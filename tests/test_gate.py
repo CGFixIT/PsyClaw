@@ -401,10 +401,20 @@ class TestNoAutoDocs:
 
 
 class TestSoulRateLimit:
-    """POST /soul/* mutation routes enforce the shared per-IP rate limit with
+    """Authenticated /soul routes enforce the shared per-IP rate limit with
     the same 429 RATE_LIMIT contract as /query and /ops/*. The check runs
     before any personality work, so an exhausted budget cannot hammer the
     soul file / DB even with a valid API key."""
+
+    def test_get_soul_429_when_rate_limited(self, client, monkeypatch):
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            resp = test_client.get(
+                "/soul", headers={"Authorization": "Bearer test-key-123"}
+            )
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
 
     @pytest.mark.parametrize("path,body", [
         ("/soul/propose", {"new_soul": "calm and factual", "reason": "test"}),
@@ -432,6 +442,16 @@ class TestAuditSummaryEndpoint:
         monkeypatch.setenv("CYCLAW_API_KEY", "audit-key-456")
         resp = test_client.get("/audit/summary")
         assert resp.status_code == 401
+
+    def test_429_when_rate_limited(self, client, monkeypatch):
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "audit-key-456")
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            resp = test_client.get(
+                "/audit/summary", headers={"Authorization": "Bearer audit-key-456"}
+            )
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
 
     def test_returns_aggregates_no_raw_query(self, client, monkeypatch, tmp_path):
         test_client, _ = client
