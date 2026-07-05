@@ -200,9 +200,8 @@ async def _check_rate_limit_async(client_ip: str) -> bool:
 async def _enforce_rate_limit(request: Request) -> None:
     """Audit and raise HTTP 429 when the caller's per-IP budget is spent.
 
-    Same policy /query and /ops/* apply inline; used by the POST /soul/*
-    mutation routes, which each hit disk + the personality DB. GET /soul stays
-    unthrottled deliberately — it is read-only, like /health and /audit/summary.
+    Same policy /query and /ops/* apply inline; used by authenticated endpoints
+    that hit disk, the personality DB, or the audit log.
     """
     client_ip = request.client.host if request.client else "unknown"
     if not await _check_rate_limit_async(client_ip):
@@ -509,7 +508,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
     )
 
 @app.get("/soul", dependencies=[Depends(require_api_key)])
-async def get_soul():
+async def get_soul(request: Request):
+    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     await _audit({"event": "soul_read", "version": personality.get_version()})
@@ -576,15 +576,16 @@ async def health():
 
 
 @app.get("/audit/summary", dependencies=[Depends(require_api_key)])
-async def audit_summary():
+async def audit_summary(request: Request):
     """API-key-gated compliance summary over the audit log.
 
     Returns aggregates only — query volume, score distribution, retrieval-mode
     and model-usage breakdowns, and external-LLM escalation count. The audit log
     persists only SHA-256 query hashes (never plaintext), so no raw query text is
-    exposed here either. Intended as audit evidence for regulated SMBs (HIPAA /
-    SOC 2) without creating any new data egress.
+    exposed here either. This is operational evidence, not a formal compliance
+    artifact or certification.
     """
+    await _enforce_rate_limit(request)
     audit_file = cfg.get("logging", {}).get("audit_file", "audit.jsonl")
     # Single off-loop pass: summarize_audit streams the JSONL through
     # compute_metrics without materializing the (unbounded) file in memory.
