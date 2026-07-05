@@ -19,11 +19,41 @@ from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_writer, vector_backend
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_config_path(config_path: str = "config.yaml") -> Path:
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
+
+
+def _resolve_relative_path(value: str, base_dir: Path) -> str:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str((base_dir / path).resolve())
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    with open(config_path, encoding="utf-8") as f:
+    with open(_resolve_config_path(config_path), encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _anchor_index_paths(cfg: dict, config_path: Path) -> dict:
+    base_dir = config_path.parent
+    path_keys = (
+        ("corpus", "path"),
+        ("indexing", "bm25_path"),
+        ("indexing", "chroma_path"),
+    )
+    for section, key in path_keys:
+        value = cfg.get(section, {}).get(key)
+        if isinstance(value, str) and value:
+            cfg[section][key] = _resolve_relative_path(value, base_dir)
+    return cfg
+
 
 def load_corpus(corpus_path: str, extensions: list[str]) -> list[tuple[str, str]]:
     docs = []
@@ -53,6 +83,7 @@ def load_corpus(corpus_path: str, extensions: list[str]) -> list[tuple[str, str]
         raise CorpusEmptyError(f"No documents found in {corpus_path} with extensions {extensions}")
     return docs
 
+
 def chunk_document(text: str, chunk_size: int = 512, overlap: int = 50) -> list[str]:
     # Fail loudly on a caller-supplied misconfiguration. build_index() validates
     # config values, but chunk_document() is also called directly (tests, ad-hoc
@@ -74,8 +105,11 @@ def chunk_document(text: str, chunk_size: int = 512, overlap: int = 50) -> list[
         start += step
     return chunks
 
+
 def build_index(config_path: str = "config.yaml") -> None:
-    cfg = load_config(config_path)
+    resolved_config_path = _resolve_config_path(config_path)
+    config_path_str = str(resolved_config_path)
+    cfg = _anchor_index_paths(load_config(config_path_str), resolved_config_path)
     corpus_path = cfg["corpus"]["path"]
     extensions = cfg["corpus"]["extensions"]
     bm25_path = cfg["indexing"]["bm25_path"]
@@ -92,9 +126,7 @@ def build_index(config_path: str = "config.yaml") -> None:
     if chunk_size < 1:
         raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
     if chunk_overlap >= chunk_size:
-        raise ValueError(
-            f"chunk_overlap ({chunk_overlap}) must be < chunk_size ({chunk_size})"
-        )
+        raise ValueError(f"chunk_overlap ({chunk_overlap}) must be < chunk_size ({chunk_size})")
 
     logger.info("Loading corpus from %s", corpus_path)
     docs = load_corpus(corpus_path, extensions)
@@ -112,16 +144,13 @@ def build_index(config_path: str = "config.yaml") -> None:
         source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
         chunks = chunk_document(content, chunk_size, chunk_overlap)
         for i, chunk in enumerate(chunks):
-            clean_chunk = sanitize_chunk(chunk, config_path)
+            clean_chunk = sanitize_chunk(chunk, config_path_str)
             tokens = tokenize_and_stem(clean_chunk)
             all_chunks.append(clean_chunk)
             tokenized_corpus.append(tokens)
-            all_metadata.append({
-                "source": source,
-                "chunk_id": i,
-                "source_sha256": source_sha256,
-                "stem_tags": json.dumps(tokens[:20])
-            })
+            all_metadata.append(
+                {"source": source, "chunk_id": i, "source_sha256": source_sha256, "stem_tags": json.dumps(tokens[:20])}
+            )
 
     logger.info("Total chunks: %d", len(all_chunks))
 
@@ -139,7 +168,7 @@ def build_index(config_path: str = "config.yaml") -> None:
             batch_end = min(batch_start + batch_size, len(all_chunks))
             batch_chunks = all_chunks[batch_start:batch_end]
             batch_meta = all_metadata[batch_start:batch_end]
-            batch_embeddings = get_embeddings_batch(batch_chunks, config_path)
+            batch_embeddings = get_embeddings_batch(batch_chunks, config_path_str)
             batch_ids = [f"chunk_{batch_start + i}" for i in range(len(batch_chunks))]
             writer.add(batch_ids, batch_chunks, batch_embeddings, batch_meta)
             logger.info("Indexed %d/%d chunks", batch_end, len(all_chunks))
@@ -151,13 +180,17 @@ def build_index(config_path: str = "config.yaml") -> None:
     # tokenized_corpus was built alongside all_chunks above (single tokenization pass).
     Path(bm25_path).parent.mkdir(parents=True, exist_ok=True)
     with open(bm25_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "tokenized_corpus": tokenized_corpus,
-            "chunks": all_chunks,
-            "metadata": all_metadata,
-        }, f)
+        json.dump(
+            {
+                "tokenized_corpus": tokenized_corpus,
+                "chunks": all_chunks,
+                "metadata": all_metadata,
+            },
+            f,
+        )
 
     logger.info("Done. Semantic backend: %s, BM25: %s", backend, bm25_path)
+
 
 def main() -> None:
     """Console entry point for ``cyclaw-index`` (see pyproject [project.scripts]).
