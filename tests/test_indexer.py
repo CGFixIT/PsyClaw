@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from retrieval import indexer
 from retrieval.indexer import chunk_document, build_index, load_corpus
 
 
@@ -119,8 +120,10 @@ class TestBuildIndexConfigPropagation:
         fake_embeddings = MagicMock(return_value=[[0.1, 0.2, 0.3]])
         # Stub the vector writer so build_index runs without a real ChromaDB/pgvector
         # store; the assertion below verifies config_path forwarding to embeddings.
-        with patch("retrieval.indexer.get_embeddings_batch", fake_embeddings), \
-                patch("retrieval.indexer.get_vector_writer") as mock_get_writer:
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", fake_embeddings),
+            patch("retrieval.indexer.get_vector_writer") as mock_get_writer,
+        ):
             mock_get_writer.return_value = MagicMock()
             build_index(str(config_path))
 
@@ -128,8 +131,7 @@ class TestBuildIndexConfigPropagation:
         args, kwargs = fake_embeddings.call_args
         passed_config = args[1] if len(args) > 1 else kwargs.get("config_path")
         assert passed_config == str(config_path), (
-            "build_index did not forward its config_path to get_embeddings_batch; "
-            f"got {passed_config!r}"
+            f"build_index did not forward its config_path to get_embeddings_batch; got {passed_config!r}"
         )
 
     def test_build_index_stores_source_sha256_metadata(self, tmp_path):
@@ -153,8 +155,10 @@ class TestBuildIndexConfigPropagation:
             yaml.dump(cfg, f)
 
         fake_writer = MagicMock()
-        with patch("retrieval.indexer.get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]), \
-                patch("retrieval.indexer.get_vector_writer", return_value=fake_writer):
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]),
+            patch("retrieval.indexer.get_vector_writer", return_value=fake_writer),
+        ):
             build_index(str(config_path))
 
         expected = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -163,6 +167,42 @@ class TestBuildIndexConfigPropagation:
 
         bm25_data = json.loads((tmp_path / "bm25.json").read_text(encoding="utf-8"))
         assert bm25_data["metadata"][0]["source_sha256"] == expected
+
+    def test_default_config_anchors_relative_paths_to_repo_root(self, tmp_path, monkeypatch):
+        repo_root = tmp_path / "repo"
+        launch_dir = tmp_path / "elsewhere"
+        corpus = repo_root / "data" / "corpus"
+        corpus.mkdir(parents=True)
+        launch_dir.mkdir()
+        (corpus / "a.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        cfg = {
+            "corpus": {"path": "data/corpus", "extensions": [".md"]},
+            "indexing": {
+                "chroma_path": "data/chroma",
+                "bm25_path": "data/index/bm25.json",
+                "collection_name": "test_kb",
+                "chunk_size": 512,
+                "chunk_overlap": 50,
+                "batch_size": 10,
+            },
+        }
+        (repo_root / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        monkeypatch.setattr(indexer, "_REPO_ROOT", repo_root)
+        monkeypatch.chdir(launch_dir)
+
+        fake_writer = MagicMock()
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]) as embeddings,
+            patch("retrieval.indexer.get_vector_writer", return_value=fake_writer) as get_writer,
+        ):
+            build_index()
+
+        resolved_config = str((repo_root / "config.yaml").resolve())
+        assert embeddings.call_args.args[1] == resolved_config
+        writer_cfg = get_writer.call_args.args[0]
+        assert writer_cfg["indexing"]["chroma_path"] == str((repo_root / "data" / "chroma").resolve())
+        assert (repo_root / "data" / "index" / "bm25.json").exists()
+        assert not (launch_dir / "data" / "index" / "bm25.json").exists()
 
 
 class TestLoadCorpusCaseInsensitive:
