@@ -11,7 +11,7 @@ import json
 import yaml
 
 import metrics
-from metrics import compute_metrics, load_events, print_metrics
+from metrics import compute_audit_integrity, compute_metrics, load_events, print_metrics, summarize_audit
 
 
 def _write_audit(tmp_path, events):
@@ -40,6 +40,37 @@ class TestLoadEvents:
         events = load_events(str(p))
         assert len(events) == 2
         assert events[0]["event"] == "rag_query"
+
+
+class TestAuditIntegrity:
+    def test_counts_malformed_raw_query_and_missing_hash(self, tmp_path):
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            "\n".join([
+                json.dumps({"event": "rag_query", "query": "raw", "top_score": 0.3}),
+                json.dumps({"event": "mcp_rag_query", "query_hash": "abc"}),
+                "NOT JSON",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+
+        assert compute_audit_integrity(str(p)) == {
+            "malformed_lines": 1,
+            "events_with_raw_query": 1,
+            "rag_events_missing_query_hash": 1,
+        }
+
+    def test_summary_includes_integrity_without_raw_query(self, tmp_path):
+        audit_file = _write_audit(
+            tmp_path,
+            [{"event": "rag_query", "query": "raw-secret-text", "top_score": 0.5}],
+        )
+
+        summary = summarize_audit(audit_file)
+
+        assert summary["audit_integrity"]["events_with_raw_query"] == 1
+        assert summary["audit_integrity"]["rag_events_missing_query_hash"] == 1
+        assert "query" not in summary
 
 
 class TestPrintMetrics:
@@ -89,6 +120,25 @@ class TestPrintMetrics:
         assert "qwen: 1" in out
         assert "grok-4.3: 1" in out
         assert "Online escalations (external LLM): 1" in out
+
+    def test_integrity_warnings_are_printed(self, tmp_path, capsys):
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            "\n".join([
+                json.dumps({"event": "rag_query", "query": "raw-secret-text"}),
+                "NOT JSON",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        config_path = _write_config(tmp_path, str(p))
+        print_metrics(config_path)
+        out = capsys.readouterr().out
+
+        assert "Audit integrity:" in out
+        assert "malformed_lines: 1" in out
+        assert "events_with_raw_query: 1" in out
+        assert "rag_events_missing_query_hash: 1" in out
+        assert "raw-secret-text" not in out
 
     def test_score_stats_span_both_event_types(self, tmp_path, capsys):
         events = [
