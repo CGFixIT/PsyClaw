@@ -17,6 +17,8 @@ from .errors import HealthStatus
 
 _cfg_cache: dict[str, tuple[dict, float]] = {}
 _cfg_ttl_sec = 60
+_status_cache: dict[str, tuple[tuple[HealthStatus, ...], float]] = {}
+_status_ttl_sec = 2
 
 # Shared pooled HTTP client for all probes. Constructing a fresh httpx.Client
 # per request (what module-level httpx.get() does under the hood) costs ~48 ms
@@ -68,6 +70,12 @@ def _safe_error(exc: Exception) -> str:
 
 
 def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
+    now = time.monotonic()
+    if config_path in _status_cache:
+        cached_statuses, cached_at = _status_cache[config_path]
+        if now - cached_at < _status_ttl_sec:
+            return list(cached_statuses)
+
     try:
         cfg = _health_cfg(config_path)
         llm_base = cfg["models"]["local_llm"]["base_url"]
@@ -98,6 +106,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
                 error="GROK_API_KEY not set (hybrid mode enabled but no API key)",
             ))
     results.append(HealthStatus(name="embeddings_local", healthy=True, latency_ms=0.0))
+    _status_cache[config_path] = (tuple(results), time.monotonic())
     return results
 
 def _ping(url: str, name: str, headers: dict | None = None,

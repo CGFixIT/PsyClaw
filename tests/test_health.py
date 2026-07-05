@@ -67,11 +67,13 @@ class _ModelsResp(_OKResp):
 
 @pytest.fixture(autouse=True)
 def _clear_health_cfg_cache():
-    # _health_cfg uses a module-level TTL dict cache; isolate every test from
-    # cached parses by emptying it before and after each test.
+    # health.py uses module-level TTL caches; isolate every test from cached
+    # parses/probes by emptying them before and after each test.
     health._cfg_cache.clear()
+    health._status_cache.clear()
     yield
     health._cfg_cache.clear()
+    health._status_cache.clear()
 
 
 class TestPing:
@@ -179,6 +181,20 @@ class TestCheckAll:
         statuses = health.check_all(cfg_path)
         grok = next(s for s in statuses if s.name == "grok_api")
         assert grok.healthy is True
+
+    def test_immediate_repeat_uses_status_cache(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="offline")
+        calls = 0
+
+        def fake_get(url, **kw):
+            nonlocal calls
+            calls += 1
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", fake_get)
+        assert health.check_all(cfg_path)[0].healthy is True
+        assert health.check_all(cfg_path)[0].healthy is True
+        assert calls == 1
 
 
 class TestHealthCfgCache:
