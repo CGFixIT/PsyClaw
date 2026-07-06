@@ -572,6 +572,7 @@ async def health():
         graph_ready=compiled_graph is not None,
         mode=cfg["app"]["mode"],
         graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 330),
+        version=_CYCLAW_VERSION,
     )
 
 
