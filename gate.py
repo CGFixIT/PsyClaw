@@ -200,15 +200,20 @@ async def _check_rate_limit_async(client_ip: str) -> bool:
 async def _enforce_rate_limit(request: Request) -> None:
     """Audit and raise HTTP 429 when the caller's per-IP budget is spent.
 
-    Same policy /query and /ops/* apply inline; used by authenticated endpoints
-    that hit disk, the personality DB, or the audit log.
+    Single enforcement point for every rate-limited endpoint (/query, /soul/*,
+    /audit/summary, /ops/*). The 429 detail interpolates the configured
+    api.rate_limit values — a hardcoded "(60/min)" here misled operators who
+    tuned max_requests/window_seconds away from the defaults.
     """
     client_ip = request.client.host if request.client else "unknown"
     if not await _check_rate_limit_async(client_ip):
         await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
         raise HTTPException(
             status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"},
+            detail={
+                "error": f"Rate limit exceeded ({RATE_LIMIT_REQUESTS} req / {RATE_LIMIT_WINDOW}s)",
+                "code": "RATE_LIMIT",
+            },
         )
 
 # Redact sensitive values from exception messages before returning in HTTP responses.
@@ -388,13 +393,7 @@ if retriever is not None:
 
 @app.post("/query", response_model=QueryResponse)
 async def query_endpoint(request: Request, req: QueryRequest):
-    client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
-        raise HTTPException(
-            status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"}
-        )
+    await _enforce_rate_limit(request)
 
     if compiled_graph is None:
         raise HTTPException(
@@ -636,13 +635,7 @@ def _ops_agentic_config() -> dict:
 
 @app.post("/ops/sync", dependencies=[Depends(require_api_key)])
 async def ops_sync(request: Request, req: OpsSyncRequest):
-    client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
-        raise HTTPException(
-            status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"},
-        )
+    await _enforce_rate_limit(request)
     try:
         result = await asyncio.to_thread(run_sync_op, req.action, dry_run=req.dry_run)
     except OpsError as e:
@@ -664,13 +657,7 @@ async def ops_sync(request: Request, req: OpsSyncRequest):
 
 @app.post("/ops/agentic", dependencies=[Depends(require_api_key)])
 async def ops_agentic(request: Request, req: OpsAgenticRequest):
-    client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
-        raise HTTPException(
-            status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"},
-        )
+    await _enforce_rate_limit(request)
     try:
         result = await asyncio.to_thread(
             run_agentic_op, req.action,
@@ -716,13 +703,7 @@ def _ops_sqlconnect_config() -> dict:
 
 @app.post("/ops/fsconnect", dependencies=[Depends(require_api_key)])
 async def ops_fsconnect(request: Request, req: OpsFsConnectRequest):
-    client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
-        raise HTTPException(
-            status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"},
-        )
+    await _enforce_rate_limit(request)
     try:
         result = await asyncio.to_thread(
             run_fsconnect_op, req.action,
@@ -748,13 +729,7 @@ async def ops_fsconnect(request: Request, req: OpsFsConnectRequest):
 
 @app.post("/ops/sqlconnect", dependencies=[Depends(require_api_key)])
 async def ops_sqlconnect(request: Request, req: OpsSqlConnectRequest):
-    client_ip = request.client.host if request.client else "unknown"
-    if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
-        raise HTTPException(
-            status_code=429,
-            detail={"error": "Rate limit exceeded (60/min)", "code": "RATE_LIMIT"},
-        )
+    await _enforce_rate_limit(request)
     try:
         result = await asyncio.to_thread(
             run_sqlconnect_op, req.action,

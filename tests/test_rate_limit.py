@@ -153,6 +153,34 @@ def test_gate_uses_production_limiter():
     assert gate.check_rate_limit("203.0.113.7") is True
 
 
+def test_429_detail_reflects_configured_limits(monkeypatch):
+    """The 429 body must quote the CONFIGURED api.rate_limit values.
+
+    Regression guard: gate.py used to hardcode "Rate limit exceeded (60/min)"
+    in six handlers, so an operator who tuned max_requests/window_seconds still
+    saw the stale default in every 429.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(gate, "_check_rate_limit_async", AsyncMock(return_value=False))
+    monkeypatch.setattr(gate, "_audit", AsyncMock())
+    request = MagicMock()
+    request.client.host = "203.0.113.9"
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(gate._enforce_rate_limit(request))
+
+    assert exc_info.value.status_code == 429
+    detail = exc_info.value.detail
+    assert detail["code"] == "RATE_LIMIT"
+    assert str(gate.RATE_LIMIT_REQUESTS) in detail["error"]
+    assert str(gate.RATE_LIMIT_WINDOW) in detail["error"]
+    assert "60/min" not in detail["error"]
+
+
 class TestPersistence:
     """Optional sqlite persistence (api.rate_limit.persist_path in config.yaml).
 
