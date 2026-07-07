@@ -62,6 +62,10 @@ class HealthResponse(BaseModel):
     # aborts first and hides the server's truthful 504 GRAPH_TIMEOUT message.
     # Defaulted so existing HealthResponse constructions stay valid.
     graph_timeout_sec: int = 330
+    # Installed package version (importlib.metadata; "dev" when not installed).
+    # The console footer renders `cyclaw v{version}`; without this field the
+    # UI's data.version read is always undefined and the version never shows.
+    version: str = "dev"
 
 class SoulEvolutionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)

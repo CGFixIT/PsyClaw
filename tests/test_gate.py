@@ -183,6 +183,25 @@ class TestHealthEndpoint:
             data = resp.json()
             assert "status" in data
 
+    def test_health_carries_console_contract_fields(self, client):
+        """static/terminal.html consumes status, mode, version, and
+        graph_timeout_sec from /health (checkHealth()). This is the contract
+        test that would have caught the missing `version` field: the console
+        rendered `cyclaw` with no version forever because data.version was
+        always undefined."""
+        import gate
+        test_client, _ = client
+        with patch("gate.check_all", return_value=[]):
+            resp = test_client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        for field in ("status", "mode", "version", "graph_timeout_sec",
+                      "index_ready", "graph_ready", "services"):
+            assert field in data, f"/health lost console-contract field {field!r}"
+        assert data["version"] == gate._CYCLAW_VERSION
+        assert data["version"]  # non-empty ("dev" when package not installed)
+        assert isinstance(data["graph_timeout_sec"], int)
+
 
 class TestTrustedHost:
     """PR #99 #3: TrustedHostMiddleware rejects requests with a Host not in the
