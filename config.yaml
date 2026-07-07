@@ -269,7 +269,6 @@ security:
   require_env:
     - "GROK_API_KEY"
   allowed_origins:
-    - “null” #DevSkim: ignore DS162092,DS137138
     - "http://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
     - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
     - "http://localhost"  # DevSkim: ignore DS162092,DS137138
