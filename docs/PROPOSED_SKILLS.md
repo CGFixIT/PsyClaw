@@ -2,15 +2,22 @@
 
 Suggestions for `.claude/skills/` additions specific to CyClaw's three
 invariants — **RAG-first retrieval**, **LangGraph topology as security policy**,
-**offline-first** — rather than generic refactor loops. Each is a proposal; none
-are implemented here. Ranked by leverage.
+**offline-first** — rather than generic refactor loops. Ranked by leverage.
+
+> **Status (2026-07):** #1 `invariant-guard`, #2 `injection-redteam`, and #4
+> `index-doctor` are now **implemented** under `.claude/skills/`, each with a
+> deterministic checker/runner and a self-testing `verify.sh`. A fourth new
+> skill, **`doc-sync`** (code↔docs drift detector — not originally in this
+> list), was added alongside them. Still open: #3 `cve-triage`, #5
+> `release-cut`.
 
 > Existing skills today: `architecture-refactor`, `logging-refactor`,
-> `speed-refactor`, `tests-refactor` (loops); `run-cyclaw`, `wrap-up` (task).
+> `speed-refactor`, `tests-refactor` (loops); `run-cyclaw`, `wrap-up`,
+> `invariant-guard`, `injection-redteam`, `index-doctor`, `doc-sync` (task/check).
 
 ---
 
-## 1. `invariant-guard` 🔴 highest leverage
+## 1. `invariant-guard` 🔴 highest leverage — ✅ IMPLEMENTED
 
 **Trigger:** before merging any change to `gate.py`, `graph.py`, `llm/`,
 `retrieval/`, or `sync/`; or on demand ("check invariants").
@@ -32,7 +39,7 @@ findings reported with the offending edge/file.
 
 ---
 
-## 2. `injection-redteam` 🟡 (loop)
+## 2. `injection-redteam` 🟡 (loop) — ✅ IMPLEMENTED
 
 **Trigger:** "redteam the sanitizer", or on changes to `utils/sanitizer.py` /
 `config.yaml` injection patterns.
@@ -69,7 +76,7 @@ invariants.
 
 ---
 
-## 4. `index-doctor` 🟢
+## 4. `index-doctor` 🟢 — ✅ IMPLEMENTED
 
 **Trigger:** "rebuild/validate the index", retrieval-quality complaints, or
 corpus changes under `data/corpus/`.

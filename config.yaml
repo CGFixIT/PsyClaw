@@ -269,14 +269,14 @@ security:
   require_env:
     - "GROK_API_KEY"
   allowed_origins:
-    - “null” #DevSkim: ignore DS162092,DS137138
     - "http://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
     - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
     - "http://localhost"  # DevSkim: ignore DS162092,DS137138
     - "http://localhost:8787"  # DevSkim: ignore DS162092,DS137138
     - "http://10.0.0.112"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
     - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - with port
-    # NOTE: null removed — curl/MCP clients send no Origin header and are not
+    - "null"
+    # NOTE: null NOT removed — curl/MCP clients send no Origin header and are not
     # subject to CORS filtering. null in allow_origins is invalid for starlette
     # CORSMiddleware and would cause a runtime error or silent rejection.
   # TrustedHostMiddleware Host allow-list (DNS-rebinding defense, PR #99 #3).
