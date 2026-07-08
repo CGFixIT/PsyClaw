@@ -32,6 +32,31 @@ def load_events(audit_file: str):
     """Materialized list form of :func:`iter_events` (kept for existing callers)."""
     return list(iter_events(audit_file))
 
+
+def compute_audit_integrity(audit_file: str) -> dict:
+    """Count audit-log issues that weaken evidence quality without exposing data."""
+    stats = {
+        "malformed_lines": 0,
+        "events_with_raw_query": 0,
+        "rag_events_missing_query_hash": 0,
+    }
+    path = Path(audit_file)
+    if not path.exists():
+        return stats
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                stats["malformed_lines"] += 1
+                continue
+            if "query" in event:
+                stats["events_with_raw_query"] += 1
+            if event.get("event") in ("rag_query", "mcp_rag_query") and "query_hash" not in event:
+                stats["rag_events_missing_query_hash"] += 1
+    return stats
+
+
 def compute_metrics(events) -> dict:
     """Aggregate audit events into a JSON-serializable summary.
 
@@ -110,8 +135,10 @@ def compute_metrics(events) -> dict:
 
 
 def summarize_audit(audit_file: str) -> dict:
-    """Stream the audit log through :func:`compute_metrics` in one bounded pass."""
-    return compute_metrics(iter_events(audit_file))
+    """Summarize audit metrics and evidence-quality counters in bounded memory."""
+    summary = compute_metrics(iter_events(audit_file))
+    summary["audit_integrity"] = compute_audit_integrity(audit_file)
+    return summary
 
 
 def print_metrics(config_path: str = "config.yaml"):
@@ -119,8 +146,14 @@ def print_metrics(config_path: str = "config.yaml"):
         cfg = yaml.safe_load(f)
     audit_file = cfg["logging"]["audit_file"]
     summary = summarize_audit(audit_file)
+    integrity = summary["audit_integrity"]
     if not summary["total_events"]:
         print("No audit events found.")
+        if any(integrity.values()):
+            print("\nAudit integrity:")
+            for name, count in integrity.items():
+                if count:
+                    print(f"  {name}: {count}")
         return
     print(f"Total events: {summary['total_events']}")
     print("\nEvent breakdown:")
@@ -144,6 +177,11 @@ def print_metrics(config_path: str = "config.yaml"):
             for model, count in summary["model_used"].items():
                 print(f"  {model}: {count}")
         print(f"\nOnline escalations (external LLM): {summary['online_escalated']}")
+    if any(integrity.values()):
+        print("\nAudit integrity:")
+        for name, count in integrity.items():
+            if count:
+                print(f"  {name}: {count}")
 
 def main() -> None:
     """Console entry point for ``cyclaw-metrics`` (see pyproject [project.scripts]).
