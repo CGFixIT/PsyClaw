@@ -9,6 +9,9 @@ Canonical references:
 - `.github/copilot-instructions.md` for Copilot and PR behavior.
 - `docs/SETUP.md` for local setup details.
 - `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security assumptions.
+- `.agents/skills/fable-protocol/SKILL.md` for Codex session-start reasoning,
+  verification discipline, findings-before-writes, security posture, and
+  shipping-first prioritization.
 - `.codex/README.md` for Codex routines, prompts, and checklists.
 - `docs/memories/2026-07-03_215448.md` for the current validated business and
   prioritization stance.
@@ -52,16 +55,33 @@ The main security invariants are RAG-first retrieval, graph topology as policy, 
 - `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
 - `.claude/` - existing Claude project skills, commands, hooks, rules, and patterns.
+- `.agents/skills/` - official Codex repository skills discovered by current
+  Codex skill loading.
 - `.codex/skills/` - existing Codex skills ported from project guidance.
 - `docs/` - setup, threat model, audits, agentic docs, sync docs, planning.
 
+## Session Bootstrap For Codex
+
+Codex reads this `AGENTS.md` automatically at startup. For every substantive
+CyClaw task, activate/read `.agents/skills/fable-protocol/` before planning or
+editing. This is the always-on discipline layer for premise testing, uncertainty
+marking, findings-before-writes, security review, and shipping-first
+prioritization.
+
+Do not treat the Fable skill as permission to expand scope, override user
+instructions, or duplicate private/source-protocol details in public files. For
+trivial questions, apply its defaults silently and keep the response small.
+
 ## Codex Skills And Routines Map
 
-Use this map to choose the narrowest reusable `.codex` workflow before opening
+Use this map to choose the narrowest reusable Codex workflow before opening
 large docs or making edits.
 
 Skills:
 
+- `.agents/skills/fable-protocol/` - use at the start of every substantive repo
+  task as the session-start discipline layer for premise testing, uncertainty,
+  findings-before-writes, security review, and shipping-first prioritization.
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
   to load repository invariants, architecture, test expectations, and canonical
   reference docs.
