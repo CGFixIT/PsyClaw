@@ -456,6 +456,23 @@ async def query_endpoint(request: Request, req: QueryRequest):
     if needs_confirm and not answer_model:
         top_score = result.get("top_score", 0.0)
         threshold = cfg.get("retrieval", {}).get("min_score", 0.4)
+        # A retrieval failure (retrieve_node caught a RAGError and set
+        # state["error"] with top_score=0.0) also lands here, but it is NOT a
+        # vault miss — presenting it as one hides a broken index behind a
+        # routine "send to Grok?" prompt. Name the failure in the confirm
+        # message (the console renders only confirm_message on this path) and
+        # pass error through for API consumers, matching the answered path.
+        retrieval_error = result.get("error")
+        if retrieval_error:
+            confirm_message = (
+                f"Retrieval failed ({retrieval_error}) — no vault results available. "
+                f"Send query to Grok online? Re-submit with user_confirmed_online=true/false."
+            )
+        else:
+            confirm_message = (
+                f"Vault miss (best score: {top_score:.3f} < {threshold}). "
+                f"Send query to Grok online? Re-submit with user_confirmed_online=true/false."
+            )
         return QueryResponse(
             answer="",
             sources=[],
@@ -463,10 +480,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
             hit_count=len(result.get("retrieved_docs", [])),
             model_used="",
             needs_confirm=True,
-            confirm_message=(
-                f"Vault miss (best score: {top_score:.3f} < {threshold}). "
-                f"Send query to Grok online? Re-submit with user_confirmed_online=true/false."
-            )
+            confirm_message=confirm_message,
+            error=retrieval_error,
         )
 
     docs = result.get("answer_sources", [])

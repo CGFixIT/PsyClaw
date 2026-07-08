@@ -124,6 +124,37 @@ class TestQueryEndpoint:
         data = resp.json()
         assert data["needs_confirm"] is True
         assert "Vault miss" in data["confirm_message"]
+        assert data["error"] is None  # a real vault miss carries no error
+
+    def test_retrieval_failure_not_masked_as_vault_miss(self, client):
+        """retrieve_node catches RAGError and returns top_score=0.0 + error,
+        which routes to user_gate exactly like an empty vault. The confirm
+        response must NAME the failure — the console renders only
+        confirm_message on the needs_confirm path, so a 'Vault miss (best
+        score: 0.000...)' message would hide a broken index behind a routine
+        Grok prompt — and must pass error through like the answered path does."""
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = {
+            "query": "anything",
+            "answer": "",
+            "answer_model": "",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.0,
+            "retrieval_mode": "none",
+            "needs_user_confirm": True,
+            "error": "INDEX_NOT_FOUND: ChromaDB collection missing",
+            "audit_event": {}
+        }
+
+        resp = test_client.post("/query", json={"query": "Explain quantum physics"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["needs_confirm"] is True
+        assert "Retrieval failed" in data["confirm_message"]
+        assert "INDEX_NOT_FOUND" in data["confirm_message"]
+        assert "Vault miss" not in data["confirm_message"]
+        assert data["error"] == "INDEX_NOT_FOUND: ChromaDB collection missing"
 
     def test_confirmation_flow_resubmit(self, client):
         test_client, mock_graph = client
