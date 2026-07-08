@@ -16,8 +16,8 @@ import httpx
 import pytest
 import yaml
 
-from llm.client import LocalLLMClient, GrokClient
-from utils.errors import LLMServiceError, GrokServiceError
+from llm.client import ClaudeClient, GrokClient, LocalLLMClient
+from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError
 
 _URL = "http://127.0.0.1:1234/v1/chat/completions"  # DevSkim: ignore DS162092,DS137138 - loopback test URL
 
@@ -44,10 +44,18 @@ def _write_config(tmp_path, retry: dict = None) -> str:
         "temperature": 0.2,
         "timeout_sec": 5,
     }
+    claude = {
+        "base_url": "https://api.anthropic.com/v1",
+        "model": "claude-sonnet-5",
+        "anthropic_version": "2023-06-01",
+        "max_tokens": 256,
+        "timeout_sec": 5,
+    }
     if retry is not None:
         local_llm["retry"] = dict(retry)
         grok["retry"] = dict(retry)
-    cfg = {"models": {"local_llm": local_llm, "grok": grok}}
+        claude["retry"] = dict(retry)
+    cfg = {"models": {"local_llm": local_llm, "grok": grok, "claude": claude}}
     p = tmp_path / "config.yaml"
     with open(p, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f)
@@ -93,6 +101,13 @@ def _ok_response(content: str = "hello from llm") -> httpx.Response:
     req = httpx.Request("POST", _URL)
     return httpx.Response(
         200, json={"choices": [{"message": {"content": content}}]}, request=req
+    )
+
+
+def _claude_ok_response(content: str = "hello from claude") -> httpx.Response:
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return httpx.Response(
+        200, json={"content": [{"type": "text", "text": content}]}, request=req
     )
 
 
@@ -275,6 +290,54 @@ class TestGrokClient:
         with pytest.raises(GrokServiceError) as exc:
             client.generate("a prompt")
         assert "dns failure" in exc.value.message
+        client.close()
+
+
+# =============================================================================
+# ClaudeClient
+# =============================================================================
+
+class TestClaudeClient:
+    def test_is_available_reflects_api_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        assert client.is_available() is True
+        client.close()
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        client2 = ClaudeClient(_write_config(tmp_path))
+        assert client2.is_available() is False
+        client2.close()
+
+    def test_generate_without_key_raises(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        client = ClaudeClient(_write_config(tmp_path))
+        with pytest.raises(ClaudeServiceError) as exc:
+            client.generate("a prompt")
+        assert exc.value.details.get("required_env") == "ANTHROPIC_API_KEY"
+        client.close()
+
+    def test_generate_success_sends_messages_api_request(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        fake = _FakePost(response=_claude_ok_response("claude answer"))
+        client._client.post = fake
+        assert client.generate("a prompt") == "claude answer"
+        url, kwargs = fake.calls[0]
+        assert url == "https://api.anthropic.com/v1/messages"
+        assert kwargs["headers"]["x-api-key"] == "anthropic-secret"
+        assert kwargs["headers"]["anthropic-version"] == "2023-06-01"
+        assert kwargs["json"]["model"] == "claude-sonnet-5"
+        assert kwargs["json"]["messages"][0]["content"] == "a prompt"
+        assert "temperature" not in kwargs["json"]
+        client.close()
+
+    def test_generate_empty_content_maps_to_claude_service_error(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        client._client.post = _FakePost(response=_claude_ok_response("   "))
+        with pytest.raises(ClaudeServiceError):
+            client.generate("a prompt")
         client.close()
 
 

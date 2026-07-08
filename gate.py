@@ -76,7 +76,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from graph import build_graph, GraphState
 from retrieval.hybrid_search import HybridRetriever
-from llm.client import LocalLLMClient, GrokClient
+from llm.client import ClaudeClient, LocalLLMClient, GrokClient
 from schemas.api import (
     QueryRequest, QueryResponse, SourceInfo, HealthResponse, SoulEvolutionRequest,
     OpsSyncRequest, OpsAgenticRequest, OpsFsConnectRequest, OpsSqlConnectRequest,
@@ -277,6 +277,7 @@ async def lifespan(app: FastAPI):
     for _name, _obj in [
         ("local_llm", local_llm),
         ("grok", grok),
+        ("claude", claude),
         ("rate_limiter", _rate_limiter),
         ("personality", personality),
         ("retriever", retriever),
@@ -381,6 +382,10 @@ grok = None
 if cfg["app"]["mode"] == "hybrid" and cfg["models"]["grok"].get("enabled", False):
     grok = GrokClient(cfg=cfg)
 
+claude = None
+if cfg["app"]["mode"] == "hybrid" and cfg["models"].get("claude", {}).get("enabled", False):
+    claude = ClaudeClient(cfg=cfg)
+
 personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
@@ -388,7 +393,7 @@ if cfg.get("personality", {}).get("enabled", False):
 compiled_graph = None
 if retriever is not None:
     compiled_graph = build_graph(
-        retriever=retriever, llm=local_llm, grok=grok, cfg=cfg, personality=personality
+        retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg, personality=personality
     )
 
 @app.post("/query", response_model=QueryResponse)
@@ -417,7 +422,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
 
     initial_state: GraphState = {
         "query": req.query,
-        "user_confirmed_online": req.user_confirmed_online
+        "user_confirmed_online": req.user_confirmed_online,
+        "online_provider": req.online_provider,
     }
 
     # Overall server-side deadline: a stalled LM Studio / retrieval must not hold
@@ -466,12 +472,14 @@ async def query_endpoint(request: Request, req: QueryRequest):
         if retrieval_error:
             confirm_message = (
                 f"Retrieval failed ({retrieval_error}) — no vault results available. "
-                f"Send query to Grok online? Re-submit with user_confirmed_online=true/false."
+                f"Send query online? Re-submit with user_confirmed_online=true/false "
+                f"and optional online_provider=grok|claude."
             )
         else:
             confirm_message = (
                 f"Vault miss (best score: {top_score:.3f} < {threshold}). "
-                f"Send query to Grok online? Re-submit with user_confirmed_online=true/false."
+                f"Send query online? Re-submit with user_confirmed_online=true/false "
+                f"and optional online_provider=grok|claude."
             )
         return QueryResponse(
             answer="",

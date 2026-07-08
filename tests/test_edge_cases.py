@@ -14,7 +14,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from tests.conftest import (
-    MockRetriever, MockLocalLLM, MockGrokClient,
+    MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
     MOCK_HIGH_SCORE_RESULTS, TEST_CONFIG
 )
 
@@ -195,6 +195,26 @@ class TestUserGateRouter:
         grok = MockGrokClient(available=False)
         result = user_gate_router(
             {"user_confirmed_online": True}, grok=grok
+        )
+        assert result == "offline_best_effort"
+
+    def test_confirmed_with_available_claude_routes_claude(self):
+        from graph import user_gate_router
+        claude = MockClaudeClient(available=True)
+        result = user_gate_router(
+            {"user_confirmed_online": True, "online_provider": "claude"},
+            grok=None,
+            claude=claude,
+        )
+        assert result == "claude_fallback"
+
+    def test_confirmed_with_unavailable_claude_routes_offline(self):
+        from graph import user_gate_router
+        claude = MockClaudeClient(available=False)
+        result = user_gate_router(
+            {"user_confirmed_online": True, "online_provider": "claude"},
+            grok=None,
+            claude=claude,
         )
         assert result == "offline_best_effort"
 

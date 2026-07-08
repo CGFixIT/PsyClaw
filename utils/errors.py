@@ -26,6 +26,10 @@ class GrokServiceError(RAGError):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(message, code="GROK_SERVICE_ERROR", details=details)
 
+class ClaudeServiceError(RAGError):
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="CLAUDE_SERVICE_ERROR", details=details)
+
 class IndexNotFoundError(RAGError):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(message, code="INDEX_NOT_FOUND", details=details)

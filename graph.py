@@ -45,7 +45,7 @@ from typing import Literal, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from llm.client import GrokClient, LocalLLMClient
+from llm.client import ClaudeClient, GrokClient, LocalLLMClient
 from retrieval.hybrid_search import HybridRetriever
 from utils.errors import RAGError
 from utils.logger import audit_log, hash_query
@@ -95,10 +95,11 @@ class GraphState(TypedDict, total=False):
     # Control flags
     needs_user_confirm: bool
     user_confirmed_online: bool | None
+    online_provider: str | None
 
     # Model outputs
     answer: str
-    answer_model: str  # "local" | "grok" | "offline-best-effort"
+    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort"
     answer_sources: list[RetrievedDoc]
 
     # Audit
@@ -459,6 +460,72 @@ def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) ->
         out["error"] = error
     return out
 
+def claude_fallback_node(state: GraphState, claude: ClaudeClient | None, cfg: dict) -> dict:
+    """Call Claude API. Only reachable when hybrid + confirmed + selected."""
+    if claude is None:
+        logger.warning("claude_fallback_node reached with claude=None; returning offline response")
+        return {
+            "answer": "[Claude unavailable: offline mode or Claude disabled - no external fallback executed]",
+            "answer_model": "offline-best-effort",
+            "answer_sources": []
+        }
+
+    query = state["query"]
+    fallback_cfg = cfg.get("policy", {}).get("fallback", {})
+    send_ctx = fallback_cfg.get("send_local_context_to_claude", False)
+    docs = state.get("retrieved_docs", []) if send_ctx else []
+
+    def _assemble(ctx: str) -> str:
+        if send_ctx:
+            return (
+                f"USER QUERY: {query}\n\n"
+                f"PARTIAL LOCAL CONTEXT {UNTRUSTED_NOTE}:\n"
+                f"{ctx}\n\n"
+                "Answer the query using the partial context where relevant."
+            )
+        return f"USER QUERY: {query}"
+
+    context = _format_context_chunks(docs, limit=3, char_cap=200) if send_ctx else ""
+    prompt = _assemble(context)
+
+    max_chars = fallback_cfg.get("claude_max_prompt_chars", 8000)
+    if max_chars and max_chars > 0 and len(prompt) > max_chars:
+        original_len = len(prompt)
+        if send_ctx:
+            framing_overhead = len(_assemble(""))
+            ctx_budget = max_chars - framing_overhead
+            if ctx_budget > 0:
+                context = _format_context_chunks(
+                    docs, limit=3, char_cap=200, total_char_budget=ctx_budget,
+                )
+                prompt = _assemble(context)
+            else:
+                prompt = f"USER QUERY: {query}"
+            if len(prompt) > max_chars:
+                prompt = prompt[:max_chars]
+        else:
+            prompt = prompt[:max_chars]
+        logger.warning(
+            "Claude prompt truncated from %d to %d chars (policy.fallback.claude_max_prompt_chars)",
+            original_len, len(prompt),
+        )
+        audit_log({
+            "event": "claude_prompt_truncated",
+            "original_chars": original_len,
+            "truncated_chars": len(prompt),
+            "query": state.get("query", ""),
+        })
+
+    answer, error = _generate_or_error(claude, prompt, label="Claude")
+    out: dict = {
+        "answer": answer,
+        "answer_model": "claude",
+        "answer_sources": [],
+    }
+    if error is not None:
+        out["error"] = error
+    return out
+
 def offline_best_effort_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
                              personality: PersonalityManager | None = None) -> dict:
     """Node 6: Best-effort local answer when user declines Grok or offline mode.
@@ -533,7 +600,7 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "query": query,          # hashed (SHA256) by audit_log()
         "top_score": state.get("top_score", 0.0),
         "retrieval_mode": state.get("retrieval_mode", "none"),
-        "online_escalated": state.get("answer_model") == "grok",
+        "online_escalated": state.get("answer_model") in {"grok", "claude"},
         "model_used": state.get("answer_model", "unknown"),
         "hit_count": len(state.get("retrieved_docs", [])),
         # now corpus files and hits are visible in audit but not query
@@ -579,7 +646,11 @@ def score_router(state: GraphState) -> Literal["local_llm", "user_gate"]:
         return "user_gate"
     return "local_llm"
 
-def user_gate_router(state: GraphState, grok: GrokClient | None = None) -> Literal["grok_fallback", "offline_best_effort", "audit_logger"]:
+def user_gate_router(
+    state: GraphState,
+    grok: GrokClient | None = None,
+    claude: ClaudeClient | None = None,
+) -> Literal["grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"]:
     """After user_gate: route based on confirmation and Grok availability.
 
     ``grok`` is bound at build time (``build_graph`` passes the same client it
@@ -604,10 +675,15 @@ def user_gate_router(state: GraphState, grok: GrokClient | None = None) -> Liter
 
     # Confirmed AND Grok present AND actually usable (has API key) → Grok;
     # otherwise local best effort.
-    if confirmed and grok is not None and grok.is_available():
-        return "grok_fallback"
-    else:
+    if not confirmed:
         return "offline_best_effort"
+
+    provider = state.get("online_provider") or "grok"
+    if provider == "claude" and claude is not None and claude.is_available():
+        return "claude_fallback"
+    if provider == "grok" and grok is not None and grok.is_available():
+        return "grok_fallback"
+    return "offline_best_effort"
 
 # =============================================================================
 # Graph Builder
@@ -619,6 +695,7 @@ def build_graph(
     llm: LocalLLMClient,
     grok: GrokClient | None,
     cfg: dict,
+    claude: ClaudeClient | None = None,
     personality: PersonalityManager | None = None
 ):
     """Build and compile the CyClaw LangGraph.
@@ -656,6 +733,7 @@ def build_graph(
     graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
     graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))
+    graph.add_node("claude_fallback", partial(claude_fallback_node,    claude=claude, cfg=cfg))
     graph.add_node("offline_best_effort", partial(offline_best_effort_node, llm=llm, cfg=cfg, personality=personality))
     graph.add_node("audit_logger",    partial(audit_logger_node,       cfg=cfg, personality=personality))
 
@@ -682,9 +760,10 @@ def build_graph(
     # user_gate → grok_fallback | offline_best_effort | audit_logger (conditional)
     graph.add_conditional_edges(
         "user_gate",
-        partial(user_gate_router, grok=grok),
+        partial(user_gate_router, grok=grok, claude=claude),
         {
             "grok_fallback":        "grok_fallback",
+            "claude_fallback":      "claude_fallback",
             "offline_best_effort":  "offline_best_effort",
             "audit_logger":         "audit_logger"
         }
@@ -692,6 +771,7 @@ def build_graph(
 
     # grok_fallback → audit_logger (always)
     graph.add_edge("grok_fallback", "audit_logger")
+    graph.add_edge("claude_fallback", "audit_logger")
 
     # offline_best_effort → audit_logger (always)
     graph.add_edge("offline_best_effort", "audit_logger")

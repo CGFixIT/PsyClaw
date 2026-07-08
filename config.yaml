@@ -77,6 +77,17 @@ models:
       max_retries: 2        # extra attempts beyond the first
       backoff_base_sec: 1.0 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (1s, 2s)
       backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
+  claude:
+    enabled: false
+    base_url: "https://api.anthropic.com/v1"
+    model: "claude-sonnet-5"
+    anthropic_version: "2023-06-01"
+    timeout_sec: 30
+    max_tokens: 2048
+    retry:
+      max_retries: 2        # extra attempts beyond the first; never retries 4xx/auth errors
+      backoff_base_sec: 1.0
+      backoff_max_sec: 30.0
 
 corpus:
   path: "data/corpus"
@@ -147,10 +158,12 @@ policy:
     enabled: true
     require_user_confirm: true
     send_local_context_to_grok: false
+    send_local_context_to_claude: false
     # Cost guard: hard ceiling on the prompt forwarded to the external (paid)
     # Grok API. Generous default — no effect on normal queries; lower it to cap
     # per-call token spend. Set <= 0 to disable the cap entirely.
     grok_max_prompt_chars: 8000
+    claude_max_prompt_chars: 8000
   prompt_filter:
     enabled: true
     # Regex patterns (single-quoted so backslashes reach the regex engine

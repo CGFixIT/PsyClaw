@@ -105,6 +105,24 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
                 name="grok_api", healthy=False,
                 error="GROK_API_KEY not set (hybrid mode enabled but no API key)",
             ))
+    if (cfg["app"]["mode"] == "hybrid" and
+            cfg["models"].get("claude", {}).get("enabled", False)):
+        claude_cfg = cfg["models"]["claude"]
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key:
+            results.append(_ping(
+                f"{claude_cfg['base_url'].rstrip('/')}/models", "claude_api",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": claude_cfg.get("anthropic_version", "2023-06-01"),
+                },
+                expect_model=claude_cfg.get("model", ""),
+            ))
+        else:
+            results.append(HealthStatus(
+                name="claude_api", healthy=False,
+                error="ANTHROPIC_API_KEY not set (hybrid mode enabled but no API key)",
+            ))
     results.append(HealthStatus(name="embeddings_local", healthy=True, latency_ms=0.0))
     _status_cache[config_path] = (tuple(results), time.monotonic())
     return results

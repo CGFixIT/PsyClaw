@@ -23,6 +23,7 @@ class QueryRequest(BaseModel):
     # hot path regardless of filter state (mirrors the new_soul/body limits below).
     query: str = Field(min_length=1, max_length=65536)
     user_confirmed_online: bool | None = None
+    online_provider: Literal["grok", "claude"] | None = None
 
 class SourceInfo(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)

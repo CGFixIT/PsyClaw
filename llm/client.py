@@ -1,7 +1,7 @@
-"""LM Studio (local) and Grok (online fallback) client wrappers.
+"""LM Studio (local), Grok, and Claude online fallback client wrappers.
 
-Both clients use the OpenAI-compatible /chat/completions endpoint.
-Grok is only instantiated in hybrid mode when explicitly enabled.
+Local LM Studio and Grok use the OpenAI-compatible /chat/completions endpoint.
+Claude uses Anthropic's Messages API.
 
 Transient failures (timeouts, transport/network errors, and retryable HTTP
 statuses — 5xx and 429) are retried with bounded exponential backoff. Client
@@ -20,7 +20,7 @@ from collections.abc import Callable
 import httpx
 import yaml
 
-from utils.errors import GrokServiceError, LLMServiceError, RAGError
+from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError, RAGError
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +55,23 @@ def _extract_content(resp: httpx.Response) -> str:
     # response so the caller maps it to a clear typed LLM/Grok error instead.
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"empty LLM response: content was {content!r}")
+    return content
+
+
+def _extract_claude_content(resp: httpx.Response) -> str:
+    """Pull text blocks from an Anthropic Messages API response."""
+    try:
+        data = resp.json()
+        parts = [
+            block.get("text", "")
+            for block in data["content"]
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise ValueError(f"malformed Claude response ({type(e).__name__}): {e}") from e
+    content = "\n".join(p for p in parts if isinstance(p, str) and p.strip()).strip()
+    if not content:
+        raise ValueError("empty Claude response: no text content")
     return content
 
 
@@ -96,6 +113,7 @@ def _post_with_retry(
     on_other: Callable[[Exception], RAGError],
     backoff_max: float = _DEFAULT_BACKOFF_MAX_SEC,
     retry_on_timeout: bool = True,
+    extract_content: Callable[[httpx.Response], str] = _extract_content,
 ) -> str:
     """POST with bounded exponential-backoff retry on transient failures.
 
@@ -133,7 +151,7 @@ def _post_with_retry(
         try:
             resp = do_post()
             resp.raise_for_status()
-            return _extract_content(resp)
+            return extract_content(resp)
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if attempt < max_retries and _is_retryable_status(status):
@@ -292,4 +310,63 @@ class GrokClient:
                 "Grok timeout", details={"timeout_sec": self.timeout}
             ),
             on_other=lambda e: GrokServiceError(f"Grok error: {str(e)}"),
+        )
+
+
+class ClaudeClient:
+    def __init__(self, config_path: str = "config.yaml", cfg: dict | None = None):
+        if cfg is None:
+            with open(config_path, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        claude_cfg = cfg["models"]["claude"]
+        self.base_url = claude_cfg["base_url"].rstrip("/")
+        self.model = claude_cfg["model"]
+        self.max_tokens = claude_cfg["max_tokens"]
+        self.timeout = claude_cfg["timeout_sec"]
+        self.anthropic_version = claude_cfg.get("anthropic_version", "2023-06-01")
+        self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(claude_cfg)
+        self.api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        self._client = httpx.Client(timeout=self.timeout)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    def generate(self, prompt: str) -> str:
+        if not self.api_key:
+            raise ClaudeServiceError("ANTHROPIC_API_KEY not set",
+                                     details={"required_env": "ANTHROPIC_API_KEY"})
+
+        def do_post() -> httpx.Response:
+            return self._client.post(
+                f"{self.base_url}/messages",
+                headers={
+                    "x-api-key": self.api_key,
+                    "anthropic-version": self.anthropic_version,
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "max_tokens": self.max_tokens,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+
+        return _post_with_retry(
+            service="claude",
+            do_post=do_post,
+            max_retries=self.retry_max,
+            backoff_base=self.retry_backoff,
+            backoff_max=self.retry_backoff_max,
+            extract_content=_extract_claude_content,
+            on_http=lambda e: ClaudeServiceError(
+                f"Claude HTTP {e.response.status_code}",
+                details={"status": e.response.status_code},
+            ),
+            on_timeout=lambda e: ClaudeServiceError(
+                "Claude timeout", details={"timeout_sec": self.timeout}
+            ),
+            on_other=lambda e: ClaudeServiceError(f"Claude error: {str(e)}"),
         )
