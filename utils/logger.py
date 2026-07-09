@@ -84,6 +84,16 @@ def close_audit_handles() -> None:
 atexit.register(close_audit_handles)
 
 
+def _anchor(path_str: str) -> Path:
+    """Resolve path_str against the repo root when it isn't already absolute.
+
+    Mirrors _get_config's own anchoring (see _REPO_ROOT above) so log_file/
+    audit_file values read from config.yaml don't depend on the process cwd.
+    """
+    path = Path(path_str).expanduser()
+    return path if path.is_absolute() else _REPO_ROOT / path
+
+
 def setup_logging(cfg: dict | None = None) -> None:
     global _logging_initialized
     if _logging_initialized:
@@ -107,8 +117,9 @@ def setup_logging(cfg: dict | None = None) -> None:
     root.addHandler(console)
 
     if log_file:
-        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_file, encoding="utf-8")
+        anchored_log_file = _anchor(log_file)
+        anchored_log_file.parent.mkdir(parents=True, exist_ok=True)
+        fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         root.addHandler(fh)
 
@@ -199,7 +210,7 @@ def _redact_value(value: object, cfg: dict) -> object:
 def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = None) -> None:
     if cfg is None:
         cfg = _get_config(config_path)
-    log_path = Path(cfg["logging"]["audit_file"])
+    log_path = _anchor(cfg["logging"]["audit_file"])
     audit_fields = cfg["logging"].get("audit_fields", {})
     record = dict(event)  # work on a shallow copy — never mutate the caller's dict
     if "query" in record and audit_fields.get("include_query_hash", True):

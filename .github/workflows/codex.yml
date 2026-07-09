@@ -4,6 +4,11 @@ on:
   issue_comment:
     types: [created]
 
+# Cancel superseded @codex runs on the same issue thread; keep main history.
+concurrency:
+  group: codex-pr-comment-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   codex:
     name: Codex Agent
