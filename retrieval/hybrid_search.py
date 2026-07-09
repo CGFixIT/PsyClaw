@@ -18,6 +18,7 @@ from utils.errors import EmbeddingServiceError, IndexNotFoundError
 from utils.logger import audit_log
 
 from .embeddings import get_embedding
+from .indexer import _anchor_index_paths, _resolve_config_path
 from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_reader, parse_stem_tags
 
@@ -42,10 +43,11 @@ class SearchResult:
 
 class HybridRetriever:
     def __init__(self, config_path: str = "config.yaml"):
-        with open(config_path, encoding="utf-8") as f:
-            self.cfg = yaml.safe_load(f)
+        resolved_config_path = _resolve_config_path(config_path)
+        with open(resolved_config_path, encoding="utf-8") as f:
+            self.cfg = _anchor_index_paths(yaml.safe_load(f), resolved_config_path)
 
-        self.config_path = config_path
+        self.config_path = str(resolved_config_path)
         bm25_path = self.cfg["indexing"]["bm25_path"]
 
         # Semantic backend is pluggable (ChromaDB default, or pgvector). The reader

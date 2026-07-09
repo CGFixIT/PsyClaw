@@ -4,9 +4,12 @@ Tests RRF fusion logic, graceful degradation, and score calculation
 without requiring live sentence-transformers or ChromaDB indices.
 """
 
-import pytest
+import json
 from functools import lru_cache
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from rank_bm25 import BM25Okapi
 
@@ -105,6 +108,43 @@ class TestFusionReturnsFullUnion:
         # Pre-fix this returned only 5 (max(5, 5)); the other 5 were dropped.
         assert len(out) == 10
         assert {r.chunk_id for r in out} == set(range(10))
+
+
+class TestConfigPathAnchoring:
+    def test_relative_index_paths_resolve_from_config_dir(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        outside = tmp_path / "outside"
+        index_dir = repo / "index"
+        index_dir.mkdir(parents=True)
+        outside.mkdir()
+        (index_dir / "bm25.json").write_text(
+            json.dumps({
+                "tokenized_corpus": [["alpha"]],
+                "chunks": ["alpha"],
+                "metadata": [{"source": "a.md", "chunk_id": 0, "stem_tags": "[]"}],
+            }),
+            encoding="utf-8",
+        )
+        (repo / "config.yaml").write_text(
+            json.dumps({
+                "indexing": {
+                    "bm25_path": "index/bm25.json",
+                    "chroma_path": "index/chroma_db",
+                    "collection_name": "test_kb",
+                },
+                "retrieval": {"top_k_semantic": 1, "top_k_keyword": 1, "rrf_k": 60},
+            }),
+            encoding="utf-8",
+        )
+
+        monkeypatch.chdir(outside)
+        with patch("retrieval.hybrid_search.get_vector_reader", return_value=SimpleNamespace(close=lambda: None)) as reader:
+            retriever = HybridRetriever(str(repo / "config.yaml"))
+
+        reader_cfg = reader.call_args.args[0]
+        assert retriever.config_path == str((repo / "config.yaml").resolve())
+        assert reader_cfg["indexing"]["bm25_path"] == str((index_dir / "bm25.json").resolve())
+        assert reader_cfg["indexing"]["chroma_path"] == str((index_dir / "chroma_db").resolve())
 
 
 class TestTokenizationForBM25:
