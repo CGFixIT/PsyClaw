@@ -38,11 +38,12 @@ Never imported by gate.py / graph.py / mcp_hybrid_server.py.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import re
 import stat as statmod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,8 +123,18 @@ class ScopedRoots:
     (read scope) requires them to exist.
     """
 
-    def __init__(self, root_strs: list[str], *, create: bool = False, allow_unc: bool = False) -> None:
+    def __init__(
+        self,
+        root_strs: list[str],
+        *,
+        create: bool = False,
+        allow_unc: bool = False,
+        strict_roots: bool = False,
+        on_fallback: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.allow_unc = allow_unc
+        self.strict_roots = strict_roots
+        self._on_fallback = on_fallback
         self._roots: list[SafeRoot] = []
         seen: list[str] = []
         for raw in root_strs:
@@ -139,17 +150,29 @@ class ScopedRoots:
             dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY) if _POSIX else -1
             self._roots.append(SafeRoot(requested=raw, path=resolved, normcase=norm, dir_fd=dir_fd))
 
-    @staticmethod
-    def _prepare_root(raw: str, *, create: bool) -> Path:
+    def _prepare_root(self, raw: str, *, create: bool) -> Path:
         path = Path(os.path.expanduser(os.path.expandvars(raw)))
         if create:
             try:
                 path.mkdir(parents=True, exist_ok=True)
-            except PermissionError:
+            except PermissionError as exc:
                 # Documented fallback for the default service path (/var/lib/cyclaw-fs):
-                # if we cannot create it, fall back to a home-dir share that needs no root.
+                # if we cannot create it, fall back to a home-dir share that needs no
+                # root. Phase 2 makes this fallback (a) refusable and (b) audited: with
+                # strict_roots the misconfiguration halts (fail closed) instead of
+                # silently relocating writes; otherwise the fallback fires an
+                # fsconnect_root_fallback audit event via the on_fallback callback so
+                # the operator can detect config drift. (R-7.)
+                if self.strict_roots:
+                    raise FsPathError(
+                        f"cannot prepare writable root {raw!r} and strict_roots is set; "
+                        "refusing the ~/CyClaw-FS fallback (fail closed)",
+                        details={"root": raw, "error": str(exc)},
+                    ) from exc
                 fallback = Path(os.path.expanduser("~/CyClaw-FS"))
                 fallback.mkdir(parents=True, exist_ok=True)
+                if self._on_fallback is not None:
+                    self._on_fallback(raw, str(fallback))
                 path = fallback
         try:
             resolved = path.resolve(strict=True)
@@ -379,10 +402,24 @@ class ScopedRoots:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, leaf, src_dir_fd=pfd, dst_dir_fd=pfd)
+            self._fsync_dir(pfd)
         except BaseException:
             with suppress(OSError):
                 os.unlink(tmp, dir_fd=pfd)
             raise
+
+    @staticmethod
+    def _fsync_dir(dir_fd: int) -> None:
+        """Best-effort fsync of a directory fd so a rename/unlink is crash-durable.
+
+        Completes the atomicity story the module docstring claims: ``os.replace`` is
+        atomic w.r.t. concurrent readers, but the rename itself is not guaranteed
+        durable across a power loss until the *parent directory* is fsynced. Suppress
+        OSError -- some filesystems reject directory fsync (EINVAL); durability is
+        best-effort there and the atomic-visibility guarantee is unaffected. (R-6.)
+        """
+        with suppress(OSError):
+            os.fsync(dir_fd)
 
     def append_bytes(self, target: str, data: bytes, *, root: str | None = None) -> dict:
         comps = split_components(target)
@@ -452,8 +489,131 @@ class ScopedRoots:
                         "move failed",
                         details={"errno": exc.errno, "strerror": exc.strerror},
                     ) from exc
+                self._fsync_dir(dpfd)
             return {"from": self._display(sr, scomps), "to": self._display(sr, dcomps)}
         return self._move_win(sr, scomps, dcomps, overwrite)  # pragma: no cover
+
+    def unlink(self, target: str, *, root: str | None = None, sha_max_bytes: int | None = None) -> dict:
+        """Hard-delete a regular file (``os.unlink`` with ``dir_fd``). Refuses directories.
+
+        Mechanism only -- policy (gates, allow_hard_delete) lives in the writer. The
+        leaf is opened only via the held descent fds (``O_NOFOLLOW``), so a symlink
+        leaf is refused, never followed. Returns the pre-delete size and (for regular
+        files at/under ``sha_max_bytes``) a content sha256 for the purge audit record.
+        """
+        comps = split_components(target)
+        if not comps:
+            raise FsPathError("unlink target must be a file under the root")
+        sr = self.pick_root(root)
+        if _POSIX:
+            with self._descend_posix(sr, comps) as (pfd, leaf):
+                try:
+                    st = os.stat(leaf, dir_fd=pfd, follow_symlinks=False)
+                except OSError as exc:
+                    raise FsPathError(
+                        f"cannot stat {leaf!r} for unlink",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
+                if statmod.S_ISDIR(st.st_mode):
+                    raise FsPathError("unlink target is a directory; use rmdir")
+                size = int(st.st_size)
+                sha = self._sha_leaf_posix(pfd, leaf, st, size, sha_max_bytes)
+                try:
+                    os.unlink(leaf, dir_fd=pfd)
+                except OSError as exc:
+                    raise FsPathError(
+                        f"cannot unlink {leaf!r}",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
+                self._fsync_dir(pfd)
+            return {"removed": self._display(sr, comps), "size": size, "sha256": sha}
+        return self._unlink_win(sr, comps, sha_max_bytes)  # pragma: no cover - Windows only
+
+    @staticmethod
+    def _sha_leaf_posix(
+        pfd: int, leaf: str, st: os.stat_result, size: int, sha_max_bytes: int | None
+    ) -> str | None:
+        """Stream a regular file's content sha256 through the held descent fd.
+
+        Returns ``None`` for non-regular files or when ``size`` exceeds
+        ``sha_max_bytes`` (so a purge of a huge file never buffers it whole).
+        """
+        if not statmod.S_ISREG(st.st_mode):
+            return None
+        if sha_max_bytes is not None and size > sha_max_bytes:
+            return None
+        try:
+            fd = os.open(leaf, os.O_RDONLY | _O_NOFOLLOW, dir_fd=pfd)
+        except OSError:
+            return None
+        h = hashlib.sha256()
+        with os.fdopen(fd, "rb", closefd=True) as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def rmdir(self, target: str, *, root: str | None = None) -> dict:
+        """Remove an EMPTY directory (``os.rmdir`` with ``dir_fd``). Refuses files.
+
+        ``ENOTEMPTY`` surfaces as ``FsConnectRuntimeError`` -- the writer maps it to a
+        typed ``FsWriteRefused(failed_gate='non_empty_dir')``; recursive hard delete is
+        deliberately not offered in Phase 2.
+        """
+        comps = split_components(target)
+        if not comps:
+            raise FsPathError("rmdir target must be a directory under the root")
+        sr = self.pick_root(root)
+        if _POSIX:
+            with self._descend_posix(sr, comps) as (pfd, leaf):
+                try:
+                    st = os.stat(leaf, dir_fd=pfd, follow_symlinks=False)
+                except OSError as exc:
+                    raise FsPathError(
+                        f"cannot stat {leaf!r} for rmdir",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
+                if not statmod.S_ISDIR(st.st_mode):
+                    raise FsPathError("rmdir target is not a directory; use unlink")
+                try:
+                    os.rmdir(leaf, dir_fd=pfd)
+                except OSError as exc:
+                    if exc.errno == errno.ENOTEMPTY:
+                        raise FsConnectRuntimeError(
+                            f"directory {leaf!r} is not empty",
+                            details={"errno": exc.errno, "non_empty": True},
+                        ) from exc
+                    raise FsPathError(
+                        f"cannot rmdir {leaf!r}",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
+                self._fsync_dir(pfd)
+            return {"removed": self._display(sr, comps), "kind": "dir"}
+        return self._rmdir_win(sr, comps)  # pragma: no cover - Windows only
+
+    def _unlink_win(self, sr: SafeRoot, comps: list[str], sha_max_bytes: int | None) -> dict:  # pragma: no cover - Windows only
+        real = self._win_resolve(sr, comps, must_exist=True)
+        if real.is_dir():
+            raise FsPathError("unlink target is a directory; use rmdir")
+        size = real.stat().st_size
+        sha: str | None = None
+        if sha_max_bytes is None or size <= sha_max_bytes:
+            sha = hashlib.sha256(real.read_bytes()).hexdigest()
+        real.unlink()
+        return {"removed": str(real), "size": int(size), "sha256": sha}
+
+    def _rmdir_win(self, sr: SafeRoot, comps: list[str]) -> dict:  # pragma: no cover - Windows only
+        real = self._win_resolve(sr, comps, must_exist=True)
+        if not real.is_dir():
+            raise FsPathError("rmdir target is not a directory; use unlink")
+        try:
+            real.rmdir()
+        except OSError as exc:
+            if exc.errno == errno.ENOTEMPTY:
+                raise FsConnectRuntimeError(
+                    f"directory {real} is not empty", details={"non_empty": True}
+                ) from exc
+            raise
+        return {"removed": str(real), "kind": "dir"}
 
     @staticmethod
     def _display(sr: SafeRoot, comps: list[str]) -> str:
