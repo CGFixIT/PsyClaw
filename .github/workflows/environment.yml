@@ -12,24 +12,28 @@ channels:
 dependencies:
   - python=3.12
   - pip
-  # Core runtime (conda-forge versions for binary stability)
-  - fastapi
-  - uvicorn
-  - pydantic
-  - pyyaml
-  - httpx
-  - langchain-core
-  - chromadb  # Note: Use embedded/PersistentClient only. See SECURITY.md
-  - sentence-transformers
-  - numpy
-  - nltk
-  # Test & Dev tooling
-  - pytest
-  - pytest-asyncio
-  - ruff
-  - mypy
-  - bandit
-  - pytest-cov
+  # Core runtime — pinned to match pyproject.toml / constraints.txt exactly
+  # (each version verified present on conda-forge, 2026-07). Keep these pins in
+  # sync with pyproject.toml [project.dependencies] and constraints.txt; a bare
+  # unpinned resolve here can silently drift from the pip path (e.g. numpy
+  # floating to 2.x, which breaks chromadb/onnxruntime per CLAUDE.md).
+  - fastapi=0.138.0
+  - uvicorn=0.49.0
+  - pydantic=2.13.4
+  - pyyaml=6.0.3
+  - httpx=0.28.1
+  - langchain-core=1.4.8
+  - chromadb=1.5.9  # Note: Use embedded/PersistentClient only. See SECURITY.md
+  - sentence-transformers=5.6.0
+  - numpy=1.26.4
+  - nltk=3.9.4
+  # Test & Dev tooling — pinned to match pyproject.toml's test/dev extras
+  - pytest=9.1.1
+  - pytest-asyncio=1.4.0
+  - ruff=0.15.20
+  - mypy=2.1.0
+  - bandit=1.9.4
+  - pytest-cov=7.1.0
   - pip:
       - langgraph==1.2.6
       - rank-bm25==0.2.2

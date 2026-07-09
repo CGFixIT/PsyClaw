@@ -42,11 +42,11 @@ torch-cpu = ["torch==2.12.1+cpu"]  # Minimum safe version post CVE-2025-32434 (w
 # Optional Postgres backend for the soul DB + rate limiter (CYCLAW_DB_URL). Stays
 # OUT of the base deps so the default SQLite/offline-first install is zero-extra;
 # psycopg is lazy-imported, so installs without this extra never load it.
-postgres = ["psycopg[binary]>=3.2.0"]
+postgres = ["psycopg[binary]==3.2.13"]
 # Optional pgvector vector backend (indexing.vector_backend: pgvector). Superset of
 # `postgres` — adds the pgvector adapter; ChromaDB remains the default vector store.
-pgvector = ["psycopg[binary]>=3.2.0", "pgvector>=0.3.6"]
-full = ["torch==2.12.1+cpu", "pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.15.20", "mypy==2.1.0", "bandit==1.9.4", "pytest-cov==7.1.0", "psycopg[binary]>=3.2.0", "pgvector>=0.3.6"]
+pgvector = ["psycopg[binary]==3.2.13", "pgvector==0.4.2"]
+full = ["torch==2.12.1+cpu", "pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.15.20", "mypy==2.1.0", "bandit==1.9.4", "pytest-cov==7.1.0", "psycopg[binary]==3.2.13", "pgvector==0.4.2"]
 
 [project.scripts]
 cyclaw-server = "gate:main"
