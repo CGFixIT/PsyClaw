@@ -24,7 +24,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 1. **Answers questions exclusively from your local Markdown corpus** — no internet by default
 2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline
 3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification
-4. **Falls back to Grok (xAI) only with explicit user confirmation** in hybrid mode — triple-gated at config, env, and per-query level
+4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
 5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
@@ -48,7 +48,7 @@ User Query (HTTP POST /query or MCMC tool call)
                        │
                        ▼
     ┌─────────────────────────────────────────────────────┐
-    │  graph.py  (LangGraph 7-node State Machine)         │
+    │  graph.py  (LangGraph 8-node State Machine)         │
     │                                                     │
     │  [ENTRY]                                            │
     │     ↓                                               │
@@ -58,7 +58,9 @@ User Query (HTTP POST /query or MCMC tool call)
     │     ├─ YES ──→ 3. local_llm (LM Studio :1234)       │
     │     └─ NO  ──→ 4. user_gate (needs_confirm=true)    │
     │                    ├─ confirmed + hybrid ──→        │
-    │                    │      5. grok_fallback          │
+    │                    │      5. grok_fallback OR       │
+    │                    │         claude_fallback        │
+    │                    │      (selected per-query)      │
     │                    └─ declined / offline ──→        │
     │                           6. offline_best_effort    │
     │     ↓ (all paths converge)                          │
@@ -93,17 +95,19 @@ flowchart TD
 
     E --> F
 
-    subgraph GRAPH ["graph.py — LangGraph 7-node State Machine"]
+    subgraph GRAPH ["graph.py — LangGraph 8-node State Machine"]
         F(["① retrieve\nChroma + BM25 + RRF"])
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| H["③ local_llm\nLM Studio :1234\nQwen2.5-7b"]
         G -->|"NO — vault miss"| I["④ user_gate\nneeds_confirm = true"]
-        I -->|"confirmed=true\n+ hybrid + grok.enabled"| J["⑤ grok_fallback\nxAI grok-4.3\ntriple-gated"]
-        I -->|"confirmed=false\nor offline mode"| K["⑥ offline_best_effort\nlocal LLM · no RAG gate"]
+        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑤ grok_fallback\nxAI grok-4.3\ntriple-gated"]
+        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑥ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
+        I -->|"confirmed=false\nor offline mode"| K["⑦ offline_best_effort\nlocal LLM · no RAG gate"]
         H --> L
         J --> L
+        W --> L
         K --> L
-        L(["⑦ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
+        L(["⑧ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
     end
 
     L --> M(["📤 QueryResponse\nanswer · sources · model_used\nretrieval_mode · needs_confirm"])
@@ -140,6 +144,7 @@ flowchart TD
     style SOUL fill:#3a1a3a,color:#ffffff,stroke:#d94ad9
     style OOB fill:#2a2a2a,color:#aaaaaa,stroke:#666666,stroke-dasharray:5 5
     style J fill:#5c1a1a,color:#ffffff
+    style W fill:#5c1a1a,color:#ffffff
     style L fill:#1a1a3a,color:#ffffff
 ```
 
@@ -600,6 +605,7 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Telemetry | Kill block runs before any SDK import in `gate.py` |
 | Audit | All paths log SHA-256 query hash + PII-redacted metadata |
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
+| Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |
 | Soul writes | Explicit human reason string + enforced write-boundary scan + atomic write |
 | Agentic writes | Stubbed / non-executing in current release |
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
