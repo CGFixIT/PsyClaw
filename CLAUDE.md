@@ -505,6 +505,17 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`).
 `/python-coding-agent` auto-loads via the SessionStart hook.
 
+### Cross-repo behavioral skill
+
+`/fable-protocol` — reasoning-discipline and epistemic-calibration layer (mark
+speculation, verify stale knowledge, security lens on every generated artifact,
+anti-sycophancy, Sonnet 5 vs Opus 4.8 routing). Scoped to the user, not to
+CyClaw: it is registered both at `.claude/skills/fable-protocol/SKILL.md` in
+this repo and at the user-level `~/.claude/skills/fable-protocol/SKILL.md`, so
+it activates in any repository, not only here. It does not encode CyClaw
+architecture and carries no authority over the six invariants in §3 — those
+still govern. See the skill file for the full protocol.
+
 ---
 
 ## 10. Session Protocol
