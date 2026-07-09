@@ -26,7 +26,10 @@ TEST_CONFIG = {
         "embeddings": {"provider": "sentence-transformers", "model": "all-MiniLM-L6-v2",
                        "dim": 384, "cache_dir": None},
         "grok": {"enabled": False, "base_url": "https://api.x.ai/v1", "model": "grok-4.3",
-                 "timeout_sec": 10, "max_tokens": 256, "temperature": 0.2}
+                 "timeout_sec": 10, "max_tokens": 256, "temperature": 0.2},
+        "claude": {"enabled": False, "base_url": "https://api.anthropic.com/v1",
+                   "model": "claude-sonnet-5", "anthropic_version": "2023-06-01",
+                   "timeout_sec": 10, "max_tokens": 256}
     },
     "corpus": {"path": "data/corpus", "extensions": [".md", ".txt"]},
     "indexing": {"chroma_path": "", "bm25_path": "", "collection_name": "test_kb",
@@ -35,7 +38,9 @@ TEST_CONFIG = {
                    "max_context_tokens": 1000, "min_score": 0.75,
                    "hybrid": {"enabled": True}},
     "policy": {
-        "fallback": {"enabled": True, "require_user_confirm": True, "send_local_context_to_grok": False},
+        "fallback": {"enabled": True, "require_user_confirm": True,
+                     "send_local_context_to_grok": False,
+                     "send_local_context_to_claude": False},
         "prompt_filter": {"enabled": True,
                           "banned_patterns": ["ignore previous instructions", "system prompt:"],
                           "max_input_chars": 4000},
@@ -174,6 +179,10 @@ class MockGrokClient:
     def generate(self, prompt):
         self.last_prompt = prompt
         return self.response
+
+
+class MockClaudeClient(MockGrokClient):
+    """Stand-in for ClaudeClient; same generate/is_available contract."""
 
 
 @pytest.fixture

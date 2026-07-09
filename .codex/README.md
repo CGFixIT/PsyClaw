@@ -16,10 +16,15 @@ short and invocation-friendly, for example `/refactor` or
 
 ## Available Skills
 
+- `skills/fable-protocol/` - session-start discipline for substantive Codex
+  tasks: premise testing, uncertainty marking, findings-before-writes, security
+  review, and shipping-first prioritization.
 - `skills/cyclaw-project-guidance/` - load CyClaw operating context,
   invariants, and canonical reference docs before substantial work.
 - `skills/cyclaw-run-cyclaw/` - prepare, run, smoke-test, and interact with the
   local CyClaw FastAPI RAG server.
+- `skills/cyclaw-sandbox-test/` - clone `origin/main`, mock LM Studio, and
+  smoke-test CyClaw gateway plus terminal/API surfaces before PRs.
 - `skills/cyclaw-command-status/` - run a read-only environment, config, index,
   soul, telemetry, and live-health status check.
 - `skills/cyclaw-command-run/` - run focused smoke checks for local server

@@ -28,15 +28,21 @@ _LM_MODELS = "http://127.0.0.1:1234/models"  # DevSkim: ignore DS137138,DS162092
 _HOST_MODELS = "http://host/models"  # DevSkim: ignore DS137138
 
 
-def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None):
+def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
+               claude_enabled=False, claude_model=None):
     grok_cfg = {"enabled": grok_enabled, "base_url": "https://api.x.ai/v1"}
     if grok_model is not None:
         grok_cfg["model"] = grok_model
+    claude_cfg = {"enabled": claude_enabled, "base_url": "https://api.anthropic.com/v1",
+                  "anthropic_version": "2023-06-01"}
+    if claude_model is not None:
+        claude_cfg["model"] = claude_model
     cfg = {
         "app": {"mode": mode},
         "models": {
             "local_llm": {"base_url": _LM_BASE},
             "grok": grok_cfg,
+            "claude": claude_cfg,
         },
     }
     p = tmp_path / "config.yaml"
@@ -127,6 +133,15 @@ class TestCheckAll:
         assert grok.healthy is False
         assert "GROK_API_KEY not set" in grok.error
 
+    def test_hybrid_claude_without_key_reports_key_not_set(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        statuses = health.check_all(cfg_path)
+        claude = next(s for s in statuses if s.name == "claude_api")
+        assert claude.healthy is False
+        assert "ANTHROPIC_API_KEY not set" in claude.error
+
     def test_hybrid_with_key_pings_grok_with_bearer_auth(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True)
         seen = {}
@@ -144,6 +159,26 @@ class TestCheckAll:
         # Last ping is Grok; it must carry the Bearer token (else xAI 401s).
         assert seen["headers"]["Authorization"] == "Bearer test-key-123"
         assert seen["url"].endswith("/models")
+
+    def test_hybrid_with_key_pings_claude_with_anthropic_headers(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        seen = {}
+
+        def fake_get(url, **kw):
+            if "anthropic" in url:
+                seen["url"] = url
+                seen["headers"] = kw.get("headers")
+                return _ModelsResp(["claude-sonnet-5"])
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", fake_get)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
+        statuses = health.check_all(cfg_path)
+        claude = next(s for s in statuses if s.name == "claude_api")
+        assert claude.healthy is True
+        assert seen["headers"]["x-api-key"] == "test-key-123"
+        assert seen["headers"]["anthropic-version"] == "2023-06-01"
+        assert seen["url"] == "https://api.anthropic.com/v1/models"
 
     def test_hybrid_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4.3")

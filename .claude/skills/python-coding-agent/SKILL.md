@@ -76,7 +76,7 @@ When extending any of the seven LangGraph nodes (`retrieve`, `route_score`, `loc
 - **Topology = Policy.** Routing is graph edges, never LLM-decided.
 - **RAG-First invariant.** `retrieve` is the unconditional first node; no LLM call precedes it.
 - **Audit convergence.** All paths converge at `audit_logger`; never add a shortcut.
-- **Triple-gated external.** Grok requires `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` simultaneously — enforce in graph edges, not runtime checks.
+- **Triple-gated external.** Grok and Claude require `mode=hybrid` AND the selected provider enabled AND `user_confirmed_online=true` simultaneously — enforce in graph edges, not runtime checks.
 - **Soul governance.** `data/personality/soul.md` mutations require an explicit `reason` string; use `utils/personality.py` APIs, not raw file writes.
 - **Hybrid retrieval pattern** (`retrieval/hybrid_search.py`): ChromaDB semantic + BM25Okapi keyword → RRF fusion (k=60). Do not bypass either leg.
 - **Config source of truth**: `config.yaml` only. No hardcoded tunables.

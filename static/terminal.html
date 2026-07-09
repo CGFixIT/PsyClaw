@@ -1161,7 +1161,7 @@ async function checkHealth() {
   scheduleHealthCheck();
 }
 
-async function submitQuery(confirmedOnline = null) {
+async function submitQuery(confirmedOnline = null, onlineProvider = null) {
   const query = confirmedOnline !== null ? pendingConfirmQuery : input.value.trim();
   if (!query) return;
 
@@ -1185,6 +1185,7 @@ async function submitQuery(confirmedOnline = null) {
     const body = { query };
     if (confirmedOnline !== null) {
       body.user_confirmed_online = confirmedOnline;
+      if (onlineProvider) body.online_provider = onlineProvider;
     }
 
     // Bound the wait so a stalled LLM surfaces an error instead of hanging the
@@ -1214,7 +1215,7 @@ async function submitQuery(confirmedOnline = null) {
 
     if (data.needs_confirm) {
       pendingConfirmQuery = query;
-      addConfirmEntry(data.confirm_message || 'Low confidence. Send to Grok online?');
+      addConfirmEntry(data.confirm_message || 'Low confidence. Send online?');
       return;
     }
 
@@ -1316,9 +1317,15 @@ function addConfirmEntry(message) {
 
   const yesBtn = document.createElement('button');
   yesBtn.className = 'btn-confirm yes';
-  yesBtn.textContent = 'Yes — Send to Grok';
+  yesBtn.textContent = 'Send to Grok';
   yesBtn.setAttribute('aria-label', 'Confirm: send query to Grok online');
-  yesBtn.addEventListener('click', () => handleConfirm(true, id));
+  yesBtn.addEventListener('click', () => handleConfirm(true, id, 'grok'));
+
+  const claudeBtn = document.createElement('button');
+  claudeBtn.className = 'btn-confirm yes';
+  claudeBtn.textContent = 'Send to Claude';
+  claudeBtn.setAttribute('aria-label', 'Confirm: send query to Claude API online');
+  claudeBtn.addEventListener('click', () => handleConfirm(true, id, 'claude'));
 
   const noBtn = document.createElement('button');
   noBtn.className = 'btn-confirm no';
@@ -1326,14 +1333,14 @@ function addConfirmEntry(message) {
   noBtn.setAttribute('aria-label', 'Decline: stay offline with best-effort local');
   noBtn.addEventListener('click', () => handleConfirm(false, id));
 
-  buttons.append(yesBtn, noBtn);
+  buttons.append(yesBtn, claudeBtn, noBtn);
   el.append(label, text, buttons);
   resultsEl.appendChild(el);
   resultsEl.scrollTop = resultsEl.scrollHeight;
   noBtn.focus();
 
   // Trap focus within the modal dialog (Tab cycles between Yes and No).
-  const focusable = [yesBtn, noBtn];
+  const focusable = [yesBtn, claudeBtn, noBtn];
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
     const idx = focusable.indexOf(document.activeElement);
@@ -1346,7 +1353,7 @@ function addConfirmEntry(message) {
   });
 }
 
-function handleConfirm(confirmed, entryId) {
+function handleConfirm(confirmed, entryId, onlineProvider = null) {
   const el = document.getElementById(entryId);
   if (el) {
     const btns = el.querySelectorAll('.btn-confirm');
@@ -1355,8 +1362,9 @@ function handleConfirm(confirmed, entryId) {
     el.removeAttribute('aria-modal');
     el.removeAttribute('aria-labelledby');
   }
-  addEntry('system', '', confirmed ? '→ Escalating to Grok...' : '→ Staying offline (best-effort local)');
-  submitQuery(confirmed);
+  const providerLabel = onlineProvider === 'claude' ? 'Claude' : 'Grok';
+  addEntry('system', '', confirmed ? `→ Escalating to ${providerLabel}...` : '→ Staying offline (best-effort local)');
+  submitQuery(confirmed, onlineProvider);
   input.focus();
 }
 

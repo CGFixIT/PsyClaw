@@ -20,7 +20,7 @@ from graph import (
     _context_char_budget,
 )
 from tests.conftest import (
-    MockRetriever, MockLocalLLM, MockGrokClient,
+    MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
     MOCK_HIGH_SCORE_RESULTS, MOCK_LOW_SCORE_RESULTS, MOCK_EMPTY_RESULTS,
     TEST_CONFIG
 )
@@ -45,13 +45,14 @@ def setup_logging(tmp_path, monkeypatch):
     reset_config_cache()
 
 
-def _make_cfg(tmp_path, mode="offline", grok_enabled=False):
+def _make_cfg(tmp_path, mode="offline", grok_enabled=False, claude_enabled=False):
     """Build test config with temp audit path."""
     cfg = {**TEST_CONFIG}
     cfg["app"] = {**cfg["app"], "mode": mode}
     cfg["models"] = {
         **cfg["models"],
-        "grok": {**cfg["models"]["grok"], "enabled": grok_enabled}
+        "grok": {**cfg["models"]["grok"], "enabled": grok_enabled},
+        "claude": {**cfg["models"]["claude"], "enabled": claude_enabled},
     }
     cfg["logging"] = {
         **cfg["logging"],
@@ -171,6 +172,57 @@ class TestGrokFallbackPath:
         assert "Local fallback when key missing." in result["answer"]
         # Grok must not have been called at all.
         assert grok.last_prompt is None
+
+    def test_confirmed_claude_provider_routes_to_claude(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM()
+        claude = MockClaudeClient(response="Claude answer about quantum physics.")
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, claude=claude, cfg=cfg)
+        result = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "claude"
+        assert "Claude answer" in result["answer"]
+
+    def test_confirmed_claude_provider_does_not_call_grok_when_both_enabled(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True, claude_enabled=True)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM()
+        grok = MockGrokClient(response="Grok answer should not be used.")
+        claude = MockClaudeClient(response="Claude answer selected by button.")
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=grok, claude=claude, cfg=cfg)
+        result = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "claude"
+        assert "Claude answer selected by button." in result["answer"]
+        assert grok.last_prompt is None
+
+    def test_confirmed_claude_without_key_routes_to_offline(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Local fallback when Claude key missing.")
+        claude = MockClaudeClient(available=False)
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, claude=claude, cfg=cfg)
+        result = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "offline-best-effort"
+        assert "Local fallback when Claude key missing." in result["answer"]
+        assert claude.last_prompt is None
 
 
 class TestOfflineBestEffortPath:

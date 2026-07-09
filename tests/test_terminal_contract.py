@@ -50,6 +50,14 @@ def test_console_path_extraction_is_not_empty():
     assert any(p.startswith("/ops/") for p in paths)
 
 
+def test_online_confirm_buttons_send_explicit_provider():
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    assert "handleConfirm(true, id, 'grok')" in html
+    assert "handleConfirm(true, id, 'claude')" in html
+    assert "body.online_provider = onlineProvider" in html
+    assert "Escalating to ${providerLabel}" in html
+
+
 @pytest.mark.parametrize("path", sorted(_console_paths()))
 def test_console_endpoint_exists_on_gateway(path):
     routes = _gate_routes()

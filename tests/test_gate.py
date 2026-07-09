@@ -40,6 +40,7 @@ def client(tmp_path):
          patch("gate.cfg", cfg), \
          patch("gate.HybridRetriever") as MockRet, \
          patch("gate.LocalLLMClient") as MockLLM, \
+         patch("gate.ClaudeClient"), \
          patch("gate.build_graph") as MockBuild, \
          patch("gate.check_input", side_effect=lambda q: q), \
          patch("gate.check_all", return_value=[]):
@@ -70,6 +71,7 @@ def client(tmp_path):
         gate.retriever = retriever
         gate.local_llm = llm
         gate.grok = None
+        gate.claude = None
         gate.compiled_graph = mock_graph
 
         # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
@@ -178,6 +180,31 @@ class TestQueryEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["model_used"] == "offline-best-effort"
+
+    def test_confirmation_flow_passes_online_provider(self, client):
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = {
+            "query": "quantum physics",
+            "answer": "Claude answer.",
+            "answer_model": "claude",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.3,
+            "retrieval_mode": "hybrid",
+            "needs_user_confirm": False,
+            "audit_event": {}
+        }
+
+        resp = test_client.post("/query", json={
+            "query": "Explain quantum physics",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert resp.status_code == 200
+        state = mock_graph.invoke.call_args.args[0]
+        assert state["online_provider"] == "claude"
+        assert resp.json()["model_used"] == "claude"
 
     def test_query_timeout_returns_504(self, client):
         # A graph invoke that exceeds api.graph_timeout_sec must return HTTP 504

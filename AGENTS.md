@@ -9,7 +9,7 @@ Canonical references:
 - `.github/copilot-instructions.md` for Copilot and PR behavior.
 - `docs/SETUP.md` for local setup details.
 - `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security assumptions.
-- `.agents/skills/fable-protocol/SKILL.md` for Codex session-start reasoning,
+- `.codex/skills/fable-protocol/SKILL.md` for Codex session-start reasoning,
   verification discipline, findings-before-writes, security posture, and
   shipping-first prioritization.
 - `.codex/README.md` for Codex routines, prompts, and checklists.
@@ -55,15 +55,13 @@ The main security invariants are RAG-first retrieval, graph topology as policy, 
 - `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
 - `.claude/` - existing Claude project skills, commands, hooks, rules, and patterns.
-- `.agents/skills/` - official Codex repository skills discovered by current
-  Codex skill loading.
-- `.codex/skills/` - existing Codex skills ported from project guidance.
+- `.codex/skills/` - Codex repository skills and project workflows.
 - `docs/` - setup, threat model, audits, agentic docs, sync docs, planning.
 
 ## Session Bootstrap For Codex
 
 Codex reads this `AGENTS.md` automatically at startup. For every substantive
-CyClaw task, activate/read `.agents/skills/fable-protocol/` before planning or
+CyClaw task, activate/read `.codex/skills/fable-protocol/` before planning or
 editing. This is the always-on discipline layer for premise testing, uncertainty
 marking, findings-before-writes, security review, and shipping-first
 prioritization.
@@ -79,7 +77,7 @@ large docs or making edits.
 
 Skills:
 
-- `.agents/skills/fable-protocol/` - use at the start of every substantive repo
+- `.codex/skills/fable-protocol/` - use at the start of every substantive repo
   task as the session-start discipline layer for premise testing, uncertainty,
   findings-before-writes, security review, and shipping-first prioritization.
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
@@ -87,6 +85,8 @@ Skills:
   reference docs.
 - `.codex/skills/cyclaw-run-cyclaw/` - use when asked to prepare, start, run,
   smoke-test, or interact with the local FastAPI RAG server.
+- `.codex/skills/cyclaw-sandbox-test/` - use for a fresh-main local sandbox
+  audit with mock LM Studio and terminal/API smoke coverage before PRs.
 - `.codex/skills/cyclaw-command-status/` - use for read-only environment,
   config, index, soul, telemetry, and live health status checks.
 - `.codex/skills/cyclaw-command-run/` - use for focused endpoint smoke checks
