@@ -14,7 +14,7 @@ from pathlib import Path
 
 from graph import (
     build_graph, retrieve_node, local_llm_node,
-    offline_best_effort_node, grok_fallback_node,
+    offline_best_effort_node, grok_fallback_node, claude_fallback_node,
     audit_logger_node,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
     _context_char_budget,
@@ -522,6 +522,119 @@ class TestGrokFallbackPrompt:
 
     def test_grok_none_degrades_without_crash(self, tmp_path):
         result = grok_fallback_node({"query": "x"}, grok=None, cfg=self._cfg(False))
+        assert result["answer_model"] == "offline-best-effort"
+
+
+class TestClaudeFallbackPrompt:
+    """claude_fallback_node prompt structure when forwarding local context.
+
+    Mirrors TestGrokFallbackPrompt 1:1 (both nodes share the same
+    _external_fallback_node implementation) — added because no prior test in
+    this file exercised claude_fallback_node's prompt assembly / cost-guard
+    truncation at all, despite grok_fallback_node's identical logic being
+    thoroughly covered here.
+    """
+
+    def _cfg(self, send_ctx):
+        return {"policy": {"fallback": {"send_local_context_to_claude": send_ctx}}}
+
+    def test_forwarded_context_includes_source_and_score_headers(self, tmp_path):
+        claude = MockClaudeClient()
+        state = {
+            "query": "what is RRF?",
+            "retrieved_docs": [
+                {"text": "reciprocal rank fusion blends rankings",
+                 "score": 0.81, "source": "rrf.md", "chunk_id": 0},
+                {"text": "it is used in hybrid retrieval",
+                 "score": 0.55, "source": "hybrid.md", "chunk_id": 1},
+            ],
+        }
+        result = claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx=True))
+
+        assert "[Source: rrf.md, Score: 0.810]" in claude.last_prompt
+        assert "Score:" in claude.last_prompt
+        assert "untrusted data" in claude.last_prompt
+        assert "what is RRF?" in claude.last_prompt
+        assert result["answer_model"] == "claude"
+        assert result["answer"] == claude.response
+
+    def test_claude_reports_no_fabricated_sources(self, tmp_path):
+        claude = MockClaudeClient()
+        state = {
+            "query": "what is RRF?",
+            "retrieved_docs": [
+                {"text": "reciprocal rank fusion", "score": 0.30,
+                 "source": "rrf.md", "chunk_id": 0},
+            ],
+        }
+        for send_ctx in (True, False):
+            result = claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx))
+            assert result["answer_model"] == "claude"
+            assert result["answer_sources"] == []
+
+    def test_no_context_forwarded_sends_query_only(self, tmp_path):
+        claude = MockClaudeClient()
+        state = {"query": "ping", "retrieved_docs": [
+            {"text": "secret local context", "score": 0.9, "source": "s.md", "chunk_id": 0}
+        ]}
+        claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx=False))
+
+        assert claude.last_prompt == "USER QUERY: ping"
+        assert "[Source:" not in claude.last_prompt
+
+    def test_prompt_truncated_to_cost_cap(self, tmp_path):
+        """claude_max_prompt_chars caps the prompt forwarded to the paid API."""
+        claude = MockClaudeClient()
+        cfg = {"policy": {"fallback": {"send_local_context_to_claude": False,
+                                       "claude_max_prompt_chars": 20}}}
+        claude_fallback_node({"query": "x" * 500}, claude=claude, cfg=cfg)
+        assert len(claude.last_prompt) == 20
+
+    def test_cap_disabled_when_non_positive(self, tmp_path):
+        claude = MockClaudeClient()
+        cfg = {"policy": {"fallback": {"send_local_context_to_claude": False,
+                                       "claude_max_prompt_chars": 0}}}
+        claude_fallback_node({"query": "y" * 500}, claude=claude, cfg=cfg)
+        assert claude.last_prompt == "USER QUERY: " + "y" * 500
+
+    def test_default_cap_does_not_truncate_normal_query(self, tmp_path):
+        claude = MockClaudeClient()
+        claude_fallback_node({"query": "what is RRF?"}, claude=claude, cfg=self._cfg(send_ctx=False))
+        assert claude.last_prompt == "USER QUERY: what is RRF?"
+
+    def test_truncation_with_context_preserves_trailing_instruction(self, tmp_path):
+        claude = MockClaudeClient()
+        cfg = {"policy": {"fallback": {
+            "send_local_context_to_claude": True,
+            "claude_max_prompt_chars": 600,
+        }}}
+        long_doc = {"text": "X" * 2000, "source": "doc.md", "score": 0.5}
+        state = {
+            "query": "what does the system do under load?",
+            "retrieved_docs": [long_doc, long_doc, long_doc],
+        }
+        claude_fallback_node(state, claude=claude, cfg=cfg)
+
+        assert len(claude.last_prompt) <= 600
+        assert "Answer the query using the partial context where relevant." in claude.last_prompt
+        assert claude.last_prompt.startswith("USER QUERY: what does the system do under load?")
+        assert "PARTIAL LOCAL CONTEXT" in claude.last_prompt
+
+    def test_truncation_with_context_below_framing_drops_context(self, tmp_path):
+        claude = MockClaudeClient()
+        cfg = {"policy": {"fallback": {
+            "send_local_context_to_claude": True,
+            "claude_max_prompt_chars": 40,
+        }}}
+        long_doc = {"text": "X" * 500, "source": "doc.md", "score": 0.5}
+        state = {"query": "q", "retrieved_docs": [long_doc]}
+        claude_fallback_node(state, claude=claude, cfg=cfg)
+
+        assert len(claude.last_prompt) <= 40
+        assert claude.last_prompt.startswith("USER QUERY: q")
+
+    def test_claude_none_degrades_without_crash(self, tmp_path):
+        result = claude_fallback_node({"query": "x"}, claude=None, cfg=self._cfg(False))
         assert result["answer_model"] == "offline-best-effort"
 
 
