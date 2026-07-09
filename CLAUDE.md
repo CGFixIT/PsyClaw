@@ -162,6 +162,13 @@ heavy imports in `gate.py`; unset `CYCLAW_API_KEY` fails auth **closed** (401);
 the sanitizer contract phrases stay caught; BM25 stays JSON (pickle = RCE); MCP
 declares `sampling: None`.
 
+**Before touching `gate.py`, `soul.md` handling, or the scanner, read
+`INVARIANTS.md`** (repo root). It records which of these guarantees are enforced by
+code vs. by convention (e.g. two of the three external-provider gates live in
+`gate.py` construction, not the graph; the soul injection scan is write-path-only),
+and names the test that pins each. `tests/test_due_diligence_invariants.py` is the
+regression harness.
+
 ---
 
 ## 4. Mistakes You Will Make Here (and the rule that prevents each)

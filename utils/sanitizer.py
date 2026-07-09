@@ -12,6 +12,7 @@ every chunk at index time) does not recompile regexes on each call.
 import logging
 import re
 from functools import lru_cache
+from pathlib import Path
 from re import Pattern
 
 import yaml
@@ -23,6 +24,24 @@ logger = logging.getLogger("cyclaw.sanitizer")
 # Fallback used only when config.yaml omits policy.prompt_filter entirely.
 _DEFAULT_MAX_INPUT_CHARS = 4000
 
+# Anchor a relative config_path to the repo root, mirroring utils/logger.py's
+# _REPO_ROOT and utils/health.py. The default "config.yaml" is resolved against
+# the CWD by open(), so a caller that does not pass an absolute path (gate.py's
+# /query hot path calls check_input(req.query) with no path) would crash with
+# FileNotFoundError whenever cyclaw-server is launched from outside the repo root
+# — the exact Windows double-click failure mode gate.py's _BASE_DIR exists to
+# prevent. Anchoring here keeps the injection filter CWD-independent like the
+# rest of the config readers.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_config_path(config_path: str) -> Path:
+    """Resolve ``config_path`` against the repo root when it is not absolute."""
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
+
 
 @lru_cache(maxsize=8)
 def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
@@ -30,7 +49,7 @@ def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
 
     Returns ``(enabled, max_input_chars, compiled_patterns)``.
     """
-    with open(config_path, encoding="utf-8") as f:
+    with open(_resolve_config_path(config_path), encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
     # ``or {}`` at each level: a present-but-empty ``policy:`` or
