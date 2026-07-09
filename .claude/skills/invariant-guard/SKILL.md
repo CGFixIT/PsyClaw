@@ -1,6 +1,6 @@
 ---
 name: invariant-guard
-description: Assert CyClaw's six security invariants still hold — RAG-first, topology=policy, triple-gated Grok, audit convergence, soul governance, module isolation — plus five supporting guards, against the current tree or a diff. Use before merging any change to gate.py, graph.py, mcp_hybrid_server.py, llm/, retrieval/, utils/, or config.yaml; when asked to "check invariants"; or as the first gate of any security review.
+description: Assert CyClaw's six security invariants still hold — RAG-first, topology=policy, triple-gated external fallback, audit convergence, soul governance, module isolation — plus five supporting guards, against the current tree or a diff. Use before merging any change to gate.py, graph.py, mcp_hybrid_server.py, llm/, retrieval/, utils/, or config.yaml; when asked to "check invariants"; or as the first gate of any security review.
 ---
 
 # Invariant Guard
@@ -32,14 +32,14 @@ Stdlib-only static analysis — safe in a fresh container before any `pip
 install`. Exit codes follow the repo convention: `0` all pass · `2` invariant
 violated · `3` env/config error (wrong root, unparseable core file).
 
-It verifies 22 assertions across:
+It verifies 26 assertions across:
 
 | ID | Invariant | What is actually checked |
 |---|---|---|
 | I1 | RAG-first | `set_entry_point("retrieve")` and the unconditional `retrieve → route_by_score` edge exist in `graph.py` |
 | I2 | Topology = policy | Conditional edges exist ONLY at `route_by_score` and `user_gate`; `score_router` / `user_gate_router` return exactly their documented target sets |
-| I3 | Triple-gated Grok | `gate.py` builds `GrokClient` only under `mode == "hybrid"` + `grok.enabled`; `user_gate_router` requires `confirmed and grok is not None and grok.is_available()` |
-| I4 | Audit convergence | Graph reachability: all 6 upstream nodes reach `audit_logger`; `audit_logger → END` |
+| I3 | Triple-gated external fallback | `gate.py` builds Grok/Claude clients only under `mode == "hybrid"` + provider enabled; `user_gate_router` requires user confirmation, selected provider, and an available provider client |
+| I4 | Audit convergence | Graph reachability: all 7 upstream nodes reach `audit_logger`; `audit_logger → END` |
 | I5 | Soul governance | `apply_evolution` raises on empty `reason`; writes use atomic `os.replace` |
 | I6 | Module isolation | AST imports both directions: gate/graph/mcp never import `agentic`/`sync`/`guardrails`, and no file under those packages imports the core three |
 | G1 | Telemetry kill | `_TELEMETRY_KILL` assignment line precedes the first heavy import (`graph`/`retrieval`/`llm`/`fastapi`/…) in `gate.py` |
@@ -78,7 +78,7 @@ below, also read and confirm by hand:
   coverage — diff the pattern text itself, and run `/injection-redteam` if
   patterns changed.
 - **New graph nodes:** must route (directly or transitively) to `audit_logger`,
-  and any new external call must be gated at least as strictly as Grok.
+  and any new external call must be gated at least as strictly as Grok and Claude.
 - **`config.yaml` semantics:** the checker validates structure, not values.
   `min_score` is RRF-scale (0.028 ≈ top-3-4 rank) — an innocent-looking bump to
   0.5 routes every query to the user gate and no automated check catches it.
@@ -88,7 +88,7 @@ below, also read and confirm by hand:
 End with a verdict block (paste into the PR body when run as a merge gate):
 
 ```
-Invariant Guard: PASS (22/22) | FAIL (<n> violated)
+Invariant Guard: PASS (26/26) | FAIL (<n> violated)
 Checker: <exit code and any FAIL lines verbatim>
 Manual review: <files read, semantic findings or "none">
 Verdict: safe to merge / fix required: <one line per violation>

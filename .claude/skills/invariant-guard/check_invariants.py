@@ -10,7 +10,7 @@ text scan when not). Safe to run in a fresh container before any pip install.
 Checks (one section per invariant, plus supporting guards):
   I1  RAG-first          retrieve is the unconditional graph entry
   I2  Topology=policy    routing decided only by the two named routers
-  I3  Triple-gated Grok  hybrid mode + grok.enabled + user confirmation
+  I3  Triple-gated external providers  hybrid mode + provider.enabled + user confirmation
   I4  Audit convergence  every node reaches audit_logger; audit_logger -> END
   I5  Soul governance    apply_evolution refuses an empty reason
   I6  Module isolation   agentic/sync/guardrails never meet gate/graph/mcp
@@ -173,13 +173,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         fail("score_router returns exactly {local_llm, user_gate}", f"returns: {sorted(score_targets)}")
     gate_targets = router_returns(graph_tree, "user_gate_router")
-    if gate_targets == {"grok_fallback", "offline_best_effort", "audit_logger"}:
-        ok("user_gate_router returns exactly {grok_fallback, offline_best_effort, audit_logger}")
+    expected_gate_targets = {"grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"}
+    if gate_targets == expected_gate_targets:
+        ok("user_gate_router returns exactly the documented provider/offline/audit targets")
     else:
-        fail("user_gate_router returns the documented three targets", f"returns: {sorted(gate_targets)}")
+        fail("user_gate_router returns the documented provider/offline/audit targets",
+             f"returns: {sorted(gate_targets)}")
 
-    # ── I3 Triple-gated external (Grok) ─────────────────────────────────────
-    print("I3 Triple-gated Grok")
+    # ── I3 Triple-gated external providers ─────────────────────────────────
+    print("I3 Triple-gated external providers")
     if re.search(r'mode.{0,20}==.{0,5}["\']hybrid["\']', gate_src) and "grok" in gate_src:
         ok("gate.py constructs GrokClient only under mode == 'hybrid'")
     else:
@@ -189,11 +191,30 @@ def main(argv: list[str] | None = None) -> int:
         ok("gate.py checks models.grok.enabled before constructing GrokClient")
     else:
         fail("gate.py checks models.grok.enabled", "enabled check not found near GrokClient")
-    if re.search(r"confirmed\s+and\s+grok\s+is\s+not\s+None\s+and\s+grok\.is_available\(\)", graph_src):
-        ok("user_gate_router requires confirmed AND grok present AND grok.is_available()")
+    if re.search(r'mode.{0,20}==.{0,5}["\']hybrid["\']', gate_src) and "ClaudeClient" in gate_src:
+        ok("gate.py constructs ClaudeClient only under mode == 'hybrid'")
     else:
-        fail("user_gate_router requires confirmed AND available grok",
-             "the compound condition in user_gate_router changed — verify all three gates survive")
+        fail("gate.py constructs ClaudeClient only under mode == 'hybrid'",
+             "hybrid-mode guard around ClaudeClient construction not found")
+    if re.search(r'claude.{0,40}enabled', gate_src):
+        ok("gate.py checks models.claude.enabled before constructing ClaudeClient")
+    else:
+        fail("gate.py checks models.claude.enabled", "enabled check not found near ClaudeClient")
+    if "if not confirmed:" in graph_src and 'return "offline_best_effort"' in graph_src:
+        ok("user_gate_router requires user confirmation before external fallback")
+    else:
+        fail("user_gate_router requires user confirmation before external fallback",
+             "declined confirmation branch not found")
+    if re.search(r'provider\s*==\s*["\']grok["\']\s+and\s+grok\s+is\s+not\s+None\s+and\s+grok\.is_available\(\)', graph_src):
+        ok("user_gate_router requires selected Grok provider and available Grok client")
+    else:
+        fail("user_gate_router requires selected Grok provider and available Grok client",
+             "the Grok provider/client availability condition changed")
+    if re.search(r'provider\s*==\s*["\']claude["\']\s+and\s+claude\s+is\s+not\s+None\s+and\s+claude\.is_available\(\)', graph_src):
+        ok("user_gate_router requires selected Claude provider and available Claude client")
+    else:
+        fail("user_gate_router requires selected Claude provider and available Claude client",
+             "the Claude provider/client availability condition changed")
 
     # ── I4 Audit convergence ────────────────────────────────────────────────
     print("I4 Audit convergence")
@@ -204,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         router = "score_router" if src == "route_by_score" else "user_gate_router"
         adj.setdefault(src, set()).update(router_returns(graph_tree, router))
     nodes = {"retrieve", "route_by_score", "local_llm", "user_gate",
-             "grok_fallback", "offline_best_effort"}
+             "grok_fallback", "claude_fallback", "offline_best_effort"}
 
     def reaches_audit(start: str, seen: set[str] | None = None) -> bool:
         seen = seen or set()
@@ -218,9 +239,9 @@ def main(argv: list[str] | None = None) -> int:
 
     stranded = sorted(n for n in nodes if not reaches_audit(n))
     if not stranded:
-        ok("all 6 upstream nodes reach audit_logger")
+        ok("all 7 upstream nodes reach audit_logger")
     else:
-        fail("all 6 upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
+        fail("all 7 upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
     if any(src == "audit_logger" and dst == "END" for src, dst in edges):
         ok("audit_logger -> END")
     else:
