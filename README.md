@@ -255,8 +255,10 @@ sudo systemctl enable --now cyclaw
 Create `.env` in the repo root:
 
 ```
-CYCLAW_API_KEY=your-strong-local-secret
-GROK_API_KEY=offline-dummy-sk-123
+API KEYS added to config.yaml
+CYCLAW_API_KEY=api-key
+GROK_API_KEY=InputAPIkey
+CLAUDE_API_KEY=InputAPIkey
 ```
 
 Load it before launching:
