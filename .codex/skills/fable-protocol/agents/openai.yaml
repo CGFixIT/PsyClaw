@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fable Protocol"
+  short_description: "CyClaw Codex session discipline"
+  default_prompt: "Use $fable-protocol at the start of substantive CyClaw repo work to test premises, mark uncertainty, preserve security invariants, and keep changes shipping-focused."
