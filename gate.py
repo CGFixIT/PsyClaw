@@ -79,7 +79,6 @@ from retrieval.hybrid_search import HybridRetriever
 from llm.client import ClaudeClient, LocalLLMClient, GrokClient
 from schemas.api import (
     QueryRequest, QueryResponse, SourceInfo, HealthResponse, SoulEvolutionRequest,
-    OpsSyncRequest, OpsAgenticRequest, OpsFsConnectRequest, OpsSqlConnectRequest,
 )
 from utils.logger import audit_log, setup_logging
 from fastapi.middleware.cors import CORSMiddleware
@@ -91,10 +90,7 @@ from utils.errors import (
 from utils.guardrail_bridge import build_input_guard
 from utils.health import check_all
 from utils.personality import PersonalityManager
-# Subprocess shim for the out-of-band sync/ + agentic/ control surface. This is a
-# subprocess wrapper ONLY — it never imports sync/ or agentic/, so gate.py's
-# out-of-band isolation invariant is preserved (see utils/ops_runner.py).
-from utils.ops_runner import run_sync_op, run_agentic_op, run_fsconnect_op, run_sqlconnect_op, OpsError
+from gate_ops import register_ops_routes
 from metrics import summarize_audit
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -628,165 +624,21 @@ async def audit_summary(request: Request):
     return await asyncio.to_thread(summarize_audit, audit_file)
 
 
-# =============================================================================
-# Ops endpoints — out-of-band sync/ + agentic/ control surface (terminal panels)
-# =============================================================================
-# These back the Soul Console's Sync + Agentic panels. A browser cannot spawn a
-# subprocess, so the gateway does — via utils/ops_runner, which is a pure
-# subprocess shim. gate.py NEVER imports sync/ or agentic/, so out-of-band
-# isolation (and the five security invariants that rest on it) is preserved.
-#
-# Every action is: loopback-only (inherited 127.0.0.1 bind + TrustedHost
-# allow-list), rate-limited (shared _rate_limiter), API-key-gated
-# (require_api_key — uniform with /soul/* mutations; subprocess execution is more
-# sensitive than a /soul GET), and audited. A CLI that exits non-zero is reported
-# inside the JSON envelope (HTTP 200) so the UI can render exit codes / stderr;
-# only gateway-level problems (bad action -> 400, rate limit -> 429, launch
-# failure -> 500) raise HTTP errors.
-#
-# The "config" block is read from the already-parsed cfg dict (NOT an import of
-# sync/ or agentic/) so the UI can surface enabled/mode/writes_enabled — the two
-# config-driven gates of the agentic apply checklist — authoritatively.
-
-def _ops_sync_config() -> dict:
-    s = cfg.get("sync", {}) or {}
-    return {
-        "enabled": bool(s.get("enabled", False)),
-        "direction": s.get("direction", "pull"),
-        "max_delete": s.get("max_delete"),
-        "max_transfer": s.get("max_transfer"),
-        "schedule": f"{int(s.get('schedule_hour', 2)):02d}:{int(s.get('schedule_min', 0)):02d}",
-    }
-
-
-def _ops_agentic_config() -> dict:
-    a = cfg.get("agentic", {}) or {}
-    return {
-        "enabled": bool(a.get("enabled", False)),
-        "mode": a.get("mode", "read"),
-        "writes_enabled": bool(a.get("writes_enabled", False)),
-        "repo": a.get("repo", ""),
-    }
-
-
-@app.post("/ops/sync", dependencies=[Depends(require_api_key)])
-async def ops_sync(request: Request, req: OpsSyncRequest):
-    await _enforce_rate_limit(request)
-    try:
-        result = await asyncio.to_thread(run_sync_op, req.action, dry_run=req.dry_run)
-    except OpsError as e:
-        await _audit({"event": "ops_sync_rejected", "action": req.action, "error": str(e)})
-        raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-    except Exception as e:
-        safe_msg = _sanitize_error(e)
-        await _audit({"event": "ops_sync_error", "action": req.action, "error": safe_msg})
-        logger.exception("Unexpected error in /ops/sync action=%r", req.action)
-        raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-    await _audit({
-        "event": "ops_sync_executed", "action": req.action, "dry_run": req.dry_run,
-        "exit_code": result.exit_code, "label": result.label,
-    })
-    payload = result.to_dict()
-    payload["config"] = _ops_sync_config()
-    return payload
-
-
-@app.post("/ops/agentic", dependencies=[Depends(require_api_key)])
-async def ops_agentic(request: Request, req: OpsAgenticRequest):
-    await _enforce_rate_limit(request)
-    try:
-        result = await asyncio.to_thread(
-            run_agentic_op, req.action,
-            pr=req.pr, issue=req.issue, no_diff=req.no_diff,
-            name=req.name, desc=req.desc, body=req.body, reason=req.reason, confirm=req.confirm,
-        )
-    except OpsError as e:
-        await _audit({"event": "ops_agentic_rejected", "action": req.action, "error": str(e)})
-        raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-    except Exception as e:
-        safe_msg = _sanitize_error(e)
-        await _audit({"event": "ops_agentic_error", "action": req.action, "error": safe_msg})
-        logger.exception("Unexpected error in /ops/agentic action=%r", req.action)
-        raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-    await _audit({
-        "event": "ops_agentic_executed", "action": req.action,
-        "exit_code": result.exit_code, "label": result.label,
-    })
-    payload = result.to_dict()
-    payload["config"] = _ops_agentic_config()
-    return payload
-
-
-def _ops_fsconnect_config() -> dict:
-    f = cfg.get("fsconnect", {}) or {}
-    return {
-        "enabled": bool(f.get("enabled", False)),
-        "allowed_roots": f.get("allowed_roots", []) or [],
-        "writes_enabled": bool(f.get("writes_enabled", False)),
-        "max_file_bytes": f.get("max_file_bytes", 5242880),
-    }
-
-
-def _ops_sqlconnect_config() -> dict:
-    s = cfg.get("sqlconnect", {}) or {}
-    return {
-        "enabled": bool(s.get("enabled", False)),
-        "driver": s.get("driver", "postgres"),
-        "read_only": bool(s.get("read_only", True)),
-        "max_rows": s.get("max_rows", 1000),
-    }
-
-
-@app.post("/ops/fsconnect", dependencies=[Depends(require_api_key)])
-async def ops_fsconnect(request: Request, req: OpsFsConnectRequest):
-    await _enforce_rate_limit(request)
-    try:
-        result = await asyncio.to_thread(
-            run_fsconnect_op, req.action,
-            root=req.root, path=req.path, pattern=req.pattern,
-            regex=req.regex, recursive=req.recursive,
-        )
-    except OpsError as e:
-        await _audit({"event": "ops_fsconnect_rejected", "action": req.action, "error": str(e)})
-        raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-    except Exception as e:
-        safe_msg = _sanitize_error(e)
-        await _audit({"event": "ops_fsconnect_error", "action": req.action, "error": safe_msg})
-        logger.exception("Unexpected error in /ops/fsconnect action=%r", req.action)
-        raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-    await _audit({
-        "event": "ops_fsconnect_executed", "action": req.action,
-        "exit_code": result.exit_code, "label": result.label,
-    })
-    payload = result.to_dict()
-    payload["config"] = _ops_fsconnect_config()
-    return payload
-
-
-@app.post("/ops/sqlconnect", dependencies=[Depends(require_api_key)])
-async def ops_sqlconnect(request: Request, req: OpsSqlConnectRequest):
-    await _enforce_rate_limit(request)
-    try:
-        result = await asyncio.to_thread(
-            run_sqlconnect_op, req.action,
-            sql=req.sql, table=req.table, explain=req.explain,
-            count=req.count, fmt=req.fmt,
-        )
-    except OpsError as e:
-        await _audit({"event": "ops_sqlconnect_rejected", "action": req.action, "error": str(e)})
-        raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-    except Exception as e:
-        safe_msg = _sanitize_error(e)
-        await _audit({"event": "ops_sqlconnect_error", "action": req.action, "error": safe_msg})
-        logger.exception("Unexpected error in /ops/sqlconnect action=%r", req.action)
-        raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-    await _audit({
-        "event": "ops_sqlconnect_executed", "action": req.action,
-        "exit_code": result.exit_code, "label": result.label,
-    })
-    payload = result.to_dict()
-    payload["config"] = _ops_sqlconnect_config()
-    return payload
+# The four /ops/* endpoints (out-of-band sync/ + agentic/ control surface) live
+# in gate_ops.py as one bounded module; the security callables defined above are
+# injected so auth, rate limiting, auditing, and error sanitization stay
+# byte-identical to the pre-extraction handlers. gate_ops imports nothing from
+# gate, so there is no import cycle, and it never imports sync/ or agentic/
+# (module isolation, invariant I6). Registration decorates handlers directly on
+# app — see gate_ops.py for why an APIRouter is deliberately not used here.
+register_ops_routes(
+    app,
+    cfg=cfg,
+    audit=_audit,
+    enforce_rate_limit=_enforce_rate_limit,
+    sanitize_error=_sanitize_error,
+    require_api_key=require_api_key,
+)
 
 
 def _is_port_in_use(host: str, port: int) -> bool:

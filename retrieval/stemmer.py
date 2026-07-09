@@ -9,10 +9,23 @@ Extends NLTK PorterStemmer with custom rules for:
 
 import re
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
-from nltk.stem import PorterStemmer
+if TYPE_CHECKING:
+    from nltk.stem import PorterStemmer
 
-_stemmer = PorterStemmer()
+
+@lru_cache(maxsize=1)
+def _porter() -> "PorterStemmer":
+    # Deferred to first stem: the module-level `from nltk.stem import ...` +
+    # PorterStemmer() pulled the whole nltk package into every process that
+    # imports retrieval/ — ~140 ms of gate.py / mcp_hybrid_server.py cold start
+    # (measured via python -X importtime) paid even when no token is ever
+    # stemmed (e.g. server boot with a missing index). First stem_token() call
+    # pays it once; steady-state cost is unchanged (lru_cache hit).
+    from nltk.stem import PorterStemmer
+
+    return PorterStemmer()
 
 # Tokenizer: extracts words starting with a letter (2+ chars). Avoids nltk.data.load()
 # so the NLTK URL-encoded path-traversal CVE (punkt tokenizer) is not reachable.
@@ -39,7 +52,7 @@ def stem_token(token: str) -> str:
     lower = token.lower()
     if lower in _CUSTOM_STEMS:
         return _CUSTOM_STEMS[lower]
-    return _stemmer.stem(lower)
+    return _porter().stem(lower)
 
 @lru_cache(maxsize=4096)
 def _tokenize_and_stem_cached(text: str) -> tuple[str, ...]:

@@ -108,7 +108,7 @@ exclude_dirs = ["tests"]
 skips = ["B101"]
 
 [tool.coverage.run]
-source = ["gate", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails"]
+source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails"]
 # fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
 # Windows branch needs a separate Windows CI lane (deferred -- see
 # docs/agentic/FSCONNECT_SQL_ROADMAP.md, FS Phase 4). Their tests run on Linux CI for

@@ -127,6 +127,7 @@ jobs:
           pytest tests/ \
             -q --tb=short \
             --cov=gate \
+            --cov=gate_ops \
             --cov=utils.sanitizer \
             --cov=utils.config_validation \
             --cov=utils.errors \

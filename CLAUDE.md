@@ -99,7 +99,8 @@ subsystems.
 
 | Path | Role |
 |---|---|
-| `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill, `/ops/*` |
+| `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
+| `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
 | `graph.py` | 9-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
