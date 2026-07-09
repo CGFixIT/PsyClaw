@@ -17,10 +17,11 @@ subprocess shim. Neither gate.py nor this module ever imports sync/ or
 agentic/, so out-of-band isolation (and the six security invariants that rest
 on it) is preserved.
 
-Every action is: loopback-only (inherited 127.0.0.1 bind + TrustedHost
-allow-list), rate-limited (shared gateway limiter), API-key-gated
-(require_api_key — uniform with /soul/* mutations; subprocess execution is more
-sensitive than a /soul GET), and audited. A CLI that exits non-zero is reported
+Every action is: loopback-only (inherited loopback-address bind + TrustedHost
+allow-list; api.host in config.yaml owns the literal value), rate-limited
+(shared gateway limiter), API-key-gated (require_api_key — uniform with /soul/*
+mutations; subprocess execution is more sensitive than a /soul GET), and
+audited. A CLI that exits non-zero is reported
 inside the JSON envelope (HTTP 200) so the UI can render exit codes / stderr;
 only gateway-level problems (bad action -> 400, rate limit -> 429, launch
 failure -> 500) raise HTTP errors.
@@ -51,6 +52,19 @@ from schemas.api import (
 from utils.ops_runner import OpsError, run_agentic_op, run_fsconnect_op, run_sqlconnect_op, run_sync_op
 
 logger = logging.getLogger("cyclaw.gate_ops")
+
+
+def _log_safe(value: str) -> str:
+    """Strip CR/LF so a request-derived value cannot forge extra log lines.
+
+    Every req.action below is a closed Pydantic Literal in strict mode, so a
+    non-enum value never reaches these handlers — this can never actually fire.
+    It exists because CodeQL's py/log-injection taint tracking cannot see the
+    Literal narrowing (PR #465 alerts 679-682); stripping newlines is the
+    sanitizer it recognizes, and it keeps the defense explicit if a future
+    schema ever loosens action to a free string.
+    """
+    return value.replace("\r", "").replace("\n", "")
 
 
 def register_ops_routes(
@@ -111,7 +125,7 @@ def register_ops_routes(
         except Exception as e:
             safe_msg = sanitize_error(e)
             await audit({"event": "ops_sync_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/sync action=%r", req.action)
+            logger.exception("Unexpected error in /ops/sync action=%r", _log_safe(req.action))
             raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
         await audit({
             "event": "ops_sync_executed", "action": req.action, "dry_run": req.dry_run,
@@ -136,7 +150,7 @@ def register_ops_routes(
         except Exception as e:
             safe_msg = sanitize_error(e)
             await audit({"event": "ops_agentic_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/agentic action=%r", req.action)
+            logger.exception("Unexpected error in /ops/agentic action=%r", _log_safe(req.action))
             raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
         await audit({
             "event": "ops_agentic_executed", "action": req.action,
@@ -161,7 +175,7 @@ def register_ops_routes(
         except Exception as e:
             safe_msg = sanitize_error(e)
             await audit({"event": "ops_fsconnect_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/fsconnect action=%r", req.action)
+            logger.exception("Unexpected error in /ops/fsconnect action=%r", _log_safe(req.action))
             raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
         await audit({
             "event": "ops_fsconnect_executed", "action": req.action,
@@ -186,7 +200,7 @@ def register_ops_routes(
         except Exception as e:
             safe_msg = sanitize_error(e)
             await audit({"event": "ops_sqlconnect_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/sqlconnect action=%r", req.action)
+            logger.exception("Unexpected error in /ops/sqlconnect action=%r", _log_safe(req.action))
             raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
         await audit({
             "event": "ops_sqlconnect_executed", "action": req.action,
