@@ -2,7 +2,7 @@
 name: CyClaw-Sandbox
 description: >
   Clone origin/main to a clean local sandbox, install all dependencies, spin up a mock
-  LM Studio (QWEN-7B-Instruct cached offline, Grok=No), then run a comprehensive audit
+  LM Studio (QWEN-7B-Instruct cached offline, Grok=No, Claude=No), then run a comprehensive audit
   covering config validation, gate.py/graph.py standalone checks, full unit+integration
   tests, terminal.html endpoint emulation (including the "describe CyClaw in one sentence"
   vault-hit probe), metrics.py output, and per-subsystem review (utils/, tests/, sync/,
@@ -76,7 +76,7 @@ Python 3.12 compatibility proof.
 
 ---
 
-## Phase 3 — Start mock LM Studio (port 1234, Grok = No)
+## Phase 3 — Start mock LM Studio (port 1234, Grok = No, Claude = No)
 
 Copy the mock server into the sandbox and launch it in the background:
 
@@ -92,8 +92,9 @@ echo "Mock LM Studio PID: $MOCK_PID"
 Where `$ORIG_REPO` is the real repo root (the parent of this venv). Confirm
 `/v1/models` returns a JSON object containing `qwen2.5-7b-instruct`.
 
-> Note: `grok.enabled` is `false` in config.yaml by default — Grok is already
-> off. No change needed. Keep it off throughout this audit.
+> Note: `grok.enabled` and `claude.enabled` are both `false` in config.yaml by
+> default — both external fallbacks are already off. No change needed. Keep
+> them off throughout this audit.
 
 ---
 
@@ -543,7 +544,7 @@ Then create the PR via `mcp__github__create_pull_request` with:
 ## Summary
 
 Full sandbox audit cloned from `main` and run in a clean Python 3.12
-environment with a mock LM Studio (QWEN-7B-Instruct offline cache, Grok=No).
+environment with a mock LM Studio (QWEN-7B-Instruct offline cache, Grok=No, Claude=No).
 
 ### Scope
 - Clean clone of origin/main

@@ -1,7 +1,8 @@
 """Health checks for external dependencies.
 
-Only checks LM Studio (and optionally Grok). No Ollama —
-embeddings are local sentence-transformers.
+Checks LM Studio, and optionally Grok and/or Claude when their respective
+mode==hybrid + <provider>.enabled gates are on. No Ollama — embeddings are
+local sentence-transformers.
 """
 
 import os
