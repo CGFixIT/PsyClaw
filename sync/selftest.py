@@ -19,19 +19,7 @@ from sync.config import RcloneConfig, load_sync_config
 from sync.filters import filter_summary, generate_filters, write_filter_file
 from sync.runner import build_bisync_argv, build_pull_argv, check_rclone_version
 from utils.errors import RcloneNotInstalledError, RcloneTimeoutError, RcloneVersionError, SyncConfigError
-
-
-def _ok(name: str) -> tuple[bool, str]:
-    return True, f"  [OK  ] {name}"
-
-
-def _fail(name: str, reason: str) -> tuple[bool, str]:
-    return False, f"  [FAIL] {name}: {reason}"
-
-
-def _skip(name: str, reason: str) -> tuple[bool, str]:
-    # Skips count as PASS for the overall result -- they are environment-conditional.
-    return True, f"  [SKIP] {name}: {reason}"
+from utils.selftest import fail, finalize, ok, skip
 
 
 def run_self_test(
@@ -45,49 +33,49 @@ def run_self_test(
     # 1. config.yaml exists, parses, and validates.
     try:
         cfg = load_sync_config(config_path)
-        results.append(_ok("01. Config loads and validates"))
+        results.append(ok("01. Config loads and validates"))
     except SyncConfigError as exc:
-        results.append(_fail("01. Config loads and validates", exc.message))
+        results.append(fail("01. Config loads and validates", exc.message))
         # Cannot continue without a config; the rest are skipped.
         for n in range(2, 9):
-            results.append(_skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
-        return _finalize(results)
+            results.append(skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
+        return finalize(results)
 
     # 2. local_path is absolute (and ideally an existing directory).
     if os.path.isabs(cfg.local_path):
         if os.path.isdir(cfg.local_path):
-            results.append(_ok("02. local_path is an existing directory"))
+            results.append(ok("02. local_path is an existing directory"))
         else:
-            results.append(_skip(
+            results.append(skip(
                 "02. local_path is an existing directory",
                 f"path does not yet exist: {cfg.local_path}",
             ))
     else:
-        results.append(_fail("02. local_path is absolute", f"got relative: {cfg.local_path}"))
+        results.append(fail("02. local_path is absolute", f"got relative: {cfg.local_path}"))
 
     # 3. rclone installed and recent enough (floor 1.68.2). Tolerate absence.
     try:
         v = check_rclone_version()
-        results.append(_ok(f"03. rclone {v[0]}.{v[1]}.{v[2]} installed (>= 1.68.2)"))
+        results.append(ok(f"03. rclone {v[0]}.{v[1]}.{v[2]} installed (>= 1.68.2)"))
     except (RcloneNotInstalledError, RcloneTimeoutError, RcloneVersionError) as exc:
-        results.append(_fail("03. rclone >= 1.68.2 installed", exc.message))
+        results.append(fail("03. rclone >= 1.68.2 installed", exc.message))
 
     # 4. Filter content asserts the hardened soul exclusion (or its loud absence).
     text = generate_filters(cfg)
     soul_rule_present = "- data/personality/**" in text
     if cfg.include_soul:
         if not soul_rule_present:
-            results.append(_ok("04. include_soul=true and soul rule absent"))
+            results.append(ok("04. include_soul=true and soul rule absent"))
         else:
-            results.append(_fail(
+            results.append(fail(
                 "04. include_soul=true and soul rule absent",
                 "soul exclusion still present in filter",
             ))
     else:
         if soul_rule_present:
-            results.append(_ok("04. data/personality/** excluded by default"))
+            results.append(ok("04. data/personality/** excluded by default"))
         else:
-            results.append(_fail(
+            results.append(fail(
                 "04. data/personality/** excluded by default",
                 "soul exclusion missing from filter",
             ))
@@ -95,44 +83,38 @@ def run_self_test(
     # 5. Filter file can be written to disk.
     try:
         path = write_filter_file(cfg)
-        results.append(_ok(f"05. Wrote filter file: {path}"))
+        results.append(ok(f"05. Wrote filter file: {path}"))
     except OSError as exc:
-        results.append(_fail("05. Write filter file", str(exc)))
+        results.append(fail("05. Write filter file", str(exc)))
 
     # 6. Filter summary is consistent with the config.
     summary = filter_summary(cfg)
     if summary["soul_excluded"] == (not cfg.include_soul):
-        results.append(_ok("06. Filter summary consistent with config"))
+        results.append(ok("06. Filter summary consistent with config"))
     else:
-        results.append(_fail("06. Filter summary consistent with config", f"got: {summary}"))
+        results.append(fail("06. Filter summary consistent with config", f"got: {summary}"))
 
     # 7. Pull argv is well-formed (subprocess is NOT invoked here).
     try:
         argv = build_pull_argv(cfg, dry_run=dry_run, log_path=cfg.log_path)
         if isinstance(argv, list) and argv[1] == "copy" and cfg.remote in argv and cfg.local_path in argv:
-            results.append(_ok("07. Pull argv well-formed (list, no shell)"))
+            results.append(ok("07. Pull argv well-formed (list, no shell)"))
         else:
-            results.append(_fail("07. Pull argv well-formed", f"unexpected argv: {argv[:6]}"))
+            results.append(fail("07. Pull argv well-formed", f"unexpected argv: {argv[:6]}"))
     except (OSError, ValueError) as exc:
-        results.append(_fail("07. Pull argv well-formed", str(exc)))
+        results.append(fail("07. Pull argv well-formed", str(exc)))
 
     # 8. Bisync argv is well-formed.
     try:
         argv = build_bisync_argv(cfg, dry_run=dry_run, log_path=cfg.log_path)
         if isinstance(argv, list) and argv[1] == "bisync" and cfg.remote in argv and cfg.local_path in argv:
-            results.append(_ok("08. Bisync argv well-formed (list, no shell)"))
+            results.append(ok("08. Bisync argv well-formed (list, no shell)"))
         else:
-            results.append(_fail("08. Bisync argv well-formed", f"unexpected argv: {argv[:6]}"))
+            results.append(fail("08. Bisync argv well-formed", f"unexpected argv: {argv[:6]}"))
     except (OSError, ValueError) as exc:
-        results.append(_fail("08. Bisync argv well-formed", str(exc)))
+        results.append(fail("08. Bisync argv well-formed", str(exc)))
 
-    return _finalize(results)
-
-
-def _finalize(results: list[tuple[bool, str]]) -> tuple[int, int, list[str]]:
-    lines = [text for _, text in results]
-    passed = sum(1 for ok, _ in results if ok)
-    return passed, len(results), lines
+    return finalize(results)
 
 
 if __name__ == "__main__":
