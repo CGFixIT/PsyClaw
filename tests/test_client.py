@@ -181,10 +181,14 @@ class TestLocalLLMClient:
 
     def test_generate_unexpected_error_maps_to_llm_service_error(self, tmp_path):
         client = LocalLLMClient(_write_config(tmp_path))
-        client._client.post = _FakePost(raises=ValueError("connection reset"))
+        client._client.post = _FakePost(raises=ValueError("connection reset secret=sk-leak"))
         with pytest.raises(LLMServiceError) as exc:
             client.generate("a prompt")
-        assert "connection reset" in exc.value.message
+        # User-facing message is type-only — raw exception text must not leak.
+        assert "ValueError" in exc.value.message
+        assert "connection reset" not in exc.value.message
+        assert "sk-leak" not in exc.value.message
+        assert exc.value.details.get("exc_type") == "ValueError"
         client.close()
 
 
@@ -286,10 +290,13 @@ class TestGrokClient:
     def test_generate_unexpected_error_maps_to_grok_service_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GROK_API_KEY", "xai-secret")
         client = GrokClient(_write_config(tmp_path))
-        client._client.post = _FakePost(raises=ValueError("dns failure"))
+        client._client.post = _FakePost(raises=ValueError("dns failure secret=sk-leak"))
         with pytest.raises(GrokServiceError) as exc:
             client.generate("a prompt")
-        assert "dns failure" in exc.value.message
+        assert "ValueError" in exc.value.message
+        assert "dns failure" not in exc.value.message
+        assert "sk-leak" not in exc.value.message
+        assert exc.value.details.get("exc_type") == "ValueError"
         client.close()
 
 
@@ -397,10 +404,13 @@ class TestClaudeClient:
         # Mirrors TestGrokClient.test_generate_unexpected_error_maps_to_grok_service_error.
         monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
         client = ClaudeClient(_write_config(tmp_path))
-        client._client.post = _FakePost(raises=ValueError("dns failure"))
+        client._client.post = _FakePost(raises=ValueError("dns failure secret=sk-leak"))
         with pytest.raises(ClaudeServiceError) as exc:
             client.generate("a prompt")
-        assert "dns failure" in exc.value.message
+        assert "ValueError" in exc.value.message
+        assert "dns failure" not in exc.value.message
+        assert "sk-leak" not in exc.value.message
+        assert exc.value.details.get("exc_type") == "ValueError"
         client.close()
 
 

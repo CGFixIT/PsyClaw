@@ -4,10 +4,16 @@ on:
   issue_comment:
     types: [created]
 
+# Cancel superseded @claude runs on the same issue thread; keep main history.
+concurrency:
+  group: claude-pr-comment-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   claude:
     name: Claude Code
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@claude') &&

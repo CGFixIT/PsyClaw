@@ -41,13 +41,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 0
 
       - name: Setup Python (used for analysis runtime / import resolution)
         if: matrix.language == 'python'
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'  # match the project's CI target (CLAUDE.md); avoid floating 3.x
 
