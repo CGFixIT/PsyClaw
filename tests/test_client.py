@@ -309,6 +309,13 @@ class TestClaudeClient:
         assert client2.is_available() is False
         client2.close()
 
+    def test_is_available_false_for_whitespace_only_key(self, tmp_path, monkeypatch):
+        # Mirrors TestGrokClient.test_is_available_false_for_whitespace_only_key.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "  \n\t  ")
+        client = ClaudeClient(_write_config(tmp_path))
+        assert client.is_available() is False
+        client.close()
+
     def test_generate_without_key_raises(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         client = ClaudeClient(_write_config(tmp_path))
@@ -332,12 +339,68 @@ class TestClaudeClient:
         assert "temperature" not in kwargs["json"]
         client.close()
 
+    def test_generate_success_strips_env_key_before_header(self, tmp_path, monkeypatch):
+        # Mirrors TestGrokClient.test_generate_success_strips_env_key_before_bearer:
+        # a padded env value must not leak whitespace into the x-api-key header.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "  anthropic-secret \n")
+        client = ClaudeClient(_write_config(tmp_path))
+        fake = _FakePost(response=_claude_ok_response("claude answer"))
+        client._client.post = fake
+        assert client.generate("a prompt") == "claude answer"
+        _url, kwargs = fake.calls[0]
+        assert kwargs["headers"]["x-api-key"] == "anthropic-secret"
+        client.close()
+
     def test_generate_empty_content_maps_to_claude_service_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
         client = ClaudeClient(_write_config(tmp_path))
         client._client.post = _FakePost(response=_claude_ok_response("   "))
         with pytest.raises(ClaudeServiceError):
             client.generate("a prompt")
+        client.close()
+
+    def test_generate_malformed_response_maps_to_claude_service_error(self, tmp_path, monkeypatch):
+        # _extract_claude_content's shape (data["content"] list of {"type","text"}
+        # blocks) is distinct from the OpenAI-style choices[0].message.content
+        # shape Grok/local use — a response missing "content" entirely must still
+        # map to the typed error, not a leaked KeyError.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx.Response(200, json={"unexpected": "shape"}, request=req)
+        client._client.post = _FakePost(response=resp)
+        with pytest.raises(ClaudeServiceError):
+            client.generate("a prompt")
+        client.close()
+
+    def test_generate_http_error_maps_to_claude_service_error(self, tmp_path, monkeypatch):
+        # Mirrors TestGrokClient.test_generate_http_error_maps_to_grok_service_error.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        client._client.post = _FakePost(response=_status_response(529))  # Anthropic "overloaded"
+        with pytest.raises(ClaudeServiceError) as exc:
+            client.generate("a prompt")
+        assert exc.value.details.get("status") == 529
+        client.close()
+
+    def test_generate_timeout_maps_to_claude_service_error(self, tmp_path, monkeypatch):
+        # Mirrors TestGrokClient.test_generate_timeout_maps_to_grok_service_error.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        client._client.post = _FakePost(raises=httpx.TimeoutException("timed out"))
+        with pytest.raises(ClaudeServiceError) as exc:
+            client.generate("a prompt")
+        assert exc.value.details.get("timeout_sec") == 5
+        client.close()
+
+    def test_generate_unexpected_error_maps_to_claude_service_error(self, tmp_path, monkeypatch):
+        # Mirrors TestGrokClient.test_generate_unexpected_error_maps_to_grok_service_error.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        client._client.post = _FakePost(raises=ValueError("dns failure"))
+        with pytest.raises(ClaudeServiceError) as exc:
+            client.generate("a prompt")
+        assert "dns failure" in exc.value.message
         client.close()
 
 
@@ -488,6 +551,41 @@ class TestRetryBehavior:
         assert len(fake.calls) == 1  # no wasted retries / credits on auth failure
         client.close()
 
+    def test_claude_timeout_is_retried(self, tmp_path, monkeypatch, no_sleep):
+        # Mirrors test_grok_timeout_is_retried: ClaudeClient.generate() goes
+        # through the same shared _post_with_retry with the default
+        # retry_on_timeout=True (it's a cloud API, not the local stall case).
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": 1, "backoff_base_sec": 2.0}))
+        fake = _ScriptedPost([httpx.TimeoutException("slow"), _claude_ok_response("ok after timeout")])
+        client._client.post = fake
+        assert client.generate("p") == "ok after timeout"
+        assert len(fake.calls) == 2
+        assert no_sleep == [2.0]
+        client.close()
+
+    def test_claude_429_is_retried(self, tmp_path, monkeypatch, no_sleep):
+        # Mirrors test_grok_429_is_retried.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": 2, "backoff_base_sec": 1.0}))
+        fake = _ScriptedPost([_status_response(429), _claude_ok_response("claude ok")])
+        client._client.post = fake
+        assert client.generate("p") == "claude ok"
+        assert len(fake.calls) == 2
+        client.close()
+
+    def test_claude_401_fails_fast(self, tmp_path, monkeypatch, no_sleep):
+        # Mirrors test_grok_401_fails_fast.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": 3, "backoff_base_sec": 1.0}))
+        fake = _ScriptedPost([_status_response(401)])
+        client._client.post = fake
+        with pytest.raises(ClaudeServiceError) as exc:
+            client.generate("p")
+        assert exc.value.details.get("status") == 401
+        assert len(fake.calls) == 1  # no wasted retries / credits on auth failure
+        client.close()
+
     def test_transient_retry_logs_warning(self, tmp_path, no_sleep, caplog):
         # A retried transient failure must leave a WARNING breadcrumb tagged with
         # the service + attempt count — previously the retry was entirely silent.
@@ -559,5 +657,11 @@ class TestRetryConfigBounds:
 
     def test_grok_negative_max_retries_clamped(self, tmp_path):
         client = GrokClient(_write_config(tmp_path, retry={"max_retries": -99}))
+        assert client.retry_max == 0
+        client.close()
+
+    def test_claude_negative_max_retries_clamped(self, tmp_path):
+        # Mirrors test_grok_negative_max_retries_clamped.
+        client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": -99}))
         assert client.retry_max == 0
         client.close()
