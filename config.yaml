@@ -406,6 +406,22 @@ fsconnect:
     - null                       # null => OS default: C:\CyClaw-FS (Win) | /var/lib/cyclaw-fs (Linux, ~/CyClaw-FS fallback)
   max_write_bytes: 10485760      # 10 MiB write cap
   require_confirm_destructive: true   # overwrite-existing / move need --confirm AND --reason
+  # --- Phase 2 write-enablement (all default-off / unbounded; safe to omit) ---
+  strict_roots: false            # true => fail closed if a writable root can't be prepared (no ~/CyClaw-FS fallback)
+  block_on_injection_flags: false  # true => refuse a write whose advisory scan flags the content
+  allow_hard_delete: false       # fifth gate: true required for `delete --purge` (bypasses trash); GLOBAL, not per-root
+  trash_retention_days: 30       # deletes go to <root>/.cyclaw-trash; entries purgeable after this many days
+  quota_recompute_hours: 24      # ledger staleness window; older => full lstat-walk recompute before enforcing
+  write_rate_limit:              # per-root (fs:<root>) + global (fs:*) write throttle; separate sqlite file
+    enabled: false               # off by default; when false no throttle is applied
+    max_ops: 30                  # per-root ops allowed per window
+    window_seconds: 60           # sliding window length
+    # global_max_ops: 60         # aggregate ceiling across all roots (default: 2 x max_ops)
+    db_path: "data/fsconnect_rate.db"  # SEPARATE from the gateway limiter's db
+  # writable_roots may also be a mapping to declare a per-root quota, e.g.:
+  #   - path: /var/lib/cyclaw-fs
+  #     quota_bytes: 1073741824  # 1 GiB (null/absent => unlimited)
+  #     max_files: 10000         # (null/absent => unlimited)
   # --- secondary RAG-indexing of the file-share ---
   index_enabled: false           # toggle RAG-corpus indexing of index_root on/off
   index_root: null               # null => defaults to the first writable_root (generate→write→index loop)

@@ -12,6 +12,10 @@ Subcommands:
     append   Append to a file in a writable root (gated; --reason).
     mkdir    Make a directory in a writable root (gated; --reason).
     move     Move within a writable root (gated; --reason; --confirm).
+    delete        Delete a path to trash (gated; --reason; --confirm; --purge for hard delete).
+    trash-empty   Purge expired (or --all) trash entries (gated; --reason; --confirm).
+    trash-restore Restore a trash entry to its original path (gated; --reason; --confirm).
+    quota-status  Report per-root quota usage/limits (--recompute to force a walk).
     index    Stage the file-share into the corpus (--apply [--reindex]); dry-run default.
     reveal   Open a writable root in the OS file manager (out-of-band).
     test     Run the pre-flight self-test.
@@ -28,6 +32,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from agentic.fsconnect.config import FsConnectConfig, load_fsconnect_config
 from utils.errors import (
@@ -36,6 +42,9 @@ from utils.errors import (
     FsWriteRefused,
 )
 from utils.logger import _get_config
+
+if TYPE_CHECKING:
+    from agentic.fsconnect.writer import FsWriter
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -199,6 +208,56 @@ def cmd_move(args: argparse.Namespace) -> int:
     return _run_write(args, "fs_move")
 
 
+def _run_writer(args: argparse.Namespace, call: Callable[[FsWriter], dict]) -> int:
+    """Load config, open an FsWriter, and run ``call(writer)`` with the exit-code map.
+
+    Shared by the delete/trash/quota subcommands so each maps FsWriteRefused -> exit 4,
+    other FsConnectError -> exit 2, and the disabled/config-error no-ops identically to
+    the read/write helpers above.
+    """
+    fc = _load(args)
+    if fc is None:
+        return EXIT_ENV
+    if not getattr(fc, "enabled", False):
+        return _disabled_noop()
+    cfg = _get_config(args.config)
+    from agentic.fsconnect.writer import FsWriter
+    try:
+        with FsWriter(cfg, fc, config_path=args.config) as w:
+            res = call(w)
+    except FsWriteRefused as exc:
+        _err(f"Write refused: {exc.message}")
+        return EXIT_REFUSED
+    except FsConnectError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+    _emit(res)
+    return EXIT_OK
+
+
+def cmd_delete(args: argparse.Namespace) -> int:
+    return _run_writer(args, lambda w: w.fs_delete(
+        args.path, reason=args.reason or "", confirm=args.confirm,
+        purge=args.purge, root=args.root))
+
+
+def cmd_trash_empty(args: argparse.Namespace) -> int:
+    return _run_writer(args, lambda w: w.trash_empty(
+        reason=args.reason or "", confirm=args.confirm,
+        all_entries=args.all, root=args.root))
+
+
+def cmd_trash_restore(args: argparse.Namespace) -> int:
+    return _run_writer(args, lambda w: w.trash_restore(
+        args.entry, reason=args.reason or "", confirm=args.confirm,
+        overwrite=args.overwrite, root=args.root))
+
+
+def cmd_quota_status(args: argparse.Namespace) -> int:
+    return _run_writer(args, lambda w: w.quota_status(
+        root=args.root, recompute=args.recompute))
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     fc = _load(args)
     if fc is None:
@@ -317,6 +376,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_move.add_argument("--confirm", action="store_true")
     p_move.add_argument("--overwrite", action="store_true")
     p_move.set_defaults(func=cmd_move)
+
+    p_delete = sub.add_parser("delete", help="Delete a path to trash (gated; --purge for hard delete).")
+    p_delete.add_argument("--root")
+    p_delete.add_argument("--path", required=True)
+    p_delete.add_argument("--reason")
+    p_delete.add_argument("--confirm", action="store_true")
+    p_delete.add_argument("--purge", action="store_true",
+                          help="Hard-delete (bypass trash); needs allow_hard_delete in config.")
+    p_delete.set_defaults(func=cmd_delete)
+
+    p_tempty = sub.add_parser("trash-empty", help="Purge expired (or --all) trash entries (gated).")
+    p_tempty.add_argument("--root")
+    p_tempty.add_argument("--reason")
+    p_tempty.add_argument("--confirm", action="store_true")
+    p_tempty.add_argument("--all", action="store_true", help="Purge every entry, not just expired.")
+    p_tempty.set_defaults(func=cmd_trash_empty)
+
+    p_trestore = sub.add_parser("trash-restore", help="Restore a trash entry to its original path (gated).")
+    p_trestore.add_argument("--root")
+    p_trestore.add_argument("--entry", required=True, help="Trash entry name (from trash listing).")
+    p_trestore.add_argument("--reason")
+    p_trestore.add_argument("--confirm", action="store_true")
+    p_trestore.add_argument("--overwrite", action="store_true",
+                            help="Replace an existing file at the original path.")
+    p_trestore.set_defaults(func=cmd_trash_restore)
+
+    p_quota = sub.add_parser("quota-status", help="Report per-root quota usage/limits.")
+    p_quota.add_argument("--root")
+    p_quota.add_argument("--recompute", action="store_true", help="Force a full usage walk.")
+    p_quota.set_defaults(func=cmd_quota_status)
 
     p_index = sub.add_parser("index", help="Stage the file-share into the corpus (dry-run default).")
     p_index.add_argument("--apply", action="store_true", help="Stage files (else dry-run scan).")

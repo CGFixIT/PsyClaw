@@ -97,6 +97,54 @@ def test_write_applies(tmp_path):
     assert (wz / "out.txt").read_text(encoding="utf-8") == "qwen output"
 
 
+def test_delete_to_trash_exit_0(tmp_path, capsys):
+    wz = tmp_path / "wz"
+    cp = _cfg(tmp_path, {"enabled": True, "writable_roots": [str(wz)], "writes_enabled": True})
+    cli.main(["--config", cp, "write", "--path", "g.txt", "--body", "x", "--reason", "seed"])
+    rc = cli.main(["--config", cp, "delete", "--path", "g.txt", "--reason", "cleanup", "--confirm"])
+    assert rc == 0
+    assert not (wz / "g.txt").exists()
+    assert (wz / ".cyclaw-trash").is_dir()
+
+
+def test_delete_purge_refused_exit_4(tmp_path):
+    wz = tmp_path / "wz"
+    cp = _cfg(tmp_path, {"enabled": True, "writable_roots": [str(wz)], "writes_enabled": True})
+    cli.main(["--config", cp, "write", "--path", "h.txt", "--body", "x", "--reason", "seed"])
+    # allow_hard_delete defaults false => --purge refused => exit 4
+    rc = cli.main(["--config", cp, "delete", "--path", "h.txt", "--reason", "hard",
+                   "--confirm", "--purge"])
+    assert rc == 4
+    assert (wz / "h.txt").exists()
+
+
+def test_trash_restore_exit_0(tmp_path, capsys):
+    wz = tmp_path / "wz"
+    cp = _cfg(tmp_path, {"enabled": True, "writable_roots": [str(wz)], "writes_enabled": True})
+    cli.main(["--config", cp, "write", "--path", "r.txt", "--body", "keep", "--reason", "seed"])
+    cli.main(["--config", cp, "delete", "--path", "r.txt", "--reason", "oops", "--confirm"])
+    capsys.readouterr()
+    entry = next(p.name for p in (wz / ".cyclaw-trash").iterdir()
+                 if not p.name.endswith(".meta.json"))
+    rc = cli.main(["--config", cp, "trash-restore", "--entry", entry,
+                   "--reason", "undo", "--confirm"])
+    assert rc == 0
+    assert (wz / "r.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_quota_status_exit_0(tmp_path, capsys):
+    wz = tmp_path / "wz"
+    cp = _cfg(tmp_path, {"enabled": True,
+                         "writable_roots": [{"path": str(wz), "quota_bytes": 10000}],
+                         "writes_enabled": True})
+    cli.main(["--config", cp, "write", "--path", "a.txt", "--body", "hello", "--reason", "seed"])
+    capsys.readouterr()
+    rc = cli.main(["--config", cp, "quota-status"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "used_bytes" in out and "quota_bytes" in out
+
+
 def test_index_disabled_noop(tmp_path, capsys):
     cp = _cfg(tmp_path, {"enabled": True, "index_enabled": False})
     assert cli.main(["--config", cp, "index"]) == 0
