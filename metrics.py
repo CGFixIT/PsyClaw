@@ -87,8 +87,15 @@ def compute_metrics(events) -> dict:
 
         if e.get("event") in ("rag_query", "mcp_rag_query"):
             rag_query_count += 1
-            if "top_score" in e:
-                s = e["top_score"]
+            # audit.jsonl is append-only evidence this module already treats as
+            # untrusted (load_events skips non-JSON lines; "query" presence is
+            # checked, not assumed). Extend the same posture to top_score: a
+            # JSON-valid line carrying ``top_score: null`` (or a string) would
+            # otherwise TypeError here and take down GET /audit/summary and the
+            # cyclaw-metrics CLI. bool is excluded because it is an int subclass
+            # and True would silently count as a 1.0 score.
+            s = e.get("top_score")
+            if isinstance(s, (int, float)) and not isinstance(s, bool):
                 score_sum += s
                 score_n += 1
                 score_min = s if score_min is None or s < score_min else score_min
