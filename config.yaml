@@ -399,6 +399,28 @@ agentic:
     - issue_view
     - issue_list
     - repo_view
+  # Future optional LangChain Deep Agents-backed GitHub coding harness.
+  # Phase 1 config only: disabled, not imported by the core request path, and
+  # not used unless a future reviewed command explicitly invokes it.
+  deepagent_github:
+    enabled: false
+    provider: "lmstudio"                         # "lmstudio" | "openai_compatible"
+    base_url: "http://localhost:1234/v1"         # local OpenAI-compatible endpoint
+    model: ""
+    allow_deepagents_dependency: false           # extras must be installed explicitly
+    allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
+    allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
+    allow_github_writes: false                   # writer.py remains the write-policy boundary
+    workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
+  # Governed harness optimizer scaffold. Phase 2 adds local data models and a
+  # proposer workspace builder only; no model calls, no GitHub writes, no MCP tools.
+  harness_optimizer:
+    enabled: false
+    max_iterations: 3
+    require_human_confirm_for_accept: true
+    output_dir: "data/agentic/harness_optimizer/runs"
+    memory_dir: "data/agentic/harness_optimizer/memory"
+    allow_local_model_judge: false
 
 # ===========================
 # Filesystem connector (out-of-band)  [v0.1 — experimental]

@@ -79,3 +79,13 @@ Every read, refusal, and registry change emits a JSONL event via the same
 GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q
 python -m agentic.cli test
 ```
+
+## 9. Future governed GitHub coding harness
+Planning for the optional harness optimizer and LangChain Deep Agents-backed
+GitHub coding harness is tracked in
+`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+
+Those features stay disabled by default and out-of-band. The phase-2
+`agentic/harness_optimizer` scaffold contains local data models and workspace
+artifact creation only; it does not call models, GitHub, MCP, shell commands, or
+the core request path.

@@ -50,6 +50,8 @@ def test_valid_load(tmp_path: Path) -> None:
     assert cfg.mode == "read"
     assert cfg.gh_min_tuple == (2, 40, 0)
     assert os.path.isabs(cfg.registry_path)
+    assert cfg.deepagent_github.enabled is False
+    assert cfg.harness_optimizer.enabled is False
     assert cfg.enabled is True  # type: ignore[attr-defined]
 
 
@@ -72,6 +74,60 @@ def test_defaults_disabled_when_absent_enabled(tmp_path: Path) -> None:
     cfg = load_agentic_config(_write_config(tmp_path, block))
     # Conservative: agentic is disabled unless explicitly enabled.
     assert cfg.enabled is False  # type: ignore[attr-defined]
+
+
+def test_rejects_non_bool_enabled(tmp_path: Path) -> None:
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, _base_block(enabled="false")))
+
+
+def test_rejects_non_bool_writes_enabled(tmp_path: Path) -> None:
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, _base_block(writes_enabled="false")))
+
+
+def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) -> None:
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+
+    assert cfg.deepagent_github.provider == "lmstudio"
+    assert cfg.deepagent_github.base_url == "http://localhost:1234/v1"
+    assert cfg.deepagent_github.allow_deepagents_dependency is False
+    assert cfg.deepagent_github.allow_shell_execution is False
+    assert cfg.deepagent_github.workspace_root == str(DATA_ROOT / "agentic" / "workspaces")
+
+
+def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"model": "good;bad"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_rejects_workspace_escape(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"workspace_root": "data/../outside"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_harness_optimizer_config_defaults_disabled_and_path_anchored(tmp_path: Path) -> None:
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+
+    assert cfg.harness_optimizer.max_iterations == 3
+    assert cfg.harness_optimizer.require_human_confirm_for_accept is True
+    assert cfg.harness_optimizer.allow_local_model_judge is False
+    assert cfg.harness_optimizer.output_dir == str(DATA_ROOT / "agentic" / "harness_optimizer" / "runs")
+    assert cfg.harness_optimizer.memory_dir == str(DATA_ROOT / "agentic" / "harness_optimizer" / "memory")
+
+
+def test_harness_optimizer_config_rejects_bad_iterations(tmp_path: Path) -> None:
+    block = _base_block(harness_optimizer={"max_iterations": 0})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_harness_optimizer_config_rejects_memory_escape(tmp_path: Path) -> None:
+    block = _base_block(harness_optimizer={"memory_dir": "/tmp/cyclaw-memory"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
 
 
 def test_missing_block_raises(tmp_path: Path) -> None:
