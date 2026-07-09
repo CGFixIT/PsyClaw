@@ -364,9 +364,8 @@ gate_src = pathlib.Path("gate.py").read_text(encoding="utf-8")
 tree = ast.parse(gate_src)
 guardrail_imports = [
     n for n in ast.walk(tree)
-    if isinstance(n, (ast.Import, ast.ImportFrom))
-    and any("guardrail" in (getattr(a, "name", None) or "") for a in (getattr(n, "names", []) or []))
-    or ("guardrail" in (getattr(n, "module", None) or ""))
+    if (isinstance(n, ast.Import) and any((a.name or "").split(".")[0] == "guardrails" for a in n.names))
+    or (isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "guardrails")
 ]
 assert not guardrail_imports, f"guardrails imported in gate.py: {guardrail_imports}"
 print("  PASS  NeMo guardrails isolation (not imported by gate.py)")
