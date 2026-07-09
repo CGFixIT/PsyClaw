@@ -158,6 +158,28 @@ class TestPrintMetrics:
 class TestComputeMetrics:
     """Direct coverage of the aggregate fields surfaced at GET /audit/summary."""
 
+    def test_non_numeric_top_score_is_skipped_not_fatal(self):
+        """A JSON-valid audit line whose top_score is null/string/bool must be
+        excluded from the score stats instead of raising TypeError — one
+        malformed line must never take down GET /audit/summary or the
+        cyclaw-metrics CLI (load_events already tolerates non-JSON lines; this
+        extends the same posture to field types)."""
+        events = [
+            {"event": "rag_query", "top_score": 0.40, "retrieval_mode": "hybrid"},
+            {"event": "rag_query", "top_score": None, "retrieval_mode": "hybrid"},
+            {"event": "rag_query", "top_score": "0.9", "retrieval_mode": "hybrid"},
+            {"event": "mcp_rag_query", "top_score": True, "mode": "hybrid"},
+            {"event": "mcp_rag_query", "top_score": 0.60, "mode": "hybrid"},
+        ]
+        m = compute_metrics(events)
+        # All five still count as rag queries; only the two numeric scores
+        # feed the stats (bool excluded — it is an int subclass and True
+        # would otherwise count as a 1.0 score).
+        assert m["rag_query_count"] == 5
+        assert m["scores"]["min"] == 0.40
+        assert m["scores"]["max"] == 0.60
+        assert abs(m["scores"]["avg"] - 0.50) < 1e-9
+
     def test_model_used_excludes_non_answer_events(self):
         """The graph stamps model_used="unknown" on user_gate_pause events.
         Those must not appear in the model-usage breakdown — only answered
