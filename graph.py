@@ -610,18 +610,26 @@ def user_gate_router(
 ) -> Literal["grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"]:
     """After user_gate: route based on confirmation and selected provider availability.
 
-    ``grok`` is bound at build time (``build_graph`` passes the same client it
-    injects into ``grok_fallback_node``). When it is ``None`` — offline mode or
-    Grok disabled — a confirmed query is routed straight to offline-best-effort
-    so the user gets a real local answer. Previously it was routed to
-    ``grok_fallback`` regardless of mode; the node's ``grok is None`` guard then
-    returned a "[Grok unavailable: offline mode]" stub, a dead-end that wasted
-    the confirmation round-trip and produced no actual answer.
+    The active external provider is chosen by ``state["online_provider"]``
+    (``gate.py`` sets this from the user's request; defaults to ``"grok"`` when
+    absent). Only that ONE provider's client is consulted — a confirmed query
+    with ``online_provider="claude"`` never touches ``grok`` even if it is
+    present and usable, and vice versa.
 
-    A client can exist yet be unusable: Grok enabled in config but ``GROK_API_KEY``
-    unset (``grok.is_available()`` is False). Routing such a query to
-    ``grok_fallback`` only yields a "[Grok Error: GROK_API_KEY not set]" string,
-    so we treat an unavailable client like ``None`` and fall back to a real local
+    ``grok``/``claude`` are bound at build time (``build_graph`` passes the same
+    clients it injects into ``grok_fallback_node``/``claude_fallback_node``).
+    When the selected provider's client is ``None`` — offline mode or that
+    provider disabled — a confirmed query is routed straight to
+    offline-best-effort so the user gets a real local answer, rather than to
+    the fallback node's own ``client is None`` guard (which would return an
+    "[<Provider> unavailable: offline mode]" stub — a dead-end that wastes the
+    confirmation round-trip and produces no actual answer).
+
+    A client can exist yet be unusable: the provider enabled in config but its
+    API key env var unset (``is_available()`` is False — ``GROK_API_KEY`` for
+    Grok, ``ANTHROPIC_API_KEY`` for Claude). Routing such a query to the
+    fallback node only yields a "[<Provider> Error: ... not set]" string, so we
+    treat an unavailable client like ``None`` and fall back to a real local
     answer instead.
     """
     confirmed = state.get("user_confirmed_online")

@@ -15,7 +15,8 @@ of what must not break.
 
 **What CyClaw is.** A Python 3.12 FastAPI RAG server (`gate.py`) fronting a
 LangGraph security topology (`graph.py`), with hybrid ChromaDB + BM25 retrieval,
-a local LLM via LM Studio, and a triple-gated optional Grok fallback. It binds
+a local LLM via LM Studio, and triple-gated optional external fallbacks (Grok
+and/or Claude, selected per-query via `online_provider`). It binds
 **only** to `127.0.0.1:8787`. A separate retrieval-only MCP server
 (`mcp_hybrid_server.py`) exposes search with no LLM path.
 
@@ -51,12 +52,13 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
               → soul init → graph invoke (wrapped in 330s timeout)
         │
         ▼
-   graph.py  (LangGraph 7-node state machine)
+   graph.py  (LangGraph 8-node state machine)
    retrieve → route_by_score
               ├─ score ≥ min_score → local_llm
               └─ score < min_score → user_gate
-                                     ├─ confirmed + hybrid + grok usable → grok_fallback
-                                     └─ declined / offline / no key      → offline_best_effort
+                                     ├─ confirmed + hybrid + selected provider usable
+                                     │    → grok_fallback | claude_fallback
+                                     └─ declined / offline / no key → offline_best_effort
               ↓ (all upstream nodes converge)
               audit_logger → END
         │
@@ -95,20 +97,20 @@ subsystems.
 | Path | Role |
 |---|---|
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill, `/ops/*` |
-| `graph.py` | 7-node LangGraph topology; all security policy lives in the edges |
+| `graph.py` | 8-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
 | `retrieval/embeddings.py` | Local CPU embeddings; triple `lru_cache` |
 | `retrieval/stemmer.py` | Porter stemmer + custom vocab; avoids NLTK punkt (CVE) |
 | `retrieval/vector_store.py` | Pluggable reader/writer: embedded ChromaDB (default) or pgvector |
 | `retrieval/clear_cache.py` | Dry-run-by-default embedding-cache cleaner (`cyclaw-clear-cache`) |
-| `llm/client.py` | `LocalLLMClient` + `GrokClient`; shared bounded-retry `_post_with_retry` |
+| `llm/client.py` | `LocalLLMClient` + `GrokClient` + `ClaudeClient`; shared bounded-retry `_post_with_retry` |
 | `utils/sanitizer.py` | Injection filter; patterns in `config.yaml` |
 | `utils/personality.py` | Soul versioning, SHA-256 drift detection, injection gate on write |
 | `utils/personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL` |
 | `utils/logger.py` | Audit JSONL; SHA-256 query hashing, recursive PII redaction |
 | `utils/ratelimit.py` | Per-IP rate limiting; in-memory / SQLite / Postgres |
-| `utils/health.py` | `check_all()` behind `/health`; skips Grok probe when no key |
+| `utils/health.py` | `check_all()` behind `/health`; skips Grok/Claude probes when their key is unset |
 | `utils/errors.py` | Typed exception hierarchy rooted at `RAGError` |
 | `utils/config_validation.py` | Boot-time config validation; fails fast |
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |
@@ -138,6 +140,7 @@ subsystems.
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
 | `qwen2.5-7b-instruct` | `local_llm.model` | LM Studio |
 | `grok-4.3` | `grok.model` | disabled by default |
+| `claude-sonnet-5` | `claude.model` | disabled by default; second external fallback (PR #441) |
 
 ---
 
@@ -152,8 +155,8 @@ statically; run it after any change to the core files.
 |---|---|---|---|---|
 | I1 | **RAG-first** — `retrieve` is the unconditional entry; no LLM call precedes retrieval | `graph.py` `set_entry_point("retrieve")` | `test_graph` | add a node/edge that answers before `retrieve` runs |
 | I2 | **Topology = policy** — routing is graph edges only, never an LLM or ad-hoc `if` | `graph.py` `score_router`/`user_gate_router` | `test_graph` | add a runtime branch that decides routing outside the two routers |
-| I3 | **Triple-gated Grok** — external call needs `mode=="hybrid"` AND `grok.enabled` AND `user_confirmed_online`, all three | `gate.py` construction + `graph.py` `user_gate_router` | `test_graph`, `test_gate` | route to `grok_fallback` without all three conditions |
-| I4 | **Audit convergence** — all six upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
+| I3 | **Triple-gated external fallback** — a call to Grok or Claude needs `mode=="hybrid"` AND `<provider>.enabled` AND `user_confirmed_online`, all three, for whichever provider is selected (`online_provider`) | `gate.py` construction + `graph.py` `user_gate_router` | `test_graph`, `test_gate` | route to `grok_fallback`/`claude_fallback` without all three conditions for that provider |
+| I4 | **Audit convergence** — all seven upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
 | I5 | **Soul governance** — soul mutation requires a human `reason` string; writes are atomic | `utils/personality.py` `apply_evolution` | `test_personality` | write `soul.md` without a non-empty `reason`, or bypass `PersonalityManager` |
 | I6 | **Module isolation** — `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`, and those never import the core three | import graph | `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core three to "reuse" something |
 
