@@ -319,6 +319,7 @@ security:
     - "127.0.0.1"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
     - "localhost"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
     - "10.0.0.112"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
+    - "10.0.0.111"  # DevSkim: ignore DS137138 - home-lab LAN host (mirrors allowed_origins)
 
 # ===========================
 # sync: Dropbox corpus sync (out-of-band, rclone-based)
