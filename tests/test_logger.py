@@ -36,7 +36,12 @@ class TestAnchor:
         assert logger._anchor(str(absolute)) == absolute
 
     def test_user_expansion(self, monkeypatch, tmp_path):
+        # posixpath.expanduser reads HOME; Windows' ntpath.expanduser reads
+        # USERPROFILE (falling back to HOMEDRIVE+HOMEPATH) and never reads HOME
+        # at all (verified against CPython's ntpath.py) -- set both so this
+        # passes on every CI leg instead of silently no-op'ing on windows-latest.
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
         assert logger._anchor("~/audit.jsonl") == tmp_path / "audit.jsonl"
 
 
