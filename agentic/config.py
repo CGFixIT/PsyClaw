@@ -118,8 +118,11 @@ class AgenticConfig:
                 details={"hint": "A path under the repo's data/ tree, e.g. data/agentic/skills_registry.json"},
             )
         expanded = os.path.expanduser(os.path.expandvars(self.registry_path))
-        resolved = Path(expanded).resolve()
         repo_root = Path(__file__).resolve().parent.parent
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = repo_root / path
+        resolved = path.resolve()
         data_root = (repo_root / "data").resolve()
         # Must resolve to a path inside the repo's data/ tree. resolve() collapses
         # ".." and follows symlinks, so an escape cannot land inside data_root.

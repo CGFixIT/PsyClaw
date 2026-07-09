@@ -61,6 +61,17 @@ def test_valid_load(tmp_path: Path) -> None:
     assert cfg.log_path.endswith("rclone_cyclaw.log")
 
 
+def test_relative_local_path_is_repo_anchored_from_other_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _write_config(tmp_path, _base_block())
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    monkeypatch.chdir(outside)
+    cfg = load_sync_config(path)
+
+    assert cfg.local_path == str(CORPUS_ROOT)
+
+
 def test_absolute_corpus_subdir_is_accepted(tmp_path: Path) -> None:
     abs_path = str(CORPUS_ROOT / "sub")
     cfg = load_sync_config(_write_config(tmp_path, _base_block(local_path=abs_path)))

@@ -53,6 +53,19 @@ def test_valid_load(tmp_path: Path) -> None:
     assert cfg.enabled is True  # type: ignore[attr-defined]
 
 
+def test_relative_registry_path_is_repo_anchored_from_other_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_config(tmp_path, _base_block())
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    monkeypatch.chdir(outside)
+    cfg = load_agentic_config(path)
+
+    assert cfg.registry_path == str(DATA_ROOT / "agentic" / "skills_registry.json")
+
+
 def test_defaults_disabled_when_absent_enabled(tmp_path: Path) -> None:
     block = _base_block()
     del block["enabled"]
