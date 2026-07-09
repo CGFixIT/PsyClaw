@@ -10,11 +10,17 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = 1234
 MODEL_ID = "qwen2.5-7b-instruct"
+GROK_MODEL_ID = "grok-4.3"
+CLAUDE_MODEL_ID = "claude-sonnet-5"
 
 MODELS_RESP = json.dumps(
     {
         "object": "list",
-        "data": [{"id": MODEL_ID, "object": "model", "created": 1700000000, "owned_by": "local"}],
+        "data": [
+            {"id": MODEL_ID, "object": "model", "created": 1700000000, "owned_by": "local"},
+            {"id": GROK_MODEL_ID, "object": "model", "created": 1700000000, "owned_by": "mock-xai"},
+            {"id": CLAUDE_MODEL_ID, "object": "model", "created": 1700000000, "owned_by": "mock-anthropic"},
+        ],
     }
 )
 
@@ -28,22 +34,44 @@ COMPLETION_TMPL = {
 }
 
 
-def _make_completion(prompt_content: str) -> str:
+def _answer(prompt_content: str, model_id: str) -> str:
     if "one sentence" in prompt_content.lower() or "describe" in prompt_content.lower():
-        answer = (
+        return (
             "CyClaw is an offline-first, RAG-enforced personal AI assistant that uses "
             "a LangGraph security topology and ChromaDB+BM25 hybrid retrieval to answer "
             "questions from a local knowledge vault without sending data to the cloud."
         )
-    else:
-        answer = (
-            f"[Mock LM Studio - {MODEL_ID}] This is a cached offline response "
-            "for sandbox audit purposes. No real model weights were loaded."
-        )
+    if model_id == GROK_MODEL_ID:
+        return "[Mock Grok API] Dummy-key external fallback response for sandbox audit purposes."
+    if model_id == CLAUDE_MODEL_ID:
+        return "[Mock Claude API] Dummy-key external fallback response for sandbox audit purposes."
+    return (
+        f"[Mock LM Studio - {MODEL_ID}] This is a cached offline response "
+        "for sandbox audit purposes. No real model weights were loaded."
+    )
+
+
+def _make_completion(prompt_content: str, model_id: str = MODEL_ID) -> str:
+    answer = _answer(prompt_content, model_id)
     resp = dict(COMPLETION_TMPL)
     resp["created"] = int(time.time())
+    resp["model"] = model_id
     resp["choices"] = [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}]
     return json.dumps(resp)
+
+
+def _make_claude_completion(prompt_content: str, model_id: str = CLAUDE_MODEL_ID) -> str:
+    return json.dumps(
+        {
+            "id": "msg-mock-001",
+            "type": "message",
+            "role": "assistant",
+            "model": model_id,
+            "content": [{"type": "text", "text": _answer(prompt_content, model_id)}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        }
+    )
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -65,7 +93,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "not found"}))
 
     def do_POST(self) -> None:  # noqa: N802
-        if "/chat/completions" not in self.path:
+        if "/chat/completions" not in self.path and "/messages" not in self.path:
             self._send(404, json.dumps({"error": "not found"}))
             return
         length = int(self.headers.get("Content-Length", 0))
@@ -74,9 +102,14 @@ class _Handler(BaseHTTPRequestHandler):
             body = json.loads(raw)
             msgs = body.get("messages", [])
             combined = " ".join(m.get("content", "") for m in msgs)
+            model_id = body.get("model") or MODEL_ID
         except (json.JSONDecodeError, AttributeError):
             combined = raw
-        self._send(200, _make_completion(combined))
+            model_id = MODEL_ID
+        if "/messages" in self.path:
+            self._send(200, _make_claude_completion(combined, str(model_id)))
+        else:
+            self._send(200, _make_completion(combined, str(model_id)))
 
 
 def main() -> None:

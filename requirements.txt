@@ -1,6 +1,7 @@
 # CyClaw requirements (DEPRECATED — use pyproject.toml + uv instead)
 # This file is kept for backward compatibility + legacy CI/tools only.
-# Pins below are EXACTLY synced with pyproject.toml [project.dependencies] + test extras.
+# Pins below are synced with pyproject.toml [project.dependencies], the torch CPU
+# extra, and CI test/dev tools used by the legacy requirements path.
 # Always install with constraints for full alignment: 
 #   Preferred: uv pip install -r pyproject.toml --constraint constraints.txt
 #   Legacy/CI: pip install -r requirements.txt -c constraints.txt

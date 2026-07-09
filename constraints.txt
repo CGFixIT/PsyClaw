@@ -6,7 +6,7 @@
 # This pins direct dependencies (sourced from pyproject.toml) + critical transitives
 # (pydantic family to avoid resolver explosion, torch for post-CVE-2025-32434 safety).
 # For complete transitive reproducibility, run `uv lock` (recommended in pyproject.toml)
-# or `pip-compile` and commit the result. Current state: direct pins aligned with v1.7.0.
+# or `pip-compile` and commit the result. Current state: direct pins aligned with v1.8.0.
 
 # CRITICAL: pydantic family must stay synchronized or pip resolver explodes
 # pydantic 2.13.4 hard-pins pydantic-core==2.46.4 (exact ==, not a range), and
