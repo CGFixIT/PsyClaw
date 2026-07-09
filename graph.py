@@ -626,9 +626,10 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "error": state.get("error")
     }
 
-    audit_log(event)
-
-    # Record to personality DB if available
+    # Record to personality DB before audit_log so a failure is durable in the
+    # JSONL event (personality_db_error), not only in process logs. The call is
+    # non-fatal: any exception is caught and stamped on the event, then audit
+    # always runs so query audit convergence is preserved.
     if personality and state.get("answer_model"):
         try:
             query_hash = hash_query(query)
@@ -641,6 +642,8 @@ def audit_logger_node(state: GraphState, cfg: dict,
         except Exception as exc:
             logger.error("personality.record_interaction failed (non-fatal)", exc_info=True)
             event["personality_db_error"] = str(exc)
+
+    audit_log(event)
 
     return {"audit_event": event}
 
