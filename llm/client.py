@@ -47,14 +47,16 @@ def _extract_content(resp: httpx.Response) -> str:
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-        raise ValueError(f"malformed LLM response ({type(e).__name__}): {e}") from e
+        # Type-only message: exception text can echo body fragments / proxy HTML
+        # that later lands in graph answers and HTTP 200 QueryResponse.error.
+        raise ValueError(f"malformed LLM response ({type(e).__name__})") from e
     # A structurally-valid envelope can still carry no usable text: some
     # OpenAI-compatible backends return content=null (e.g. alongside a refusal or
     # tool-call) or an empty/whitespace string. Returning that verbatim would
     # surface a blank answer downstream; treat it as a malformed (non-retryable)
     # response so the caller maps it to a clear typed LLM/Grok error instead.
     if not isinstance(content, str) or not content.strip():
-        raise ValueError(f"empty LLM response: content was {content!r}")
+        raise ValueError("empty LLM response: content missing or blank")
     return content
 
 
@@ -68,7 +70,7 @@ def _extract_claude_content(resp: httpx.Response) -> str:
             if isinstance(block, dict) and block.get("type") == "text"
         ]
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        raise ValueError(f"malformed Claude response ({type(e).__name__}): {e}") from e
+        raise ValueError(f"malformed Claude response ({type(e).__name__})") from e
     content = "\n".join(p for p in parts if isinstance(p, str) and p.strip()).strip()
     if not content:
         raise ValueError("empty Claude response: no text content")
@@ -254,7 +256,12 @@ class LocalLLMClient:
             on_timeout=lambda e: LLMServiceError(
                 "LM Studio timeout", details={"timeout_sec": self.timeout}
             ),
-            on_other=lambda e: LLMServiceError(f"LM Studio error: {str(e)}"),
+            # Type-only: str(e) can carry URLs, body fragments, or secrets that
+            # graph embeds into HTTP 200 answers via _generate_or_error.
+            on_other=lambda e: LLMServiceError(
+                f"LM Studio error: {type(e).__name__}",
+                details={"exc_type": type(e).__name__},
+            ),
         )
 
 class GrokClient:
@@ -309,7 +316,10 @@ class GrokClient:
             on_timeout=lambda e: GrokServiceError(
                 "Grok timeout", details={"timeout_sec": self.timeout}
             ),
-            on_other=lambda e: GrokServiceError(f"Grok error: {str(e)}"),
+            on_other=lambda e: GrokServiceError(
+                f"Grok error: {type(e).__name__}",
+                details={"exc_type": type(e).__name__},
+            ),
         )
 
 
@@ -368,5 +378,8 @@ class ClaudeClient:
             on_timeout=lambda e: ClaudeServiceError(
                 "Claude timeout", details={"timeout_sec": self.timeout}
             ),
-            on_other=lambda e: ClaudeServiceError(f"Claude error: {str(e)}"),
+            on_other=lambda e: ClaudeServiceError(
+                f"Claude error: {type(e).__name__}",
+                details={"exc_type": type(e).__name__},
+            ),
         )
