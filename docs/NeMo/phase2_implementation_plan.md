@@ -190,12 +190,39 @@ default in the wiring PR.** Reasoning:
    (verified overlap: "ignore previous instructions", "you are now",
    "system prompt:", "disregard …"). The genuinely new coverage is mostly the
    soul-mutation regex ("from now on you are …", "rewrite your soul …").
-2. **False-positive risk is real and unmeasured.** CyClaw's corpus is
-   security-topical; legitimate queries *about* injection and soul attacks are
-   expected traffic. The soul-mutation regex has no measured false-positive rate.
-   The guideline already mandates measuring FP rate against an attack corpus
-   before enabling the model-assisted rail (Phase 3) — the same discipline
-   applies to flipping any rail on by default.
+2. **False-positive risk, now measured on the existing corpus, is low — but the
+   sample is small.** Running the `injection-redteam` `probes.yaml` corpus
+   (10 benign probes, including 2 near-miss probes worded to overlap blocked
+   phrasing — "remember prior soul versions," "update to the corpus") directly
+   through `guardrails._offline_checks` (2026-07-09; see measurement table
+   below) gives **0/10 false positives**. That is a real, code-verified data
+   point, not an assumption — but `n=10` is small, and it is the sanitizer's
+   benign corpus, not a dedicated security-topical benign set sized for this
+   decision. Flipping the default still deserves a wider benign corpus before
+   shipping it as a platform default, per the guideline's own FP-measurement
+   mandate for Phase 3.
+
+**Measurement (2026-07-09):** the `injection-redteam` corpus (45 probes: 35
+jailbreak/injection across the 6 `banned_patterns` families, 10 benign) driven
+directly through `guardrails._offline_checks` — the exact `scan_injection` +
+`detect_soul_mutation_intent` logic Decision 2's `check_input` wraps. (The
+shipped `redteam.py` runner is hardcoded to `utils.sanitizer.check_input` and
+was intentionally not generalized for this one-off measurement — a throwaway
+script imported `guardrails._offline_checks` directly over the same
+`probes.yaml`; not committed as a shipped tool.)
+
+| Metric | Result |
+|---|---|
+| False positives (benign probes blocked) | 0 / 10 (0%) |
+| Jailbreak probes caught | 4 / 35 (11.4%) |
+| Jailbreak probes missed | 31 / 35 (88.6%) — 24 of those the sanitizer already blocks today; the remaining 7 are the sanitizer's own documented `open_finding` gaps |
+
+Reading: the offline checks are **safe** on this corpus (no FP signal) but
+**mostly redundant** with the existing sanitizer — they do not meaningfully
+raise detection on their own (7 literal substring markers + one regex vs. the
+sanitizer's 33 patterns across 6 taxonomy sections). This gives reason 1
+(marginal gain is small) a number, and upgrades reason 2 from "unmeasured
+risk" to "measured low risk, small sample."
 3. **Repo convention is opt-in.** Grok: disabled. Claude: disabled. fsconnect
    Phase 2 (merged 2026-07-09) shipped every new capability default-off. The
    `guardrails:` block, `docs/NeMo/README.md`, and the guideline all document
@@ -206,11 +233,13 @@ default in the wiring PR.** Reasoning:
 4. **One concern per PR.** The wiring is already a High-tier topology change;
    bundling a default flip doubles the review surface.
 
-**Risk of flipping later: LOW–MEDIUM, and it has a defined path.** After Phase 2
-merges, run the `/injection-redteam` probe corpus plus a benign security-question
-corpus through `check_input`, measure the false-positive rate, and if acceptable
-flip the default in its own one-line PR citing the measurement. Until then,
-`enabled: true` is a deliberate one-line operator opt-in.
+**Risk of flipping later: LOW, and the first measurement is already in hand.**
+The corpus pass above found zero false positives; the remaining step before
+flipping is widening the benign set beyond this 10-probe sample (CyClaw-specific
+security questions the corpus doesn't yet cover) and re-running it through the
+real `check_input` once Decision 2 ships, then citing both numbers in a
+one-line default-flip PR. Until then, `enabled: true` remains a deliberate
+one-line operator opt-in.
 
 What `enabled: true` means after Phase 2 (semantics change to document in the
 config comment): it activates the wired input rail (offline checks, no LLM) in
@@ -272,5 +301,8 @@ python3 .claude/skills/doc-sync/doc_sync.py                  # no new drift
 - [ ] Flag (user-scoped, do not edit unilaterally): the `fable-protocol` skill
       §8.3 says "7-node LangGraph" — stale even before Phase 2; after Phase 2 the
       graph is 9 nodes.
-- [ ] Then evaluate the default-flip experiment from Decision 5 (redteam FP
-      measurement) as its own task.
+- [x] Redteam FP measurement against the existing corpus is done (see Decision 5
+      above: 0/10 FP, 4/35 jailbreak coverage) — done 2026-07-09, before the
+      Phase 2 code PR, per operator request.
+- [ ] Evaluate the default-flip decision once `check_input` ships: widen the
+      benign corpus, re-measure against the real entry point, decide.
