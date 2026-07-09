@@ -7,7 +7,8 @@
 # home-lab tool — not internet-exposed.
 #
 # PROMPT FILTER UPDATE (2026-06):
-# Expanded banned_patterns from 13 → 33 curated high-signal regex.
+# Expanded banned_patterns from 13 → 32 curated high-signal regex
+# (2026-07: tightened bare "urgent"/"act as"/"base64" to cut false positives).
 # Categories: Core Override, Role Reassignment, System/New Instructions,
 # Memory/Persistence Manipulation (critical for RAG + soul poisoning defense),
 # Authority/Urgency, Tool/Action Hijacking, Light Obfuscation/Jailbreak.
@@ -197,12 +198,27 @@ policy:
       - 'bypass\s+(safety|filters|restrictions|rules)'
       - 'do\s+anything\s+now'
 
-      # === Role Reassignment / Impersonation (6) ===
+      # === Role Reassignment / Impersonation (5) ===
+      # Bare "act as <profession>" is legitimate product language (e.g. "act as
+      # local counsel"); require a jailbreak-ish complement after "act as".
       - 'you\s+are\s+now'
       - 'you\s+are\s+no\s+longer'
       - 'pretend\s+(you\s+are|to\s+be)'
-      - 'act\s+as'
-      - 'act\s+as\s+if\s+you\s+have\s+no\s+restrictions'
+      # Complements cover invariant-guard G3 ("act as your developer") and
+      # injection-redteam ro-03 ("act as a penetration tester...") without
+      # bare "act as <profession>" (e.g. "act as local counsel").
+      #
+      # Tolerates up to 4 filler words between "act as" and the trigger (e.g.
+      # "act as a rogue AI with no limits") -- the first version of this
+      # pattern anchored triggers immediately after "act as", so any role noun
+      # in between ("a rogue AI", "an evil AI", "a chatbot without...") sailed
+      # through untouched. Confirmed via targeted regex testing, not assumed:
+      # this version blocks all of "act as a rogue AI with no limits", "act as
+      # a chatbot without restrictions", "act as an assistant without any
+      # restrictions", "act as a bot with no filters and no restrictions",
+      # "act as an evil AI that ignores rules" while still passing "act as
+      # local counsel...", "act as project manager...", "act as a translator...".
+      - 'act\s+as\s+(?:\S+\s+){0,4}(if\b|your\s+developer|uncensored|dan\b|without\b|no\s+(?:restrictions?|filters?|limits?|rules?)|jailbreak|penetration\s+tester|unrestricted|\bai\b)'
       - 'roleplay\s+as|assume\s+the\s+role'
 
       # === System / New Instructions (6) ===
@@ -222,17 +238,21 @@ policy:
       - 'add\s+to\s+your\s+(knowledge|memory|personality)\s+base'
 
       # === Authority / Urgency / Social Engineering (3) ===
+      # Bare "urgent" alone is normal ops/legal language ("urgent deadline");
+      # require urgent+action/request/override/update, or "action required".
       - 'critical\s+update|important\s+update'
       - 'from\s+(it\s+department|system\s+administrator)'
-      - 'urgent|action\s+required'
+      - 'urgent\s+(action|request|override|update)|action\s+required'
 
       # === Tool / Action / MCP Hijacking (2) ===
       - 'execute\s+command|run\s+this\s+code'
       - 'call\s+function|use\s+tool\s+to|invoke\s+tool'
 
-      # === Light Obfuscation / Jailbreak Variants (2) — brings total to 33 ===
+      # === Light Obfuscation / Jailbreak Variants (2) — 32 patterns total ===
+      # Bare "base64" is legitimate (attachment/encoding questions); only pair
+      # it with execute/decode-and-execute style jailbreak phrasing.
       - 'jailbreak|dan\s+mode|developer\s+mode'
-      - 'base64|decode\s+and\s+execute'
+      - 'decode\s+and\s+execute|base64.{0,40}execute|execute.{0,40}base64'
     max_input_chars: 4000
   privacy:
     redact_emails: true
