@@ -36,6 +36,40 @@
           { "type": "command", "command": "python3 .claude/skills/memory-orchestrator/orchestrate.py hook" }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/skills/fable-protocol/context_gate.py 2>/dev/null || true",
+            "statusMessage": "Checking fable-protocol auto-load condition..."
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch)",
+      "Bash(git branch *)",
+      "Bash(git fetch *)",
+      "Bash(ruff check *)",
+      "Bash(mypy *)",
+      "Bash(python -m metrics)",
+      "Bash(python3 .claude/skills/invariant-guard/check_invariants.py)",
+      "Bash(python3 .claude/skills/doc-sync/doc_sync.py)"
     ]
   }
 }
