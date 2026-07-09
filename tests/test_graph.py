@@ -783,17 +783,17 @@ class TestGuardrailInputNode:
     See docs/NeMo/phase2_implementation_plan.md Decision 3."""
 
     def test_no_guard_is_pure_passthrough(self):
-        out = guardrail_input_node({"query": "anything"}, input_guard=None, cfg={})
+        out = guardrail_input_node({"query": "anything"}, input_guard=None)
         assert out == {}
 
     def test_passing_guard_is_passthrough(self):
         guard = lambda q: {"blocked": False, "message": "", "rails": []}  # noqa: E731
-        out = guardrail_input_node({"query": "benign"}, input_guard=guard, cfg={})
+        out = guardrail_input_node({"query": "benign"}, input_guard=guard)
         assert out == {}
 
     def test_blocking_guard_produces_block_message_without_error_key(self):
         guard = lambda q: {"blocked": True, "message": "nope", "rails": ["check_injection"]}  # noqa: E731
-        out = guardrail_input_node({"query": "bad"}, input_guard=guard, cfg={})
+        out = guardrail_input_node({"query": "bad"}, input_guard=guard)
         assert out["answer"] == "nope"
         assert out["answer_model"] == "guardrail-blocked"
         assert out["answer_sources"] == []
@@ -805,13 +805,13 @@ class TestGuardrailInputNode:
         def _boom(q):
             raise RuntimeError("guard exploded")
 
-        out = guardrail_input_node({"query": "x"}, input_guard=_boom, cfg={})
+        out = guardrail_input_node({"query": "x"}, input_guard=_boom)
         assert out == {}
 
     def test_guard_receives_the_query(self):
         seen = []
         guard = lambda q: (seen.append(q), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
-        guardrail_input_node({"query": "what is RRF?"}, input_guard=guard, cfg={})
+        guardrail_input_node({"query": "what is RRF?"}, input_guard=guard)
         assert seen == ["what is RRF?"]
 
 

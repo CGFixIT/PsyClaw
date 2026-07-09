@@ -23,7 +23,7 @@ def build_input_guard(cfg: dict[str, Any]) -> Callable[[str], dict[str, Any]] | 
     importing guardrails at all (the import is lazy, inside this branch), so
     a disabled layer costs nothing: no import, no I/O, no state.
     """
-    if not cfg.get("guardrails", {}).get("enabled", False):
+    if not (cfg.get("guardrails") or {}).get("enabled", False):
         return None
 
     from guardrails.config import load_guardrails_config
