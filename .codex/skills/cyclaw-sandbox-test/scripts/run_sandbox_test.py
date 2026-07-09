@@ -21,6 +21,8 @@ from typing import Any
 BASE_URL = "http://127.0.0.1:8787"
 MOCK_URL = "http://127.0.0.1:1234"
 MODEL_ID = "qwen2.5-7b-instruct"
+GROK_MODEL_ID = "grok-4.3"
+CLAUDE_MODEL_ID = "claude-sonnet-5"
 API_KEY = "cyclaw-sandbox-test-key"
 
 
@@ -83,6 +85,30 @@ def _http_probe(name: str, method: str, url: str, expect: set[int], **kwargs: An
     return Result(name, verdict, f"HTTP {status}: {json.dumps(payload, default=str)[:500]}")
 
 
+def _health_contract_probe() -> Result:
+    try:
+        status, payload = _json_request("GET", f"{BASE_URL}/health")
+    except Exception as exc:  # noqa: BLE001 - smoke runner reports exceptions as probe failures
+        return Result("GET /health provider contract", "FAIL", str(exc))
+    services = payload.get("services", {}) if isinstance(payload, dict) else {}
+    expected = {"lm_studio", "grok_api", "claude_api", "embeddings_local"}
+    missing = sorted(expected - set(services))
+    unhealthy = sorted(name for name in expected & set(services) if not services[name].get("healthy"))
+    failures = []
+    if status != 200:
+        failures.append(f"HTTP {status}")
+    if missing:
+        failures.append(f"missing services={missing}")
+    if unhealthy:
+        failures.append(f"unhealthy services={unhealthy}")
+    if payload.get("mode") != "hybrid":
+        failures.append(f"mode={payload.get('mode')!r}")
+    if not payload.get("index_ready") or not payload.get("graph_ready"):
+        failures.append("index_ready/graph_ready not true")
+    verdict = "FAIL" if failures else "PASS"
+    return Result("GET /health provider contract", verdict, "; ".join(failures) or json.dumps(payload)[:500])
+
+
 def _wait_json(url: str, timeout: int) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -109,6 +135,53 @@ def _start_process(name: str, cmd: list[str], cwd: Path, env: dict[str, str], lo
     except Exception:
         log.close()
         raise
+
+
+def _replace_required(text: str, old: str, new: str) -> str:
+    if old not in text:
+        raise ValueError(f"config pattern not found: {old!r}")
+    return text.replace(old, new, 1)
+
+
+def _enable_mock_external_providers(repo: Path, results: list[Result]) -> str | None:
+    config_path = repo / "config.yaml"
+    try:
+        original = config_path.read_text(encoding="utf-8")
+        patched = original
+        patched = _replace_required(patched, '  mode: "offline"', '  mode: "hybrid"')
+        patched = _replace_required(patched, "  grok:\n    enabled: false", "  grok:\n    enabled: true")
+        patched = _replace_required(patched, "  claude:\n    enabled: false", "  claude:\n    enabled: true")
+        patched = _replace_required(
+            patched,
+            '    base_url: "https://api.x.ai/v1"',
+            f'    base_url: "{MOCK_URL}/v1"',
+        )
+        patched = _replace_required(
+            patched,
+            '    base_url: "https://api.anthropic.com/v1"',
+            f'    base_url: "{MOCK_URL}/v1"',
+        )
+        config_path.write_text(patched, encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        results.append(Result("mock external provider config", "FAIL", str(exc)))
+        return None
+    results.append(
+        Result(
+            "mock external provider config",
+            "PASS",
+            "enabled hybrid Grok/Claude with loopback mock endpoints and dummy API keys",
+        )
+    )
+    return original
+
+
+def _restore_config(repo: Path, original: str | None, results: list[Result]) -> None:
+    if original is None:
+        return
+    try:
+        (repo / "config.yaml").write_text(original, encoding="utf-8")
+    except OSError as exc:
+        results.append(Result("restore config.yaml", "FAIL", str(exc)))
 
 
 def _python_in_venv(repo: Path) -> Path:
@@ -218,6 +291,7 @@ def _run_http_smoke(results: list[Result]) -> None:
     results.extend(
         [
             _http_probe("GET /health", "GET", f"{BASE_URL}/health", {200}),
+            _health_contract_probe(),
             _http_probe("GET /", "GET", f"{BASE_URL}/", {200}),
             _http_probe("GET /static/terminal.html", "GET", f"{BASE_URL}/static/terminal.html", {200}),
             _query_probe(
@@ -305,6 +379,44 @@ def _run_http_smoke(results: list[Result]) -> None:
     )
 
 
+def _run_provider_client_smoke(py: Path, repo: Path, env: dict[str, str]) -> Result:
+    code = """
+from llm.client import ClaudeClient, GrokClient
+
+grok = GrokClient()
+claude = ClaudeClient()
+grok_answer = grok.generate("grok provider smoke")
+claude_answer = claude.generate("claude provider smoke")
+assert "Mock Grok API" in grok_answer, grok_answer
+assert "Mock Claude API" in claude_answer, claude_answer
+"""
+    return _run("Grok/Claude client dummy-key smoke", [str(py), "-c", code], repo, env, 60)
+
+
+def _run_targeted_tests(py: Path, repo: Path, env: dict[str, str], timeout: int) -> list[Result]:
+    return [
+        _run("tests.ci_rag_smoke", [str(py), "-m", "tests.ci_rag_smoke"], repo, env, timeout),
+        _run(
+            "targeted pytest recent API/RAG tests",
+            [
+                str(py),
+                "-m",
+                "pytest",
+                "tests/test_client.py",
+                "tests/test_health.py",
+                "tests/test_graph.py",
+                "tests/test_rag_integration.py",
+                "tests/test_terminal_contract.py",
+                "tests/test_cyclaw_sandbox_skill.py",
+                "-q",
+            ],
+            repo,
+            env,
+            timeout,
+        ),
+    ]
+
+
 def _write_report(repo: Path, results: list[Result]) -> Path:
     report = repo / "docs" / f"Cyclaw_Sandbox_Test_{dt.date.today().isoformat()}.md"
     passes = sum(r.status == "PASS" for r in results)
@@ -334,14 +446,24 @@ def main() -> int:
     parser.add_argument("--in-place", action="store_true", help="Run in the current checkout instead of cloning.")
     parser.add_argument("--skip-install", action="store_true", help="Use the current Python environment.")
     parser.add_argument("--skip-index", action="store_true", help="Do not rebuild retrieval index.")
+    parser.add_argument("--skip-tests", action="store_true", help="Do not run targeted API/RAG pytest checks.")
     parser.add_argument("--index-timeout", type=int, default=900)
+    parser.add_argument("--test-timeout", type=int, default=900)
     args = parser.parse_args()
 
     results: list[Result] = []
     repo = _clone_or_use_repo(args, results)
     env = os.environ.copy()
-    env.update({"GROK_API_KEY": "dummy", "CYCLAW_API_KEY": API_KEY, "PYTHONUTF8": "1"})
+    env.update(
+        {
+            "GROK_API_KEY": "dummy",
+            "ANTHROPIC_API_KEY": "dummy",
+            "CYCLAW_API_KEY": API_KEY,
+            "PYTHONUTF8": "1",
+        }
+    )
     py = _prepare_repo(repo, args, results, env)
+    original_config = _enable_mock_external_providers(repo, results)
 
     skill_dir = Path(__file__).resolve().parents[1]
     mock_log = repo / "logs" / "mock_lmstudio.log"
@@ -358,8 +480,10 @@ def main() -> int:
             )
         if _wait_json(f"{MOCK_URL}/v1/models", 10):
             status, payload = _json_request("GET", f"{MOCK_URL}/v1/models")
-            ok = MODEL_ID in json.dumps(payload)
+            encoded = json.dumps(payload)
+            ok = all(model_id in encoded for model_id in (MODEL_ID, GROK_MODEL_ID, CLAUDE_MODEL_ID))
             results.append(Result("mock LM Studio", "PASS" if ok else "FAIL", json.dumps(payload)[:300]))
+            results.append(_run_provider_client_smoke(py, repo, env))
         else:
             results.append(Result("mock LM Studio", "FAIL", "port 1234 did not become ready"))
 
@@ -383,7 +507,10 @@ def main() -> int:
                     proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+        _restore_config(repo, original_config, results)
 
+    if not args.skip_tests:
+        results.extend(_run_targeted_tests(py, repo, env, args.test_timeout))
     results.append(_run("metrics.py", [str(py), "metrics.py"], repo, env, 60))
     report = _write_report(repo, results)
     print(report)
