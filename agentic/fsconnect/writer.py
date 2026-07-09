@@ -232,6 +232,17 @@ class FsWriter:
         return ledger
 
     def _check_quota(self, op: str, sr: SafeRoot, delta_bytes: int, delta_files: int) -> str:
+        """Check the projected usage against the quota spec; raise via ``_refuse`` if over.
+
+        Like the rate limiter (see ``_check_rate``'s docstring, R-4), this check and
+        the later ``_update_ledger`` call are two independent load-modify-save round
+        trips, not one transaction: a concurrent ``FsWriter`` invocation (a second CLI
+        process) can interleave its own check/write/update, letting two writes each
+        individually pass this check while jointly exceeding the quota. Accepted per
+        the same operator decision as the rate limiter -- this is an abuse brake, not
+        a security boundary, and the failure mode is a soft overshoot, not a
+        containment bypass.
+        """
         spec = self._quota_spec(sr)
         if spec is None:
             return "quota unlimited"
@@ -583,25 +594,47 @@ class FsWriter:
                          "denied: trash-empty requires fsconnect.allow_hard_delete: true")
         rnote = self._check_rate("trash_empty", sr)
         purged: list[str] = []
+        freed_bytes = 0
+        freed_files = 0
         for e in targets:
             intent_id = uuid.uuid4().hex
             self._audit_intent("trash_empty", reason, e.name, intent_id, {"trash_entry": e.name})
-            self._purge_trash_entry(sr, e, root)
+            if not self._purge_trash_entry(sr, e, root):
+                # Purge silently failed (e.g. a permission error mid-purge) -- no
+                # applied event, no ledger credit. The intent event above still
+                # records the attempt; an auditor sees intent with no matching
+                # applied and knows this entry was not actually removed.
+                continue
             rule = ("allowed: writes_enabled + human reason + confirm(destructive) + "
                     f"trash-empty (allow_hard_delete) + {rnote}")
             self._audit_applied("trash_empty", reason, {"removed": e.name}, [], intent_id, rule)
             purged.append(e.name)
+            # Mirrors fs_delete's own purge-path convention (see d_bytes/d_files
+            # above): a directory's stat().size is its inode size, not a recursive
+            # walk, so directories are a quota no-op here too -- only files credit
+            # the freed bytes/file-count back to the ledger.
+            if e.kind != "dir":
+                freed_bytes += e.size
+                freed_files += 1
         swept = self._sweep_orphan_tmp(sr, root)
-        self._update_ledger(sr, 0, 0)
+        self._update_ledger(sr, -freed_bytes, -freed_files)
         return {"status": "applied", "op": "trash_empty", "executed": True, "reason": reason,
                 "purged": purged, "swept_tmp": swept}
 
-    def _purge_trash_entry(self, sr: SafeRoot, entry: trash.TrashEntry, root: str | None) -> None:
+    def _purge_trash_entry(self, sr: SafeRoot, entry: trash.TrashEntry, root: str | None) -> bool:
+        """Purge one trash entry. Returns True iff the payload was actually removed --
+        the caller must not report success (audit event, purged list, ledger credit)
+        for an entry whose removal silently failed."""
         payload = f"{trash.TRASH_DIR}/{entry.name}"
-        with suppress(FsConnectError):
+        removed = False
+        try:
             self._purge_tree(sr, payload, root)
+            removed = True
+        except FsConnectError:
+            pass
         with suppress(FsConnectError):
             self._roots.unlink(f"{payload}{trash.META_SUFFIX}", root=root, sha_max_bytes=0)
+        return removed
 
     def _purge_tree(self, sr: SafeRoot, rel: str, root: str | None) -> None:
         """Recursively remove a trash payload (file or whole dir) via pathsafe.
