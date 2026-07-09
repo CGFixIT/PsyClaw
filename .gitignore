@@ -84,3 +84,6 @@ docs/memories/CONSOLIDATED.md
 
 # Selective torch wheel cache (CI artifact, never commit wheels)
 .torch-wheels/
+
+# Claude Code agent worktree isolation (runtime scaffolding, never repo content)
+.claude/worktrees/
