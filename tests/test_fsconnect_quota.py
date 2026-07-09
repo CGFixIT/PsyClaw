@@ -108,3 +108,26 @@ def test_quota_status_recompute(tmp_path):
         status = w.quota_status(recompute=True)
     assert status["used_bytes"] == 100  # 30 + 70 reconciled by the walk
     assert status["file_count"] == 2
+
+
+def test_quota_bytes_allows_exact_boundary(tmp_path):
+    # _check_quota uses strict > (not >=): landing exactly on the quota is
+    # allowed. Pinning this deliberate choice so it can't silently flip.
+    wz = tmp_path / "wz"
+    cfg, fs_cfg, cp = _make(tmp_path, [{"path": str(wz), "quota_bytes": 100}])
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        w.fs_write("a.txt", b"X" * 100, reason="exactly at quota")
+    assert (wz / "a.txt").read_bytes() == b"X" * 100
+
+
+def test_trash_empty_credits_freed_bytes_to_ledger(tmp_path):
+    wz = tmp_path / "wz"
+    cfg, fs_cfg, cp = _make(tmp_path, [{"path": str(wz), "quota_bytes": 10000}])
+    fs_cfg.allow_hard_delete = True
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        w.fs_write("a.txt", b"X" * 100, reason="seed")
+        before = w.quota_status()["used_bytes"]
+        w.fs_delete("a.txt", reason="trash it", confirm=True)
+        w.trash_empty(reason="empty all", confirm=True, all_entries=True)
+        after = w.quota_status()["used_bytes"]
+    assert after <= before - 100
