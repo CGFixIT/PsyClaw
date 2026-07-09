@@ -234,8 +234,15 @@ or if the package imports a request-path or sibling out-of-band module.
 
 ## Open questions (resolve before Phase 2)
 
-- [ ] Import-direction decision (inversion shim vs. relax isolation rule) — **blocks Phase 2.**
-- [ ] Does `route_score`'s low-score branch also get input rails, or only `local_llm`? (Priority: high)
+- [x] Import-direction decision (inversion shim vs. relax isolation rule) —
+  **decided 2026-07-09: inversion shim (Option 1)** via a new
+  `utils/guardrail_bridge.py` factory injected at `build_graph()` time; neither
+  `gate.py` nor `graph.py` names `guardrails`. Full contract:
+  `docs/NeMo/phase2_implementation_plan.md`.
+- [x] Does `route_score`'s low-score branch also get input rails, or only `local_llm`? —
+  **decided 2026-07-09: `local_llm` branch only in Phase 2** (the low-score branch
+  is already sanitizer-screened and human-confirmed before any external call);
+  revisit with output rails in Phase 3. See `phase2_implementation_plan.md`.
 - [ ] Hallucination threshold (`0.18`) — tune against the real corpus; current value is a placeholder. (Priority: medium)
 - [ ] Second guardrail model in LM Studio, or reuse `main`? (latency vs. memory trade-off) (Priority: medium)
 
