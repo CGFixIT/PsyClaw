@@ -1,5 +1,14 @@
 # CyClaw Unit Test Suite — Audit & Remediation Report
 
+> **Historical snapshot (2026-06-16) — findings since remediated.** This report
+> describes the suite as it existed at HEAD `2bccc9e`. Its recommendations have
+> landed on `main`: §3.8's limiter extraction now exists as `utils/ratelimit.py`
+> with `tests/test_rate_limit.py` importing the real limiter under an injected
+> fake clock (no `time.sleep`), and the suite collects and passes cleanly
+> (1096 passed / 13 expected skips as of the 2026-07-09 sandbox audit — see
+> `docs/audits/2026-07-09-full-review-findings.md`). Read the sections below as
+> the *before* picture, not the current state.
+
 **Date:** 2026-06-16
 **Runtime verified:** Python 3.12.3 (CPython, Linux)
 **Scope:** Full `tests/` folder, run against `main` (HEAD `2bccc9e`)
