@@ -292,11 +292,21 @@ python3 .claude/skills/doc-sync/doc_sync.py                  # no new drift
 
 ## Follow-up after the Phase-2 code PR merges (tracked task, per operator request)
 
-- [ ] Update `CLAUDE.md`: request-flow diagram and "8-node" → 9-node topology
+- [x] Update `CLAUDE.md`: request-flow diagram and "8-node" → 9-node topology
       claim, the routers wording, and the `guardrails/` row (now live-path-capable
-      behind `enabled`); re-verify §3 invariant table language for I2/I4.
-- [ ] Update `README.md` "8-node" mentions.
-- [ ] Run `/doc-sync` and reconcile any remaining drift it finds.
+      behind `enabled`); re-verify §3 invariant table language for I2/I4. Done
+      2026-07-09 — also added a new §4 Testing trap + softened the §5/§6/§8
+      mypy language after discovering (during Phase 2 verification) that
+      `mypy --strict --python-version 3.12 .` isn't CI-enforced and errors out
+      immediately on pre-existing `utils/errors.py` namespace-package discovery,
+      independent of this change.
+- [x] Update `README.md` "8-node" mentions — the ASCII diagram, the Mermaid
+      flowchart (new node `guardrail_input` + renumbered ⑨ `audit_logger`), and
+      the NeMo Guardrails section's "never a routing authority" framing (still
+      true — the graph's own `guardrail_router` edge decides, not guardrails
+      code — but now noting the one visible node). Done 2026-07-09.
+- [x] Run `/doc-sync` and reconcile any remaining drift it finds — 0 drift
+      items, both before and after the above edits.
 - [ ] Record the decisions in `docs/memories/` via the memory skills.
 - [ ] Flag (user-scoped, do not edit unilaterally): the `fable-protocol` skill
       §8.3 says "7-node LangGraph" — stale even before Phase 2; after Phase 2 the
@@ -306,3 +316,17 @@ python3 .claude/skills/doc-sync/doc_sync.py                  # no new drift
       Phase 2 code PR, per operator request.
 - [ ] Evaluate the default-flip decision once `check_input` ships: widen the
       benign corpus, re-measure against the real entry point, decide.
+- [x] Cross-reference `agentic/fsconnect`'s Phase 2 `block_on_injection_flags`
+      gate against NeMo's injection scanning, in case guardrails is ever
+      enabled. Finding (2026-07-09): no coupling exists or is needed.
+      `agentic/fsconnect/client.py::build_injection_patterns` compiles
+      `OWASP_INJECTION_PATTERNS ∪ policy.prompt_filter.banned_patterns` (the
+      same 33-pattern sanitizer already used everywhere else) — it never
+      imports or calls `guardrails.rails.scan_injection` /
+      `detect_soul_mutation_intent`. The two gates sit on entirely different
+      code paths (`fsconnect`'s out-of-band file *writes* vs. `graph.py`'s RAG
+      *query* path) behind entirely different config flags
+      (`fsconnect.block_on_injection_flags` vs. `guardrails.enabled`), and
+      module isolation (I6) already forbids either side from importing the
+      other. Enabling `guardrails.enabled` later changes nothing about
+      fsconnect's behavior, and vice versa — nothing to reconcile.
