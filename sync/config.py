@@ -214,12 +214,14 @@ class RcloneConfig:
         # Expand ~ and env vars early so downstream code does not have to.
         expanded = os.path.expanduser(os.path.expandvars(self.local_path))
 
-        # A relative default like "data/corpus" is resolved against the repo
-        # root (cwd) into an absolute path; an already-absolute path is kept.
-        resolved = Path(expanded).resolve()
-
         # Repo root is two levels up from this file: sync/config.py -> repo/.
         repo_root = Path(__file__).resolve().parent.parent
+        # A relative default like "data/corpus" is resolved against the repo
+        # root, not the caller's cwd, so the CLI works from any launch dir.
+        path = Path(expanded)
+        if not path.is_absolute():
+            path = repo_root / path
+        resolved = path.resolve()
         corpus_root = (repo_root / "data" / "corpus").resolve()
 
         # Must resolve to corpus_root itself or a path inside it. resolve()
