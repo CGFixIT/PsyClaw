@@ -204,7 +204,10 @@ policy:
       - 'you\s+are\s+now'
       - 'you\s+are\s+no\s+longer'
       - 'pretend\s+(you\s+are|to\s+be)'
-      - 'act\s+as\s+(if\s+|an?\s+uncensored|uncensored|dan\b|without\s+|a\s+jailbreak)'
+      # Complements cover invariant-guard G3 ("act as your developer") and
+      # injection-redteam ro-03 ("act as a penetration tester...") without
+      # bare "act as <profession>" (e.g. "act as local counsel").
+      - 'act\s+as\s+(if\s+|your\s+developer|an?\s+uncensored|uncensored|dan\b|without\s+|a\s+jailbreak|a\s+penetration\s+tester|an?\s+unrestricted|an?\s+ai\b)'
       - 'roleplay\s+as|assume\s+the\s+role'
 
       # === System / New Instructions (6) ===
