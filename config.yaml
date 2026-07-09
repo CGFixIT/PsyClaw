@@ -468,7 +468,12 @@ sqlconnect:
 # to offline heuristic rails (injection + soul-mutation block + token-overlap
 # grounding) when it is absent. See docs/NeMo/later_development_guideline.md.
 guardrails:
-  enabled: false                 # off by default; CLI no-ops, nothing runs while false
+  enabled: false                 # off by default; CLI no-ops. Also gates graph.py's
+                                  # guardrail_input node (Phase 2): false = pure pass-
+                                  # through (no import of guardrails at all); true =
+                                  # the offline input rail (injection markers + soul-
+                                  # mutation regex, no LLM) runs between route_by_score
+                                  # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
   engine: "openai"               # LM Studio / Ollama expose OpenAI-compatible APIs
   base_url: "http://127.0.0.1:1234/v1"  # DevSkim: ignore DS162092,DS137138 - loopback LM Studio, offline-only
   model: "qwen2.5-7b-instruct"   # keep in sync with models.local_llm.model

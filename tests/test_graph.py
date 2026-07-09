@@ -15,7 +15,7 @@ from pathlib import Path
 from graph import (
     build_graph, retrieve_node, local_llm_node,
     offline_best_effort_node, grok_fallback_node, claude_fallback_node,
-    audit_logger_node,
+    audit_logger_node, guardrail_input_node, guardrail_router,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
     _context_char_budget,
 )
@@ -776,3 +776,112 @@ class TestLocalLlmPromptBudget:
             llm=llm, cfg=cfg,
         )
         assert len(llm.last_prompt) <= 1000 * CHARS_PER_TOKEN
+
+
+class TestGuardrailInputNode:
+    """Phase 2: offline input rail between route_by_score and local_llm.
+    See docs/NeMo/phase2_implementation_plan.md Decision 3."""
+
+    def test_no_guard_is_pure_passthrough(self):
+        out = guardrail_input_node({"query": "anything"}, input_guard=None, cfg={})
+        assert out == {}
+
+    def test_passing_guard_is_passthrough(self):
+        guard = lambda q: {"blocked": False, "message": "", "rails": []}  # noqa: E731
+        out = guardrail_input_node({"query": "benign"}, input_guard=guard, cfg={})
+        assert out == {}
+
+    def test_blocking_guard_produces_block_message_without_error_key(self):
+        guard = lambda q: {"blocked": True, "message": "nope", "rails": ["check_injection"]}  # noqa: E731
+        out = guardrail_input_node({"query": "bad"}, input_guard=guard, cfg={})
+        assert out["answer"] == "nope"
+        assert out["answer_model"] == "guardrail-blocked"
+        assert out["answer_sources"] == []
+        assert out["guardrail_blocked"] is True
+        assert out["guardrail_rails"] == ["check_injection"]
+        assert "error" not in out
+
+    def test_raising_guard_fails_open(self):
+        def _boom(q):
+            raise RuntimeError("guard exploded")
+
+        out = guardrail_input_node({"query": "x"}, input_guard=_boom, cfg={})
+        assert out == {}
+
+    def test_guard_receives_the_query(self):
+        seen = []
+        guard = lambda q: (seen.append(q), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+        guardrail_input_node({"query": "what is RRF?"}, input_guard=guard, cfg={})
+        assert seen == ["what is RRF?"]
+
+
+class TestGuardrailRouter:
+    def test_blocked_routes_to_audit_logger(self):
+        assert guardrail_router({"guardrail_blocked": True}) == "audit_logger"
+
+    def test_unset_routes_to_local_llm(self):
+        assert guardrail_router({}) == "local_llm"
+
+    def test_explicit_false_routes_to_local_llm(self):
+        assert guardrail_router({"guardrail_blocked": False}) == "local_llm"
+
+
+class TestGuardrailInputGraphIntegration:
+    """Full build_graph() wiring: default behavior is byte-identical to
+    pre-Phase-2 (no input_guard passed), and a configured guard can short-
+    circuit to audit_logger without ever calling the local LLM."""
+
+    def test_default_no_input_guard_behavior_unchanged(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Veeam uses chattr +i for immutability.")
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg)
+        result = graph.invoke({"query": "What is Veeam immutability?"})
+
+        assert result["answer_model"] == "local"
+        assert "chattr" in result["answer"]
+        assert result.get("guardrail_blocked", False) is False
+
+    def test_blocking_input_guard_short_circuits_without_calling_llm(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="should never be produced")
+        guard = lambda q: {"blocked": True, "message": "blocked by policy", "rails": ["check_injection"]}  # noqa: E731
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg, input_guard=guard)
+        result = graph.invoke({"query": "malicious payload"})
+
+        assert result["answer_model"] == "guardrail-blocked"
+        assert result["answer"] == "blocked by policy"
+        assert result["guardrail_blocked"] is True
+        assert llm.last_prompt is None  # local_llm_node was never reached
+        assert "audit_event" in result  # I4: still converges
+
+    def test_passing_input_guard_still_reaches_local_llm(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Veeam uses chattr +i for immutability.")
+        guard = lambda q: {"blocked": False, "message": "", "rails": []}  # noqa: E731
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg, input_guard=guard)
+        result = graph.invoke({"query": "What is Veeam immutability?"})
+
+        assert result["answer_model"] == "local"
+        assert llm.last_prompt is not None
+
+    def test_low_score_path_never_invokes_the_guard(self, tmp_path):
+        # Decision 4: input rails apply only to the local_llm (high-score)
+        # branch in Phase 2 -- the low-score/user_gate branch is already
+        # sanitizer-screened and human-confirmed before any external call.
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Best effort from local model.")
+        calls = []
+        guard = lambda q: (calls.append(q), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg, input_guard=guard)
+        result = graph.invoke({"query": "off topic", "user_confirmed_online": False})
+
+        assert result["answer_model"] == "offline-best-effort"
+        assert calls == []

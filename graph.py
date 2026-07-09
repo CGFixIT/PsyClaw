@@ -1,10 +1,12 @@
 """CyClaw LangGraph Controller – Topology = Enforcement.
 
 Graph flow (matching CyClaw final diagram):
-  retrieve -> route_by_score -> local_llm (high score)
+  retrieve -> route_by_score -> guardrail_input -> local_llm (high score, rail passed)
                               -> user_gate (low score)
-                                  -> grok_fallback (confirmed + hybrid)
+                                  -> grok_fallback (confirmed + hybrid, provider=grok)
+                                  -> claude_fallback (confirmed + hybrid, provider=claude)
                                   -> offline_best_effort (denied or offline)
+  guardrail_input -> audit_logger (blocked by the offline input rail)
   ALL paths -> audit_logger -> END
 
 Invariants enforced by graph edges, not prompts:
@@ -12,6 +14,16 @@ Invariants enforced by graph edges, not prompts:
 2. No LLM is called before score gate.
 3. No Grok without explicit user confirmation AND hybrid mode.
 4. Every response passes through audit logging.
+
+CHANGES (Phase 2 NeMo Guardrails wiring, docs/NeMo/phase2_implementation_plan.md):
+  - New node guardrail_input between route_by_score and local_llm: a sync,
+    offline-only input rail (injection markers + soul-mutation regex, no LLM).
+  - New router guardrail_router: blocked -> audit_logger, else -> local_llm.
+  - build_graph() accepts optional input_guard (built by
+    utils/guardrail_bridge.py); None (default) is a pure pass-through, so
+    every existing caller is byte-identical to pre-Phase-2 behavior.
+  - graph.py still never imports guardrails -- input_guard is an injected
+    callable, preserving module isolation (invariant I6).
 
 CHANGES FROM ORIGINAL (soul.md / persistent personality integration):
   - Import PersonalityManager from utils.personality
@@ -41,7 +53,8 @@ CHANGES FROM ORIGINAL (soul.md / persistent personality integration):
 """
 
 import logging
-from typing import Literal, Protocol, TypedDict
+from collections.abc import Callable
+from typing import Any, Literal, Protocol, TypedDict
 
 from langgraph.graph import END, StateGraph
 
@@ -99,8 +112,12 @@ class GraphState(TypedDict, total=False):
 
     # Model outputs
     answer: str
-    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort"
+    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked"
     answer_sources: list[RetrievedDoc]
+
+    # Guardrail (Phase 2 offline input rail; only set when a guard is configured)
+    guardrail_blocked: bool
+    guardrail_rails: list[str]
 
     # Audit
     audit_event: dict
@@ -278,6 +295,38 @@ def route_by_score_node(state: GraphState, cfg: dict) -> dict:
         return {"needs_user_confirm": False}
     else:
         return {"needs_user_confirm": True}
+
+def guardrail_input_node(
+    state: GraphState, *, input_guard: Callable[[str], dict[str, Any]] | None, cfg: dict
+) -> dict:
+    """Node 2.5: offline input rail between route_by_score and local_llm.
+
+    Defense-in-depth BEHIND the gate.py sanitizer, which stays the fail-closed
+    front door. This layer is optional (input_guard is None when
+    guardrails.enabled is false -- utils/guardrail_bridge.py short-circuits
+    before ever building a callable) and fails OPEN: a raising guard must
+    never take down /query. See docs/NeMo/phase2_implementation_plan.md
+    Decision 3.
+    """
+    if input_guard is None:
+        return {}
+
+    try:
+        result = input_guard(state["query"])
+    except Exception:
+        logger.warning("input_guard raised; failing open (query answered normally)", exc_info=True)
+        return {}
+
+    if not result.get("blocked"):
+        return {}
+
+    return {
+        "answer": result.get("message", ""),
+        "answer_model": "guardrail-blocked",
+        "answer_sources": [],
+        "guardrail_blocked": True,
+        "guardrail_rails": result.get("rails", []),
+    }
 
 def local_llm_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
                     personality: PersonalityManager | None = None) -> dict:
@@ -603,6 +652,13 @@ def score_router(state: GraphState) -> Literal["local_llm", "user_gate"]:
         return "user_gate"
     return "local_llm"
 
+def guardrail_router(state: GraphState) -> Literal["local_llm", "audit_logger"]:
+    """After guardrail_input: local_llm normally, or straight to audit_logger
+    when the input rail blocked the query (no LLM call for a blocked input)."""
+    if state.get("guardrail_blocked"):
+        return "audit_logger"
+    return "local_llm"
+
 def user_gate_router(
     state: GraphState,
     grok: GrokClient | None = None,
@@ -659,7 +715,8 @@ def build_graph(
     grok: GrokClient | None,
     cfg: dict,
     claude: ClaudeClient | None = None,
-    personality: PersonalityManager | None = None
+    personality: PersonalityManager | None = None,
+    input_guard: Callable[[str], dict[str, Any]] | None = None,
 ):
     """Build and compile the CyClaw LangGraph.
 
@@ -682,6 +739,10 @@ def build_graph(
         cfg: parsed config.yaml dict
         personality: optional PersonalityManager — if provided, soul content
                      is injected into prompts and interactions are recorded.
+        input_guard: optional callable built by utils.guardrail_bridge —
+                     offline input rail run between route_by_score and
+                     local_llm. None (default) is a pure pass-through, so
+                     omitting it reproduces pre-Phase-2 behavior exactly.
 
     Returns:
         Compiled LangGraph (CompiledGraph) ready to invoke.
@@ -693,6 +754,7 @@ def build_graph(
     # ── Node registration ────────────────────────────────────────────
     graph.add_node("retrieve",        partial(retrieve_node,           retriever=retriever, cfg=cfg))
     graph.add_node("route_by_score",  partial(route_by_score_node,     cfg=cfg))
+    graph.add_node("guardrail_input", partial(guardrail_input_node,    input_guard=input_guard, cfg=cfg))
     graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
     graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))
@@ -707,13 +769,23 @@ def build_graph(
     # retrieve → route_by_score (always)
     graph.add_edge("retrieve", "route_by_score")
 
-    # route_by_score → local_llm | user_gate (conditional on score)
+    # route_by_score → guardrail_input | user_gate (conditional on score)
     graph.add_conditional_edges(
         "route_by_score",
         score_router,
         {
-            "local_llm": "local_llm",
+            "local_llm": "guardrail_input",
             "user_gate": "user_gate"
+        }
+    )
+
+    # guardrail_input → local_llm | audit_logger (conditional on the rail's verdict)
+    graph.add_conditional_edges(
+        "guardrail_input",
+        guardrail_router,
+        {
+            "local_llm": "local_llm",
+            "audit_logger": "audit_logger"
         }
     )
 

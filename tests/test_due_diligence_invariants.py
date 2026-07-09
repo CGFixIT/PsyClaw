@@ -298,6 +298,27 @@ class TestAuditConvergence:
             assert f'add_edge("{node}", "audit_logger")' in src, f"{node} no longer converges on audit"
 
 
+class TestGuardrailInputAuditConvergence:
+    """I4 extension (Phase 2): a query blocked by the offline guardrail_input
+    node still converges at audit_logger with the blocked answer_model
+    recorded -- the new node must not create a shortcut around audit logging.
+    See docs/NeMo/phase2_implementation_plan.md Decision 3."""
+
+    def test_blocked_guardrail_input_emits_audit_event(self):
+        guard = lambda q: {"blocked": True, "message": "blocked by policy", "rails": ["check_injection"]}  # noqa: E731
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_HIGH_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=None,
+            cfg=_cfg(),
+            input_guard=guard,
+        )
+        result = graph.invoke({"query": "anything"})
+        assert "audit_event" in result
+        assert result["answer_model"] == "guardrail-blocked"
+        assert result["guardrail_blocked"] is True
+
+
 # =============================================================================
 # I5 — Soul governance: the reason gate and the scan boundary.
 # =============================================================================

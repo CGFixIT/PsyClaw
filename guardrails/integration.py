@@ -123,6 +123,44 @@ def _offline_checks(query: str, cfg: GuardrailsConfig) -> tuple[bool, list[str]]
     return blocked, triggered
 
 
+def check_input(
+    query: str, *, cfg: GuardrailsConfig | None = None, metrics: GuardrailMetrics | None = None
+) -> dict[str, Any]:
+    """Phase 2 input rail -- the sync, offline-only entry point for graph.py.
+
+    Unlike :func:`safe_generate`, this NEVER generates: it only runs the
+    model-free heuristic floor (:func:`_offline_checks`), so wiring it into the
+    graph as ``guardrail_input_node`` cannot double-generate an answer -- the
+    disqualifier that keeps :func:`guardrail_safety_node` unwired (see
+    docs/NeMo/later_development_guideline.md). ``utils/guardrail_bridge.py``
+    is the only production caller and already short-circuits to ``None``
+    before this is ever reached when guardrails are disabled, but this
+    function is correct standalone too (e.g. from the CLI).
+
+    Returns ``{"blocked": bool, "message": str, "rails": list[str]}``.
+    """
+    if cfg is None:
+        cfg = load_guardrails_config()
+    if metrics is None:
+        metrics = GuardrailMetrics(cfg.metrics_path)
+
+    if is_soul_topic(query, cfg.soul_topics):
+        metrics.record_soul_topic(query=query)
+
+    blocked, triggered = _offline_checks(query, cfg)
+    if not blocked:
+        metrics.record_allowed(stage="input", query=query)
+        return {"blocked": False, "message": "", "rails": []}
+
+    rail = triggered[0]
+    metrics.record_blocked(stage="input", rail=rail, reason="offline heuristic", query=query)
+    # A single input can trip more than one offline rail; mirrors safe_generate's
+    # same fix -- record_blocked only counts the first rail, so record the rest.
+    for extra_rail in triggered[1:]:
+        metrics.record_rail(extra_rail, stage="input", query=query)
+    return {"blocked": True, "message": cfg.block_message, "rails": triggered}
+
+
 async def safe_generate(
     prompt: str,
     *,

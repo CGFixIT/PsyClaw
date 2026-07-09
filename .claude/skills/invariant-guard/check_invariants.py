@@ -32,6 +32,16 @@ from pathlib import Path
 
 CORE_FILES = ("gate.py", "graph.py", "mcp_hybrid_server.py")
 OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails")
+# Conditional-edge sources and their router function names. Single source of
+# truth for I2 (topology=policy) and I4 (audit convergence), which both need
+# to agree on which nodes route conditionally and via which router -- I4's
+# audit-convergence DFS would otherwise silently miss a node's router-driven
+# edges if it fell out of sync with I2's expected source set.
+COND_SOURCE_ROUTERS = {
+    "route_by_score": "score_router",
+    "guardrail_input": "guardrail_router",
+    "user_gate": "user_gate_router",
+}
 # Phrases the shipped config must block — mirror tests/test_sanitizer.py
 # TestShippedConfigContract. Deleting coverage for any of these is a regression.
 CONTRACT_PHRASES = (
@@ -161,17 +171,23 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── I2 Topology = policy ────────────────────────────────────────────────
     print("I2 Topology = policy")
-    expected_cond_sources = {"route_by_score", "user_gate"}
+    expected_cond_sources = set(COND_SOURCE_ROUTERS)
     if set(cond) == expected_cond_sources:
-        ok("conditional routing only at route_by_score and user_gate")
+        ok("conditional routing only at route_by_score, guardrail_input, and user_gate")
     else:
-        fail("conditional routing only at route_by_score and user_gate",
+        fail("conditional routing only at route_by_score, guardrail_input, and user_gate",
              f"conditional sources: {sorted(cond)}")
     score_targets = router_returns(graph_tree, "score_router")
     if score_targets == {"local_llm", "user_gate"}:
         ok("score_router returns exactly {local_llm, user_gate}")
     else:
         fail("score_router returns exactly {local_llm, user_gate}", f"returns: {sorted(score_targets)}")
+    guardrail_targets = router_returns(graph_tree, "guardrail_router")
+    if guardrail_targets == {"local_llm", "audit_logger"}:
+        ok("guardrail_router returns exactly {local_llm, audit_logger}")
+    else:
+        fail("guardrail_router returns exactly {local_llm, audit_logger}",
+             f"returns: {sorted(guardrail_targets)}")
     gate_targets = router_returns(graph_tree, "user_gate_router")
     expected_gate_targets = {"grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"}
     if gate_targets == expected_gate_targets:
@@ -221,10 +237,9 @@ def main(argv: list[str] | None = None) -> int:
     adj: dict[str, set[str]] = {}
     for src, dst in edges:
         adj.setdefault(src, set()).add(dst)
-    for src, _ in (("route_by_score", None), ("user_gate", None)):
-        router = "score_router" if src == "route_by_score" else "user_gate_router"
+    for src, router in COND_SOURCE_ROUTERS.items():
         adj.setdefault(src, set()).update(router_returns(graph_tree, router))
-    nodes = {"retrieve", "route_by_score", "local_llm", "user_gate",
+    nodes = {"retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
              "grok_fallback", "claude_fallback", "offline_best_effort"}
 
     def reaches_audit(start: str, seen: set[str] | None = None) -> bool:
@@ -239,9 +254,9 @@ def main(argv: list[str] | None = None) -> int:
 
     stranded = sorted(n for n in nodes if not reaches_audit(n))
     if not stranded:
-        ok("all 7 upstream nodes reach audit_logger")
+        ok("all 8 upstream nodes reach audit_logger")
     else:
-        fail("all 7 upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
+        fail("all 8 upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
     if any(src == "audit_logger" and dst == "END" for src, dst in edges):
         ok("audit_logger -> END")
     else:
