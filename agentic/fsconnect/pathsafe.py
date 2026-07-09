@@ -590,7 +590,9 @@ class ScopedRoots:
             return {"removed": self._display(sr, comps), "kind": "dir"}
         return self._rmdir_win(sr, comps)  # pragma: no cover - Windows only
 
-    def _unlink_win(self, sr: SafeRoot, comps: list[str], sha_max_bytes: int | None) -> dict:  # pragma: no cover - Windows only
+    def _unlink_win(  # pragma: no cover - Windows only
+        self, sr: SafeRoot, comps: list[str], sha_max_bytes: int | None
+    ) -> dict:
         real = self._win_resolve(sr, comps, must_exist=True)
         if real.is_dir():
             raise FsPathError("unlink target is a directory; use rmdir")

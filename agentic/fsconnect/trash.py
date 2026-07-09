@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
 from agentic.fsconnect.pathsafe import ScopedRoots, split_components
 from utils.errors import FsConnectRuntimeError
+
+logger = logging.getLogger(__name__)
 
 TRASH_DIR = ".cyclaw-trash"
 META_SUFFIX = ".meta.json"
@@ -137,7 +140,12 @@ def list_entries(roots: ScopedRoots, root: str | None) -> list[TrashEntry]:
             continue
         try:
             data = roots.read_bytes(f"{TRASH_DIR}/{name}", root=root, max_bytes=_MAX_META_BYTES)
-        except Exception:  # noqa: BLE001, S112 -- unreadable sidecar => skip, not fatal
+        except Exception:  # noqa: BLE001 -- unreadable sidecar => skip, not fatal
+            # An unreadable/corrupt sidecar (truncated crash write, permission
+            # blip) must not abort trash-empty. Silently dropping it hid the
+            # metadata loss; log the skipped entry so it is observable, then
+            # continue past this one entry.
+            logger.warning("Skipping unreadable trash sidecar %r in root %r", name, root)
             continue
         entry = _parse_meta(name, data)
         if entry is not None:
