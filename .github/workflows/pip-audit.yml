@@ -39,24 +39,50 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # Matches ci.yml's convention. This job's own triggers already fire on
+          # every requirements.txt/constraints.txt change, so the pip cache still
+          # busts every run that matters — but restores unrelated-transitive
+          # wheels from a previous run instead of a cold cache.
+          cache-dependency-path: |
+            requirements.txt
+            constraints.txt
+            pyproject.toml
 
       - name: Upgrade pip (CVE mitigation)
         shell: bash
         run: python -m pip install --upgrade "pip>=26.1.2"
 
-      - name: Install CPU-only torch first (offline-first, avoids CUDA wheel)
+      - name: Cache torch CPU wheel
+        # Mirrors ci.yml's dedicated torch cache: torch (~2GB) is pinned
+        # infrequently, so keying its wheel separately means this job's own
+        # requirements.txt/constraints.txt triggers don't force a re-download of
+        # the heaviest dependency on every run.
+        id: torch-wheel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .torch-wheels
+          key: torch-cpu-2.12.1-${{ runner.os }}-py312
+          restore-keys: |
+            torch-cpu-2.12.1-${{ runner.os }}-
+
+      - name: Download torch wheel (cache miss only)
+        if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
         shell: bash
         # torch is intentionally NOT pinned in requirements.txt — see its header:
-        # a bare resolve pulls the ~2.5 GB CUDA build from PyPI on Linux. Install
-        # the lean CPU wheel from the PyTorch index FIRST (matching ci.yml and the
-        # documented CVE-2025-32434 >=2.6.0 floor) so the requirements resolve
-        # below reuses it instead of dragging in the heavy CUDA build.
+        # a bare resolve pulls the ~2.5 GB CUDA build from PyPI on Linux. Fetch
+        # the lean CPU wheel from the PyTorch index (matching ci.yml and the
+        # documented CVE-2025-32434 >=2.6.0 floor); --no-deps avoids pulling the
+        # default CUDA build.
         run: |
-          pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip download "torch==2.12.1+cpu" \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --no-deps -d .torch-wheels
 
       - name: Install with constraints (reproducible gate)
         shell: bash
         run: |
+          pip install --no-index --no-deps --find-links .torch-wheels "torch==2.12.1+cpu"
           pip install -r requirements.txt -c constraints.txt
 
       - name: Minimal hermetic prep + smoke import check
