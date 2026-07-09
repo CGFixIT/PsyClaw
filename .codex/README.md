@@ -2,6 +2,9 @@
 
 This folder holds Codex-specific operating material for CyClaw. Repo-wide instructions belong in `AGENTS.md`; reusable task playbooks, checklists, and prompt templates can live here.
 
+Start with `.codex/instructions.md` for the short Codex workflow overlay, then
+use the narrower checklist, routine, or skill that fits the task.
+
 ## Purpose
 
 Use `.codex/` to help future Codex agents start safely and consistently without copying large project docs. Keep material short, practical, and linked to canonical sources such as `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, and the CI workflows.

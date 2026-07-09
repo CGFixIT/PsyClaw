@@ -1,8 +1,3 @@
-# Compatibility copy of `.codex/instructions.md`.
-#
-# Keep this file aligned with `.codex/instructions.md` for surfaces that still
-# read the legacy filename.
-
 # Codex Instructions
 
 Use this as the short Codex workflow overlay for CyClaw. Repo truth still lives
