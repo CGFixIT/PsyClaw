@@ -68,9 +68,24 @@ class HybridRetriever:
             raise IndexNotFoundError(f"BM25 index path is not a regular file: {bm25_path}")
         with open(resolved, encoding="utf-8") as f:  # DevSkim: ignore DS161085 - project-generated index
             bm25_data = json.load(f)
-            self.bm25 = BM25Okapi(bm25_data["tokenized_corpus"])
-            self.bm25_chunks = bm25_data["chunks"]
-            self.bm25_metadata = bm25_data["metadata"]
+            tokenized = bm25_data["tokenized_corpus"]
+            chunks = bm25_data["chunks"]
+            metadata = bm25_data["metadata"]
+            # Length parity is load-bearing: keyword_search indexes into all three
+            # by the same rank. Mismatch or empty corpus raises IndexError /
+            # ZeroDivisionError on the hot path and is NOT covered by the
+            # hybrid_search degrade except list — surface as IndexNotFoundError
+            # so gate boot soft-fails like a missing index.
+            n_tok, n_chunks, n_meta = len(tokenized), len(chunks), len(metadata)
+            if n_tok == 0 or n_tok != n_chunks or n_tok != n_meta:
+                raise IndexNotFoundError(
+                    f"BM25 index corrupt or empty at {bm25_path} "
+                    f"(tokenized={n_tok}, chunks={n_chunks}, metadata={n_meta}). "
+                    f"Run: python -m retrieval.indexer"
+                )
+            self.bm25 = BM25Okapi(tokenized)
+            self.bm25_chunks = chunks
+            self.bm25_metadata = metadata
 
         self.top_k_semantic = self.cfg["retrieval"]["top_k_semantic"]
         self.top_k_keyword = self.cfg["retrieval"]["top_k_keyword"]
@@ -198,7 +213,10 @@ class HybridRetriever:
             audit_log({"event": "retrieval_degraded", "path": "semantic", "error": str(e)})
         try:
             keyword_hits = self.keyword_search(query)
-        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+        except (json.JSONDecodeError, KeyError, AttributeError, IndexError, TypeError, ValueError) as e:
+            # IndexError/TypeError: corrupt metadata shape after a partial write
+            # or manual edit; ValueError: BM25 edge cases. Soft-degrade like the
+            # semantic EmbeddingServiceError path so hybrid still answers.
             audit_log({"event": "retrieval_degraded", "path": "keyword", "error": str(e)})
 
         if not semantic_hits and not keyword_hits:
