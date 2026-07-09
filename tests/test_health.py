@@ -217,6 +217,47 @@ class TestCheckAll:
         grok = next(s for s in statuses if s.name == "grok_api")
         assert grok.healthy is True
 
+    # The three tests above exercise the model-pin drift guard (_ping's
+    # expect_model check, utils/health.py) only for Grok. check_all() runs the
+    # identical check for Claude (same _ping call shape, just a different
+    # provider block) — mirrored here so a stale Claude pin gets the same
+    # protection a stale Grok pin already has.
+    def test_hybrid_claude_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        monkeypatch.setattr(
+            health, "_http_get", lambda url, **kw: _ModelsResp(["claude-sonnet-5", "claude-opus-4-8"])
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
+        statuses = health.check_all(cfg_path)
+        claude = next(s for s in statuses if s.name == "claude_api")
+        assert claude.healthy is True
+
+    def test_hybrid_retired_claude_model_pin_reports_unhealthy(self, tmp_path, monkeypatch):
+        # Same drift guard as test_hybrid_retired_model_pin_reports_unhealthy,
+        # for the Claude provider block: a superseded/renamed model pin the
+        # provider no longer lists should surface here, not only as a runtime
+        # 4xx on the first live fallback after the user already confirmed it.
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-2.1")
+        monkeypatch.setattr(
+            health, "_http_get", lambda url, **kw: _ModelsResp(["claude-sonnet-5", "claude-opus-4-8"])
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
+        statuses = health.check_all(cfg_path)
+        claude = next(s for s in statuses if s.name == "claude_api")
+        assert claude.healthy is False
+        assert "claude-2.1" in claude.error
+        assert "not in provider /models list" in claude.error
+
+    def test_hybrid_unparseable_models_body_stays_healthy_claude(self, tmp_path, monkeypatch):
+        # Mirrors the Grok unparseable-body case: an odd/unparseable body on an
+        # up Claude endpoint must never fail the availability probe.
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
+        statuses = health.check_all(cfg_path)
+        claude = next(s for s in statuses if s.name == "claude_api")
+        assert claude.healthy is True
+
     def test_immediate_repeat_uses_status_cache(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="offline")
         calls = 0
