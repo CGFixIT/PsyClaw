@@ -574,3 +574,40 @@ class TestHealthEmbeddingsSignalIsStatic:
         assert by_name["embeddings_local"].healthy is True  # static, not probed
         # Clear the 2s status cache so this monkeypatched result never leaks.
         health._status_cache.clear()
+
+
+# =============================================================================
+# config.yaml dead-key characterization: policy.fallback.require_user_confirm.
+# =============================================================================
+class TestFallbackRequireUserConfirmIsUnwired:
+    """Characterization: policy.fallback.require_user_confirm is NOT read by any
+    production code — the confirm-then-route pause is hardcoded in graph.py's
+    user_gate_router (confirmed is None -> pause; not confirmed ->
+    offline_best_effort), for either external provider. Setting this key false
+    has NO effect today; it lives directly next to the real, wired
+    send_local_context_to_grok / send_local_context_to_claude /
+    grok_max_prompt_chars / claude_max_prompt_chars knobs, which invites an
+    operator to reasonably (but wrongly) assume it gates the confirmation
+    prompt. See config.yaml's comment on this key and INVARIANTS.md.
+
+    If a future change wires this key up for real, this test's AST assertion
+    will start failing (the string will appear in gate.py/graph.py) — update
+    both the config.yaml comment and this test deliberately at that point;
+    don't just delete the test."""
+
+    def test_require_user_confirm_is_not_read_by_gate_or_graph(self):
+        for fname in ("gate.py", "graph.py"):
+            src = (_REPO_ROOT / fname).read_text(encoding="utf-8")
+            assert "require_user_confirm" not in src, (
+                f"{fname} now reads require_user_confirm — update the config.yaml "
+                "comment (it currently documents this key as unwired) and this "
+                "test's docstring to match the new, real behavior"
+            )
+
+    def test_confirmation_pause_is_hardcoded_not_config_driven(self):
+        # The actual gate: user_gate_router returns "audit_logger" (the pause
+        # signal) precisely when confirmed is None, regardless of any config
+        # value — confirmed via the graph.user_gate_router source itself.
+        src = (_REPO_ROOT / "graph.py").read_text(encoding="utf-8")
+        assert 'if confirmed is None:' in src
+        assert 'return "audit_logger"' in src
