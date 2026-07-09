@@ -298,7 +298,7 @@ No markdown formatter or markdown lint command was found in repo config.
 
 - GitHub repository metadata exposed through the connector reported `admin`, `maintain`, `pull`, `push`, and `triage` access during first setup.
 - During first setup, the connector's Git contents APIs returned `403 Resource not accessible by integration` for direct file writes. Repository files cannot grant GitHub App installation permissions; update the GitHub App/connector installation outside the repo if Codex needs contents-write through the connector.
-- The local setup environment did not have `gh` installed. If using repo-local agentic GitHub flows, install/authenticate `gh` and verify with `gh auth status`.
+- Local `gh` availability is environment-specific and may be a non-GitHub-CLI shim. If using repo-local agentic GitHub flows, verify the actual binary first with `Get-Command gh` / `gh --version`, then authenticate and confirm with `gh auth status`. Prefer connector/API metadata when `gh` is missing, unauthenticated, or not the official GitHub CLI.
 - PR conversation comments require pull request/issues write permission. The connector exposes PR comment/review tools; if they return 403, update the app installation permissions outside the repo.
 - `.github/workflows/claude.yml` already grants `contents: write`, `pull-requests: write`, `issues: write`, and `id-token: write` for the existing Claude PR-comment workflow.
 

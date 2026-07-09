@@ -31,6 +31,8 @@ Always apply ponytail discipline during this skill:
   rely on Claude-only tool names or hooks.
 - Keep one tracker file for the whole loop:
   `/tmp/refactor-{projectname}.md`.
+  On Windows, use `$env:TEMP\refactor-{projectname}.md` and keep the same
+  headings.
 - Make exactly one high-leverage change per loop iteration.
 - After each significant step: verify live behavior, do an explicit self-review
   pass, commit, and append results to the tracker.
