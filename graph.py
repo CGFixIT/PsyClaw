@@ -297,7 +297,7 @@ def route_by_score_node(state: GraphState, cfg: dict) -> dict:
         return {"needs_user_confirm": True}
 
 def guardrail_input_node(
-    state: GraphState, *, input_guard: Callable[[str], dict[str, Any]] | None, cfg: dict
+    state: GraphState, *, input_guard: Callable[[str], dict[str, Any]] | None
 ) -> dict:
     """Node 2.5: offline input rail between route_by_score and local_llm.
 
@@ -609,6 +609,8 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "online_escalated": state.get("answer_model") in {"grok", "claude"},
         "model_used": state.get("answer_model", "unknown"),
         "hit_count": len(state.get("retrieved_docs", [])),
+        "guardrail_blocked": state.get("guardrail_blocked", False),
+        "guardrail_rails": state.get("guardrail_rails", []),
         # now corpus files and hits are visible in audit but not query
         "sources": [
             {
@@ -754,7 +756,7 @@ def build_graph(
     # ── Node registration ────────────────────────────────────────────
     graph.add_node("retrieve",        partial(retrieve_node,           retriever=retriever, cfg=cfg))
     graph.add_node("route_by_score",  partial(route_by_score_node,     cfg=cfg))
-    graph.add_node("guardrail_input", partial(guardrail_input_node,    input_guard=input_guard, cfg=cfg))
+    graph.add_node("guardrail_input", partial(guardrail_input_node,    input_guard=input_guard))
     graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
     graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))

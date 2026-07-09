@@ -317,6 +317,24 @@ class TestGuardrailInputAuditConvergence:
         assert "audit_event" in result
         assert result["answer_model"] == "guardrail-blocked"
         assert result["guardrail_blocked"] is True
+        # The audit event itself must carry which rail fired -- without this,
+        # reconstructing why a query was blocked requires cross-referencing
+        # the separate logs/guardrails.jsonl stream with no shared join key.
+        assert result["audit_event"]["guardrail_blocked"] is True
+        assert result["audit_event"]["guardrail_rails"] == ["check_injection"]
+
+    def test_unblocked_path_reports_guardrail_blocked_false(self):
+        # A normal, unguarded high-score answer must not be mistaken for a
+        # guardrail decision -- the new audit fields default sanely.
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_HIGH_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=None,
+            cfg=_cfg(),
+        )
+        result = graph.invoke({"query": "anything"})
+        assert result["audit_event"]["guardrail_blocked"] is False
+        assert result["audit_event"]["guardrail_rails"] == []
 
 
 # =============================================================================

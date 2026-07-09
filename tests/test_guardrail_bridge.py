@@ -27,6 +27,15 @@ class TestBuildInputGuardDisabled:
     def test_explicit_enabled_false_returns_none(self):
         assert build_input_guard({"guardrails": {"enabled": False}}) is None
 
+    def test_present_but_empty_guardrails_block_returns_none(self):
+        # A `guardrails:` key with nothing under it parses to None (valid YAML,
+        # an easy real-world slip when stubbing out the block) -- the key IS
+        # present, so dict.get's default doesn't kick in and a bare
+        # cfg.get("guardrails", {}) would return None, not {}. Regression for
+        # a startup-crash: gate.py calls build_input_guard(cfg) unconditionally
+        # at import time, so this must degrade to disabled, not raise.
+        assert build_input_guard({"guardrails": None}) is None
+
     def test_disabled_path_never_imports_guardrails_package(self):
         # Regression guard for the "no import, no I/O, no state when disabled"
         # claim. Runs in a fresh subprocess: sys.modules is shared/cached across
