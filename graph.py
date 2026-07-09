@@ -357,31 +357,44 @@ def user_gate_node(state: GraphState, cfg: dict) -> dict:
     # User has responded – routing handled by conditional edge
     return {}
 
-def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) -> dict:
-    """Node 5: Call Grok API. Only reachable when hybrid + confirmed.
+def _external_fallback_node(
+    state: GraphState, client: _GeneratingClient | None, cfg: dict, *, provider: str, label: str
+) -> dict:
+    """Shared implementation behind grok_fallback_node / claude_fallback_node.
 
-    5.2.26: Prompt formatting brought in line with local_llm_node — consistent
-    "USER QUERY:" label, consistent section separators, and identical
-    untrusted-data framing when context forwarding is enabled.
+    Both external providers assemble prompts, apply cost-guard truncation, and
+    call generate() identically — only the config-key prefix
+    (send_local_context_to_<provider> / <provider>_max_prompt_chars), the
+    audit-event name (<provider>_prompt_truncated), the display label, and the
+    answer_model value differ. Extracted here so the truncation-with-context-
+    preservation logic below (a genuinely non-trivial edge case — see its
+    comment) is fixed once as providers are added, not once per provider.
 
-    IMPORTANT: No soul_preamble here. Grok is an external model; the soul /
-    identity layer is never forwarded off-box (invariant 3 + privacy). This is
-    the deliberate divergence from local_llm_node — only the *structural*
-    formatting is replicated, not the soul prepend.
+    5.2.26: Prompt formatting matches local_llm_node — consistent "USER QUERY:"
+    label, consistent section separators, and identical untrusted-data framing
+    when context forwarding is enabled.
+
+    IMPORTANT: No soul_preamble here. External providers are off-box models;
+    the soul / identity layer is never forwarded off-box (invariant 3 +
+    privacy). This is the deliberate divergence from local_llm_node — only the
+    *structural* formatting is replicated, not the soul prepend.
     """
-    if grok is None:
-        # Defensive: in offline mode (or Grok disabled) no GrokClient is built.
-        # The topology should not route here, but guard against None so an edge
-        # path degrades gracefully instead of crashing on None.generate().
-        logger.warning("grok_fallback_node reached with grok=None; returning offline response")
+    if client is None:
+        # Defensive: in offline mode (or this provider disabled) no client is
+        # built. The topology should not route here, but guard against None so
+        # an edge path degrades gracefully instead of crashing on None.generate().
+        logger.warning(
+            "%s_fallback_node reached with %s=None; returning offline response", provider, provider
+        )
         return {
-            "answer": "[Grok unavailable: offline mode or Grok disabled — no external fallback executed]",
+            "answer": f"[{label} unavailable: offline mode or {label} disabled — no external fallback executed]",
             "answer_model": "offline-best-effort",
             "answer_sources": []
         }
 
     query = state["query"]
-    send_ctx = cfg.get("policy", {}).get("fallback", {}).get("send_local_context_to_grok", False)
+    fallback_cfg = cfg.get("policy", {}).get("fallback", {})
+    send_ctx = fallback_cfg.get(f"send_local_context_to_{provider}", False)
     docs = state.get("retrieved_docs", []) if send_ctx else []
 
     def _assemble(ctx: str) -> str:
@@ -397,21 +410,21 @@ def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) ->
     context = _format_context_chunks(docs, limit=3, char_cap=200) if send_ctx else ""
     prompt = _assemble(context)
 
-    # Cost guard for the only external, paid API call in the topology. The
+    # Cost guard for the only external, paid API calls in the topology. The
     # gateway already caps raw input length (policy.prompt_filter.max_input_chars),
-    # but the Grok-forwarded prompt also carries the local-context block and the
-    # framing, so this is an independent, operator-visible ceiling on per-call
-    # token spend. Default is generous (no behavior change for normal queries);
-    # lower it to tighten the budget. A value <= 0 disables the cap.
-    max_chars = cfg.get("policy", {}).get("fallback", {}).get("grok_max_prompt_chars", 8000)
+    # but the provider-forwarded prompt also carries the local-context block and
+    # the framing, so this is an independent, operator-visible ceiling on
+    # per-call token spend. Default is generous (no behavior change for normal
+    # queries); lower it to tighten the budget. A value <= 0 disables the cap.
+    max_chars = fallback_cfg.get(f"{provider}_max_prompt_chars", 8000)
     if max_chars and max_chars > 0 and len(prompt) > max_chars:
         original_len = len(prompt)
         # When the prompt carries a context block, the trailing
         # "Answer the query using the partial context where relevant." instruction
         # is the LAST element. A naive prompt[:max_chars] tail slice chops that
-        # instruction first, leaving Grok with a query and a dangling untrusted
-        # context block but no task framing. Budget the variable context instead
-        # so the framing + query + trailing instruction always survive.
+        # instruction first, leaving the provider with a query and a dangling
+        # untrusted context block but no task framing. Budget the variable
+        # context instead so the framing + query + trailing instruction survive.
         if send_ctx:
             framing_overhead = len(_assemble(""))
             ctx_budget = max_chars - framing_overhead
@@ -433,98 +446,42 @@ def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) ->
         else:
             prompt = prompt[:max_chars]
         logger.warning(
-            "Grok prompt truncated from %d to %d chars (policy.fallback.grok_max_prompt_chars)",
-            original_len, len(prompt),
+            "%s prompt truncated from %d to %d chars (policy.fallback.%s_max_prompt_chars)",
+            label, original_len, len(prompt), provider,
         )
         audit_log({
-            "event": "grok_prompt_truncated",
+            "event": f"{provider}_prompt_truncated",
             "original_chars": original_len,
             "truncated_chars": len(prompt),
             "query": state.get("query", ""),
         })
 
-    answer, error = _generate_or_error(grok, prompt, label="Grok")
+    answer, error = _generate_or_error(client, prompt, label=label)
 
-    # No fabricated source. The previous stub
-    # {"source": "Grok Fallback", "score": 0.0, "chunk_id": -1, ...} is not a real
-    # RetrievedDoc — it carries no retrieval metadata (no semantic/keyword/rrf
-    # scores) and surfaces to the client (gate.py -> SourceInfo) as a meaningless
-    # null-scored "source". Grok answered from its own knowledge, not from a
-    # cited local document, so report no sources rather than a fake one.
+    # No fabricated source. A stub {"source": f"{label} Fallback", "score": 0.0,
+    # "chunk_id": -1, ...} would not be a real RetrievedDoc — it carries no
+    # retrieval metadata (no semantic/keyword/rrf scores) and would surface to
+    # the client (gate.py -> SourceInfo) as a meaningless null-scored "source".
+    # The provider answered from its own knowledge, not from a cited local
+    # document, so report no sources rather than a fake one.
     out: dict = {
         "answer": answer,
-        "answer_model": "grok",
+        "answer_model": provider,
         "answer_sources": [],
     }
     if error is not None:
         out["error"] = error
     return out
+
+
+def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) -> dict:
+    """Node 5: Call Grok API. Only reachable when hybrid + confirmed + selected."""
+    return _external_fallback_node(state, grok, cfg, provider="grok", label="Grok")
+
 
 def claude_fallback_node(state: GraphState, claude: ClaudeClient | None, cfg: dict) -> dict:
     """Call Claude API. Only reachable when hybrid + confirmed + selected."""
-    if claude is None:
-        logger.warning("claude_fallback_node reached with claude=None; returning offline response")
-        return {
-            "answer": "[Claude unavailable: offline mode or Claude disabled - no external fallback executed]",
-            "answer_model": "offline-best-effort",
-            "answer_sources": []
-        }
-
-    query = state["query"]
-    fallback_cfg = cfg.get("policy", {}).get("fallback", {})
-    send_ctx = fallback_cfg.get("send_local_context_to_claude", False)
-    docs = state.get("retrieved_docs", []) if send_ctx else []
-
-    def _assemble(ctx: str) -> str:
-        if send_ctx:
-            return (
-                f"USER QUERY: {query}\n\n"
-                f"PARTIAL LOCAL CONTEXT {UNTRUSTED_NOTE}:\n"
-                f"{ctx}\n\n"
-                "Answer the query using the partial context where relevant."
-            )
-        return f"USER QUERY: {query}"
-
-    context = _format_context_chunks(docs, limit=3, char_cap=200) if send_ctx else ""
-    prompt = _assemble(context)
-
-    max_chars = fallback_cfg.get("claude_max_prompt_chars", 8000)
-    if max_chars and max_chars > 0 and len(prompt) > max_chars:
-        original_len = len(prompt)
-        if send_ctx:
-            framing_overhead = len(_assemble(""))
-            ctx_budget = max_chars - framing_overhead
-            if ctx_budget > 0:
-                context = _format_context_chunks(
-                    docs, limit=3, char_cap=200, total_char_budget=ctx_budget,
-                )
-                prompt = _assemble(context)
-            else:
-                prompt = f"USER QUERY: {query}"
-            if len(prompt) > max_chars:
-                prompt = prompt[:max_chars]
-        else:
-            prompt = prompt[:max_chars]
-        logger.warning(
-            "Claude prompt truncated from %d to %d chars (policy.fallback.claude_max_prompt_chars)",
-            original_len, len(prompt),
-        )
-        audit_log({
-            "event": "claude_prompt_truncated",
-            "original_chars": original_len,
-            "truncated_chars": len(prompt),
-            "query": state.get("query", ""),
-        })
-
-    answer, error = _generate_or_error(claude, prompt, label="Claude")
-    out: dict = {
-        "answer": answer,
-        "answer_model": "claude",
-        "answer_sources": [],
-    }
-    if error is not None:
-        out["error"] = error
-    return out
+    return _external_fallback_node(state, claude, cfg, provider="claude", label="Claude")
 
 def offline_best_effort_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
                              personality: PersonalityManager | None = None) -> dict:
