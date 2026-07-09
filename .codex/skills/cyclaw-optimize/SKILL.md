@@ -86,6 +86,14 @@ the optimization workflow:
 bash .codex/skills/cyclaw-optimize/bootstrap.sh codex/cyclaw-optimize-<topic>
 ```
 
+On Windows without Bash, perform the equivalent steps directly in PowerShell:
+
+```powershell
+git fetch origin main --prune
+git switch -c codex/cyclaw-optimize-<topic> origin/main
+git status -sb
+```
+
 Omit the branch argument for a local inventory against the current branch.
 With a branch argument, the script fetches `origin/main` and creates or checks
 out the requested branch without force-resetting existing branch work.
@@ -138,7 +146,9 @@ Use the best available GitHub path:
 gh pr list --repo CGFixIT/CyClaw --state open --json number,title
 ```
 
-If using a GitHub connector, request only `number` and `title` when possible.
+Verify `gh` is the official GitHub CLI before using it; some Windows
+environments may have a different executable named `gh`. If using a GitHub
+connector, request only `number` and `title` when possible.
 Do not dump large raw PR payloads into context.
 
 ## Step 3 - Select Focus Areas
