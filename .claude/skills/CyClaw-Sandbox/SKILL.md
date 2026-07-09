@@ -338,7 +338,7 @@ entries — that is normal and should be noted in the report.
 
 ```bash
 GROK_API_KEY=dummy python -c "
-from utils.sanitizer import sanitize_query
+from utils.sanitizer import check_input, sanitize_chunk
 from utils.logger import audit_log
 from utils.ratelimit import RateLimiter
 from utils.health import check_all

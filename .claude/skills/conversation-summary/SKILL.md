@@ -1,3 +1,9 @@
+---
+name: conversation-summary
+description: >
+  Produce a condensed summary of the entire conversation for seamless continuation.
+---
+
 # conversation-summary
 
 Produce a condensed summary of the entire conversation for seamless continuation.

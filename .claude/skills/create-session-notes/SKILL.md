@@ -1,3 +1,9 @@
+---
+name: create-session-notes
+description: >
+  Maintain a structured session notes file that preserves execution context for future continuation.
+---
+
 # create-session-notes
 
 Maintain a structured session notes file that preserves execution context for future continuation.
