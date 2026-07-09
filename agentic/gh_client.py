@@ -68,6 +68,13 @@ def check_gh_version(
     ``TimeoutExpired`` (the only transient failure possible for ``gh version``).
     The default of 1 retry tolerates a single slow startup without silently
     failing the agentic layer at import time on a loaded CI runner.
+
+    Cache lifetime: the ``lru_cache`` result lives for the whole process — a
+    ``gh`` upgrade/downgrade mid-process is not re-detected. Accepted trade-off:
+    the agentic CLI is a short-lived out-of-band process (python -m agentic.cli),
+    so the window is one command, and the version floor is a CVE guard where a
+    stale *pass* only occurs if gh was downgraded mid-command. Call
+    ``check_gh_version.cache_clear()`` if a long-lived host ever embeds this.
     """
     binary = shutil.which(gh_bin)
     if binary is None:

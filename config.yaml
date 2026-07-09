@@ -80,7 +80,7 @@ models:
   claude:
     enabled: false
     base_url: "https://api.anthropic.com/v1"
-    model: "claude-sonnet-5"
+    model: "claude-sonnet-5"   # current Claude 5 family Sonnet alias (verified 2026-07); second external fallback (PR #441). Check https://docs.anthropic.com/en/docs/about-claude/models before enabling — same drift risk as the grok model id above
     anthropic_version: "2023-06-01"
     timeout_sec: 30
     max_tokens: 2048
