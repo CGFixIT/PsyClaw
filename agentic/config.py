@@ -43,8 +43,12 @@ DEFAULT_ALLOWED_READ_OPS = (
     "issue_list",
     "repo_view",
 )
+DEFAULT_DEEPAGENT_WORKSPACE_ROOT = "data/agentic/workspaces"
+DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
+DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 
 _VALID_MODES = ("read", "write")
+_VALID_DEEPAGENT_PROVIDERS = ("lmstudio", "openai_compatible")
 # owner/name -- GitHub slugs allow alphanumerics, hyphen, underscore, dot, but the
 # FIRST character of each segment must be alphanumeric. Anchoring it (rather than
 # the looser ``[A-Za-z0-9_.-]+``) closes a flag-injection gap: a slug like
@@ -57,6 +61,127 @@ _GH_MIN_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 # Shell metacharacters rejected at the boundary (defense in depth; argv is never
 # passed through a shell, but taint is rejected here anyway).
 _SHELL_METACHARS = set(";|&$`<>(){}[]!*?\"'\\\n\r\t ")
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _validate_bool(value: object, field_name: str) -> None:
+    if not isinstance(value, bool):
+        raise AgenticConfigError(
+            f"{field_name} must be a boolean, got: {value!r}",
+            details={"field": field_name, "received": value},
+        )
+
+
+def _validate_no_shell_metachars(value: str, field_name: str) -> None:
+    bad = sorted(_SHELL_METACHARS & set(value))
+    if bad:
+        raise AgenticConfigError(
+            f"{field_name} contains forbidden characters: {bad!r}",
+            details={"field": field_name, "received": value, "forbidden": bad},
+        )
+
+
+def _resolve_data_path(raw_path: str, field_name: str) -> str:
+    if not isinstance(raw_path, str) or not raw_path:
+        raise AgenticConfigError(
+            f"{field_name} is required",
+            details={"hint": "Use a path under the repo's data/ tree."},
+        )
+    expanded = os.path.expanduser(os.path.expandvars(raw_path))
+    repo_root = _repo_root()
+    path = Path(expanded)
+    if not path.is_absolute():
+        path = repo_root / path
+    resolved = path.resolve()
+    data_root = (repo_root / "data").resolve()
+    if data_root not in resolved.parents:
+        raise AgenticConfigError(
+            f"{field_name} must resolve to a path inside the repo's data/ tree",
+            details={"data_root": str(data_root), "received": raw_path},
+        )
+    return str(resolved)
+
+
+@dataclass
+class DeepAgentGitHubConfig:
+    """Optional Deep Agents GitHub harness config. Disabled by default."""
+
+    enabled: bool = False
+    provider: str = "lmstudio"
+    base_url: str = "http://localhost:1234/v1"
+    model: str = ""
+    allow_deepagents_dependency: bool = False
+    allow_filesystem_write_tools: bool = False
+    allow_shell_execution: bool = False
+    allow_github_writes: bool = False
+    workspace_root: str = DEFAULT_DEEPAGENT_WORKSPACE_ROOT
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "agentic.deepagent_github.enabled",
+            "agentic.deepagent_github.allow_deepagents_dependency",
+            "agentic.deepagent_github.allow_filesystem_write_tools",
+            "agentic.deepagent_github.allow_shell_execution",
+            "agentic.deepagent_github.allow_github_writes",
+        ):
+            attr = field_name.rsplit(".", 1)[-1]
+            _validate_bool(getattr(self, attr), field_name)
+        if self.provider not in _VALID_DEEPAGENT_PROVIDERS:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.provider must be 'lmstudio' or 'openai_compatible'",
+                details={"received": self.provider, "valid": list(_VALID_DEEPAGENT_PROVIDERS)},
+            )
+        if not isinstance(self.base_url, str) or not self.base_url:
+            raise AgenticConfigError("agentic.deepagent_github.base_url must be a non-empty string")
+        if not isinstance(self.model, str):
+            raise AgenticConfigError("agentic.deepagent_github.model must be a string")
+        _validate_no_shell_metachars(self.base_url, "agentic.deepagent_github.base_url")
+        _validate_no_shell_metachars(self.model, "agentic.deepagent_github.model")
+        self.workspace_root = _resolve_data_path(
+            self.workspace_root,
+            "agentic.deepagent_github.workspace_root",
+        )
+
+
+@dataclass
+class HarnessOptimizerConfig:
+    """Governed harness optimizer config. Disabled by default."""
+
+    enabled: bool = False
+    max_iterations: int = 3
+    require_human_confirm_for_accept: bool = True
+    output_dir: str = DEFAULT_HARNESS_OUTPUT_DIR
+    memory_dir: str = DEFAULT_HARNESS_MEMORY_DIR
+    allow_local_model_judge: bool = False
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "agentic.harness_optimizer.enabled",
+            "agentic.harness_optimizer.require_human_confirm_for_accept",
+            "agentic.harness_optimizer.allow_local_model_judge",
+        ):
+            attr = field_name.rsplit(".", 1)[-1]
+            _validate_bool(getattr(self, attr), field_name)
+        if (
+            not isinstance(self.max_iterations, int)
+            or isinstance(self.max_iterations, bool)
+            or self.max_iterations <= 0
+        ):
+            raise AgenticConfigError(
+                "agentic.harness_optimizer.max_iterations must be a positive integer",
+                details={"received": self.max_iterations},
+            )
+        self.output_dir = _resolve_data_path(
+            self.output_dir,
+            "agentic.harness_optimizer.output_dir",
+        )
+        self.memory_dir = _resolve_data_path(
+            self.memory_dir,
+            "agentic.harness_optimizer.memory_dir",
+        )
 
 
 @dataclass
@@ -74,15 +199,28 @@ class AgenticConfig:
     # gh read-path resilience knobs (threaded into gh_client.run_read).
     gh_timeout_sec: int = DEFAULT_GH_TIMEOUT_SEC
     gh_retries: int = DEFAULT_GH_RETRIES
+    deepagent_github: DeepAgentGitHubConfig | dict = field(default_factory=DeepAgentGitHubConfig)
+    harness_optimizer: HarnessOptimizerConfig | dict = field(default_factory=HarnessOptimizerConfig)
 
     # --- Validation -------------------------------------------------------
 
     def __post_init__(self) -> None:
+        self._coerce_nested_configs()
+        self._validate_top_level_bools()
         self._validate_repo()
         self._validate_mode()
         self._validate_gh_min_version()
         self._validate_registry_path()
         self._validate_gh_runtime()
+
+    def _coerce_nested_configs(self) -> None:
+        if isinstance(self.deepagent_github, dict):
+            self.deepagent_github = DeepAgentGitHubConfig(**self.deepagent_github)
+        if isinstance(self.harness_optimizer, dict):
+            self.harness_optimizer = HarnessOptimizerConfig(**self.harness_optimizer)
+
+    def _validate_top_level_bools(self) -> None:
+        _validate_bool(self.writes_enabled, "agentic.writes_enabled")
 
     def _validate_repo(self) -> None:
         if not _REPO_RE.match(self.repo):
@@ -117,21 +255,7 @@ class AgenticConfig:
                 "agentic.registry_path is required",
                 details={"hint": "A path under the repo's data/ tree, e.g. data/agentic/skills_registry.json"},
             )
-        expanded = os.path.expanduser(os.path.expandvars(self.registry_path))
-        repo_root = Path(__file__).resolve().parent.parent
-        path = Path(expanded)
-        if not path.is_absolute():
-            path = repo_root / path
-        resolved = path.resolve()
-        data_root = (repo_root / "data").resolve()
-        # Must resolve to a path inside the repo's data/ tree. resolve() collapses
-        # ".." and follows symlinks, so an escape cannot land inside data_root.
-        if data_root not in resolved.parents:
-            raise AgenticConfigError(
-                "agentic.registry_path must resolve to a path inside the repo's data/ tree",
-                details={"data_root": str(data_root)},
-            )
-        self.registry_path = str(resolved)
+        self.registry_path = _resolve_data_path(self.registry_path, "agentic.registry_path")
 
     def _validate_gh_runtime(self) -> None:
         t = self.gh_timeout_sec
@@ -206,6 +330,8 @@ def load_agentic_config(config_path: str = "config.yaml") -> AgenticConfig:
 
     # Conservative default: disabled unless explicitly enabled. Stored as a plain
     # attribute so it never leaks into the argv / to_dict surface.
-    ac.enabled = bool(block.get("enabled", False))  # type: ignore[attr-defined]
+    enabled = block.get("enabled", False)
+    _validate_bool(enabled, "agentic.enabled")
+    ac.enabled = enabled  # type: ignore[attr-defined]
     ac._unknown_keys = sorted(unknown)  # type: ignore[attr-defined]
     return ac
