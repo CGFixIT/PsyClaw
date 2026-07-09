@@ -82,9 +82,7 @@ jobs:
           --cov=guardrails \
           --cov-report=xml \
           --cov-report=term-missing \
-          -m "not slow and not agentic" \
           --tb=short
-        # agentic/ and heavy fsconnect/sqlconnect paths remain human-reason gated (off-by-default in CI)
 
     - name: Run verify harness / smoke (if present)
       shell: bash -l {0}
