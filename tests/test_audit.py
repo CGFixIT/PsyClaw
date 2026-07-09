@@ -85,6 +85,17 @@ class TestRedactSensitive:
         result = redact_sensitive("Key: AKIAIOSFODNN7EXAMPLE", cfg)
         assert "[REDACTED_SECRET]" in result
 
+    def test_redacts_anthropic_key(self):
+        # Real Anthropic keys (sk-ant-api03-...) contain hyphens inside the
+        # token body, so the pre-existing OpenAI-style "sk-" pattern (no
+        # hyphens allowed) never matches them — this is a distinct pattern.
+        cfg = {"policy": {"privacy": {"redact_emails": False, "redact_ips": False,
+                                       "redact_secrets_like": ["sk-ant-[a-zA-Z0-9_-]{20,}"]}}}
+        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
+        result = redact_sensitive(f"Key: {secret}", cfg)
+        assert "[REDACTED_SECRET]" in result
+        assert secret not in result
+
     # PR #99 #10: the audit-path secret list must also cover Bearer tokens and
     # api_key= assignment forms (previously only gate._sanitize_error did).
     _SECRET_CFG = {"policy": {"privacy": {"redact_emails": False, "redact_ips": False,

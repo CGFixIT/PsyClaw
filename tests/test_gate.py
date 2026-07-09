@@ -344,6 +344,29 @@ class TestErrorSanitization:
         sanitized = gate._sanitize_error(RuntimeError(f"boom {secret}"))
         assert secret not in sanitized
 
+    def test_anthropic_api_key_env_var_redacted(self, monkeypatch):
+        # Mirrors test_grok_api_key_still_redacted: ClaudeClient (llm/client.py)
+        # reads ANTHROPIC_API_KEY the same way GrokClient reads GROK_API_KEY, and
+        # deserves the same live-env-var redaction in _sanitize_error.
+        import gate
+        secret = "anthropic-live-token-abcdefghijklmnop"
+        monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+        sanitized = gate._sanitize_error(RuntimeError(f"boom {secret}"))
+        assert secret not in sanitized
+
+    def test_anthropic_style_key_pattern_redacted(self):
+        # Real Anthropic keys (sk-ant-api03-...) contain hyphens inside the
+        # token body, so the pre-existing OpenAI-style `sk-` pattern (no
+        # hyphens allowed) never matches them — this is a distinct regex, not
+        # covered by the sk- entry. Not env-var-dependent: this is the
+        # pattern-based leg of _sanitize_error (_SECRET_PATTERNS), which also
+        # catches a key embedded in a traceback that never touched an env var.
+        import gate
+        secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789"
+        sanitized = gate._sanitize_error(RuntimeError(f"upstream rejected key {secret}"))
+        assert secret not in sanitized
+        assert "[REDACTED]" in sanitized
+
 
 class TestSoulAndErrorPaths:
     """Soul endpoints must 404 when the personality system is disabled, and

@@ -242,7 +242,10 @@ policy:
       - "AKIA[0-9A-Z]{16}"           # AWS access keys
       - "xox[baprs]-[0-9a-zA-Z-]+"  # Slack tokens
       - "ghp_[a-zA-Z0-9]{36}"        # GitHub PATs
-      - "sk-[a-zA-Z0-9]{32,}"
+      - "sk-[a-zA-Z0-9]{32,}"        # OpenAI-style keys
+      # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
+      # so the OpenAI-style pattern above (no hyphens allowed) never matches them.
+      - "sk-ant-[a-zA-Z0-9_-]{20,}"  # Anthropic (Claude) API keys
 
 api:
   host: "127.0.0.1"  # DevSkim: ignore DS162092 - loopback-only binding by design
