@@ -146,6 +146,39 @@ class TestConfigPathAnchoring:
         assert reader_cfg["indexing"]["bm25_path"] == str((index_dir / "bm25.json").resolve())
         assert reader_cfg["indexing"]["chroma_path"] == str((index_dir / "chroma_db").resolve())
 
+    def test_mismatched_bm25_lengths_raise_index_not_found(self, tmp_path):
+        """Corrupt BM25 arrays must fail boot as IndexNotFoundError, not hot-path 500."""
+        from utils.errors import IndexNotFoundError
+
+        repo = tmp_path / "repo"
+        index_dir = repo / "index"
+        index_dir.mkdir(parents=True)
+        (index_dir / "bm25.json").write_text(
+            json.dumps({
+                "tokenized_corpus": [["alpha"], ["beta"]],
+                "chunks": ["alpha"],  # length mismatch
+                "metadata": [{"source": "a.md", "chunk_id": 0}],
+            }),
+            encoding="utf-8",
+        )
+        (repo / "config.yaml").write_text(
+            json.dumps({
+                "indexing": {
+                    "bm25_path": "index/bm25.json",
+                    "chroma_path": "index/chroma_db",
+                    "collection_name": "test_kb",
+                },
+                "retrieval": {"top_k_semantic": 1, "top_k_keyword": 1, "rrf_k": 60},
+            }),
+            encoding="utf-8",
+        )
+        with patch(
+            "retrieval.hybrid_search.get_vector_reader",
+            return_value=SimpleNamespace(close=lambda: None),
+        ):
+            with pytest.raises(IndexNotFoundError, match="corrupt or empty"):
+                HybridRetriever(str(repo / "config.yaml"))
+
 
 class TestTokenizationForBM25:
     """Ensure tokenization produces useful BM25 input."""

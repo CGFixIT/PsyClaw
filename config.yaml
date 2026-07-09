@@ -290,6 +290,10 @@ logging:
     include_model_used: true
 
 security:
+  # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).
+  # The server boots fine without GROK_API_KEY set; Grok simply reports
+  # unavailable. Kept as operator-facing documentation of the expected env,
+  # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
   require_env:
     - "GROK_API_KEY"
   allowed_origins:
