@@ -582,3 +582,33 @@ class TestAuditSummaryEndpoint:
         # No raw query text or hashes may leak through the summary.
         assert "query" not in data
         assert "raw-secret-text" not in resp.text
+
+    def test_relative_audit_file_anchored_to_base_dir_not_cwd(self, client, monkeypatch, tmp_path):
+        """A relative logging.audit_file must resolve via _BASE_DIR, not the
+        process cwd -- the same "launched from elsewhere" scenario _BASE_DIR
+        already exists to prevent for config.yaml/static/ (see gate.py's
+        _BASE_DIR comment)."""
+        test_client, _ = client
+        import json
+
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "audit-key-456")
+
+        # Point _BASE_DIR at an isolated tmp dir so a *relative* audit_file
+        # resolves there regardless of where the process cwd ends up.
+        monkeypatch.setattr(gate, "_BASE_DIR", tmp_path)
+        (tmp_path / "audit_relative.jsonl").write_text(
+            json.dumps({"event": "rag_query", "top_score": 0.9,
+                        "retrieval_mode": "hybrid", "model_used": "local"}) + "\n"
+        )
+        gate.cfg["logging"]["audit_file"] = "audit_relative.jsonl"
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        resp = test_client.get(
+            "/audit/summary", headers={"Authorization": "Bearer audit-key-456"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["total_events"] == 1

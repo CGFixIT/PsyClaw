@@ -618,7 +618,11 @@ async def audit_summary(request: Request):
     artifact or certification.
     """
     await _enforce_rate_limit(request)
-    audit_file = cfg.get("logging", {}).get("audit_file", "audit.jsonl")
+    # _BASE_DIR / value resolves correctly whether the configured path is
+    # relative or already absolute (Path.__truediv__ discards the left side
+    # for an absolute right-hand operand) -- same cwd-independence _BASE_DIR
+    # already guarantees for config.yaml/static/ above.
+    audit_file = str(_BASE_DIR / cfg.get("logging", {}).get("audit_file", "audit.jsonl"))
     # Single off-loop pass: summarize_audit streams the JSONL through
     # compute_metrics without materializing the (unbounded) file in memory.
     return await asyncio.to_thread(summarize_audit, audit_file)
