@@ -373,6 +373,7 @@ try:
 except IndexNotFoundError as e:
     print(f"FATAL: {e.message}", file=sys.stderr)
     print("Run: python -m retrieval.indexer", file=sys.stderr)
+    logger.critical("Retrieval index not found at startup: %s", e.message)
     retriever = None
 
 # Pass the already-parsed cfg dict into both clients rather than letting them
@@ -591,6 +592,7 @@ async def restore_soul(request: Request):
         result = await asyncio.to_thread(personality.restore_from_backup)
         return result
     except FileNotFoundError as e:
+        await _audit({"event": "soul_restore_failed", "error": str(e)})
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 @app.get("/health", response_model=HealthResponse)
