@@ -136,6 +136,7 @@ jobs:
             --cov=utils.ratelimit \
             --cov=utils.health \
             --cov=utils.ops_runner \
+            --cov=utils.guardrail_bridge \
             --cov=llm.client \
             --cov=graph \
             --cov=retrieval.embeddings \

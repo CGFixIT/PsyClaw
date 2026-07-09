@@ -88,6 +88,7 @@ from utils.sanitizer import check_input
 from utils.errors import (
     PromptInjectionError, IndexNotFoundError
 )
+from utils.guardrail_bridge import build_input_guard
 from utils.health import check_all
 from utils.personality import PersonalityManager
 # Subprocess shim for the out-of-band sync/ + agentic/ control surface. This is a
@@ -397,10 +398,17 @@ personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
 
+# Phase 2 NeMo Guardrails offline input rail (docs/NeMo/phase2_implementation_plan.md).
+# build_input_guard returns None when guardrails.enabled is false (the shipped
+# default) without importing guardrails at all -- gate.py never names that
+# package, preserving module isolation (invariant I6).
+input_guard = build_input_guard(cfg)
+
 compiled_graph = None
 if retriever is not None:
     compiled_graph = build_graph(
-        retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg, personality=personality
+        retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
+        personality=personality, input_guard=input_guard,
     )
 
 @app.post("/query", response_model=QueryResponse)
