@@ -188,6 +188,15 @@ class TestComputeMetrics:
         events = [{"event": "rag_query", "model_used": "grok-4.3"}]
         assert compute_metrics(events)["online_escalated"] == 1
 
+    def test_online_escalated_falls_back_to_claude_model_heuristic(self):
+        """The model-name heuristic must recognize claude too, not just grok —
+        both are external providers gated the same way (graph.py's
+        audit_logger_node sets online_escalated = answer_model in
+        {"grok", "claude"}); an older/legacy Claude event without the explicit
+        field deserves the same fallback recognition a legacy Grok event gets."""
+        events = [{"event": "rag_query", "model_used": "claude-sonnet-5"}]
+        assert compute_metrics(events)["online_escalated"] == 1
+
 
 class TestMain:
     """Cover the ``cyclaw-metrics`` console entry point (``metrics:main``).

@@ -106,16 +106,19 @@ def compute_metrics(events) -> dict:
             if e.get("model_used"):
                 model_counts[e["model_used"]] += 1
 
-        # An escalation to the external LLM. Prefer the explicit boolean the graph
-        # audit node already records (audit_logger_node sets
-        # online_escalated = answer_model == "grok") as the source of truth; fall back
-        # to user_confirmed_online / the model-name heuristic for older or MCP events
-        # that predate the explicit field. Relying on user_confirmed_online alone
-        # undercounted real escalations because the graph never writes that key.
+        # An escalation to an external LLM (grok or claude). Prefer the explicit
+        # boolean the graph audit node already records (audit_logger_node sets
+        # online_escalated = answer_model in {"grok", "claude"}) as the source of
+        # truth; fall back to user_confirmed_online / the model-name heuristic for
+        # older or MCP events that predate the explicit field. Relying on
+        # user_confirmed_online alone undercounted real escalations because the
+        # graph never writes that key. The model-name heuristic checks both
+        # provider prefixes so a legacy Claude event isn't missed the same way a
+        # legacy Grok event wouldn't be.
         if (
             e.get("online_escalated") is True
             or e.get("user_confirmed_online") is True
-            or str(e.get("model_used", "")).lower().startswith("grok")
+            or str(e.get("model_used", "")).lower().startswith(("grok", "claude"))
         ):
             online_escalated += 1
 

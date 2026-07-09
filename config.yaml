@@ -156,6 +156,14 @@ personality:
 policy:
   fallback:
     enabled: true
+    # NOT YET WIRED: no production code reads this key. The confirm-then-route
+    # pause is hardcoded in graph.py's user_gate_router (confirmed is None ->
+    # pause; not confirmed -> offline_best_effort) — it does not consult this
+    # flag, for either external provider. Setting it false today has NO effect;
+    # an operator relying on it to skip the confirmation prompt would be
+    # silently wrong. Kept (rather than deleted) as a placeholder for when a
+    # real "skip confirmation" mode is implemented — see
+    # tests/test_due_diligence_invariants.py for a grep-based regression check.
     require_user_confirm: true
     send_local_context_to_grok: false
     send_local_context_to_claude: false
