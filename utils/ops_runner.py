@@ -45,6 +45,9 @@ from utils.logger import _get_config, redact_sensitive
 # packages on the import path without mutating PYTHONPATH for the gateway process.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
+# Default wall-clock for short ops (status/test/agentic/fsconnect/sqlconnect).
+# The full Dropbox sync path uses config sync.sync_timeout_sec instead — see
+# _sync_timeout_sec() — so POST /ops/sync does not kill rclone mid-transfer.
 _TIMEOUT_SEC = 120
 
 # action whitelists — the ONLY subcommands a caller may reach.
@@ -130,14 +133,33 @@ def _redact_ops_value(value: Any, cfg: dict) -> Any:
     return value
 
 
-def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+def _sync_timeout_sec() -> int:
+    """Wall-clock budget for ``sync.cli sync`` launched via the ops shim.
+
+    Aligns with ``sync.sync_timeout_sec`` (default 3600) so console-driven
+    ``POST /ops/sync`` does not abort a legitimate long rclone transfer that
+    the CLI path would complete. Adds a small overhead for Python startup and
+    post-rclone bookkeeping. Config value ``0`` means unbounded in the CLI;
+    the ops path still needs a finite ceiling (falls back to 3600).
+    """
+    try:
+        cfg = _get_config(str(_CONFIG_PATH))
+        sec = int((cfg.get("sync") or {}).get("sync_timeout_sec", 3600))
+    except (OSError, TypeError, ValueError, KeyError):
+        sec = 3600
+    if sec <= 0:
+        sec = 3600
+    return sec + 60
+
+
+def _run(argv: list[str], *, timeout_sec: int | None = None) -> subprocess.CompletedProcess[str]:
     """Run a fully-formed, whitelisted argv list. No shell, fixed interpreter."""
     return subprocess.run(  # noqa: S603  # nosec B603 - list-form, no shell, fixed interpreter + whitelisted argv
         argv,
         cwd=str(_REPO_ROOT),
         capture_output=True,
         text=True,
-        timeout=_TIMEOUT_SEC,
+        timeout=_TIMEOUT_SEC if timeout_sec is None else timeout_sec,
         check=False,
     )
 
@@ -176,7 +198,10 @@ def run_sync_op(action: str, *, dry_run: bool = False) -> OpsResult:
     if action == "sync" and dry_run:
         argv.append("--dry-run")
 
-    proc = _run(argv)
+    # status/test/schedule stay on the short default; only the full transfer
+    # needs the config-aligned ceiling (rclone can run for up to an hour).
+    timeout = _sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
+    proc = _run(argv, timeout_sec=timeout)
     ok, label = _SYNC_LABELS.get(proc.returncode, (False, "unknown"))
     return OpsResult("sync", action, proc.returncode, ok, label, proc.stdout, proc.stderr)
 

@@ -21,7 +21,10 @@ def _fake_run(returncode: int = 0, stdout: str = "", stderr: str = ""):
     """Return a (_run replacement, captured-argv list) pair."""
     captured: list[list[str]] = []
 
-    def _runner(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    def _runner(argv: list[str], *, timeout_sec: int | None = None) -> subprocess.CompletedProcess[str]:
+        # timeout_sec is accepted so run_sync_op's config-aligned budget
+        # does not TypeError the stub (production _run takes the same kwarg).
+        del timeout_sec
         captured.append(argv)
         return subprocess.CompletedProcess(args=argv, returncode=returncode, stdout=stdout, stderr=stderr)
 
@@ -53,6 +56,23 @@ def test_sync_dry_run_appends_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     run_sync_op("sync", dry_run=True)
     assert captured[0][-1] == "--dry-run"
     assert captured[0][-2] == "sync"
+
+
+def test_sync_action_uses_config_aligned_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /ops/sync must not hard-kill at 120s when sync.sync_timeout_sec is 3600."""
+    captured: list[tuple[list[str], int | None]] = []
+
+    def _runner(argv: list[str], *, timeout_sec: int | None = None) -> subprocess.CompletedProcess[str]:
+        captured.append((argv, timeout_sec))
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ops_runner, "_run", _runner)
+    monkeypatch.setattr(ops_runner, "_sync_timeout_sec", lambda: 3660)
+    run_sync_op("sync")
+    assert captured[0][1] == 3660
+    # Non-transfer actions keep the short default path (timeout_sec=_TIMEOUT_SEC).
+    run_sync_op("status")
+    assert captured[1][1] == ops_runner._TIMEOUT_SEC
 
 
 def test_sync_dry_run_ignored_for_non_sync(monkeypatch: pytest.MonkeyPatch) -> None:
