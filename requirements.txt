@@ -38,8 +38,8 @@ pytest-cov==7.1.0
 
 # Optional Postgres / pgvector backends (NOT installed by default — the base install
 # stays SQLite + ChromaDB, offline-first). Enable via the pyproject extras instead:
-#   pip install 'cyclaw[postgres]'   # soul DB + rate limiter over Postgres (CYCLAW_DB_URL)
-#   pip install 'cyclaw[pgvector]'   # also the pgvector vector backend
+#   pip install 'cyclaw[postgres]' -c constraints.txt   # soul DB + rate limiter over Postgres (CYCLAW_DB_URL)
+#   pip install 'cyclaw[pgvector]' -c constraints.txt   # also the pgvector vector backend
 # psycopg / pgvector are lazy-imported, so leaving these out costs nothing.
 # psycopg[binary]>=3.2.0
 # pgvector>=0.3.6
