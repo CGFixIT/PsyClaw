@@ -6,8 +6,6 @@ No live services required — all external deps are mocked.
 
 import copy
 import json
-import os
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -48,7 +46,15 @@ TEST_CONFIG = {
                     "redact_secrets_like": ["AKIA[0-9A-Z]{16}"]}
     },
     "api": {"host": "127.0.0.1", "port": 8787},  # DevSkim: ignore DS162092
-    "logging": {"level": "DEBUG", "log_file": "", "audit_file": os.path.join(tempfile.mkdtemp(), "audit.jsonl"),
+    # audit_file is a deliberately-nonexistent placeholder, never a real path.
+    # Every consumer overrides it per-test (the test_config fixture below and the
+    # autouse audit-routing fixtures in test_graph.py / test_due_diligence_
+    # invariants.py all point it at tmp_path). The old value called
+    # tempfile.mkdtemp() at module import — leaking one orphan /tmp dir per
+    # pytest collection for a path nothing ever wrote to. If a future test uses
+    # TEST_CONFIG raw and writes audit lines, this placeholder fails loudly
+    # (missing directory) instead of scattering files under /tmp.
+    "logging": {"level": "DEBUG", "log_file": "", "audit_file": "OVERRIDDEN-PER-TEST/audit.jsonl",
                 "audit_fields": {"include_query_hash": True, "include_top_score": True,
                                  "include_retrieval_mode": True, "include_online_escalated": True,
                                  "include_model_used": True}},
