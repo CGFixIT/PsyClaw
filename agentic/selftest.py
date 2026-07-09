@@ -20,18 +20,7 @@ from utils.errors import (
     GhVersionError,
 )
 from utils.logger import _get_config
-
-
-def _ok(name: str) -> tuple[bool, str]:
-    return True, f"  [OK  ] {name}"
-
-
-def _fail(name: str, reason: str) -> tuple[bool, str]:
-    return False, f"  [FAIL] {name}: {reason}"
-
-
-def _skip(name: str, reason: str) -> tuple[bool, str]:
-    return True, f"  [SKIP] {name}: {reason}"
+from utils.selftest import fail, finalize, ok, skip
 
 
 def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]]:
@@ -42,35 +31,35 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
     # 1. agentic: block loads and validates.
     try:
         cfg = load_agentic_config(config_path)
-        results.append(_ok("01. agentic config loads and validates"))
+        results.append(ok("01. agentic config loads and validates"))
     except AgenticConfigError as exc:
-        results.append(_fail("01. agentic config loads and validates", exc.message))
+        results.append(fail("01. agentic config loads and validates", exc.message))
         for n in range(2, 6):
-            results.append(_skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
-        return _finalize(results)
+            results.append(skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
+        return finalize(results)
 
     # 2. gh installed and recent enough. Tolerate absence (SKIP).
     try:
         v = check_gh_version(min_version=cfg.gh_min_tuple)
-        results.append(_ok(f"02. gh {v[0]}.{v[1]}.{v[2]} installed (>= {cfg.gh_min_version})"))
+        results.append(ok(f"02. gh {v[0]}.{v[1]}.{v[2]} installed (>= {cfg.gh_min_version})"))
     except GhNotInstalledError:
-        results.append(_skip("02. gh installed", "gh not on PATH (agentic is opt-in)"))
+        results.append(skip("02. gh installed", "gh not on PATH (agentic is opt-in)"))
     except GhVersionError as exc:
-        results.append(_fail("02. gh >= floor installed", exc.message))
+        results.append(fail("02. gh >= floor installed", exc.message))
 
     # 3. Read argv is well-formed (subprocess is NOT invoked here).
     argv = build_read_argv("pr_view", cfg.repo, number=1)
     if isinstance(argv, list) and argv[1:3] == ["pr", "view"] and cfg.repo in argv:
-        results.append(_ok("03. Read argv well-formed (list, no shell)"))
+        results.append(ok("03. Read argv well-formed (list, no shell)"))
     else:
-        results.append(_fail("03. Read argv well-formed", f"unexpected argv: {argv[:6]}"))
+        results.append(fail("03. Read argv well-formed", f"unexpected argv: {argv[:6]}"))
 
     # 4. Write gate refuses when not fully gated.
     try:
         plan_write(cfg, "pr_comment", "selftest", confirm=False, number=1, body="x")
-        results.append(_fail("04. Write gate refuses ungated request", "did NOT refuse"))
+        results.append(fail("04. Write gate refuses ungated request", "did NOT refuse"))
     except AgenticWriteRefused:
-        results.append(_ok("04. Write gate refuses ungated request"))
+        results.append(ok("04. Write gate refuses ungated request"))
 
     # 5. Registry scanner blocks an injection payload.
     try:
@@ -81,19 +70,13 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
             reason="selftest",
         )
         if proposal["safe_to_apply"] is False and proposal["injection_flag_count"] > 0:
-            results.append(_ok("05. Registry flags an injection payload"))
+            results.append(ok("05. Registry flags an injection payload"))
         else:
-            results.append(_fail("05. Registry flags an injection payload", "not flagged"))
+            results.append(fail("05. Registry flags an injection payload", "not flagged"))
     except Exception as exc:  # noqa: BLE001 -- selftest must never crash
-        results.append(_fail("05. Registry scanner", str(exc)))
+        results.append(fail("05. Registry scanner", str(exc)))
 
-    return _finalize(results)
-
-
-def _finalize(results: list[tuple[bool, str]]) -> tuple[int, int, list[str]]:
-    lines = [text for _, text in results]
-    passed = sum(1 for ok, _ in results if ok)
-    return passed, len(results), lines
+    return finalize(results)
 
 
 if __name__ == "__main__":
