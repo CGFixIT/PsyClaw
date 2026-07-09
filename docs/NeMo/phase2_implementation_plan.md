@@ -307,10 +307,12 @@ python3 .claude/skills/doc-sync/doc_sync.py                  # no new drift
       code — but now noting the one visible node). Done 2026-07-09.
 - [x] Run `/doc-sync` and reconcile any remaining drift it finds — 0 drift
       items, both before and after the above edits.
-- [ ] Record the decisions in `docs/memories/` via the memory skills.
-- [ ] Flag (user-scoped, do not edit unilaterally): the `fable-protocol` skill
+- [x] Record the decisions in `docs/memories/` via the memory skills. Done
+      2026-07-09 (`docs/memories/CONSOLIDATED.md`/`INDEX.md`).
+- [x] Flag (user-scoped, do not edit unilaterally): the `fable-protocol` skill
       §8.3 says "7-node LangGraph" — stale even before Phase 2; after Phase 2 the
-      graph is 9 nodes.
+      graph is 9 nodes. Flagged to the operator 2026-07-09; not edited per its
+      user-scoped status.
 - [x] Redteam FP measurement against the existing corpus is done (see Decision 5
       above: 0/10 FP, 4/35 jailbreak coverage) — done 2026-07-09, before the
       Phase 2 code PR, per operator request.
