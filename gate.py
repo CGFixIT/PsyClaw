@@ -472,14 +472,12 @@ async def query_endpoint(request: Request, req: QueryRequest):
         if retrieval_error:
             confirm_message = (
                 f"Retrieval failed ({retrieval_error}) — no vault results available. "
-                f"Send query online? Re-submit with user_confirmed_online=true/false "
-                f"and optional online_provider=grok|claude."
+                f"Choose Offline Best Effort, Send to Grok, or Send to Claude."
             )
         else:
             confirm_message = (
                 f"Vault miss (best score: {top_score:.3f} < {threshold}). "
-                f"Send query online? Re-submit with user_confirmed_online=true/false "
-                f"and optional online_provider=grok|claude."
+                f"Choose Offline Best Effort, Send to Grok, or Send to Claude."
             )
         return QueryResponse(
             answer="",

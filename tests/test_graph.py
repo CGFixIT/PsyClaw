@@ -189,6 +189,24 @@ class TestGrokFallbackPath:
         assert result["answer_model"] == "claude"
         assert "Claude answer" in result["answer"]
 
+    def test_confirmed_claude_provider_does_not_call_grok_when_both_enabled(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True, claude_enabled=True)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM()
+        grok = MockGrokClient(response="Grok answer should not be used.")
+        claude = MockClaudeClient(response="Claude answer selected by button.")
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=grok, claude=claude, cfg=cfg)
+        result = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "claude"
+        assert "Claude answer selected by button." in result["answer"]
+        assert grok.last_prompt is None
+
     def test_confirmed_claude_without_key_routes_to_offline(self, tmp_path):
         cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
         retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)

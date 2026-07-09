@@ -651,7 +651,7 @@ def user_gate_router(
     grok: GrokClient | None = None,
     claude: ClaudeClient | None = None,
 ) -> Literal["grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"]:
-    """After user_gate: route based on confirmation and Grok availability.
+    """After user_gate: route based on confirmation and selected provider availability.
 
     ``grok`` is bound at build time (``build_graph`` passes the same client it
     injects into ``grok_fallback_node``). When it is ``None`` — offline mode or
@@ -673,8 +673,6 @@ def user_gate_router(
         # Pause state — gate.py will return 202 and await /confirm
         return "audit_logger"
 
-    # Confirmed AND Grok present AND actually usable (has API key) → Grok;
-    # otherwise local best effort.
     if not confirmed:
         return "offline_best_effort"
 
