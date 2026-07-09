@@ -223,6 +223,10 @@ _SECRET_PATTERNS = [
     re.compile(r'Bearer\s+[A-Za-z0-9\-_\.]+', re.IGNORECASE),  # Authorization headers
     re.compile(r'[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]["\s:=]+[\w\-\.]+'),  # api_key = ...
     re.compile(r'sk-[A-Za-z0-9]{20,}'),       # OpenAI-style keys
+    # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
+    # so the OpenAI-style sk- pattern above (no hyphens allowed) never matches
+    # them — this is a distinct shape, not a subset of the pattern above.
+    re.compile(r'sk-ant-[A-Za-z0-9_\-]{20,}'),  # Anthropic (Claude) API keys
     re.compile(r'ghp_[A-Za-z0-9]{36}'),        # GitHub PATs
     re.compile(r'xox[baprs]-[0-9a-zA-Z\-]+'), # Slack tokens
     re.compile(r'AKIA[0-9A-Z]{16}'),           # AWS access keys
@@ -236,7 +240,10 @@ def _sanitize_error(exc: Exception) -> str:
     # Also redact any live env var that looks like a credential (length > 8).
     # CYCLAW_API_KEY is the server's own auth secret — if it ever surfaced in an
     # auth-library or middleware traceback it must not be echoed in a 500 body.
-    for env_key in ("GROK_API_KEY", "LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "SSC_TOKEN", "CYCLAW_API_KEY"):
+    # ANTHROPIC_API_KEY mirrors the GROK_API_KEY entry below: ClaudeClient
+    # (llm/client.py) reads the same env var, and its failure paths deserve the
+    # identical defense-in-depth this loop already gives Grok.
+    for env_key in ("GROK_API_KEY", "ANTHROPIC_API_KEY", "LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "SSC_TOKEN", "CYCLAW_API_KEY"):
         val = os.environ.get(env_key, "")
         if val and len(val) > 8:
             msg = msg.replace(val, '[REDACTED]')
