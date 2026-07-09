@@ -47,23 +47,27 @@ User Query (HTTP POST /query or MCMC tool call)
                        │
                        ▼
     ┌─────────────────────────────────────────────────────┐
-    │  graph.py  (LangGraph 8-node State Machine)         │
+    │  graph.py  (LangGraph 9-node State Machine)         │
     │                                                     │
     │  [ENTRY]                                            │
     │     ↓                                               │
     │  1. retrieve  (Chroma + BM25 + RRF fusion)          │
     │     ↓                                               │
     │  2. route_score  (top_score >= 0.028 RRF?)          │
-    │     ├─ YES ──→ 3. local_llm (LM Studio :1234)       │
-    │     └─ NO  ──→ 4. user_gate (needs_confirm=true)    │
+    │     ├─ YES ──→ 3. guardrail_input (offline rail;    │
+    │     │           opt-in, pass-through when disabled) │
+    │     │           blocked ──→ 8. audit_logger          │
+    │     │           passed  ──→ 4. local_llm             │
+    │     │                        (LM Studio :1234)      │
+    │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
     │                    ├─ confirmed + hybrid ──→        │
-    │                    │      5. grok_fallback OR       │
+    │                    │      6. grok_fallback OR       │
     │                    │         claude_fallback        │
     │                    │      (selected per-query)      │
     │                    └─ declined / offline ──→        │
-    │                           6. offline_best_effort    │
+    │                           7. offline_best_effort    │
     │     ↓ (all paths converge)                          │
-    │  7. audit_logger (SHA-256 + PII redact → jsonl)     │
+    │  8. audit_logger (SHA-256 + PII redact → jsonl)     │
     │     ↓                                               │
     │  [END]                                              │
     └─────────────────────────────────────────────────────┘
@@ -94,19 +98,21 @@ flowchart TD
 
     E --> F
 
-    subgraph GRAPH ["graph.py — LangGraph 8-node State Machine"]
+    subgraph GRAPH ["graph.py — LangGraph 9-node State Machine"]
         F(["① retrieve\nChroma + BM25 + RRF"])
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
-        G -->|"YES — local context"| H["③ local_llm\nLM Studio :1234\nQwen2.5-7b"]
-        G -->|"NO — vault miss"| I["④ user_gate\nneeds_confirm = true"]
-        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑤ grok_fallback\nxAI grok-4.3\ntriple-gated"]
-        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑥ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
-        I -->|"confirmed=false\nor offline mode"| K["⑦ offline_best_effort\nlocal LLM · no RAG gate"]
+        G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
+        X -->|"blocked"| L
+        X -->|"passed"| H["④ local_llm\nLM Studio :1234\nQwen2.5-7b"]
+        G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
+        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.3\ntriple-gated"]
+        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
+        I -->|"confirmed=false\nor offline mode"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
         H --> L
         J --> L
         W --> L
         K --> L
-        L(["⑧ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
+        L(["⑨ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
     end
 
     L --> M(["📤 QueryResponse\nanswer · sources · model_used\nretrieval_mode · needs_confirm"])
@@ -549,7 +555,7 @@ sqlconnect:
 
 ## NeMo Guardrails (v1.8)
 
-An **opt-in, out-of-band** content-safety layer in `guardrails/`. It is **defense-in-depth only — never a routing authority**: the LangGraph topology stays the sole source of policy. Absence of the `guardrails:` block, or `enabled: false`, is a pure no-op. It is never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`.
+An **opt-in** content-safety layer in `guardrails/`. Absence of the `guardrails:` block, or `enabled: false` (the shipped default), is a pure no-op. Since Phase 2, when enabled, `utils/guardrail_bridge.py` wires its offline input rail into one visible `graph.py` node (`guardrail_input`, between `route_by_score` and `local_llm`) — still **defense-in-depth only, never a routing authority**: the graph's own `guardrail_router` edge (topology, not guardrails code) decides where a blocked query goes. `guardrails` itself is still never imported directly by `gate.py` or `graph.py` — `utils/guardrail_bridge.py` is the only seam, preserving module isolation (invariant I6). `mcp_hybrid_server.py` never touches it at all.
 
 - **`nemoguardrails` is an optional dependency.** The layer **soft-imports** it and, when it is absent, degrades to **offline heuristic rails** that need no second LLM call:
   - **input** — light prompt-injection marker scan + soul/identity-mutation intent detection (the content-layer arm of the Soul-Governance invariant);
@@ -566,14 +572,15 @@ python -m guardrails.cli test                            # pre-flight self-test
 
 ```yaml
 guardrails:
-  enabled: false                 # opt-in; nothing runs while false
+  enabled: false                 # opt-in; also gates the graph.py guardrail_input node
   engine: "openai"               # LM Studio / Ollama OpenAI-compatible endpoint
   model: "qwen2.5-7b-instruct"   # keep in sync with models.local_llm.model
   hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
 ```
 
-> Full design / wiring plan: `docs/NeMo/later_development_guideline.md`.
+> Full design / wiring plan: `docs/NeMo/later_development_guideline.md`. Phase 2
+> implementation contract: `docs/NeMo/phase2_implementation_plan.md`.
 
 ---
 
