@@ -17,7 +17,15 @@ dependencies:
   # sync with pyproject.toml [project.dependencies] and constraints.txt; a bare
   # unpinned resolve here can silently drift from the pip path (e.g. numpy
   # floating to 2.x, which breaks chromadb/onnxruntime per CLAUDE.md).
-  - fastapi=0.138.0
+  #
+  # fastapi is the one deliberate exception: conda-forge's chromadb=1.5.9
+  # build hard-pins fastapi==0.115.9 (confirmed via a live `mamba env create`
+  # solve failure -- "fastapi=0.138.0 is not installable because it conflicts
+  # with any installable versions previously reported"). This is a conda-forge
+  # packaging constraint, not a CyClaw choice; the pip path stays on
+  # fastapi==0.138.0 (pyproject.toml/constraints.txt) since PyPI's chromadb
+  # 1.5.9 carries no such pin. Re-check this pin if chromadb is ever bumped here.
+  - fastapi=0.115.9
   - uvicorn=0.49.0
   - pydantic=2.13.4
   - pyyaml=6.0.3
