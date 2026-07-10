@@ -6,7 +6,10 @@ No model, shell, GitHub, MCP, or request-path imports.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+
+from utils.errors import AgenticError
 
 
 @dataclass(frozen=True)
@@ -19,19 +22,29 @@ class GovernanceFinding:
 
     def __post_init__(self) -> None:
         if self.severity not in {"info", "warning", "critical"}:
-            raise ValueError("severity must be info, warning, or critical")
+            raise AgenticError("severity must be info, warning, or critical", details={"severity": self.severity})
 
     def as_gate_string(self) -> str:
         return f"{self.severity}: {self.code}: {self.message}"
 
 
 def detect_visible_case_hardcoding(candidate_text: str, visible_case_ids: tuple[str, ...]) -> bool:
-    """Return true when a candidate appears to key directly on visible case ids."""
+    """Return true when a candidate appears to key directly on visible case ids.
+
+    Matches on whole case-id tokens (word-boundary anchored) so a shorter id like
+    "case-1" does not falsely fire on unrelated ids that merely share its prefix,
+    e.g. "case-10" or "case-1b" — this feeds the hard rejection gate in
+    decide_candidate, so a substring false positive would reject a legitimate
+    candidate.
+    """
 
     if not candidate_text or not visible_case_ids:
         return False
-    lower = candidate_text.lower()
-    return any(case_id.lower() in lower for case_id in visible_case_ids if case_id.strip())
+    return any(
+        re.search(rf"\b{re.escape(case_id.strip())}\b", candidate_text, re.IGNORECASE)
+        for case_id in visible_case_ids
+        if case_id.strip()
+    )
 
 
 def governance_gate_strings(findings: tuple[GovernanceFinding, ...]) -> tuple[str, ...]:

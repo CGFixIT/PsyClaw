@@ -18,6 +18,7 @@ from agentic.deepagent_github.runners import draft_plan
 from agentic.harness_optimizer import (
     CaseResult,
     Experiment,
+    GovernanceFinding,
     LocalProposerClient,
     MockHarnessRunner,
     MockRunnerCase,
@@ -102,6 +103,17 @@ def test_mock_runner_rejects_undeclared_cases() -> None:
 def test_visible_case_hardcoding_detector() -> None:
     assert detect_visible_case_hardcoding("Special handling for CASE-1", ("case-1",)) is True
     assert detect_visible_case_hardcoding("General planner instruction", ("case-1",)) is False
+
+
+def test_visible_case_hardcoding_detector_does_not_false_positive_on_prefix_ids() -> None:
+    assert detect_visible_case_hardcoding("Special handling for case-10", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("See test-case-14 for context", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("Special handling for case-1b", ("case-1",)) is False
+
+
+def test_governance_finding_rejects_invalid_severity_as_agentic_error() -> None:
+    with pytest.raises(AgenticError):
+        GovernanceFinding(severity="fatal", code="x", message="y")
 
 
 def test_workspace_tools_scope_writes_reads_and_audit(tmp_path: Path) -> None:
