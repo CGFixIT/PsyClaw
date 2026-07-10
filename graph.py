@@ -288,6 +288,11 @@ def retrieve_node(state: GraphState, retriever: HybridRetriever, cfg: dict) -> d
 
 def route_by_score_node(state: GraphState, cfg: dict) -> dict:
     """Node 2: Compare top_score to threshold. Sets routing flag."""
+    # min_score is on the RRF scale, NOT cosine similarity — fused scores rarely
+    # exceed ~0.1, and the shipped config value is 0.028. The 0.4 fallback only
+    # fires when the key is missing from config entirely; on the RRF scale it is
+    # effectively unreachable, so a misconfigured deploy routes every query to
+    # the user gate instead of answering on a garbage threshold.
     threshold = cfg.get("retrieval", {}).get("min_score", 0.4)
     top_score = state.get("top_score", 0.0)
 
@@ -601,6 +606,10 @@ def audit_logger_node(state: GraphState, cfg: dict,
     query = state.get("query", "")
     sources = state.get("answer_sources", [])
 
+    # An empty answer_model means no node produced an answer — that only happens
+    # on the user_gate pause path (waiting for the human's online/offline choice),
+    # which gets its own event name so the audit trail shows the pause itself,
+    # not a query that mysteriously answered with model "unknown".
     event = {
         "event": "rag_query" if state.get("answer_model") else "user_gate_pause",
         "query": query,          # hashed (SHA256) by audit_log()
