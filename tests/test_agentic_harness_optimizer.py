@@ -148,3 +148,26 @@ def test_experiment_rejects_duplicate_surface_ids() -> None:
     surface = Surface("dup", SurfaceType.REGISTRY_SKILL, "skills/one.md")
     with pytest.raises(AgenticError):
         Experiment("exp", "workspace", (surface, surface))
+
+
+def test_require_human_confirm_flag_is_config_only__not_enforced() -> None:
+    """Tripwire: agentic.harness_optimizer.require_human_confirm_for_accept is
+    parsed and validated (agentic/config.py) but consulted by NO code path —
+    decide_candidate() returns accepted=True with no human-confirm hook, the
+    same "decorative flag" hazard CLAUDE.md documents for security.require_env.
+    If you wire enforcement in (a legitimate hardening), update this test and
+    the config.yaml comment deliberately — do not silently delete the tripwire.
+    """
+    import inspect
+
+    assert "require_human_confirm" not in str(inspect.signature(decide_candidate))
+
+    baseline = RunReport(variant_id="baseline", train_passed=True, holdout_passed=True, score=0.1)
+    candidate = RunReport(variant_id="candidate", train_passed=True, holdout_passed=True, score=0.9)
+    decision = decide_candidate(
+        baseline,
+        candidate,
+        allowed_surface_ids=frozenset(),
+        proposal_present=True,
+    )
+    assert decision.accepted is True

@@ -417,6 +417,10 @@ agentic:
   harness_optimizer:
     enabled: false
     max_iterations: 3
+    # Validated (agentic/config.py) but NOT YET ENFORCED by any code path:
+    # decide_candidate() accepts a passing candidate with no human-confirm hook.
+    # Do not rely on this flag as a safety gate until a caller wires it in
+    # (tripwire: tests/test_agentic_harness_optimizer.py).
     require_human_confirm_for_accept: true
     output_dir: "data/agentic/harness_optimizer/runs"
     memory_dir: "data/agentic/harness_optimizer/memory"
