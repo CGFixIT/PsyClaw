@@ -188,7 +188,7 @@ def test_local_proposer_invoke_audits_success(tmp_path: Path) -> None:
         return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
 
     client = LocalProposerClient(
-        base_url="http://localhost:1234/v1",
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
         model="local-test-model",
         transport=httpx.MockTransport(handler),
     )
@@ -212,7 +212,7 @@ def test_local_proposer_invoke_audits_failure_with_error_type(tmp_path: Path) ->
         return httpx.Response(500, json={"error": "boom"})
 
     client = LocalProposerClient(
-        base_url="http://localhost:1234/v1",
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
         model="local-test-model",
         transport=httpx.MockTransport(handler),
     )
