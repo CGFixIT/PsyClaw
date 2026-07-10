@@ -116,6 +116,18 @@ class AgenticError(RAGError):
         super().__init__(message, code=code, details=details)
 
 
+def require_non_empty(value: str, field_name: str) -> None:
+    """Raise AgenticError unless `value` is a non-empty (post-strip) string.
+
+    Shared validator for the agentic layer's frozen dataclasses (harness_optimizer,
+    deepagent_github); was copy-pasted identically across three modules before
+    being consolidated here.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        raise AgenticError(f"{field_name} must be a non-empty string", details={"field": field_name})
+
+
 class GhNotInstalledError(AgenticError):
     """The GitHub CLI (`gh`) was not found on PATH."""
 
