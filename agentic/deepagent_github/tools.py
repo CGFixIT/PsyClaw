@@ -8,13 +8,8 @@ from typing import Any
 
 from agentic.deepagent_github.permissions import DeepAgentPermissionPolicy
 from agentic.harness_optimizer.mcp.tools import ProposerWorkspaceTools
-from utils.errors import AgenticError
+from utils.errors import AgenticError, require_non_empty
 from utils.logger import audit_log
-
-
-def _require_non_empty(value: str, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise AgenticError(f"{field_name} must be a non-empty string", details={"field": field_name})
 
 
 @dataclass(frozen=True)
@@ -27,8 +22,8 @@ class ToolSpec:
     sensitive: bool = False
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.name, "tool.name")
-        _require_non_empty(self.purpose, "tool.purpose")
+        require_non_empty(self.name, "tool.name")
+        require_non_empty(self.purpose, "tool.purpose")
 
 
 def default_tool_specs(policy: DeepAgentPermissionPolicy | None = None) -> tuple[ToolSpec, ...]:

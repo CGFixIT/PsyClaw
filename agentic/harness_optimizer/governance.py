@@ -32,9 +32,12 @@ class GovernanceFinding:
 def detect_visible_case_hardcoding(candidate_text: str, visible_case_ids: tuple[str, ...]) -> bool:
     """Return true when a candidate appears to key directly on visible case ids.
 
-    Matches on whole case-id tokens (word-boundary anchored) so a shorter id like
-    "case-1" does not falsely fire on unrelated ids that merely share its prefix,
-    e.g. "case-10" or "case-1b" — this feeds the hard rejection gate in
+    Matches on whole case-id tokens (negative-lookaround anchored on `[\\w-]`) so
+    a shorter id like "case-1" does not falsely fire on unrelated ids that merely
+    share its prefix, e.g. "case-10" or "case-1b" — nor on unrelated ids that
+    happen to contain it as a dash-delimited substring, e.g. "test-case-1" or
+    "hard-case-1" (a plain `\\b` boundary treats hyphen as a boundary character
+    and would wrongly match those). This feeds the hard rejection gate in
     decide_candidate, so a substring false positive would reject a legitimate
     candidate.
     """
@@ -42,7 +45,7 @@ def detect_visible_case_hardcoding(candidate_text: str, visible_case_ids: tuple[
     if not candidate_text or not visible_case_ids:
         return False
     return any(
-        re.search(rf"\b{re.escape(case_id.strip())}\b", candidate_text, re.IGNORECASE)
+        re.search(rf"(?<![\w-]){re.escape(case_id.strip())}(?![\w-])", candidate_text, re.IGNORECASE)
         for case_id in visible_case_ids
         if case_id.strip()
     )

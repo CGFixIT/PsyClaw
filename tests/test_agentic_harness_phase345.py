@@ -118,6 +118,12 @@ def test_visible_case_hardcoding_detector_does_not_false_positive_on_prefix_ids(
     assert detect_visible_case_hardcoding("Special handling for case-1b", ("case-1",)) is False
 
 
+def test_visible_case_hardcoding_detector_does_not_false_positive_on_dash_delimited_ids() -> None:
+    assert detect_visible_case_hardcoding("See test-case-1 for context", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("Special handling for hard-case-1", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("case-1", ("case-1",)) is True
+
+
 def test_governance_finding_rejects_invalid_severity_as_agentic_error() -> None:
     with pytest.raises(AgenticError):
         GovernanceFinding(severity="fatal", code="x", message="y")
@@ -162,6 +168,22 @@ def test_read_train_failures_counts_skipped_nested_directories(tmp_path: Path) -
     events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
     read_event = next(event for event in events if event["event"] == "agentic_harness_workspace_tool_allowed"
                        and event["tool"] == "read_train_failures")
+    assert read_event["skipped_non_file"] == 1
+
+
+def test_read_visible_history_counts_skipped_nested_directories(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.history_dir / "attempt.md").write_text("case-1 failed", encoding="utf-8")
+    (workspace.history_dir / "nested").mkdir()
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    out = tools.read_visible_history()
+
+    assert out == {"attempt.md": "case-1 failed"}
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    read_event = next(event for event in events if event["event"] == "agentic_harness_workspace_tool_allowed"
+                       and event["tool"] == "read_visible_history")
     assert read_event["skipped_non_file"] == 1
 
 

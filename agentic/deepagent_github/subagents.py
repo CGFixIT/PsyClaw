@@ -6,12 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from utils.errors import AgenticError
-
-
-def _require_non_empty(value: str, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise AgenticError(f"{field_name} must be a non-empty string", details={"field": field_name})
+from utils.errors import AgenticError, require_non_empty
 
 
 @dataclass(frozen=True)
@@ -27,10 +22,10 @@ class SubagentSpec:
     may_call: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.name, "subagent.name")
-        _require_non_empty(self.purpose, "subagent.purpose")
-        _require_non_empty(self.input_contract, "subagent.input_contract")
-        _require_non_empty(self.output_contract, "subagent.output_contract")
+        require_non_empty(self.name, "subagent.name")
+        require_non_empty(self.purpose, "subagent.purpose")
+        require_non_empty(self.input_contract, "subagent.input_contract")
+        require_non_empty(self.output_contract, "subagent.output_contract")
         overlap = set(self.allowed_tools) & set(self.denied_tools)
         if overlap:
             raise AgenticError(
