@@ -38,6 +38,13 @@ class SubagentSpec:
 
 
 def _validate_may_call_targets(subagents: tuple[SubagentSpec, ...]) -> None:
+    # This can't live in SubagentSpec.__post_init__: a single spec is built
+    # before it knows what other subagent names will exist in the same set, so
+    # there's no way for one spec alone to tell if its may_call targets are
+    # real. We wait until the whole tuple is assembled (see default_subagents
+    # below) and check every spec's may_call against everyone else's names at
+    # once — that's what catches a typo like "repo-context-redaer" instead of
+    # letting it sit there silently until phase 6 wiring tries to use it.
     known = {subagent.name for subagent in subagents}
     for subagent in subagents:
         unknown = [target for target in subagent.may_call if target not in known]
