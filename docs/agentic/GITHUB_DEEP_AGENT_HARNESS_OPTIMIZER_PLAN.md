@@ -956,3 +956,44 @@ That implementation must not add:
 - shell execution
 - real repo filesystem writes
 - request-path imports
+
+## Unwired scaffold inventory (post-phase-5 audit, 2026-07-10)
+
+A read-only audit of the phase 0-5 scaffold (`agentic/harness_optimizer/`,
+`agentic/deepagent_github/`, merged in PRs #492/#493) found the items below
+present in the tree but on no import path and in no test. Each is deliberate
+phase-5 scaffolding ("local-only placeholder modules"), not accidental cruft —
+this section records what is unwired, which phase of this plan is expected to
+wire it, and what must be true before it can be treated as live. Do not delete
+these as dead code without checking this table; do not treat any of them as
+functional until their wiring phase lands.
+
+| Unwired item | Location | Planned consumer / wiring phase |
+|---|---|---|
+| `core.py`, `runners.py` (`draft_plan`), `memory.py`, `skills.py`, `governance.py`, `config.py` | `agentic/deepagent_github/` | Phase 6 (subagents, skills, memory, permissions, interrupts) wires `skills.py`/`memory.py`; the rest wire as the Deep Agents harness becomes real. Not exported by `__init__.__all__` today. |
+| `draft_plan()` | `agentic/deepagent_github/runners.py` | Returns hardcoded constant steps and ignores every input field except `task_id`; `DeepAgentPlan.pr_body` is always empty. A caller today would silently get placeholder output — it must gain a real implementation (or an explicit refusal) before phase 6/7 code calls it. |
+| `GovernanceFinding`, `governance_gate_strings` | `agentic/harness_optimizer/governance.py` (exported by `__init__`) | Phase 8 (governed propose/apply) is the planned producer/consumer; they emit the `"critical: ..."` strings `RunReport.has_critical_governance_finding` keys on, but nothing wires producer to consumer yet. |
+| `HarnessRunner` Protocol | `agentic/harness_optimizer/runners/base_runner.py` | Has one implementer (`MockHarnessRunner`). Phase 7's `github_coding_runner.py` is the planned second, real implementer. |
+| 9 of 11 `SurfaceType` members | `agentic/harness_optimizer/core.py` | Only `REGISTRY_SKILL` and `GITHUB_CODING_PROMPT` are exercised by tests; the other nine (soul_fragment, deepagent_*, mcp_tool_catalog, harness_optimizer_prompt, evaluation_runner_policy) describe surfaces later phases may declare. |
+| `HarnessOptimizerConfig` | `agentic/config.py` | Validated at parse but read by no optimizer code path; `require_human_confirm_for_accept` is therefore not an enforced gate yet (see the config.yaml comment and the tripwire test in `tests/test_agentic_harness_optimizer.py`). Phase 8's apply path is the natural enforcement point. |
+
+## Builder seam gap: create_deep_agent call is not yet a valid Deep Agents wiring (2026-07-10)
+
+`agentic/deepagent_github/builder.py` currently calls the injected creator with
+`tools=[]` and `subagents=[subagent.name ...]` (bare name strings), then
+returns `DeepAgentBuildResult(created=True, ...)` with `tool_names` populated
+from the local spec catalog. Against the real `deepagents` package this is not
+a valid wiring: LangChain's SubAgent spec is a dict requiring at least
+`name`/`description`/`system_prompt` (Python middleware additionally expects
+`model` and `tools`, where `tools` is a list of callables) — bare strings and
+an empty tool list produce an agent that reports success but can do nothing.
+The seam is exercised only with an injected `create_fn` in tests today, so
+nothing is broken at runtime; the gap matters the moment
+`allow_deepagents_dependency` is enabled against the real package.
+
+Decision recorded for phase 6: builder must construct validated SubAgent spec
+dicts from `default_subagents()` and pass real tool callables derived from
+`default_tool_specs()`, and must only report `created=True` (and advertise
+`tool_names`) after the wired tool list is non-empty and matches the specs —
+never before. Until that lands, treat `DeepAgentBuildResult.created` as "the
+creator seam was invoked," not "a functional agent exists."
