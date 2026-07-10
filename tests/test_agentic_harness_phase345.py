@@ -368,11 +368,16 @@ def test_deepagent_builder_injected_create_fn_path(tmp_path: Path) -> None:
 
 
 def test_deepagent_phase5_refuses_write_and_shell_flags(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+
     with pytest.raises(AgenticWriteRefused):
         build_deepagent_github(
             _agentic_config(enabled=True, deepagent={"enabled": True, "allow_shell_execution": True}),
-            cfg=_audit_cfg(tmp_path),
+            cfg=cfg,
         )
+
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    assert any(event["event"] == "agentic_deepagent_write_policy_refused" for event in events)
 
 
 def test_deepagent_tool_and_subagent_specs_are_minimal() -> None:

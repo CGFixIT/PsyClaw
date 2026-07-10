@@ -11,7 +11,7 @@ from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
 from agentic.deepagent_github.permissions import DeepAgentPermissionPolicy, refuse_phase5_write_policy
 from agentic.deepagent_github.subagents import default_subagents
 from agentic.deepagent_github.tools import default_tool_specs
-from utils.errors import AgenticError
+from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
 
@@ -79,7 +79,21 @@ def build_deepagent_github(
             tool_names,
             subagent_names,
         )
-    refuse_phase5_write_policy(policy)
+    # refuse_phase5_write_policy has no config/audit context of its own (it's a
+    # pure policy check), so we catch its refusal here where config_path/cfg
+    # are already in scope and log it before re-raising. Every other deny path
+    # in this codebase (e.g. ProposerWorkspaceTools._deny) audits before
+    # raising; without this, a request to enable shell/GitHub-write/filesystem
+    # tools would leave no trace beyond the generic "invoked" event above.
+    try:
+        refuse_phase5_write_policy(policy)
+    except AgenticWriteRefused as exc:
+        audit_log(
+            {"event": "agentic_deepagent_write_policy_refused", "reason": str(exc)},
+            config_path=config_path,
+            cfg=cfg,
+        )
+        raise
     if not policy.allow_deepagents_dependency:
         return DeepAgentBuildResult(
             False,
