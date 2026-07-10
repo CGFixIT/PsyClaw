@@ -85,7 +85,10 @@ Planning for the optional harness optimizer and LangChain Deep Agents-backed
 GitHub coding harness is tracked in
 `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
 
-Those features stay disabled by default and out-of-band. The phase-2
-`agentic/harness_optimizer` scaffold contains local data models and workspace
-artifact creation only; it does not call models, GitHub, MCP, shell commands, or
-the core request path.
+Those features stay disabled by default and out-of-band. The phase-5 scaffold
+adds deterministic mock runner/scoring/governance helpers, scoped proposer
+workspace tools, a fake-transport-testable local LM Studio proposer adapter, and
+an optional `agentic/deepagent_github` lazy builder skeleton. It still does not
+add a Deep Agents runtime dependency, call live GitHub in unit tests, execute
+shell commands, write to GitHub, expose unrestricted filesystem tools, or import
+from the core request path.

@@ -2,7 +2,14 @@
 
 Target path: `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
 
-Status: Draft / planning only / no code implemented by this document.
+Status: Draft / planning pointer. Phase 0-5 scaffold code now exists out of
+band under `agentic/`; this document remains a planning summary and does not
+itself implement runtime behavior.
+
+Implementation note: phase 3-5 adds deterministic mock runner/scoring helpers,
+scoped proposer workspace tools, a fake-transport-testable local LM Studio
+proposer adapter, and an optional `deepagent_github` lazy builder skeleton. Deep
+Agents remains optional and is not a runtime dependency.
 
 ## 1. Executive Summary
 
@@ -494,6 +501,7 @@ Repo facts verified:
 
 Verification:
 
-- No tests run. (need ci verification and sandbox runtime testing for python 3.12 before any phase commit
-- follow typical pr process
+- Phase 3-5 implementation verification is tracked in the PR body and CI.
+- Unit tests must not require live GitHub, LM Studio, MCP, LangChain Deep
+  Agents, or network access.
 
