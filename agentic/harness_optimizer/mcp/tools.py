@@ -15,6 +15,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
+from typing import NoReturn
 
 from agentic.harness_optimizer.proposer import ProposerWorkspace
 from utils.errors import AgenticError
@@ -77,7 +78,12 @@ class ProposerWorkspaceTools:
             cfg=self.cfg,
         )
 
-    def _deny(self, tool: str, message: str, **extra: object) -> None:
+    # NoReturn (not None): _deny always raises. Without this, the two
+    # `-> Path` resolvers below would have an implicit-None fall-through on
+    # their `except OSError` branches that type checkers can't see, and a
+    # future refactor that made _deny not raise would silently hand callers
+    # a None path.
+    def _deny(self, tool: str, message: str, **extra: object) -> NoReturn:
         self._audit(False, tool, reason=message, **extra)
         raise AgenticError(message, details={"tool": tool, **extra})
 
