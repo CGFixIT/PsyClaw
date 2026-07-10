@@ -165,6 +165,22 @@ def test_read_train_failures_counts_skipped_nested_directories(tmp_path: Path) -
     assert read_event["skipped_non_file"] == 1
 
 
+def test_read_visible_history_counts_skipped_nested_directories(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.history_dir / "attempt.md").write_text("case-1 failed", encoding="utf-8")
+    (workspace.history_dir / "nested").mkdir()
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    out = tools.read_visible_history()
+
+    assert out == {"attempt.md": "case-1 failed"}
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    read_event = next(event for event in events if event["event"] == "agentic_harness_workspace_tool_allowed"
+                       and event["tool"] == "read_visible_history")
+    assert read_event["skipped_non_file"] == 1
+
+
 def test_rag_search_readonly_invokes_injected_callable_and_audits(tmp_path: Path) -> None:
     cfg = _audit_cfg(tmp_path)
     workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
