@@ -50,6 +50,12 @@ psycopg==3.2.13
 psycopg-binary==3.2.13
 pgvector==0.4.2
 
+# Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
+# not installed by the default offline runtime or legacy requirements path.
+deepagents==0.6.12
+langchain==1.3.11
+langchain-openai==1.3.3
+
 # Test optional-dependencies (for CI / dev)
 pytest==9.1.1
 pytest-asyncio==1.4.0

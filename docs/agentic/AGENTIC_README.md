@@ -80,15 +80,16 @@ GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q
 python -m agentic.cli test
 ```
 
-## 9. Future governed GitHub coding harness
-Planning for the optional harness optimizer and LangChain Deep Agents-backed
-GitHub coding harness is tracked in
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+## 9. Governed GitHub coding harness
 
-Those features stay disabled by default and out-of-band. The phase-5 scaffold
-adds deterministic mock runner/scoring/governance helpers, scoped proposer
-workspace tools, a fake-transport-testable local LM Studio proposer adapter, and
-an optional `agentic/deepagent_github` lazy builder skeleton. It still does not
-add a Deep Agents runtime dependency, call live GitHub in unit tests, execute
-shell commands, write to GitHub, expose unrestricted filesystem tools, or import
-from the core request path.
+The optional harness optimizer and LangChain Deep Agents-backed GitHub coding
+harness remains disabled by default and out-of-band. Its canonical plan is
+`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`; the implemented
+phase 6-9 controls and operator boundaries are in
+`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`.
+
+The harness uses scoped proposer-workspace tools, a virtual in-state Deep Agents
+backend, local-only memory/skills, fixture-only evaluation, and human-gated local
+candidate artifacts. It does not execute shell commands, write the real repo,
+write GitHub, expose unrestricted filesystem tools, or import from the core
+request path.
