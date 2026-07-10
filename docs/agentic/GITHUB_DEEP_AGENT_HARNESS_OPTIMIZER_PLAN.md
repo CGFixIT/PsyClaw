@@ -2,6 +2,11 @@
 
 Status: Draft / planning only / no code implemented by this document.
 
+Implementation note: phases 0-5 now have scaffold code in `agentic/` and
+focused tests. This document remains the design plan; the implementation still
+keeps Deep Agents optional, disabled by default, and free of live GitHub, shell,
+or real write execution.
+
 ## 1. Title and Status
 
 This document uses the requested filename because `docs/agentic/` already uses
@@ -704,6 +709,13 @@ Remains disabled:
 
 ### Phase 3: Mocked runner and acceptance gate
 
+Implemented scaffold:
+
+- `agentic/harness_optimizer/runners/base_runner.py`
+- `agentic/harness_optimizer/scoring.py`
+- `agentic/harness_optimizer/governance.py`
+- focused tests in `tests/test_agentic_harness_phase345.py`
+
 Likely files changed:
 
 - `agentic/harness_optimizer/runners/base_runner.py`
@@ -727,6 +739,13 @@ Remains disabled:
 - persistent apply
 
 ### Phase 4: Local LM Studio proposer invocation with scoped workspace tools
+
+Implemented scaffold:
+
+- `agentic/harness_optimizer/model_adapter.py`
+- `agentic/harness_optimizer/mcp/tools.py`
+- dependency-free `agentic/harness_optimizer/mcp/__init__.py`
+- fake-transport LM Studio test coverage
 
 Likely files changed:
 
@@ -752,6 +771,18 @@ Remains disabled:
 - real repo writes
 
 ### Phase 5: Optional `deepagent_github` skeleton with no writes
+
+Implemented scaffold:
+
+- `agentic/deepagent_github/__init__.py`
+- `agentic/deepagent_github/config.py`
+- `agentic/deepagent_github/core.py`
+- `agentic/deepagent_github/builder.py`
+- `agentic/deepagent_github/model_adapter.py`
+- `agentic/deepagent_github/permissions.py`
+- `agentic/deepagent_github/tools.py`
+- `agentic/deepagent_github/subagents.py`
+- local-only placeholder modules for governance, runners, skills, and memory
 
 Likely files changed:
 
