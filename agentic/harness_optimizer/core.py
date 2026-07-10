@@ -87,6 +87,19 @@ class Experiment:
                     details={"surface_id": surface.surface_id},
                 )
             seen.add(surface.surface_id)
+        # This is a "the paperwork disagrees with itself" check, not the actual
+        # security boundary — ProposerWorkspaceTools separately hard-denies any
+        # holdout_hidden/ read regardless of what an Experiment claims here. But
+        # if a case is declared visible AND hidden, downstream code (runners,
+        # governance checks) that assumes those two sets are disjoint would be
+        # working from a contradiction, so we fail fast here instead of letting
+        # that quietly propagate.
+        overlap = set(self.train_visible) & set(self.holdout_hidden)
+        if overlap:
+            raise AgenticError(
+                "experiment case ids must not be in both train_visible and holdout_hidden",
+                details={"case_ids": sorted(overlap)},
+            )
 
     @property
     def editable_surface_ids(self) -> frozenset[str]:
