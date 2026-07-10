@@ -87,6 +87,12 @@ class Experiment:
                     details={"surface_id": surface.surface_id},
                 )
             seen.add(surface.surface_id)
+        overlap = set(self.train_visible) & set(self.holdout_hidden)
+        if overlap:
+            raise AgenticError(
+                "experiment case ids must not be in both train_visible and holdout_hidden",
+                details={"case_ids": sorted(overlap)},
+            )
 
     @property
     def editable_surface_ids(self) -> frozenset[str]:
