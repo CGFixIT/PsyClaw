@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from agentic.harness_optimizer import (
     Experiment,
+    ProposerWorkspaceTools,
     RunReport,
     Surface,
     SurfaceType,
@@ -171,3 +173,53 @@ def test_require_human_confirm_flag_is_config_only__not_enforced() -> None:
         proposal_present=True,
     )
     assert decision.accepted is True
+
+
+def _workspace_tools_cfg(tmp_path: Path) -> dict:
+    return {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}, "policy": {"privacy": {}}}
+
+
+def test_write_current_file_creates_missing_nested_dirs(tmp_path: Path) -> None:
+    """A not-yet-existing nested target must succeed, not be denied as
+    "not accessible" — _resolve_current_write's containment check must walk
+    up to the nearest existing ancestor instead of strict-resolving a parent
+    directory that doesn't exist yet."""
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    result = tools.write_current_file("sub/dir/file.md", "content")
+
+    assert result["sha256"]
+    written = workspace.current_dir / "sub" / "dir" / "file.md"
+    assert written.read_text(encoding="utf-8") == "content"
+
+
+def test_write_current_file_rejects_symlink_escape(tmp_path: Path) -> None:
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = workspace.current_dir / "evil"
+    try:
+        os.symlink(outside, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unavailable on this host: {exc}")
+
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+    with pytest.raises(AgenticError):
+        tools.write_current_file("evil/file.md", "content")
+
+
+def test_write_current_file_nested_denial_message_is_not_the_stale_one(tmp_path: Path) -> None:
+    """Regression guard for the old bug: a merely-nonexistent nested target
+    must not be denied at all (see test above), so it must never surface the
+    misleading "workspace write target is not accessible" message."""
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    tools.write_current_file("new/nested/path/file.md", "ok")
+
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    assert not any(event.get("reason") == "workspace write target is not accessible" for event in events)
