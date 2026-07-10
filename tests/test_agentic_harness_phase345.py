@@ -12,7 +12,9 @@ import pytest
 
 from agentic.config import AgenticConfig
 from agentic.deepagent_github import build_deepagent_github, default_subagents, default_tool_specs
+from agentic.deepagent_github.core import DeepAgentGitHubTask
 from agentic.deepagent_github.permissions import DeepAgentPermissionPolicy
+from agentic.deepagent_github.runners import draft_plan
 from agentic.harness_optimizer import (
     CaseResult,
     Experiment,
@@ -170,6 +172,61 @@ def test_local_lmstudio_proposer_uses_fake_transport(tmp_path: Path) -> None:
     assert seen["url"] == "http://localhost:1234/v1/chat/completions"
     assert result["proposal"]["sha256"]
     assert workspace.proposal_path.read_text(encoding="utf-8").startswith("# Proposal")
+
+
+def test_draft_plan_raises_not_implemented() -> None:
+    task = DeepAgentGitHubTask(task_id="task-1", repo="cgfixit/CyClaw", instruction="do the thing")
+
+    with pytest.raises(NotImplementedError):
+        draft_plan(task)
+
+
+def test_local_proposer_invoke_audits_success(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = LocalProposerClient(
+        base_url="http://localhost:1234/v1",
+        model="local-test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = client.invoke(system_prompt="sys", user_prompt="usr", cfg=cfg)
+    finally:
+        client.close()
+
+    assert result.content == "ok"
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    succeeded = [event for event in events if event["event"] == "agentic_harness_proposer_model_succeeded"]
+    assert len(succeeded) == 1
+    assert succeeded[0]["model"] == "local-test-model"
+    assert not any(event["event"] == "agentic_harness_proposer_model_failed" for event in events)
+
+
+def test_local_proposer_invoke_audits_failure_with_error_type(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "boom"})
+
+    client = LocalProposerClient(
+        base_url="http://localhost:1234/v1",
+        model="local-test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(AgenticError):
+            client.invoke(system_prompt="sys", user_prompt="usr", cfg=cfg)
+    finally:
+        client.close()
+
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    failed = [event for event in events if event["event"] == "agentic_harness_proposer_model_failed"]
+    assert len(failed) == 1
+    assert failed[0]["error_type"] == "HTTPStatusError"
+    assert not any(event["event"] == "agentic_harness_proposer_model_succeeded" for event in events)
 
 
 def _agentic_config(*, enabled: bool, deepagent: dict) -> AgenticConfig:
