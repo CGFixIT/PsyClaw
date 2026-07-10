@@ -99,6 +99,13 @@ def test_mock_runner_rejects_undeclared_cases() -> None:
         runner.run(_experiment(), _variant())
 
 
+def test_mock_runner_rejects_invalid_split() -> None:
+    runner = MockHarnessRunner((MockRunnerCase("case-1", "not_a_real_split", True, 1.0),))
+
+    with pytest.raises(AgenticError, match="train_visible or holdout_hidden"):
+        runner.run(_experiment(), _variant())
+
+
 def test_visible_case_hardcoding_detector() -> None:
     assert detect_visible_case_hardcoding("Special handling for CASE-1", ("case-1",)) is True
     assert detect_visible_case_hardcoding("General planner instruction", ("case-1",)) is False
@@ -128,6 +135,56 @@ def test_workspace_tools_scope_writes_reads_and_audit(tmp_path: Path) -> None:
     events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
     assert any(event["event"] == "agentic_harness_workspace_tool_allowed" for event in events)
     assert any(event["event"] == "agentic_harness_workspace_tool_denied" for event in events)
+
+
+def test_read_train_failures_counts_skipped_nested_directories(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.train_visible_dir / "failure.md").write_text("case-1 failed", encoding="utf-8")
+    (workspace.train_visible_dir / "nested").mkdir()
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    out = tools.read_train_failures()
+
+    assert out == {"failure.md": "case-1 failed"}
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    read_event = next(event for event in events if event["event"] == "agentic_harness_workspace_tool_allowed"
+                       and event["tool"] == "read_train_failures")
+    assert read_event["skipped_non_file"] == 1
+
+
+def test_rag_search_readonly_invokes_injected_callable_and_audits(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    calls: list[str] = []
+
+    def fake_rag_search(query: str) -> list[dict]:
+        calls.append(query)
+        return [{"doc": "planner_prompt", "score": 0.9}]
+
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg, rag_search=fake_rag_search)
+
+    result = tools.rag_search_readonly("planner prompt guidance")
+
+    assert calls == ["planner prompt guidance"]
+    assert result["results"] == [{"doc": "planner_prompt", "score": 0.9}]
+    assert result["query_hash"]
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    search_event = next(event for event in events if event.get("tool") == "rag_search_readonly")
+    assert search_event["results"] == 1
+
+
+def test_rag_search_readonly_propagates_callable_errors(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+
+    def failing_rag_search(query: str) -> list[dict]:
+        raise RuntimeError("rag backend unavailable")
+
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg, rag_search=failing_rag_search)
+
+    with pytest.raises(RuntimeError, match="rag backend unavailable"):
+        tools.rag_search_readonly("planner prompt guidance")
 
 
 def test_workspace_tools_reject_symlink_escape(tmp_path: Path) -> None:

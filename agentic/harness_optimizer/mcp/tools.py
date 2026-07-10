@@ -206,22 +206,28 @@ class ProposerWorkspaceTools:
         """Read visible train artifacts."""
 
         out: dict[str, str] = {}
+        skipped = 0
         for path in sorted(self.workspace.train_visible_dir.glob("*")):
             if path.is_file():
                 rel = path.relative_to(self.workspace.root).as_posix()
                 out[path.name] = self.read_file(rel)
-        self._audit(True, "read_train_failures", files=len(out))
+            else:
+                skipped += 1
+        self._audit(True, "read_train_failures", files=len(out), skipped_non_file=skipped)
         return out
 
     def read_visible_history(self) -> dict[str, str]:
         """Read visible prior-attempt artifacts."""
 
         out: dict[str, str] = {}
+        skipped = 0
         for path in sorted(self.workspace.history_dir.glob("*")):
             if path.is_file():
                 rel = path.relative_to(self.workspace.root).as_posix()
                 out[path.name] = self.read_file(rel)
-        self._audit(True, "read_visible_history", files=len(out))
+            else:
+                skipped += 1
+        self._audit(True, "read_visible_history", files=len(out), skipped_non_file=skipped)
         return out
 
     def rag_search_readonly(self, query: str) -> dict:
