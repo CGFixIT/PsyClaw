@@ -152,6 +152,11 @@ def test_experiment_rejects_duplicate_surface_ids() -> None:
         Experiment("exp", "workspace", (surface, surface))
 
 
+def test_surface_rejects_invalid_surface_type_as_agentic_error() -> None:
+    with pytest.raises(AgenticError):
+        Surface("s", "not_a_real_surface_type", "path.md")
+
+
 def test_require_human_confirm_flag_is_config_only__not_enforced() -> None:
     """Tripwire: agentic.harness_optimizer.require_human_confirm_for_accept is
     parsed and validated (agentic/config.py) but consulted by NO code path —

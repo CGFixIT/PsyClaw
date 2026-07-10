@@ -50,7 +50,13 @@ class Surface:
         if not isinstance(self.editable, bool):
             raise AgenticError("surface.editable must be a boolean", details={"surface_id": self.surface_id})
         if not isinstance(self.surface_type, SurfaceType):
-            object.__setattr__(self, "surface_type", SurfaceType(str(self.surface_type)))
+            try:
+                object.__setattr__(self, "surface_type", SurfaceType(str(self.surface_type)))
+            except ValueError as exc:
+                raise AgenticError(
+                    "surface.surface_type is not a valid SurfaceType",
+                    details={"surface_id": self.surface_id, "surface_type": str(self.surface_type)},
+                ) from exc
 
     def to_dict(self) -> dict:
         data = asdict(self)
