@@ -997,3 +997,57 @@ dicts from `default_subagents()` and pass real tool callables derived from
 `tool_names`) after the wired tool list is non-empty and matches the specs —
 never before. Until that lands, treat `DeepAgentBuildResult.created` as "the
 creator seam was invoked," not "a functional agent exists."
+
+## Phase 6-9 sequencing decisions and HITL design corrections (2026-07-10)
+
+This ledger records the confirmed parts of the reviewed phase 6-9 plan so later
+implementation work starts from repo truth instead of the raw paste.
+
+Status:
+
+- `draft_plan()` now refuses with `NotImplementedError`; shipped in PR #499.
+- The unwired-file annotation request was superseded by the in-doc "Unwired
+  scaffold inventory" from PR #498. The rejected variant would have added
+  inline placeholder comments, which conflicts with the repo convention against
+  placeholder/fixme comments.
+- The builder validation rule is already recorded above from PR #498: no bare
+  string subagents, no empty tool list, and `created=True` only after SubAgent
+  specs and tool callables validate against the real Deep Agents contract.
+
+Phase 6 regression-test shape:
+
+- Reject bare-string subagent specs before invoking `create_deep_agent`.
+- Reject an empty wired tool list before returning `created=True`.
+- Assert `created=True` and advertised `tool_names` only after the validated
+  tool callables match `default_tool_specs()`.
+
+Sequencing rule:
+
+- Inside the Deep Agents harness, `interrupt_on` plus a checkpointer is the HITL
+  control plane. A separate approval-decorator layer is only for tools outside
+  Deep Agents, and is deferred until phase 9.
+- Phase 9 may add that external-tool decorator only after phase 7 CI covers
+  `interrupt_on` approve, reject, and timeout paths with green tests.
+
+HITL design corrections:
+
+1. Do not append raw JSON with `open("audit.jsonl", "a")`. Use
+   `utils.logger.audit_log(event, config_path=..., cfg=...)`, whose current
+   definition is `utils/logger.py:210`; it handles config anchoring, redaction,
+   and `_AUDIT_WRITE_LOCK`.
+2. Do not define `_AUDIT_PATH = Path(os.getenv("CYCLAW_AUDIT_LOG",
+   "audit.jsonl"))`. That is cwd-relative at import time and moves feature
+   configuration into environment variables. Follow the repo's `_BASE_DIR`
+   anchoring pattern and `config.yaml` source-of-truth rule.
+3. Do not flatten all tool args and grep for fragments such as `key`, `main`,
+   or `cred` without boundaries. Score each argument separately and use word
+   boundaries so benign names such as `turkey.csv` and `domain.txt` do not
+   become high risk.
+4. Do not call `asyncio.get_event_loop()` from `ApprovalQueue.submit` when
+   already inside coroutine-driven code. Use `asyncio.get_running_loop()`.
+
+Model-swap notes:
+
+- Qwen 3.7 Max and Kimi K2 pricing or protocol-compatibility claims were not
+  verified in this repo session. Re-check them before any phase 8 model-swap
+  decision.
