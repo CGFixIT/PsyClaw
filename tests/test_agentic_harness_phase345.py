@@ -118,6 +118,12 @@ def test_visible_case_hardcoding_detector_does_not_false_positive_on_prefix_ids(
     assert detect_visible_case_hardcoding("Special handling for case-1b", ("case-1",)) is False
 
 
+def test_visible_case_hardcoding_detector_does_not_false_positive_on_dash_delimited_ids() -> None:
+    assert detect_visible_case_hardcoding("See test-case-1 for context", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("Special handling for hard-case-1", ("case-1",)) is False
+    assert detect_visible_case_hardcoding("case-1", ("case-1",)) is True
+
+
 def test_governance_finding_rejects_invalid_severity_as_agentic_error() -> None:
     with pytest.raises(AgenticError):
         GovernanceFinding(severity="fatal", code="x", message="y")
