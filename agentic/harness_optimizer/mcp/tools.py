@@ -54,6 +54,29 @@ def _contains(root: Path, candidate: Path) -> bool:
     return candidate_resolved == root_resolved or root_resolved in candidate_resolved.parents
 
 
+def _contains_write_target(root: Path, candidate: Path) -> bool:
+    """Containment check for a write target that may not exist yet.
+
+    Nested write targets (``sub/dir/file.md``) have no existing parent, so
+    unlike ``_contains`` this walks up to the nearest ancestor that *does*
+    exist and resolves that one strictly. An existing directory inside
+    ``root`` that is itself a symlink escaping ``root`` is still caught,
+    because the walk resolves it on the way up; components that don't exist
+    yet can't be symlinks, so no further check is needed for them.
+    """
+    root_resolved = root.resolve()
+    ancestor = candidate
+    while True:
+        try:
+            ancestor_resolved = ancestor.resolve(strict=True)
+            break
+        except FileNotFoundError:
+            if ancestor.parent == ancestor:
+                raise
+            ancestor = ancestor.parent
+    return ancestor_resolved == root_resolved or root_resolved in ancestor_resolved.parents
+
+
 @dataclass(frozen=True)
 class ProposerWorkspaceTools:
     """Audited tool boundary for one proposer workspace."""
@@ -106,7 +129,7 @@ class ProposerWorkspaceTools:
         try:
             parts = _parts(target)
             path = self.workspace.current_dir.joinpath(*parts)
-            if not _contains(self.workspace.current_dir, path):
+            if not _contains_write_target(self.workspace.current_dir, path):
                 self._deny(tool, "workspace write escaped current/", target=target)
             if path.exists() and path.is_dir():
                 self._deny(tool, "workspace write target is a directory", target=target)
