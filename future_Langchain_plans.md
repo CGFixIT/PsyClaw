@@ -1,6 +1,7 @@
 # Future LangChain Plans
 
-Status: planning pointer for optional, out-of-band agentic work.
+Status: planning pointer plus phase 0-5 scaffold status for optional,
+out-of-band agentic work.
 
 CyClaw already uses LangGraph and `langchain-core` in the governed RAG request
 path. Future LangChain-related work should stay split by trust boundary:
@@ -17,10 +18,22 @@ The detailed governed GitHub coding and harness optimization plan lives at:
 
 - `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
 
-Implementation boundary for the current phase:
+Implemented scaffold boundary through phase 5:
 
-- allowed: disabled config keys, local data models, local proposer workspace
-  builder, focused tests, docs
+- allowed and present: disabled config keys, local data models, deterministic
+  mock runner/scoring/governance helpers, local proposer workspace builder,
+  scoped proposer workspace tools, fake-transport-testable local LM Studio
+  proposer adapter, optional `deepagent_github` lazy builder skeleton, focused
+  tests, docs
 - not allowed: Deep Agents runtime dependency, model calls, live GitHub in unit
   tests, GitHub writes, shell execution, unrestricted filesystem tools, request
   path imports
+
+Remaining future phases:
+
+- Phase 6: real Deep Agents subagent wiring, skills, memory, permissions, and
+  human-in-the-loop interrupts behind feature flags.
+- Phase 7: GitHub coding eval runner using fixture repos and read-only GitHub
+  context.
+- Phase 8: governed propose/apply for accepted harness improvements.
+- Phase 9: security review before any real write execution.
