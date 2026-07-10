@@ -1,5 +1,7 @@
 Given CyClaw's hard architectural invariant — the agentic layer (GitHub/FS/SQL/Dropbox/NeMo) is never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py` and is only reached via subprocess through `utils/ops_runner.py` — both implementations below preserve that boundary instead of importing deepagents or LangGraph subagents directly into the core graph.[1][2]
 
+> https://www.perplexity.ai/search/f3532bc5-763f-4916-8bf8-8e6ac564b595
+
 ## Why this matters for your build
 
 Security Invariant 13 (module isolation) is enforced architecturally, not by code discipline, specifically so a compromised or buggy agentic subsystem can't touch the core RAG/audit pipeline. That means neither implementation below can live inside `graph.py`. Both must be spawned as a subprocess, read config/args over stdin or CLI flags, and return JSON over stdout — exactly like the existing 5 agentic subsystems (GitHub/FS/SQL/Dropbox/NeMo), all disabled by default with explicit opt-in plus a human reason required for any write path.[2]
@@ -351,7 +353,7 @@ if __name__ == "__main__":
 Given CyClaw already runs LangGraph 1.2.6 for the core 9-node controller and prioritizes topology-enforced invariants you can point at in an audit, **the LangGraph-native version is the better architectural fit** — it's dependency-free, matches your existing node/audit conventions exactly, and every gate (`node_gate_write`) is a single testable function rather than something buried inside a deepagents harness you'd have to trust. The deepagents version is worth it only if you plan to add many more agentic connectors and want the batteries-included subagent/permission machinery instead of hand-rolling gates for each one.[2]
 
 Sources
-[!!!] - 
+[!!!] - https://www.perplexity.ai/search/f3532bc5-763f-4916-8bf8-8e6ac564b595
 [1] CyClaw_Architecture_Guide_v1.9.0_crisp.pdf https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/collection_bb753fae-2826-4344-be5a-7a4bfcfb2760/4e2a11ff-ab32-4e8f-b3dc-1efbd4149ef1/CyClaw_Architecture_Guide_v1.9.0_crisp.pdf
 [2] CyClaw_Swarm_Verification_Report_2026-07-09.pdf https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/collection_bb753fae-2826-4344-be5a-7a4bfcfb2760/e0dcc5c1-b3f5-4171-8f15-6df2022f7e25/CyClaw_Swarm_Verification_Report_2026-07-09.pdf
 [3] https://docs.langchain.com/oss/python/integrations/providers/overview
