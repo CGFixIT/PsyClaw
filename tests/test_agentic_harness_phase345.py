@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from agentic.config import AgenticConfig
-from agentic.deepagent_github import build_deepagent_github, default_subagents, default_tool_specs
+from agentic.deepagent_github import SubagentSpec, ToolSpec, build_deepagent_github, default_subagents, default_tool_specs
 from agentic.deepagent_github.core import DeepAgentGitHubTask
 from agentic.deepagent_github.permissions import DeepAgentPermissionPolicy
 from agentic.deepagent_github.runners import draft_plan
@@ -317,3 +317,43 @@ def test_deepagent_tool_and_subagent_specs_are_minimal() -> None:
     }
     assert all("local_shell" in subagent.denied_tools for subagent in subagents)
     assert all("github_write" in subagent.denied_tools for subagent in subagents)
+
+
+def test_subagent_spec_rejects_overlapping_allowed_and_denied_tools() -> None:
+    with pytest.raises(AgenticError, match="both allowed and denied"):
+        SubagentSpec(
+            "conflicted",
+            "purpose",
+            ("local_repo_read",),
+            ("local_repo_read",),
+            "input",
+            "output",
+        )
+
+
+def test_subagent_spec_rejects_blank_name() -> None:
+    with pytest.raises(AgenticError):
+        SubagentSpec("", "purpose", (), (), "input", "output")
+
+
+def test_validate_may_call_targets_rejects_undeclared_subagent_name() -> None:
+    from agentic.deepagent_github.subagents import _validate_may_call_targets
+
+    broken = (
+        SubagentSpec("issue-planner", "purpose", (), (), "input", "output", ("repo-context-redaer",)),
+    )
+
+    with pytest.raises(AgenticError, match="undeclared subagent name"):
+        _validate_may_call_targets(broken)
+
+
+def test_default_subagents_may_call_targets_are_all_valid() -> None:
+    subagents = default_subagents()
+    names = {subagent.name for subagent in subagents}
+    for subagent in subagents:
+        assert set(subagent.may_call) <= names
+
+
+def test_tool_spec_rejects_blank_name() -> None:
+    with pytest.raises(AgenticError):
+        ToolSpec("", "purpose", True)
