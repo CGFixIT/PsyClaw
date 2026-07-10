@@ -246,8 +246,9 @@ class ProposerWorkspaceTools:
         if not isinstance(query, str) or not query.strip():
             self._deny(tool, "RAG query must be a non-empty string")
         results = self.rag_search(query) if self.rag_search else []
-        self._audit(True, tool, query_hash=hash_query(query), results=len(results))
-        return {"query_hash": hash_query(query), "results": results}
+        query_hash = hash_query(query)
+        self._audit(True, tool, query_hash=query_hash, results=len(results))
+        return {"query_hash": query_hash, "results": results}
 
     def finish_proposal(self, content: str) -> dict:
         """Write proposal.md through the explicit proposal tool."""
