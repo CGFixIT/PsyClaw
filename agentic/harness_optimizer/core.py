@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
-from utils.errors import AgenticError
+from utils.errors import AgenticError, require_non_empty
 
 
 class SurfaceType(StrEnum):
@@ -29,11 +29,6 @@ class SurfaceType(StrEnum):
     EVALUATION_RUNNER_POLICY = "evaluation_runner_policy"
 
 
-def _require_non_empty(value: str, field_name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise AgenticError(f"{field_name} must be a non-empty string", details={"field": field_name})
-
-
 @dataclass(frozen=True)
 class Surface:
     """An editable or read-only harness surface declared by an experiment."""
@@ -45,8 +40,8 @@ class Surface:
     editable: bool = True
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.surface_id, "surface.surface_id")
-        _require_non_empty(self.path, "surface.path")
+        require_non_empty(self.surface_id, "surface.surface_id")
+        require_non_empty(self.path, "surface.path")
         if not isinstance(self.editable, bool):
             raise AgenticError("surface.editable must be a boolean", details={"surface_id": self.surface_id})
         if not isinstance(self.surface_type, SurfaceType):
@@ -75,8 +70,8 @@ class Experiment:
     holdout_hidden: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.experiment_id, "experiment.experiment_id")
-        _require_non_empty(self.target_workspace, "experiment.target_workspace")
+        require_non_empty(self.experiment_id, "experiment.experiment_id")
+        require_non_empty(self.target_workspace, "experiment.target_workspace")
         if not self.surfaces:
             raise AgenticError("experiment.surfaces must not be empty")
         seen: set[str] = set()
@@ -87,6 +82,20 @@ class Experiment:
                     details={"surface_id": surface.surface_id},
                 )
             seen.add(surface.surface_id)
+        for case_id in self.train_visible:
+            require_non_empty(case_id, "experiment.train_visible")
+        if len(set(self.train_visible)) != len(self.train_visible):
+            raise AgenticError(
+                "experiment.train_visible must not contain duplicate case ids",
+                details={"experiment_id": self.experiment_id},
+            )
+        for case_id in self.holdout_hidden:
+            require_non_empty(case_id, "experiment.holdout_hidden")
+        if len(set(self.holdout_hidden)) != len(self.holdout_hidden):
+            raise AgenticError(
+                "experiment.holdout_hidden must not contain duplicate case ids",
+                details={"experiment_id": self.experiment_id},
+            )
         # This is a "the paperwork disagrees with itself" check, not the actual
         # security boundary — ProposerWorkspaceTools separately hard-denies any
         # holdout_hidden/ read regardless of what an Experiment claims here. But
@@ -119,9 +128,9 @@ class Variant:
     artifact_dir: str
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.variant_id, "variant.variant_id")
-        _require_non_empty(self.proposal_path, "variant.proposal_path")
-        _require_non_empty(self.artifact_dir, "variant.artifact_dir")
+        require_non_empty(self.variant_id, "variant.variant_id")
+        require_non_empty(self.proposal_path, "variant.proposal_path")
+        require_non_empty(self.artifact_dir, "variant.artifact_dir")
 
 
 @dataclass(frozen=True)
@@ -137,7 +146,7 @@ class RunReport:
     notes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _require_non_empty(self.variant_id, "run_report.variant_id")
+        require_non_empty(self.variant_id, "run_report.variant_id")
         if not isinstance(self.train_passed, bool) or not isinstance(self.holdout_passed, bool):
             raise AgenticError("run_report pass fields must be booleans", details={"variant_id": self.variant_id})
         if not isinstance(self.score, int | float) or isinstance(self.score, bool):

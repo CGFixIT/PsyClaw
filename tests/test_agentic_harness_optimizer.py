@@ -169,6 +169,24 @@ def test_experiment_rejects_case_id_in_both_train_visible_and_holdout_hidden() -
         )
 
 
+def test_experiment_rejects_empty_case_id_in_train_visible() -> None:
+    surface = Surface("s", SurfaceType.REGISTRY_SKILL, "skills/one.md")
+    with pytest.raises(AgenticError):
+        Experiment("exp", "workspace", (surface,), train_visible=("", "case-1", "case-1"))
+
+
+def test_experiment_rejects_duplicate_case_id_within_train_visible() -> None:
+    surface = Surface("s", SurfaceType.REGISTRY_SKILL, "skills/one.md")
+    with pytest.raises(AgenticError):
+        Experiment("exp", "workspace", (surface,), train_visible=("case-1", "case-1"))
+
+
+def test_experiment_rejects_duplicate_case_id_within_holdout_hidden() -> None:
+    surface = Surface("s", SurfaceType.REGISTRY_SKILL, "skills/one.md")
+    with pytest.raises(AgenticError):
+        Experiment("exp", "workspace", (surface,), holdout_hidden=("case-h1", "case-h1"))
+
+
 def test_require_human_confirm_flag_is_config_only__not_enforced() -> None:
     """Tripwire: agentic.harness_optimizer.require_human_confirm_for_accept is
     parsed and validated (agentic/config.py) but consulted by NO code path —
