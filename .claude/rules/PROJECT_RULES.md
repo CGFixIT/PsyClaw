@@ -107,7 +107,7 @@ See `retrieval/hybrid_search.py` for implementation.
 - **CLAUDE.md is authoritative** — update it when architecture, modules, or behavioral rules change.
 - **.claude/ structure** — mirror documented skills/patterns/utilities; keep in sync.
 - **Agentic Governance Docs** — `docs/agentic/AGENTIC_README.md` + `SKILLS_REGISTRY_GOVERNANCE.md` are binding.
-- **Session Notes** — optional but encouraged; use `SESSION_NOTES.md` for multi-turn continuity.
+- **Session Notes** — optional but encouraged; live notes go under `.claude/session-notes/` (`docs/SESSION_NOTES.md` is an empty template scaffold, not the active log).
 
 ---
 
@@ -155,4 +155,4 @@ See `retrieval/hybrid_search.py` for implementation.
 - **Undefined behavior:** Post in `#cyclaw-dev` Slack.
 - **Security concerns:** File a private security issue on GitHub.
 - **Configuration drift:** Run `/sandbox-runtime-verification` and report findings.
-- **Stuck on a blocker:** Call out in SESSION_NOTES.md + Slack before context compaction.
+- **Stuck on a blocker:** Call out in `.claude/session-notes/` + Slack before context compaction.

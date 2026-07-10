@@ -517,6 +517,10 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/wrap-up` | task | End-of-session checklist (ship / remember / improve / publish) |
 | `/create-session-notes` | task | Maintain `SESSION_NOTES.md` |
 | `/ponytail` | mode | Lazy-senior-dev mode: YAGNI, stdlib-first, minimal abstraction |
+| `/add-comment` | task | Comment-only pass adding ELI5-toned WHY comments to under-documented code |
+| `/cyclaw-sandbox-validator` | check | Full-dependency sandbox verifier: 5-query swarm, terminal consoles, invariants, redaction parity |
+| `/karpathy-guidelines` | mode | Anti-overcomplication guardrails: surgical diffs, surfaced assumptions, verifiable success criteria |
+| `/cyclaw-advisor` | mode | "Legal" persona for privacy/DPA/DSR/breach-analysis review of CyClaw changes |
 
 ### Agent skills
 

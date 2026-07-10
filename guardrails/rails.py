@@ -57,7 +57,7 @@ _SOUL_MUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Light injection markers (defense-in-depth; the authoritative 33-pattern filter
+# Light injection markers (defense-in-depth; the authoritative 32-pattern filter
 # stays in utils/sanitizer.py + config.yaml). These exist so the guardrails CLI
 # can flag obvious payloads offline without loading the full sanitizer config.
 _INJECTION_MARKERS = (
