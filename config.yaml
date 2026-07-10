@@ -180,7 +180,7 @@ policy:
     # newlines that corpus chunks routinely contain — and the alternations
     # cover the previous/all/prior variants. Compiled with re.IGNORECASE.
     #
-    # Expanded set (33 patterns total) for stronger defense against:
+    # Expanded set (32 patterns total) for stronger defense against:
     # - Direct override / jailbreak
     # - Role reassignment & impersonation
     # - Memory/persistence poisoning (zombie agent risk in RAG/soul)
