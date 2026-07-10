@@ -206,6 +206,12 @@ class ProposerWorkspaceTools:
         """Read visible train artifacts."""
 
         out: dict[str, str] = {}
+        # train_visible_dir only ever holds flat files today, so glob("*") isn't
+        # recursive on purpose — we're not walking into subdirectories. But if a
+        # nested folder ever does show up here, we'd otherwise skip it with zero
+        # trace of that happening. Counting it into the audit event means a
+        # future proposer/governance reviewer can *see* something was skipped
+        # instead of silently getting fewer files than they expected.
         skipped = 0
         for path in sorted(self.workspace.train_visible_dir.glob("*")):
             if path.is_file():
@@ -220,6 +226,9 @@ class ProposerWorkspaceTools:
         """Read visible prior-attempt artifacts."""
 
         out: dict[str, str] = {}
+        # Same reasoning as read_train_failures above: this stays a flat, non-recursive
+        # glob, and skipped_non_file makes any surprise nested entry visible in the
+        # audit trail rather than a file quietly vanishing from what the proposer sees.
         skipped = 0
         for path in sorted(self.workspace.history_dir.glob("*")):
             if path.is_file():
