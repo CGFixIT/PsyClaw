@@ -384,10 +384,17 @@ except IndexNotFoundError as e:
 local_llm = LocalLLMClient(cfg=cfg)
 
 grok = None
+# This `if` IS two of the triple-gate's three conditions (mode=="hybrid" AND
+# grok.enabled) — the graph itself only checks the third (user confirmed) plus
+# whether this client ended up non-None. Building a GrokClient anywhere else,
+# or loosening this check "to simplify," would let a confirmed low-score query
+# reach a paid external API even in offline mode, since the graph has no
+# backstop for mode/enabled (see INVARIANTS.md Rule 2).
 if cfg["app"]["mode"] == "hybrid" and cfg["models"]["grok"].get("enabled", False):
     grok = GrokClient(cfg=cfg)
 
 claude = None
+# Same double-gate as grok above, mirrored for the Claude fallback (PR #441).
 if cfg["app"]["mode"] == "hybrid" and cfg["models"].get("claude", {}).get("enabled", False):
     claude = ClaudeClient(cfg=cfg)
 
@@ -471,6 +478,12 @@ async def query_endpoint(request: Request, req: QueryRequest):
     needs_confirm = result.get("needs_user_confirm", False)
     answer_model = result.get("answer_model", "")
 
+    # needs_user_confirm stays True in the final graph state even after a
+    # confirmed query gets answered by a fallback node (it's set once by
+    # route_by_score/user_gate and never cleared downstream) — so checking it
+    # alone can't tell "still waiting on the user" from "already answered".
+    # answer_model is only empty on the genuine pause path, so both conditions
+    # together are what actually distinguishes the two.
     if needs_confirm and not answer_model:
         top_score = result.get("top_score", 0.0)
         threshold = cfg.get("retrieval", {}).get("min_score", 0.4)

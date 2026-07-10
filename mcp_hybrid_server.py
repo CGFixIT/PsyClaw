@@ -17,6 +17,10 @@ from utils.logger import audit_log, redact_sensitive
 # nothing; a non-int or non-positive value would otherwise crash the slice.
 _DEFAULT_TOP_K = 5
 _MAX_TOP_K = 50
+# A stdio JSON-RPC caller could otherwise hand this process an arbitrarily
+# large string to embed/tokenize on every search — this ceiling is just a
+# sanity bound on request size, not a security filter (this path doesn't run
+# check_input; see the DESIGN DECISION comment in _handle_search below).
 _MAX_QUERY_CHARS = 65536
 
 
@@ -182,6 +186,11 @@ def handle_message(msg: dict, retriever: HybridRetriever) -> dict:
             return _handle_search(msg_id, args, retriever)
         return _error(msg_id, -32601, f"Unknown tool: {tool_name}")
     elif method == "notifications/initialized":
+        # JSON-RPC notifications (no "id" field) are fire-and-forget by spec —
+        # the caller isn't waiting for a reply, so sending one back would just
+        # be a stray line on stdout the client never expects. Returning None
+        # here is what main()'s "if response is not None" check relies on to
+        # skip writing anything for this method.
         return None
     return _error(msg_id, -32601, f"Unknown method: {method}")
 
