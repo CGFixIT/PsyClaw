@@ -91,12 +91,41 @@ class LocalProposerClient:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            audit_log(
+                {
+                    "event": "agentic_harness_proposer_model_failed",
+                    "provider": "lmstudio",
+                    "model": self.model,
+                    "error_type": type(exc).__name__,
+                },
+                config_path=config_path,
+                cfg=cfg,
+            )
             raise AgenticError(
                 "local proposer invocation failed",
                 details={"error_type": type(exc).__name__},
             ) from exc
         if not isinstance(content, str) or not content.strip():
+            audit_log(
+                {
+                    "event": "agentic_harness_proposer_model_failed",
+                    "provider": "lmstudio",
+                    "model": self.model,
+                    "error_type": "AgenticError",
+                },
+                config_path=config_path,
+                cfg=cfg,
+            )
             raise AgenticError("local proposer returned empty content")
+        audit_log(
+            {
+                "event": "agentic_harness_proposer_model_succeeded",
+                "provider": "lmstudio",
+                "model": self.model,
+            },
+            config_path=config_path,
+            cfg=cfg,
+        )
         return LocalProposerResponse(content=content, model=self.model)
 
 

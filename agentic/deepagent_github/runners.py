@@ -6,10 +6,9 @@ from agentic.deepagent_github.core import DeepAgentGitHubTask, DeepAgentPlan
 
 
 def draft_plan(task: DeepAgentGitHubTask) -> DeepAgentPlan:
-    """Return a local planning-only skeleton result."""
+    """Raise until real planning is wired; will return a DeepAgentPlan derived from task."""
 
-    return DeepAgentPlan(
-        task_id=task.task_id,
-        steps=("read context", "draft implementation plan", "propose diff", "select tests", "draft PR body"),
-        proposed_tests=("agentic unit tests", "ruff agentic tests docs"),
+    raise NotImplementedError(
+        "draft_plan is a phase-5 placeholder; real planning is wired in phase 6/7 — "
+        "see docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md 'Unwired scaffold inventory'"
     )
