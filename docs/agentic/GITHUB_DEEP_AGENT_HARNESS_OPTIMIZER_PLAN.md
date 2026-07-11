@@ -85,12 +85,18 @@ Verified current files and directories:
 | `config.yaml` | Single source of truth. | `agentic.enabled: false`, `mode: read`, `writes_enabled: false`; optional layers disabled by default. | Add nested disabled future config. | Do not enable network, writes, shell, or Deep Agents by default. |
 | `tests/test_agentic_*.py` | Agentic unit tests. | Cover isolation, config, context, `gh_client`, registry, selftest, writer. | Extend with config and optimizer scaffold tests. | Do not introduce live network/model/tool dependencies. |
 
-Files requested but not present under the exact names:
+Files requested but not present under the exact names (state at the time this
+plan was first written, before phase 0-5 implementation — **now stale**; see
+"Unwired scaffold inventory (post-phase-5 audit, 2026-07-10)" below for the
+current, accurate state of both packages):
 
-- No `agentic/deepagent_github/` package exists yet.
-- No `agentic/harness_optimizer/` package existed before this plan effort.
+- ~~No `agentic/deepagent_github/` package exists yet.~~ Now exists (12
+  files); see the inventory section below.
+- ~~No `agentic/harness_optimizer/` package existed before this plan
+  effort.~~ Now exists; see the inventory section below.
 - No `deepagents`, `langchain-mcp-adapters`, `fastmcp`, or `quickjs` dependency
-  is currently declared in `pyproject.toml`.
+  is currently declared in `pyproject.toml` — this one is still accurate as of
+  2026-07-10.
 
 Related modules that do exist:
 
@@ -245,6 +251,23 @@ Rules:
 - `holdout_hidden/` is runner-owned and not exposed to the proposer.
 - `proposal.md` is required for acceptance.
 - `surface_manifest.json` is the local source of truth for allowed surfaces.
+
+Run-artifact directory layout (recorded 2026-07-11 from the superseded root
+draft `LangchainIntegrationPlan.md` so that file could be reduced to a
+pointer; still **proposed**, not shipped — the phase-8 implementation in
+draft PR #515 persists accepted candidates as
+`<output_dir>/accepted/<variant_id>.json` plus a
+`<memory_dir>/<variant_id>-<sha12>.json` memory record, not this tree):
+
+```text
+data/agentic/harness_optimizer/runs/<run_id>/
+  experiment.toml
+  baseline/
+  candidates/<candidate_id>/
+  decisions.jsonl
+  audit_refs.jsonl
+  scorecard.md
+```
 
 Acceptance rule:
 
@@ -909,10 +932,15 @@ Remains disabled:
 
 - Exact future soul evolution API surface name for optimizer proposals.
 - Whether LM Studio gateway helpers should reuse `llm/client.py` or stay
-  separate to avoid coupling with the core graph.
+  separate to avoid coupling with the core graph. (Verified fact restored
+  2026-07-11 from the superseded root draft: the current `llm/client.py`
+  client is plain chat completions, with no tool-calling support.)
 - Whether Deep Agents should live behind optional extra
   `[agentic-deepagents]` or a separate plugin package.
 - Whether harness experiments should use TOML files or only `config.yaml`.
+- Whether Windows-specific workspace path safety should reuse FsConnect
+  fallback logic or have a stricter temp-only policy (restored 2026-07-11
+  from the superseded root draft; fsconnect's security core is POSIX-only).
 - Whether scorecard runs should be manual-only.
 - Whether a future GitHub write executor should ever be enabled.
 - Whether a future MCP proposer workspace should be a standalone process or
@@ -1049,6 +1077,44 @@ HITL design corrections:
 
 Model-swap notes:
 
-- Qwen 3.7 Max and Kimi K2 pricing or protocol-compatibility claims were not
-  verified in this repo session. Re-check them before any phase 8 model-swap
-  decision.
+- Qwen 3.7 Max and Kimi K2 pricing or protocol-compatibility claims were
+  verified 2026-07-11: the correct naming is `Qwen3.7-Max` and its Anthropic
+  Messages protocol support is real (Alibaba Cloud Model Studio Anthropic
+  endpoints); the widely-quoted per-task cost figures belong to Cursor
+  Composer 2.5 (built on the Kimi K2.5 open checkpoint), not to Kimi K2.5
+  itself. Sourced details in
+  `docs/LG_Deep_Agentic_Harness_status_n_roadmap.md`. Re-verify pricing at
+  decision time before any model-swap decision.
+
+## Alternative considered: LangGraph-native GitHub coding harness (recorded 2026-07-11)
+
+Recorded during the 2026-07-11 root-docs consolidation so the superseded root
+file `LangChainFix.md` could be reduced to a pointer without losing its one
+load-bearing design input. The research behind that root file compared the
+Deep Agents approach implemented under `agentic/deepagent_github/` against a
+LangGraph-native variant: a five-node
+review → plan → gate_write → execute → audit `StateGraph` under `agentic/`,
+using `Annotated[list, operator.add]` reducers so nodes append to
+`review_notes`/`audit_events` instead of overwriting. Its assessed
+advantages: zero new dependencies (`langgraph==1.2.6` and
+`langchain-core==1.4.8` are already pinned in `pyproject.toml`), and every
+security gate is a single testable node function matching CyClaw's existing
+topology-as-policy conventions. The recorded verdict: the LangGraph-native
+variant is the better architectural fit unless many more agentic connectors
+are planned. Deep Agents was chosen as the optional path, and draft PR #515
+validates that choice by keeping the dependency optional (the
+`agentic-deepagents` extra) and the wiring policy-scoped. The
+LangGraph-native design remains the documented fallback if the optional
+extra ever fails a dependency review.
+
+Also preserved from the same research: an ordering-based default-deny
+filesystem permissions pattern for any future scoped write surface — allow
+rules first, then explicit denies, then a catch-all deny
+(`Allow(<allowed paths>)`, then `Deny(".env")`, `Deny("secrets/**")`,
+`Deny("**")`).
+
+Provenance: Perplexity research thread
+`f3532bc5-763f-4916-8bf8-8e6ac564b595`, drawing on
+`CyClaw_Architecture_Guide_v1.9.0_crisp.pdf`,
+`CyClaw_Swarm_Verification_Report_2026-07-09.pdf`, and the LangChain
+deepagents documentation.
