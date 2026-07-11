@@ -93,6 +93,8 @@ def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) ->
     assert cfg.deepagent_github.base_url == "http://localhost:1234/v1"
     assert cfg.deepagent_github.allow_deepagents_dependency is False
     assert cfg.deepagent_github.allow_shell_execution is False
+    assert cfg.deepagent_github.allow_filesystem_write_tools is False
+    assert cfg.deepagent_github.allow_github_writes is False
     assert cfg.deepagent_github.workspace_root == str(DATA_ROOT / "agentic" / "workspaces")
 
 
@@ -219,3 +221,58 @@ def test_to_dict_excludes_enabled(tmp_path: Path) -> None:
     d = cfg.to_dict()
     assert "enabled" not in d  # plain attribute, not a dataclass field
     assert d["repo"] == "CGFixIT/CyClaw"
+
+
+class TestShippedAgenticConfigContract:
+    """Pins the SHIPPED config.yaml's agentic block, not a synthetic fixture.
+
+    Every other test in this file constructs its own tmp_path config, which
+    proves the loader/validator works but never confirms the real repo config
+    actually ships every gate disabled. Mirrors the real-file-read pattern in
+    tests/test_due_diligence_invariants.py (yaml.safe_load against the repo's
+    own config.yaml) and tests/test_sanitizer.py's TestShippedConfigContract.
+    """
+
+    @staticmethod
+    def _load() -> AgenticConfig:
+        return load_agentic_config(str(REPO_ROOT / "config.yaml"))
+
+    def test_master_switch_disabled(self) -> None:
+        cfg = self._load()
+        assert cfg.enabled is False
+        assert cfg.mode == "read"
+        assert cfg.writes_enabled is False
+
+    def test_deepagent_github_shipped_gates_disabled(self) -> None:
+        cfg = self._load().deepagent_github
+        assert cfg.enabled is False
+        assert cfg.allow_deepagents_dependency is False
+        assert cfg.allow_filesystem_write_tools is False
+        assert cfg.allow_shell_execution is False
+        assert cfg.allow_github_writes is False
+
+    def test_harness_optimizer_shipped_gates_disabled(self) -> None:
+        cfg = self._load().harness_optimizer
+        assert cfg.enabled is False
+        assert cfg.allow_local_model_judge is False
+        # The one gate meant to stay TRUE by default: accepting an optimizer
+        # candidate is supposed to require a human to confirm. Pinned here
+        # because no runtime code path enforces it yet (see the tripwire in
+        # tests/test_agentic_harness_optimizer.py) -- if this flips to False
+        # in config.yaml with nothing enforcing it either way, that is a
+        # silent downgrade of a documented safety default.
+        assert cfg.require_human_confirm_for_accept is True
+
+
+def test_cli_exposes_no_harness_or_deepagent_subcommands() -> None:
+    """Tripwire: the harness_optimizer/deepagent_github packages must stay
+    unreachable from the agentic CLI until a later phase deliberately wires
+    a subcommand for them. If this test needs updating, that wiring was
+    added on purpose -- update it deliberately, not by accident."""
+    import argparse
+
+    from agentic.cli import build_parser
+
+    parser = build_parser()
+    sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
+    assert set(sub_action.choices.keys()) == {"status", "context", "propose-skill", "apply-skill", "test"}
