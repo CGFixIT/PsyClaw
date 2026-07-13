@@ -4,6 +4,7 @@
 
 # Git metadata
 .git/
+.gitleaksignore
 
 # Python
 __pycache__/
