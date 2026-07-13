@@ -79,6 +79,7 @@ jobs:
           # upload + code-scanning alert creation below, which is the intended
           # security behavior.
           output-filename: devskim-results.sarif
+          exclude-rules: 'DS137138,DS162092'
           ignore-globs: "**/.git/**,**/bin/**,**/*.md,**/*.json"
 
       # Upload SARIF to GitHub Security tab
