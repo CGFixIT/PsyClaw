@@ -39,9 +39,3 @@ def refuse_unsupported_write_policy(policy: DeepAgentPermissionPolicy) -> None:
         raise AgenticWriteRefused("Deep Agents shell execution is not implemented")
     if policy.allow_github_writes:
         raise AgenticWriteRefused("Deep Agents GitHub writes are not implemented")
-
-
-def refuse_phase5_write_policy(policy: DeepAgentPermissionPolicy) -> None:
-    """Backward-compatible name for callers that still use the phase-5 helper."""
-
-    refuse_unsupported_write_policy(policy)

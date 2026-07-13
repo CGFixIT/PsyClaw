@@ -450,19 +450,20 @@ What it implements, per phase:
 The one **real security delta to sign off, R1**, then runtime-reality items,
 then hygiene. Everything here was verified against the actual diff.
 
-- **R1 — filesystem-write posture change (the PR's one loosening).**
-  `refuse_phase5_write_policy` → `refuse_unsupported_write_policy` no longer
-  refuses `allow_filesystem_write_tools: true`; scoped workspace writes are
-  the intended phase-6 capability. Verify the four mitigations as a set:
-  writes only via `ProposerWorkspaceTools` containment (symlink-hardened by
-  PR #518), `interrupt_on` approve/reject on both write tools, StateBackend
-  deny-all built-ins, double audit per call. **Also fix the alias drift:**
-  the kept backward-compat alias `refuse_phase5_write_policy` silently
-  changed semantics, and zero-caller `validate_phase5_policy()`
-  (`deepagent_github/governance.py`) would now permit filesystem-write
-  policies under its phase-5 name. Delete the alias (and update/delete
-  `validate_phase5_policy`) or rename it honestly in a follow-up commit on
-  the branch.
+- **R1 — filesystem-write posture change (the PR's one loosening). FIXED
+  2026-07-13.** `refuse_phase5_write_policy` → `refuse_unsupported_write_policy`
+  no longer refuses `allow_filesystem_write_tools: true`; scoped workspace
+  writes are the intended phase-6 capability. The four mitigations hold as a
+  set: writes only via `ProposerWorkspaceTools` containment (symlink-hardened
+  by PR #518, merged before this fix landed), `interrupt_on` approve/reject on
+  both write tools, StateBackend deny-all built-ins, double audit per call.
+  **Alias drift fixed:** the backward-compat alias `refuse_phase5_write_policy`
+  was deleted from `agentic/deepagent_github/permissions.py`, and
+  `deepagent_github/governance.py`'s zero-caller helper was renamed from
+  `validate_phase5_policy()` to `validate_write_policy()` and now calls
+  `refuse_unsupported_write_policy()` directly — no more loosened-semantics-
+  under-an-old-name hazard. Verified: repo-wide grep for both old names
+  returns zero hits outside this changelog note.
 - **R2 — the real graph is constructed but never invoked in CI.**
   `invoke(payload, config=…, version="v2")` and
   `Command(resume={"decisions": [{"type": …}]})` are exercised only via
