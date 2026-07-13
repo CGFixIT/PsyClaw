@@ -62,7 +62,13 @@ jobs:
           BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
           git fetch origin "$BASE_REF"
           BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD)
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py' | tr '\n' ' ')
+          # xargs (no command) joins lines with single spaces and trims any
+          # leading/trailing whitespace — `tr '\n' ' '` alone leaves a
+          # trailing space after the last filename, which the wemake action
+          # then treats as part of the (single) path argument verbatim,
+          # producing a literal "FileNotFoundError: 'name.py '" instead of
+          # linting the file.
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py' | xargs)
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
           if [ -n "$FILES" ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
