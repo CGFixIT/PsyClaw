@@ -444,6 +444,24 @@ class TestSoulAndErrorPaths:
         assert soul_reads, "Expected a soul_read audit event"
         assert "version" in soul_reads[0]
 
+    def test_soul_restore_404_writes_audit_event(self, client, monkeypatch, tmp_path):
+        """POST /soul/restore 404s and writes a soul_restore_failed audit event
+        when no .bak file exists (the shipped repo state — restore_from_backup
+        raises FileNotFoundError deterministically)."""
+        import json
+        import gate
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "correct-key-xyz")
+        audit_file = tmp_path / "audit_soul_restore.jsonl"
+        gate.cfg["logging"]["audit_file"] = str(audit_file)
+        resp = test_client.post(
+            "/soul/restore", headers={"Authorization": "Bearer correct-key-xyz"}
+        )
+        assert resp.status_code == 404
+        events = [json.loads(line) for line in audit_file.read_text().splitlines() if line]
+        restore_failures = [e for e in events if e.get("event") == "soul_restore_failed"]
+        assert restore_failures, "Expected a soul_restore_failed audit event"
+
     def test_soul_reload_404_when_disabled(self, client, monkeypatch):
         test_client, _ = client
         import gate
