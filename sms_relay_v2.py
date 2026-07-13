@@ -1,18 +1,17 @@
-import os
-import json
-import time
-import sqlite3
 import asyncio
 import hashlib
+import json
 import logging
-from typing import Optional
+import os
+import sqlite3
+import time
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import Response
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client as TwilioClient
-from xml.sax.saxutils import escape as xml_escape
 
 logging.basicConfig(level=os.environ.get("SMS_LOG_LEVEL", "INFO"))
 logger = logging.getLogger("cyclaw.sms_relay")
@@ -26,6 +25,12 @@ SMS_AUTH_WHITELIST = {
     x.strip() for x in os.environ.get("SMS_AUTH_WHITELIST", "").split(",") if x.strip()
 }
 
+# Default stays loopback for consistency with CyClaw's zero-trust posture
+# (gate.py binds 127.0.0.1 only). Set SMS_RELAY_HOST=0.0.0.0 explicitly only
+# when this relay must accept Twilio webhooks directly from the public
+# internet; production deploys should front it with a reverse proxy / TLS
+# terminator instead of exposing it on all interfaces directly.
+SMS_RELAY_HOST = os.environ.get("SMS_RELAY_HOST", "127.0.0.1")
 SMS_RELAY_PORT = int(os.environ.get("SMS_RELAY_PORT", "8788"))
 SMS_DB_PATH = os.environ.get("SMS_DB_PATH", "sms_relay.db")
 SMS_SESSION_TTL_SEC = int(os.environ.get("SMS_SESSION_TTL_SEC", "900"))
@@ -99,9 +104,9 @@ def phone_hash(phone: str) -> str:
     return sha256_text(phone)[:16]
 
 
-def log_event(phone: str, event_type: str, msg_sid: Optional[str] = None,
-              query: Optional[str] = None, provider: Optional[str] = None,
-              detail: Optional[str] = None):
+def log_event(phone: str, event_type: str, msg_sid: str | None = None,
+              query: str | None = None, provider: str | None = None,
+              detail: str | None = None):
     conn = db()
     conn.execute(
         "INSERT INTO relay_log (created_at, phone_hash, msg_sid, event_type, query_hash, provider, detail) "
@@ -122,7 +127,7 @@ def cleanup_db():
     conn.close()
 
 
-def get_session(phone: str) -> Optional[dict]:
+def get_session(phone: str) -> dict | None:
     cleanup_db()
     conn = db()
     row = conn.execute(
@@ -202,7 +207,7 @@ def chunk_text(text: str, size: int = SMS_SEGMENT_SIZE) -> list[str]:
     return chunks
 
 
-def format_page(chunks: list[str], idx: int, footer: Optional[str] = None) -> str:
+def format_page(chunks: list[str], idx: int, footer: str | None = None) -> str:
     total = len(chunks)
     page = f"\n\n[{idx+1}/{total}]"
     if idx < total - 1:
@@ -262,7 +267,7 @@ def build_result_footer(data: dict) -> str:
 # ── Core logic ──────────────────────────────────────────────────────────────────
 
 async def handle_cyclaw_result(phone: str, query: str, data: dict, msg_sid: str,
-                               provider_override: Optional[str] = None):
+                               provider_override: str | None = None):
     if data.get("needs_confirm"):
         allowed = allowed_confirm_commands()
         set_session(phone, {"pending_confirm": True, "original_query": query, "allowed_commands": allowed})
@@ -298,8 +303,13 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
         log_event(phone, "error", msg_sid=msg_sid, detail=str(e)[:300])
         try:
             await send_sms(phone, f"CyClaw error: {str(e)[:120]}")
-        except Exception:
-            pass
+        except Exception as notify_exc:
+            # Best-effort notification only — do not re-raise, so the webhook
+            # still returns a valid TwiML response and Twilio doesn't retry
+            # endlessly. The failure is logged instead of silently dropped so
+            # a broken outbound path (Twilio down, bad creds) is visible.
+            logger.error("failed to deliver error notification phone=%s sid=%s: %s",
+                         phone_hash(phone), msg_sid, notify_exc, exc_info=True)
 
 
 async def _process_query_inner(phone: str, inbound_text: str, msg_sid: str):
@@ -393,4 +403,4 @@ async def inbound_sms(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=SMS_RELAY_PORT)
+    uvicorn.run(app, host=SMS_RELAY_HOST, port=SMS_RELAY_PORT)
