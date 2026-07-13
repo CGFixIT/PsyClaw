@@ -49,6 +49,8 @@ When uncertain, choose the higher tier.
 - For docs, skill, routine, prompt, or workflow-only changes, run
   `git diff --check` and any relevant static validation such as markdown review,
   YAML parsing, shell syntax checks, or stale-string scans.
+- For skill changes, validate every touched skill folder and confirm its
+  `agents/openai.yaml` still names the exact `$skill-name` in `default_prompt`.
 - For Python behavior changes, run
   `ruff check --select E,F,I,B,C4,UP,S .` and the most targeted `pytest`
   coverage for the touched area.

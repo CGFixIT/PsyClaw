@@ -1,62 +1,41 @@
 ---
 name: cyclaw-command-audit
-description: >-
-  Codex-native CyClaw audit-log analyzer workflow. Use when working in CGFixIT/CyClaw and the user asks to audit CyClaw logs, summarize logs/audit.jsonl, run metrics.py, inspect node distribution, check retrieval score statistics, or flag audit anomalies and privacy issues.
+description: Analyze CyClaw audit evidence without exposing private query content. Use in CGFixIT/CyClaw when the user asks to summarize logs/audit.jsonl, run cyclaw-metrics or metrics.py, inspect retrieval or model usage, or identify malformed and privacy-risk audit records.
 ---
 
-# CyClaw Command Audit
+# CyClaw Audit Logs
 
-Use this skill to summarize `logs/audit.jsonl` with the repository's metrics
-analyzer and report anomalies without exposing private query content.
-
-Run commands only when the user asks to execute the audit workflow. For
-explanation or planning requests, inspect files and describe the workflow.
+Use the repository's metrics code. It reads the audit file configured at
+`logging.audit_file`; it does not read JSONL from standard input.
 
 ## Workflow
 
-1. Read `AGENTS.md` for repository rules.
-2. Check whether `logs/audit.jsonl` exists.
-3. If it is missing, report that no audit log exists yet and that the server
-   must run and receive at least one query before metrics are available.
-4. If a date or time filter is requested, prefer a small, scoped JSONL filter
-   before invoking `metrics.py`.
-5. Run the analyzer:
+1. Read `AGENTS.md` and inspect `metrics.py` plus `utils/logger.py` when the
+   requested claim depends on audit semantics.
+2. Resolve `logging.audit_file` from `config.yaml` and confirm the file exists.
+3. Run the full configured summary:
 
 ```bash
-GROK_API_KEY=dummy python -m metrics
+python -m metrics
 ```
 
-If installed entry points are available, `cyclaw-metrics` is an equivalent
-runtime path.
+The installed `cyclaw-metrics` entry point is equivalent.
 
-For date-scoped inspection, keep output bounded and avoid dumping raw audit
-records into chat:
+4. For a date prefix, aggregate in memory without printing raw events:
 
 ```bash
-rg '"2026-06-20"' logs/audit.jsonl | GROK_API_KEY=dummy python -m metrics
+python -c "from metrics import compute_metrics, iter_events; print(compute_metrics(e for e in iter_events('logs/audit.jsonl') if e.get('timestamp', '').startswith('2026-06-20')))"
 ```
+
+Adjust the path to match `config.yaml`. Treat the date as data controlled by
+the operator; do not interpolate untrusted shell input.
 
 ## Report
 
-Include:
+Include total and RAG-query counts, event breakdown, score min/mean/max,
+retrieval modes, model usage, online escalations, and audit-integrity counters.
+Flag malformed records, plaintext queries, unexpected external-model activity,
+and material error or refusal spikes.
 
-- total queries processed
-- graph node distribution
-- retrieval score statistics: min, max, mean
-- injection attempts blocked
-- errors or unusual entries
-- whether any `grok_fallback` path was triggered
-
-Flag as risk:
-
-- raw query text in logs, because CyClaw should store hashed query values
-- error rate above 10%
-- unexpected Grok fallback activity
-- missing or malformed audit records
-
-## Guardrails
-
-- Do not paste private corpus data or raw user queries into the response unless
-  the user explicitly requests that exact content and it is safe to show.
-- Treat `logs/` as local runtime data; never commit audit logs.
-- Respect the active Codex sandbox and approval rules for command execution.
+Do not paste raw queries, corpus content, API keys, or complete audit records.
+Never commit files under `logs/`.

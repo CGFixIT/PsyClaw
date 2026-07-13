@@ -1,0 +1,4 @@
+interface:
+  display_name: "Run CyClaw"
+  short_description: "Prepare, start, and verify local CyClaw"
+  default_prompt: "Use $cyclaw-run-cyclaw to prepare, index, start, and verify the local CyClaw gateway on loopback."

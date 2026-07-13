@@ -1,34 +1,32 @@
 ---
 name: cyclaw-project-guidance
-description: >-
-  CyClaw repository operating guidance for Codex. Use when working in CGFixIT/CyClaw to understand architecture, security invariants, commands, project rules, testing expectations, agent workflow constraints, and canonical docs before substantial edits.
+description: Read current CyClaw repository guidance, architecture, security invariants, commands, tests, and product constraints before substantive work in CGFixIT/CyClaw. Use for code, configuration, CI, dependency, security, agentic, sync, retrieval, or roadmap changes.
 ---
 
 # CyClaw Project Guidance
 
-Use this skill before substantial work in the CyClaw repository, especially when
-changing `gate.py`, `graph.py`, retrieval, soul governance, sync, agentic,
-tests, dependencies, CI, or security-sensitive paths.
+Read current repository sources instead of copied snapshots:
 
-Read the relevant references before acting:
+1. `AGENTS.md` for the Codex map, repo layout, commands, and safety rules.
+2. `CLAUDE.md` for the detailed architecture and operating contract.
+3. `.github/copilot-instructions.md` and active workflows for current CI commands.
+4. `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security-sensitive work.
+5. The current code, `config.yaml`, tests, and subsystem docs for the requested scope.
 
-- `references/CLAUDE.md` for the authoritative repository operating contract, architecture map, invariants, commands, and skill list.
-- `references/PROJECT_RULES.md` for scoped non-negotiable constraints, test commands, isolation rules, git workflow, and risk tiers.
-- `references/CLAUDE-README.md` for the `.claude/` workflow structure and common command entry points.
-- `references/BUSINESS_STATUS.md` when roadmap, optimization, refactor, polish,
-  packaging, or PMF-sensitive prioritization is part of the task.
+For roadmap, optimization, or packaging work, also read the current business
+sources linked from `AGENTS.md`. Treat dated market conclusions as dated.
 
-When the references mention Claude-specific tools, commands, or hooks, translate
-them into the active Codex toolset and current sandbox/approval rules. Do not
-run command steps merely because a legacy reference lists them; run them only
-when they fit the user's request.
+Verify mutable facts such as model IDs, dependency versions, workflow commands,
+and branch state from current sources before relying on them.
 
-Preserve these project invariants: RAG-first retrieval, topology-enforced
-policy, triple-gated external fallback, audit convergence, and explicit human
-reason strings for soul mutation.
+Preserve these invariants:
 
-Default prioritization, unless the user overrides it:
+- retrieval runs before any LLM call
+- graph edges enforce routing policy
+- external fallback remains provider-enabled, hybrid-mode, and human-confirmed
+- every execution path converges on audit logging
+- soul mutation requires an explicit human reason
+- optional `agentic/`, `sync/`, and `guardrails/` code stays out of the core request path
 
-- polish, proof, docs, testability, and packaging over new features
-- evidence-backed claims over optimistic market extrapolation
-- Codex-native repo guidance over stale Claude-specific execution details
+Prefer polish, proof, testability, packaging, and repo coherence over speculative
+features unless the user explicitly asks for new product behavior.

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Refactor Loop"
-  short_description: "Iterative CyClaw refactor and speed loop"
-  default_prompt: "Use $refactor to iteratively refactor CyClaw architecture, measure speed after each meaningful change, and keep looping with verification until the stop conditions are met."
+  display_name: "Refactor CyClaw"
+  short_description: "Behavior-preserving CyClaw refactoring"
+  default_prompt: "Use $refactor to make one evidence-backed, behavior-preserving CyClaw cleanup and verify it against the current baseline."

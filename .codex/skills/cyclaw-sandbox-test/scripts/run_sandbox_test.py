@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 BASE_URL = "http://127.0.0.1:8787"
 MOCK_URL = "http://127.0.0.1:1234"
 MODEL_ID = "qwen2.5-7b-instruct"
@@ -137,32 +139,17 @@ def _start_process(name: str, cmd: list[str], cwd: Path, env: dict[str, str], lo
         raise
 
 
-def _replace_required(text: str, old: str, new: str) -> str:
-    if old not in text:
-        raise ValueError(f"config pattern not found: {old!r}")
-    return text.replace(old, new, 1)
-
-
 def _enable_mock_external_providers(repo: Path, results: list[Result]) -> str | None:
     config_path = repo / "config.yaml"
     try:
         original = config_path.read_text(encoding="utf-8")
-        patched = original
-        patched = _replace_required(patched, '  mode: "offline"', '  mode: "hybrid"')
-        patched = _replace_required(patched, "  grok:\n    enabled: false", "  grok:\n    enabled: true")
-        patched = _replace_required(patched, "  claude:\n    enabled: false", "  claude:\n    enabled: true")
-        patched = _replace_required(
-            patched,
-            '    base_url: "https://api.x.ai/v1"',
-            f'    base_url: "{MOCK_URL}/v1"',
-        )
-        patched = _replace_required(
-            patched,
-            '    base_url: "https://api.anthropic.com/v1"',
-            f'    base_url: "{MOCK_URL}/v1"',
-        )
-        config_path.write_text(patched, encoding="utf-8")
-    except (OSError, ValueError) as exc:
+        config = yaml.safe_load(original)
+        config["app"]["mode"] = "hybrid"
+        for provider in ("grok", "claude"):
+            config["models"][provider]["enabled"] = True
+            config["models"][provider]["base_url"] = f"{MOCK_URL}/v1"
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    except (KeyError, OSError, TypeError, yaml.YAMLError) as exc:
         results.append(Result("mock external provider config", "FAIL", str(exc)))
         return None
     results.append(
@@ -199,15 +186,16 @@ def _clone_or_use_repo(args: argparse.Namespace, results: list[Result]) -> Path:
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     repo = work_root / f"cyclaw-sandbox-test-{stamp}"
     env = os.environ.copy()
-    results.append(
-        _run(
-            "clone origin/main",
-            ["git", "clone", "--branch", args.branch, "--single-branch", args.repo_url, str(repo)],
-            work_root,
-            env,
-            180,
-        )
+    clone = _run(
+        "clone origin/main",
+        ["git", "clone", "--branch", args.branch, "--single-branch", args.repo_url, str(repo)],
+        work_root,
+        env,
+        180,
     )
+    results.append(clone)
+    if clone.status != "PASS":
+        raise RuntimeError(clone.detail.replace(args.repo_url, "<repo-url>"))
     return repo
 
 
@@ -417,8 +405,9 @@ def _run_targeted_tests(py: Path, repo: Path, env: dict[str, str], timeout: int)
     ]
 
 
-def _write_report(repo: Path, results: list[Result]) -> Path:
-    report = repo / "docs" / f"Cyclaw_Sandbox_Test_{dt.date.today().isoformat()}.md"
+def _write_report(results: list[Result]) -> Path:
+    report_dir = Path(tempfile.mkdtemp(prefix="cyclaw-sandbox-report-"))
+    report = report_dir / f"Cyclaw_Sandbox_Test_{dt.date.today().isoformat()}.md"
     passes = sum(r.status == "PASS" for r in results)
     fails = sum(r.status == "FAIL" for r in results)
     warns = sum(r.status == "WARN" for r in results)
@@ -433,7 +422,6 @@ def _write_report(repo: Path, results: list[Result]) -> Path:
     for r in results:
         detail = r.detail.replace("|", "\\|").replace("\n", "<br>")
         lines.append(f"| {r.name} | {r.status} | {detail} |")
-    report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report
 
@@ -452,7 +440,11 @@ def main() -> int:
     args = parser.parse_args()
 
     results: list[Result] = []
-    repo = _clone_or_use_repo(args, results)
+    try:
+        repo = _clone_or_use_repo(args, results)
+    except RuntimeError as exc:
+        print(f"clone failed: {exc}", file=sys.stderr)
+        return 1
     env = os.environ.copy()
     env.update(
         {
@@ -512,7 +504,7 @@ def main() -> int:
     if not args.skip_tests:
         results.extend(_run_targeted_tests(py, repo, env, args.test_timeout))
     results.append(_run("metrics.py", [str(py), "metrics.py"], repo, env, 60))
-    report = _write_report(repo, results)
+    report = _write_report(results)
     print(report)
     return 1 if any(r.status == "FAIL" for r in results) else 0
 
