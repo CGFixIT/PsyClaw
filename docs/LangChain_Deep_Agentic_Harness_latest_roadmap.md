@@ -1062,10 +1062,11 @@ How to consume this document in future sessions (human or agent):
 1. **One concern per PR**, cut from `main`, draft, What/Why/Risk body — per
    `CLAUDE.md` §5/§6. The checklist items R1-R10 and the provider-parity
    design are pre-scoped to that size on purpose.
-2. **Order of operations:** merge #515 first (after R1's alias fix), then
-   hardening PRs (R3-R8), then provider parity, then the live LM Studio
-   smoke. Do not start provider parity on a branch cut before #515 merges —
-   it edits the same `model_adapter.py`/`config.py` region.
+2. **Order of operations:** ~~merge #515 first (after R1's alias fix)~~ —
+   done 2026-07-13, R1 fixed and merged (see below). Next: hardening PRs
+   (R3-R8), then provider parity, then the live LM Studio smoke. Do not
+   start provider parity on a branch cut before this point — it edits the
+   same `model_adapter.py`/`config.py` region #515 touched.
 3. **Every PR that touches `agentic/`** re-runs
    `python3 .claude/skills/invariant-guard/check_invariants.py` and
    `GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q` locally; anything
@@ -1076,3 +1077,131 @@ How to consume this document in future sessions (human or agent):
 5. **Model claims expire.** The Qwen3.7-Max/Kimi/Composer numbers above were
    verified 2026-07-11 from secondary sources; re-verify before any
    purchasing or model-swap decision.
+
+## PR resolution status (2026-07-13)
+
+All six PRs tracked by this document's original review cycle are resolved.
+Recorded here as the terminal status of that batch; the per-PR review detail
+above (checklist, conflict matrix, R1-R10) is kept as the historical record
+of *why* each call was made, not rewritten to erase the "in-flight" framing
+it was written under.
+
+- **#515** (phases 6-9 implementation) — merged. Both pre-merge conditions
+  from the "PR #515 review" section were satisfied first: the R1 alias fix
+  (deleted `refuse_phase5_write_policy`, renamed
+  `deepagent_github/governance.py`'s helper to `validate_write_policy()`)
+  and the one-hunk doc conflict in
+  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (resolved by
+  taking main's verified model-swap text). Verified before push: 93/93
+  relevant agentic tests, `test_agentic_deepagent_optional` skips cleanly
+  without the optional dependency, invariant-guard 27/27, ruff clean.
+- **#516, #517, #518, #519** — merged (self-contained, zero cross-overlap
+  fixes; #518 landed before #515 per the load-bearing containment
+  dependency the R1 sign-off required).
+- **#520** — merged (the archived-doc identity-block redaction from the
+  `ac1a195` privacy sweep).
+- **#497** — closed, not merged. Its branch (`origin/clonebackup-792026`)
+  added a single root file, `LangchainDeepAgent.md`, containing research
+  notes on Deep Agents memory/persistence design and some naming asides.
+  Privacy check: clean — none of the personal-identity markers `ac1a195`
+  ordered removed appear in it. Redundancy check: most of its content
+  (the `builder.py` toothless-agent bug, the unused `SurfaceType`/
+  `GovernanceFinding` findings, the Qwen/Kimi pricing research) was already
+  absorbed into `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
+  and this document during the 2026-07-11 consolidation. Three items were
+  genuinely unique and are folded in below; the source file was not merged.
+
+## Folded from PR #497: Deep Agents memory, persistence, and taxonomy notes
+
+Three items from the closed #497 branch's `LangchainDeepAgent.md` that
+weren't already captured elsewhere in this document or the canonical plan
+doc. Recorded verbatim from the source research (light formatting only) so
+the content survives the file's removal; provenance and citation numbering
+below are as they appeared in that file, not re-verified against current
+sources — treat citation markers as historical pointers, not fresh
+verification.
+
+### Harness primitive taxonomy: no single "folder" name
+
+There is a semi-standard taxonomy for the "skills/hooks/tools folders"
+question, per LangChain and the broader agentic-engineering community — five
+primitives, each its own first-class concept with different loading
+semantics, no single umbrella term beyond "harness primitives" or
+"scaffolding":
+
+- **AGENTS.md** — lightweight, always-loaded repo instructions.
+- **Skills** — named, on-demand directories with a `SKILL.md`, portable
+  across harnesses (`skills.sh` is the emerging registry).
+- **MCP** — authenticated connections to external services (Linear, Slack,
+  Sentry-style); downside is context bloat from tool injection.
+- **Subagents** — bounded/parallel task delegation for context isolation —
+  this is what `agentic/deepagent_github/builder.py`'s `SubAgent` wiring
+  targets.
+- **Hooks** — deterministic pre/post logic (lint, format, approval-gate)
+  that shouldn't depend on the model remembering anything.
+
+Related aside on naming: a "harness" is the full scaffolding (model + tools
++ skills + hooks + MCP + subagents working together); a single clever prompt
+pattern or notification trigger is closer to a hook or a UX affordance (a
+"doorbell") than a harness in its own right.
+
+### Proposed memory model for a future Deep Agents harness
+
+Not implemented by phases 6-9 as merged (which use only the bounded local
+`AGENTS.md` file — see "Verified deepagents API reference" above for the
+shipped `StateBackend`/memory design). This is unincorporated design
+research for a *future* richer memory layer, kept here rather than silently
+lost:
+
+- **Three-tier model:** `checkpoint` for active run/thread continuity,
+  `store` for promoted durable facts, and file-backed audit/event logs for
+  forensics and replay — matching LangGraph's short-term-vs-long-term
+  persistence split, and fitting CyClaw's offline, small-surface design
+  better than one shared memory blob.
+- **No default cross-boundary writes.** Subagents should not write directly
+  into shared long-term memory by default; parent/subgraph state should stay
+  namespace-isolated, with the shared store reserved for data intentionally
+  crossing boundaries.
+- **Persistence rule:** an in-memory-only checkpointer (LangGraph's
+  `InMemorySaver`, which phases 6-9 use today) is fine for the current
+  interrupt-approve/reject/timeout scope, but is a dev-only choice for
+  anything beyond that — production-shaped use needs persistent
+  checkpointing with retention/pruning. For CyClaw specifically, SQLite is
+  the sane local default; Postgres only if genuine concurrent multi-session
+  orchestration is needed — matching the offline-first, loopback-only
+  posture already established elsewhere in this repo.
+- **Subagent memory policy:** give each subagent a private working set plus
+  a read-only slice of parent context; promotion to shared memory should
+  require an explicit `promote_memory()` step with schema and trust level,
+  preventing context rot. Proposed promotion classes: `user_fact`,
+  `project_convention`, `retrieval_hint`, `security_finding`,
+  `tool_capability`, `rejected_hypothesis` — only the first four persisting
+  by default; rejected hypotheses expire fast.
+- **Dynamic subagent deployment policy:** only spawn dynamic subagents for
+  naturally fan-out, conditional, or multi-phase work — repo-wide file
+  review, per-file GitHub analysis, multi-document synthesis, verifier
+  passes on security findings, exhaustive sweeps. Not for ordinary
+  single-query RAG or simple tool calls, which just burns tokens and
+  complicates state.
+- **Proposed pipeline shape:** `controller -> policy gate -> planner ->
+  subagent dispatcher -> result verifier -> memory promoter` — preserving
+  CyClaw's established principle of enforcement in topology/policy, not
+  hopeful prompt wording. Recommended hard gates on any dynamic-subagent
+  deployment: max fan-out, allowed subagent types, allowed tools,
+  retrieval-first requirement, per-run budget, and approval required for
+  mutating tools.
+
+  A starter policy table for when to deploy:
+
+  | Trigger | Deploy? | Memory access | Notes |
+  |---|---|---|---|
+  | Single local RAG question | No | Thread checkpoint only | Keep cheap and deterministic |
+  | Repo-wide file review | Yes | Read-only parent context, per-subagent scratchpad | Fan-out and synthesize |
+  | Security finding verification | Yes | No shared writes until verifier consensus | Adversarial verification pattern |
+  | Tool mutation or external action | Maybe, gated | No autonomous promotion | Require approval |
+  | Learning stable project conventions | No immediate fan-out | Promote to store after repeated confirmation | Prevent garbage memory |
+
+  Overall recommendation if this is ever built: keep subagent state
+  disposable, shared memory sparse, and deployment logic rule-based first,
+  model-suggested second — the same discipline that keeps the rest of
+  CyClaw's agentic layer safe to leave disabled by default.
