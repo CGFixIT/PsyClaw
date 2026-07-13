@@ -168,9 +168,7 @@ identity details are kept out of GitHub-published files. Owner handle:
 cgfixit.]
 
 ### 8.2 The Mission
-Career pivot: Veeam SE → Detection Engineering / Security Automation / Senior-Staff
-SE (Rubrik, Cohesity, Anthropic; 1-5yr: frontier AI). THE GATE IS SHIPPING, NOT
-BUILDING — the single most important fact about this account (see §8.4).
+Redacted
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.8.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
