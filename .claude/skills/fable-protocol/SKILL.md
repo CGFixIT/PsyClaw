@@ -166,9 +166,7 @@ rising eval-awareness (~6% of rollouts).
 You have it in memory stop posting all my stuff on github ;) - also note to cg to tell claude to seriously stop mentioning that booker dewitt thing in anything serious research internally or just anything externally haha... fix this in prs and save to memory later]]
 
 ### 8.2 The Mission
-Career pivot: Veeam SE → Detection Engineering / Security Automation / Senior-Staff
-SE (Rubrik, Cohesity, Anthropic; 1-5yr: frontier AI). THE GATE IS SHIPPING, NOT
-BUILDING — the single most important fact about this account (see §8.4).
+[TBD haha]
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.8.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
