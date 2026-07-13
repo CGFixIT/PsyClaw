@@ -1,13 +1,13 @@
 # Codex Instructions
 
 Use this as the short Codex workflow overlay for CyClaw. Repo truth still lives
-in `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, and the active
+in `AGENTS.md`, docs/invariants and docs/thread_models.md`, and the active
 CI workflows.
 
 ## Execution Defaults
 
 - If the request is clear, implement directly with the smallest correct diff.
-- Read `AGENTS.md`, `CLAUDE.md`, and the relevant routine or skill before
+- Read `AGENTS.md`, and the relevant routine or skill before
   substantive edits.
 - Keep progress updates short. State uncertainty and skipped checks plainly.
 - If unexpected repo changes appear, stop and ask before editing around them.
