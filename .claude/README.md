@@ -16,6 +16,7 @@ sync there so a second list does not drift. A few common entry points:
 /logging-refactor        # Start logging audit loop
 /speed-refactor          # Start speed optimization loop
 /wrap-up                 # Run end-of-session checklist
+/CyClaw-Optimize         # there are many more, verify folder each time
 ```
 
 ## Refactor Loop Pattern
