@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize CyClaw"
+  short_description: "Evidence-backed CyClaw repository optimization"
+  default_prompt: "Use $cyclaw-optimize to select and implement one current, evidence-backed CyClaw improvement with focused verification."

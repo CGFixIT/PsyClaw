@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Project Guidance"
+  short_description: "Current CyClaw repository operating context"
+  default_prompt: "Use $cyclaw-project-guidance to load current CyClaw architecture, security invariants, commands, tests, and project constraints before substantive work."

@@ -12,6 +12,8 @@ Use `.codex/` to help future Codex agents start safely and consistently without 
 Existing `.codex/skills/` content is project-specific skill material. Keep it
 Codex-native: avoid hard-coding legacy agent tools, stale `.claude` execution
 paths, or connector function names that may not exist in a given session.
+Each skill includes `agents/openai.yaml` for Codex UI metadata and a default
+prompt. Keep that metadata aligned with the skill name and trigger description.
 
 When the active Codex surface exposes repo skills as slash commands, keep names
 short and invocation-friendly, for example `/refactor` or
@@ -22,24 +24,24 @@ short and invocation-friendly, for example `/refactor` or
 - `skills/fable-protocol/` - session-start discipline for substantive Codex
   tasks: premise testing, uncertainty marking, findings-before-writes, security
   review, and shipping-first prioritization.
-- `skills/cyclaw-project-guidance/` - load CyClaw operating context,
-  invariants, and canonical reference docs before substantial work.
+- `skills/cyclaw-project-guidance/` - load current CyClaw operating context and
+  canonical repo docs before substantial work.
 - `skills/cyclaw-run-cyclaw/` - prepare, run, smoke-test, and interact with the
   local CyClaw FastAPI RAG server.
 - `skills/cyclaw-sandbox-test/` - clone `origin/main`, mock LM Studio, and
   smoke-test CyClaw gateway plus terminal/API surfaces before PRs.
 - `skills/cyclaw-command-status/` - run a read-only environment, config, index,
   soul, telemetry, and live-health status check.
-- `skills/cyclaw-command-run/` - run focused smoke checks for local server
-  endpoints and repo-native runtime verification.
+- `skills/cyclaw-command-run/` - run focused smoke checks against an existing
+  checkout or server without performing setup.
 - `skills/cyclaw-command-audit/` - summarize `logs/audit.jsonl` through
   `metrics.py` and flag audit anomalies or privacy risks.
 - `skills/cyclaw-command-check-soul/` - verify soul file presence, hash,
   readability, and drift without mutating it.
-- `skills/refactor/` - iterative CyClaw architecture cleanup and speed loop
-  with tracker, measurement, self-review, and commit discipline.
-- `skills/cyclaw-optimize/` - scan `main` for optimization opportunities and
-  open focused draft PRs when the user asks for that workflow.
+- `skills/refactor/` - make focused, behavior-preserving architecture or
+  measured-performance improvements.
+- `skills/cyclaw-optimize/` - select one current, evidence-backed improvement
+  and publish a focused draft PR when requested.
 
 ## Available Routines
 
@@ -78,6 +80,9 @@ Use checklists as lightweight reminders, not as a substitute for reading the rel
 3. Link to canonical docs rather than copying long sections.
 4. Include when to use it, inputs, workflow, verification, and final response expectations.
 5. Keep routine names lower-case kebab-case.
+
+Do not add compatibility copies of `.codex/instructions.md` or snapshots of
+canonical repo guidance. They drift; link to the live source instead.
 
 ## Scratch Work
 
