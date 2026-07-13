@@ -8,9 +8,6 @@
 [![PGvector](https://img.shields.io/badge/PGvector-0.3.6-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
-[![DevSkim](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml)
-[![Gitleaks Secret Scan](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml)
-[![OSV-Scanner](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
 
