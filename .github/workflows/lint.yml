@@ -2,9 +2,18 @@
 # Sequence: Ruff (fast, modern rules exactly matching pyproject.toml) → wemake-python-styleguide (strict WPS + flake8 plugins).
 # No project deps (torch, ChromaDB, LangGraph, etc.) — full CI (tests + coverage) runs separately.
 #
-# Ruff first for quick feedback on your tuned select (E,F,I,B,C4,UP,S).
-# wemake adds the official complementary strict/opinionated layer (WPS rules) for extra discipline
-# on security-sensitive and agentic code. Designed to run together per wemake docs.
+# Ruff first for quick feedback on your tuned select (E,F,I,B,C4,UP,S); it runs
+# repo-wide because the whole tree is expected to already be clean under that
+# select set (CLAUDE.md, §5 Conventions).
+#
+# wemake adds the official complementary strict/opinionated WPS layer, but the
+# existing tree was never brought WPS-clean, so it is scoped to only the
+# .py files actually changed on this branch vs its merge-base with the PR's
+# target branch (main/cc) — otherwise every PR fails on pre-existing findings
+# in files it never touched. The action's `filter_mode: added` input only
+# controls which findings get posted as inline PR comments; it does not limit
+# which files are linted or which exit code gates the job, so the file list
+# has to be computed and passed via the action's `path` input instead.
 #
 # Rule scope and UP backlog notes preserved from prior ruff-up-alignment work.
 
@@ -33,6 +42,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0   # full history needed for the merge-base diff below
 
       - name: Setup Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
@@ -45,15 +56,34 @@ jobs:
       - name: Ruff check (fast modern gate)
         run: ruff check --select E,F,I,B,C4,UP,S .
 
+      - name: Determine changed Python files
+        id: changed
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
+          git fetch origin "$BASE_REF"
+          BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD)
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py' | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          if [ -n "$FILES" ]; then
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: wemake-python-styleguide (strict WPS + flake8 plugins)
         # Uses the official Docker-based action. Runs flake8 + wemake plugin with reviewdog backend.
+        # `path` is scoped to this branch's changed .py files (see the step above) so the job
+        # only fails on findings in code this PR actually touches — the existing tree was never
+        # brought WPS-clean, and filter_mode alone does not limit the lint scope (see file header).
         # reporter=github-pr-review gives clean inline PR comments (only on added lines by default).
         # fail_workflow: '1' enforces the gate. Set to '0' temporarily during initial WPS cleanup.
         # Official pattern: run ruff first, then wemake (they complement, no overlap conflict).
+        if: steps.changed.outputs.has_files == 'true'
         uses: wemake-services/wemake-python-styleguide@master
         # Consider pinning to a specific release commit SHA for maximum supply-chain security
         # (monitor https://github.com/wemake-services/wemake-python-styleguide/releases).
         with:
+          path: ${{ steps.changed.outputs.files }}
           reporter: github-pr-review
           filter_mode: added          # Only comment on newly added/changed code
           fail_workflow: '1'
