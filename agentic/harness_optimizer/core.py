@@ -154,6 +154,12 @@ class RunReport:
 
     @property
     def has_critical_governance_finding(self) -> bool:
+        # governance_findings arrives here as plain strings, not GovernanceFinding
+        # objects -- governance_gate_strings() flattens them via
+        # GovernanceFinding.as_gate_string() into "severity: code: message". This
+        # check is only recognizing that same "critical:" prefix by convention, so
+        # if that serialization format in governance.py ever changes, this needs to
+        # change with it -- nothing enforces the two stay in sync.
         return any(finding.lower().startswith("critical:") for finding in self.governance_findings)
 
 

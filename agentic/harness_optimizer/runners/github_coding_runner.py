@@ -59,6 +59,10 @@ class FixtureCase:
             raise AgenticError("fixture case_id must be a non-empty string")
         if self.split not in {"train_visible", "holdout_hidden"}:
             raise AgenticError("fixture split must be train_visible or holdout_hidden")
+        # We don't need the resolved path here -- this call is only run for its
+        # side effect of raising if self.path tries to climb out of its root (e.g.
+        # "../../etc/passwd"). A bad path should fail the moment a FixtureCase is
+        # constructed, not later when something finally tries to read it.
         _safe_child(Path.cwd(), self.path)
         if not isinstance(self.expected_text, str) or not self.expected_text:
             raise AgenticError("fixture expected_text must be non-empty")
@@ -129,6 +133,12 @@ class GitHubCodingRunner:
         findings: list[GovernanceFinding] = []
         declared_paths = {surface.path.replace("\\", "/") for surface in experiment.surfaces}
         current = self.workspace.current_dir.resolve()
+        # ProposerWorkspaceTools already restricts *tool* writes to declared surface
+        # paths, but current/ isn't only reachable through those tools -- a variant
+        # could still end up with an extra file there some other way. This rescan is
+        # the last line of defense: anything sitting in current/ that isn't one of
+        # the surfaces the experiment actually declared gets flagged as critical, so
+        # it can never quietly ride along into the fixture repo below.
         for path in current.rglob("*"):
             if path.is_file() and path.relative_to(current).as_posix() not in declared_paths:
                 findings.append(
