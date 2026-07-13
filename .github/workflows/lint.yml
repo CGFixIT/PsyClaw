@@ -1,9 +1,12 @@
 # Fast lint gate for pull requests and claude/* feature branches.
-# Runs ruff only — no project deps, no torch, no ChromaDB.
-# Full CI (tests + coverage) runs separately on push to main/cc.
+# Sequence: Ruff (fast, modern rules exactly matching pyproject.toml) → wemake-python-styleguide (strict WPS + flake8 plugins).
+# No project deps (torch, ChromaDB, LangGraph, etc.) — full CI (tests + coverage) runs separately.
 #
-# Rule scope: E,F,I,B,C4,UP,S matches pyproject.toml [tool.ruff.lint] exactly.
-# UP (pyupgrade) backlog was cleared in the ruff-up-alignment PR.
+# Ruff first for quick feedback on your tuned select (E,F,I,B,C4,UP,S).
+# wemake adds the official complementary strict/opinionated layer (WPS rules) for extra discipline
+# on security-sensitive and agentic code. Designed to run together per wemake docs.
+#
+# Rule scope and UP backlog notes preserved from prior ruff-up-alignment work.
 
 name: Lint
 
@@ -12,7 +15,7 @@ on:
     branches:
       - 'claude/**'
   pull_request:
-    branches: [main, cc, feature/CyClaw-Agent]
+    branches: [main, cc]
 
 concurrency:
   group: lint-${{ github.ref }}
@@ -20,10 +23,11 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: write   # Required for github-pr-review reporter to post inline comments
 
 jobs:
-  ruff:
-    name: ruff
+  lint:
+    name: Lint (Ruff + WPS)
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -38,5 +42,20 @@ jobs:
       - name: Install ruff
         run: pip install -c constraints.txt ruff
 
-      - name: ruff check
+      - name: Ruff check (fast modern gate)
         run: ruff check --select E,F,I,B,C4,UP,S .
+
+      - name: wemake-python-styleguide (strict WPS + flake8 plugins)
+        # Uses the official Docker-based action. Runs flake8 + wemake plugin with reviewdog backend.
+        # reporter=github-pr-review gives clean inline PR comments (only on added lines by default).
+        # fail_workflow: '1' enforces the gate. Set to '0' temporarily during initial WPS cleanup.
+        # Official pattern: run ruff first, then wemake (they complement, no overlap conflict).
+        uses: wemake-services/wemake-python-styleguide@master
+        # Consider pinning to a specific release commit SHA for maximum supply-chain security
+        # (monitor https://github.com/wemake-services/wemake-python-styleguide/releases).
+        with:
+          reporter: github-pr-review
+          filter_mode: added          # Only comment on newly added/changed code
+          fail_workflow: '1'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
