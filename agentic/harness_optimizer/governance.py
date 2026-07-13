@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 
 from utils.errors import AgenticError
+from utils.personality import OWASP_INJECTION_PATTERNS
 
 
 @dataclass(frozen=True)
@@ -54,3 +55,25 @@ def governance_gate_strings(findings: tuple[GovernanceFinding, ...]) -> tuple[st
     """Serialize findings into the existing RunReport governance string format."""
 
     return tuple(finding.as_gate_string() for finding in findings)
+
+
+def inspect_candidate_text(candidate_text: str, cfg: dict | None = None) -> tuple[GovernanceFinding, ...]:
+    """Flag prompt-injection-shaped candidate content before acceptance or apply."""
+
+    patterns = list(OWASP_INJECTION_PATTERNS)
+    for pattern in ((cfg or {}).get("policy", {}).get("prompt_filter", {}).get("banned_patterns", []) or []):
+        if isinstance(pattern, str) and pattern not in patterns:
+            patterns.append(pattern)
+    for pattern in patterns:
+        try:
+            if re.search(pattern, candidate_text, re.IGNORECASE):
+                return (
+                    GovernanceFinding(
+                        "critical",
+                        "candidate_injection_pattern",
+                        "candidate content matches a governed injection pattern",
+                    ),
+                )
+        except re.error:
+            continue
+    return ()

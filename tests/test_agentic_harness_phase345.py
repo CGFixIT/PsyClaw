@@ -265,11 +265,14 @@ def test_local_lmstudio_proposer_uses_fake_transport(tmp_path: Path) -> None:
     assert workspace.proposal_path.read_text(encoding="utf-8").startswith("# Proposal")
 
 
-def test_draft_plan_raises_not_implemented() -> None:
+def test_draft_plan_is_a_structured_no_write_plan() -> None:
     task = DeepAgentGitHubTask(task_id="task-1", repo="cgfixit/CyClaw", instruction="do the thing")
 
-    with pytest.raises(NotImplementedError):
-        draft_plan(task)
+    plan = draft_plan(task)
+
+    assert plan.task_id == "task-1"
+    assert plan.steps
+    assert "no-write" in plan.pr_body
 
 
 def test_local_proposer_invoke_audits_success(tmp_path: Path) -> None:
@@ -374,12 +377,14 @@ def test_deepagent_builder_injected_create_fn_path(tmp_path: Path) -> None:
         calls.update(kwargs)
         return {"agent": "fake"}
 
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=_audit_cfg(tmp_path))
     result = build_deepagent_github(
         _agentic_config(
             enabled=True,
             deepagent={"enabled": True, "allow_deepagents_dependency": True, "model": "local-deep-agent"},
         ),
         create_fn=fake_create_deep_agent,
+        workspace_tools=ProposerWorkspaceTools(workspace, cfg=_audit_cfg(tmp_path)),
         cfg=_audit_cfg(tmp_path),
     )
 
@@ -395,6 +400,12 @@ def test_deepagent_phase5_refuses_write_and_shell_flags(tmp_path: Path) -> None:
     with pytest.raises(AgenticWriteRefused):
         build_deepagent_github(
             _agentic_config(enabled=True, deepagent={"enabled": True, "allow_shell_execution": True}),
+            cfg=cfg,
+        )
+
+    with pytest.raises(AgenticWriteRefused):
+        build_deepagent_github(
+            _agentic_config(enabled=True, deepagent={"enabled": True, "allow_github_writes": True}),
             cfg=cfg,
         )
 

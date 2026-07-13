@@ -187,13 +187,12 @@ def test_experiment_rejects_duplicate_case_id_within_holdout_hidden() -> None:
         Experiment("exp", "workspace", (surface,), holdout_hidden=("case-h1", "case-h1"))
 
 
-def test_require_human_confirm_flag_is_config_only__not_enforced() -> None:
-    """Tripwire: agentic.harness_optimizer.require_human_confirm_for_accept is
-    parsed and validated (agentic/config.py) but consulted by NO code path —
-    decide_candidate() returns accepted=True with no human-confirm hook, the
-    same "decorative flag" hazard CLAUDE.md documents for security.require_env.
-    If you wire enforcement in (a legitimate hardening), update this test and
-    the config.yaml comment deliberately — do not silently delete the tripwire.
+def test_decide_candidate_remains_pure_before_the_separate_persistent_apply_gate() -> None:
+    """The deterministic score decision does not mutate state or bypass apply gates.
+
+    Phase 8 enforces ``require_human_confirm_for_accept`` in
+    ``apply_candidate_artifact``. Keeping this function free of configuration
+    avoids confusing an evaluation result with a human authorization.
     """
     import inspect
 

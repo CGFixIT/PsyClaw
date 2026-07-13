@@ -412,15 +412,12 @@ agentic:
     allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
     allow_github_writes: false                   # writer.py remains the write-policy boundary
     workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
-  # Governed harness optimizer scaffold. Phase 2 adds local data models and a
-  # proposer workspace builder only; no model calls, no GitHub writes, no MCP tools.
+  # Governed harness optimizer. Candidate application records only a versioned local
+  # artifact after all deterministic gates plus an explicit human reason/confirmation;
+  # it never mutates source, soul.md, or GitHub.
   harness_optimizer:
     enabled: false
     max_iterations: 3
-    # Validated (agentic/config.py) but NOT YET ENFORCED by any code path:
-    # decide_candidate() accepts a passing candidate with no human-confirm hook.
-    # Do not rely on this flag as a safety gate until a caller wires it in
-    # (tripwire: tests/test_agentic_harness_optimizer.py).
     require_human_confirm_for_accept: true
     output_dir: "data/agentic/harness_optimizer/runs"
     memory_dir: "data/agentic/harness_optimizer/memory"

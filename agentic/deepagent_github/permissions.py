@@ -10,7 +10,7 @@ from utils.errors import AgenticWriteRefused
 
 @dataclass(frozen=True)
 class DeepAgentPermissionPolicy:
-    """Default-deny policy for phase-5 Deep Agents integration."""
+    """Default-deny policy for the optional Deep Agents integration."""
 
     allow_deepagents_dependency: bool = False
     allow_filesystem_write_tools: bool = False
@@ -27,12 +27,15 @@ class DeepAgentPermissionPolicy:
         )
 
 
-def refuse_phase5_write_policy(policy: DeepAgentPermissionPolicy) -> None:
-    """Phase 5 is a no-write skeleton even if config flags are toggled."""
+def refuse_unsupported_write_policy(policy: DeepAgentPermissionPolicy) -> None:
+    """Reject capabilities that remain outside phases 6-9.
+
+    Scoped proposer-workspace writes are allowed in phase 6, but only through
+    ``ProposerWorkspaceTools`` and only with Deep Agents HITL interrupts. Shell
+    and GitHub writes remain hard-refused regardless of configuration.
+    """
 
     if policy.allow_shell_execution:
-        raise AgenticWriteRefused("Deep Agents shell execution is not implemented in phase 5")
+        raise AgenticWriteRefused("Deep Agents shell execution is not implemented")
     if policy.allow_github_writes:
-        raise AgenticWriteRefused("Deep Agents GitHub writes are not implemented in phase 5")
-    if policy.allow_filesystem_write_tools:
-        raise AgenticWriteRefused("Deep Agents filesystem write tools are not implemented in phase 5")
+        raise AgenticWriteRefused("Deep Agents GitHub writes are not implemented")

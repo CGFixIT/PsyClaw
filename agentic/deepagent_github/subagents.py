@@ -1,8 +1,10 @@
-"""Subagent specifications for the optional GitHub coding harness skeleton."""
+"""Subagent specifications for the optional GitHub coding harness."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from utils.errors import AgenticError, require_non_empty
 
@@ -30,6 +32,22 @@ class SubagentSpec:
                 "subagent tool is both allowed and denied",
                 details={"subagent": self.name, "tools": sorted(overlap)},
             )
+
+    @property
+    def system_prompt(self) -> str:
+        """Build the actual Deep Agents system prompt from the declared contract."""
+
+        return "\n".join(
+            (
+                f"You are the {self.name} subagent.",
+                self.purpose,
+                f"Allowed tools: {', '.join(self.allowed_tools)}.",
+                f"Denied tools: {', '.join(self.denied_tools)}.",
+                f"Input contract: {self.input_contract}.",
+                f"Output contract: {self.output_contract}.",
+                "Return only the requested structured result; never claim an action was applied.",
+            )
+        )
 
 
 def _validate_may_call_targets(subagents: tuple[SubagentSpec, ...]) -> None:
@@ -73,7 +91,7 @@ def default_subagents() -> tuple[SubagentSpec, ...]:
         SubagentSpec(
             "patch-proposer",
             "Propose diffs without applying them to the real repo.",
-            ("local_repo_read",),
+            ("local_repo_read", "proposal_workspace_write_current", "finish_proposal"),
             denied,
             "implementation plan and scoped workspace",
             "unapplied unified diff",
@@ -113,7 +131,7 @@ def default_subagents() -> tuple[SubagentSpec, ...]:
         SubagentSpec(
             "harness-proposer",
             "Propose harness prompt, skill, or policy improvements for optimizer review.",
-            ("local_repo_read", "rag_search_readonly"),
+            ("local_repo_read", "rag_search_readonly", "proposal_workspace_write_current", "finish_proposal"),
             denied,
             "optimizer run report and visible artifacts",
             "candidate proposal only",
@@ -121,3 +139,38 @@ def default_subagents() -> tuple[SubagentSpec, ...]:
     )
     _validate_may_call_targets(subagents)
     return subagents
+
+
+def build_subagent_specs(
+    *,
+    model: object,
+    tool_callables: tuple[Callable[..., Any], ...],
+    interrupt_on: dict[str, object],
+) -> list[dict[str, object]]:
+    """Materialize validated Deep Agents subagent dictionaries from local specs."""
+
+    tools_by_name = {tool.__name__: tool for tool in tool_callables}
+    if len(tools_by_name) != len(tool_callables):
+        raise AgenticError("Deep Agents tool callable names must be unique")
+
+    payloads: list[dict[str, object]] = []
+    for subagent in default_subagents():
+        tools = [tools_by_name[name] for name in subagent.allowed_tools if name in tools_by_name]
+        if not tools:
+            raise AgenticError(
+                "subagent has no wired allowed tools",
+                details={"subagent": subagent.name},
+            )
+        payload: dict[str, object] = {
+            "name": subagent.name,
+            "description": subagent.purpose,
+            "system_prompt": subagent.system_prompt,
+            "model": model,
+            "tools": tools,
+        }
+        tool_names = {tool.__name__ for tool in tools}
+        subagent_interrupts = {name: value for name, value in interrupt_on.items() if name in tool_names}
+        if subagent_interrupts:
+            payload["interrupt_on"] = subagent_interrupts
+        payloads.append(payload)
+    return payloads

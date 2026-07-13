@@ -1,11 +1,12 @@
 # CyClaw GitHub Deep Agent + Harness Optimizer Implementation Plan
 
-Status: Draft / planning only / no code implemented by this document.
+Status: Historical design plan with the phase 6-9 implementation now recorded
+behind disabled-by-default agentic feature gates. The current behavior and
+security boundary are authoritative in `DEEP_AGENT_HARNESS_PHASES_6_9.md`.
 
-Implementation note: phases 0-5 now have scaffold code in `agentic/` and
-focused tests. This document remains the design plan; the implementation still
-keeps Deep Agents optional, disabled by default, and free of live GitHub, shell,
-or real write execution.
+Implementation note: Deep Agents remain optional, disabled by default, and free
+of live GitHub writes, shell execution, real-repository writes, and autonomous
+apply. Phase 9 is a security gate, not authorization to add an executor.
 
 ## 1. Title and Status
 
@@ -628,11 +629,13 @@ Security regression tests:
 
 Current state:
 
-- The agentic layer is intentionally lightweight and has no Deep Agents runtime
+- The default agentic layer remains lightweight and has no Deep Agents runtime
   dependency.
 - `langgraph` and `langchain-core` already exist in `pyproject.toml`.
-- `deepagents`, `langchain-mcp-adapters`, `fastmcp`, and `quickjs` are not
-  currently declared.
+- `deepagents==0.6.12`, `langchain==1.3.11`, and
+  `langchain-openai==1.3.3` are declared only in the
+  `agentic-deepagents` optional extra and constraints file.
+- `langchain-mcp-adapters`, `fastmcp`, and `quickjs` remain undeclared.
 
 New surfaces if added:
 
@@ -833,13 +836,13 @@ Remains disabled:
 
 ### Phase 6: Deep Agents subagents, skills, memory, permissions, interrupts
 
-Likely files changed:
+Implemented:
 
-- `agentic/deepagent_github/subagents.py`
-- `agentic/deepagent_github/skills.py`
-- `agentic/deepagent_github/memory.py`
-- `agentic/deepagent_github/permissions.py`
-- prompts under `agentic/deepagent_github/prompts/`
+- validated dict subagents with non-empty wired tool callables
+- local-only `AGENTS.md` memory plus applied-registry virtual skills
+- `StateBackend` with all built-in filesystem operations denied
+- scoped workspace writes only, guarded by `interrupt_on` and an in-memory
+  checkpointer
 
 Tests required:
 
@@ -860,11 +863,12 @@ Remains disabled:
 
 ### Phase 7: Real GitHub coding eval runner using local fixture repos
 
-Likely files changed:
+Implemented:
 
 - `agentic/harness_optimizer/runners/github_coding_runner.py`
-- fixture repos under tests
-- runner artifact tests
+- committed fixture repository under `tests/fixtures/github_coding_repo/`
+- fake-context, no-network, deterministic visible/holdout runner coverage
+- optional-dependency CI coverage for approve, reject, and timeout interrupts
 
 Tests required:
 
@@ -880,15 +884,19 @@ Rollback:
 Remains disabled:
 
 - live GitHub in unit tests
-- persistent apply
+- source-tree persistent apply
 
 ### Phase 8: Governed propose/apply for accepted harness improvements
 
-Likely files changed:
+Implemented:
 
-- `agentic/harness_optimizer/governance.py`
-- `agentic/harness_optimizer/patching.py`
-- registry and soul adapters
+- candidate injection inspection and governance finding serialization
+- `agentic/harness_optimizer/patching.py` proposal plus atomic, SHA-256-versioned
+  local artifact records
+- reason, confirmation, write-mode, master-switch, and optimizer-enable gates
+
+The implementation deliberately does not add registry, soul, source-tree, or
+GitHub apply adapters. Their existing human-governed paths remain authoritative.
 
 Tests required:
 
@@ -909,9 +917,12 @@ Remains disabled:
 
 ### Phase 9: Security review before any real write execution
 
-Likely files changed:
+Implemented:
 
-- documents and tests only unless enabling a reviewed executor
+- `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`
+- security regression coverage for tool scope, injection, candidate files, and
+  HITL decisions
+- `deepagents-harness` CI dependency and pip-audit gate
 
 Tests required:
 
@@ -926,7 +937,7 @@ Rollback:
 
 Remains disabled:
 
-- all real write execution until separately approved
+- all source-tree and GitHub write execution until separately approved
 
 ## 19. Open Questions
 
@@ -948,7 +959,7 @@ Remains disabled:
 - Whether local model judging should be permitted for non-security score
   annotations.
 
-## 20. Acceptance Criteria For This Planning Document
+## 20. Historical Acceptance Criteria and Current Scope
 
 This planning document is acceptable only if it:
 
@@ -963,29 +974,14 @@ This planning document is acceptable only if it:
 - includes exact proposed file layout
 - includes CLI and config plans
 - includes audit event plan
-- explicitly says no code was implemented by this document
+- distinguishes historical proposed behavior from the current implementation
 
-This document does not implement code. A separate phase 0-2 implementation may
-add:
+The phase 0-9 implementation adds optional dependencies, local fixture
+evaluation, and artifact-only persistence. It does not add a request-path
+import, a live GitHub test, host shell execution, real-repository mutation, or
+GitHub write execution.
 
-- the document itself
-- disabled config keys and validating config objects
-- local harness optimizer data models
-- local proposer workspace builder
-- focused tests
-
-That implementation must not add:
-
-- Deep Agents dependency
-- LangChain MCP dependency
-- LM Studio calls
-- live GitHub calls in tests
-- GitHub writes
-- shell execution
-- real repo filesystem writes
-- request-path imports
-
-## Unwired scaffold inventory (post-phase-5 audit, 2026-07-10)
+## Historical Unwired Scaffold Inventory (post-phase-5 audit, 2026-07-10)
 
 A read-only audit of the phase 0-5 scaffold (`agentic/harness_optimizer/`,
 `agentic/deepagent_github/`, merged in PRs #492/#493) found the items below
@@ -996,19 +992,36 @@ wire it, and what must be true before it can be treated as live. Do not delete
 these as dead code without checking this table; do not treat any of them as
 functional until their wiring phase lands.
 
+The table is retained as the phase-5 snapshot. Its resolved status is recorded
+below so it is not mistaken for current behavior.
+
 | Unwired item | Location | Planned consumer / wiring phase |
 |---|---|---|
 | `core.py`, `runners.py` (`draft_plan`), `memory.py`, `skills.py`, `governance.py`, `config.py` | `agentic/deepagent_github/` | Phase 6 (subagents, skills, memory, permissions, interrupts) wires `skills.py`/`memory.py`; the rest wire as the Deep Agents harness becomes real. Not exported by `__init__.__all__` today. |
 | `draft_plan()` | `agentic/deepagent_github/runners.py` | **Updated 2026-07-10 (PR #499):** now raises `NotImplementedError` instead of returning hardcoded constants — a caller can no longer silently get placeholder output. Still needs a real implementation before phase 6/7 code calls it. |
 | `GovernanceFinding`, `governance_gate_strings` | `agentic/harness_optimizer/governance.py` (exported by `__init__`) | Phase 8 (governed propose/apply) is the planned producer/consumer; they emit the `"critical: ..."` strings `RunReport.has_critical_governance_finding` keys on, but nothing wires producer to consumer yet. |
-| `validate_phase5_policy()` | `agentic/deepagent_github/governance.py` | Zero callers today (in the same unwired file as the row above). It calls `refuse_phase5_write_policy()` directly with no audit wrapping, unlike `builder.py`'s call sites, which wrap every `refuse_phase5_write_policy()` call in `audit_log()` (that function has no config/audit context of its own — see the comment at `builder.py:82`). Whichever phase wires `validate_phase5_policy` in must add the same audit wrapping, or a refusal on that path raises unaudited. |
+| `validate_write_policy()` | `agentic/deepagent_github/governance.py` | **Updated 2026-07-13 (R1 fix on PR #515):** renamed from `validate_phase5_policy()` and now calls `refuse_unsupported_write_policy()` (the phase-6-9 gate; the `refuse_phase5_write_policy` alias it used to call was deleted). Zero callers today — same unwired-by-design status as the row above, but no longer carries stale phase-5 naming or the loosened-semantics-under-an-old-name hazard `docs/LG_Deep_Agentic_Harness_status_n_roadmap.md`'s R1 review item flagged. It still calls `refuse_unsupported_write_policy()` directly with no audit wrapping, unlike `builder.py`'s call sites, which wrap every such call in `audit_log()` (that function has no config/audit context of its own — see the comment at `builder.py:82`). Whichever phase wires `validate_write_policy` in must add the same audit wrapping, or a refusal on that path raises unaudited. |
 | `HarnessRunner` Protocol | `agentic/harness_optimizer/runners/base_runner.py` | Has one implementer (`MockHarnessRunner`). Phase 7's `github_coding_runner.py` is the planned second, real implementer. |
 | 9 of 11 `SurfaceType` members | `agentic/harness_optimizer/core.py` | Only `REGISTRY_SKILL` and `GITHUB_CODING_PROMPT` are exercised by tests; the other nine (soul_fragment, deepagent_*, mcp_tool_catalog, harness_optimizer_prompt, evaluation_runner_policy) describe surfaces later phases may declare. |
 | `HarnessOptimizerConfig` | `agentic/config.py` | Validated at parse but read by no optimizer code path; `require_human_confirm_for_accept` is therefore not an enforced gate yet (see the config.yaml comment and the tripwire test in `tests/test_agentic_harness_optimizer.py`). Phase 8's apply path is the natural enforcement point. |
 
-## Builder seam gap: create_deep_agent call is not yet a valid Deep Agents wiring (2026-07-10)
+### Current Resolution Ledger
 
-`agentic/deepagent_github/builder.py` currently calls the injected creator with
+| Former gap | Current owner and boundary |
+|---|---|
+| `draft_plan()` placeholder/refusal | `agentic/deepagent_github/runners.py` now produces a deterministic, task-specific no-write plan and PR-body draft. |
+| Memory and skills placeholders | `builder.py` reads only the bounded local `data/agentic/deepagent_github/AGENTS.md` and projects applied registry skills into virtual files. |
+| `GovernanceFinding` had no phase-8 consumer | The fixture runner and artifact proposal path emit findings before deterministic acceptance or persistence. |
+| `HarnessRunner` only had the mock implementation | `GitHubCodingRunner` implements the protocol against copied local fixtures and never invokes a shell or writes GitHub. |
+| `require_human_confirm_for_accept` was parse-only | `apply_candidate_artifact()` requires it together with the master switch, write mode, `writes_enabled`, a reason, and explicit confirmation. |
+| `deepagent_github/config.py` had no CLI consumer | It remains a small config helper; no CLI or background executor is added by phases 6-9. |
+
+## Historical Builder Seam Gap, Resolved in Phase 6 (2026-07-10)
+
+The following paragraph is the historical phase-5 snapshot. It describes the
+gap resolved by the current builder.
+
+`agentic/deepagent_github/builder.py` previously called the injected creator with
 `tools=[]` and `subagents=[subagent.name ...]` (bare name strings), then
 returns `DeepAgentBuildResult(created=True, ...)` with `tool_names` populated
 from the local spec catalog. Against the real `deepagents` package this is not
@@ -1020,32 +1033,32 @@ The seam is exercised only with an injected `create_fn` in tests today, so
 nothing is broken at runtime; the gap matters the moment
 `allow_deepagents_dependency` is enabled against the real package.
 
-Decision recorded for phase 6: builder must construct validated SubAgent spec
-dicts from `default_subagents()` and pass real tool callables derived from
-`default_tool_specs()`, and must only report `created=True` (and advertise
-`tool_names`) after the wired tool list is non-empty and matches the specs —
-never before. Until that lands, treat `DeepAgentBuildResult.created` as "the
-creator seam was invoked," not "a functional agent exists."
+The current builder materializes validated SubAgent dictionaries from
+`default_subagents()` and real callable tools from `default_tool_specs()`. It
+reports `created=True` and advertises `tool_names` only after the wired list is
+non-empty and matches the policy. The optional-dependency test constructs the
+real Deep Agents graph with this wiring.
 
 ## Phase 6-9 sequencing decisions and HITL design corrections (2026-07-10)
 
-This ledger records the confirmed parts of the reviewed phase 6-9 plan so later
-implementation work starts from repo truth instead of the raw paste.
+This ledger records the reviewed decisions and their implementation so later
+work starts from repo truth rather than the raw planning paste.
 
 Status:
 
-- `draft_plan()` now refuses with `NotImplementedError`; shipped in PR #499.
+- The pre-phase-6 `draft_plan()` refusal from PR #499 is replaced with a
+  deterministic task-specific plan that remains no-write.
 - The unwired-file annotation request was superseded by the in-doc "Unwired
   scaffold inventory" from PR #498. The rejected variant would have added
   inline placeholder comments, which conflicts with the repo convention against
   placeholder/fixme comments.
-- The builder validation rule is already recorded above from PR #498: no bare
-  string subagents, no empty tool list, and `created=True` only after SubAgent
-  specs and tool callables validate against the real Deep Agents contract.
+- The builder validation rule is now enforced: no bare string subagents, no
+  empty tool list, and `created=True` only after SubAgent specs and tool
+  callables validate against the real Deep Agents contract.
 
 Phase 6 regression-test shape:
 
-- Reject bare-string subagent specs before invoking `create_deep_agent`.
+- Assert materialized subagent dictionaries before invoking `create_deep_agent`.
 - Reject an empty wired tool list before returning `created=True`.
 - Assert `created=True` and advertised `tool_names` only after the validated
   tool callables match `default_tool_specs()`.
@@ -1053,10 +1066,11 @@ Phase 6 regression-test shape:
 Sequencing rule:
 
 - Inside the Deep Agents harness, `interrupt_on` plus a checkpointer is the HITL
-  control plane. A separate approval-decorator layer is only for tools outside
-  Deep Agents, and is deferred until phase 9.
-- Phase 9 may add that external-tool decorator only after phase 7 CI covers
-  `interrupt_on` approve, reject, and timeout paths with green tests.
+  control plane. The implemented CI covers approve, reject, and timeout, with a
+  timeout resolved as rejection.
+- A separate approval-decorator layer is only for a future tool outside Deep
+  Agents. No such tool exists in this implementation, so no decorator or
+  approval queue was added.
 
 HITL design corrections:
 
