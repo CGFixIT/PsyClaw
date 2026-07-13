@@ -17,7 +17,7 @@
 
 CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 
-1. **Answers questions exclusively from your local Markdown corpus** — no internet by default
+1. **Answers questions from your local Markdown corpus** — no internet by default - Offline best effort with cached models available if vault miss 
 2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline
 3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification
 4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
