@@ -22,9 +22,12 @@ comments everywhere" sweep doesn't turn into one unreviewable diff.
 
 **Style gap — read before writing a single comment:** the user asked for this
 skill's tone to mirror the comment style in two of their personal GitHub
-repos, `pick-a-politician` and `blackjack`. Neither repo is in scope for this
-session (no access was requested or granted), so their exact voice could not
-be sampled or mirrored directly. The tone guidance in §"Comment style" below
+repos, `pick-a-politician` and `blackjack`. 
+web_fetch tool urls for thise repos:
+1) https://github.com/cgfixit/Pick-a-Politician/blob/master/main.py/
+2) https://github.com/cgfixit/Blackjack/blob/master/Blackjack/Blackjack/main.cpp
+#Note just use that for comment styling based on language rules but ideally youd be even more detailed and technically helpful especially for unclear, more complex, or cross-file functions
+The tone guidance in §"Comment style" below
 is a generic best-effort description of what the user asked for — approachable,
 plain-English, ELI5-flavored, technically precise. **This is a documented gap,
 not a finished calibration.** A future session with `add_repo` access to
