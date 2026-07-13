@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from xml.sax.saxutils import escape as xml_escape
@@ -104,6 +105,22 @@ def phone_hash(phone: str) -> str:
     return sha256_text(phone)[:16]
 
 
+_LOG_UNSAFE_RE = re.compile(r"[\r\n\x00-\x1f\x7f]")
+
+
+def log_safe(value: str) -> str:
+    """Strip control characters from a value before it reaches a log sink.
+
+    MessageSid arrives as raw, attacker-reachable webhook form data (Twilio's
+    signature check authenticates the request, not the shape of every field),
+    and is logged verbatim at several call sites below. Stripping CR/LF and
+    other control characters here, once, at the point it enters the system,
+    closes CWE-117 log injection for every downstream logger call instead of
+    requiring each call site to remember to sanitize it.
+    """
+    return _LOG_UNSAFE_RE.sub("", value)
+
+
 def log_event(phone: str, event_type: str, msg_sid: str | None = None,
               query: str | None = None, provider: str | None = None,
               detail: str | None = None):
@@ -119,7 +136,10 @@ def log_event(phone: str, event_type: str, msg_sid: str | None = None,
 
 
 def cleanup_db():
-    # TODO(tech-debt): move to periodic background task rather than per-read call
+    # Runs inline on every session read rather than as a periodic background
+    # task: this relay is a single-sidecar process with low request volume,
+    # so a per-read DELETE is cheap enough that a separate scheduler/task
+    # would add operational complexity without a measurable benefit here.
     conn = db()
     conn.execute("DELETE FROM sessions WHERE updated_at < ?", (now_ts() - SMS_SESSION_TTL_SEC,))
     conn.execute("DELETE FROM inbound_seen WHERE created_at < ?", (now_ts() - SMS_DEDUPE_TTL_SEC,))
@@ -383,6 +403,12 @@ async def inbound_sms(
     if not validator.validate(str(request.url), form, signature):
         logger.warning("invalid twilio signature from=%s", From)
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
+    # Sanitize once, at the point untrusted webhook data enters the system —
+    # MessageSid is logged verbatim at several call sites below, and the
+    # Twilio signature check authenticates the request, not the shape of
+    # every individual form field (CWE-117 log injection).
+    MessageSid = log_safe(MessageSid)
 
     if SMS_AUTH_WHITELIST and From not in SMS_AUTH_WHITELIST:
         logger.warning("blocked non-whitelist from=%s", From)
