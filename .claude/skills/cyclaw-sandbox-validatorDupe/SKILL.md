@@ -1,5 +1,5 @@
 ---
-name: cyclaw-sandbox-validator
+name: cyclaw-sandbox-validatorDupe
 description: Comprehensive sandbox + full-dependency verifier for CyClaw. Incorporates full run_full_verification.py (5 queries: 2 vault, offline-best-effort/Qwen, Grok/Claude connection-only), test_terminal_consoles.py (all soul/ops endpoints), test-specifications.md (detailed prompts, triple-gate, redaction, invariants, HTML contract), and the swarm-verification SKILL.md structure. Python 3.12+ with stubs for offline validation. Enforces all invariants including unwired require_user_confirm, module isolation, key redaction parity for ANTHROPIC/GROK, terminal consoles.
 ---
 
