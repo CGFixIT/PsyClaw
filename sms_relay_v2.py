@@ -318,7 +318,12 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
     try:
         await _process_query_inner(phone, inbound_text, msg_sid)
     except Exception as e:
-        logger.error("process_query failed phone=%s sid=%s: %s",
+        # %r (repr) rather than %s: msg_sid is sanitized at the webhook
+        # boundary already (see log_safe()), but repr() additionally escapes
+        # any embedded control characters into literal \n-style sequences in
+        # every argument here, including the exception text itself — belt
+        # and suspenders against CWE-117 log injection.
+        logger.error("process_query failed phone=%s sid=%r: %r",
                      phone_hash(phone), msg_sid, e, exc_info=True)
         log_event(phone, "error", msg_sid=msg_sid, detail=str(e)[:300])
         try:
@@ -328,7 +333,7 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
             # still returns a valid TwiML response and Twilio doesn't retry
             # endlessly. The failure is logged instead of silently dropped so
             # a broken outbound path (Twilio down, bad creds) is visible.
-            logger.error("failed to deliver error notification phone=%s sid=%s: %s",
+            logger.error("failed to deliver error notification phone=%s sid=%r: %r",
                          phone_hash(phone), msg_sid, notify_exc, exc_info=True)
 
 
@@ -401,7 +406,11 @@ async def inbound_sms(
     form = dict(await request.form())
     signature = request.headers.get("X-Twilio-Signature", "")
     if not validator.validate(str(request.url), form, signature):
-        logger.warning("invalid twilio signature from=%s", From)
+        # phone_hash(), not raw From: this file's own design (see the PR
+        # description's "phone numbers hashed in logs" gap fix) hashes
+        # phone numbers everywhere else; these two logger.warning calls
+        # were the one place that still logged it raw.
+        logger.warning("invalid twilio signature from=%s", phone_hash(From))
         raise HTTPException(status_code=403, detail="Invalid Twilio signature")
 
     # Sanitize once, at the point untrusted webhook data enters the system —
@@ -411,12 +420,12 @@ async def inbound_sms(
     MessageSid = log_safe(MessageSid)
 
     if SMS_AUTH_WHITELIST and From not in SMS_AUTH_WHITELIST:
-        logger.warning("blocked non-whitelist from=%s", From)
+        logger.warning("blocked non-whitelist from=%s", phone_hash(From))
         log_event(From, "blocked_sender", msg_sid=MessageSid)
         return twiml_empty()
 
     if MessageSid and seen_msg(MessageSid):
-        logger.info("duplicate webhook sid=%s", MessageSid)
+        logger.info("duplicate webhook sid=%r", MessageSid)
         log_event(From, "duplicate_webhook", msg_sid=MessageSid)
         return twiml_reply("Duplicate received; ignoring.")
 
