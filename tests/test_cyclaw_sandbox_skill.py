@@ -42,19 +42,22 @@ def test_mock_claude_message_shape_returns_text_content() -> None:
     assert "Mock Claude API" in payload["content"][0]["text"]
 
 
-def test_runner_temporarily_points_external_providers_at_mock(tmp_path: Path) -> None:
+def test_runner_temporarily_points_providers_at_mock(tmp_path: Path) -> None:
     runner = _load_script("run_sandbox_test.py")
     repo_config = ROOT / "config.yaml"
     original_text = repo_config.read_text(encoding="utf-8")
     (tmp_path / "config.yaml").write_text(original_text, encoding="utf-8")
     results = []
 
-    original = runner._enable_mock_external_providers(tmp_path, results)
+    original = runner._enable_mock_providers(tmp_path, results)
     patched = (tmp_path / "config.yaml").read_text(encoding="utf-8")
     config = yaml.safe_load(patched)
 
     assert original == original_text
     assert config["app"]["mode"] == "hybrid"
+    assert config["models"]["local_llm"]["provider"] == "ollama"
+    assert config["models"]["local_llm"]["base_url"] == f"{runner.MOCK_URL}/v1"
+    assert config["models"]["local_llm"]["model"] == runner.MODEL_ID
     assert config["models"]["grok"]["enabled"] is True
     assert config["models"]["claude"]["enabled"] is True
     assert config["models"]["grok"]["base_url"] == f"{runner.MOCK_URL}/v1"

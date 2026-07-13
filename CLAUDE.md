@@ -515,7 +515,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 |---|---|---|
 | `/run-cyclaw` | task | Smoke-test the FastAPI server |
 | `/CyClaw-Optimize` | task | Scan main for optimizations; open focused draft PRs |
-| `/CyClaw-Sandbox` | task | Clone main, mock LM Studio, full audit, dated report + PR |
+| `/CyClaw-Sandbox` | task | Clone main, mock Ollama, full audit, dated report + PR |
 | `/sandbox-runtime-verification` | task | Full Python 3.12 runtime gate |
 | `/architecture-refactor` `/speed-refactor` `/tests-refactor` `/logging-refactor` | loop | Iterative refactor loops |
 | `/wrap-up` | task | End-of-session checklist (ship / remember / improve / publish) |

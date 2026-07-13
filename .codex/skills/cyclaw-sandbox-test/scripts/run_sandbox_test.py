@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a clean CyClaw sandbox smoke with mock LM Studio and terminal API probes."""
+"""Run a clean CyClaw sandbox smoke with mock Ollama and terminal API probes."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from typing import Any
 import yaml
 
 BASE_URL = "http://127.0.0.1:8787"
-MOCK_URL = "http://127.0.0.1:1234"
-MODEL_ID = "qwen2.5-7b-instruct"
+MOCK_URL = "http://127.0.0.1:11434"
+MODEL_ID = "qwen2.5:7b"
 GROK_MODEL_ID = "grok-4.3"
 CLAUDE_MODEL_ID = "claude-sonnet-5"
 API_KEY = "cyclaw-sandbox-test-key"
@@ -93,7 +93,7 @@ def _health_contract_probe() -> Result:
     except Exception as exc:  # noqa: BLE001 - smoke runner reports exceptions as probe failures
         return Result("GET /health provider contract", "FAIL", str(exc))
     services = payload.get("services", {}) if isinstance(payload, dict) else {}
-    expected = {"lm_studio", "grok_api", "claude_api", "embeddings_local"}
+    expected = {"ollama", "grok_api", "claude_api", "embeddings_local"}
     missing = sorted(expected - set(services))
     unhealthy = sorted(name for name in expected & set(services) if not services[name].get("healthy"))
     failures = []
@@ -139,24 +139,27 @@ def _start_process(name: str, cmd: list[str], cwd: Path, env: dict[str, str], lo
         raise
 
 
-def _enable_mock_external_providers(repo: Path, results: list[Result]) -> str | None:
+def _enable_mock_providers(repo: Path, results: list[Result]) -> str | None:
     config_path = repo / "config.yaml"
     try:
         original = config_path.read_text(encoding="utf-8")
         config = yaml.safe_load(original)
         config["app"]["mode"] = "hybrid"
+        config["models"]["local_llm"].update(
+            {"provider": "ollama", "base_url": f"{MOCK_URL}/v1", "model": MODEL_ID}
+        )
         for provider in ("grok", "claude"):
             config["models"][provider]["enabled"] = True
             config["models"][provider]["base_url"] = f"{MOCK_URL}/v1"
         config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     except (KeyError, OSError, TypeError, yaml.YAMLError) as exc:
-        results.append(Result("mock external provider config", "FAIL", str(exc)))
+        results.append(Result("mock provider config", "FAIL", str(exc)))
         return None
     results.append(
         Result(
-            "mock external provider config",
+            "mock provider config",
             "PASS",
-            "enabled hybrid Grok/Claude with loopback mock endpoints and dummy API keys",
+            "enabled Ollama/Grok/Claude loopback mock endpoints with dummy external API keys",
         )
     )
     return original
@@ -455,16 +458,16 @@ def main() -> int:
         }
     )
     py = _prepare_repo(repo, args, results, env)
-    original_config = _enable_mock_external_providers(repo, results)
+    original_config = _enable_mock_providers(repo, results)
 
     skill_dir = Path(__file__).resolve().parents[1]
-    mock_log = repo / "logs" / "mock_lmstudio.log"
+    mock_log = repo / "logs" / "mock_ollama.log"
     server_log = repo / "logs" / "cyclaw_sandbox_test_server.log"
     mock = server = None
     try:
         if not _wait_json(f"{MOCK_URL}/v1/models", 2):
             mock = _start_process(
-                "mock lmstudio",
+                "mock ollama",
                 [sys.executable, str(skill_dir / "scripts" / "mock_lmstudio.py")],
                 repo,
                 env,
@@ -474,10 +477,10 @@ def main() -> int:
             status, payload = _json_request("GET", f"{MOCK_URL}/v1/models")
             encoded = json.dumps(payload)
             ok = all(model_id in encoded for model_id in (MODEL_ID, GROK_MODEL_ID, CLAUDE_MODEL_ID))
-            results.append(Result("mock LM Studio", "PASS" if ok else "FAIL", json.dumps(payload)[:300]))
+            results.append(Result("mock Ollama", "PASS" if ok else "FAIL", json.dumps(payload)[:300]))
             results.append(_run_provider_client_smoke(py, repo, env))
         else:
-            results.append(Result("mock LM Studio", "FAIL", "port 1234 did not become ready"))
+            results.append(Result("mock Ollama", "FAIL", "port 11434 did not become ready"))
 
         server = _start_process(
             "uvicorn",
