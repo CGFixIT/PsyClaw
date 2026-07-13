@@ -445,7 +445,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         "online_provider": req.online_provider,
     }
 
-    # Overall server-side deadline: a stalled LM Studio / retrieval must not hold
+    # Overall server-side deadline: a stalled Ollama / retrieval must not hold
     # the request (and a worker thread) open indefinitely. The per-call LLM
     # timeouts are an inner bound; this is the outer one covering the whole graph.
     graph_timeout = cfg.get("api", {}).get("graph_timeout_sec", 330)
@@ -462,7 +462,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             detail={
                 "error": (
                     f"Request exceeded the {graph_timeout}s server deadline. The local LLM or "
-                    f"retrieval likely stalled — check that LM Studio is running and that its "
+                    f"retrieval likely stalled — check that Ollama is running (ollama serve) and that its "
                     f"loaded context length >= retrieval.max_context_tokens + "
                     f"models.local_llm.max_tokens + ~1500 headroom (see config.yaml), or it can "
                     f"stall at '0% processing'."

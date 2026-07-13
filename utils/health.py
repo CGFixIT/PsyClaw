@@ -1,9 +1,10 @@
 """Health checks for external dependencies.
 
-Checks LM Studio, and optionally Grok and/or Claude when their respective
-mode==hybrid + <provider>.enabled gates are on. No Ollama — embeddings are
-local sentence-transformers.
+Checks Ollama, and optionally Grok and/or Claude when their respective
+mode==hybrid + <provider>.enabled gates are on. Embeddings are local
+sentence-transformers.
 """
+
 
 import os
 import re
@@ -84,7 +85,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         return [HealthStatus(name="config", healthy=False, error=f"config load failed: {_safe_error(exc)}")]
 
     results = []
-    results.append(_ping(f"{llm_base}/models", "lm_studio"))
+    results.append(_ping(f"{llm_base}/models", "ollama"))
     if (cfg["app"]["mode"] == "hybrid" and
             cfg["models"]["grok"].get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]

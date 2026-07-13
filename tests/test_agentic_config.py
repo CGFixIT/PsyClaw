@@ -89,8 +89,8 @@ def test_rejects_non_bool_writes_enabled(tmp_path: Path) -> None:
 def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) -> None:
     cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
 
-    assert cfg.deepagent_github.provider == "lmstudio"
-    assert cfg.deepagent_github.base_url == "http://localhost:1234/v1"
+    assert cfg.deepagent_github.provider == "ollama"
+    assert cfg.deepagent_github.base_url == "http://localhost:11434/v1"
     assert cfg.deepagent_github.allow_deepagents_dependency is False
     assert cfg.deepagent_github.allow_shell_execution is False
     assert cfg.deepagent_github.allow_filesystem_write_tools is False

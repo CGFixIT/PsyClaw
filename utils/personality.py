@@ -75,7 +75,7 @@ class PersonalityManager:
         self._prune_every = pers_cfg.get("interaction_prune_every", 100)
         self._inserts_since_prune = 0
         # Hard ceiling on the soul text that gets prepended to EVERY LLM system
-        # prompt. Bounds prompt inflation (and the LM Studio context budget) no
+        # prompt. Bounds prompt inflation (and the Ollama context budget) no
         # matter how soul.md was written/edited. The /soul/apply schema enforces
         # a matching outer cap at the HTTP boundary (SoulEvolutionRequest).
         self.soul_max_chars = pers_cfg.get("soul_max_chars", 8000)

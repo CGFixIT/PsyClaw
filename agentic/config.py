@@ -48,7 +48,7 @@ DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
 DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 
 _VALID_MODES = ("read", "write")
-_VALID_DEEPAGENT_PROVIDERS = ("lmstudio", "openai_compatible")
+_VALID_DEEPAGENT_PROVIDERS = ("lmstudio", "ollama", "openai_compatible")
 # owner/name -- GitHub slugs allow alphanumerics, hyphen, underscore, dot, but the
 # FIRST character of each segment must be alphanumeric. Anchoring it (rather than
 # the looser ``[A-Za-z0-9_.-]+``) closes a flag-injection gap: a slug like
@@ -110,8 +110,8 @@ class DeepAgentGitHubConfig:
     """Optional Deep Agents GitHub harness config. Disabled by default."""
 
     enabled: bool = False
-    provider: str = "lmstudio"
-    base_url: str = "http://localhost:1234/v1"
+    provider: str = "ollama"
+    base_url: str = "http://localhost:11434/v1"
     model: str = ""
     allow_deepagents_dependency: bool = False
     allow_filesystem_write_tools: bool = False
@@ -131,7 +131,7 @@ class DeepAgentGitHubConfig:
             _validate_bool(getattr(self, attr), field_name)
         if self.provider not in _VALID_DEEPAGENT_PROVIDERS:
             raise AgenticConfigError(
-                "agentic.deepagent_github.provider must be 'lmstudio' or 'openai_compatible'",
+                "agentic.deepagent_github.provider must be 'lmstudio', 'ollama', or 'openai_compatible'",
                 details={"received": self.provider, "valid": list(_VALID_DEEPAGENT_PROVIDERS)},
             )
         if not isinstance(self.base_url, str) or not self.base_url:

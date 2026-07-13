@@ -1,7 +1,7 @@
 # CyClaw — GitHub Setup Guide (Windows + Linux)
 
-**v1.3+ | Offline-First | LM Studio | 10–15 min**  
-Tested & verified June 14 2026 — runs cleaner than 3.11 version
+**v1.3+ | Offline-First | Ollama | 10–15 min**  
+Tested & verified July 2026 — Ollama edition
 
 ---
 
@@ -11,7 +11,7 @@ Tested & verified June 14 2026 — runs cleaner than 3.11 version
 |---|---|
 | Git | Any recent version |
 | Python 3.12 | 3.12 is primary supported runtime |
-| LM Studio | Running on `http://127.0.0.1:1234/v1` with `qwen2.5-7b-instruct` loaded |
+| Ollama | Running on `http://127.0.0.1:11434/v1` with `qwen2.5:7b` pulled |
 | Corpus `.md` files | Copy from local machine or `cgfixit.com/zSafeClaw/` |
 | Windows: PowerShell as admin | Linux: bash |
 
@@ -131,8 +131,8 @@ app:
 
 models:
   local_llm:
-    base_url: "http://127.0.0.1:1234/v1"   # LM Studio default — do not change
-    model: "qwen2.5-7b-instruct"            # must match model name in LM Studio exactly
+    base_url: "http://127.0.0.1:11434/v1"  # Ollama default — do not change
+    model: "qwen2.5:7b"                     # must match model tag in Ollama exactly
     timeout_sec: 720
     max_tokens: 5000
 
@@ -174,7 +174,7 @@ sampling capability by design.
 |---|---|
 | `IndexNotFoundError` on startup | Run `python -m retrieval.indexer` — index not built yet |
 | `Collection not found in ChromaDB` | Delete `index/` folder and reindex |
-| LLM timeout on query | Increase `timeout_sec` in `config.yaml` — long-context inference is slow on CPU |
+| LLM timeout on query | Increase `timeout_sec` in `config.yaml` — or switch to a smaller Ollama model |
 | `ModuleNotFoundError: nltk` | Run the NLTK download step (Step 4) |
 | `FileNotFoundError: constraints.txt` | File restored to repo June 14 — `git pull` |
 | Soul endpoint returns 404 | Set `personality.enabled: true` in `config.yaml` |

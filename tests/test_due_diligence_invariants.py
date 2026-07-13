@@ -606,10 +606,10 @@ class TestHealthEmbeddingsSignalIsStatic:
 
         monkeypatch.setattr(health, "_http_get", _boom)
         # Point at the shipped config (offline mode, grok disabled) so only the
-        # LM Studio probe + the static embeddings entry are produced.
+        # Ollama probe + the static embeddings entry are produced.
         statuses = health.check_all(str(_REPO_ROOT / "config.yaml"))
         by_name = {s.name: s for s in statuses}
-        assert by_name["lm_studio"].healthy is False  # real probe failed
+        assert by_name["ollama"].healthy is False  # real probe failed
         assert by_name["embeddings_local"].healthy is True  # static, not probed
         # Clear the 2s status cache so this monkeypatched result never leaks.
         health._status_cache.clear()

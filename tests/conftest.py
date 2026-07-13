@@ -19,7 +19,7 @@ from retrieval.hybrid_search import SearchResult
 TEST_CONFIG = {
     "app": {"name": "cyclaw-test", "env": "test", "mode": "offline", "debug": True},
     "models": {
-        "local_llm": {"provider": "lmstudio", "base_url": "http://127.0.0.1:1234/v1",
+        "local_llm": {"provider": "ollama", "base_url": "http://127.0.0.1:11434/v1",
                       "model": "test-model", "max_tokens": 256, "temperature": 0.1, "timeout_sec": 10},
         "embeddings": {"provider": "sentence-transformers", "model": "all-MiniLM-L6-v2",
                        "dim": 384, "cache_dir": None},
