@@ -13,7 +13,7 @@ Hardened defaults (conservative, matching CyClaw's offline-first posture):
   - registry_path:  data/agentic/skills_registry.json   (must resolve under data/)
 
 This module is part of a package that is NEVER imported by gate.py, graph.py, or
-mcp_hybrid_server.py. That isolation is what preserves CyClaw's five security
+mcp_hybrid_server.py. That isolation is what preserves CyClaw's six security
 invariants by construction.
 """
 
