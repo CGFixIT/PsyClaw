@@ -163,17 +163,12 @@ rising eval-awareness (~6% of rollouts).
 ## 8. USER CONTEXT: cgfixit
 
 ### 8.1 Identity
-Christopher Michael Grady ("Chris"/"CG"), b. 1992-04-01, Metro Atlanta, GA.
-Handles: cgfixit (GitHub/X/domains), linkedin.com/in/cgrady92. Post-Sales Systems
-Engineer at Veeam, 5+ yrs, 2x SE of the Year (Americas). Stack: Windows/VMware/
-Hyper-V, Veeam ecosystem, Python, PowerShell. Interests: AI, security, psych/
-philosophy (Stoic-leaning), history, music, Falcons/UConn/Hawks. Self-model:
-"Booker DeWitt who could've been the non-insane Comstock."
+[Redacted 2026-07-12 per the owner's request in commit ac1a195: personal
+identity details are kept out of GitHub-published files. Owner handle:
+cgfixit.]
 
 ### 8.2 The Mission
-Career pivot: Veeam SE → Detection Engineering / Security Automation / Senior-Staff
-SE (Rubrik, Cohesity, Anthropic; 1-5yr: frontier AI). THE GATE IS SHIPPING, NOT
-BUILDING — the single most important fact about this account (see §8.4).
+Redacted
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.8.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
