@@ -28,7 +28,7 @@ short and invocation-friendly, for example `/refactor` or
   canonical repo docs before substantial work.
 - `skills/cyclaw-run-cyclaw/` - prepare, run, smoke-test, and interact with the
   local CyClaw FastAPI RAG server.
-- `skills/cyclaw-sandbox-test/` - clone `origin/main`, mock LM Studio, and
+- `skills/cyclaw-sandbox-test/` - clone `origin/main`, mock Ollama, and
   smoke-test CyClaw gateway plus terminal/API surfaces before PRs.
 - `skills/cyclaw-command-status/` - run a read-only environment, config, index,
   soul, telemetry, and live-health status check.

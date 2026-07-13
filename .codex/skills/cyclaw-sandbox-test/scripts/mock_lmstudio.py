@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal mock LM Studio server: OpenAI-compatible API on port 1234."""
+"""Minimal mock Ollama server with OpenAI-compatible provider APIs."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-PORT = 1234
-MODEL_ID = "qwen2.5-7b-instruct"
+PORT = 11434
+MODEL_ID = "qwen2.5:7b"
 GROK_MODEL_ID = "grok-4.3"
 CLAUDE_MODEL_ID = "claude-sonnet-5"
 
@@ -46,7 +46,7 @@ def _answer(prompt_content: str, model_id: str) -> str:
     if model_id == CLAUDE_MODEL_ID:
         return "[Mock Claude API] Dummy-key external fallback response for sandbox audit purposes."
     return (
-        f"[Mock LM Studio - {MODEL_ID}] This is a cached offline response "
+        f"[Mock Ollama - {MODEL_ID}] This is a cached offline response "
         "for sandbox audit purposes. No real model weights were loaded."
     )
 
@@ -114,8 +114,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = HTTPServer(("127.0.0.1", PORT), _Handler)
-    print(f"[mock_lmstudio] Listening on http://127.0.0.1:{PORT}", flush=True)
-    print("[mock_lmstudio] READY", file=sys.stderr, flush=True)
+    print(f"[mock_ollama] Listening on http://127.0.0.1:{PORT}", flush=True)
+    print("[mock_ollama] READY", file=sys.stderr, flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

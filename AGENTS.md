@@ -86,7 +86,7 @@ Skills:
 - `.codex/skills/cyclaw-run-cyclaw/` - use when asked to prepare, start, run,
   smoke-test, or interact with the local FastAPI RAG server.
 - `.codex/skills/cyclaw-sandbox-test/` - use for a fresh-main local sandbox
-  audit with mock LM Studio and terminal/API smoke coverage before PRs.
+  audit with mock Ollama and terminal/API smoke coverage before PRs.
 - `.codex/skills/cyclaw-command-status/` - use for read-only environment,
   config, index, soul, telemetry, and live health status checks.
 - `.codex/skills/cyclaw-command-run/` - use for focused endpoint smoke checks

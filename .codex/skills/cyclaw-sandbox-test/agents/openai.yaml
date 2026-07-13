@@ -1,4 +1,4 @@
 interface:
   display_name: "CyClaw Sandbox Test"
   short_description: "Clean CyClaw sandbox smoke audit"
-  default_prompt: "Use $cyclaw-sandbox-test to clone origin/main, mock LM Studio, and smoke-test CyClaw endpoints."
+  default_prompt: "Use $cyclaw-sandbox-test to clone origin/main, mock Ollama, and smoke-test CyClaw endpoints."
