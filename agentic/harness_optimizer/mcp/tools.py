@@ -119,6 +119,16 @@ class ProposerWorkspaceTools:
             resolved = path.resolve(strict=True)
             if not _contains(self.workspace.root, resolved):
                 self._deny(tool, "workspace read escaped root", target=target)
+            # The parts[0] check above only catches a request that NAMES
+            # holdout_hidden directly. A symlink placed elsewhere in the
+            # workspace (e.g. current/peek -> ../holdout_hidden) resolves
+            # into holdout_hidden while still passing the root-containment
+            # check above, since holdout_hidden is itself inside root. Check
+            # the RESOLVED path against holdout_hidden_dir too, so holdout
+            # stays hidden regardless of which path led there.
+            holdout_resolved = self.workspace.holdout_hidden_dir.resolve()
+            if resolved == holdout_resolved or holdout_resolved in resolved.parents:
+                self._deny(tool, "holdout_hidden is not readable by proposer tools", target=target)
             return resolved
         except AgenticError:
             raise
