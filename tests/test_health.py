@@ -16,15 +16,15 @@ import yaml
 
 from utils import health
 
-# Inert test fixtures mirroring the real loopback LM Studio endpoint
-# (http://127.0.0.1:1234, the value shipped in config.yaml) so the probes are
+# Inert test fixtures mirroring the real loopback Ollama endpoint
+# (http://127.0.0.1:11434, the value shipped in config.yaml) so the probes are
 # exercised against realistic inputs. No socket is ever opened -- httpx is
 # mocked in every test. DevSkim flags the http scheme + localhost on URL
 # literals; suppressed here per the repo convention (cf. the inline
 # `# DevSkim: ignore` markers in retrieval/hybrid_search.py and
 # utils/personality.py).
-_LM_BASE = "http://127.0.0.1:1234/v1"  # DevSkim: ignore DS137138,DS162092
-_LM_MODELS = "http://127.0.0.1:1234/models"  # DevSkim: ignore DS137138,DS162092
+_OLLAMA_BASE = "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS137138,DS162092
+_OLLAMA_MODELS = "http://127.0.0.1:11434/models"  # DevSkim: ignore DS137138,DS162092
 _HOST_MODELS = "http://host/models"  # DevSkim: ignore DS137138
 
 
@@ -40,7 +40,7 @@ def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
     cfg = {
         "app": {"mode": mode},
         "models": {
-            "local_llm": {"base_url": _LM_BASE},
+            "local_llm": {"base_url": _OLLAMA_BASE},
             "grok": grok_cfg,
             "claude": claude_cfg,
         },
@@ -85,18 +85,18 @@ def _clear_health_cfg_cache():
 class TestPing:
     def test_ping_healthy(self, monkeypatch):
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
-        status = health._ping(_HOST_MODELS, "lm_studio")
+        status = health._ping(_HOST_MODELS, "ollama")
         assert status.healthy is True
-        assert status.name == "lm_studio"
+        assert status.name == "ollama"
         assert status.latency_ms is not None
         assert status.error is None
 
     def test_ping_unreachable_redacts_url(self, monkeypatch):
         def boom(url, **kw):
-            raise httpx.ConnectError(f"cannot connect to {_LM_MODELS}")
+            raise httpx.ConnectError(f"cannot connect to {_OLLAMA_MODELS}")
 
         monkeypatch.setattr(health, "_http_get", boom)
-        status = health._ping(_LM_MODELS, "lm_studio")
+        status = health._ping(_OLLAMA_MODELS, "ollama")
         assert status.healthy is False
         # The URL (possible creds / internal hostnames) must not leak into /health.
         assert "127.0.0.1" not in status.error
@@ -111,17 +111,17 @@ class TestPing:
                 raise httpx.HTTPStatusError("503", request=request, response=response)
 
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _Resp())
-        status = health._ping(_HOST_MODELS, "lm_studio")
+        status = health._ping(_HOST_MODELS, "ollama")
         assert status.healthy is False
 
 
 class TestCheckAll:
-    def test_offline_mode_pings_only_lm_studio(self, tmp_path, monkeypatch):
+    def test_offline_mode_pings_only_ollama(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="offline")
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         statuses = health.check_all(cfg_path)
         names = {s.name for s in statuses}
-        assert names == {"lm_studio", "embeddings_local"}
+        assert names == {"ollama", "embeddings_local"}
         assert all(s.healthy for s in statuses)
 
     def test_hybrid_without_key_reports_key_not_set(self, tmp_path, monkeypatch):

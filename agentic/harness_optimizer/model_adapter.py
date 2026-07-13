@@ -1,4 +1,4 @@
-"""Local LM Studio/OpenAI-compatible proposer adapter for the harness optimizer."""
+"""Local Ollama/OpenAI-compatible proposer adapter for the harness optimizer."""
 
 from __future__ import annotations
 
@@ -22,14 +22,14 @@ class LocalProposerResponse:
 
     content: str
     model: str
-    provider: str = "lmstudio"
+    provider: str = "ollama"
 
 
 class LocalProposerClient:
     """Minimal OpenAI-compatible chat client for local proposer use.
 
     The constructor accepts an httpx transport so tests use MockTransport and
-    never require live LM Studio.
+    never require live Ollama.
     """
 
     def __init__(
@@ -65,7 +65,7 @@ class LocalProposerClient:
         audit_log(
             {
                 "event": "agentic_harness_proposer_model_invoked",
-                "provider": "lmstudio",
+                "provider": "ollama",
                 "model": self.model,
                 "system_prompt_hash": _hash_text(system_prompt),
                 "user_prompt_hash": _hash_text(user_prompt),
@@ -94,7 +94,7 @@ class LocalProposerClient:
             audit_log(
                 {
                     "event": "agentic_harness_proposer_model_failed",
-                    "provider": "lmstudio",
+                    "provider": "ollama",
                     "model": self.model,
                     "error_type": type(exc).__name__,
                 },
@@ -109,7 +109,7 @@ class LocalProposerClient:
             audit_log(
                 {
                     "event": "agentic_harness_proposer_model_failed",
-                    "provider": "lmstudio",
+                    "provider": "ollama",
                     "model": self.model,
                     "error_type": "AgenticError",
                 },
@@ -120,7 +120,7 @@ class LocalProposerClient:
         audit_log(
             {
                 "event": "agentic_harness_proposer_model_succeeded",
-                "provider": "lmstudio",
+                "provider": "ollama",
                 "model": self.model,
             },
             config_path=config_path,

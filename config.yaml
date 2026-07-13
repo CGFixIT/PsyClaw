@@ -25,28 +25,28 @@ app:
 
 models:
   local_llm:
-    provider: "lmstudio"
-    base_url: "http://127.0.0.1:1234/v1"  # DevSkim: ignore DS162092,DS137138 - LMStudio loopback, offline-only
-    # Optional. Leave commented for a default (unauthenticated) LM Studio server —
-    # no Authorization header is sent. Only set this if LM Studio's "Require API
-    # Key" is enabled, and QUOTE it as a string (api_key: "your-key") so YAML
+    provider: "ollama"
+    base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - Ollama loopback, offline-only
+    # Optional. Leave commented for a default (unauthenticated) Ollama server —
+    # no Authorization header is sent. Only set this if you have configured Ollama
+    # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-#    api_key: "your-lm-studio-key"
-    model: "qwen2.5-7b-instruct"
-    # max_tokens = RESERVED OUTPUT BUDGET. LM Studio allocates it up front before
+#    api_key: "your-ollama-key"
+    model: "qwen2.5:7b"
+    # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
-    # length, LM Studio stalls at "0% processing". The graph bounds the prompt
+    # length, Ollama stalls at "0% processing". The graph bounds the prompt
     # INPUT to retrieval.max_context_tokens (query/soul-aware budget in
     # graph.py local_llm_node / offline_best_effort_node), so the stall is
     # prevented deterministically as long as:
-    #   LM Studio context length  >=  max_context_tokens + max_tokens + ~1500 headroom
-    # RECOMMENDED LM Studio context length: 10000-12288 (10k-12k).
+    #   Ollama context length  >=  max_context_tokens + max_tokens + ~1500 headroom
+    # RECOMMENDED Ollama context length (via num_ctx): 10000-12288 (10k-12k).
     # With max_context_tokens=4000 + max_tokens=3000 that is 7000 + headroom -> fits.
     max_tokens: 3000
     temperature: 0.3
     # Hard per-attempt HTTP timeout. A bounded context (retrieval.max_context_tokens)
     # means local inference finishes in seconds-to-low-minutes; 300s is a backstop
-    # so a genuine LM Studio stall surfaces as an error in 5 min rather than 12.
+    # so a genuine Ollama stall surfaces as an error in 5 min rather than 12.
     # Raise it if you run very large models on slow CPU-only hardware.
     timeout_sec: 300  # Per-call LLM timeout. Must be < api.graph_timeout_sec (330) to avoid orphaned graph invocations.
     retry:                  # bounded exp-backoff on transport/5xx/429; 4xx AND read-timeouts fail fast
@@ -54,7 +54,7 @@ models:
       backoff_base_sec: 0.5 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (0.5s, 1s)
       backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
       # NOTE: a local read timeout is NOT retried (retry_on_timeout=False in
-      # llm/client.py). It means LM Studio is stalled ("0% processing"); a retry
+      # llm/client.py). It means Ollama is stalled ("0% processing"); a retry
       # would just wait another full timeout_sec and, since api.graph_timeout_sec
       # cuts the request first, only orphans a worker thread on a 2nd stalled call.
   embeddings:
@@ -119,8 +119,8 @@ retrieval:
   # (query/soul-aware budget, ~4 chars/token), so the assembled prompt input stays
   # within this many tokens. This bounds both the RAG (local_llm) and offline
   # best-effort paths. The no-stall guarantee:
-  #   LM Studio context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
-  # 4000 + max_tokens 3000 + headroom -> recommend LM Studio context 10000-12288.
+  #   Ollama context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
+  # 4000 + max_tokens 3000 + headroom -> recommend Ollama context 10000-12288.
   # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
   max_context_tokens: 4000
@@ -143,7 +143,7 @@ personality:
   db_path: "data/personality/cyclaw_soul.db"
   # Hard ceiling (chars) on the soul text prepended to every LLM system prompt.
   # Bounds prompt inflation so an oversized/edited soul.md can't push the prompt
-  # past the LM Studio context budget (the in-memory soul is truncated to this
+  # past the Ollama context budget (the in-memory soul is truncated to this
   # on load/apply, with a warning; soul.md on disk is left intact). Keep it well
   # below retrieval.max_context_tokens*4 so query + context still fit. The
   # /soul/apply HTTP boundary (SoulEvolutionRequest) caps input at 8192.
@@ -280,7 +280,7 @@ api:
   port: 8787
   # Overall server-side deadline for one /query (retrieval + graph + LLM). The
   # graph invoke is wrapped in asyncio.wait_for; on exceed the endpoint returns
-  # HTTP 504 instead of holding the request open, so a stalled LM Studio /
+  # HTTP 504 instead of holding the request open, so a stalled Ollama /
   # retrieval can't hang a client indefinitely. Keep this >= the inner
   # models.local_llm.timeout_sec (300) so normal slow inference is not cut off;
   # the margin covers retrieval + soul-DB time.
@@ -404,8 +404,8 @@ agentic:
   # not used unless a future reviewed command explicitly invokes it.
   deepagent_github:
     enabled: false
-    provider: "lmstudio"                         # "lmstudio" | "openai_compatible"
-    base_url: "http://localhost:1234/v1"         # local OpenAI-compatible endpoint
+    provider: "ollama"                          # "ollama" | "openai_compatible"
+    base_url: "http://localhost:11434/v1"        # local Ollama OpenAI-compatible endpoint
     model: ""
     allow_deepagents_dependency: false           # extras must be installed explicitly
     allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
@@ -524,9 +524,9 @@ guardrails:
                                   # the offline input rail (injection markers + soul-
                                   # mutation regex, no LLM) runs between route_by_score
                                   # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
-  engine: "openai"               # LM Studio / Ollama expose OpenAI-compatible APIs
-  base_url: "http://127.0.0.1:1234/v1"  # DevSkim: ignore DS162092,DS137138 - loopback LM Studio, offline-only
-  model: "qwen2.5-7b-instruct"   # keep in sync with models.local_llm.model
+  engine: "openai"               # Ollama exposes an OpenAI-compatible API
+  base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
+  model: "qwen2.5:7b"            # keep in sync with models.local_llm.model
   nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
   metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
   block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."

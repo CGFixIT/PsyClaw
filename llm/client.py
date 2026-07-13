@@ -1,6 +1,6 @@
-"""LM Studio (local), Grok, and Claude online fallback client wrappers.
+"""Ollama (local), Grok, and Claude online fallback client wrappers.
 
-Local LM Studio and Grok use the OpenAI-compatible /chat/completions endpoint.
+Local Ollama and Grok use the OpenAI-compatible /chat/completions endpoint.
 Claude uses Anthropic's Messages API.
 
 Transient failures (timeouts, transport/network errors, and retryable HTTP
@@ -129,7 +129,7 @@ def _post_with_retry(
     messages/codes stay unchanged.
 
     ``retry_on_timeout=False`` makes a read timeout fail fast (no retry), while
-    transport/5xx/429 still retry. This is the right policy for a local LM Studio
+    transport/5xx/429 still retry. This is the right policy for a local Ollama
     backend: a read timeout there means inference is *stalled* (the classic
     "0% processing"), so a retry just issues a second request that waits the full
     per-call ``timeout_sec`` again — and, because the gateway wraps the whole graph
@@ -139,10 +139,10 @@ def _post_with_retry(
     behind its short timeout are worth a retry).
 
     Each transient retry logs a WARNING and each terminal give-up / fail-fast a
-    ERROR, tagged with ``service`` (e.g. ``lm_studio`` / ``grok``), the attempt
+    ERROR, tagged with ``service`` (e.g. ``ollama`` / ``grok``), the attempt
     count, and the failure category. Only network/HTTP metadata is logged —
     never the prompt or response body — so the breadcrumb is safe for the audit
-    trail. This turns previously-silent retries (a 12-minute LM Studio stall would
+    trail. This turns previously-silent retries (a 12-minute Ollama stall would
     leave no trace) into an observable signal.
     """
     def _delay(attempt: int) -> float:
@@ -240,7 +240,7 @@ class LocalLLMClient:
             )
 
         return _post_with_retry(
-            service="lm_studio",
+            service="ollama",
             do_post=do_post,
             max_retries=self.retry_max,
             backoff_base=self.retry_backoff,
@@ -250,16 +250,16 @@ class LocalLLMClient:
             # returned 504). Transport/5xx/429 still retry — those fail fast.
             retry_on_timeout=False,
             on_http=lambda e: LLMServiceError(
-                f"LM Studio HTTP error: {e.response.status_code}",
+                f"Ollama HTTP error: {e.response.status_code}",
                 details={"status": e.response.status_code},
             ),
             on_timeout=lambda e: LLMServiceError(
-                "LM Studio timeout", details={"timeout_sec": self.timeout}
+                "Ollama timeout", details={"timeout_sec": self.timeout}
             ),
             # Type-only: str(e) can carry URLs, body fragments, or secrets that
             # graph embeds into HTTP 200 answers via _generate_or_error.
             on_other=lambda e: LLMServiceError(
-                f"LM Studio error: {type(e).__name__}",
+                f"Ollama error: {type(e).__name__}",
                 details={"exc_type": type(e).__name__},
             ),
         )

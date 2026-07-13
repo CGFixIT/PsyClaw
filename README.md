@@ -8,6 +8,9 @@
 [![PGvector](https://img.shields.io/badge/PGvector-0.3.6-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
+[![DevSkim](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml)
+[![Gitleaks Secret Scan](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml)
+[![OSV-Scanner](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
 
@@ -17,7 +20,7 @@
 
 CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 
-1. **Answers questions from your local Markdown corpus** — no internet by default - Offline best effort with cached models available if vault miss 
+1. **Answers questions exclusively from your local Markdown corpus** — no internet by default
 2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline
 3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification
 4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
@@ -56,7 +59,7 @@ User Query (HTTP POST /query or MCMC tool call)
     │     │           opt-in, pass-through when disabled) │
     │     │           blocked ──→ 8. audit_logger          │
     │     │           passed  ──→ 4. local_llm             │
-    │     │                        (LM Studio :1234)      │
+    │     │                        (Ollama :11434)        │
     │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
     │                    ├─ confirmed + hybrid ──→        │
     │                    │      6. grok_fallback OR       │
@@ -101,7 +104,7 @@ flowchart TD
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
         X -->|"blocked"| L
-        X -->|"passed"| H["④ local_llm\nLM Studio :1234\nQwen2.5-7b"]
+        X -->|"passed"| H["④ local_llm\nOllama :11434\nqwen2.5:7b"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
         I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.3\ntriple-gated"]
         I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
@@ -298,8 +301,8 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 | Requirement | Version | Notes |
 |---|---|---|
 | Python | 3.12 | Primary supported runtime |
-| [LM Studio](https://lmstudio.ai/) | Any | Must be running on `localhost:1234` |
-| GGUF model loaded in LM Studio | — | `mistral-7b-instruct` or `qwen2.5-7b` work well |
+| [Ollama](https://ollama.com/) | Any | Must be running on `localhost:11434` |
+| Model pulled in Ollama | — | `qwen2.5:7b` (default), `mistral:7b`, or any chat model |
 
 ### Install
 
@@ -580,7 +583,7 @@ python -m guardrails.cli test                            # pre-flight self-test
 ```yaml
 guardrails:
   enabled: false                 # opt-in; also gates the graph.py guardrail_input node
-  engine: "openai"               # LM Studio / Ollama OpenAI-compatible endpoint
+  engine: "openai"               # Ollama OpenAI-compatible endpoint
   model: "qwen2.5-7b-instruct"   # keep in sync with models.local_llm.model
   hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
@@ -603,7 +606,7 @@ same isolation guarantee as every other agentic feature above:
   regression, no unallowed surface changed, no visible-case hardcoding, no critical
   governance finding).
 - **`agentic/deepagent_github/`** — an optional LangChain Deep Agents-backed local GitHub
-  coding harness using LM Studio and scoped CyClaw tool wrappers, lazily importing
+  coding harness using Ollama and scoped CyClaw tool wrappers, lazily importing
   `deepagents` only when explicitly enabled.
 
 **Status:** phases 0-5 (config validation, the proposer workspace + its audited,

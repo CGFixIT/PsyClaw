@@ -606,7 +606,7 @@ class TestRetryBehavior:
             assert client.generate("p") == "ok"
         warnings = [r for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1
-        assert "lm_studio" in warnings[0].message
+        assert "ollama" in warnings[0].message
         assert "503" in warnings[0].message
         client.close()
 
@@ -621,7 +621,7 @@ class TestRetryBehavior:
                 client.generate("p")
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1
-        assert "lm_studio" in errors[0].message
+        assert "ollama" in errors[0].message
         assert "500" in errors[0].message
         client.close()
 
@@ -636,7 +636,7 @@ class TestRetryBehavior:
                 client.generate("p")
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1
-        assert "lm_studio" in errors[0].message
+        assert "ollama" in errors[0].message
         assert "non-retryable" in errors[0].message
         client.close()
 
