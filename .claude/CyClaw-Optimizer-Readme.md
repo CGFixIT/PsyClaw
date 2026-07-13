@@ -1,6 +1,9 @@
 note for any loop task prompt or essentially any time an optimization skill is invoked - start here during 4 minute code scan time block and read each issue then compare to current code branch to verify valid/not already resolved
 
 ALSO: there are several others like this to check first when fixing or optimizing cyclaw - under docs/* , docs/zIdeas, docs/audits, 
+
+also - if i dont myself by next run, please add to the settings.json in claude for hooks that has claude code load another skill on default (karpathy-guidelines)  
+
 ## Part II — Code Review 
 
 ### Bugs / Optimizations needed Summary Table
