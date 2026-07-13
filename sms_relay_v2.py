@@ -30,7 +30,7 @@ SMS_RELAY_PORT = int(os.environ.get("SMS_RELAY_PORT", "8788"))
 SMS_DB_PATH = os.environ.get("SMS_DB_PATH", "sms_relay.db")
 SMS_SESSION_TTL_SEC = int(os.environ.get("SMS_SESSION_TTL_SEC", "900"))
 SMS_DEDUPE_TTL_SEC = int(os.environ.get("SMS_DEDUPE_TTL_SEC", "3600"))
-SMS_SEGMENT_SIZE = int(os.environ.get("SMS_SEGMENT_SIZE", "1200"))
+SMS_SEGMENT_SIZE = max(int(os.environ.get("SMS_SEGMENT_SIZE", "1200")), 100)  # P2: floor guard
 SMS_ALLOWED_ONLINE_PROVIDERS = [
     x.strip().lower()
     for x in os.environ.get("SMS_ALLOWED_ONLINE_PROVIDERS", "grok").split(",")
@@ -44,7 +44,7 @@ twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 app = FastAPI(title="CyClaw SMS Relay v2", docs_url=None, redoc_url=None, openapi_url=None)
 
 
-# ── DB ─────────────────────────────────────────────────────────────────────────
+# ── DB ──────────────────────────────────────────────────────────────────────────
 
 def db():
     conn = sqlite3.connect(SMS_DB_PATH)
@@ -114,6 +114,7 @@ def log_event(phone: str, event_type: str, msg_sid: Optional[str] = None,
 
 
 def cleanup_db():
+    # TODO(tech-debt): move to periodic background task rather than per-read call
     conn = db()
     conn.execute("DELETE FROM sessions WHERE updated_at < ?", (now_ts() - SMS_SESSION_TTL_SEC,))
     conn.execute("DELETE FROM inbound_seen WHERE created_at < ?", (now_ts() - SMS_DEDUPE_TTL_SEC,))
@@ -182,6 +183,8 @@ def twiml_empty() -> Response:
 
 
 def chunk_text(text: str, size: int = SMS_SEGMENT_SIZE) -> list[str]:
+    # P2: floor prevents zero/negative size infinite loop
+    size = max(size, 100)
     text = text.strip()
     if not text:
         return ["[empty]"]
@@ -225,11 +228,17 @@ async def post_cyclaw(payload: dict) -> dict:
         return resp.json()
 
 
-def send_sms(to_number: str, text: str):
-    twilio_client.messages.create(
-        body=text,
-        from_=TWILIO_FROM_NUMBER,
-        to=to_number,
+# P1: non-blocking send — wraps synchronous Twilio REST call in executor
+# to avoid blocking the event loop on every outbound SMS
+async def send_sms(to_number: str, text: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        None,
+        lambda: twilio_client.messages.create(
+            body=text,
+            from_=TWILIO_FROM_NUMBER,
+            to=to_number,
+        ),
     )
 
 
@@ -250,14 +259,14 @@ def build_result_footer(data: dict) -> str:
     return "[" + " | ".join(bits) + "]"
 
 
-# ── Core logic ─────────────────────────────────────────────────────────────────
+# ── Core logic ──────────────────────────────────────────────────────────────────
 
 async def handle_cyclaw_result(phone: str, query: str, data: dict, msg_sid: str,
                                provider_override: Optional[str] = None):
     if data.get("needs_confirm"):
         allowed = allowed_confirm_commands()
         set_session(phone, {"pending_confirm": True, "original_query": query, "allowed_commands": allowed})
-        send_sms(phone, build_confirm_prompt(data))
+        await send_sms(phone, build_confirm_prompt(data))
         log_event(phone, "needs_confirm", msg_sid=msg_sid, query=query,
                   detail=json.dumps({"allowed": allowed}))
         return
@@ -273,16 +282,30 @@ async def handle_cyclaw_result(phone: str, query: str, data: dict, msg_sid: str,
         "original_query": query,
         "provider_used": provider_override or data.get("model_used"),
     })
-    send_sms(phone, format_page(pages, 0, footer))
+    await send_sms(phone, format_page(pages, 0, footer))
     log_event(phone, "answer_sent", msg_sid=msg_sid, query=query,
               provider=provider_override or data.get("model_used"),
               detail=json.dumps({"pages": len(pages)}))
 
 
+# P1: top-level exception handler — silent task failures become error SMS instead of vanishing
 async def process_query(phone: str, inbound_text: str, msg_sid: str):
+    try:
+        await _process_query_inner(phone, inbound_text, msg_sid)
+    except Exception as e:
+        logger.error("process_query failed phone=%s sid=%s: %s",
+                     phone_hash(phone), msg_sid, e, exc_info=True)
+        log_event(phone, "error", msg_sid=msg_sid, detail=str(e)[:300])
+        try:
+            await send_sms(phone, f"CyClaw error: {str(e)[:120]}")
+        except Exception:
+            pass
+
+
+async def _process_query_inner(phone: str, inbound_text: str, msg_sid: str):
     text = inbound_text.strip()
     if not text:
-        send_sms(phone, "Send a question.")
+        await send_sms(phone, "Send a question.")
         return
 
     session = get_session(phone) or {}
@@ -291,7 +314,7 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
     if lowered == "cancel":
         clear_session(phone)
         log_event(phone, "cancel", msg_sid=msg_sid)
-        send_sms(phone, "Canceled.")
+        await send_sms(phone, "Canceled.")
         return
 
     if lowered == "more":
@@ -299,15 +322,15 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
         page_index = session.get("page_index", 0)
         footer = session.get("footer")
         if not pages:
-            send_sms(phone, "Nothing queued. Send a new question.")
+            await send_sms(phone, "Nothing queued. Send a new question.")
             return
         next_idx = page_index + 1
         if next_idx >= len(pages):
-            send_sms(phone, "No more pages.")
+            await send_sms(phone, "No more pages.")
             return
         session["page_index"] = next_idx
         set_session(phone, session)
-        send_sms(phone, format_page(pages, next_idx, footer))
+        await send_sms(phone, format_page(pages, next_idx, footer))
         log_event(phone, "more", msg_sid=msg_sid)
         return
 
@@ -327,7 +350,7 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
             clear_session(phone)
             await handle_cyclaw_result(phone, original_query, data, msg_sid, provider_override=lowered)
             return
-        send_sms(phone, f"Reply with: {' / '.join(allowed)} / cancel")
+        await send_sms(phone, f"Reply with: {' / '.join(allowed)} / cancel")
         return
 
     log_event(phone, "query_submit", msg_sid=msg_sid, query=text)
@@ -335,7 +358,7 @@ async def process_query(phone: str, inbound_text: str, msg_sid: str):
     await handle_cyclaw_result(phone, text, data, msg_sid)
 
 
-# ── Webhook endpoint ────────────────────────────────────────────────────────────
+# ── Webhook endpoint ─────────────────────────────────────────────────────────────
 
 @app.post("/sms")
 async def inbound_sms(
