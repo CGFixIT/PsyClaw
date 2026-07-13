@@ -10,6 +10,9 @@ refactor-loop, memory, and agent skills). For the **authoritative, complete list
 sync there so a second list does not drift. A few common entry points:
 
 ```bash
+/invariant-guard         # Static-assert the six security invariants (stdlib)
+/config-guard            # Static-validate config.yaml's relational/value/threat-model contract
+/dep-guard               # Static-validate dependency-pin invariants (pyproject + constraints)
 /run-cyclaw              # Smoke-test the FastAPI server
 /architecture-refactor   # Start architecture refactor loop
 /tests-refactor          # Start test coverage loop
@@ -18,6 +21,11 @@ sync there so a second list does not drift. A few common entry points:
 /wrap-up                 # Run end-of-session checklist
 /CyClaw-Optimize         # there are many more, verify folder each time
 ```
+
+The three static guards — `/invariant-guard` (topology & imports), `/config-guard`
+(config.yaml numbers & relations), `/dep-guard` (dependency pins) — are the
+pre-merge/pre-install checks; each ships a `check_*.py` plus a `verify.sh` that
+CI runs automatically. See the authoritative table in [`CLAUDE.md`](../CLAUDE.md) §9.
 
 ## Refactor Loop Pattern
 
