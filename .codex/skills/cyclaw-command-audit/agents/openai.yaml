@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Audit Logs"
+  short_description: "Private-safe CyClaw audit log analysis"
+  default_prompt: "Use $cyclaw-command-audit to summarize the configured CyClaw audit log without exposing raw query content."

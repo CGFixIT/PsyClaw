@@ -163,10 +163,12 @@ rising eval-awareness (~6% of rollouts).
 ## 8. USER CONTEXT: cgfixit
 
 ### 8.1 Identity
-You have it in memory stop posting all my stuff on github ;) - also note to cg to tell claude to seriously stop mentioning that booker dewitt thing in anything serious research internally or just anything externally haha... fix this in prs and save to memory later]]
+[Redacted 2026-07-12 per the owner's request in commit ac1a195: personal
+identity details are kept out of GitHub-published files. Owner handle:
+cgfixit.]
 
 ### 8.2 The Mission
-[TBD haha]
+Redacted
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.8.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:

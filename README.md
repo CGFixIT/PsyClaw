@@ -8,9 +8,6 @@
 [![PGvector](https://img.shields.io/badge/PGvector-0.3.6-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
-[![DevSkim](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml)
-[![Gitleaks Secret Scan](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml)
-[![OSV-Scanner](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
 
@@ -20,7 +17,7 @@
 
 CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 
-1. **Answers questions exclusively from your local Markdown corpus** — no internet by default
+1. **Answers questions from your local Markdown corpus** — no internet by default - Offline best effort with cached models available if vault miss 
 2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline
 3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification
 4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
@@ -28,6 +25,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
+9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-5 (config, workspace tools, mock scoring/acceptance gate) are implemented and tested, phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply) are in progress
 
 ---
 
@@ -359,9 +357,18 @@ CyClaw/
 │   │   ├── pathsafe.py         # TOCTOU-safe openat/O_NOFOLLOW security core
 │   │   ├── writer.py           # gated, atomic writes (default-disabled)
 │   │   └── indexer.py          # toggleable RAG-corpus indexing of the share
-│   └── sqlconnect/             # (v1.8) read-only SQL scaffold (Postgres/MSSQL)
-│       ├── cli.py
-│       └── client.py           # SELECT-only query guard, env-only DSN
+│   ├── sqlconnect/             # (v1.8) read-only SQL scaffold (Postgres/MSSQL)
+│   │   ├── cli.py
+│   │   └── client.py           # SELECT-only query guard, env-only DSN
+│   ├── harness_optimizer/      # (v1.9) governed better-harness-style optimizer scaffold
+│   │   ├── core.py             # Experiment/Surface/RunReport/CandidateDecision models
+│   │   ├── proposer.py         # scoped train/holdout workspace builder
+│   │   ├── mcp/tools.py        # audited, symlink-hardened proposer workspace tools
+│   │   └── governance.py       # visible-case-hardcoding + governance-finding gates
+│   └── deepagent_github/       # (v1.9) optional LangChain Deep Agents GitHub harness
+│       ├── builder.py          # lazy create_deep_agent() seam, never imported unless enabled
+│       ├── permissions.py      # phase-5 no-write policy refusal
+│       └── subagents.py        # validated SubAgent specs, no bare-string tools
 ├── guardrails/                 # (v1.8) optional NeMo Guardrails layer (out-of-band)
 │   ├── cli.py
 │   ├── config.py
@@ -497,7 +504,7 @@ The **Agentic Console** panel drives these from the terminal UI via `POST /ops/a
 
 ## Filesystem & SQL Connectors (v1.8)
 
-v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulated or security conscious use case where AI use is compliance heavy. Both connectors are **opt-in, disabled by default, and fully out-of-band** — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`, so the five security invariants hold by construction. While disabled, their CLIs are a pure no-op (exit 0).
+v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulated or security conscious use case where AI use is compliance heavy. Both connectors are **opt-in, disabled by default, and fully out-of-band** — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`, so the six security invariants hold by construction. While disabled, their CLIs are a pure no-op (exit 0).
 
 ### `agentic/fsconnect/` — local / SMB filesystem connector
 
@@ -581,6 +588,49 @@ guardrails:
 
 > Full design / wiring plan: `docs/NeMo/later_development_guideline.md`. Phase 2
 > implementation contract: `docs/NeMo/phase2_implementation_plan.md`.
+
+---
+
+## Agentic Harness Scaffold (v1.9)
+
+A governed, **opt-in, disabled-by-default, and out-of-band** scaffold for two related
+future capabilities — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`,
+same isolation guarantee as every other agentic feature above:
+
+- **`agentic/harness_optimizer/`** — a better-harness-style optimizer that would evaluate
+  candidate improvements to allowed harness surfaces against visible train cases and
+  hidden holdout cases, deterministic scoring, and a hard acceptance gate (no score
+  regression, no unallowed surface changed, no visible-case hardcoding, no critical
+  governance finding).
+- **`agentic/deepagent_github/`** — an optional LangChain Deep Agents-backed local GitHub
+  coding harness using LM Studio and scoped CyClaw tool wrappers, lazily importing
+  `deepagents` only when explicitly enabled.
+
+**Status:** phases 0-5 (config validation, the proposer workspace + its audited,
+symlink-hardened tool boundary, mock scoring/acceptance gate, the lazy `deepagent_github`
+builder seam) are implemented and covered by `tests/test_agentic_harness_optimizer.py`
+and `tests/test_agentic_harness_phase345.py`. Phases 6-9 (real Deep Agents subagent
+wiring, a fixture-based GitHub coding evaluator, and governed propose/apply with
+human-confirmed acceptance) are in progress. Full plan and phase ledger:
+`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+
+Every gate below the master `agentic.enabled` switch defaults to `false`; while
+disabled, nothing under either package is reachable from `agentic.cli`, and no
+`deepagents`/`langchain` optional dependency is imported.
+
+```yaml
+agentic:
+  deepagent_github:
+    enabled: false
+    allow_deepagents_dependency: false    # extras must be installed explicitly
+    allow_filesystem_write_tools: false
+    allow_shell_execution: false
+    allow_github_writes: false            # writer.py remains the write-policy boundary
+  harness_optimizer:
+    enabled: false
+    require_human_confirm_for_accept: true
+    allow_local_model_judge: false
+```
 
 ---
 

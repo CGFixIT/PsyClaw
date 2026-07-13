@@ -28,7 +28,9 @@ To skip the targeted API/RAG tests during a fast local rerun:
 python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place --skip-install --skip-index --skip-tests
 ```
 
-3. Read the generated Markdown report path printed at the end. Treat any `FAIL` as a blocker before pushing runtime changes.
+3. Read the generated Markdown report path printed at the end. Reports are
+   written to a temporary directory outside the checkout. Treat any `FAIL` as
+   a blocker before pushing runtime changes.
 
 ## What It Exercises
 
@@ -44,7 +46,9 @@ python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place 
 - Do not run authenticated `/soul/propose`, `/soul/apply`, or `/soul/restore` during smoke. The runner checks those mutation routes without auth and expects `401`.
 - Do not bind outside `127.0.0.1`.
 - If port `1234` already serves an OpenAI-compatible `/v1/models`, reuse it only if it returns the expected model id; otherwise stop and report the conflict.
-- The runner temporarily rewrites sandbox `config.yaml` to hybrid mode with Grok/Claude pointed at the mock provider, then restores the original file before writing the report.
+- The runner parses sandbox `config.yaml`, temporarily enables hybrid
+  Grok/Claude against the loopback mock, then restores the exact original text
+  before writing the report.
 - Use `--skip-install` only when dependencies are already installed. Use `--skip-index` only when the index already exists.
 
 ## Scripts

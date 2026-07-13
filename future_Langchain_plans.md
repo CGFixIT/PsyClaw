@@ -1,39 +1,27 @@
 # Future LangChain Plans
 
-Status: planning pointer plus phase 0-5 scaffold status for optional,
-out-of-band agentic work.
+Status: root-level planning pointer for optional, out-of-band LangChain work.
 
 CyClaw already uses LangGraph and `langchain-core` in the governed RAG request
 path. Future LangChain-related work should stay split by trust boundary:
 
-- Core gateway work remains in `gate.py` and `graph.py` and must preserve
-  RAG-first retrieval, topology-enforced policy, triple-gated external fallback,
-  audit convergence, and human-gated soul changes.
+- Core gateway work remains in `gate.py` and `graph.py` and must preserve all
+  six security invariants: RAG-first retrieval, topology-enforced policy,
+  triple-gated external fallback, audit convergence, human-gated soul
+  changes, and module isolation (the core three never import `agentic/`,
+  `sync/`, or `guardrails/`).
 - Agentic GitHub coding work belongs under `agentic/` and remains optional,
   disabled by default, and out-of-band.
-- LangChain Deep Agents, MCP adapters, and related tools must be optional extras
-  unless a separate dependency review approves them.
+- LangChain Deep Agents, MCP adapters, and related tools must be optional
+  extras unless a separate dependency review approves them.
 
 The detailed governed GitHub coding and harness optimization plan lives at:
 
-- `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
+- `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (canonical
+  design plan, with per-phase implementation ledgers)
 
-Implemented scaffold boundary through phase 5:
-
-- allowed and present: disabled config keys, local data models, deterministic
-  mock runner/scoring/governance helpers, local proposer workspace builder,
-  scoped proposer workspace tools, fake-transport-testable local LM Studio
-  proposer adapter, optional `deepagent_github` lazy builder skeleton, focused
-  tests, docs
-- not allowed: Deep Agents runtime dependency, model calls, live GitHub in unit
-  tests, GitHub writes, shell execution, unrestricted filesystem tools, request
-  path imports
-
-Remaining future phases:
-
-- Phase 6: real Deep Agents subagent wiring, skills, memory, permissions, and
-  human-in-the-loop interrupts behind feature flags.
-- Phase 7: GitHub coding eval runner using fixture repos and read-only GitHub
-  context.
-- Phase 8: governed propose/apply for accepted harness improvements.
-- Phase 9: security review before any real write execution.
+Phases 0-5 are merged on `main`. Phases 6-9 are implemented in draft PR #515
+(`agent/deepagent-harness-phases-6-9`). The PR #515 review checklist, the
+recorded owner decisions (including Grok/Claude provider parity for the
+harness), the verified `deepagents` API reference, and the forward roadmap
+live in `docs/LG_Deep_Agentic_Harness_status_n_roadmap.md`.

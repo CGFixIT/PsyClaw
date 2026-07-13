@@ -257,3 +257,43 @@ def test_write_current_file_nested_denial_message_is_not_the_stale_one(tmp_path:
 
     events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
     assert not any(event.get("reason") == "workspace write target is not accessible" for event in events)
+
+
+def test_read_file_rejects_symlink_pointing_into_holdout_hidden(tmp_path: Path) -> None:
+    """The holdout_hidden guard in _resolve_existing_read only checked whether
+    the REQUESTED path's first component was literally "holdout_hidden". A
+    symlink placed elsewhere in the workspace that resolves into
+    holdout_hidden passed that check (the request doesn't name holdout_hidden)
+    and the root-containment check (holdout_hidden is itself inside root),
+    silently exposing holdout content through an indirect path."""
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.holdout_hidden_dir / "secret.md").write_text("hidden", encoding="utf-8")
+    link = workspace.current_dir / "peek"
+    try:
+        os.symlink(workspace.holdout_hidden_dir, link, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unavailable on this host: {exc}")
+
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+    with pytest.raises(AgenticError):
+        tools.read_file("current/peek/secret.md")
+
+
+def test_read_file_denies_target_over_max_read_bytes(tmp_path: Path) -> None:
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.train_visible_dir / "big.md").write_text("x" * 100, encoding="utf-8")
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg, max_read_bytes=10)
+
+    with pytest.raises(AgenticError):
+        tools.read_file("train_visible/big.md")
+
+
+def test_finish_proposal_rejects_blank_content(tmp_path: Path) -> None:
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    with pytest.raises(AgenticError):
+        tools.finish_proposal("   ")

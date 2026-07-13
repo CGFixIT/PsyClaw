@@ -6,6 +6,10 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / ".codex" / "skills" / "cyclaw-sandbox-test" / "scripts"
@@ -47,12 +51,30 @@ def test_runner_temporarily_points_external_providers_at_mock(tmp_path: Path) ->
 
     original = runner._enable_mock_external_providers(tmp_path, results)
     patched = (tmp_path / "config.yaml").read_text(encoding="utf-8")
+    config = yaml.safe_load(patched)
 
     assert original == original_text
-    assert '  mode: "hybrid"' in patched
-    assert patched.count('base_url: "http://127.0.0.1:1234/v1"') >= 3
+    assert config["app"]["mode"] == "hybrid"
+    assert config["models"]["grok"]["enabled"] is True
+    assert config["models"]["claude"]["enabled"] is True
+    assert config["models"]["grok"]["base_url"] == f"{runner.MOCK_URL}/v1"
+    assert config["models"]["claude"]["base_url"] == f"{runner.MOCK_URL}/v1"
 
     runner._restore_config(tmp_path, original, results)
 
     assert (tmp_path / "config.yaml").read_text(encoding="utf-8") == original_text
     assert [r.status for r in results] == ["PASS"]
+
+
+def test_runner_stops_when_clone_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_script("run_sandbox_test.py")
+    args = SimpleNamespace(in_place=False, work_root=str(tmp_path), branch="main", repo_url="https://invalid")
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda *args, **kwargs: runner.Result("clone origin/main", "FAIL", "offline: https://invalid"),
+    )
+
+    with pytest.raises(RuntimeError, match="offline: <repo-url>") as exc_info:
+        runner._clone_or_use_repo(args, [])
+    assert "https://invalid" not in str(exc_info.value)
