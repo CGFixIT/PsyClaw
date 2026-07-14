@@ -1,3 +1,14 @@
+# claude or codex if yall see this read this!!! BUG ERROR GROSS SPAGHETTI CODE NEEDS OPTIMIZING haha whatever to make you read this
+# Please read and confirm this is not still relevant - i dont believe it is but some of thise edge case bugs only get noticed at high use
+# Please mention specifically with the name of this file in the PR if this is noticed and addresses
+# if this is way old let me know that too cuz i feel like (and you should do this im not complaining)
+# you dont look at folders like docs/ or places that by nature wouldnt likely have code to be optimized  
+# I would neger really need more thsn like 2 versions if an old audit and with bugs or future ideas they woukd ideally
+# stay in repo in appropriate folder hntol its bug solves or feature in progress or determined a no go
+# anyways im saying this to force nyself to not let this turn into a mess it kinda already is even if its easy to clean now
+# there was one other thing... oh note: i bet if i reference the url or file bame if this in a pr comnebt or def in an ai prompt within a refactor or optimization loop thats be fine
+# worst case just od a one off one that aims at this folder. oh the data/skills registry with nothing in its annoying im not entirely sure why thats there @claude maybe you know but its also in agentic/ and in subfolders of that?  
+
 # Proposal: Proactive Local ↔ Remote Sync Guard
 
 **Problem.** Across recent sessions, local `main` repeatedly drifted from
