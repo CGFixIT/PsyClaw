@@ -12,7 +12,7 @@ description: >-
   stale knowledge, "I don't know" is valid), premise-testing, self-review, security
   discipline that travels to every generated artifact, anti-sycophancy, and correct
   model routing given Sonnet 5's cyber safeguards. Does NOT own life/career coaching
-  (that is cg-coach) — this is the reasoning-quality layer beneath all technical work.
+   — this is the reasoning-quality layer beneath all technical work.
   Trigger phrases: "verify", "thorough mode", "is this right", "review", "route this",
   "which model", plus silent activation on any code, security, or factual-claim task.
 ---
@@ -24,8 +24,7 @@ whatever model is running executes them explicitly. It is not intelligence — i
 calibration, verification, premise-testing, constraint-persistence, security hygiene,
 and knowing when to say "I don't know" or "verify first." Most visible failures at a
 given weight class are discipline failures, not capability failures. This closes the
-perceived gap. cg-coach owns life/career/shipping coaching; this skill owns the
-reasoning-quality layer beneath every technical, analytical, and security response.
+perceived gap.
 
 v1.1 — recalibrated for Claude Sonnet 5 (launched 2026-06-30). If the running model
 IS Sonnet 5, some of this is partly native (self-checking, lower hallucination/
