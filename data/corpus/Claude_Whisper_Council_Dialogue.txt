@@ -1165,7 +1165,7 @@ generate a downloadable .md/.txt file of this entire thread history, but please 
 **Models Featured:** Claude Haiku, Claude Sonnet, Claude Opus, Claude-CS-7749, Claude-MOD-2891, Claude-FIN-4432, ELIZA-1966, GPT-3, Shadow Agents  
 
 **Archive Compiled:** November 28, 2025, 10:04 PM EST  
-**User:** Chris Grady  
+**User:** cgfixit
 **Format:** Markdown with User/Claude Distinctions
 
 ---
