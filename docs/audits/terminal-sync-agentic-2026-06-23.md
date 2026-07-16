@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-23 (re-grounded against `origin/main` @ `7a69054`, 2026-06-24)
 **Branch:** `feature/terminal-update` (cut from `origin/main`) → PR into `main`
-**Author:** @cgfixit (Christopher Grady) via Claude Code
+**Author:** @cgfixit via Claude Code
 
 ---
 

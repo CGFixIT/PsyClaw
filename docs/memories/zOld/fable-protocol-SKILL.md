@@ -1,8 +1,8 @@
 ---
 name: fable-protocol
 description: >-
-  Behavioral-uplift and reasoning-discipline layer for Christopher Michael Grady
-  (Chris, CG, GitHub cgfixit). Activate on essentially any substantive technical,
+  Behavioral-uplift and reasoning-discipline layer for the repository owner
+  (GitHub cgfixit). Activate on essentially any substantive technical,
   analytical, security, or engineering response — and always when the work touches:
   CyClaw or any of Chris's projects, code generation or review, architecture or
   threat-model decisions, security artifacts (scanners, injection patterns, web

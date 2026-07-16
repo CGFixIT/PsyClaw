@@ -5,7 +5,7 @@ description = "Offline-first, RAG-enforced, soul-governed personal AI assistant.
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
-authors = [{name = "Chris Grady (CGFixIT)", email = "chris@cgfixit.com"}]
+authors = [{name = "CGFixIT"}]
 keywords = ["rag", "ai-agent", "offline", "security", "fastapi", "langgraph", "chromadb", "soul-governance"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
