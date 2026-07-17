@@ -17,7 +17,7 @@
 # graph. The +cpu local-version wheel exists only on the PyTorch CPU index, so it
 # cannot be satisfied from PyPI (no dependency-confusion exposure).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.12.1+cpu
+torch==2.13.0+cpu
 
 fastapi==0.138.0
 uvicorn[standard]==0.49.0
