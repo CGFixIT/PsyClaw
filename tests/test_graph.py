@@ -383,6 +383,23 @@ class TestOfflineBestEffortIdentity:
         # With no soul to own identity, a neutral fallback identity is acceptable.
         assert "You are a helpful assistant" in llm.last_prompt
 
+    def test_answer_sources_matches_context_limit(self, tmp_path):
+        # offline_best_effort_node feeds the model up to limit=5 context chunks
+        # (see _format_context_chunks(docs, limit=5, ...) above); answer_sources
+        # must report the same 5, not a stale docs[:3] that used to under-report
+        # up to 2 chunks that genuinely informed the answer.
+        cfg = _make_cfg(tmp_path)
+        llm = MockLocalLLM()
+        docs = [
+            {"text": f"chunk {i}", "score": 0.3, "source": f"{i}.md", "chunk_id": i}
+            for i in range(7)
+        ]
+        state = {"query": "explain immutability", "retrieved_docs": docs}
+        result = offline_best_effort_node(state, llm=llm, cfg=cfg, personality=_FakePersonality())
+
+        assert len(result["answer_sources"]) == 5
+        assert result["answer_sources"] == docs[:5]
+
 
 class TestBuildGraphSignature:
     """T2.3: build_graph dependencies are keyword-only (anti-drift hardening)."""

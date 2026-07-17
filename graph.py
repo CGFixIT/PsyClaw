@@ -588,7 +588,7 @@ Provide the best general answer you can. Clearly note that your local knowledge 
     out: dict = {
         "answer": answer,
         "answer_model": "offline-best-effort",
-        "answer_sources": docs[:3] if docs else [],
+        "answer_sources": docs[:5] if docs else [],
     }
     # Only set on failure so a successful best-effort answer does not overwrite an
     # upstream error already in state (e.g. a retrieve_node RAG_ERROR that routed
