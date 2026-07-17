@@ -1,5 +1,11 @@
 # Ponytail Review — Planning & Findings
 
+> **STATUS BANNER (verified 2026-07-18 against main @ 8dc96d5):** ALL 8
+> violations are RESOLVED on current main (verified by grep/read of each site:
+> no `__enter__`/`__exit__` in llm/client.py, no `require_healthy`, `_build_patterns`
+> collapsed, no `_EXPECTED`, no `reload_soul` alias, CYCLAW_DB_URL fallback
+> removed and documented, Postgres backend documented). Historical — do not re-implement.
+
 **Date:** 2026-06-29
 **Branch reviewed:** `origin/main` @ `edc1d5b`
 **Verdict:** FAIL — 8 violations across 6 production files
