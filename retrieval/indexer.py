@@ -143,13 +143,34 @@ def build_index(config_path: str = "config.yaml") -> None:
     for source, content in docs:
         source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
         chunks = chunk_document(content, chunk_size, chunk_overlap)
+        if not chunks:
+            # An empty/whitespace-only file passes load_corpus (it reads fine)
+            # but splits to zero words -- without this warning it would vanish
+            # from both indices with no trace in the build log.
+            logger.warning("Document %s produced 0 chunks (empty or whitespace-only); skipping", source)
+            continue
+        untokenized_chunks = 0
         for i, chunk in enumerate(chunks):
             clean_chunk = sanitize_chunk(chunk, config_path_str)
             tokens = tokenize_and_stem(clean_chunk)
+            if not tokens and clean_chunk.strip():
+                untokenized_chunks += 1
             all_chunks.append(clean_chunk)
             tokenized_corpus.append(tokens)
             all_metadata.append(
                 {"source": source, "chunk_id": i, "source_sha256": source_sha256, "stem_tags": json.dumps(tokens[:20])}
+            )
+        if untokenized_chunks:
+            # The BM25 tokenizer is deliberately ASCII-only (see
+            # retrieval/stemmer.py _WORD_RE -- avoids the nltk punkt CVE), so
+            # non-Latin content yields zero keyword tokens. Such chunks are
+            # still indexed semantically but are invisible to the keyword leg;
+            # surface that at build time instead of silently degrading hybrid
+            # fusion to semantic-only for those documents.
+            logger.warning(
+                "Document %s: %d/%d chunk(s) produced no BM25 tokens "
+                "(non-ASCII or symbol-only content); keyword search will not see them",
+                source, untokenized_chunks, len(chunks),
             )
 
     logger.info("Total chunks: %d", len(all_chunks))

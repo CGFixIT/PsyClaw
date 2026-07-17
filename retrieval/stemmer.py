@@ -32,6 +32,10 @@ def _porter() -> "PorterStemmer":
 # Compiled once at import rather than on every call. findall() returns only
 # maximal runs of this exact shape, so every token is already letter-led and
 # >= 2 chars by construction — no second-pass validation is required.
+# KNOWN LIMITATION (deliberate): the pattern is ASCII-only, so non-Latin text
+# (CJK, Cyrillic, accented words after .lower()) tokenizes to ZERO tokens —
+# such content is invisible to the BM25 keyword leg and is covered only by the
+# semantic leg. The indexer warns per-document at build time when this happens.
 _WORD_RE = re.compile(r'[a-z][a-z0-9_-]+')
 
 _CUSTOM_STEMS = {
