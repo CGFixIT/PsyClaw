@@ -251,3 +251,72 @@ class TestLoadCorpusCaseInsensitive:
         # Only .md should be loaded; .json should be skipped
         assert len(docs) == 1
         assert "doc.md" in docs[0][0]
+
+
+class TestBuildIndexObservability:
+    """Silent-drop and silent-degradation paths must leave a build-log trace."""
+
+    def _cfg(self, tmp_path, corpus):
+        cfg = {
+            "corpus": {"path": str(corpus), "extensions": [".md"]},
+            "indexing": {
+                "chroma_path": str(tmp_path / "chroma"),
+                "bm25_path": str(tmp_path / "bm25.json"),
+                "collection_name": "test_kb",
+                "chunk_size": 512,
+                "chunk_overlap": 50,
+                "batch_size": 10,
+            },
+        }
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f)
+        return str(config_path)
+
+    def test_zero_chunk_document_is_skipped_with_warning(self, tmp_path, caplog):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "real.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        (corpus / "empty.md").write_text("   \n\n  ", encoding="utf-8")
+        config_path = self._cfg(tmp_path, corpus)
+
+        fake_embeddings = MagicMock(return_value=[[0.1, 0.2, 0.3]])
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", fake_embeddings),
+            patch("retrieval.indexer.get_vector_writer") as mock_get_writer,
+            caplog.at_level("WARNING", logger="retrieval.indexer"),
+        ):
+            mock_get_writer.return_value = MagicMock()
+            build_index(config_path)
+
+        assert any(
+            "empty.md" in rec.getMessage() and "0 chunks" in rec.getMessage()
+            for rec in caplog.records
+        ), f"no zero-chunk warning for empty.md in: {[r.getMessage() for r in caplog.records]}"
+        # Only the real document's single chunk reaches the embedding batch.
+        embedded_texts = fake_embeddings.call_args.args[0]
+        assert len(embedded_texts) == 1
+
+    def test_non_ascii_document_warns_about_bm25_blindness(self, tmp_path, caplog):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        # Entirely non-Latin content: chunks exist (words split fine) but the
+        # ASCII-only tokenizer yields zero BM25 tokens for every chunk.
+        (corpus / "cyrillic.md").write_text("Привет мир это тест поиска", encoding="utf-8")
+        config_path = self._cfg(tmp_path, corpus)
+
+        fake_embeddings = MagicMock(return_value=[[0.1, 0.2, 0.3]])
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", fake_embeddings),
+            patch("retrieval.indexer.get_vector_writer") as mock_get_writer,
+            caplog.at_level("WARNING", logger="retrieval.indexer"),
+        ):
+            mock_get_writer.return_value = MagicMock()
+            build_index(config_path)
+
+        assert any("no BM25 tokens" in rec.getMessage() for rec in caplog.records), (
+            f"no BM25-blindness warning in: {[r.getMessage() for r in caplog.records]}"
+        )
+        # The document is still embedded (semantic leg keeps covering it).
+        embedded_texts = fake_embeddings.call_args.args[0]
+        assert len(embedded_texts) == 1

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import yaml
 
+from utils.errors import EmbeddingServiceError
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -84,10 +86,26 @@ def _cached_embedding(text: str, config_path: str) -> tuple:
     expensive step on the retrieval hot path. Identical queries (common in
     practice) previously re-ran the model every time. The cached value is an
     immutable tuple so it can be safely shared across callers.
+
+    Failures are wrapped as EmbeddingServiceError so hybrid_search's
+    documented degrade-to-keyword-only catch actually fires -- before this
+    wrap, a real model failure (missing package, corrupt cache_dir, OOM)
+    escaped as a raw ImportError/OSError/RuntimeError that nothing on the
+    query path caught, crashing the request instead of degrading.
+    lru_cache does not memoize exceptions, so a transient failure is retried
+    on the next call rather than poisoning the cache.
     """
-    model_name, cache_dir = _embeddings_cfg(config_path)
-    model = _load_model(model_name, cache_dir)
-    return tuple(model.encode(text, normalize_embeddings=True).tolist())
+    try:
+        model_name, cache_dir = _embeddings_cfg(config_path)
+        model = _load_model(model_name, cache_dir)
+        return tuple(model.encode(text, normalize_embeddings=True).tolist())
+    except EmbeddingServiceError:
+        raise
+    except (ImportError, OSError, RuntimeError, ValueError) as e:
+        raise EmbeddingServiceError(
+            f"query embedding failed: {e}",
+            details={"error_type": type(e).__name__},
+        ) from e
 
 def get_embedding(text: str, config_path: str = "config.yaml") -> list[float]:
     return list(_cached_embedding(text, config_path))
@@ -111,6 +129,10 @@ def reset_embedding_cache() -> None:
             clear()
 
 def get_embeddings_batch(texts: list[str], config_path: str = "config.yaml") -> list[list[float]]:
+    # Deliberately NOT wrapped in EmbeddingServiceError: this is the index-build
+    # path (cyclaw-index), where a model failure must abort the build loudly --
+    # degrading here would silently produce a semantic index with missing
+    # vectors. Only the query path (_cached_embedding) soft-degrades.
     model_name, cache_dir = _embeddings_cfg(config_path)
     model = _load_model(model_name, cache_dir)
     return model.encode(texts, normalize_embeddings=True, show_progress_bar=True).tolist()

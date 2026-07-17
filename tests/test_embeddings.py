@@ -158,3 +158,47 @@ class TestQueryCacheSize:
     def test_falls_back_on_non_numeric_value(self, monkeypatch):
         monkeypatch.setenv("CYCLAW_EMBED_CACHE_SIZE", "not-a-number")
         assert embeddings._default_query_cache_size() == 2048
+
+
+class TestEmbeddingFailureWrapping:
+    """A model failure on the query path must surface as EmbeddingServiceError.
+
+    hybrid_search.hybrid_search() catches exactly EmbeddingServiceError around
+    the semantic leg to degrade to keyword-only; before the wrap in
+    _cached_embedding, raw ImportError/OSError/RuntimeError escaped that catch
+    and crashed the request instead of degrading.
+    """
+
+    def test_model_failure_raises_embedding_service_error(self, tmp_path, monkeypatch):
+        from utils.errors import EmbeddingServiceError
+
+        cfg_path = _write_cfg(tmp_path)
+
+        def _boom(name, cache):
+            raise RuntimeError("model exploded")
+
+        monkeypatch.setattr(embeddings, "_load_model", _boom)
+        with pytest.raises(EmbeddingServiceError) as exc_info:
+            embeddings.get_embedding("query text", cfg_path)
+        assert exc_info.value.code == "EMBEDDING_ERROR"
+        assert exc_info.value.details["error_type"] == "RuntimeError"
+
+    def test_failure_is_not_cached(self, tmp_path, monkeypatch):
+        # lru_cache does not memoize exceptions -- a transient failure must be
+        # retried, not poison the cache for that query text forever.
+        from utils.errors import EmbeddingServiceError
+
+        cfg_path = _write_cfg(tmp_path)
+
+        def _boom(name, cache):
+            raise OSError("cache_dir unreadable")
+
+        monkeypatch.setattr(embeddings, "_load_model", _boom)
+        with pytest.raises(EmbeddingServiceError):
+            embeddings.get_embedding("same query", cfg_path)
+
+        model = _FakeModel()
+        monkeypatch.setattr(embeddings, "_load_model", lambda name, cache: model)
+        result = embeddings.get_embedding("same query", cfg_path)
+        assert result == [float(len("same query")), 0.5]
+        assert model.calls == 1
