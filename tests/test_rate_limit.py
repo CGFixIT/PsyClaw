@@ -13,7 +13,13 @@ from collections import defaultdict
 import pytest
 
 from utils.ratelimit import RateLimiter
-import gate
+
+# NOTE: `gate` is imported lazily inside the two tests that need it
+# (test_gate_uses_production_limiter / test_429_detail_reflects_configured_limits).
+# A module-level `import gate` boots the whole FastAPI app — config load,
+# HybridRetriever construction attempt, LLM clients — just to run limiter unit
+# tests, which made `pytest tests/test_rate_limit.py` alone pay the full app
+# startup cost.
 
 
 class _SlowHits(defaultdict):
@@ -148,6 +154,7 @@ def test_concurrent_requests_never_overcount():
 
 def test_gate_uses_production_limiter():
     """gate.check_rate_limit delegates to the shared RateLimiter instance."""
+    import gate  # lazy: boots the app only when this test runs
     assert isinstance(gate._rate_limiter, RateLimiter)
     # The wrapper must call through to the instance (not a private copy).
     assert gate.check_rate_limit("203.0.113.7") is True
@@ -164,6 +171,8 @@ def test_429_detail_reflects_configured_limits(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
+
+    import gate  # lazy: boots the app only when this test runs
 
     monkeypatch.setattr(gate, "_check_rate_limit_async", AsyncMock(return_value=False))
     monkeypatch.setattr(gate, "_audit", AsyncMock())
