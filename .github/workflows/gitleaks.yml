@@ -45,6 +45,7 @@ jobs:
   gitleaks:
     name: Scan for secrets
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read        # checkout the repository (with full history)
       pull-requests: write  # let the action annotate PRs with any findings

@@ -57,6 +57,11 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # ruff/flake8/wemake versions are pinned directly in this workflow's
+          # run: steps (no requirements.txt entry), so key the cache on the
+          # workflow file itself -- a version bump here still busts the cache.
+          cache-dependency-path: .github/workflows/lint.yml
 
       - name: Install ruff
         run: pip install -c constraints.txt ruff

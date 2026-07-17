@@ -35,6 +35,10 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # semgrep has no pin in requirements.txt (installed ad hoc below), so
+          # key the cache on the workflow file itself.
+          cache-dependency-path: .github/workflows/semgrep.yml
 
       - name: Install and run Semgrep
         run: |
