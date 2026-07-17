@@ -231,8 +231,14 @@ class FsWriter:
                 quota.save(self._roots, sr.requested, ledger)
         return ledger
 
-    def _check_quota(self, op: str, sr: SafeRoot, delta_bytes: int, delta_files: int) -> str:
+    def _check_quota(
+        self, op: str, sr: SafeRoot, delta_bytes: int, delta_files: int,
+    ) -> tuple[str, quota.QuotaLedger | None]:
         """Check the projected usage against the quota spec; raise via ``_refuse`` if over.
+
+        Returns ``(note, ledger)`` -- the ledger it loaded (None when no quota
+        spec applies) so the caller can hand it to ``_update_ledger`` instead of
+        paying a second disk read+parse for the same write.
 
         Like the rate limiter (see ``_check_rate``'s docstring, R-4), this check and
         the later ``_update_ledger`` call are two independent load-modify-save round
@@ -245,7 +251,7 @@ class FsWriter:
         """
         spec = self._quota_spec(sr)
         if spec is None:
-            return "quota unlimited"
+            return "quota unlimited", None
         ledger = self._quota_ledger(op, sr)
         proj_bytes = ledger.used_bytes + delta_bytes
         proj_files = ledger.file_count + delta_files
@@ -261,13 +267,20 @@ class FsWriter:
                          f"denied: quota files {proj_files}/{spec.max_files} exceeded",  # type: ignore[attr-defined]
                          extra={"used_files": ledger.file_count, "max_files": spec.max_files})  # type: ignore[attr-defined]
         limit = spec.quota_bytes if spec.quota_bytes is not None else "inf"  # type: ignore[attr-defined]
-        return f"quota {proj_bytes}/{limit} bytes ok"
+        return f"quota {proj_bytes}/{limit} bytes ok", ledger
 
-    def _update_ledger(self, sr: SafeRoot, delta_bytes: int, delta_files: int) -> None:
+    def _update_ledger(
+        self, sr: SafeRoot, delta_bytes: int, delta_files: int,
+        ledger: quota.QuotaLedger | None = None,
+    ) -> None:
         if self._quota_spec(sr) is None:
             return
         now = self._now_dt()
-        ledger = quota.load(self._roots, sr.requested)
+        if ledger is None:
+            # Callers with no prior _check_quota in the same op (trash_empty)
+            # still load from disk; gated writes pass the checked ledger through
+            # to avoid a second read+parse of the same file per write.
+            ledger = quota.load(self._roots, sr.requested)
         if ledger is None or quota.is_stale(ledger, now, self.fs_cfg.quota_recompute_hours):
             gen = (ledger.generation + 1) if ledger is not None else 1
             try:
@@ -287,8 +300,8 @@ class FsWriter:
     # --- rate limiting (item 7) -------------------------------------------
 
     def _check_rate(self, op: str, sr: SafeRoot) -> str:
-        """Two ``allow()`` calls on a sqlite-persisted limiter: global ``fs:*`` first,
-        then per-root ``fs:<normcase>``.
+        """Two ``allow()`` calls on a sqlite-persisted limiter: per-root
+        ``fs:<normcase>`` first, then global ``fs:*``.
 
         The CLI is a short-lived subprocess, so ONLY the sqlite persistence backend
         makes cross-invocation limiting real (an in-memory limiter would reset each
@@ -298,6 +311,15 @@ class FsWriter:
         (fail-closed). ``allow()`` records a hit only when it returns True, so refusals
         and dry-runs (which never reach here) are not counted. This runs last, after
         every other gate, so an earlier refusal never burns rate budget.
+
+        ORDER MATTERS: per-root is checked before global. ``allow()`` consumes a
+        unit when it passes, so whichever check runs first burns budget even when
+        the second refuses. Global-first meant a stream of writes refused by ONE
+        over-quota root still drained the shared fs:* budget and could starve
+        every other root. Per-root-first confines that leakage: a per-root
+        refusal burns nothing, and the residual asymmetry (a global refusal
+        burns one unit of the asking root's own budget) only slows the root
+        that was asking while the whole system is throttled anyway.
         """
         settings = self.fs_cfg.rate_limit_settings
         if not settings["enabled"]:
@@ -310,19 +332,19 @@ class FsWriter:
                                  window_seconds=settings["window_seconds"],
                                  clock=self._clock, db_path=settings["db_path"])
         try:
-            if not global_lim.allow("fs:*"):
-                self._refuse(op, "rate_limit",
-                             f"global write rate limit exceeded "
-                             f"({settings['global_max_ops']}/{settings['window_seconds']}s)",
-                             "denied: global rate limit fs:* exceeded",
-                             extra={"key": "fs:*", "max_ops": settings["global_max_ops"],
-                                    "window_seconds": int(settings["window_seconds"])})
             if not per_root.allow(key):
                 self._refuse(op, "rate_limit",
                              f"per-root write rate limit exceeded "
                              f"({settings['max_ops']}/{settings['window_seconds']}s)",
                              f"denied: per-root rate limit {key} exceeded",
                              extra={"key": key, "max_ops": settings["max_ops"],
+                                    "window_seconds": int(settings["window_seconds"])})
+            if not global_lim.allow("fs:*"):
+                self._refuse(op, "rate_limit",
+                             f"global write rate limit exceeded "
+                             f"({settings['global_max_ops']}/{settings['window_seconds']}s)",
+                             "denied: global rate limit fs:* exceeded",
+                             extra={"key": "fs:*", "max_ops": settings["global_max_ops"],
                                     "window_seconds": int(settings["window_seconds"])})
         finally:
             per_root.close()
@@ -397,13 +419,13 @@ class FsWriter:
             d_bytes, d_files = len(data) - old_size, 0
         else:
             d_bytes, d_files = len(data), 1
-        qnote = self._check_quota("fs_write", sr, d_bytes, d_files)
+        qnote, qledger = self._check_quota("fs_write", sr, d_bytes, d_files)
         rnote = self._check_rate("fs_write", sr)
         intent_id = uuid.uuid4().hex
         self._audit_intent("fs_write", reason, target, intent_id,
                            {"bytes": len(data), "overwrite": overwrite})
         result = self._roots.write_bytes(target, data, root=root, overwrite=overwrite)
-        self._update_ledger(sr, d_bytes, d_files)
+        self._update_ledger(sr, d_bytes, d_files, ledger=qledger)
         rule = self._allow_rule(destructive=overwrite, qnote=qnote, rnote=rnote, flags=flags)
         self._audit_applied("fs_write", reason, result, flags, intent_id, rule)
         return {"status": "applied", "op": "fs_write", "executed": True, "reason": reason,
@@ -425,12 +447,12 @@ class FsWriter:
         self._check_injection("fs_append", flags)
         existed, _old, _ = self._pre_size(target, root)
         d_bytes, d_files = len(data), (0 if existed else 1)
-        qnote = self._check_quota("fs_append", sr, d_bytes, d_files)
+        qnote, qledger = self._check_quota("fs_append", sr, d_bytes, d_files)
         rnote = self._check_rate("fs_append", sr)
         intent_id = uuid.uuid4().hex
         self._audit_intent("fs_append", reason, target, intent_id, {"bytes": len(data)})
         result = self._roots.append_bytes(target, data, root=root)
-        self._update_ledger(sr, d_bytes, d_files)
+        self._update_ledger(sr, d_bytes, d_files, ledger=qledger)
         rule = self._allow_rule(destructive=False, qnote=qnote, rnote=rnote, flags=flags)
         self._audit_applied("fs_append", reason, result, flags, intent_id, rule)
         return {"status": "applied", "op": "fs_append", "executed": True, "reason": reason,
@@ -446,7 +468,7 @@ class FsWriter:
         extra = {"target": target}
         if not self._executable("fs_mkdir", reason, confirm, destructive=False):
             return self._dryrun("fs_mkdir", reason, extra)
-        qnote = self._check_quota("fs_mkdir", sr, 0, 0)
+        qnote, _ = self._check_quota("fs_mkdir", sr, 0, 0)
         rnote = self._check_rate("fs_mkdir", sr)
         intent_id = uuid.uuid4().hex
         self._audit_intent("fs_mkdir", reason, target, intent_id)
@@ -468,7 +490,7 @@ class FsWriter:
         extra = {"from": src, "to": dst, "overwrite": overwrite}
         if not self._executable("fs_move", reason, confirm, destructive=True):
             return self._dryrun("fs_move", reason, extra)
-        qnote = self._check_quota("fs_move", sr, 0, 0)
+        qnote, _ = self._check_quota("fs_move", sr, 0, 0)
         rnote = self._check_rate("fs_move", sr)
         intent_id = uuid.uuid4().hex
         self._audit_intent("fs_move", reason, dst, intent_id, {"from": src})
@@ -513,13 +535,13 @@ class FsWriter:
             d_bytes, d_files = (0, 0) if kind == "dir" else (-size, -1)
         else:
             d_bytes, d_files = 0, 0  # trash stays in-root: no net quota change
-        qnote = self._check_quota("fs_delete", sr, d_bytes, d_files)
+        qnote, qledger = self._check_quota("fs_delete", sr, d_bytes, d_files)
         rnote = self._check_rate("fs_delete", sr)
         intent_id = uuid.uuid4().hex
         self._audit_intent("fs_delete", reason, target, intent_id, {"mode": mode})
         if purge:
             result = self._purge(sr, target, kind, root)
-            self._update_ledger(sr, d_bytes, d_files)
+            self._update_ledger(sr, d_bytes, d_files, ledger=qledger)
             extra_parts = ["purge (allow_hard_delete)"]
         else:
             result = self._to_trash(sr, target, kind, size, reason, now, root)

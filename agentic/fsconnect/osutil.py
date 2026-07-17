@@ -29,23 +29,31 @@ def _file_manager_argv(path: str) -> list[str]:
     return ["xdg-open", path]
 
 
-def _within_roots(target: Path, allowed_roots: list[str]) -> bool:
-    """True if ``target`` (canonicalized) is equal-to or under one of ``allowed_roots``.
+def _within_roots(target: Path, allowed_roots: list[str]) -> str | None:
+    """The canonical path of ``target`` if it is equal-to or under one of
+    ``allowed_roots``, else ``None``.
 
     Both sides are ``realpath``-canonicalized (resolving symlinks) and
     ``normcase``-normalized, then compared with the same segment-aware containment
     check the read/write paths use (``pathsafe._norm_contains`` — closes the
     sibling-prefix bypass). A symlink under a root that points outside it resolves
     outside and is therefore refused.
+
+    Returning the canonical path (not a bool) lets ``reveal`` launch EXACTLY the
+    path that was containment-checked. Launching the original, unresolved string
+    left a check-then-use gap: a symlink swapped between the check and the
+    file-manager launch would open whatever the link pointed to at launch time,
+    not what was validated.
     """
-    target_norm = os.path.normcase(os.path.realpath(str(target)))
+    target_real = os.path.realpath(str(target))
+    target_norm = os.path.normcase(target_real)
     for root in allowed_roots:
         if not root:
             continue
         root_norm = os.path.normcase(os.path.realpath(root))
         if _norm_contains(root_norm, target_norm):
-            return True
-    return False
+            return target_real
+    return None
 
 
 def reveal(path: str, allowed_roots: list[str]) -> dict:
@@ -66,12 +74,15 @@ def reveal(path: str, allowed_roots: list[str]) -> dict:
     p = Path(path)
     if not p.exists():
         raise FsConnectRuntimeError(f"path does not exist: {path}", details={"path": path})
-    if not _within_roots(p, allowed_roots or []):
+    canonical = _within_roots(p, allowed_roots or [])
+    if canonical is None:
         raise FsConnectRuntimeError(
             "reveal target is outside the configured roots",
             details={"path": path},
         )
-    argv = _file_manager_argv(str(p))
+    # Launch the canonical path the containment check validated, never the
+    # caller's original string (see _within_roots docstring: check-then-use).
+    argv = _file_manager_argv(canonical)
     exe = shutil.which(argv[0])
     if exe is None:
         raise FsConnectRuntimeError(
@@ -79,11 +90,11 @@ def reveal(path: str, allowed_roots: list[str]) -> dict:
             details={"looked_for": argv[0]},
         )
     try:
-        subprocess.run([exe, str(p)], check=False, timeout=10)  # noqa: S603 -- argv list, no shell
+        subprocess.run([exe, canonical], check=False, timeout=10)  # noqa: S603 -- argv list, no shell
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise FsConnectRuntimeError("failed to launch file manager",
                                     details={"error": str(exc)}) from exc
-    return {"revealed": str(p), "via": argv[0]}
+    return {"revealed": canonical, "via": argv[0]}
 
 
 __all__ = ["reveal"]

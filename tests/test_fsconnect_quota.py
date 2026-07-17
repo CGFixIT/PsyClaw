@@ -48,9 +48,10 @@ def test_unlimited_root_writes_no_ledger(tmp_path):
     wz = tmp_path / "wz"
     cfg, fs_cfg, cp = _make(tmp_path, [str(wz)])
     with FsWriter(cfg, fs_cfg, config_path=cp) as w:
-        note = w._check_quota("fs_write", w._roots.pick_root(None), 100, 1)
+        note, ledger = w._check_quota("fs_write", w._roots.pick_root(None), 100, 1)
         w.fs_write("a.txt", b"x" * 100, reason="save")
     assert note == "quota unlimited"
+    assert ledger is None  # no spec -> nothing loaded, nothing to thread forward
     assert not (wz / quota.QUOTA_FILE).exists()  # no ledger for an unlimited root
 
 

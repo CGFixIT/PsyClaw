@@ -137,3 +137,31 @@ def test_global_ceiling_across_roots(tmp_path):
             w.fs_write("c.txt", b"3", reason="three", root=str(wz1))
     assert ei.value.details["failed_gate"] == "rate_limit"
     assert ei.value.details["key"] == "fs:*"
+
+
+def test_per_root_refusal_does_not_burn_global_budget(tmp_path):
+    """Per-root is checked BEFORE global (order matters: allow() consumes a unit
+    when it passes). Under the old global-first order, every write refused by
+    one exhausted root still drained a unit of the shared fs:* budget -- enough
+    refusals from a single over-quota root starved every other root. Now a
+    per-root refusal burns nothing: after several refusals on root r1, root r2
+    retains the full global budget."""
+    wz1 = tmp_path / "r1"
+    wz2 = tmp_path / "r2"
+    db = str(tmp_path / "rate.db")
+    # r1's per-root budget is 1; global budget is 2. Old order: 3 extra refused
+    # r1 writes would consume 3 global units and r2's first write would be
+    # refused at the global gate despite never writing.
+    rl = {"enabled": True, "max_ops": 1, "global_max_ops": 2,
+          "window_seconds": 60, "db_path": db}
+    cfg, fs_cfg, cp, _ = _make(tmp_path, rl, writable_roots=[str(wz1), str(wz2)])
+    clock = _Clock()
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=clock) as w:
+        w.fs_write("a.txt", b"1", reason="one", root=str(wz1))  # r1 + global unit 1
+        for attempt in range(3):
+            with pytest.raises(FsWriteRefused) as ei:
+                w.fs_write(f"x{attempt}.txt", b"x", reason="over", root=str(wz1))
+            assert ei.value.details["key"] == f"fs:{w._roots.pick_root(str(wz1)).normcase}"
+        # r2 still gets the remaining global unit -- the refusals burned nothing.
+        r = w.fs_write("b.txt", b"2", reason="two", root=str(wz2))
+    assert r["executed"] is True
