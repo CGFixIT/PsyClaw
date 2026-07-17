@@ -4,8 +4,11 @@
 
 FROM python:3.12-slim-bookworm AS builder
 
-# Install uv (fast, reproducible)
-COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /bin/uv
+# Install uv (fast, reproducible). Pinned to the multi-arch manifest digest of
+# the 0.7 tag (fetched from GHCR 2026-07-18): a bare tag is mutable, so a
+# re-tagged/compromised uv image would silently enter every build. The tag is
+# kept alongside the digest for human readability; re-pin on any uv bump.
+COPY --from=ghcr.io/astral-sh/uv:0.7@sha256:629240833dd25d03949509fc01ceff56ae74f5e5f0fd264da634dd2f70e9cc70 /uv /bin/uv
 
 WORKDIR /app
 
@@ -16,9 +19,13 @@ COPY pyproject.toml constraints.txt requirements.txt ./
 # Fallback to pip + requirements.txt (proper reqs format) + constraints for legacy/CI alignment.
 # Plain pip cannot read [tool.uv.sources], so the fallback pre-installs the CPU torch wheel
 # from the PyTorch index first (mirrors ci.yml / pip-audit.yml) before the constrained install,
-# otherwise constraints.txt's `torch==2.12.1+cpu` pin is unresolvable on PyPI.
+# otherwise constraints.txt's `torch==2.13.0+cpu` pin is unresolvable on PyPI.
+# The fallback pre-install MUST match the constraints.txt torch pin exactly —
+# when constraints moved 2.12.1 -> 2.13.0 this line stayed behind, so the
+# fallback path installed 2.12.1 and then immediately failed the constrained
+# resolve. Keep the two in lock-step on any torch bump.
 RUN uv pip install --system --no-cache-dir -r pyproject.toml --constraint constraints.txt 2>/dev/null || \
-    ( pip install --no-cache-dir torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    ( pip install --no-cache-dir torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
       pip install --no-cache-dir -r requirements.txt -c constraints.txt )
 
 # Runtime stage
