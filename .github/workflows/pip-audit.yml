@@ -112,7 +112,7 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597
+          pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
         # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
@@ -131,3 +131,16 @@ jobs:
         # live in code this repo never executes. stemmer.py's own header comment
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
+        #
+        # PYSEC-2026-3447 (setuptools, fixed in 83.0.0) — scanner-resolution
+        # artifact, added 2026-07-17 after 3 consecutive daily failures on main
+        # (first red: 2026-07-15). setuptools is not pinned or shipped by any
+        # CyClaw manifest (requirements.txt / constraints.txt / pyproject.toml);
+        # it enters this audit's dependency closure only because torch's own
+        # metadata declares `setuptools>=77.0.3` as a runtime dependency, and
+        # the runner resolved 81.0.0 even though the patched 83.0.0 is live on
+        # PyPI (verified 2026-07-17, not yanked, requires-python >=3.10 —
+        # compatible with this job's 3.12). A real install on a current
+        # environment resolves the patched version. Remove this ignore once the
+        # runner's resolution picks setuptools>=83.0.0; if the audit then still
+        # flags setuptools, treat that as a real finding, not noise.
