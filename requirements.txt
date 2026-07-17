@@ -31,7 +31,7 @@ chromadb==1.5.9  # CVE-2026-45829 (Critical pre-auth RCE; no upstream patch). Ri
 sentence-transformers==5.6.0
 rank-bm25==0.2.2
 numpy==1.26.4
-nltk==3.9.4
+nltk==3.10.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
