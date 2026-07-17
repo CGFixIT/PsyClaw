@@ -21,8 +21,8 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-cp "$repo_root"/gate.py "$repo_root"/graph.py "$repo_root"/mcp_hybrid_server.py \
-   "$repo_root"/config.yaml "$tmp"/
+cp "$repo_root"/gate.py "$repo_root"/gate_ops.py "$repo_root"/graph.py \
+   "$repo_root"/mcp_hybrid_server.py "$repo_root"/config.yaml "$tmp"/
 cp -r "$repo_root"/utils "$repo_root"/agentic "$repo_root"/sync \
       "$repo_root"/guardrails "$tmp"/ 2>/dev/null || true
 
