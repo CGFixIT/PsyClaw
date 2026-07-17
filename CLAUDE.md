@@ -15,7 +15,7 @@ of what must not break.
 
 **What CyClaw is.** A Python 3.12 FastAPI RAG server (`gate.py`) fronting a
 LangGraph security topology (`graph.py`), with hybrid ChromaDB + BM25 retrieval,
-a local LLM via LM Studio, and triple-gated optional external fallbacks (Grok
+a local LLM via Ollama, and triple-gated optional external fallbacks (Grok
 and/or Claude, selected per-query via `online_provider`). It binds
 **only** to `127.0.0.1:8787`. A separate retrieval-only MCP server
 (`mcp_hybrid_server.py`) exposes search with no LLM path.
@@ -79,7 +79,7 @@ decision.
 | GET | `/` | none | serves `static/terminal.html` |
 | GET | `/static/*` | none | static mount |
 | POST | `/query` | none | rate-limited, sanitized; 400/429/503/504/500 |
-| GET | `/health` | none | `degraded` without LM Studio is NORMAL |
+| GET | `/health` | none | `degraded` without Ollama is NORMAL |
 | GET | `/soul` | **API key** | rate-limited |
 | POST | `/soul/propose` | **API key** | advisory scan, never writes |
 | POST | `/soul/apply` | **API key** | enforced scan + atomic write; requires `reason` |
@@ -141,9 +141,9 @@ subsystems.
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |
 | `60` per `60`s | `api.rate_limit` | per-IP |
-| `33` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
+| `32` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
-| `qwen2.5-7b-instruct` | `local_llm.model` | LM Studio |
+| `qwen2.5:7b` | `local_llm.model` | Ollama |
 | `grok-4.3` | `grok.model` | disabled by default |
 | `claude-sonnet-5` | `claude.model` | disabled by default; second external fallback (PR #441) |
 
@@ -196,7 +196,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   server boots fine; Grok just reports unavailable. Tests only need
   `GROK_API_KEY=dummy` (any non-empty value).
 - **Trap:** treating `status: degraded` in `/health` or `TELEMETRY KILL` on
-  startup as errors. **Rule:** both are normal (no LM Studio; intentional env
+  startup as errors. **Rule:** both are normal (no Ollama; intentional env
   blocking).
 
 ### Boot semantics
@@ -251,7 +251,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** a fresh `MockGrokClient` to simulate "no API key."
   **Rule:** it defaults `available=True`. Pass `available=False` for that path.
 - **Trap:** trimming `banned_patterns` and assuming a count test catches it.
-  **Rule:** no test asserts `== 33`. But `TestShippedConfigContract` runs
+  **Rule:** no test asserts `== 32`. But `TestShippedConfigContract` runs
   specific **phrases** against the real config — deleting a documented phrase
   fails tests. Adding patterns is safe; removing coverage is not.
 - **Trap:** adding a state-changing POST route without touching the console
@@ -485,10 +485,10 @@ python3 .claude/skills/injection-redteam/redteam.py
 ```
 
 CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
-`gate`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`, `utils`,
-`sync`, `agentic`, `guardrails`. `tests/conftest.py` mocks all external deps —
-no live services required. The full test-file list is discoverable in `tests/`
-(~60 files, auto-collected by pytest).
+`gate`, `gate_ops`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
+`utils`, `sync`, `agentic`, `guardrails`. `tests/conftest.py` mocks all external
+deps — no live services required. The full test-file list is discoverable in
+`tests/` (~72 files, auto-collected by pytest).
 
 ---
 
@@ -522,7 +522,6 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/create-session-notes` | task | Maintain `SESSION_NOTES.md` |
 | `/ponytail` | mode | Lazy-senior-dev mode: YAGNI, stdlib-first, minimal abstraction |
 | `/add-comment` | task | Comment-only pass adding ELI5-toned WHY comments to under-documented code |
-| `/cyclaw-sandbox-validator` | check | Full-dependency sandbox verifier: 5-query swarm, terminal consoles, invariants, redaction parity |
 | `/karpathy-guidelines` | mode | Anti-overcomplication guardrails: surgical diffs, surfaced assumptions, verifiable success criteria |
 | `/cyclaw-advisor` | mode | "Legal" persona for privacy/DPA/DSR/breach-analysis review of CyClaw changes |
 

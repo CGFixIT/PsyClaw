@@ -13,24 +13,21 @@ Canonical references:
   verification discipline, findings-before-writes, security posture, and
   shipping-first prioritization.
 - `.codex/README.md` for Codex routines, prompts, and checklists.
-- `docs/memories/2026-07-03_215448.md` for the current validated business and
-  prioritization stance.
-- `docs/analysis/2026-07-03_tri_analysis_monetization_calibration.md` and
-  `docs/analysis/2026-07-03_atl_small_law_market_memo.md` for the supporting
-  PMF, monetization, and market calibration analysis.
+- `docs/memories/CONSOLIDATED.md` for the current consolidated memory/business
+  and prioritization stance.
 
 ## Project Overview
 
-CyClaw is an offline-first Python RAG server and retrieval-only MCP server. The core app is `gate.py` (FastAPI) calling `graph.py` (LangGraph security topology), with hybrid retrieval in `retrieval/` backed by ChromaDB and BM25. It is designed to bind to `127.0.0.1:8787`, use a local LM Studio model, and allow Grok only through explicit hybrid-mode gates.
+CyClaw is an offline-first Python RAG server and retrieval-only MCP server. The core app is `gate.py` (FastAPI) calling `graph.py` (LangGraph security topology), with hybrid retrieval in `retrieval/` backed by ChromaDB and BM25. It is designed to bind to `127.0.0.1:8787`, use a local Ollama model, and allow Grok/Claude only through explicit hybrid-mode gates.
 
-The main security invariants are RAG-first retrieval, graph topology as policy, triple-gated external fallback, audit convergence, and human-gated soul changes. Treat these as design constraints, not implementation suggestions.
+The main security invariants are RAG-first retrieval, graph topology as policy, triple-gated external fallback, audit convergence, human-gated soul changes, and module isolation. Treat these as design constraints, not implementation suggestions.
 
 ## Tech Stack Detected
 
 - Python 3.12.
 - FastAPI, Uvicorn, Pydantic.
 - LangGraph, ChromaDB embedded `PersistentClient`, BM25, sentence-transformers.
-- Local LM Studio endpoint at `127.0.0.1:1234/v1`.
+- Local Ollama endpoint at `127.0.0.1:11434/v1`.
 - Optional Grok/xAI fallback in hybrid mode only.
 - Optional `sync/`, `agentic/`, and `guardrails/` layers.
 - Packaging via `pyproject.toml`, legacy/CI `requirements.txt`, reproducibility `constraints.txt`, and uv where available.
@@ -44,7 +41,7 @@ The main security invariants are RAG-first retrieval, graph topology as policy, 
 - `gate.py` - FastAPI app, auth, rate limit, telemetry kill block, static UI mount.
 - `graph.py` - LangGraph policy topology and routing.
 - `retrieval/` - indexing, embeddings, hybrid search, BM25/Chroma helpers.
-- `llm/` - local LM Studio and Grok clients.
+- `llm/` - local Ollama, Grok, and Claude clients.
 - `utils/` - sanitizer, logging, health, personality/soul, rate limiting, errors.
 - `schemas/` - API models.
 - `sync/` - optional out-of-band Dropbox/rclone sync.
@@ -273,7 +270,7 @@ No markdown formatter or markdown lint command was found in repo config.
 
 - Add or update tests with behavior changes.
 - Prefer targeted tests first, then broader CI parity for cross-cutting changes.
-- Do not rely on LM Studio, rclone, real GitHub tokens, or real databases in ordinary unit tests unless the test is explicitly scoped to that integration.
+- Do not rely on Ollama, rclone, real GitHub tokens, or real databases in ordinary unit tests unless the test is explicitly scoped to that integration.
 - Use dummy non-secret env values in tests, such as `GROK_API_KEY=dummy`.
 - Preserve committed `data/personality/soul.md` unless the task is explicitly about soul content or tests isolate and restore it.
 
@@ -330,7 +327,7 @@ No markdown formatter or markdown lint command was found in repo config.
 
 ## Do Not
 
-- Do not weaken the five security invariants.
+- Do not weaken the six security invariants.
 - Do not bind services to `0.0.0.0` casually.
 - Do not introduce autonomous soul/personality mutation.
 - Do not make optional `sync/`, `agentic/`, or `guardrails/` required for the core request path.

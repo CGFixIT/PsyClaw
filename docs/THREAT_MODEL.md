@@ -32,7 +32,7 @@ consolidates the threat-model assumptions previously scattered across
 | Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
-| LLM | Local LM Studio over loopback; optional Grok fallback (triple-gated, off by default). |
+| LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider, off by default). |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -47,14 +47,14 @@ multi-tenant workloads.
 
 | Threat | Primary control | Where |
 |---|---|---|
-| **Prompt injection** (direct) | 33-pattern sanitizer at `/query` and at index time | `utils/sanitizer.py`, `config.yaml` |
+| **Prompt injection** (direct) | 32-pattern sanitizer at `/query` and at index time | `utils/sanitizer.py`, `config.yaml` |
 | **Indirect / RAG injection** (poisoned retrieved doc) | Retrieved context tagged untrusted in-prompt; topology never lets a doc redirect routing | `graph.py` (`UNTRUSTED_NOTE`, topology=policy) |
 | **Corpus / memory poisoning** | Injection scan on ingestion; chunk sanitization | `retrieval/indexer.py`, `utils/sanitizer.py` |
 | **Soul poisoning** (persisted identity hijack) | Soul writes require human `reason`; injection gate enforced at the write boundary; atomic `os.replace`; SHA-256 drift detection | `utils/personality.py`, `gate.py` |
 | **Unauthorized soul mutation** | Fail-closed Bearer auth on all `/soul/*`; constant-time key compare | `gate.py` |
 | **DNS-rebinding → state-changing POST** | `TrustedHostMiddleware` Host allow-list (outermost middleware) | `gate.py`, `config.yaml` |
 | **Unauthorized cross-origin reads** | CORS allow-list | `gate.py`, `config.yaml` |
-| **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** `grok.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
+| **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
 | **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import; raw query text never persisted (hashes only) | `gate.py`, `utils/logger.py` |
 | **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; seccomp profile; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
@@ -105,7 +105,7 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
 - **Strong syscall *blocking* on the gate process.** The current seccomp profile
   permits the broad set the rclone/agentic subprocesses need. A tight,
   gate-specific block-list is **roadmap**, not present (see §6).
-- **Confidentiality against a compromised LM Studio / Grok endpoint.** Prompt and
+- **Confidentiality against a compromised Ollama / Grok / Claude endpoint.** Prompt and
   retrieved context are sent to the configured model; trust in that endpoint is
   assumed.
 
