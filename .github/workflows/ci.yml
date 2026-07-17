@@ -314,14 +314,19 @@ jobs:
     name: verify-skills (${{ matrix.skill }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # `needs: test` (added alongside discover-skills) is a deliberate ordering
-    # constraint, not a correctness dependency: this job shares the `test`
-    # job's exact torch-cpu-2.12.1-${{ runner.os }}-py312 cache key, and
-    # GitHub Actions cache writes from one job aren't visible to a sibling job
-    # running concurrently. Running the two in parallel on a cold cache meant
-    # both independently re-downloaded the ~2GB torch wheel. Serializing after
-    # `test` costs some wall time but guarantees the cache is warm.
-    needs: [discover-skills, test]
+    # Deliberately runs IN PARALLEL with `test` (needs only discover-skills).
+    # A `needs: test` serialization was tried (2026-07-17) to guarantee this
+    # matrix always finds a warm torch-wheel cache, and reverted the same day
+    # on measured data: workflow wall-clock went from ~4.2 min to ~8.9 min
+    # (all 9 matrix jobs were created the exact second the slower
+    # windows-latest test leg finished, then added ~3.8 min of their own),
+    # while on warm-cache runs — which is nearly every run — each matrix job
+    # restores the wheel independently in 1-4 seconds anyway. The only thing
+    # serialization bought was avoiding parallel re-downloads on a cold key
+    # (torch pin bump / 7-day eviction), which costs bandwidth GitHub-hosted
+    # runners don't meter, not wall time. Do not re-add `needs: test` without
+    # new measurements showing the trade has changed.
+    needs: discover-skills
     # Skip cleanly when no skill ships a verify/smoke script (empty matrix).
     if: needs.discover-skills.outputs.has_skills == 'true'
     # These skill scripts are full app-runtime e2e smokes (they build the index
