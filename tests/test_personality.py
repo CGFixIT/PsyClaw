@@ -108,6 +108,10 @@ class TestPersonalityManager:
         assert pm.soul_core == "# V2"
         assert soul_path.read_text() == "# V2"
         assert pm.get_version() == 2
+        # I5 half that's never regression-tested: the atomic-write .tmp sibling
+        # (os.replace source) must not survive a successful apply_evolution.
+        tmp_path = soul_path.with_suffix(soul_path.suffix + ".tmp")
+        assert not tmp_path.exists()
 
     def test_reload_picks_up_manual_edits(self, cfg, tmp_paths):
         """reload() re-reads the file after external modification."""

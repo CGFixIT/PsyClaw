@@ -1,10 +1,10 @@
 """Invariant guard: the agentic layer must stay out of the request path.
 
 The whole security argument for the agentic layer is that it is out-of-band --
-exactly like sync/. If gate.py, graph.py, or mcp_hybrid_server.py ever imported
-``agentic``, the layer would be coupled into the request path and could (in
-principle) influence retrieval, routing, or the MCP surface. This test fails
-loudly if that coupling is ever introduced.
+exactly like sync/. If gate.py, gate_ops.py, graph.py, or mcp_hybrid_server.py
+ever imported ``agentic``, the layer would be coupled into the request path
+and could (in principle) influence retrieval, routing, or the MCP surface.
+This test fails loudly if that coupling is ever introduced.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REQUEST_PATH_MODULES = ["gate.py", "graph.py", "mcp_hybrid_server.py"]
+REQUEST_PATH_MODULES = ["gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py"]
 
 
 def _imports(source: str) -> set[str]:

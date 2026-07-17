@@ -1,5 +1,6 @@
 """Security-focused tests: BM25 pickle rejection, API key auth, and async endpoints."""
 
+import copy
 import json
 import os
 import pickle
@@ -31,8 +32,7 @@ class TestBM25PickleRejection:
         with open(pkl_path, "wb") as f:
             pickle.dump({"bm25": Evil(), "chunks": [], "metadata": []}, f)
 
-        cfg = TEST_CONFIG.copy()
-        cfg["indexing"] = cfg["indexing"].copy()
+        cfg = copy.deepcopy(TEST_CONFIG)
         cfg["indexing"]["bm25_path"] = str(pkl_path)
         cfg["indexing"]["chroma_path"] = str(tmp_path / "chroma_db")
         config_file = tmp_path / "config.yaml"
@@ -62,8 +62,7 @@ class TestBM25PickleRejection:
         with open(bm25_path, "w") as f:
             json.dump({"tokenized_corpus": tokenized, "chunks": chunks, "metadata": metadata}, f)
 
-        cfg = TEST_CONFIG.copy()
-        cfg["indexing"] = cfg["indexing"].copy()
+        cfg = copy.deepcopy(TEST_CONFIG)
         cfg["indexing"]["bm25_path"] = str(bm25_path)
         cfg["indexing"]["chroma_path"] = str(tmp_path / "chroma_db")
         config_file = tmp_path / "config.yaml"

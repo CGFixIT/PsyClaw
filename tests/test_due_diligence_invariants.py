@@ -568,12 +568,13 @@ class TestMcpNoLlmPath:
 # I6 — Module isolation for the core three (focused, AST-based).
 # =============================================================================
 class TestCoreModuleIsolation:
-    """I6: gate.py / graph.py / mcp_hybrid_server.py never import the out-of-band
-    packages (agentic / sync / guardrails). Their isolation is what keeps the
-    security invariants from being reachable through an out-of-band code path."""
+    """I6: gate.py / gate_ops.py / graph.py / mcp_hybrid_server.py never import
+    the out-of-band packages (agentic / sync / guardrails). Their isolation is
+    what keeps the security invariants from being reachable through an
+    out-of-band code path."""
 
     OUT_OF_BAND = {"agentic", "sync", "guardrails"}
-    CORE = ("gate.py", "graph.py", "mcp_hybrid_server.py")
+    CORE = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
 
     def test_core_modules_never_import_out_of_band(self):
         for fname in self.CORE:
