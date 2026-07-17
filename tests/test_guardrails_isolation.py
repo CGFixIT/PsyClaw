@@ -1,10 +1,11 @@
 """Invariant guard: the NeMo guardrails layer must stay out of the request path.
 
 The whole security argument for the guardrails layer is that it is out-of-band --
-exactly like sync/ and agentic/. If gate.py, graph.py, or mcp_hybrid_server.py
-ever imported ``guardrails``, the content-safety layer would be coupled into the
-request path and could influence retrieval/routing as hidden middleware, breaking
-the topology=policy invariant. This test fails loudly if that coupling appears.
+exactly like sync/ and agentic/. If gate.py, gate_ops.py, graph.py, or
+mcp_hybrid_server.py ever imported ``guardrails``, the content-safety layer
+would be coupled into the request path and could influence retrieval/routing
+as hidden middleware, breaking the topology=policy invariant. This test fails
+loudly if that coupling appears.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REQUEST_PATH_MODULES = ["gate.py", "graph.py", "mcp_hybrid_server.py"]
+REQUEST_PATH_MODULES = ["gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py"]
 
 
 def _imports(source: str) -> set[str]:

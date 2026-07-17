@@ -30,7 +30,7 @@ import re
 import sys
 from pathlib import Path
 
-CORE_FILES = ("gate.py", "graph.py", "mcp_hybrid_server.py")
+CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
 OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails")
 # Conditional-edge sources and their router function names. Single source of
 # truth for I2 (topology=policy) and I4 (audit convergence), which both need
@@ -146,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         gate_tree = parse(root / "gate.py")
+        gate_ops_tree = parse(root / "gate_ops.py")
         graph_tree = parse(root / "graph.py")
         mcp_tree = parse(root / "mcp_hybrid_server.py")
     except (OSError, SyntaxError) as exc:
@@ -281,14 +282,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── I6 Module isolation ─────────────────────────────────────────────────
     print("I6 Module isolation")
-    for fname, tree in (("gate.py", gate_tree), ("graph.py", graph_tree),
-                        ("mcp_hybrid_server.py", mcp_tree)):
+    for fname, tree in (("gate.py", gate_tree), ("gate_ops.py", gate_ops_tree),
+                        ("graph.py", graph_tree), ("mcp_hybrid_server.py", mcp_tree)):
         bad = sorted({m for m, _ in top_level_import_names(tree) if m in OUT_OF_BAND_PKGS})
         if not bad:
             ok(f"{fname} imports none of {OUT_OF_BAND_PKGS}")
         else:
             fail(f"{fname} imports none of {OUT_OF_BAND_PKGS}", f"imports {bad}")
-    core_roots = {"gate", "graph", "mcp_hybrid_server"}
+    core_roots = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
     scanned = 0
     offenders: list[str] = []
     for pkg in OUT_OF_BAND_PKGS:

@@ -209,11 +209,16 @@ class TestQueryEndpoint:
     def test_query_timeout_returns_504(self, client):
         # A graph invoke that exceeds api.graph_timeout_sec must return HTTP 504
         # (GRAPH_TIMEOUT) instead of holding the request open indefinitely.
-        import time
+        # Block on an Event that's never set, instead of a fixed time.sleep():
+        # the response can only come from asyncio.wait_for's own timeout firing,
+        # not a race between two independent clocks, and the test doesn't pay a
+        # real fixed delay either.
+        import threading
         import gate
+        never_set = threading.Event()
         test_client, mock_graph = client
         gate.cfg = {**gate.cfg, "api": {**gate.cfg.get("api", {}), "graph_timeout_sec": 0.1}}
-        mock_graph.invoke.side_effect = lambda state: time.sleep(0.5) or {}
+        mock_graph.invoke.side_effect = lambda state: never_set.wait() or {}
         resp = test_client.post("/query", json={"query": "slow query"})
         assert resp.status_code == 504
         assert resp.json()["detail"]["code"] == "GRAPH_TIMEOUT"
