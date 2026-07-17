@@ -38,7 +38,7 @@ numpy==1.26.4
 nltk==3.9.4
 
 # torch-cpu extra / embedding backend (minimum safe post CVE, CPU index via pyproject [tool.uv.sources])
-torch==2.12.1+cpu
+torch==2.13.0+cpu
 
 # Optional Postgres / pgvector backends (pyproject extras: postgres, pgvector).
 # These are NOT installed by the default path; constraints only cap a version when
