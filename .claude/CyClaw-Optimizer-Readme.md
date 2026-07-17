@@ -1,3 +1,16 @@
+> **STATUS BANNER (verified 2026-07-18 against main @ 8dc96d5):** nearly all
+> findings below are RESOLVED on current main — H1–H5, M1, M3–M8, SEC-1/2/3/7,
+> I1, L6, and the ponytail items (see docs/zIdeas/CHECKIFSTILLRELEVANTponytail-fix-planning.md,
+> all 8 landed) no longer reproduce. STILL OPEN at verification time (each now
+> has a draft PR): M9 (MCP audit "mode" key → PR #548), M10 (agentic-context
+> mock shape → PR #547), M5 (dead gate patches → PR #547), L7 (module-level
+> import gate → PR #547), L9 (cwd-relative config in test_rag_integration →
+> PR #547), SEC-3 uv digest pin (partially fixed — was `latest`, now `0.7`
+> tag; digest pin in PR #549). Not reproducible / out of scope: H2/H4 (fixed),
+> M2 (no debug log — cosmetic, skipped), SEC-5/SEC-8 (accepted design),
+> M3 note: include_query_hash=false raw-text behavior is intentional and
+> pinned by tests/test_due_diligence_invariants.py. Verify before acting.
+
 note for any loop task prompt or essentially any time an optimization skill is invoked - start here during 4 minute code scan time block and read each issue then compare to current code branch to verify valid/not already resolved
 
 ALSO: there are several others like this to check first when fixing or optimizing cyclaw - under docs/* , docs/zIdeas, docs/audits, 
