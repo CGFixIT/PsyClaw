@@ -7,7 +7,7 @@
 # --- GHSA-f4j7-r4q5-qw2c (chromadb) ---
 # ID: GHSA-f4j7-r4q5-qw2c (CVE-2026-45829)
 # Package: chromadb
-# Version: 1.5.6
+# Version: 1.5.9
 # Date added: 2026-06-20
 # Last reviewed: 2026-06-20
 # Owner: CGFixIT
@@ -38,15 +38,15 @@ reason = "CVE-2026-45829 (Critical pre-auth RCE) — no upstream patch released 
 id = "GHSA-p4gq-832x-fm9v"
 reason = "CVE-2026-54293 (High path traversal in nltk.data.load()) — no upstream patch released yet. Risk accepted because CyClaw deliberately avoids the vulnerable code path: custom regex-based tokenize_and_stem() in retrieval/stemmer.py bypasses nltk.data.load() entirely (see explicit comment in the file). Standard NLTK tokenization that would trigger the vuln is not used. Quarterly review scheduled."
 
-# === torch 2.6.0+cpu vulnerability block ===
+# === torch 2.12.1+cpu vulnerability block ===
 # All 18 torch CVEs detected after adding torch to requirements.txt for GitHub Automatic
 # Dependency Submission (to avoid spurious CUDA transitive deps in the dep graph).
 # Threat model: torch is used ONLY as a CPU embedding backend via sentence-transformers
 # (all-MiniLM-L6-v2); no model loading from the internet, no untrusted weight files,
 # offline-first design, PersistentClient embedded mode. The majority of these CVEs are
 # model-deserialization or remote-model-loading issues that require a network attack
-# surface CyClaw does not expose. Pinned at 2.6.0+cpu as the minimum safe post
-# CVE-2025-32434 (weights_only=True RCE bypass). Review for torch upgrade on 2026-09-20.
+# surface CyClaw does not expose. Pinned at 2.12.1+cpu, well past the minimum safe post
+# CVE-2025-32434 (weights_only=True RCE bypass) version. Review for torch upgrade on 2026-09-20.
 #
 # ID: PYSEC-2025-191 / GHSA-3749-ghw9-m3mg — no upstream patch available
 # ID: PYSEC-2025-198 through PYSEC-2025-202 — fixed in 2.7.0
@@ -61,76 +61,76 @@ reason = "CVE-2026-54293 (High path traversal in nltk.data.load()) — no upstre
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-191"
-reason = "torch 2.6.0+cpu — no upstream patch available. Accepted: CyClaw uses torch only as a CPU embedding backend (sentence-transformers, offline, no remote model loading). See .osv-scanner.toml torch block above. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — no upstream patch available. Accepted: CyClaw uses torch only as a CPU embedding backend (sentence-transformers, offline, no remote model loading). See .osv-scanner.toml torch block above. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "GHSA-3749-ghw9-m3mg"
-reason = "torch 2.6.0+cpu — alias for PYSEC-2025-191 (no upstream patch). Accepted under same offline/CPU-only threat model. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — alias for PYSEC-2025-191 (no upstream patch). Accepted under same offline/CPU-only threat model. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-198"
-reason = "torch 2.6.0+cpu — fixed in 2.7.0. Accepted: offline CPU embedding use only, no remote model loading. Bump torch when sentence-transformers compat is verified. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — fixed in 2.7.0. Accepted: offline CPU embedding use only, no remote model loading. Bump torch when sentence-transformers compat is verified. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-199"
-reason = "torch 2.6.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-200"
-reason = "torch 2.6.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-201"
-reason = "torch 2.6.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-202"
-reason = "torch 2.6.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-203"
-reason = "torch 2.6.0+cpu — fixed in 2.9.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — fixed in 2.9.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-204"
-reason = "torch 2.6.0+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
+reason = "torch 2.12.1+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-205"
-reason = "torch 2.6.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-206"
-reason = "torch 2.6.0+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
+reason = "torch 2.12.1+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-207"
-reason = "torch 2.6.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-208"
-reason = "torch 2.6.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2025-209"
-reason = "torch 2.6.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
+reason = "torch 2.12.1+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
 
 [[IgnoredVulns]]
 id = "PYSEC-2026-139"
-reason = "torch 2.6.0+cpu — no upstream patch available (CVSS 7.8). Accepted: CyClaw uses torch only as a CPU embedding backend in offline mode — no network attack surface exposed. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — no upstream patch available (CVSS 7.8). Accepted: CyClaw uses torch only as a CPU embedding backend in offline mode — no network attack surface exposed. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "GHSA-887c-mr87-cxwp"
-reason = "torch 2.6.0+cpu — fixed in 2.8.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — fixed in 2.8.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "GHSA-qfhq-4f3w-5fph"
-reason = "torch 2.6.0+cpu — fixed in 2.10.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — fixed in 2.10.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "GHSA-rrmf-rvhw-rf47"
-reason = "torch 2.6.0+cpu — no upstream patch available. Accepted under offline/CPU-only CyClaw threat model. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — no upstream patch available. Accepted under offline/CPU-only CyClaw threat model. Review 2026-09-20."
 
 [[IgnoredVulns]]
 id = "GHSA-vgrw-7cvw-pwgx"
-reason = "torch 2.6.0+cpu — fixed in 2.9.1. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
+reason = "torch 2.12.1+cpu — fixed in 2.9.1. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
