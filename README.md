@@ -93,7 +93,7 @@ flowchart TD
     subgraph GATEWAY ["gate.py — FastAPI 127.0.0.1:8787"]
         B["TrustedHostMiddleware\nHost header allowlist"]
         B --> C["Rate Limiter\n60 req/min per IP"]
-        C --> D["Prompt Injection Filter\n33 patterns · config-driven · lru_cache"]
+        C --> D["Prompt Injection Filter\n32 patterns · config-driven · lru_cache"]
         D --> E["Build GraphState\nquery + user_confirmed_online"]
     end
 
@@ -584,7 +584,7 @@ python -m guardrails.cli test                            # pre-flight self-test
 guardrails:
   enabled: false                 # opt-in; also gates the graph.py guardrail_input node
   engine: "openai"               # Ollama OpenAI-compatible endpoint
-  model: "qwen2.5-7b-instruct"   # keep in sync with models.local_llm.model
+  model: "qwen2.5:7b"            # keep in sync with models.local_llm.model
   hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
 ```
