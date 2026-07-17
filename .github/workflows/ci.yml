@@ -314,7 +314,14 @@ jobs:
     name: verify-skills (${{ matrix.skill }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: discover-skills
+    # `needs: test` (added alongside discover-skills) is a deliberate ordering
+    # constraint, not a correctness dependency: this job shares the `test`
+    # job's exact torch-cpu-2.12.1-${{ runner.os }}-py312 cache key, and
+    # GitHub Actions cache writes from one job aren't visible to a sibling job
+    # running concurrently. Running the two in parallel on a cold cache meant
+    # both independently re-downloaded the ~2GB torch wheel. Serializing after
+    # `test` costs some wall time but guarantees the cache is warm.
+    needs: [discover-skills, test]
     # Skip cleanly when no skill ships a verify/smoke script (empty matrix).
     if: needs.discover-skills.outputs.has_skills == 'true'
     # These skill scripts are full app-runtime e2e smokes (they build the index
