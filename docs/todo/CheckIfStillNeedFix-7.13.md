@@ -1,5 +1,14 @@
 # CyClaw Test Suite Analysis — 2026-06-20
 
+> **STATUS BANNER (verified 2026-07-18 against main @ 8dc96d5):** every item in
+> this file is RESOLVED on current main — the rate limiter is extracted to
+> `utils/ratelimit.py` with `tests/test_rate_limit.py` importing the real
+> limiter under a fake clock; `test_gate.py` covers 429/401/503/504/oversize;
+> `test_graph.py` covers personality `record_interaction` and the retrieval
+> RAGError path; `test_personality_changes.py` no longer exists; the stale
+> `test_audit.py` header was rewritten; `test_security.py` has the soul-auth
+> tests. Read below as historical context only — do not re-implement.
+
 **Runtime Verified:** Python 3.12.3  
 **Commit:** origin/main @ 611118d  
 **Local checkout used for pytest run:** 0e47adc (94 commits behind main)  
