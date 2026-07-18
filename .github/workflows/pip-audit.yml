@@ -63,9 +63,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: .torch-wheels
-          key: torch-cpu-2.12.1-${{ runner.os }}-py312
+          key: torch-cpu-2.13.0-${{ runner.os }}-py312
           restore-keys: |
-            torch-cpu-2.12.1-${{ runner.os }}-
+            torch-cpu-2.13.0-${{ runner.os }}-
 
       - name: Download torch wheel (cache miss only)
         if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
@@ -76,14 +76,14 @@ jobs:
         # documented CVE-2025-32434 >=2.6.0 floor); --no-deps avoids pulling the
         # default CUDA build.
         run: |
-          pip download "torch==2.12.1+cpu" \
+          pip download "torch==2.13.0+cpu" \
             --index-url https://download.pytorch.org/whl/cpu \
             --no-deps -d .torch-wheels
 
       - name: Install with constraints (reproducible gate)
         shell: bash
         run: |
-          pip install --no-index --no-deps --find-links .torch-wheels "torch==2.12.1+cpu"
+          pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -r requirements.txt -c constraints.txt
 
       - name: Minimal hermetic prep + smoke import check
@@ -123,8 +123,11 @@ jobs:
         # Cross-ref: cyclaw-advisor §K / §M, hybrid_search.py:55, indexer.py:58, gate.py:TELEMETRY_KILL
         # Track upstream for patched 1.5.x release; re-evaluate on bump.
         #
-        # PYSEC-2026-597 (nltk) — risk accepted, 2026-07. No patched nltk release
-        # exists yet (3.9.4 is current latest on PyPI). CyClaw's only nltk usage is
+        # PYSEC-2026-597 (nltk) — risk accepted, 2026-07. nltk bumped 3.9.4->3.10.0
+        # on main (dependabot) 2026-07-17; not confirmed here whether 3.10.0 itself
+        # carries a fix (osv.dev is unreachable from this sandbox to check) -- the
+        # ignore is kept regardless since it's still fully mitigated below.
+        # CyClaw's only nltk usage is
         # `from nltk.stem import PorterStemmer` (retrieval/stemmer.py); it never
         # calls nltk.download() or nltk.data.load() -- the known nltk vulnerability
         # classes (downloader zip-slip RCE, punkt/corpus-reader path traversal) all
