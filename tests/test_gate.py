@@ -34,10 +34,11 @@ def client(tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(cfg, f)
 
-    # Patch gate module's dependencies before importing
-    with patch("gate.open", create=True), \
-         patch("gate.yaml.safe_load", return_value=cfg), \
-         patch("gate.cfg", cfg), \
+    # gate.py loads its config at module import time, so patching gate.open /
+    # gate.yaml.safe_load here would be dead code — the real mechanism is the
+    # direct `gate.cfg = cfg` assignment below (kept inside the patch context
+    # for symmetry with the other module-level patches).
+    with patch("gate.cfg", cfg), \
          patch("gate.HybridRetriever") as MockRet, \
          patch("gate.LocalLLMClient") as MockLLM, \
          patch("gate.ClaudeClient"), \

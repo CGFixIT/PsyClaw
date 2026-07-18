@@ -33,13 +33,17 @@ def _cfg(allowed: list[str] | None = None) -> AgenticConfig:
 
 
 def _fake_run_read(op: str, repo: str, **kwargs):
-    """Mimic gh_client.run_read's return shapes: diff ops -> {'diff'}, list ops ->
-    {'data': [...]}, view ops -> {'data': {...}}."""
+    """Mirror gh_client.run_read's real return contract exactly: every op returns
+    the top-level envelope {"op", "repo", ...} — diff ops add "diff", all others
+    add "data" (list for list ops, dict for view ops). A previous version dropped
+    the "op"/"repo" envelope keys, so a consumer regression reading them (e.g.
+    result["repo"]) would have stayed green here while breaking in production.
+    """
     if op == "pr_diff":
-        return {"diff": "diff --git a/f b/f\n+x"}
+        return {"op": op, "repo": repo, "diff": "diff --git a/f b/f\n+x"}
     if op in ("pr_list", "issue_list"):
-        return {"data": [{"number": 1}]}
-    return {"data": {"op": op, "repo": repo, "kwargs": kwargs}}
+        return {"op": op, "repo": repo, "data": [{"number": 1}]}
+    return {"op": op, "repo": repo, "data": {"kwargs": kwargs}}
 
 
 # --- fetch_pr_context ------------------------------------------------------
@@ -50,7 +54,7 @@ def test_fetch_pr_context_includes_diff_by_default():
         bundle = fetch_pr_context(_cfg(), 42)
     assert bundle["repo"] == "owner/repo"
     assert bundle["number"] == 42
-    assert bundle["pr"]["op"] == "pr_view"
+    assert isinstance(bundle["pr"], dict)  # pr_view "data" payload
     assert bundle["diff"].startswith("diff --git")
     # Two reads: pr_view then pr_diff.
     ops = [c.args[0] for c in mr.call_args_list]
@@ -88,7 +92,7 @@ def test_fetch_issue_context_bundles_issue():
         bundle = fetch_issue_context(_cfg(), 99)
     assert bundle["repo"] == "owner/repo"
     assert bundle["number"] == 99
-    assert bundle["issue"]["op"] == "issue_view"
+    assert isinstance(bundle["issue"], dict)  # issue_view "data" payload
     assert [c.args[0] for c in mr.call_args_list] == ["issue_view"]
 
 
@@ -106,7 +110,7 @@ def test_fetch_repo_context_includes_lists_when_allowed():
     with patch.object(context, "run_read", side_effect=_fake_run_read) as mr:
         bundle = fetch_repo_context(_cfg())  # default allow-list has pr_list + issue_list
     assert bundle["repo"] == "owner/repo"
-    assert bundle["overview"]["op"] == "repo_view"
+    assert isinstance(bundle["overview"], dict)  # repo_view "data" payload
     # Shortlists now carry pagination metadata, not a bare list.
     assert bundle["open_prs"]["items"] == [{"number": 1}]
     assert bundle["open_prs"]["count"] == 1

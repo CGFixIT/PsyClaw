@@ -15,12 +15,17 @@ from tests.conftest import MockLocalLLM
 from utils.logger import close_audit_handles, reset_config_cache
 
 
+# Repo root, for cwd-independent reads of the shipped config.yaml. A bare
+# Path("config.yaml") breaks when pytest is invoked from outside the repo root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
 def _fake_embedding(_text: str, _config_path: str = "config.yaml") -> list[float]:
     return [1.0, 0.0, 0.0]
 
 
 def _write_isolated_config(tmp_path: Path) -> tuple[Path, dict]:
-    cfg = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    cfg = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
 
     corpus = tmp_path / "corpus"
     corpus.mkdir()
