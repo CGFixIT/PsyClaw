@@ -27,7 +27,7 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 
 # 2. Torch CPU first (keeps install lean + offline-friendly)
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 3. All other deps (pinned, verified Python 3.12 tree)
 pip install -r requirements.txt -c constraints.txt
@@ -64,7 +64,7 @@ python3.12 -m venv venv
 source venv/bin/activate
 
 # 2. Torch CPU (recommended even on Linux to avoid ~2.5 GB CUDA build)
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 3. All other deps
 pip install -r requirements.txt -c constraints.txt
