@@ -227,7 +227,7 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
                     "-m",
                     "pip",
                     "install",
-                    "torch==2.12.1+cpu",
+                    "torch==2.13.0+cpu",
                     "--index-url",
                     "https://download.pytorch.org/whl/cpu",
                 ],

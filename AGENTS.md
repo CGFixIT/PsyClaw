@@ -143,7 +143,7 @@ Preferred local setup from `.github/copilot-instructions.md`:
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 uv pip install -r pyproject.toml --constraint constraints.txt
 ```
 
@@ -151,7 +151,7 @@ Legacy/CI-compatible fallback:
 
 ```bash
 python -m pip install --upgrade "pip>=26.1.2"
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -c constraints.txt
 ```
 
@@ -279,7 +279,7 @@ No markdown formatter or markdown lint command was found in repo config.
 - Prefer `pyproject.toml` plus uv for new local installs.
 - Keep `requirements.txt` only as the legacy/CI compatibility path.
 - Keep `constraints.txt` aligned with direct pins and critical transitives.
-- Install CPU-only torch first: `torch==2.12.1+cpu` from the PyTorch CPU index.
+- Install CPU-only torch first: `torch==2.13.0+cpu` from the PyTorch CPU index.
 - Do not casually remove the documented ChromaDB CVE exception; it is accepted only for embedded, local/offline `PersistentClient` use and documented in security workflows.
 - Do not add dependencies unless the task needs them and the relevant manifests, constraints, Docker, and CI install paths are kept consistent.
 

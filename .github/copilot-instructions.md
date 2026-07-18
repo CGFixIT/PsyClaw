@@ -69,7 +69,7 @@ Recommended clean setup:
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 # Preferred (uv + pyproject.toml):
 uv pip install -r pyproject.toml --constraint constraints.txt
 # Legacy / CI-compat pip fallback:
@@ -180,7 +180,7 @@ powershell -File tests/apipsTest.ps1   # Windows/manual live-server smoke
 ```
 
 ## CI / workflow facts that matter for PRs
-- `.github/workflows/ci.yml`: main test gate on `main`, `cc`, and `feature/CyClaw-Agent`, Python 3.12, Ubuntu + Windows, 30 min timeout. Installs `torch==2.12.1+cpu`, then `pip install -r requirements.txt -c constraints.txt pytest pytest-cov`, prepares hermetic dirs, runs `tests.ci_rag_smoke`, then the explicit pytest file list with per-module `--cov` flags. Also includes non-blocking `discover-skills` + `verify-skills` jobs that run `.claude/skills/*/verify.sh` and `smoke.sh` in parallel (`continue-on-error: true`; does not gate merges).
+- `.github/workflows/ci.yml`: main test gate on `main`, `cc`, and `feature/CyClaw-Agent`, Python 3.12, Ubuntu + Windows, 30 min timeout. Installs `torch==2.13.0+cpu`, then `pip install -r requirements.txt -c constraints.txt pytest pytest-cov`, prepares hermetic dirs, runs `tests.ci_rag_smoke`, then the explicit pytest file list with per-module `--cov` flags. Also includes non-blocking `discover-skills` + `verify-skills` jobs that run `.claude/skills/*/verify.sh` and `smoke.sh` in parallel (`continue-on-error: true`; does not gate merges).
 - `.github/workflows/lint.yml`: PR lint gate for `main`/`cc`; runs only Ruff with `--select E,F,I,B,C4,S`.
 - Security workflows exist for CodeQL, OSV, pip-audit, Gitleaks, DevSkim, Defender, Fortify. Avoid introducing secrets, vulnerable deps, telemetry, or unsafe network exposure.
 - `pip-audit.yml` and `.osv-scanner.toml` intentionally ignore CVE-2026-45829 (ChromaDB Critical pre-auth RCE, no upstream patch) because CyClaw uses embedded `PersistentClient` (local/offline air-gapped only, no `HttpClient`, no `trust_remote_code`); do not "fix" that policy casually.

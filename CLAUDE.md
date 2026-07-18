@@ -186,7 +186,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 
 ### Environment & install
 - **Trap:** `pip install -r requirements.txt` fails or pulls a CUDA torch.
-  **Rule:** install `torch==2.12.1+cpu` from the PyTorch CPU index **first**,
+  **Rule:** install `torch==2.13.0+cpu` from the PyTorch CPU index **first**,
   then `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`.
 - **Trap:** running `pytest` in a fresh container — no deps are installed.
   **Rule:** a freshly-cloned container has NO Python deps. Install first
@@ -447,7 +447,7 @@ Skills reference this section; keep it as the single canonical copy.
 
 ```bash
 # Install (order matters — torch CPU FIRST)
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 
 # Build the retrieval index (required before /query returns hits)

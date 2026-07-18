@@ -65,7 +65,7 @@ All subsequent commands run from `$SANDBOX`.
 ```bash
 python3.12 -m venv "$SANDBOX/.venv" || python3 -m venv "$SANDBOX/.venv"
 source "$SANDBOX/.venv/bin/activate"
-pip install --quiet torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install --quiet torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install --quiet -r requirements.txt --ignore-installed PyYAML
 pip install --quiet pytest pytest-asyncio pytest-cov httpx pyyaml
 python -c "import fastapi, langgraph, chromadb, sentence_transformers, rank_bm25; print('deps OK')"

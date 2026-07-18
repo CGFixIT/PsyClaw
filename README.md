@@ -312,8 +312,8 @@ cd CyClaw
 python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-# 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.12.1 is within the patched range)
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+# 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
 pip install -r requirements.txt -c constraints.txt

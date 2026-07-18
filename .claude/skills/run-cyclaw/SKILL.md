@@ -20,7 +20,7 @@ structural flows are testable.
 
 ```bash
 # Python 3.12 required
-pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 ```
 

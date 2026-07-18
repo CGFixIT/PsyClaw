@@ -137,7 +137,7 @@ See `retrieval/hybrid_search.py` for implementation.
 ## Dependency Notes
 
 - **PyYAML:** Install with `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`
-- **torch:** Install `torch==2.12.1+cpu` **before** `requirements.txt` (CVE-2025-32434 was fixed in 2.6.0; 2.12.1 is within the patched range — install order still matters to ensure CPU wheel resolves correctly)
+- **torch:** Install `torch==2.13.0+cpu` **before** `requirements.txt` (CVE-2025-32434 was fixed in 2.6.0; 2.13.0 is within the patched range — install order still matters to ensure CPU wheel resolves correctly)
 - **ChromaDB CVE-2026-45829:** Accepted; threat model is embedded-only (`PersistentClient`), not HTTP.
 
 ---
