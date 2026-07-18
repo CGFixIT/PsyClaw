@@ -128,7 +128,9 @@ def _handle_search(msg_id, args: dict, retriever: HybridRetriever) -> dict:
         # writes for the same query. (Previously this passed query[:100], which
         # both implied cleartext and produced a hash that diverged from HTTP for
         # queries longer than 100 chars.)
-        audit_log({"event": "mcp_rag_query", "query": query, "mode": mode,
+        # The mode key is "retrieval_mode" — the same key the graph audit node
+        # uses — so metrics.py needs no MCP-specific dual-key special case.
+        audit_log({"event": "mcp_rag_query", "query": query, "retrieval_mode": mode,
                    "hit_count": len(results), "top_score": results[0].score if results else 0.0})
         payload = {
             "chunks": [{"text": r.text, "score": r.score, "source": r.source,
@@ -149,7 +151,7 @@ def _handle_search(msg_id, args: dict, retriever: HybridRetriever) -> dict:
         # Audit parity with the HTTP path (gate.py graph_error). The error body
         # is already sanitised before it leaves the process; the audit field
         # passes through utils.logger redactors as well.
-        audit_log({"event": "mcp_rag_error", "query": query, "mode": mode,
+        audit_log({"event": "mcp_rag_error", "query": query, "retrieval_mode": mode,
                    "error": f"{e.code}: {e.message}"})
         return _error(msg_id, -32000, f"{e.code}: {e.message}")
     except Exception as e:
@@ -158,7 +160,7 @@ def _handle_search(msg_id, args: dict, retriever: HybridRetriever) -> dict:
         # degraded dependency. Redact with the config-driven secret patterns
         # before it leaves the process in the JSON-RPC error body.
         safe_err = redact_sensitive(str(e))
-        audit_log({"event": "mcp_rag_error", "query": query, "mode": mode, "error": safe_err})
+        audit_log({"event": "mcp_rag_error", "query": query, "retrieval_mode": mode, "error": safe_err})
         return _error(msg_id, -32000, f"Search error: {safe_err}")
 
 def handle_message(msg: dict, retriever: HybridRetriever) -> dict:

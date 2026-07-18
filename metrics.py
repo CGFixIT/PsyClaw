@@ -100,10 +100,9 @@ def compute_metrics(events) -> dict:
                 score_n += 1
                 score_min = s if score_min is None or s < score_min else score_min
                 score_max = s if score_max is None or s > score_max else score_max
-            # The graph audit path records the retrieval mode under "retrieval_mode";
-            # the MCP server (mcp_hybrid_server._handle_search) records it under "mode".
-            # Reading only "retrieval_mode" silently bucketed every mcp_rag_query as
-            # "unknown" even though its mode was right there under the other key.
+            # Both graph and MCP audit paths now record the retrieval mode under
+            # "retrieval_mode"; the "mode" fallback only serves audit history
+            # written before the MCP server was normalized to the same key.
             mode_counts[e.get("retrieval_mode") or e.get("mode") or "unknown"] += 1
             # model_used is only meaningful for answered queries. Scope it to rag
             # queries so non-answer events — notably the graph audit node's

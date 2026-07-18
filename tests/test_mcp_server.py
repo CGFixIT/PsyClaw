@@ -263,12 +263,12 @@ def test_unknown_method_returns_error_32601(retriever):
 
 
 def test_non_object_message_returns_invalid_request(retriever):
-    result = handle_message(["not", "an", "object"], retriever)
+    result = handle_message(["not", "a", "dict"], retriever)
     assert result["error"]["code"] == -32600
 
 
 def test_tools_call_rejects_non_object_params(retriever):
-    msg = {"jsonrpc": "2.0", "id": 61, "method": "tools/call", "params": "bad"}
+    msg = {"jsonrpc": "2.0", "id": 61, "method": "tools/call", "params": "oops"}
     result = handle_message(msg, retriever)
     assert result["error"]["code"] == -32602
 
@@ -481,7 +481,7 @@ def test_unknown_mode_normalised_in_audit_and_metadata(retriever, tmp_path, monk
     assert result["result"]["metadata"]["retrieval_mode"] == "hybrid"
 
     event = json.loads(audit_file.read_text().strip())
-    assert event["mode"] == "hybrid", "audit must record the mode that ran, not the typo"
+    assert event["retrieval_mode"] == "hybrid", "audit must record the mode that ran, not the typo"
     reset_config_cache()
 
 
@@ -520,7 +520,7 @@ def test_rag_error_writes_audit_event(retriever, tmp_path, monkeypatch):
 
     event = json.loads(audit_file.read_text().strip())
     assert event["event"] == "mcp_rag_error"
-    assert event["mode"] == "hybrid"
+    assert event["retrieval_mode"] == "hybrid"
     assert "IDX" in event["error"]
     # Query field is hashed by audit_log, never persisted as raw text.
     assert event.get("query_hash") == hash_query("anything")
@@ -566,7 +566,7 @@ def test_generic_error_writes_audit_event(retriever, tmp_path, monkeypatch):
 
     event = json.loads(audit_file.read_text().strip())
     assert event["event"] == "mcp_rag_error"
-    assert event["mode"] == "semantic"
+    assert event["retrieval_mode"] == "semantic"
     assert secret not in event["error"], "audit must not persist the raw secret"
     assert "[REDACTED_SECRET]" in event["error"]
     reset_config_cache()
