@@ -210,16 +210,26 @@ class TestQueryEndpoint:
     def test_query_timeout_returns_504(self, client):
         # A graph invoke that exceeds api.graph_timeout_sec must return HTTP 504
         # (GRAPH_TIMEOUT) instead of holding the request open indefinitely.
-        # Block on an Event that's never set, instead of a fixed time.sleep():
-        # the response can only come from asyncio.wait_for's own timeout firing,
-        # not a race between two independent clocks, and the test doesn't pay a
-        # real fixed delay either.
+        # asyncio.wait_for cancels the *awaiting* task once its 0.1s deadline
+        # fires, but mock_graph.invoke() keeps running underneath in its
+        # run_in_executor() worker thread -- cancelling the wrapper future
+        # doesn't kill the OS thread. TestClient's own request path then tears
+        # down its anyio blocking portal, which shuts down that same default
+        # executor with executor.shutdown(wait=True) -- an unbounded join on
+        # Python <3.12 (deadlocks this test forever) and a hardcoded 300s
+        # grace window on 3.12 (a real ~5-minute stall, then the still-running
+        # thread hangs the whole interpreter at exit, which is what killed CI:
+        # every subsequent test kept the process alive, but nothing ever
+        # joined this thread). A bounded wait(timeout=...), well past the 0.1s
+        # deadline so the response still always comes from wait_for's own
+        # timeout firing, lets the thread exit on its own shortly after --
+        # no reliance on this test's own control flow to release it.
         import threading
         import gate
         never_set = threading.Event()
         test_client, mock_graph = client
         gate.cfg = {**gate.cfg, "api": {**gate.cfg.get("api", {}), "graph_timeout_sec": 0.1}}
-        mock_graph.invoke.side_effect = lambda state: never_set.wait() or {}
+        mock_graph.invoke.side_effect = lambda state: never_set.wait(timeout=2) or {}
         resp = test_client.post("/query", json={"query": "slow query"})
         assert resp.status_code == 504
         assert resp.json()["detail"]["code"] == "GRAPH_TIMEOUT"

@@ -178,8 +178,14 @@ async def _audit(event: dict) -> None:
     every audited event, so under concurrent load all in-flight requests
     serialize behind each audit write. Hashing/redaction live inside
     audit_log() and are unchanged.
+
+    Passes the module's live cfg explicitly -- without it, audit_log()'s
+    cfg=None default re-reads config.yaml from disk (via its own lru_cache),
+    ignoring this module's cfg entirely. That's silently harmless in
+    production (both loads agree at boot) but wrong the moment a caller's cfg
+    diverges from what's on disk, which is exactly the case in tests.
     """
-    await asyncio.to_thread(audit_log, event)
+    await asyncio.to_thread(audit_log, event, cfg=cfg)
 
 
 async def _check_rate_limit_async(client_ip: str) -> bool:
