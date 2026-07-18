@@ -16,6 +16,13 @@ Cross-file: `constraints.txt` (its own header) says its versions "MUST match
 exactly" the direct pins in `pyproject.toml`. This checker is the thing that
 actually verifies that claim.
 
+Also cross-checks the manifest pin against every CI workflow file that
+hardcodes torch's version as a separate string (a dedicated wheel-cache key +
+explicit `pip install`/`pip download` pin) instead of reading it from the
+manifest -- a dependabot bump only touches the manifest, so those hardcoded
+copies silently go stale otherwise (D8; this happened for real on 2026-07-17
+and hung the `test`/`verify-install` CI jobs to their 30-minute timeout).
+
 Severity:
     FAIL  a documented pin invariant is broken (exit 2).
     WARN  a reproducibility/soft-pin drift an operator may accept (exit 0;
@@ -228,6 +235,76 @@ def run_checks(py_reqs: list[Req], con_reqs: list[Req]) -> None:
                    "PersistentClient only (SECURITY.md); do NOT switch to the HTTP client or file a fix PR")
 
 
+# CI workflow files known to hardcode a torch version as a SEPARATE string
+# (a dedicated wheel-cache key + an explicit `pip install`/`pip download` pin),
+# duplicating the real pin in pyproject.toml/constraints.txt instead of reading
+# it. dependabot only touches the manifest files, so a manifest-only pin bump
+# silently orphans these -- which is exactly what happened 2026-07-17: #543
+# bumped torch to 2.13.0+cpu, these four files kept saying 2.12.1+cpu, and the
+# `test`/`verify-install` jobs each paid for a SECOND, uncached ~2GB network
+# fetch reconciling the mismatch, long enough to trip the 30-minute job timeout.
+_CI_TORCH_FILES = (
+    ".github/workflows/ci.yml",
+    ".github/workflows/pip-audit.yml",
+    ".github/workflows/devskim.yml",
+    ".github/workflows/copilot-setup-steps.yml",
+)
+# Matches both the cache-key form (torch-cpu-2.13.0-...) and the explicit pin
+# form (torch==2.13.0+cpu / "torch==2.13.0+cpu") used in the workflow YAMLs.
+_TORCH_VERSION_RE = re.compile(r"torch(?:-cpu-|==)(\d+\.\d+\.\d+)")
+# .osv-scanner.toml documents the version in prose ("torch 2.13.0+cpu ..."),
+# space-separated rather than `==`-joined -- a separate pattern, anchored on
+# the trailing "+cpu" to avoid matching unrelated "torch N ..." text.
+_TORCH_PROSE_VERSION_RE = re.compile(r"torch\s+(\d+\.\d+\.\d+)\+cpu")
+
+
+def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
+    """D8: every CI-hardcoded torch version string agrees with the real pin.
+
+    torch_pin is the exact version from constraints.txt/pyproject.toml (no
+    +cpu suffix, e.g. "2.13.0"); None if torch isn't pinned there at all.
+    """
+    print("D8 CI-hardcoded torch pins agree with the manifest pin")
+    if torch_pin is None:
+        info("D8", "torch not pinned in pyproject/constraints -- skipping CI cross-check")
+        return
+
+    mismatches: list[str] = []
+    files_checked = 0
+    for rel in _CI_TORCH_FILES:
+        path = root / rel
+        if not path.exists():
+            continue
+        files_checked += 1
+        text = path.read_text(encoding="utf-8")
+        found = {m.group(1) for m in _TORCH_VERSION_RE.finditer(text)}
+        stale = found - {torch_pin}
+        if stale:
+            mismatches.append(f"{rel}: hardcodes {sorted(stale)} but the pin is {torch_pin}")
+    if files_checked == 0:
+        warn("D8", "none of the known CI files were found -- nothing to cross-check")
+    elif mismatches:
+        fail("D8", f"CI workflow(s) hardcode a stale torch version (pin is {torch_pin}+cpu): "
+                   + "; ".join(mismatches))
+    else:
+        ok("D8", f"all {files_checked} CI file(s) with a hardcoded torch version agree with {torch_pin}+cpu")
+
+    # .osv-scanner.toml's torch version appears only in comments/reason strings
+    # (documentation, not functional) -- drift here doesn't break CI the way
+    # the workflow files do, so it's a WARN, not a FAIL. Still worth catching:
+    # this exact file drifted stale once already (PR #538 fixed 2.6.0->2.12.1;
+    # the very next dependabot bump re-orphaned it to 2.13.0 within hours).
+    osv_path = root / ".osv-scanner.toml"
+    if osv_path.exists():
+        osv_text = osv_path.read_text(encoding="utf-8")
+        osv_found = {m.group(1) for m in _TORCH_PROSE_VERSION_RE.finditer(osv_text)}
+        osv_stale = osv_found - {torch_pin}
+        if osv_stale:
+            warn("D8", f".osv-scanner.toml documents torch {sorted(osv_stale)} "
+                       f"but the pin is {torch_pin}+cpu (comment-only drift, doesn't break CI, "
+                       "but misleads anyone auditing the ignore list)")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None)
@@ -252,7 +329,20 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     print("== dep-guard: static dependency-pin invariants ==")
-    run_checks(_load_pyproject_reqs(pyproject), _load_constraints_reqs(constraints_text))
+    py_reqs = _load_pyproject_reqs(pyproject)
+    con_reqs = _load_constraints_reqs(constraints_text)
+    run_checks(py_reqs, con_reqs)
+
+    # D8 needs the resolved torch pin (constraints.txt wins; D6 above already
+    # enforces it agrees with pyproject when both pin it).
+    torch_req = next((r for r in con_reqs if r.name == "torch"), None) \
+        or next((r for r in py_reqs if r.name == "torch"), None)
+    torch_pin = _pin(torch_req.spec) if torch_req is not None else None
+    # Strip a "+cpu"-style local version tag -- _CI_TORCH_FILES regex and the
+    # manifest pin both need the bare X.Y.Z to compare equal.
+    if torch_pin is not None:
+        torch_pin = torch_pin.split("+")[0]
+    run_ci_pin_checks(root, torch_pin)
 
     strict_fail = args.strict and _warns
     print(f"\n{len(_fails)} failure(s), {len(_warns)} warning(s)"
