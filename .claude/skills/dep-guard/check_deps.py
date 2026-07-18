@@ -47,7 +47,7 @@ from typing import NamedTuple
 # The pydantic family bumps in lock-step: pydantic 2.13.4 hard-pins
 # pydantic-core==2.46.4 (exact ==). Bumping one alone makes
 # `pip install -c constraints.txt` unresolvable (CLAUDE.md §4). Drift from this
-# documented pair is a conscious update, not a silent one -> WARN, not FAIL.
+documented pair is a conscious update, not a silent one -> WARN, not FAIL.
 _PYDANTIC_LOCKSTEP = {"pydantic": "2.13.4", "pydantic-core": "2.46.4"}
 
 _fails: list[dict[str, str]] = []
@@ -257,6 +257,33 @@ _TORCH_VERSION_RE = re.compile(r"torch(?:-cpu-|==)(\d+\.\d+\.\d+)")
 # the trailing "+cpu" to avoid matching unrelated "torch N ..." text.
 _TORCH_PROSE_VERSION_RE = re.compile(r"torch\s+(\d+\.\d+\.\d+)\+cpu")
 
+# Executable install scripts that hardcode the pin as `torch==X.Y.Z+cpu`.
+# The 2026-07-17 drift didn't stop at workflows: these two scripts kept
+# INSTALLING 2.12.1+cpu after the manifest moved to 2.13.0+cpu, reproducing
+# the double-fetch failure outside CI -- so they FAIL like the workflows.
+_TORCH_SCRIPT_FILES = (
+    ".claude/skills/sandbox-runtime-verification/verify.sh",
+    ".codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py",
+)
+# Agent-facing docs/SKILL.md install instructions with the same hardcoded
+# pin. Drift here misleads but executes nothing -> WARN, same posture as the
+# .osv-scanner.toml comment check. Historical narrative ("moved 2.12.1 ->
+# 2.13.0") doesn't match the `torch==`/`torch-cpu-` pattern and is ignored.
+_TORCH_DOC_FILES = (
+    "README.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "docs/SETUP.md",
+    ".github/copilot-instructions.md",
+    ".claude/rules/PROJECT_RULES.md",
+    ".claude/skills/run-cyclaw/SKILL.md",
+    ".claude/skills/CyClaw-Sandbox/SKILL.md",
+    ".claude/skills/python-coding-agent/SKILL.md",
+    ".claude/skills/cyclaw-advisor/SKILL.md",
+    ".claude/skills/CyClaw-Optimize/SKILL.md",
+    ".claude/skills/index-doctor/SKILL.md",
+)
+
 
 def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
     """D8: every CI-hardcoded torch version string agrees with the real pin.
@@ -288,6 +315,27 @@ def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
                    + "; ".join(mismatches))
     else:
         ok("D8", f"all {files_checked} CI file(s) with a hardcoded torch version agree with {torch_pin}+cpu")
+
+    # Install scripts (FAIL) and docs (WARN) that duplicate the pin outside CI.
+    for rel in _TORCH_SCRIPT_FILES:
+        path = root / rel
+        if not path.exists():
+            continue
+        stale = {m.group(1) for m in _TORCH_VERSION_RE.finditer(path.read_text(encoding="utf-8"))} - {torch_pin}
+        if stale:
+            fail("D8", f"{rel}: install script hardcodes torch {sorted(stale)} "
+                       f"but the pin is {torch_pin}+cpu -- it would install the stale version")
+    doc_mismatches: list[str] = []
+    for rel in _TORCH_DOC_FILES:
+        path = root / rel
+        if not path.exists():
+            continue
+        stale = {m.group(1) for m in _TORCH_VERSION_RE.finditer(path.read_text(encoding="utf-8"))} - {torch_pin}
+        if stale:
+            doc_mismatches.append(f"{rel}: {sorted(stale)}")
+    if doc_mismatches:
+        warn("D8", f"doc(s) reference a stale torch version (pin is {torch_pin}+cpu): "
+                   + "; ".join(doc_mismatches))
 
     # .osv-scanner.toml's torch version appears only in comments/reason strings
     # (documentation, not functional) -- drift here doesn't break CI the way
