@@ -61,4 +61,36 @@ if [ "$rc" -ne 2 ]; then
 fi
 echo "mutation C (D1 lock-step drift): PASS (WARN=exit 0, --strict=exit 2)"
 
+# 2d. D8 FAIL: a CI workflow hardcodes a torch version that disagrees with the
+# manifest pin (this is the real 2026-07-17 incident, reproduced synthetically).
+d="$(_mktree)"
+mkdir -p "$d/.github/workflows"
+printf 'steps:\n  - run: pip install torch==9.9.9+cpu\n' > "$d/.github/workflows/ci.yml"
+out="$(python3 "$checker" --repo-root "$d" 2>&1)"; rc=$?
+rm -rf "$d"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D8\]"; then
+  echo "mutation D (D8 CI torch drift): FAIL — expected exit 2 + D8, got $rc" >&2; echo "$out" >&2; exit 1
+fi
+echo "mutation D (D8 CI torch drift): PASS (exit 2, D8 reported)"
+
+# 2e. D8 WARN: only .osv-scanner.toml's torch documentation is stale; every CI
+# file agrees with the real pin. Comment-only drift never breaks CI -> WARN.
+e="$(_mktree)"
+mkdir -p "$e/.github/workflows"
+real_pin="$(python3 -c "
+import re
+print(re.search(r'torch==([0-9.]+)\+cpu', open('$repo_root/constraints.txt').read()).group(1))
+")"
+printf 'steps:\n  - run: pip install torch==%s+cpu\n' "$real_pin" > "$e/.github/workflows/ci.yml"
+printf 'reason = "torch 9.9.9+cpu -- stale doc only"\n' > "$e/.osv-scanner.toml"
+if ! python3 "$checker" --repo-root "$e" >/tmp/depguard_d8warn.txt 2>&1; then
+  echo "mutation E (D8 osv-scanner doc drift): FAIL — a WARN alone must not fail" >&2
+  cat /tmp/depguard_d8warn.txt >&2; rm -rf "$e"; exit 1
+fi
+grep -q "WARN  \[D8\]" /tmp/depguard_d8warn.txt || {
+  echo "mutation E: D8 warning not reported" >&2; cat /tmp/depguard_d8warn.txt >&2; rm -rf "$e"; exit 1
+}
+rm -rf "$e"
+echo "mutation E (D8 osv-scanner doc drift): PASS (WARN, exit 0)"
+
 echo "== dep-guard verify: OK =="
