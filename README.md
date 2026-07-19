@@ -8,9 +8,9 @@
 [![PGvector](https://img.shields.io/badge/PGvector-0.3.6-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
-[![DevSkim](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/devskim.yml)
-[![Gitleaks Secret Scan](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/gitleaks.yml)
-[![OSV-Scanner](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/osv-scanner.yml)
+[![DevSkim](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml)
+[![Gitleaks Secret Scan](https://github.com/CGFixIT/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/gitleaks.yml)
+[![OSV-Scanner](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
 
@@ -35,7 +35,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 ## Architecture
 
 ```
-User Query (HTTP POST /query or MCMC tool call)
+User Query (HTTP POST /query or MCP tool call)
          │
          ▼
     ┌─────────────────────────────────────────────────────┐
@@ -334,7 +334,7 @@ python -m retrieval.indexer
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Open `/` for the terminal UI and `/health` for readiness. The terminal exposes three operator consoles — **Soul**, **Sync**, and **Agentic** — the latter two calling `POST /ops/sync` and `POST /ops/agentic` (API-key gated, rate-limited, audited).
+Open `/` for the terminal UI and `/health` for readiness. The terminal exposes five operator consoles — **Soul**, **Sync**, **Agentic**, **Filesystem**, and **SQL** — the latter four calling `POST /ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect` (API-key gated, rate-limited, audited).
 
 ---
 
@@ -672,7 +672,7 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
-| `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |
+| `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed` / `ops_fsconnect_executed` / `ops_sqlconnect_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
 
 > **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
