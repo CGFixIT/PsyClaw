@@ -106,7 +106,7 @@ flowchart TD
         X -->|"blocked"| L
         X -->|"passed"| H["④ local_llm\nOllama :11434\nqwen2.5:7b"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
-        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.3\ntriple-gated"]
+        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated"]
         I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
         I -->|"confirmed=false\nor offline mode"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
         H --> L
