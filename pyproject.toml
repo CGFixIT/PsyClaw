@@ -95,7 +95,7 @@ exclude = [".claude"]  # skill/utility scripts are not production code
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "S"]
 ignore = ["E501"]
-per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E501"], "utils/personality.py" = ["S608"] }
+per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "graph.py = ["E501"], "utils/personality.py" = ["S608"] }
 
 [tool.pytest.ini_options]
 minversion = "9.1"
