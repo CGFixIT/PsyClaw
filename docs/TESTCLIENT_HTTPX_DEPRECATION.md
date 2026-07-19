@@ -11,7 +11,7 @@
 Every test run that constructs a `TestClient` emits this warning:
 
 ```
-.../site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning:
+.../site-packages/fastapi.testclient.py:1: StarletteDeprecationWarning:
   Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
     from starlette.testclient import TestClient as TestClient  # noqa
 ```
@@ -19,7 +19,7 @@ Every test run that constructs a `TestClient` emits this warning:
 It is raised once per session (at import of `fastapi.testclient`, which re-exports
 `starlette.testclient`). It does **not** fail any test, but it is noise on every
 `pytest` invocation, including CI. As of 2026-07-19 it is suppressed by an exact
-class+message `filterwarnings` entry in `pyproject.toml` (see "Recommendation"),
+message-text `filterwarnings` entry in `pyproject.toml` (see "Recommendation"),
 so it no longer appears in test output; the underlying deprecation is unchanged.
 
 ### Where the TestClient is used
@@ -72,18 +72,22 @@ warning is not silently ignored until it becomes a hard break.
    Starlette bump turns the warning into an `ImportError`.
 
 2. **Silence the warning only — APPLIED 2026-07-19.** `pyproject.toml`
-   `[tool.pytest.ini_options]` now carries an exact class+message filter (scoped so no
-   other warning is masked):
+   `[tool.pytest.ini_options]` now carries a filter scoped by the exact message text:
 
    ```toml
    filterwarnings = [
-       'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.:starlette.exceptions.StarletteDeprecationWarning',
+       'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.',
    ]
    ```
 
    Pros: zero dependency churn. Cons: hides the signal; the underlying break still lands later.
-   The filter is deliberately narrow (full message text + `starlette.exceptions.StarletteDeprecationWarning`
-   class) rather than the broad `:DeprecationWarning` category originally sketched here.
+   The filter is deliberately scoped by full message text (unique to this warning) rather than the
+   broad `:DeprecationWarning` category originally sketched here. It is **not** class-qualified
+   (`:starlette.exceptions.StarletteDeprecationWarning`) on purpose: the conda lane
+   (`python-package-conda.yml`) installs `fastapi=0.115.9` → starlette 0.4x, where that class does
+   not exist, and pytest resolves filter categories at startup — a class-qualified filter fails the
+   whole lane with `AttributeError` before any test runs (observed 2026-07-19). Message-only parses
+   in both the pip lane (starlette 1.3.1) and the conda lane.
 
 3. **Migrate the test client to `httpx2`.** Add `httpx2` to the test/dev requirements so
    `starlette.testclient` picks it up. This is the direction Starlette is steering toward.
@@ -127,7 +131,9 @@ not the test client, and changing it has nothing to do with the warning.
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -c constraints.txt
-# The pyproject.toml filter suppresses the warning by default; override it to reproduce:
+# The pyproject.toml filter suppresses the warning by default; override it to reproduce
+# (pip path only — the class-qualified -W below needs starlette 1.x; the conda lane's
+# starlette 0.4x has no such class, and the warning does not fire there anyway):
 GROK_API_KEY=dummy pytest tests/test_gate.py -q -W "always::starlette.exceptions.StarletteDeprecationWarning" 2>&1 | grep -i deprecat
 # -> StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
 ```
