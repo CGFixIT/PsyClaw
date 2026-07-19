@@ -58,9 +58,26 @@ def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
     pf = (cfg.get("policy") or {}).get("prompt_filter") or {}
     enabled = pf.get("enabled", True)
     max_chars = pf.get("max_input_chars", _DEFAULT_MAX_INPUT_CHARS)
-    patterns = tuple(
-        re.compile(p, re.IGNORECASE) for p in pf.get("banned_patterns", [])
-    )
+    # Compile each banned pattern individually: a single malformed regex (an
+    # unbalanced paren typo in config.yaml) would otherwise raise re.error here
+    # on the FIRST /query, and since this runs inside check_input — whose only
+    # caller-side handler catches PromptInjectionError — it would escape as an
+    # unhandled 500 on EVERY query, benign ones included. Skip the bad entry
+    # with a warning (same warn-on-degrade posture as the empty-patterns case
+    # below) so the filter keeps enforcing its remaining patterns. Log the entry
+    # index and the compile error (which carries the fault position), not the
+    # pattern text.
+    compiled = []
+    for idx, p in enumerate(pf.get("banned_patterns", [])):
+        try:
+            compiled.append(re.compile(p, re.IGNORECASE))
+        except re.error as exc:
+            logger.warning(
+                "banned_patterns entry #%d in %s failed to compile (%s); it is "
+                "skipped — injection filtering continues with the remaining patterns.",
+                idx, config_path, exc,
+            )
+    patterns = tuple(compiled)
     if enabled and not patterns:
         # Enabled with zero patterns silently degrades to a length-only check —
         # surface it rather than letting injection filtering become a no-op.
