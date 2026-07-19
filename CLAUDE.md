@@ -144,7 +144,7 @@ subsystems.
 | `32` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
 | `qwen2.5:7b` | `local_llm.model` | Ollama |
-| `grok-4.3` | `grok.model` | disabled by default |
+| `grok-4.5` | `grok.model` | disabled by default |
 | `claude-sonnet-5` | `claude.model` | disabled by default; second external fallback (PR #441) |
 
 ---
