@@ -211,6 +211,42 @@ class TestComputeMetrics:
         assert m["scores"]["max"] == 0.60
         assert abs(m["scores"]["avg"] - 0.50) < 1e-9
 
+    def test_unhashable_label_values_do_not_crash_counters(self):
+        """A corrupt audit line carrying a JSON list/dict where event /
+        retrieval_mode / model_used expect a string must not raise
+        TypeError('unhashable type') — Counter keys must stay hashable so one
+        bad line can't 500 GET /audit/summary or the cyclaw-metrics CLI."""
+        events = [
+            {"event": "rag_query", "model_used": "qwen", "retrieval_mode": "hybrid", "top_score": 0.4},
+            {"event": ["corrupt"]},                                       # unhashable event label
+            {"event": "rag_query", "retrieval_mode": ["hybrid"], "top_score": 0.3},   # unhashable mode
+            {"event": "rag_query", "model_used": {"x": 1}, "retrieval_mode": "keyword", "top_score": 0.2},
+        ]
+        m = compute_metrics(events)
+        assert m["total_events"] == 4
+        # The corrupt event label falls to the "unknown" bucket, not a crash.
+        assert m["event_breakdown"]["unknown"] == 1
+        # The one corrupt retrieval_mode (list) falls to "unknown"; the two valid
+        # string modes are counted normally.
+        assert m["retrieval_modes"] == {"hybrid": 1, "unknown": 1, "keyword": 1}
+        # The dict model_used is skipped, not counted; the one valid string stays.
+        assert m["model_used"] == {"qwen": 1}
+
+    def test_nan_top_score_excluded_so_summary_is_json_renderable(self):
+        """A JSON-valid top_score: NaN must be excluded from the average — a NaN
+        avg makes Starlette's JSONResponse (allow_nan=False) raise at render,
+        500-ing GET /audit/summary. The summary must serialize with allow_nan
+        disabled, exactly as the endpoint renders it."""
+        events = [
+            {"event": "rag_query", "top_score": 0.5, "retrieval_mode": "hybrid"},
+            {"event": "rag_query", "top_score": float("nan"), "retrieval_mode": "hybrid"},
+            {"event": "rag_query", "top_score": float("inf"), "retrieval_mode": "hybrid"},
+        ]
+        m = compute_metrics(events)
+        assert m["scores"]["avg"] == 0.5
+        # Would raise ValueError("Out of range float values...") if NaN/inf leaked in.
+        json.dumps(m, allow_nan=False)
+
     def test_model_used_excludes_non_answer_events(self):
         """The graph stamps model_used="unknown" on user_gate_pause events.
         Those must not appear in the model-usage breakdown — only answered
