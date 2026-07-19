@@ -301,12 +301,18 @@ def run_fsconnect_op(
     argv = [sys.executable, "-m", "agentic.fsconnect.cli", "--config", str(_CONFIG_PATH), action]
 
     if action in {"list", "read", "stat", "grep", "glob"}:
+        # Use the --opt=value form (not two argv elements) for every free-text
+        # value, matching run_agentic_op above: a value that begins with '-'
+        # (a grep for the literal string "--dry-run" or "-v", a path/glob with a
+        # leading dash) binds to its option instead of being reparsed by the
+        # child argparse as a separate flag — which otherwise fails the op with
+        # "expected one argument".
         if root:
-            argv += ["--root", root]
+            argv.append(f"--root={root}")
         if path:
-            argv += ["--path", path]
+            argv.append(f"--path={path}")
         if pattern and action in {"grep", "glob"}:
-            argv += ["--pattern", pattern]
+            argv.append(f"--pattern={pattern}")
         if not recursive and action == "glob":
             argv.append("--no-recursive")
 
@@ -336,14 +342,17 @@ def run_sqlconnect_op(
     argv = [sys.executable, "-m", "agentic.sqlconnect.cli", "--config", str(_CONFIG_PATH), action]
 
     if action == "query":
+        # --opt=value for the free-text values (see run_fsconnect_op): a --sql
+        # or --table beginning with '-' must bind to its option, not be reparsed
+        # as a flag. --format is a constrained enum so its two-element form is safe.
         if sql:
-            argv += ["--sql", sql]
+            argv.append(f"--sql={sql}")
             if explain:
                 argv.append("--explain")
             if fmt and fmt != "json":
                 argv += ["--format", fmt]
         elif table:
-            argv += ["--table", table]
+            argv.append(f"--table={table}")
             if count:
                 argv.append("--count")
         else:

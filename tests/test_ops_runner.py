@@ -300,8 +300,9 @@ def test_fsconnect_list_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ops_runner, "_run", runner)
     res = run_fsconnect_op("list", root="/data", path="subdir")
     argv = captured[0]
-    assert "--root" in argv and "/data" in argv
-    assert "--path" in argv and "subdir" in argv
+    # --opt=value single-token form (so a leading-dash value binds to its option).
+    assert "--root=/data" in argv
+    assert "--path=subdir" in argv
     assert res.parsed == [{"name": "file.txt"}]
 
 
@@ -310,8 +311,22 @@ def test_fsconnect_grep_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ops_runner, "_run", runner)
     run_fsconnect_op("grep", root="/data", path="file.txt", pattern="hello")
     argv = captured[0]
-    assert "--pattern" in argv and "hello" in argv
+    assert "--pattern=hello" in argv
     assert "--regex" not in argv
+
+
+def test_fsconnect_leading_dash_pattern_bound_to_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    # An operator grepping their notes for a literal dash-leading string
+    # ("--dry-run", "-v" — the kind of flag text an ops corpus contains) must
+    # travel as one --pattern=value token, else the child argparse rejects the
+    # value as a stray flag and the op fails instead of returning matches.
+    runner, captured = _fake_run(returncode=0, stdout='{"matches": []}')
+    monkeypatch.setattr(ops_runner, "_run", runner)
+    run_fsconnect_op("grep", path="notes.md", pattern="--dry-run")
+    argv = captured[0]
+    assert "--pattern=--dry-run" in argv
+    assert "--pattern" not in argv    # no two-token form remains
+    assert "--dry-run" not in argv    # the bare value is never a standalone token
 
 
 def test_fsconnect_regex_rejected() -> None:
@@ -369,8 +384,8 @@ def test_sqlconnect_query_sql_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ops_runner, "_run", runner)
     res = run_sqlconnect_op("query", sql="SELECT 1", fmt="csv")
     argv = captured[0]
-    assert "--sql" in argv and "SELECT 1" in argv
-    assert "--format" in argv and "csv" in argv
+    assert "--sql=SELECT 1" in argv                 # free text -> --opt=value form
+    assert "--format" in argv and "csv" in argv     # constrained enum -> two-token is safe
     assert res.parsed == {"rows": []}
 
 
@@ -379,7 +394,7 @@ def test_sqlconnect_query_table_count(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ops_runner, "_run", runner)
     run_sqlconnect_op("query", table="public.users", count=True)
     argv = captured[0]
-    assert "--table" in argv and "public.users" in argv
+    assert "--table=public.users" in argv
     assert "--count" in argv
 
 
