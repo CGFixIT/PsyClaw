@@ -1182,6 +1182,11 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
   const startTime = performance.now();
 
   activeQueryController = new AbortController();
+  // Declared outside the try so finally can clear it on EVERY exit path —
+  // cancel (Esc) and network-error included. Left armed, the stale timer
+  // fires ~340s later against the global activeQueryController, which by
+  // then is null (TypeError) or a NEWER query's controller (aborts it).
+  let timeoutId;
   try {
     const body = { query };
     if (confirmedOnline !== null) {
@@ -1193,14 +1198,13 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     // UI forever. queryDeadlineMs is synced from /health to stay just ABOVE the
     // server's graph_timeout_sec, so the server's truthful 504 GRAPH_TIMEOUT
     // message wins the race instead of being masked by a premature client abort.
-    const timeoutId = window.setTimeout(() => activeQueryController.abort(), queryDeadlineMs);
+    timeoutId = window.setTimeout(() => activeQueryController.abort(), queryDeadlineMs);
     const resp = await fetch(`${API}/query`, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
       signal: activeQueryController.signal
     });
-    window.clearTimeout(timeoutId);
 
     const elapsed = Math.round(performance.now() - startTime);
     removeEntry(loadingId);
@@ -1249,6 +1253,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
       addEntry('error', 'ERROR', `Network error: ${e.message}`);
     }
   } finally {
+    window.clearTimeout(timeoutId);
     activeQueryController = null;
     sendBtn.disabled = false;
     input.focus();
