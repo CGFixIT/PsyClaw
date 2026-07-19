@@ -110,7 +110,15 @@ def require_api_key(
     # Constant-time comparison: a plain `!=` short-circuits on the first
     # differing byte, leaking key length/prefix via response timing. compare_digest
     # runs in time independent of how many leading characters match.
-    if not credentials or not hmac.compare_digest(credentials.credentials, api_key):
+    # Compare the UTF-8 bytes, not the str: hmac.compare_digest raises TypeError
+    # on a str operand containing a non-ASCII character, and Starlette decodes the
+    # Authorization header latin-1, so a token with any byte > 0x7F (a pasted
+    # curly quote, an accented character) would otherwise escape this handler as
+    # an unhandled 500 instead of the fail-closed 401 this endpoint promises. The
+    # bytes overload never raises on content and preserves the constant-time property.
+    if not credentials or not hmac.compare_digest(
+        credentials.credentials.encode("utf-8"), api_key.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 # Per-IP rate limiter for /query. The limiter itself lives in utils/ratelimit.py
