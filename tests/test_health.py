@@ -133,6 +133,29 @@ class TestCheckAll:
         assert grok.healthy is False
         assert "GROK_API_KEY not set" in grok.error
 
+    def test_hybrid_with_grok_block_absent_does_not_raise(self, tmp_path, monkeypatch):
+        """A hybrid-mode config whose models.grok block was removed (the operator
+        set up claude-only and deleted the unused grok block instead of setting
+        enabled: false) must not KeyError -> 500 /health. The grok enabled-check
+        must be as defensive as claude's cfg['models'].get('claude', {})."""
+        cfg = {
+            "app": {"mode": "hybrid"},
+            "models": {
+                "local_llm": {"base_url": _OLLAMA_BASE},
+                # no "grok" key at all
+                "claude": {"enabled": False, "base_url": "https://api.anthropic.com/v1",
+                           "anthropic_version": "2023-06-01"},
+            },
+        }
+        p = tmp_path / "config.yaml"
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
+        statuses = health.check_all(str(p))  # must not raise KeyError('grok')
+        names = {s.name for s in statuses}
+        assert "grok_api" not in names          # grok disabled/absent -> not probed
+        assert "ollama" in names
+
     def test_hybrid_claude_without_key_reports_key_not_set(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True)
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())

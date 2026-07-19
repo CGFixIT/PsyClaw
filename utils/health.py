@@ -87,7 +87,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     results = []
     results.append(_ping(f"{llm_base}/models", "ollama"))
     if (cfg["app"]["mode"] == "hybrid" and
-            cfg["models"]["grok"].get("enabled", False)):
+            cfg["models"].get("grok", {}).get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]
         # xAI's /v1/models is an authenticated endpoint: without a Bearer token it
         # returns 401, which made grok_api report *unhealthy* on every probe even
