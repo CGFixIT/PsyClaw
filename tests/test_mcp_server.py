@@ -18,7 +18,9 @@ Run with:
     pytest tests/test_mcp_server.py -v
 """
 
+import io
 import json
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -570,3 +572,72 @@ def test_generic_error_writes_audit_event(retriever, tmp_path, monkeypatch):
     assert secret not in event["error"], "audit must not persist the raw secret"
     assert "[REDACTED_SECRET]" in event["error"]
     reset_config_cache()
+
+
+# ---------------------------------------------------------------------------
+# 10. tools/call unknown tool + main() stdio loop
+# ---------------------------------------------------------------------------
+
+def test_tools_call_unknown_tool_returns_error_32601(retriever):
+    """Unknown TOOL name is a distinct branch from unknown METHOD: the method
+    (tools/call) is valid, so dispatch reaches the tool-name check."""
+    msg = {
+        "jsonrpc": "2.0", "id": 20, "method": "tools/call",
+        "params": {"name": "not_a_tool", "arguments": {"query": "x"}},
+    }
+    resp = handle_message(msg, retriever)
+    assert resp["error"]["code"] == -32601
+    assert "Unknown tool" in resp["error"]["message"]
+
+
+def test_main_exits_1_when_retriever_init_fails(monkeypatch, capsys):
+    """A missing/broken index must fail the process fast with exit code 1 and
+    a stderr note — not enter the stdio loop with no retriever behind it."""
+    monkeypatch.setattr(
+        mcp_hybrid_server, "HybridRetriever", MagicMock(side_effect=RuntimeError("no index"))
+    )
+    with pytest.raises(SystemExit) as exc:
+        mcp_hybrid_server.main()
+    assert exc.value.code == 1
+    assert "Failed to init retriever" in capsys.readouterr().err
+
+
+def test_main_stdio_loop_contract(monkeypatch, capsys, retriever):
+    """One pass over the stdio loop end-to-end: a request line gets exactly one
+    JSON reply line, blank lines and notifications produce NO output (the
+    fire-and-forget contract handle_message's None return relies on),
+    malformed JSON gets a -32700 parse-error reply instead of killing the
+    loop, and the retriever is closed on EOF."""
+    lines = [
+        "",  # blank — skipped without output
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        "{not json",  # must answer -32700, then keep the loop alive
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    ]
+    monkeypatch.setattr(mcp_hybrid_server, "HybridRetriever", MagicMock(return_value=retriever))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(lines) + "\n"))
+
+    mcp_hybrid_server.main()
+
+    out_lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert len(out_lines) == 3, f"expected 3 reply lines, got: {out_lines}"
+    assert out_lines[0]["id"] == 1 and "result" in out_lines[0]
+    assert out_lines[1]["error"]["code"] == -32700
+    assert out_lines[2]["id"] == 2 and "result" in out_lines[2]
+    retriever.close.assert_called_once()
+
+
+def test_main_closes_retriever_even_when_loop_raises(monkeypatch, retriever):
+    """The finally-close contract: an unexpected error inside the loop must not
+    leak the retriever's ChromaDB/BM25 handles."""
+    monkeypatch.setattr(mcp_hybrid_server, "HybridRetriever", MagicMock(return_value=retriever))
+
+    class _ExplodingStdin:
+        def __iter__(self):
+            raise RuntimeError("stdin transport died")
+
+    monkeypatch.setattr(sys, "stdin", _ExplodingStdin())
+    with pytest.raises(RuntimeError, match="stdin transport died"):
+        mcp_hybrid_server.main()
+    retriever.close.assert_called_once()
