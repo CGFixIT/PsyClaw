@@ -333,9 +333,12 @@ app.add_middleware(
 # TrustedHostMiddleware (PR #99 #3): reject requests whose Host header is not in
 # the allow-list. CORS governs response *readability*; it does not stop a
 # DNS-rebinding page from executing state-changing POST /soul/* server-side. The
-# Host check does. Added after CORS so it is the OUTERMOST middleware (runs first
-# on each request). Host matching ignores port; the list is config-driven so an
-# operator can add any name/IP they reach CyClaw by (e.g. the home-lab LAN IP).
+# Host check does. Starlette's add_middleware inserts each new middleware at the
+# OUTSIDE of the stack, so at this point (added after CORS, before the security-
+# headers middleware below) TrustedHost is the outer wrapper around CORS + the
+# routes — the security-headers middleware added last ends up outside it. Host
+# matching ignores port; the list is config-driven so an operator can add any
+# name/IP they reach CyClaw by (e.g. the home-lab LAN IP).
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 _allowed_hosts = cfg.get("security", {}).get("allowed_hosts", ["127.0.0.1", "localhost"])  # DevSkim: ignore DS162092,DS137138 - loopback host allow-list by design
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
@@ -343,8 +346,11 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 # Security response headers middleware: sets defense-in-depth headers on every
 # response (X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
 # Permissions-Policy) and adds Cache-Control: no-store on the root / static paths
-# to prevent browser caching of the Soul Console. Added after TrustedHost so it
-# runs INSIDE the host check (i.e. only on accepted requests).
+# to prevent browser caching of the Soul Console. Added LAST, so (per Starlette's
+# outside-in add_middleware ordering) it is the OUTERMOST middleware and wraps the
+# TrustedHost check — it therefore stamps these headers on every response,
+# including the 400 a rejected Host produces. That is intentional: defense-in-depth
+# headers belong on error responses too, and they carry no request data.
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
