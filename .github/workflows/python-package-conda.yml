@@ -71,6 +71,7 @@ jobs:
         pytest tests/ \
           -v \
           --cov=gate \
+          --cov=gate_ops \
           --cov=graph \
           --cov=mcp_hybrid_server \
           --cov=metrics \

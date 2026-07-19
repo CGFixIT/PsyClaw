@@ -418,6 +418,64 @@ def run_environment_pin_check(root: Path, py_reqs: list[Req], con_reqs: list[Req
         ok("D9", f"all {compared} cross-pinned package(s) agree with the pip manifests")
 
 
+# Workflow pytest lanes enumerate their own --cov flags. Granularity differs on
+# purpose: ci.yml curates individual modules (excluding optional-backend modules
+# like utils/personality_db.py that have their own lanes), while the conda lane
+# measures whole packages. What must NOT drift is *presence*: every entry in
+# [tool.coverage.run] source has to be measured by every lane at SOME
+# granularity. Drift class (D10): the conda lane silently lost --cov=gate_ops
+# when the module was added to ci.yml + pyproject (2026-07-19), understating its
+# measured total and blinding that lane to a gate_ops coverage regression.
+_CI_COV_FILES = (".github/workflows/ci.yml", ".github/workflows/python-package-conda.yml")
+_COV_FLAG_RE = re.compile(r"--cov=([A-Za-z0-9_.-]+)")
+
+
+def run_coverage_source_check(root: Path, pyproject: dict) -> None:
+    """D10: every [tool.coverage.run] source entry is --cov'd by every pytest lane."""
+    print("D10 workflow --cov flags cover every pyproject coverage source")
+    source = (
+        pyproject.get("tool", {}).get("coverage", {}).get("run", {}).get("source", [])
+    )
+    if not source:
+        warn("D10", "no [tool.coverage.run] source list in pyproject.toml -- nothing to cross-check")
+        return
+    for rel in _CI_COV_FILES:
+        path = root / rel
+        if not path.exists():
+            warn("D10", f"{rel} not found -- skipped")
+            continue
+        flags: set[str] = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            flags.update(m.group(1) for m in _COV_FLAG_RE.finditer(line))
+        if not flags:
+            # Not a coverage lane at all -> same absence-is-not-failure policy
+            # as D8/D9. Besides real non-coverage workflows this also keeps
+            # verify.sh's mutation self-tests green: their synthetic trees ship
+            # a minimal ci.yml (a torch pin, an environment.yml stub) with no
+            # pytest step, and must not trip D10. The guard's target is a lane
+            # that MEASURES coverage but dropped one source's flag -- that case
+            # still fails below.
+            warn("D10", f"{rel} has no --cov flags -- not a coverage lane, skipped")
+            continue
+        missing: list[str] = []
+        for name in source:
+            if (root / f"{name}.py").is_file():
+                # Top-level module (gate, gate_ops, graph, ...): a lane either
+                # measures it or it does not -- require the exact flag.
+                covered = name in flags
+            else:
+                # Package (llm, utils, ...): whole-package flag, or a curated
+                # submodule flag (ci.yml's deliberate module-level selection).
+                covered = name in flags or any(f.startswith(f"{name}.") for f in flags)
+            if not covered:
+                missing.append(name)
+        if missing:
+            fail("D10", f"{rel} does not measure pyproject coverage source(s): "
+                        f"{missing} -- add matching --cov flag(s) or trim the source list")
+        else:
+            ok("D10", f"{rel} measures every pyproject coverage source ({len(source)} entries)")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None)
@@ -457,6 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         torch_pin = torch_pin.split("+")[0]
     run_ci_pin_checks(root, torch_pin)
     run_environment_pin_check(root, py_reqs, con_reqs)
+    run_coverage_source_check(root, pyproject)
 
     strict_fail = args.strict and _warns
     print(f"\n{len(_fails)} failure(s), {len(_warns)} warning(s)"
