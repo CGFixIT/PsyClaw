@@ -160,20 +160,24 @@ def _compiled_redactors(
     if redact_ips:
         compiled.append((re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'),
                          '[REDACTED_IP]'))
-    for pattern in secret_patterns:
+    for idx, pattern in enumerate(secret_patterns):
         try:
             compiled.append((re.compile(pattern), '[REDACTED_SECRET]'))
         except re.error as exc:
-            # Silently dropping an invalid pattern disables secret redaction for
-            # that shape with no signal — tokens of that form then reach
-            # audit.jsonl and /ops/* output verbatim. Warn instead (mirroring the
-            # sanitizer's warn-on-degrade), so a config typo is visible rather
-            # than a silent security regression. Cached per config, so it fires
-            # once per bad pattern, not per redacted field.
+            # Silently dropping an invalid pattern disables redaction for that
+            # shape with no signal — matching values then reach audit.jsonl and
+            # /ops/* output verbatim. Warn instead (mirroring the sanitizer's
+            # warn-on-degrade) so a config typo is visible rather than a silent
+            # security regression. Log only the entry index and the compile
+            # error (which carries the position of the fault) — never the
+            # pattern text itself: it comes from privacy config and echoing
+            # config values into logs is exactly what clear-text-logging
+            # scanners flag. Cached per config, so it fires once per bad entry.
             logger.warning(
-                "redact_secrets_like pattern %r failed to compile (%s); secret "
-                "redaction for that pattern is DISABLED until it is fixed.",
-                pattern, exc,
+                "privacy redaction pattern #%d failed to compile (%s); it is "
+                "skipped, so matching values pass through un-redacted until it "
+                "is corrected.",
+                idx, exc,
             )
     return tuple(compiled)
 
