@@ -5,6 +5,7 @@ Usage:
 """
 
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -68,6 +69,20 @@ def compute_audit_integrity(audit_file: str) -> dict:
     return stats
 
 
+def _bucket_key(value: object, default: str = "unknown") -> str:
+    """Coerce an audit-event label to a hashable Counter key.
+
+    event / retrieval_mode / model_used are strings in every path that writes
+    audit.jsonl, but this module treats the file as untrusted evidence: one
+    corrupt or hand-edited line carrying a JSON list/dict where a label belongs
+    would make ``Counter[value]`` raise ``TypeError: unhashable type`` and take
+    down summarize_audit -> GET /audit/summary and the cyclaw-metrics CLI for
+    every caller. Anything that is not a plain string falls to the default
+    bucket instead — the same posture as the top_score guard below.
+    """
+    return value if isinstance(value, str) else default
+
+
 def compute_metrics(events) -> dict:
     """Aggregate audit events into a JSON-serializable summary.
 
@@ -94,7 +109,7 @@ def compute_metrics(events) -> dict:
 
     for e in events:
         total += 1
-        event_counts[e.get("event", "unknown")] += 1
+        event_counts[_bucket_key(e.get("event"))] += 1
 
         if e.get("event") in ("rag_query", "mcp_rag_query"):
             rag_query_count += 1
@@ -106,7 +121,10 @@ def compute_metrics(events) -> dict:
             # cyclaw-metrics CLI. bool is excluded because it is an int subclass
             # and True would silently count as a 1.0 score.
             s = e.get("top_score")
-            if isinstance(s, (int, float)) and not isinstance(s, bool):
+            # isfinite excludes NaN/inf: a JSON-valid ``top_score: NaN`` would
+            # flow into the average and make JSONResponse.render raise (Starlette
+            # serializes with allow_nan=False), 500-ing GET /audit/summary.
+            if isinstance(s, (int, float)) and not isinstance(s, bool) and math.isfinite(s):
                 score_sum += s
                 score_n += 1
                 score_min = s if score_min is None or s < score_min else score_min
@@ -114,14 +132,15 @@ def compute_metrics(events) -> dict:
             # Both graph and MCP audit paths now record the retrieval mode under
             # "retrieval_mode"; the "mode" fallback only serves audit history
             # written before the MCP server was normalized to the same key.
-            mode_counts[e.get("retrieval_mode") or e.get("mode") or "unknown"] += 1
+            mode_counts[_bucket_key(e.get("retrieval_mode") or e.get("mode"))] += 1
             # model_used is only meaningful for answered queries. Scope it to rag
             # queries so non-answer events — notably the graph audit node's
             # "user_gate_pause", which is still stamped model_used="unknown"
             # (graph.audit_logger_node) — don't pollute the model-usage breakdown
             # shown at GET /audit/summary with a bogus "unknown" bucket.
-            if e.get("model_used"):
-                model_counts[e["model_used"]] += 1
+            model_used = e.get("model_used")
+            if isinstance(model_used, str) and model_used:
+                model_counts[model_used] += 1
 
         # An escalation to an external LLM (grok or claude). Prefer the explicit
         # boolean the graph audit node already records (audit_logger_node sets
