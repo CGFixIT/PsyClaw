@@ -307,8 +307,6 @@ def run_fsconnect_op(
             argv += ["--path", path]
         if pattern and action in {"grep", "glob"}:
             argv += ["--pattern", pattern]
-        if regex and action == "grep":
-            argv.append("--regex")
         if not recursive and action == "glob":
             argv.append("--no-recursive")
 
