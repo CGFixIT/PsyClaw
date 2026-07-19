@@ -109,6 +109,22 @@ class TestRedactSensitive:
         assert "[REDACTED_SECRET]" in result
         assert "abc.def-ghi_123" not in result
 
+    def test_invalid_secret_pattern_warns_and_keeps_valid_ones(self, caplog):
+        """An unbalanced-bracket regex in redact_secrets_like must not silently
+        disable redaction: the bad pattern is skipped WITH a warning (so a config
+        typo is visible), and the other valid patterns keep working. A distinct
+        pattern string is used so the redactor lru_cache misses and re-compiles."""
+        import logging
+        cfg = {"policy": {"privacy": {"redact_emails": False, "redact_ips": False,
+            "redact_secrets_like": ["sk-[a-z", r"AKIA[0-9A-Z]{16}"]}}}  # first is invalid
+        with caplog.at_level(logging.WARNING, logger="cyclaw.logger"):
+            result = redact_sensitive("key AKIAIOSFODNN7EXAMPLE here", cfg)
+        # The valid AWS-key pattern still redacts.
+        assert "[REDACTED_SECRET]" in result
+        assert "AKIAIOSFODNN7EXAMPLE" not in result
+        # The invalid pattern produced a visible warning rather than a silent drop.
+        assert any("failed to compile" in r.message for r in caplog.records)
+
     def test_redacts_api_key_assignment(self):
         for s in ("api_key=SUPERSECRETVALUE", '"api-key": "XYZ12345"', "apikey = longsecret123"):
             result = redact_sensitive(s, self._SECRET_CFG)

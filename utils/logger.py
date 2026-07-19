@@ -19,6 +19,8 @@ from typing import TextIO
 
 import yaml
 
+logger = logging.getLogger("cyclaw.logger")
+
 _logging_initialized = False
 _AUDIT_WRITE_LOCK = threading.Lock()
 # Anchor relative config_path lookups to the repo root, mirroring gate.py's
@@ -161,8 +163,18 @@ def _compiled_redactors(
     for pattern in secret_patterns:
         try:
             compiled.append((re.compile(pattern), '[REDACTED_SECRET]'))
-        except re.error:
-            pass
+        except re.error as exc:
+            # Silently dropping an invalid pattern disables secret redaction for
+            # that shape with no signal — tokens of that form then reach
+            # audit.jsonl and /ops/* output verbatim. Warn instead (mirroring the
+            # sanitizer's warn-on-degrade), so a config typo is visible rather
+            # than a silent security regression. Cached per config, so it fires
+            # once per bad pattern, not per redacted field.
+            logger.warning(
+                "redact_secrets_like pattern %r failed to compile (%s); secret "
+                "redaction for that pattern is DISABLED until it is fixed.",
+                pattern, exc,
+            )
     return tuple(compiled)
 
 def redact_sensitive(text: str, cfg: dict | None = None) -> str:
