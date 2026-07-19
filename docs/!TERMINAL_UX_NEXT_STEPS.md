@@ -1,5 +1,7 @@
 # Terminal UX Next Steps
 
+> **Status (2026-07-19):** the **Current Patch** list below has **landed** in `static/terminal.html` — verified: shared control tokens (`--control-height`, `--radius`, `--radius-pill`), wrapping ops toolbar (`flex-wrap`), `AbortController` request timeouts (`AbortSignal.timeout()` fully removed, abort timer cleared on every exit path), Firefox scrollbar styling (`scrollbar-width` / `scrollbar-color`), and `prefers-reduced-motion` handling — all with zero added dependencies. The **Next Web Interface Pass** items below remain an open *manual* visual-QA backlog (cross-browser screenshots, keyboard traversal checks).
+
 ## Current Patch
 
 - Keep the existing dark amber/green terminal identity.
