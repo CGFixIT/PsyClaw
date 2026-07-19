@@ -449,6 +449,159 @@ class TestPersonalityConcurrency:
             # the lock); reads never write. 1 initial + n_apply applied.
             assert pm.get_version() == 1 + n_apply
 
+    def test_apply_evolution_publish_is_atomic_with_its_write(self, cfg, tmp_paths):
+        """apply_evolution's DB write, soul_core publish, and version read must
+        all happen under ONE lock acquisition. Previously the lock was released
+        right after the commit, and soul_core/get_version() ran afterward,
+        unlocked -- leaving a window where a second, concurrent apply_evolution()
+        could run its own write+commit+publish entirely inside that window. This
+        call would then resume and overwrite the newer soul_core with its own
+        (by-then stale) content, and report a version number that actually
+        belongs to the other call's write.
+
+        Deterministic (no sleep-based race): _bounded_soul is instrumented to
+        pause thread A mid-publish, using threading.Event handshakes rather than
+        timing, so the interleaving is exact rather than probabilistic.
+        """
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Soul\n\nInitial.\n", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        reached_publish = threading.Event()
+        release_publish = threading.Event()
+        original_bounded_soul = pm._bounded_soul
+
+        def paused_bounded_soul(content):
+            # Only the marked call (thread A) pauses; thread B's content is
+            # unmarked and passes straight through unaffected.
+            if "PAUSE_HERE" in content:
+                reached_publish.set()
+                release_publish.wait(timeout=5)
+            return original_bounded_soul(content)
+
+        pm._bounded_soul = paused_bounded_soul
+
+        result_a: dict = {}
+
+        def apply_a():
+            result_a.update(pm.apply_evolution("# Soul\n\nPAUSE_HERE marker.\n", reason="apply A"))
+
+        thread_a = threading.Thread(target=apply_a)
+        thread_a.start()
+        assert reached_publish.wait(timeout=5), "thread A never reached the publish step"
+
+        # Thread A is now paused mid-publish (inside _bounded_soul, called from
+        # inside apply_evolution). Fire thread B and give it a bounded window to
+        # see whether it can complete an entire apply_evolution() call while A
+        # is still paused there.
+        result_b: dict = {}
+        b_done = threading.Event()
+
+        def apply_b():
+            result_b.update(pm.apply_evolution("# Soul\n\nRevision B.\n", reason="apply B"))
+            b_done.set()
+
+        thread_b = threading.Thread(target=apply_b)
+        thread_b.start()
+        b_finished_while_a_paused = b_done.wait(timeout=0.5)
+
+        release_publish.set()
+        thread_a.join(timeout=5)
+        thread_b.join(timeout=5)
+
+        assert not thread_a.is_alive() and not thread_b.is_alive(), "a thread failed to complete"
+        assert not b_finished_while_a_paused, (
+            "apply_evolution B completed an entire write+publish cycle while A "
+            "was still mid-publish -- the lock does not cover the whole "
+            "write-then-publish sequence"
+        )
+
+        # B was serialized strictly after A (the lock was held across A's whole
+        # write+publish), so both the DB's latest row and the in-memory
+        # soul_core must reflect B -- not a stale value from A resuming after
+        # B already finished.
+        latest = pm.conn.execute(
+            "SELECT content, reason FROM soul_versions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert latest["reason"] == "apply B"
+        assert pm.soul_core == "# Soul\n\nRevision B.\n"
+        assert result_b["version"] == pm.get_version()
+
+    def test_reload_publish_is_atomic_with_its_read(self, cfg, tmp_paths):
+        """_load_soul() (the /soul/reload path) must read soul.md, compare
+        against the DB, and publish soul_core all under ONE lock acquisition.
+        Previously the read+hash ran before the lock and soul_core was
+        published after it was released, leaving a window where a concurrent
+        apply_evolution() could run its entire write+commit+publish in
+        between -- reload() would then resume and publish ITS (by-then stale)
+        content over apply_evolution's already-correct soul_core, silently
+        reverting a write that had just landed."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Soul\n\nOriginal.\n", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        reached_publish = threading.Event()
+        release_publish = threading.Event()
+        original_bounded_soul = pm._bounded_soul
+        call_count = {"n": 0}
+
+        def paused_bounded_soul(content):
+            # Pause only the FIRST call (reload's own publish); the concurrent
+            # apply_evolution's call must pass straight through so it can
+            # actually complete during the pause.
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                reached_publish.set()
+                release_publish.wait(timeout=5)
+            return original_bounded_soul(content)
+
+        pm._bounded_soul = paused_bounded_soul
+
+        thread_reload = threading.Thread(target=pm.reload)
+        thread_reload.start()
+        assert reached_publish.wait(timeout=5), "reload() never reached the publish step"
+
+        result_apply: dict = {}
+        apply_done = threading.Event()
+
+        def do_apply():
+            result_apply.update(
+                pm.apply_evolution("# Soul\n\nApplied while reload paused.\n", reason="concurrent apply")
+            )
+            apply_done.set()
+
+        thread_apply = threading.Thread(target=do_apply)
+        thread_apply.start()
+        apply_finished_while_reload_paused = apply_done.wait(timeout=0.5)
+
+        release_publish.set()
+        thread_reload.join(timeout=5)
+        thread_apply.join(timeout=5)
+
+        assert not thread_reload.is_alive() and not thread_apply.is_alive()
+        assert not apply_finished_while_reload_paused, (
+            "apply_evolution completed an entire write+publish cycle while "
+            "reload() was still mid-publish -- reload's critical section does "
+            "not cover the whole read-compare-publish sequence"
+        )
+        # apply_evolution ran strictly after reload finished (serialized by the
+        # lock), so its write is the latest DB row and the current soul_core --
+        # reload() must not have overwritten it with the stale content it read
+        # before apply_evolution ran.
+        latest = pm.conn.execute(
+            "SELECT content, reason FROM soul_versions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert latest["reason"] == "concurrent apply"
+        assert pm.soul_core == "# Soul\n\nApplied while reload paused.\n"
+
 
 class TestSoulSizeCap:
     """The in-memory soul (prepended to every LLM prompt) is bounded by
