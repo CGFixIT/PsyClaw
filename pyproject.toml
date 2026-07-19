@@ -105,9 +105,13 @@ filterwarnings = [
     # Starlette 1.x steers its TestClient onto the `httpx2` distribution and
     # warns once per session when classic httpx is installed. Known, tracked,
     # and actioned only when a future Starlette major hard-cuts over — see
-    # docs/TESTCLIENT_HTTPX_DEPRECATION.md. Scoped to the exact class+message
-    # so no other warning is masked.
-    'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.:starlette.exceptions.StarletteDeprecationWarning',
+    # docs/TESTCLIENT_HTTPX_DEPRECATION.md. Scoped by the exact message text
+    # (unique to this warning) and deliberately NOT class-qualified: the conda
+    # lane (python-package-conda.yml) runs fastapi 0.115.9 / starlette 0.4x,
+    # where starlette.exceptions.StarletteDeprecationWarning does not exist,
+    # and a class-qualified filter fails pytest startup there with
+    # AttributeError (observed 2026-07-19). Message-only parses in both lanes.
+    'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.',
 ]
 
 [tool.mypy]
