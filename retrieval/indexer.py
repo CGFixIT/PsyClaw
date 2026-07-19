@@ -91,10 +91,16 @@ def chunk_document(text: str, chunk_size: int = 512, overlap: int = 50) -> list[
     # one-word stride and explode a modest corpus into one chunk per word.
     if chunk_size < 1:
         raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    if overlap < 0:
+        # A negative overlap makes step = chunk_size - overlap > chunk_size, so
+        # each window jumps FORWARD past its own end and silently drops the
+        # words in the gap — a corpus indexed with a sign-typo'd overlap loses
+        # content from both retrieval legs with no error.
+        raise ValueError(f"overlap must be >= 0, got {overlap}")
     if overlap >= chunk_size:
         raise ValueError(f"overlap ({overlap}) must be < chunk_size ({chunk_size})")
-    # Defensive floor: with the guard above this is always >= 1, but keep the
-    # clamp so no future code path can ever spin forever.
+    # With the guards above this is always >= 1; keep the clamp as a belt-and-
+    # suspenders floor so no future code path can ever spin forever.
     step = max(1, chunk_size - overlap)
     words = text.split()
     chunks = []
@@ -125,8 +131,17 @@ def build_index(config_path: str = "config.yaml") -> None:
     # callers finite, but the config boundary is where a human-set value belongs.
     if chunk_size < 1:
         raise ValueError(f"chunk_size must be >= 1, got {chunk_size}")
+    if chunk_overlap < 0:
+        raise ValueError(f"chunk_overlap must be >= 0, got {chunk_overlap}")
     if chunk_overlap >= chunk_size:
         raise ValueError(f"chunk_overlap ({chunk_overlap}) must be < chunk_size ({chunk_size})")
+    # batch_size drives range(0, N, batch_size) over the chunk list: a negative
+    # value yields an empty range so the semantic (Chroma) leg is never written
+    # — every query then falls back to BM25-only, whose rebased scores top out
+    # below min_score, silently failing the confidence gate for the whole
+    # corpus — and 0 raises "range() arg 3 must not be zero" mid-build.
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
 
     logger.info("Loading corpus from %s", corpus_path)
     docs = load_corpus(corpus_path, extensions)

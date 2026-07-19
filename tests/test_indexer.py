@@ -52,9 +52,14 @@ class TestChunkDocument:
         with pytest.raises(ValueError, match="chunk_size must be >= 1"):
             chunk_document("a b c", chunk_size=0, overlap=0)
 
+    def test_rejects_negative_overlap_when_called_directly(self):
+        # step = chunk_size - overlap > chunk_size, so windows skip words silently.
+        with pytest.raises(ValueError, match="overlap must be >= 0"):
+            chunk_document("a b c d e", chunk_size=3, overlap=-2)
+
 
 class TestBuildIndexValidation:
-    def _write_config(self, tmp_path, chunk_size, chunk_overlap):
+    def _write_config(self, tmp_path, chunk_size, chunk_overlap, batch_size=10):
         cfg = {
             "corpus": {"path": str(tmp_path / "corpus"), "extensions": [".md"]},
             "indexing": {
@@ -63,7 +68,7 @@ class TestBuildIndexValidation:
                 "collection_name": "test_kb",
                 "chunk_size": chunk_size,
                 "chunk_overlap": chunk_overlap,
-                "batch_size": 10,
+                "batch_size": batch_size,
             },
         }
         config_file = tmp_path / "config.yaml"
@@ -84,6 +89,19 @@ class TestBuildIndexValidation:
     def test_rejects_overlap_greater_than_chunk_size(self, tmp_path):
         config_path = self._write_config(tmp_path, chunk_size=100, chunk_overlap=200)
         with pytest.raises(ValueError, match="chunk_overlap .* must be < chunk_size"):
+            build_index(config_path)
+
+    def test_rejects_negative_chunk_overlap(self, tmp_path):
+        # A sign-typo'd overlap silently drops words from both indices — fail fast.
+        config_path = self._write_config(tmp_path, chunk_size=512, chunk_overlap=-50)
+        with pytest.raises(ValueError, match="chunk_overlap must be >= 0"):
+            build_index(config_path)
+
+    def test_rejects_non_positive_batch_size(self, tmp_path):
+        # A negative batch_size yields an empty semantic index (BM25-only fallback,
+        # every query fails the confidence gate); 0 crashes range() mid-build.
+        config_path = self._write_config(tmp_path, chunk_size=512, chunk_overlap=50, batch_size=-1)
+        with pytest.raises(ValueError, match="batch_size must be >= 1"):
             build_index(config_path)
 
 
