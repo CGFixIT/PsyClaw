@@ -1,6 +1,6 @@
 # CyClaw Dropbox Corpus Sync — Implementation Planning Guide
 
-**Status:** Proposed (planning only — no code in this PR)
+**Status:** **Implemented** (banner added 2026-07-19) — shipped as the out-of-band `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`), drivable from the terminal's Sync Console (`POST /ops/sync`) and covered by `tests/test_sync_*.py`. This document is the original planning guide, kept for design rationale; shipped behavior is documented in `Dropbox_Sync_Guide.md`.
 **Target:** `main` (via feature branch → reviewed PR)
 **Author:** Planning synthesis (Claude) from the PsyClaw `sync/` prior art + two research passes
 **Scope item:** README roadmap v1.4.0 ("Dropbox/cloud corpus sync") / v1.5.0 ("test Dropbox corpus sync integration")
