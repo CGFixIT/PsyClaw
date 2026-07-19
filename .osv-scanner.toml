@@ -2,135 +2,57 @@
 #
 # Targeted ignores ONLY for vulnerabilities with no upstream patch available.
 # All other findings will still fail the job (fail-on-vuln behavior preserved).
+#
+# Hygiene rule (enforced 2026-07-20): an ignore entry must match a vulnerability
+# that the OSV database actually reports for the pinned version. Entries whose
+# advisory no longer affects the pinned version are dead weight — they read as
+# live risk-acceptances, rot silently, and dilute the real ones. Verified via
+# the OSV API (api.osv.dev/v1/query) against the exact pins below.
 
 # === Vulnerability Tracking Metadata ===
-# --- GHSA-f4j7-r4q5-qw2c (chromadb) ---
-# ID: GHSA-f4j7-r4q5-qw2c (CVE-2026-45829)
+# --- GHSA-f4j7-r4q5-qw2c / PYSEC-2026-311 (chromadb) ---
+# ID: GHSA-f4j7-r4q5-qw2c + PYSEC-2026-311 (aliases of CVE-2026-45829)
 # Package: chromadb
 # Version: 1.5.9
-# Date added: 2026-06-20
-# Last reviewed: 2026-06-20
+# Date added: 2026-06-20 (GHSA) / 2026-07-20 (PYSEC alias)
+# Last reviewed: 2026-07-20
 # Owner: CGFixIT
 # Next scheduled review: 2026-09-20 (quarterly)
-# Status: Accepted (no upstream patch available)
-# Mitigation: Local PersistentClient (embedded mode) + offline-first + no HttpClient surface
+# Status: Accepted (no upstream patch available; last_affected: 1.5.9)
+# Mitigation: Local PersistentClient (embedded mode) + offline-first + no
+#   HttpClient surface + no trust_remote_code. The advisory requires the
+#   Chroma HTTP server API (/api/v2/... collections endpoint), which CyClaw
+#   never runs.
 # References: .github/workflows/pip-audit.yml, cyclaw-advisor §K / §M
-# Notes: Track https://github.com/chroma-core/chroma for upstream fix.
-#
-# --- GHSA-p4gq-832x-fm9v (nltk) ---
-# ID: GHSA-p4gq-832x-fm9v (CVE-2026-54293)
-# Package: nltk
-# Version: 3.10.0
-# Date added: 2026-06-20
-# Last reviewed: 2026-06-20
-# Owner: CGFixIT
-# Next scheduled review: 2026-09-20 (quarterly)
-# Status: Accepted (no upstream patch available yet)
-# Mitigation: Custom regex tokenizer + PorterStemmer in retrieval/stemmer.py deliberately avoids nltk.data.load() (the vulnerable function). Standard NLTK tokenization pipeline is not used.
-# References: retrieval/stemmer.py (explicit comment about avoiding the CVE)
-# Notes: Extremely low practical exploitability in CyClaw. Monitor for 3.9.5+ release.
+# Notes: OSV serves the same CVE under both IDs; the GHSA ID alone was ignored
+#   on 2026-06-20 and the PYSEC alias was added 2026-07-20 so the acceptance is
+#   explicit even if a scanner build does not resolve aliases. Track
+#   https://github.com/chroma-core/chroma for upstream fix.
 
 [[IgnoredVulns]]
 id = "GHSA-f4j7-r4q5-qw2c"
-reason = "CVE-2026-45829 (Critical pre-auth RCE) — no upstream patch released as of 2026-06-20. Risk accepted under v1.4.0 for local/offline CyClaw: chromadb.PersistentClient (embedded mode, path from config.yaml), no HttpClient, pre-computed embeddings only, offline-first design + full telemetry kill switch in gate.py. See pip-audit workflow for detailed justification. Quarterly review scheduled."
+reason = "CVE-2026-45829 (Critical pre-auth RCE) — no upstream patch released as of 2026-07-20. Risk accepted under v1.4.0 for local/offline CyClaw: chromadb.PersistentClient (embedded mode, path from config.yaml), no HttpClient, pre-computed embeddings only, offline-first design + full telemetry kill switch in gate.py. See pip-audit workflow for detailed justification. Quarterly review scheduled."
 
 [[IgnoredVulns]]
-id = "GHSA-p4gq-832x-fm9v"
-reason = "CVE-2026-54293 (High path traversal in nltk.data.load()) — no upstream patch released yet. Risk accepted because CyClaw deliberately avoids the vulnerable code path: custom regex-based tokenize_and_stem() in retrieval/stemmer.py bypasses nltk.data.load() entirely (see explicit comment in the file). Standard NLTK tokenization that would trigger the vuln is not used. Quarterly review scheduled."
+id = "PYSEC-2026-311"
+reason = "Alias of CVE-2026-45829 / GHSA-f4j7-r4q5-qw2c (same chromadb pre-auth code injection; OSV serves it under both IDs). Same acceptance: PyPI-sourced ID requires the Chroma HTTP server API with trust_remote_code=true; CyClaw uses embedded PersistentClient only, never the server surface. Verified via OSV API 2026-07-20: still reported against chromadb 1.5.9, last_affected 1.5.9, no fixed version."
 
-# === torch 2.13.0+cpu vulnerability block ===
-# All 18 torch CVEs detected after adding torch to requirements.txt for GitHub Automatic
-# Dependency Submission (to avoid spurious CUDA transitive deps in the dep graph).
-# Threat model: torch is used ONLY as a CPU embedding backend via sentence-transformers
-# (all-MiniLM-L6-v2); no model loading from the internet, no untrusted weight files,
-# offline-first design, PersistentClient embedded mode. The majority of these CVEs are
-# model-deserialization or remote-model-loading issues that require a network attack
-# surface CyClaw does not expose. Pinned at 2.13.0+cpu, well past the minimum safe post
-# CVE-2025-32434 (weights_only=True RCE bypass) version. Review for torch upgrade on 2026-09-20.
+# === Pruned 2026-07-20 (dead entries — advisories no longer match the pins) ===
 #
-# ID: PYSEC-2025-191 / GHSA-3749-ghw9-m3mg — no upstream patch available
-# ID: PYSEC-2025-198 through PYSEC-2025-202 — fixed in 2.7.0
-# ID: PYSEC-2025-203, PYSEC-2025-204, PYSEC-2025-206 — fixed in 2.9.0
-# ID: PYSEC-2025-205, PYSEC-2025-207 through PYSEC-2025-209 — fixed in 2.7.1
-# ID: PYSEC-2026-139 — no upstream patch available (CVSS 7.8)
-# ID: GHSA-887c-mr87-cxwp — fixed in 2.8.0
-# ID: GHSA-qfhq-4f3w-5fph — fixed in 2.10.0
-# ID: GHSA-rrmf-rvhw-rf47 — no upstream patch available
-# ID: GHSA-vgrw-7cvw-pwgx — fixed in 2.9.1
-# Date added: 2026-06-24 | Next review: 2026-09-20 | Owner: CGFixIT
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-191"
-reason = "torch 2.13.0+cpu — no upstream patch available. Accepted: CyClaw uses torch only as a CPU embedding backend (sentence-transformers, offline, no remote model loading). See .osv-scanner.toml torch block above. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "GHSA-3749-ghw9-m3mg"
-reason = "torch 2.13.0+cpu — alias for PYSEC-2025-191 (no upstream patch). Accepted under same offline/CPU-only threat model. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-198"
-reason = "torch 2.13.0+cpu — fixed in 2.7.0. Accepted: offline CPU embedding use only, no remote model loading. Bump torch when sentence-transformers compat is verified. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-199"
-reason = "torch 2.13.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-200"
-reason = "torch 2.13.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-201"
-reason = "torch 2.13.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-202"
-reason = "torch 2.13.0+cpu — fixed in 2.7.0. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-203"
-reason = "torch 2.13.0+cpu — fixed in 2.9.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-204"
-reason = "torch 2.13.0+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-205"
-reason = "torch 2.13.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-206"
-reason = "torch 2.13.0+cpu — fixed in 2.9.0. Same rationale as PYSEC-2025-203."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-207"
-reason = "torch 2.13.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-208"
-reason = "torch 2.13.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2025-209"
-reason = "torch 2.13.0+cpu — fixed in 2.7.1. Same rationale as PYSEC-2025-198."
-
-[[IgnoredVulns]]
-id = "PYSEC-2026-139"
-reason = "torch 2.13.0+cpu — no upstream patch available (CVSS 7.8). Accepted: CyClaw uses torch only as a CPU embedding backend in offline mode — no network attack surface exposed. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "GHSA-887c-mr87-cxwp"
-reason = "torch 2.13.0+cpu — fixed in 2.8.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "GHSA-qfhq-4f3w-5fph"
-reason = "torch 2.13.0+cpu — fixed in 2.10.0. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "GHSA-rrmf-rvhw-rf47"
-reason = "torch 2.13.0+cpu — no upstream patch available. Accepted under offline/CPU-only CyClaw threat model. Review 2026-09-20."
-
-[[IgnoredVulns]]
-id = "GHSA-vgrw-7cvw-pwgx"
-reason = "torch 2.13.0+cpu — fixed in 2.9.1. Accepted: offline CPU embedding use only, no remote model loading. Review 2026-09-20."
+# nltk GHSA-p4gq-832x-fm9v (CVE-2026-54293): the OSV API reports ZERO
+#   vulnerabilities for nltk 3.10.0 and the GHSA ID itself no longer resolves
+#   (404 on api.osv.dev/v1/vulns). The code-path mitigation it documented still
+#   stands (retrieval/stemmer.py avoids nltk.data.load()); only the dead ignore
+#   entry was removed.
+#
+# torch block (18 entries: PYSEC-2025-191, GHSA-3749-ghw9-m3mg,
+#   PYSEC-2025-198..209, PYSEC-2026-139, GHSA-887c-mr87-cxwp,
+#   GHSA-qfhq-4f3w-5fph, GHSA-rrmf-rvhw-rf47, GHSA-vgrw-7cvw-pwgx): the OSV
+#   API reports ZERO vulnerabilities for torch 2.13.0. Spot-verified ranges:
+#   PYSEC-2025-191 last_affected 2.6.0 and PYSEC-2026-139 last_affected 2.10.0
+#   (their ignore reasons claimed "no upstream patch available" — inaccurate;
+#   they simply do not cover 2.13.0), and GHSA-rrmf-rvhw-rf47 no longer
+#   resolves at all. The torch threat-model note (CPU-only embedding backend,
+#   no remote model loading) remains true; the quarterly torch review on
+#   2026-09-20 stands. If a future scan flags torch 2.13.0 again, re-add a
+#   targeted ignore with the evidence from that scan.
