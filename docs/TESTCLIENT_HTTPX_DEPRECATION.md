@@ -1,8 +1,8 @@
 # Tech Note — `StarletteDeprecationWarning` in the test suite (httpx / TestClient)
 
-**Status:** informational · no runtime impact · action required before a future Starlette major
-**Filed:** 2026-06-19
-**Applies to:** `starlette==1.3.1`, `httpx==0.28.1`, `fastapi==0.137.2` (current pins)
+**Status:** warning **filtered** (2026-07-19, Option 2 applied) · no runtime impact · `httpx2` migration still owed before a future Starlette major
+**Filed:** 2026-06-19 · **Updated:** 2026-07-19
+**Applies to:** `starlette==1.3.1`, `httpx==0.28.1`, `fastapi==0.138.0` (current pins; starlette is transitive via fastapi)
 
 ---
 
@@ -17,16 +17,19 @@ Every test run that constructs a `TestClient` emits this warning:
 ```
 
 It is raised once per session (at import of `fastapi.testclient`, which re-exports
-`starlette.testclient`). It does **not** fail any test — all 98 tests pass — but it is
-noise on every `pytest` invocation, including CI.
+`starlette.testclient`). It does **not** fail any test, but it is noise on every
+`pytest` invocation, including CI. As of 2026-07-19 it is suppressed by an exact
+class+message `filterwarnings` entry in `pyproject.toml` (see "Recommendation"),
+so it no longer appears in test output; the underlying deprecation is unchanged.
 
 ### Where the TestClient is used
 
 - `tests/test_gate.py:13` — `from fastapi.testclient import TestClient` (gateway integration tests)
 - `tests/test_security.py:99,140` — `from fastapi.testclient import TestClient` (security/CORS tests)
+- `tests/test_gate_ops.py` — `from fastapi.testclient import TestClient` (/ops/* route tests)
 
 These are the only consumers. The warning is purely a **test-time** concern — `httpx` is used
-at runtime by `llm/client.py` for LM Studio / Grok calls, but that path does not touch
+at runtime by `llm/client.py` for Ollama / Grok / Claude calls, but that path does not touch
 `starlette.testclient` and is unaffected.
 
 ---
@@ -43,7 +46,7 @@ We currently pin:
 
 ```
 httpx==0.28.1        # requirements.txt — classic httpx, 0.x line
-starlette==1.3.1     # pulled transitively via fastapi==0.137.2
+starlette==1.3.1     # pulled transitively via fastapi==0.138.0
 ```
 
 `httpx==0.28.1` is the classic line, so the warning fires. `httpx2` exists on PyPI
@@ -68,15 +71,19 @@ warning is not silently ignored until it becomes a hard break.
 1. **Do nothing yet (current state).** Acceptable while the shim exists. Risk: forgetting until a
    Starlette bump turns the warning into an `ImportError`.
 
-2. **Silence the warning only.** Add a filter so CI logs stay clean without changing deps:
+2. **Silence the warning only — APPLIED 2026-07-19.** `pyproject.toml`
+   `[tool.pytest.ini_options]` now carries an exact class+message filter (scoped so no
+   other warning is masked):
 
-   ```ini
-   # pytest.ini / pyproject.toml [tool.pytest.ini_options]
-   filterwarnings =
-       ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning
+   ```toml
+   filterwarnings = [
+       'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.:starlette.exceptions.StarletteDeprecationWarning',
+   ]
    ```
 
    Pros: zero dependency churn. Cons: hides the signal; the underlying break still lands later.
+   The filter is deliberately narrow (full message text + `starlette.exceptions.StarletteDeprecationWarning`
+   class) rather than the broad `:DeprecationWarning` category originally sketched here.
 
 3. **Migrate the test client to `httpx2`.** Add `httpx2` to the test/dev requirements so
    `starlette.testclient` picks it up. This is the direction Starlette is steering toward.
@@ -100,10 +107,12 @@ warning is not silently ignored until it becomes a hard break.
 ## Recommendation
 
 Short term: **Option 2** (filter the warning) to keep CI logs clean and intentional, paired with a
-tracking reference to this note so the deprecation is not lost.
+tracking reference to this note so the deprecation is not lost. **Done 2026-07-19** — the filter
+lives in `pyproject.toml` with a comment pointing back to this note.
 
 Before the next Starlette **major** bump (watch dependabot PRs that move `starlette` past `1.x`):
-**Option 3** — add `httpx2` for the test client and re-validate the two consuming test files. Treat
+**Option 3** — add `httpx2` for the test client and re-validate the TestClient-consuming test
+files (`tests/test_gate.py`, `tests/test_security.py`, `tests/test_gate_ops.py`). Treat
 the Starlette major bump as the trigger; do not migrate speculatively, since `httpx2` is still on
 beta/early releases and its API may shift.
 
@@ -116,8 +125,9 @@ not the test client, and changing it has nothing to do with the warning.
 
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install torch==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt pytest
-GROK_API_KEY=dummy pytest tests/test_gate.py -q -W default 2>&1 | grep -i deprecat
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt -c constraints.txt
+# The pyproject.toml filter suppresses the warning by default; override it to reproduce:
+GROK_API_KEY=dummy pytest tests/test_gate.py -q -W "always::starlette.exceptions.StarletteDeprecationWarning" 2>&1 | grep -i deprecat
 # -> StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
 ```
