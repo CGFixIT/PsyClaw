@@ -21,9 +21,10 @@ short and invocation-friendly, for example `/refactor` or
 
 ## Available Skills
 
-- `skills/fable-protocol/` - session-start discipline for substantive Codex
-  tasks: premise testing, uncertainty marking, findings-before-writes, security
-  review, and shipping-first prioritization.
+- `skills/fable-protocol/` - reasoning-discipline layer ported from the Claude
+  fable-protocol: epistemic calibration, speculation marking, premise testing,
+  hostile self-review, security pass on every generated artifact,
+  anti-sycophancy, and shipping-first prioritization.
 - `skills/cyclaw-project-guidance/` - load current CyClaw operating context and
   canonical repo docs before substantial work.
 - `skills/cyclaw-run-cyclaw/` - prepare, run, smoke-test, and interact with the

@@ -1,4 +1,4 @@
 interface:
   display_name: "Fable Protocol"
-  short_description: "CyClaw Codex session discipline"
-  default_prompt: "Use $fable-protocol at the start of substantive CyClaw repo work to test premises, mark uncertainty, preserve security invariants, and keep changes shipping-focused."
+  short_description: "Reasoning discipline ported from Claude fable-protocol"
+  default_prompt: "Use $fable-protocol at the start of substantive engineering work to test premises, mark speculation, self-review as a hostile senior engineer, run a security pass on every generated artifact, preserve CyClaw invariants, and keep changes shipping-focused."
