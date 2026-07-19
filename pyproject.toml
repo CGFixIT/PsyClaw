@@ -95,12 +95,20 @@ exclude = [".claude"]  # skill/utility scripts are not production code
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "S"]
 ignore = ["E501"]
-per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"] }
+per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E501"], "utils/personality.py" = ["S608"] }
 
 [tool.pytest.ini_options]
 minversion = "9.1"
 addopts = "-ra -q"
 testpaths = ["tests"]
+filterwarnings = [
+    # Starlette 1.x steers its TestClient onto the `httpx2` distribution and
+    # warns once per session when classic httpx is installed. Known, tracked,
+    # and actioned only when a future Starlette major hard-cuts over — see
+    # docs/TESTCLIENT_HTTPX_DEPRECATION.md. Scoped to the exact class+message
+    # so no other warning is masked.
+    'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.:starlette.exceptions.StarletteDeprecationWarning',
+]
 
 [tool.mypy]
 python_version = "3.12"
