@@ -23,9 +23,14 @@ def iter_events(audit_file: str):
     with open(audit_file, encoding="utf-8") as f:
         for line in f:
             try:
-                yield json.loads(line)
+                event = json.loads(line)
             except json.JSONDecodeError:
-                pass
+                continue
+            # JSON-valid but non-object lines (null, 42, "text", []) parse fine
+            # yet crash every consumer's first e.get(...) — same untrusted-file
+            # posture as the JSONDecodeError skip and the top_score guard below.
+            if isinstance(event, dict):
+                yield event
 
 
 def load_events(audit_file: str):
@@ -48,6 +53,12 @@ def compute_audit_integrity(audit_file: str) -> dict:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                stats["malformed_lines"] += 1
+                continue
+            if not isinstance(event, dict):
+                # A JSON-valid non-object (null, 42, "text", []) is just as
+                # malformed as unparseable text for evidence purposes, and
+                # `"query" in event` would TypeError on it below.
                 stats["malformed_lines"] += 1
                 continue
             if "query" in event:

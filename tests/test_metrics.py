@@ -41,6 +41,20 @@ class TestLoadEvents:
         assert len(events) == 2
         assert events[0]["event"] == "rag_query"
 
+    def test_skips_json_valid_non_dict_lines(self, tmp_path):
+        """null / 42 / "text" / [] parse as valid JSON but are not events —
+        yielded through, compute_metrics' first e.get(...) would crash and
+        take down GET /audit/summary and the cyclaw-metrics CLI."""
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            '{"event": "rag_query"}\nnull\n42\n"text"\n[]\n{"event": "x"}\n',
+            encoding="utf-8",
+        )
+        events = load_events(str(p))
+        assert [e["event"] for e in events] == ["rag_query", "x"]
+        # The end-to-end guarantee: aggregation over the same file must not raise.
+        assert compute_metrics(events)["total_events"] == 2
+
 
 class TestAuditIntegrity:
     def test_counts_malformed_raw_query_and_missing_hash(self, tmp_path):
@@ -58,6 +72,23 @@ class TestAuditIntegrity:
             "malformed_lines": 1,
             "events_with_raw_query": 1,
             "rag_events_missing_query_hash": 1,
+        }
+
+    def test_json_valid_non_dict_lines_count_as_malformed(self, tmp_path):
+        """A JSON-valid non-object line ("query" in None would TypeError) must
+        be counted as malformed evidence, not crash the integrity pass."""
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            "\n".join([
+                json.dumps({"event": "rag_query", "query_hash": "abc"}),
+                "null", "42", '"text"', "[]",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        assert compute_audit_integrity(str(p)) == {
+            "malformed_lines": 4,
+            "events_with_raw_query": 0,
+            "rag_events_missing_query_hash": 0,
         }
 
     def test_summary_includes_integrity_without_raw_query(self, tmp_path):
