@@ -129,18 +129,24 @@ class PersonalityManager:
             self.soul_core = _DEFAULT_SOUL
             return
 
-        content = self.soul_path.read_text(encoding="utf-8")
-        file_hash = self._sha256(content)
         # Hold the lock across the read-then-conditional-write so a concurrent
         # apply_evolution()/reload() on another thread cannot interleave with
         # this check-and-insert on the shared connection (opened
         # check_same_thread=False and shared across FastAPI's threadpool). The
-        # SELECT was previously unlocked, leaving a TOCTOU between reading the
-        # latest hash and writing the recovery row. audit_log() writes to a
-        # separate file, so the drift event is emitted after the lock is
-        # released to keep the critical section tight.
+        # file read + hash must be INSIDE the lock, not just the SELECT: reading
+        # soul.md before acquiring the lock left a TOCTOU where a concurrent
+        # apply_evolution() could write a newer soul in between, making this
+        # call's file_hash stale by the time it compares against the (by-then
+        # newer) latest DB row — inserting a spurious DRIFT_RECOVERY version and
+        # then publishing the stale content as soul_core, reverting the apply
+        # that just correctly landed. Publishing soul_core is inside the lock for
+        # the same reason. audit_log() writes to a separate file, so the drift
+        # event is emitted after the lock is released to keep the critical
+        # section tight.
         drift_expected: str | None = None
         with self._lock:
+            content = self.soul_path.read_text(encoding="utf-8")
+            file_hash = self._sha256(content)
             row = self.conn.execute(
                 "SELECT sha256 FROM soul_versions ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -158,8 +164,7 @@ class PersonalityManager:
                     (file_hash, content, "initial_load", datetime.now(UTC).isoformat())
                 )
                 self.conn.commit()
-
-        self.soul_core = self._bounded_soul(content)
+            self.soul_core = self._bounded_soul(content)
         if drift_expected is not None:
             audit_log({
                 "event": "soul_drift_detected",
@@ -185,6 +190,16 @@ class PersonalityManager:
     def get_system_prompt_additive(self) -> str:
         return self.soul_core
 
+    def _max_version_id(self) -> int:
+        """Read the newest soul_versions id. Caller MUST already hold self._lock
+        (this issues a query on the shared connection without acquiring the lock
+        itself, so it can also be called from inside apply_evolution's existing
+        critical section without deadlocking on the non-reentrant Lock)."""
+        row = self.conn.execute(
+            "SELECT MAX(id) AS max_id FROM soul_versions"
+        ).fetchone()
+        return int(row["max_id"]) if row and row["max_id"] is not None else 0
+
     def get_version(self) -> int:
         # Serialize this read through the same lock the writers hold: the
         # connection is shared across threads (check_same_thread=False), and
@@ -193,10 +208,7 @@ class PersonalityManager:
         # shared connection can race a concurrent write (e.g. "recursive use of
         # cursors not allowed"); taking the lock keeps connection access uniform.
         with self._lock:
-            row = self.conn.execute(
-                "SELECT MAX(id) AS max_id FROM soul_versions"
-            ).fetchone()
-        return int(row["max_id"]) if row and row["max_id"] is not None else 0
+            return self._max_version_id()
 
     def _build_patterns(self, base: list[str]) -> list[tuple]:
         """Compile ``base`` + all config-specified banned patterns.
@@ -288,6 +300,14 @@ class PersonalityManager:
         new_hash = self._sha256(new_soul)
         bak_path = self.soul_path.with_suffix(self.soul_path.suffix + ".bak")
         tmp_path = self.soul_path.with_suffix(self.soul_path.suffix + ".tmp")
+        # Publishing soul_core and reading the version MUST stay inside this same
+        # critical section: releasing the lock after the DB commit and only then
+        # doing `self.soul_core = ...` / `self.get_version()` left a window where
+        # a second, concurrent apply_evolution() could run its own write+commit+
+        # publish entirely in between — this call would then overwrite the newer
+        # soul_core with its own (now stale) content, and report a version number
+        # that belongs to the OTHER call's write. Keeping the whole write-then-
+        # publish sequence under one lock acquisition makes each apply atomic.
         with self._lock:
             if self.soul_path.exists():
                 bak_path.write_text(self.soul_core, encoding="utf-8")
@@ -299,8 +319,8 @@ class PersonalityManager:
                 (new_hash, new_soul, reason, datetime.now(UTC).isoformat())
             )
             self.conn.commit()
-        self.soul_core = self._bounded_soul(new_soul)
-        new_version = self.get_version()
+            self.soul_core = self._bounded_soul(new_soul)
+            new_version = self._max_version_id()
         audit_log({"event": "soul_evolution_applied", "reason": reason, "version": new_version, "sha256": new_hash})
         return {"status": "applied", "version": new_version, "sha256": new_hash}
 
