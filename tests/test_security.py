@@ -126,6 +126,26 @@ class TestAPIKeyAuth:
         resp = client_with_auth.post("/protected", headers={"Authorization": "Bearer wrong-key"})
         assert resp.status_code == 401
 
+    def test_non_ascii_token_fails_closed_401_not_typeerror(self):
+        """A bearer token with a non-ASCII character (pasted curly quote,
+        accented char) must fail closed as HTTP 401, not raise TypeError (which
+        FastAPI would surface as a 500). hmac.compare_digest raises on non-ASCII
+        str operands, so require_api_key must compare bytes. Starlette decodes
+        the Authorization header latin-1, so a wire byte > 0x7F reaches the
+        comparison as a non-ASCII str — exercised here by calling the dependency
+        directly, since the httpx test client rejects non-ASCII header values
+        before they leave the client."""
+        from fastapi import HTTPException
+        from fastapi.security import HTTPAuthorizationCredentials
+
+        from gate import require_api_key
+
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="s\xe9cret-key")
+        with patch.dict(os.environ, {"CYCLAW_API_KEY": "expected-key-value"}):
+            with pytest.raises(HTTPException) as exc:
+                require_api_key(creds)
+        assert exc.value.status_code == 401
+
     def test_protected_accepts_correct_key(self, client_with_auth):
         resp = client_with_auth.post(
             "/protected",
