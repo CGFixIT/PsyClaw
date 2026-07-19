@@ -447,6 +447,16 @@ def run_coverage_source_check(root: Path, pyproject: dict) -> None:
         flags: set[str] = set()
         for line in path.read_text(encoding="utf-8").splitlines():
             flags.update(m.group(1) for m in _COV_FLAG_RE.finditer(line))
+        if not flags:
+            # Not a coverage lane at all -> same absence-is-not-failure policy
+            # as D8/D9. Besides real non-coverage workflows this also keeps
+            # verify.sh's mutation self-tests green: their synthetic trees ship
+            # a minimal ci.yml (a torch pin, an environment.yml stub) with no
+            # pytest step, and must not trip D10. The guard's target is a lane
+            # that MEASURES coverage but dropped one source's flag -- that case
+            # still fails below.
+            warn("D10", f"{rel} has no --cov flags -- not a coverage lane, skipped")
+            continue
         missing: list[str] = []
         for name in source:
             if (root / f"{name}.py").is_file():
