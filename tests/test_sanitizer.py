@@ -139,6 +139,30 @@ class TestFilterToggles:
         # And a phrase from the DEFAULT set is NOT blocked here (config-driven).
         assert check_input("ignore previous instructions", str(path))
 
+    def test_invalid_banned_pattern_is_skipped_not_fatal(self, tmp_path, caplog):
+        """A malformed banned_patterns regex (unbalanced paren typo) must not
+        crash the filter: pre-fix it raised re.error on the first /query, which
+        escaped check_input's PromptInjectionError-only caller as a 500 on EVERY
+        query. The bad entry is now skipped with a warning; the remaining valid
+        patterns keep enforcing."""
+        import logging
+        cfg = {"policy": {"prompt_filter": {
+            "enabled": True,
+            "banned_patterns": ["bypass\\s+(safety", "banana protocol"],  # first invalid
+            "max_input_chars": 4000,
+        }}}
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(cfg, f)
+        with caplog.at_level(logging.WARNING, logger="cyclaw.sanitizer"):
+            # A benign query must pass, not raise re.error (which becomes a 500).
+            assert check_input("hello world", str(path)) == "hello world"
+        # The valid second pattern still blocks.
+        with pytest.raises(PromptInjectionError):
+            check_input("activate the banana protocol now", str(path))
+        # The malformed pattern surfaced a warning rather than a silent/fatal drop.
+        assert any("failed to compile" in r.message for r in caplog.records)
+
 
 class TestSanitizeChunk:
     def test_strips_banned_patterns(self, filter_config):
