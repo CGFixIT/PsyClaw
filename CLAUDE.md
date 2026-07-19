@@ -504,7 +504,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 |---|---|---|---|
 | `/invariant-guard` | check | Static-assert the six invariants + guards against a diff | Yes (stdlib) |
 | `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture) | Needs PyYAML |
-| `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
+| `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints + environment.yml (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |

@@ -51,6 +51,8 @@ It checks (severity in brackets):
 | D5 | WARN | every `constraints.txt` entry is an exact `==` pin (its reproducibility purpose) |
 | D6 | FAIL | every package pinned in BOTH files agrees on version (`constraints.txt`'s own header says they MUST match) |
 | D7 | INFO | `chromadb` pin is CVE-2026-45829 risk-accepted, embedded `PersistentClient` only (SECURITY.md) — do not "fix" it |
+| D8 | FAIL/WARN | every CI workflow and install script that hardcodes a torch version agrees with the manifest pin (FAIL); stale doc / `.osv-scanner.toml` references are WARN |
+| D9 | FAIL | `.github/workflows/environment.yml` (conda CI lane) pins agree with the pip manifests — `fastapi` exempt (conda-forge's chromadb build pins it; documented in the file itself) |
 
 ### Step 2 — Interpret failures
 
@@ -100,11 +102,14 @@ Verdict: safe to merge / fix required: <one line per FAIL>
 bash .claude/skills/dep-guard/verify.sh
 ```
 
-Runs the checker on the clean tree (must exit 0), then three mutation
+Runs the checker on the clean tree (must exit 0), then six mutation
 self-tests: numpy floated to 2.x asserts a D2 FAIL (exit 2); a `[standard]`
-extra added to the constraints `uvicorn` asserts a D4 FAIL (exit 2); and a
+extra added to the constraints `uvicorn` asserts a D4 FAIL (exit 2); a
 `pydantic-core` drift asserts a D1 WARN (exit 0) that becomes a failure under
-`--strict` (exit 2). Pure stdlib — no install needed.
+`--strict` (exit 2); a CI workflow hardcoding a stale torch version asserts a
+D8 FAIL (exit 2); a comment-only `.osv-scanner.toml` torch drift asserts a D8
+WARN (exit 0); and an `environment.yml` pin the manifests moved past asserts a
+D9 FAIL (exit 2). Pure stdlib — no install needed.
 
 ---
 

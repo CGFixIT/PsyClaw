@@ -22,6 +22,9 @@ explicit `pip install`/`pip download` pin) instead of reading it from the
 manifest -- a dependabot bump only touches the manifest, so those hardcoded
 copies silently go stale otherwise (D8; this happened for real on 2026-07-17
 and hung the `test`/`verify-install` CI jobs to their 30-minute timeout).
+The conda lane's environment.yml duplicates the manifests the same way and
+drifts the same way (D9; nltk stayed at 3.9.4 there after the manifests moved
+to 3.10.0, so conda CI tested a version the project never ships).
 
 Severity:
     FAIL  a documented pin invariant is broken (exit 2).
@@ -353,6 +356,68 @@ def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
                        "but misleads anyone auditing the ignore list)")
 
 
+# The conda CI lane (python-package-conda.yml) installs from this file, whose
+# own header says its pins must stay in sync with pyproject.toml and
+# constraints.txt. dependabot only touches the pip manifests, so these
+# hand-duplicated conda pins silently go stale otherwise -- which is exactly
+# what happened by 2026-07-19: PYSEC-2026-597 moved nltk 3.9.4 -> 3.10.0 in
+# all three pip manifests while environment.yml kept the conda lane testing
+# 3.9.4, a version the project no longer ships.
+_ENV_YML_FILE = ".github/workflows/environment.yml"
+# Not pip packages -- the manifests have nothing to compare them against.
+_ENV_SKIP = {"python", "pip"}
+# fastapi diverges on purpose: conda-forge's chromadb=1.5.9 build hard-pins
+# fastapi==0.115.9 (a packaging constraint documented in environment.yml
+# itself, not a CyClaw choice) -- advisory, never a failure.
+_ENV_DOCUMENTED_DIVERGENCE = {"fastapi"}
+# Two pin forms in the file: conda deps ("  - name=1.2.3", single '=') and the
+# pip: sublist ("      - name==1.2.3"). The conda pattern anchors the version
+# on a leading digit so it cannot half-match a pip '==' line.
+_ENV_PIP_PIN_RE = re.compile(r"^\s*-\s*([A-Za-z0-9_.-]+)==([^\s#]+)")
+_ENV_CONDA_PIN_RE = re.compile(r"^\s*-\s*([A-Za-z0-9_.-]+)=([0-9][^\s#]*)")
+
+
+def run_environment_pin_check(root: Path, py_reqs: list[Req], con_reqs: list[Req]) -> None:
+    """D9: environment.yml (conda CI lane) pins agree with the pip manifests."""
+    print("D9 environment.yml pins agree with the pip manifests")
+    path = root / _ENV_YML_FILE
+    if not path.exists():
+        warn("D9", f"{_ENV_YML_FILE} not found -- nothing to cross-check")
+        return
+    # constraints.txt wins on conflict (same precedence as D8's torch pin);
+    # D6 already fails the run when the two manifests disagree.
+    manifest_pin: dict[str, str] = {}
+    for req in py_reqs + con_reqs:
+        version = _pin(req.spec)
+        if version is not None:
+            manifest_pin[req.name] = version
+    mismatches: list[str] = []
+    compared = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = _ENV_PIP_PIN_RE.match(line) or _ENV_CONDA_PIN_RE.match(line)
+        if m is None:
+            continue
+        name, env_version = _normalize(m.group(1)), m.group(2)
+        if name in _ENV_SKIP:
+            continue
+        if name in _ENV_DOCUMENTED_DIVERGENCE:
+            info("D9", f"{name}={env_version} diverges on purpose (conda-forge chromadb "
+                       f"build pins it; documented in {_ENV_YML_FILE})")
+            continue
+        manifest_version = manifest_pin.get(name)
+        if manifest_version is None:
+            continue
+        compared += 1
+        if env_version != manifest_version:
+            mismatches.append(f"{name}: environment.yml={env_version} "
+                              f"vs manifests=={manifest_version}")
+    if mismatches:
+        fail("D9", "the conda CI lane tests version(s) the project never ships: "
+                   + "; ".join(mismatches))
+    else:
+        ok("D9", f"all {compared} cross-pinned package(s) agree with the pip manifests")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None)
@@ -391,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     if torch_pin is not None:
         torch_pin = torch_pin.split("+")[0]
     run_ci_pin_checks(root, torch_pin)
+    run_environment_pin_check(root, py_reqs, con_reqs)
 
     strict_fail = args.strict and _warns
     print(f"\n{len(_fails)} failure(s), {len(_warns)} warning(s)"

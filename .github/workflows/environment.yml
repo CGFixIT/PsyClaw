@@ -34,7 +34,7 @@ dependencies:
   - chromadb=1.5.9  # Note: Use embedded/PersistentClient only. See SECURITY.md
   - sentence-transformers=5.6.0
   - numpy=1.26.4
-  - nltk=3.9.4
+  - nltk=3.10.0
   # Test & Dev tooling — pinned to match pyproject.toml's test/dev extras
   - pytest=9.1.1
   - pytest-asyncio=1.4.0
