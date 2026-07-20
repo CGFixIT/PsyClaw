@@ -10,7 +10,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = 11434
 MODEL_ID = "qwen2.5:7b"
-GROK_MODEL_ID = "grok-4.3"
+# Track config.yaml's shipped grok model (grok-4.5 as of PR #570). The provider
+# smoke asserts on the "[Mock Grok API]" marker, which _answer only emits on an
+# exact model-id match; run_sandbox_test._enable_mock_providers pins the patched
+# config's grok model to this constant so shipped-model drift cannot silently
+# re-break the dispatch.
+GROK_MODEL_ID = "grok-4.5"
 CLAUDE_MODEL_ID = "claude-sonnet-5"
 
 MODELS_RESP = json.dumps(
@@ -113,15 +118,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    server = HTTPServer(("127.0.0.1", PORT), _Handler)
-    print(f"[mock_ollama] Listening on http://127.0.0.1:{PORT}", flush=True)
-    print("[mock_ollama] READY", file=sys.stderr, flush=True)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else PORT
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    print(f"mock lmstudio listening on {port}", flush=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":
