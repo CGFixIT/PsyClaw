@@ -1,14 +1,22 @@
 ---
-description: Suggest the single highest-value next action after completing a task or at the end of a session.
+description: Suggest the single highest-value next action after completing a task or at the end of a session. Use when asked "what should I do next?", "what's next?", "next steps?", or to surface a logical continuation point.
 ---
 
 Suggest the single highest-value next action given the current state. $ARGUMENTS
 
-## Steps
+Recommend the single highest-value next action the user could take.
 
-1. Ground the suggestion in conversation context and whatever was just accomplished.
-2. Identify the current bottleneck or the logical continuation point.
-3. Return one specific, immediately actionable recommendation — not a generic platitude — executable right now given the current state.
+## Rules
+
+- Ground the suggestion in conversation context and whatever was just accomplished.
+- The recommendation must be specific and immediately actionable — not a generic platitude.
+- Consider what naturally follows from the work that was completed.
+- Identify the current bottleneck or logical continuation point.
+- Ensure the action is executable right now given the current state.
+
+## Format
+
+One concise, direct suggestion. No preamble, no alternatives, no hedging.
 
 ## Notes
 
