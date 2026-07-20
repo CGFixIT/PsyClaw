@@ -204,6 +204,14 @@ phases doc frames phase 9 as "a security gate, not authorization to add an
 executor," and the post-#515 roadmap (provider parity, live-runtime HITL
 round-trip, checklist fixes) is tracked in this document rather than as new
 numbered phases.
+
+**[Update 2026-07-20].** The "not yet merged" clause above is itself now
+stale: **PR #515 merged 2026-07-13**, so phases 6-9 are on `main`
+(`tests/test_agentic_harness_phase679.py`, `deepagents-harness` CI job;
+implementation record: `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`). The
+correction paragraph is preserved for provenance; the merge-state section
+further below already reflects this.
+
 ## Part 4: "Unwired" Scaffold (Phase 5 Status)
 
 The phase-5 code includes structural placeholders that are **intentionally
