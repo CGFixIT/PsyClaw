@@ -28,7 +28,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
-9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-5 (config, workspace tools, mock scoring/acceptance gate) are implemented and tested, phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply) are in progress
+9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13); phase 9 is the terminal security gate, so real writes stay disabled by design
 
 ---
 
@@ -609,12 +609,15 @@ same isolation guarantee as every other agentic feature above:
   coding harness using Ollama and scoped CyClaw tool wrappers, lazily importing
   `deepagents` only when explicitly enabled.
 
-**Status:** phases 0-5 (config validation, the proposer workspace + its audited,
-symlink-hardened tool boundary, mock scoring/acceptance gate, the lazy `deepagent_github`
-builder seam) are implemented and covered by `tests/test_agentic_harness_optimizer.py`
-and `tests/test_agentic_harness_phase345.py`. Phases 6-9 (real Deep Agents subagent
-wiring, a fixture-based GitHub coding evaluator, and governed propose/apply with
-human-confirmed acceptance) are in progress. Full plan and phase ledger:
+**Status:** phases 0-9 are implemented. Phases 0-5 (config validation, the
+proposer workspace + its audited, symlink-hardened tool boundary, mock
+scoring/acceptance gate, the lazy `deepagent_github` builder seam) are covered by
+`tests/test_agentic_harness_optimizer.py` and `tests/test_agentic_harness_phase345.py`.
+Phases 6-9 (real Deep Agents subagent wiring, a fixture-based GitHub coding
+evaluator, and governed propose/apply with human-confirmed acceptance) landed in
+PR #515 (merged 2026-07-13), are covered by `tests/test_agentic_harness_phase679.py`,
+and are documented in `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` — phase 9 is
+a security gate, not authorization to add an executor. Full plan and phase ledger:
 `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
 
 Every gate below the master `agentic.enabled` switch defaults to `false`; while
