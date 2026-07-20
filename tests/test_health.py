@@ -320,3 +320,40 @@ class TestHealthCfgCache:
         # Different object identity -> the file was re-read and re-parsed.
         assert first is not second
         assert second == first  # same content, freshly parsed
+
+
+class TestSharedClientLifecycle:
+    """The pooled _http_client must be closable via close_http_client()."""
+
+    def test_close_without_client_is_noop(self):
+        health._http_client = None
+        health.close_http_client()  # must not raise
+        assert health._http_client is None
+
+    def test_close_releases_client_and_allows_lazy_rebuild(self, monkeypatch):
+        created = []
+
+        class _FakeClient:
+            def __init__(self, **kw):
+                self.closed = False
+                created.append(self)
+
+            def get(self, url, **kw):
+                return _OKResp()
+
+            def close(self):
+                self.closed = True
+
+        monkeypatch.setattr(health.httpx, "Client", _FakeClient)
+        health._http_client = None
+        try:
+            health._http_get(_HOST_MODELS, timeout=1.0)
+            assert len(created) == 1
+            health.close_http_client()
+            assert created[0].closed is True
+            assert health._http_client is None
+            # The next probe lazily builds a fresh client (post-restart path).
+            health._http_get(_HOST_MODELS, timeout=1.0)
+            assert len(created) == 2
+        finally:
+            health._http_client = None
