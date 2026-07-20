@@ -10,7 +10,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 PORT = 11434
 MODEL_ID = "qwen2.5:7b"
-GROK_MODEL_ID = "grok-4.3"
+# Track config.yaml's shipped grok model (grok-4.5 as of PR #570). The provider
+# smoke asserts on the "[Mock Grok API]" marker, which _answer only emits on an
+# exact model-id match; run_sandbox_test._enable_mock_providers pins the patched
+# config's grok model to this constant so shipped-model drift cannot silently
+# re-break the dispatch.
+GROK_MODEL_ID = "grok-4.5"
 CLAUDE_MODEL_ID = "claude-sonnet-5"
 
 MODELS_RESP = json.dumps(
