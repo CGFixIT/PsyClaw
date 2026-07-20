@@ -88,7 +88,7 @@ from utils.errors import (
     PromptInjectionError, IndexNotFoundError
 )
 from utils.guardrail_bridge import build_input_guard
-from utils.health import check_all
+from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from gate_ops import register_ops_routes
 from metrics import summarize_audit
@@ -305,6 +305,12 @@ async def lifespan(app: FastAPI):
                 _obj.close()
             except Exception:
                 logger.warning("shutdown close failed for %s", _name, exc_info=True)
+    # The /health probe pool is module-level in utils.health (no instance to
+    # list above); close it through its own teardown hook for the same reason.
+    try:
+        close_http_client()
+    except Exception:
+        logger.warning("shutdown close failed for health http client", exc_info=True)
 
 
 app = FastAPI(
