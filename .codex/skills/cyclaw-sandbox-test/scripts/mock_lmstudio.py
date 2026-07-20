@@ -118,10 +118,15 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else PORT
-    server = HTTPServer(("127.0.0.1", port), _Handler)
-    print(f"mock lmstudio listening on {port}", flush=True)
-    server.serve_forever()
+    server = HTTPServer(("127.0.0.1", PORT), _Handler)
+    print(f"[mock_ollama] Listening on http://127.0.0.1:{PORT}", flush=True)
+    print("[mock_ollama] READY", file=sys.stderr, flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":
