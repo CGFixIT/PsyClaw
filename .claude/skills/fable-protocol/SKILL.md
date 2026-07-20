@@ -164,7 +164,7 @@ rising eval-awareness (~6% of rollouts).
 ### 8.1 Identity
 [Redacted: personal identity details are kept out of GitHub-published files. Owner handle: cgfixit.]
 
-### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.8.0
+### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.9.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
   - 7-node LangGraph state machine; FastAPI on 127.0.0.1:8787
   - Hybrid retrieval: ChromaDB + BM25 with RRF fusion; embeddings all-MiniLM-L6-v2
