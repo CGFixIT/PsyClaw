@@ -506,7 +506,10 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # together are what actually distinguishes the two.
     if needs_confirm and not answer_model:
         top_score = result.get("top_score", 0.0)
-        threshold = cfg.get("retrieval", {}).get("min_score", 0.4)
+        # validate_retrieval_config() ran at boot (above), so this key is
+        # guaranteed present and in [0, 1] — the old 0.4 fallback was
+        # unreachable dead code that contradicted the shipped 0.028 default.
+        threshold = cfg["retrieval"]["min_score"]
         # A retrieval failure (retrieve_node caught a RAGError and set
         # state["error"] with top_score=0.0) also lands here, but it is NOT a
         # vault miss — presenting it as one hides a broken index behind a
