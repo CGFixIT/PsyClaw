@@ -1181,9 +1181,11 @@ def test_run_sync_retry_preserves_change_evidence_across_attempts(tmp_path):
     )
 
 
-def test_run_sync_retry_dedups_repeat_events_for_same_path(tmp_path):
-    # A file touched by two attempts is reported once, with the EARLIEST event
-    # (the attempt that actually changed the content), not the retry's replay.
+def test_run_sync_retry_coalesces_to_final_event_per_path(tmp_path):
+    # codex #594 P2: a file touched by two attempts is reported once, with the
+    # FINAL attempt's operation -- attempt 1 adds notes.md, attempt 2 replaces
+    # it, so the surfaced event is 'modified', matching the on-disk state.
+    # (Earliest-wins would report the stale 'added'.)
     cfg = _make_cfg(tmp_path, sync_retries=1, retry_backoff_sec=0)
     log_path = cfg.log_path
     calls = {"sync": 0}
@@ -1209,7 +1211,41 @@ def test_run_sync_retry_dedups_repeat_events_for_same_path(tmp_path):
          _patch_audit():
         result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
 
-    assert [(e.kind, e.path) for e in result.events] == [("added", "notes.md")]
+    assert [(e.kind, e.path) for e in result.events] == [("modified", "notes.md")]
+
+
+def test_run_sync_retry_coalesce_reports_delete_over_earlier_add(tmp_path):
+    # codex #594 P2 (the correctness case): a file added on attempt 1 and DELETED
+    # on the successful retry must report 'deleted' -- earliest-wins would report
+    # 'added' for a file that no longer exists, corrupting the audit against the
+    # final filesystem state. corpus_changed stays True either way (a delete is a
+    # change), so the reindex still fires.
+    cfg = _make_cfg(tmp_path, sync_retries=1, retry_backoff_sec=0)
+    log_path = cfg.log_path
+    calls = {"sync": 0}
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        calls["sync"] += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        if calls["sync"] == 1:
+            Path(log_path).write_text(
+                "2026/06/20 02:10:01 INFO  : notes.md: Copied (new)\n", encoding="utf-8"
+            )
+            return MagicMock(returncode=5, stdout="", stderr="temporary error")
+        Path(log_path).write_text(
+            "2026/06/20 02:10:02 INFO  : notes.md: Deleted\n", encoding="utf-8"
+        )
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert [(e.kind, e.path) for e in result.events] == [("deleted", "notes.md")]
+    assert result.corpus_changed is True
 
 
 def test_run_sync_exception_emits_terminal_sync_failed_audit(tmp_path):
@@ -1234,7 +1270,14 @@ def test_run_sync_exception_emits_terminal_sync_failed_audit(tmp_path):
     assert "sync_started" in events
     failed = [e for e in captured if e.get("event") == "sync_failed"]
     assert failed and failed[0]["error_type"] == "SyncRuntimeError"
-    assert "rclone_exit_code" not in failed[0]  # no half-built result fields
+    # codex #594 P2: the exceptional record is schema-aligned with a normal
+    # sync_failed -- the documented evidence fields are present, not dropped.
+    rec = failed[0]
+    for key in ("rclone_exit_code", "counts", "errors_n", "aborted_for_safety", "corpus_changed"):
+        assert key in rec
+    assert rec["aborted_for_safety"] is False   # a hang is not a safety-fuse trip
+    assert rec["rclone_exit_code"] is None       # rclone never returned an exit code
+    assert rec["corpus_changed"] is False        # nothing was copied before the hang
 
 
 def test_run_sync_failed_result_emits_exactly_one_terminal_audit(tmp_path):
@@ -1258,3 +1301,38 @@ def test_run_sync_failed_result_emits_exactly_one_terminal_audit(tmp_path):
     assert result.success is False
     terminal = [e for e in captured if e.get("event") in ("sync_completed", "sync_failed")]
     assert len(terminal) == 1 and terminal[0]["event"] == "sync_failed"
+
+
+def test_run_sync_timeout_after_partial_copy_preserves_evidence(tmp_path):
+    # codex #594 P1: an attempt that copies files and THEN times out must not
+    # lose the change evidence. The terminal sync_failed record carries the
+    # copied-file counts + corpus_changed=True (schema-aligned), so the
+    # staleness is detectable and recoverable instead of only the exception type.
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=60)
+    log_path = cfg.log_path
+    captured: list[dict] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        # rclone copies a file into the log, THEN hangs past the wall clock.
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(
+            "2026/06/20 02:10:01 INFO  : notes.md: Copied (new)\n", encoding="utf-8"
+        )
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.audit_log", side_effect=lambda e: captured.append(e)):
+        with pytest.raises(SyncRuntimeError):
+            run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    failed = [e for e in captured if e.get("event") == "sync_failed"]
+    assert failed
+    rec = failed[0]
+    assert rec["error_type"] == "SyncRuntimeError"
+    assert rec["corpus_changed"] is True         # copied-file evidence preserved
+    assert rec["counts"]["added"] == 1
+    assert rec["dry_run"] is False
+    assert rec["aborted_for_safety"] is False

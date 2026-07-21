@@ -754,14 +754,34 @@ def _run_sync_locked(
         "include_soul": cfg.include_soul,
     })
 
-    # Audit convergence (invariant): the sync_started record above must
-    # ALWAYS be paired with a terminal record. Exceptional exits --
-    # wall-clock timeout, retry-budget exhaustion, subprocess failure, or
-    # a post-sync-check error -- previously re-raised past the summary
-    # audit and left the run open-ended in the log. Emit a sanitized
-    # sync_failed first: the exception TYPE name only, never the message
-    # (messages are built without argv/remote; this keeps that contract
-    # enforced at the audit boundary rather than by convention).
+    # Accumulators hoisted ABOVE the try so the evidence-preserving except
+    # (below) can always reference them -- even if an exception fires before the
+    # loop body binds them.
+    #
+    # Change evidence is coalesced across attempts BY PATH, and the FINAL attempt
+    # to touch a path wins (codex #594 P2): a file added then replaced or DELETED
+    # on a later attempt reports its final operation against the on-disk state,
+    # not the earliest (earliest-wins would mis-report a since-deleted file as
+    # 'added'). This accumulation is also load-bearing for the reindex: a
+    # transient attempt can copy files and only THEN fail (exit 5); the clean
+    # retry sees them already present and logs nothing, so without it
+    # corpus_changed would flip back to False and suppress the reindex the copied
+    # content needs. Errors stay final-attempt-only: they feed safety-abort
+    # detection and must describe the attempt that produced the surfaced exit
+    # code, not a stale mid-retry ERROR line.
+    completed: subprocess.CompletedProcess[str] | None = None
+    events_by_path: dict[str, FileEvent] = {}
+    final_errors: list[str] = []
+
+    # Audit convergence (invariant): the sync_started record above must ALWAYS be
+    # paired with a terminal record. Exceptional exits -- wall-clock timeout,
+    # retry-budget exhaustion, subprocess failure, or a post-sync-check error --
+    # previously re-raised past the summary audit and left the run open-ended.
+    # The except below emits a schema-aligned sync_failed that (a) preserves the
+    # change evidence harvested so far (codex #594 P1: a partial-copy-then-raise
+    # must not lose the copied-file record and strand the index stale), and
+    # (b) sanitizes the failure to the exception TYPE name only, never the
+    # message (kept enforced at the audit boundary rather than by convention).
     try:
 
         # A 0 timeout means "unbounded" (subprocess.run treats timeout=None that way).
@@ -775,23 +795,10 @@ def _run_sync_locked(
 
         # Outer retry loop: re-run rclone on a *transient* failure (exit code 5) up to
         # cfg.sync_retries extra times, with exponential backoff. The log is truncated
-        # before EACH attempt so parse_log() reflects only the final attempt -- a
-        # successful retry leaves no trace of the failed one in events/errors. With
-        # the default sync_retries=0 this loop runs exactly once (historical behaviour).
+        # before EACH attempt, so each attempt's evidence is harvested into
+        # events_by_path before the next truncation wipes it. With the default
+        # sync_retries=0 this loop runs exactly once (historical behaviour).
         attempts = cfg.sync_retries + 1
-        completed = None
-        # Change evidence is CUMULATIVE across attempts: a transient attempt can
-        # copy files and only THEN fail (exit 5); the clean retry sees those files
-        # already present, logs nothing for them, and would flip corpus_changed
-        # back to False -- silently suppressing the reindex the copied content
-        # needs. So each attempt's log is parsed BEFORE the next truncation and
-        # merged here (dedup by path, earliest event wins: it marks the attempt
-        # that actually changed the file). Errors stay final-attempt-only: they
-        # feed safety-abort detection and must describe the attempt that produced
-        # the surfaced exit code, not a stale mid-retry ERROR line.
-        cumulative_events: list[FileEvent] = []
-        seen_event_paths: set[str] = set()
-        final_errors: list[str] = []
         for attempt in range(1, attempts + 1):
             # Per-attempt timeout shrinks toward the global deadline. If we already
             # have <=0 seconds left, stop now and surface the same RcloneTimeoutError
@@ -842,12 +849,11 @@ def _run_sync_locked(
                 ) from exc
 
             # Harvest this attempt's change evidence before the next _truncate_log
-            # wipes it (see the cumulative-events note above the loop).
+            # wipes it (see the coalescing note above the loop): last attempt to
+            # touch a path wins; dict preserves first-seen order for determinism.
             attempt_events, final_errors = parse_log(log_path)
             for ev in attempt_events:
-                if ev.path not in seen_event_paths:
-                    seen_event_paths.add(ev.path)
-                    cumulative_events.append(ev)
+                events_by_path[ev.path] = ev
 
             if completed.returncode != _RCLONE_TRANSIENT_EXIT or attempt == attempts:
                 break
@@ -879,10 +885,10 @@ def _run_sync_locked(
             raise SyncRuntimeError("rclone never executed", details={"direction": cfg.direction})
         exit_code = completed.returncode
 
-        # Hash -> audit. Events are the cumulative set across all attempts (a
+        # Hash -> audit. Events are the coalesced set across all attempts (a
         # partial-copy-then-clean-retry still requests the reindex); errors are the
         # final attempt's only, so transient retry noise stays out of the result.
-        events = hash_changed_files(cumulative_events, cfg.local_path)
+        events = hash_changed_files(list(events_by_path.values()), cfg.local_path)
         errors = final_errors
 
         aborted_for_safety = (
@@ -928,10 +934,37 @@ def _run_sync_locked(
 
         return result
     except Exception as exc:
+        # Preserve change evidence before propagating (codex #594 P1): an attempt
+        # can copy files and only THEN raise (timeout, budget exhaustion,
+        # subprocess failure), so harvest the current log one final time. The
+        # copied-file record would otherwise be lost and the RAG index could stay
+        # stale permanently with nothing in the audit to explain why. Never let
+        # this best-effort harvest mask the original failure.
+        try:
+            tail_events, _tail_errors = parse_log(log_path)
+            for ev in tail_events:
+                events_by_path[ev.path] = ev
+        except OSError:
+            pass
+        partial = list(events_by_path.values())
+        counts = {"added": 0, "modified": 0, "deleted": 0}
+        for ev in partial:
+            counts[ev.kind] = counts.get(ev.kind, 0) + 1
+        # Schema-aligned with SyncResult.to_audit_dict (codex #594 P2): the
+        # terminal record for an exceptional exit carries the same evidence
+        # fields a normal failure would, plus error_type. rclone_exit_code is the
+        # last observed code (None if rclone never returned one); aborted_for_safety
+        # is False -- an exceptional exit is not a --max-delete/--max-transfer trip.
         audit_log({
             "event": "sync_failed",
             "direction": cfg.direction,
+            "duration_sec": round(max(0.0, time.time() - started_at), 3),
+            "rclone_exit_code": completed.returncode if completed is not None else None,
+            "counts": counts,
+            "errors_n": len(final_errors),
+            "aborted_for_safety": False,
             "dry_run": dry_run,
+            "corpus_changed": any(not _is_rclone_internal(ev.path) for ev in partial),
             "error_type": type(exc).__name__,
         })
         raise
