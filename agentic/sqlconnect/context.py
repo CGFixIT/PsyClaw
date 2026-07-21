@@ -6,6 +6,7 @@ from typing import Literal
 
 from agentic.sqlconnect.client import SqlClient
 from agentic.sqlconnect.config import SqlConnectConfig
+from utils.errors import SqlConnectError
 
 
 def run_op(
@@ -29,7 +30,14 @@ def run_op(
         return client.explain(sql or "")
     if op == "row_count":
         return client.row_count(table or "")
-    raise ValueError(f"unknown sql op: {op!r}")
+    # Typed, not ValueError: the CLI maps SqlConnectError -> EXIT_FAIL (2); a bare
+    # builtin would escape _run's except clauses as an uncaught traceback (exit 1),
+    # breaking the documented 0/2/3 exit-code API.
+    raise SqlConnectError(
+        f"unknown sql op: {op!r}",
+        code="SQLCONNECT_OP_NOT_ALLOWED",
+        details={"op": op},
+    )
 
 
 __all__ = ["run_op"]

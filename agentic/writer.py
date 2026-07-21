@@ -34,17 +34,32 @@ EXECUTION_ENABLED = False
 _WRITE_OPS = frozenset({"pr_comment", "issue_comment", "pr_create"})
 
 
+def _require_int_number(op: str, params: dict) -> str:
+    """Return params['number'] as a decimal string, raising typed errors.
+
+    Mirrors gh_client.build_read_argv's guard: a caller-supplied non-integer
+    'number' must surface as AgenticError (the contract plan_write documents and
+    the CLI maps to EXIT_FAIL), never as a bare ValueError/TypeError traceback.
+    """
+    if "number" not in params:
+        raise AgenticError(f"op {op!r} requires 'number' in params", details={"op": op})
+    number = params["number"]
+    try:
+        return str(int(number))
+    except (TypeError, ValueError) as exc:
+        raise AgenticError(
+            f"'number' must be an integer, got {type(number).__name__}: {number!r}",
+            details={"op": op},
+        ) from exc
+
+
 def _build_write_argv(op: str, repo: str, params: dict, gh_bin: str = "gh") -> list[str]:
     """Build the argv a write WOULD use, for display in the dry-run plan only."""
     if op == "pr_comment":
-        if "number" not in params:
-            raise AgenticError(f"op {op!r} requires 'number' in params", details={"op": op})
-        return [gh_bin, "pr", "comment", str(int(params["number"])),
+        return [gh_bin, "pr", "comment", _require_int_number(op, params),
                 "--repo", repo, "--body", str(params.get("body", ""))]
     if op == "issue_comment":
-        if "number" not in params:
-            raise AgenticError(f"op {op!r} requires 'number' in params", details={"op": op})
-        return [gh_bin, "issue", "comment", str(int(params["number"])),
+        return [gh_bin, "issue", "comment", _require_int_number(op, params),
                 "--repo", repo, "--body", str(params.get("body", ""))]
     if op == "pr_create":
         return [gh_bin, "pr", "create", "--repo", repo,

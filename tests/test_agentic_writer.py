@@ -98,6 +98,15 @@ def test_unknown_op_raises():
         plan_write(_write_cfg(), "force_push", "valid reason", confirm=True)
 
 
+def test_non_integer_number_raises_typed_error():
+    # A caller-supplied non-integer 'number' must surface as AgenticError (the
+    # contract plan_write documents; CLI maps it to EXIT_FAIL), never as a bare
+    # ValueError/TypeError traceback -- mirrors gh_client.build_read_argv's guard.
+    for bad in ("abc", None, [12]):
+        with pytest.raises(AgenticError, match="must be an integer"):
+            plan_write(_write_cfg(), "pr_comment", "valid reason", confirm=True, number=bad, body="hi")
+
+
 def test_full_gate_returns_dryrun_only(tmp_path: Path):
     plan = plan_write(
         _write_cfg(),
