@@ -5,7 +5,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.138-blue.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2.6-blue.svg)](https://github.com/langchain-ai/langgraph)
-[![PGvector](https://img.shields.io/badge/PGvector-0.3.6-blue.svg)](https://github.com/pgvector/pgvector/)
+[![PGvector](https://img.shields.io/badge/PGvector-0.4.2-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
 [![DevSkim](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml)
@@ -13,6 +13,23 @@
 [![OSV-Scanner](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
+
+---
+
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [Architecture](#architecture)
+- [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [Dropbox Corpus Sync](#dropbox-corpus-sync)
+- [Agentic Layer](#agentic-layer-v160)
+- [Filesystem & SQL Connectors](#filesystem--sql-connectors-v18)
+- [NeMo Guardrails](#nemo-guardrails-v18)
+- [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
+- [MCP Server](#mcp-server)
+- [Security Model](#security-model)
 
 ---
 
@@ -422,6 +439,7 @@ CyClaw includes an **optional, out-of-band** Dropbox sync layer that mirrors a D
 
 **Key capabilities**
 - `rclone`-backed pull sync with safety fuses (`max_delete`, `max_transfer`)
+- crash-safe single-instance locking — an OS-backed lock (`fcntl.flock` / `msvcrt.locking`) prevents a scheduled run and a manual run from racing, and releases automatically even if the process dies
 - audit logging for changed corpus files
 - optional scheduler integration for Linux and Windows
 - optional reindex trigger when corpus changes
@@ -439,7 +457,7 @@ python -m sync.cli unschedule
 
 The same actions are available from the **Sync Console** panel in the terminal UI via `POST /ops/sync` (loopback-only, API-key gated, audited).
 
-See `Dropbox_Sync_Guide.md` for full setup and scheduling details.
+See `Dropbox_Sync_Guide.md` for full setup and scheduling details, and [`docs/SYNC_README.md`](docs/SYNC_README.md) for module internals (lock lifecycle, exit codes, error taxonomy).
 
 ---
 
