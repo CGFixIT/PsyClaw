@@ -451,8 +451,9 @@ def test_run_sync_single_instance_lock_blocks_concurrent_run(tmp_path):
     # A pre-existing (fresh) lock directory means another run holds the lock;
     # run_sync must refuse rather than race a second rclone invocation.
     cfg = _make_cfg(tmp_path)
-    lock_dir = Path(cfg.log_dir) / "sync.lock.d"
-    lock_dir.mkdir(parents=True)
+    lock_path = Path(cfg.log_dir) / "sync.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("", encoding="utf-8")
 
     def dispatch(argv, **kwargs):
         if argv[1] == "version":
@@ -517,11 +518,12 @@ def test_run_sync_passes_doubled_threshold_when_post_sync_check(tmp_path):
         Path(log_path).write_text("", encoding="utf-8")
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    def spy_acquire(lock_dir, stale_after_sec=_LOCK_STALE_SEC):
+    def spy_acquire(lock_path, stale_after_sec=_LOCK_STALE_SEC):
         acquired.append(stale_after_sec)
         # This module's own import binding still points at the real function
-        # (patch only swaps the attribute on sync.runner).
-        _acquire_sync_lock(lock_dir, stale_after_sec)
+        # (patch only swaps the attribute on sync.runner). Return the handle so
+        # run_sync's finally-block release removes the lock cleanly.
+        return _acquire_sync_lock(lock_path, stale_after_sec)
 
     with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
          patch("sync.runner.subprocess.run", side_effect=dispatch), \
@@ -550,18 +552,19 @@ def test_acquire_lock_reclaims_only_past_threshold(tmp_path):
     # A lock younger than the supplied threshold blocks; one older than it is
     # reclaimed. Threshold is a parameter so the bounded-timeout derivation
     # above is what actually gates reclamation.
-    lock_dir = tmp_path / "sync.lock.d"
-    lock_dir.mkdir()
+    lock_path = tmp_path / "sync.lock"
+    lock_path.write_text("", encoding="utf-8")  # empty -> staleness falls back to mtime
     with pytest.raises(SyncRuntimeError):
-        _acquire_sync_lock(str(lock_dir), stale_after_sec=3600)
+        _acquire_sync_lock(str(lock_path), stale_after_sec=3600)
     old = time.time() - 7200
-    os.utime(lock_dir, (old, old))
-    _acquire_sync_lock(str(lock_dir), stale_after_sec=3600)  # reclaimed, no raise
-    assert lock_dir.exists()
+    os.utime(lock_path, (old, old))
+    lock = _acquire_sync_lock(str(lock_path), stale_after_sec=3600)  # reclaimed, no raise
+    assert lock_path.exists()
+    assert lock.path == str(lock_path)
 
 
 def test_run_sync_releases_lock_after_run(tmp_path):
-    # After a normal run the lock directory must be gone so the next run can
+    # After a normal run the lock file must be gone so the next run can
     # acquire it.
     cfg = _make_cfg(tmp_path)
     log_path = cfg.log_path
@@ -578,7 +581,7 @@ def test_run_sync_releases_lock_after_run(tmp_path):
          _patch_audit():
         run_sync(cfg, rclone_bin=FAKE_RCLONE)
 
-    assert not (Path(cfg.log_dir) / "sync.lock.d").exists()
+    assert not (Path(cfg.log_dir) / "sync.lock").exists()
 
 
 def test_run_sync_no_change_exit_0(tmp_path):
