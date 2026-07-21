@@ -444,3 +444,32 @@ def test_importing_shim_does_not_import_out_of_band_packages() -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "ISOLATED_OK" in proc.stdout
+
+
+# --------------------------------------------------------------------------- sync budget
+
+def test_sync_timeout_sec_single_budget_without_post_sync_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"sync": {"sync_timeout_sec": 3600}},
+    )
+    assert ops_runner._sync_timeout_sec() == 3600 + 60
+
+
+def test_sync_timeout_sec_doubles_when_post_sync_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The runner can hold the lock for one full sync_timeout_sec of rclone sync
+    # PLUS a second full timeout for rclone check; the shim must not kill a
+    # healthy run mid-check (mirrors sync.runner._lock_stale_after_sec).
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"sync": {"sync_timeout_sec": 3600, "post_sync_check": True}},
+    )
+    assert ops_runner._sync_timeout_sec() == 2 * 3600 + 60
+
+
+def test_sync_timeout_sec_fallback_on_unreadable_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(_path):
+        raise OSError("config missing")
+
+    monkeypatch.setattr(ops_runner, "_get_config", _boom)
+    assert ops_runner._sync_timeout_sec() == 3600 + 60

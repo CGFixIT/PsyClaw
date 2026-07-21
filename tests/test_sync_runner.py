@@ -1135,3 +1135,126 @@ def test_run_sync_unbounded_timeout_disables_budget(tmp_path):
 
     # Both attempts receive None (unbounded).
     assert seen_timeouts == [None, None]
+
+
+# ---------------------------------------------------------------------------
+# Retry change-evidence accumulation + audit convergence (codex findings)
+# ---------------------------------------------------------------------------
+
+def test_run_sync_retry_preserves_change_evidence_across_attempts(tmp_path):
+    # Attempt 1 copies notes.md and THEN fails transiently (exit 5); the clean
+    # retry sees the file already present and logs nothing. If only the final
+    # attempt's log were parsed, corpus_changed would flip back to False and
+    # the reindex the copied content needs would never be requested.
+    cfg = _make_cfg(tmp_path, sync_retries=1, retry_backoff_sec=0)
+    log_path = cfg.log_path
+    calls = {"sync": 0}
+    captured: list[dict] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        calls["sync"] += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        if calls["sync"] == 1:
+            Path(log_path).write_text(
+                "2026/06/20 02:10:01 INFO  : notes.md: Copied (new)\n",
+                encoding="utf-8",
+            )
+            return MagicMock(returncode=5, stdout="", stderr="temporary error")
+        Path(log_path).write_text("", encoding="utf-8")  # clean retry: nothing to transfer
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.audit_log", side_effect=lambda e: captured.append(e)):
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert calls["sync"] == 2
+    assert result.success is True
+    assert result.corpus_changed is True  # False when only the final log is parsed
+    assert reindex_exit_code_for(result, cfg) == cfg.REINDEX_EXIT_CODE == 10
+    assert result.errors == []  # transient noise from attempt 1 stays out
+    assert [e.path for e in result.events] == ["notes.md"]
+    assert any(
+        e.get("event") == "sync_file_added" and e.get("file") == "notes.md" for e in captured
+    )
+
+
+def test_run_sync_retry_dedups_repeat_events_for_same_path(tmp_path):
+    # A file touched by two attempts is reported once, with the EARLIEST event
+    # (the attempt that actually changed the content), not the retry's replay.
+    cfg = _make_cfg(tmp_path, sync_retries=1, retry_backoff_sec=0)
+    log_path = cfg.log_path
+    calls = {"sync": 0}
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        calls["sync"] += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        if calls["sync"] == 1:
+            Path(log_path).write_text(
+                "2026/06/20 02:10:01 INFO  : notes.md: Copied (new)\n", encoding="utf-8"
+            )
+            return MagicMock(returncode=5, stdout="", stderr="temporary error")
+        Path(log_path).write_text(
+            "2026/06/20 02:10:02 INFO  : notes.md: Copied (replaced existing)\n",
+            encoding="utf-8",
+        )
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert [(e.kind, e.path) for e in result.events] == [("added", "notes.md")]
+
+
+def test_run_sync_exception_emits_terminal_sync_failed_audit(tmp_path):
+    # Audit convergence: a run that emitted sync_started must ALSO emit a
+    # terminal record when it exits by raising (here: rclone hang ->
+    # SyncRuntimeError). The record is sanitized: error type only.
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=60)
+    captured: list[dict] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.audit_log", side_effect=lambda e: captured.append(e)):
+        with pytest.raises(SyncRuntimeError):
+            run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    events = [e.get("event") for e in captured]
+    assert "sync_started" in events
+    failed = [e for e in captured if e.get("event") == "sync_failed"]
+    assert failed and failed[0]["error_type"] == "SyncRuntimeError"
+    assert "rclone_exit_code" not in failed[0]  # no half-built result fields
+
+
+def test_run_sync_failed_result_emits_exactly_one_terminal_audit(tmp_path):
+    # A non-raising failure already ends in the summary sync_failed; the
+    # convergence wrapper must not double-emit on top of it.
+    cfg = _make_cfg(tmp_path)
+    captured: list[dict] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        Path(cfg.log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(cfg.log_path).write_text("", encoding="utf-8")
+        return MagicMock(returncode=1, stdout="", stderr="generic failure")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.audit_log", side_effect=lambda e: captured.append(e)):
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert result.success is False
+    terminal = [e for e in captured if e.get("event") in ("sync_completed", "sync_failed")]
+    assert len(terminal) == 1 and terminal[0]["event"] == "sync_failed"
