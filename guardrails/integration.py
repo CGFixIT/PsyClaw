@@ -67,6 +67,31 @@ def reset_rails_singleton() -> None:
     _rails_singleton = None
 
 
+def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
+    """Make ``config.yaml``'s guardrails: block authoritative over the static
+    NeMo directory (codex P1).
+
+    ``guardrails/config/config.yml`` is a template; the operator-facing source
+    of truth is GuardrailsConfig. Without this override the live engine
+    silently used whatever endpoint/model the static file named -- for a long
+    time the RETIRED LM Studio port (1234) while the gateway ran Ollama
+    (11434), so enabling live rails called a dead endpoint. NeMo Model
+    entries expose .engine/.model/.parameters; override only what cfg
+    explicitly carries.
+    """
+    for model in getattr(rails_config, "models", None) or []:
+        if cfg.engine:
+            model.engine = cfg.engine
+        if cfg.model:
+            model.model = cfg.model
+        params = getattr(model, "parameters", None)
+        if params is None:
+            params = {}
+            model.parameters = params
+        if cfg.base_url:
+            params["base_url"] = cfg.base_url
+
+
 def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
     """Build (once) and return the live ``LLMRails`` engine.
 
@@ -93,6 +118,7 @@ def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
         )
     try:
         rails_config = RailsConfig.from_path(cfg.nemo_config_dir)
+        _apply_guardrails_config(rails_config, cfg)
         rails = LLMRails(rails_config)
     except Exception as exc:  # noqa: BLE001 - surface any NeMo load failure as RailsLoadError
         raise RailsLoadError(f"failed to load NeMo rails: {exc}", details={"dir": cfg.nemo_config_dir}) from exc
@@ -228,15 +254,36 @@ async def safe_generate(
     # crashes the caller.
     try:
         rails = get_cyclaw_guardrails(cfg)
-        messages = [{"role": "user", "content": prompt}]
+        # Retrieved context travels as a context-role message -- the ONLY
+        # context channel the real LLMRails.generate_async supports. Its
+        # signature (prompt/messages/options/state/streaming_handler) has no
+        # ``context`` kwarg: passing one raises TypeError, which the degrade
+        # handler below then masked as a "skipped" turn -- live rails looked
+        # enabled while never running (review P1 on PR #590). A context-role
+        # message's content dict becomes the runtime ``context`` the grounding
+        # action reads as context["relevant_chunks"] (codex P1); the previous
+        # system-message injection never reached that channel either (NeMo
+        # docs: "System messages are not yet supported").
+        messages: list[dict] = []
         if context:
-            messages.insert(0, {"role": "system", "content": f"Retrieved context:\n{context}"})
+            messages.append({"role": "context", "content": {"relevant_chunks": context}})
+        messages.append({"role": "user", "content": prompt})
         result = await rails.generate_async(messages=messages)
         response = result.get("content", "") if isinstance(result, dict) else str(result)
     except (GuardrailsDependencyError, RailsLoadError) as exc:
         metrics.record_skipped(reason=f"rails unavailable: {exc.code}", query=prompt)
         return GuardResult(
             response="", blocked=False, reason=str(exc.message),
+            rails_triggered=triggered, grounding_score=None, soul_topic=soul, guardrails_active=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - live-provider failure must also degrade
+        # Connect/timeout/5xx/Colang runtime errors from generate_async
+        # previously PROPAGATED, contradicting the documented degrade-never-
+        # crash contract (codex P2). Redact to the exception TYPE name only --
+        # provider errors can echo URLs, headers, or request bodies.
+        metrics.record_skipped(reason=f"rails provider error: {type(exc).__name__}", query=prompt)
+        return GuardResult(
+            response="", blocked=False, reason=f"rails provider error: {type(exc).__name__}",
             rails_triggered=triggered, grounding_score=None, soul_topic=soul, guardrails_active=False,
         )
 
