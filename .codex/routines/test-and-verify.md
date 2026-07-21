@@ -8,7 +8,7 @@ Use this when choosing checks before/after a change, validating CI parity, or re
 
 - What changed or what needs confidence.
 - Whether local dependencies are installed.
-- Whether external services such as LM Studio, rclone, Postgres, or gh are available.
+- Whether external services such as Ollama, rclone, Postgres, or gh are available.
 
 ## Workflow
 

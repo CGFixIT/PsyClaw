@@ -42,5 +42,5 @@ non-loopback host, unexpectedly enabled external providers, failed telemetry
 checks, or health readiness inconsistent with the local environment.
 
 Report checks that were skipped because the server or optional dependencies
-were unavailable. Do not treat a stopped LM Studio, Postgres, rclone, or GitHub
+were unavailable. Do not treat a stopped Ollama, Postgres, rclone, or GitHub
 client as a core failure unless that integration was requested.

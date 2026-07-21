@@ -1,8 +1,8 @@
 # Codex Instructions
 
 Use this as the short Codex workflow overlay for CyClaw. Repo truth still lives
-in `AGENTS.md`, docs/invariants and docs/thread_models.md`, and the active
-CI workflows.
+in `AGENTS.md`, `CLAUDE.md` (§3 for the six invariants), `docs/THREAT_MODEL.md`,
+and the active CI workflows.
 
 ## Execution Defaults
 

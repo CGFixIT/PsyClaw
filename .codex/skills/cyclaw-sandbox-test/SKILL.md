@@ -53,5 +53,5 @@ python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place 
 
 ## Scripts
 
-- `scripts/mock_lmstudio.py`: deterministic loopback Ollama, Grok, and Claude emulator (legacy filename).
+- `scripts/mock_ollama.py`: deterministic loopback Ollama, Grok, and Claude emulator.
 - `scripts/run_sandbox_test.py`: clone/setup/start/smoke/report runner.

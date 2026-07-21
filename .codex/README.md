@@ -19,43 +19,12 @@ When the active Codex surface exposes repo skills as slash commands, keep names
 short and invocation-friendly, for example `/refactor` or
 `/cyclaw-optimize`.
 
-## Available Skills
+## Available Skills And Routines
 
-- `skills/fable-protocol/` - reasoning-discipline layer ported from the Claude
-  fable-protocol: epistemic calibration, speculation marking, premise testing,
-  hostile self-review, security pass on every generated artifact,
-  anti-sycophancy, and shipping-first prioritization.
-- `skills/cyclaw-project-guidance/` - load current CyClaw operating context and
-  canonical repo docs before substantial work.
-- `skills/cyclaw-run-cyclaw/` - prepare, run, smoke-test, and interact with the
-  local CyClaw FastAPI RAG server.
-- `skills/cyclaw-sandbox-test/` - clone `origin/main`, mock Ollama, and
-  smoke-test CyClaw gateway plus terminal/API surfaces before PRs.
-- `skills/cyclaw-command-status/` - run a read-only environment, config, index,
-  soul, telemetry, and live-health status check.
-- `skills/cyclaw-command-run/` - run focused smoke checks against an existing
-  checkout or server without performing setup.
-- `skills/cyclaw-command-audit/` - summarize `logs/audit.jsonl` through
-  `metrics.py` and flag audit anomalies or privacy risks.
-- `skills/cyclaw-command-check-soul/` - verify soul file presence, hash,
-  readability, and drift without mutating it.
-- `skills/refactor/` - make focused, behavior-preserving architecture or
-  measured-performance improvements.
-- `skills/cyclaw-optimize/` - select one current, evidence-backed improvement
-  and publish a focused draft PR when requested.
-
-## Available Routines
-
-- `routines/first-pass-repo-review.md` - orient in the repo before changing code.
-- `routines/bugfix.md` - diagnose and fix a bug with targeted verification.
-- `routines/feature.md` - implement a new feature without breaking CyClaw invariants.
-- `routines/refactor.md` - improve structure while preserving behavior.
-- `routines/test-and-verify.md` - choose and run verification commands.
-- `routines/pr-review.md` - review a PR or diff with risk-first findings.
-- `routines/security-review.md` - assess security-sensitive changes.
-
-For quick selection, `AGENTS.md` contains a map of skills and routines with
-their intended trigger conditions.
+`AGENTS.md`'s "Codex Skills And Routines Map" section is the canonical list —
+one skill/routine per line with its trigger condition. This file does not keep
+a second copy; the directories are `skills/` (10 skill folders, each with
+`SKILL.md` + `agents/openai.yaml`) and `routines/` (7 task playbooks).
 
 ## Prompt Templates
 
