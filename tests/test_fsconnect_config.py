@@ -123,3 +123,35 @@ def test_to_dict_roundtrips():
     d = fc.to_dict()
     assert d["allowed_roots"] == ["/tmp/x"]
     assert "writable_roots" in d
+
+
+def test_quoted_bool_gates_fail_closed(tmp_path):
+    # codex P2: bool("false") is True -- a quoted YAML string would silently
+    # OPEN an execution/deletion gate. All safety booleans must be real
+    # booleans, including the enabled toggle.
+    for key in ("enabled", "writes_enabled", "allow_hard_delete",
+                "require_confirm_destructive", "strict_roots",
+                "block_on_injection_flags"):
+        sub = tmp_path / key
+        sub.mkdir()
+        block: dict = {"allowed_roots": [str(sub)]}
+        block[key] = "false"
+        path = _write_cfg(sub, block)
+        with pytest.raises(FsConnectConfigError, match=rf"fsconnect\.{key} must be a boolean"):
+            load_fsconnect_config(path)
+
+
+def test_real_bools_still_accepted(tmp_path):
+    # Guard against over-correction: genuine booleans load unchanged.
+    path = _write_cfg(tmp_path, {
+        "enabled": True,
+        "allowed_roots": [str(tmp_path)],
+        "writes_enabled": False,
+        "allow_hard_delete": False,
+        "require_confirm_destructive": True,
+    })
+    fc = load_fsconnect_config(path)
+    assert fc.enabled is True
+    assert fc.writes_enabled is False
+    assert fc.allow_hard_delete is False
+    assert fc.require_confirm_destructive is True

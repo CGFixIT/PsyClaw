@@ -130,6 +130,21 @@ class FsWriter:
         """Return True to execute, False for dry-run. Raise FsWriteRefused on a gate fail."""
         if FS_WRITE_HARD_DISABLE or not self.fs_cfg.writes_enabled:
             return False
+        if os.name == "nt":
+            # Hard-refuse (codex P1): the Windows fallback validates and
+            # reparse-checks a path by NAME, then opens/writes/moves/deletes by
+            # NAME -- a junction swapped into an in-root component between
+            # validation and use redirects the write outside the configured
+            # root. POSIX holds directory fds and descends no-follow; the
+            # Windows path has no equivalent containment yet, and its branches
+            # are excluded from test coverage. The security review checklist
+            # already documents Windows write-enablement as refused -- this
+            # gate now ENFORCES it instead of relying on operator discipline.
+            self._refuse(
+                op, "platform",
+                "fsconnect writes are refused on Windows until handle-based containment is implemented",
+                "denied: writes refused on Windows (name-based TOCTOU containment gap)",
+            )
         if not (isinstance(reason, str) and reason.strip()):
             self._refuse(op, "reason", "a non-empty human reason is required to write",
                          "denied: human reason missing")

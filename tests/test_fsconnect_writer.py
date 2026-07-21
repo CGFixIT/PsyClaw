@@ -417,3 +417,34 @@ def test_trash_empty_all_purges(env):
     trash_dir = wz / ".cyclaw-trash"
     remaining = list(trash_dir.iterdir()) if trash_dir.exists() else []
     assert remaining == []
+
+
+def test_windows_writes_hard_refused(env, monkeypatch):
+    # codex P1: the Windows fallback validates by name then writes by name --
+    # a junction swapped in between redirects the write outside the root
+    # (TOCTOU). Until handle-based containment lands, writes are HARD-refused
+    # on Windows (not dry-run) even when every other gate passes. Simulated by
+    # patching os.name AFTER the POSIX fixture roots are opened.
+    cfg, fs_cfg, cp, wz, _audit = env
+    fs_cfg.writes_enabled = True
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        monkeypatch.setattr(os, "name", "nt")
+        with pytest.raises(FsWriteRefused) as exc:
+            w.fs_write("out.txt", b"data", reason="x")
+    assert exc.value.details.get("failed_gate") == "platform"
+    assert not (wz / "out.txt").exists()
+    # The refusal is audited with the rule applied, like every other gate.
+    rows = [json.loads(line) for line in _audit.read_text(encoding="utf-8").splitlines()]
+    refused = [r for r in rows if r.get("event") == "fsconnect_write_refused"]
+    assert refused and refused[0]["failed_gate"] == "platform"
+
+
+def test_posix_writes_still_execute_with_gates_satisfied(env):
+    # Guard against over-correction: on POSIX the same fully-gated write must
+    # still execute (the Windows refusal is platform-scoped).
+    cfg, fs_cfg, cp, wz, _audit = env
+    fs_cfg.writes_enabled = True
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        res = w.fs_write("out.txt", b"data", reason="x")
+    assert res["executed"] is True
+    assert (wz / "out.txt").read_bytes() == b"data"
