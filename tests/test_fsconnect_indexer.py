@@ -257,3 +257,38 @@ def test_non_incremental_restages_every_run_and_writes_no_cache(env):
     assert first["staged"] == 2 and second["staged"] == 2
     assert first["unchanged"] == 0 and second["unchanged"] == 0
     assert not (staging / ".fsindex_cache.json").exists()
+
+
+def test_apply_prunes_staged_file_deleted_from_source(env):
+    # codex P1: staging mirrors the share, and the retrieval indexer ingests
+    # the whole staged tree -- a file deleted from the SOURCE must disappear
+    # from staging on the next apply, or deleted content stays retrievable.
+    cfg, fs_cfg, cp, idx, tmp = env
+    staging = tmp / "staging_src_prune"
+    FsIndexer(cfg, fs_cfg, config_path=cp).apply(staging_dir=str(staging))
+    assert (staging / "docs" / "b.txt").exists()
+
+    (idx / "docs" / "b.txt").unlink()  # delete from the share
+    second = FsIndexer(cfg, fs_cfg, config_path=cp).apply(staging_dir=str(staging))
+
+    assert not (staging / "docs" / "b.txt").exists()
+    assert (staging / "a.md").exists()  # surviving source file untouched
+    assert second["pruned"] == 1
+
+
+def test_apply_prune_keeps_cache_file_and_works_incremental(env):
+    # Pruning must never remove the incremental skip-cache itself, and must
+    # also fire in incremental mode (cache pruning and staging pruning are
+    # separate concerns).
+    _c, _f, _cp, idx, tmp = env
+    cfg, fs_cfg, cp = _incremental_env(idx, tmp)
+    staging = tmp / "staging_incr_prune"
+    FsIndexer(cfg, fs_cfg, config_path=cp).apply(staging_dir=str(staging))
+    assert (staging / ".fsindex_cache.json").exists()
+
+    (idx / "docs" / "b.txt").unlink()
+    second = FsIndexer(cfg, fs_cfg, config_path=cp).apply(staging_dir=str(staging))
+
+    assert not (staging / "docs" / "b.txt").exists()
+    assert (staging / ".fsindex_cache.json").exists()  # cache survives pruning
+    assert second["pruned"] == 1
