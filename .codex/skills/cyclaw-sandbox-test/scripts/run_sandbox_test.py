@@ -23,7 +23,11 @@ import yaml
 BASE_URL = "http://127.0.0.1:8787"
 MOCK_URL = "http://127.0.0.1:11434"
 MODEL_ID = "qwen2.5:7b"
-GROK_MODEL_ID = "grok-4.3"
+# Track config.yaml's shipped grok model (grok-4.5 as of PR #570). _answer() in
+# mock_lmstudio.py dispatches the "[Mock Grok API]" marker on an exact model-id
+# match, so this constant, the mock's, and the patched config's model must agree
+# -- _enable_mock_providers enforces the third leg.
+GROK_MODEL_ID = "grok-4.5"
 CLAUDE_MODEL_ID = "claude-sonnet-5"
 API_KEY = "cyclaw-sandbox-test-key"
 
@@ -148,9 +152,14 @@ def _enable_mock_providers(repo: Path, results: list[Result]) -> str | None:
         config["models"]["local_llm"].update(
             {"provider": "ollama", "base_url": f"{MOCK_URL}/v1", "model": MODEL_ID}
         )
-        for provider in ("grok", "claude"):
+        for provider, model_id in (("grok", GROK_MODEL_ID), ("claude", CLAUDE_MODEL_ID)):
             config["models"][provider]["enabled"] = True
             config["models"][provider]["base_url"] = f"{MOCK_URL}/v1"
+            # Pin the model to the mock's constant: the mock dispatches provider
+            # marker responses on an exact model-id match, so leaving the shipped
+            # model in place breaks the smoke the next time config.yaml bumps it
+            # (this exact drift broke the grok smoke when #570 shipped grok-4.5).
+            config["models"][provider]["model"] = model_id
         config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     except (KeyError, OSError, TypeError, yaml.YAMLError) as exc:
         results.append(Result("mock provider config", "FAIL", str(exc)))

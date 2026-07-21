@@ -1,5 +1,5 @@
 ---
-description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open focused, reviewable pull requests for each.
+description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open focused, reviewable pull requests for each. Use when asked to optimize CyClaw, find competitive/trade-bot advantages, harden CI, audit for risk, propose improvements, or open optimization PRs against main.
 ---
 
 Run a full optimization sweep of CyClaw main and open one draft PR per finding. $ARGUMENTS

@@ -88,7 +88,7 @@ from utils.errors import (
     PromptInjectionError, IndexNotFoundError
 )
 from utils.guardrail_bridge import build_input_guard
-from utils.health import check_all
+from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from gate_ops import register_ops_routes
 from metrics import summarize_audit
@@ -305,6 +305,12 @@ async def lifespan(app: FastAPI):
                 _obj.close()
             except Exception:
                 logger.warning("shutdown close failed for %s", _name, exc_info=True)
+    # The /health probe pool is module-level in utils.health (no instance to
+    # list above); close it through its own teardown hook for the same reason.
+    try:
+        close_http_client()
+    except Exception:
+        logger.warning("shutdown close failed for health http client", exc_info=True)
 
 
 app = FastAPI(
@@ -506,7 +512,10 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # together are what actually distinguishes the two.
     if needs_confirm and not answer_model:
         top_score = result.get("top_score", 0.0)
-        threshold = cfg.get("retrieval", {}).get("min_score", 0.4)
+        # validate_retrieval_config() ran at boot (above), so this key is
+        # guaranteed present and in [0, 1] — the old 0.4 fallback was
+        # unreachable dead code that contradicted the shipped 0.028 default.
+        threshold = cfg["retrieval"]["min_score"]
         # A retrieval failure (retrieve_node caught a RAGError and set
         # state["error"] with top_score=0.0) also lands here, but it is NOT a
         # vault miss — presenting it as one hides a broken index behind a

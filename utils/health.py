@@ -40,6 +40,22 @@ def _http_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx
             if _http_client is None:
                 _http_client = httpx.Client(timeout=timeout)
     return _http_client.get(url, timeout=timeout, headers=headers)
+
+
+def close_http_client() -> None:
+    """Close and drop the shared probe client so its pool is reclaimed.
+
+    gate.py's lifespan shutdown closes every other long-lived pool (LLM
+    clients, rate limiter, personality, retriever) but had no handle on this
+    module-level one, so a server restart leaked the probe client's
+    connections until process exit / GC. Idempotent and safe to call when no
+    client was ever created; the next probe lazily rebuilds one.
+    """
+    global _http_client
+    with _http_client_lock:
+        client, _http_client = _http_client, None
+    if client is not None:
+        client.close()
 # Anchor relative config_path lookups to the repo root, mirroring gate.py's
 # _BASE_DIR pattern — see utils/logger.py's _REPO_ROOT for the matching fix.
 # gate.py calls check_all() with no config_path (line 539), so the bare
