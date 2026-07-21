@@ -71,8 +71,16 @@ jobs:
 
       - name: Determine changed Python files
         id: changed
+        env:
+          # Routed through env instead of interpolated directly into the run
+          # script: a template expanded straight into shell text is evaluated
+          # before bash ever sees it as a variable, so a base-ref value
+          # containing shell metacharacters would execute as code rather than
+          # just being treated as a string once it reaches "$BASE_REF" (zizmor
+          # template-injection, high confidence).
+          BASE_REF_INPUT: ${{ github.event.pull_request.base.ref }}
         run: |
-          BASE_REF="${{ github.event.pull_request.base.ref || 'main' }}"
+          BASE_REF="${BASE_REF_INPUT:-main}"
           git fetch origin "$BASE_REF"
           BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD)
           # xargs (no command) joins lines with single spaces and trims any
@@ -99,4 +107,12 @@ jobs:
         # existing tree was never brought WPS-clean. setup.cfg (repo root)
         # sets max-line-length=120 to match the project's Ruff standard.
         if: steps.changed.outputs.has_files == 'true'
-        run: flake8 ${{ steps.changed.outputs.files }}
+        env:
+          # Routed through env rather than interpolated into the run script —
+          # the file list originates from filenames a PR branch can name
+          # arbitrarily (git diff output), so template-expanding it directly
+          # into shell text would let a maliciously-named file execute as code
+          # instead of just being read as a string argument (zizmor
+          # template-injection).
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: flake8 $CHANGED_FILES
