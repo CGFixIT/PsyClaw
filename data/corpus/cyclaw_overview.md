@@ -23,4 +23,4 @@ The system uses a FastAPI server on localhost:8787 that accepts JSON queries and
 
 ## Deployment
 
-CyClaw runs offline by default, using a local Ollama model (qwen2.5:7b) for LLM inference. It can optionally escalate to an external provider — Grok or Claude — when high-confidence answers aren't found locally, but only through a triple-gated confirmation: the server must run in hybrid mode, the chosen provider must be enabled, and the user must give explicit per-query consent.
+CyClaw runs offline by default, using Ollama (the qwen2.5:7b model) for local LLM inference. It can optionally escalate to an external provider — Grok or Claude — when high-confidence answers aren't found locally, but only through a triple-gated confirmation: the server must run in hybrid mode, the chosen provider must be enabled, and the user must give explicit per-query consent.
