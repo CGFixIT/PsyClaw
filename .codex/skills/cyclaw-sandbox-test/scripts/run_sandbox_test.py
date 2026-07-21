@@ -24,7 +24,7 @@ BASE_URL = "http://127.0.0.1:8787"
 MOCK_URL = "http://127.0.0.1:11434"
 MODEL_ID = "qwen2.5:7b"
 # Track config.yaml's shipped grok model (grok-4.5 as of PR #570). _answer() in
-# mock_lmstudio.py dispatches the "[Mock Grok API]" marker on an exact model-id
+# mock_ollama.py dispatches the "[Mock Grok API]" marker on an exact model-id
 # match, so this constant, the mock's, and the patched config's model must agree
 # -- _enable_mock_providers enforces the third leg.
 GROK_MODEL_ID = "grok-4.5"
@@ -477,7 +477,7 @@ def main() -> int:
         if not _wait_json(f"{MOCK_URL}/v1/models", 2):
             mock = _start_process(
                 "mock ollama",
-                [sys.executable, str(skill_dir / "scripts" / "mock_lmstudio.py")],
+                [sys.executable, str(skill_dir / "scripts" / "mock_ollama.py")],
                 repo,
                 env,
                 mock_log,

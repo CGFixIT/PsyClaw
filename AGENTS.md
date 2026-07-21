@@ -1,11 +1,12 @@
 # AGENTS.md
 
-Guidance for Codex and other AI coding agents working in CyClaw. Read this before editing, then consult the canonical docs linked here instead of duplicating them.
+Guidance for Codex and other AI coding agents working in CyClaw. Read this before editing, then consult the canonical docs linked here instead of duplicating them. **`CLAUDE.md` is the detailed operating contract — this file is a thin, Codex-oriented layer on top of it; it restates only what a Codex session needs at a glance or what CLAUDE.md doesn't cover.**
 
 Canonical references:
 
 - `README.md` for product overview and architecture.
-- `CLAUDE.md` for the existing detailed agent operating contract.
+- `CLAUDE.md` for the detailed agent operating contract — invariants, module
+  map, load-bearing config numbers, traps, conventions, escalation rules.
 - `.github/copilot-instructions.md` for Copilot and PR behavior.
 - `docs/SETUP.md` for local setup details.
 - `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security assumptions.
@@ -13,14 +14,15 @@ Canonical references:
   verification discipline, findings-before-writes, security posture, and
   shipping-first prioritization.
 - `.codex/README.md` for Codex routines, prompts, and checklists.
-- `docs/memories/CONSOLIDATED.md` for the current consolidated memory/business
-  and prioritization stance.
+- `docs/memories/CONSOLIDATED.md` for the current consolidated memory (this
+  file auto-regenerates from session snapshots — treat it as a rolling
+  summary, not a stable citation target).
 
 ## Project Overview
 
-CyClaw is an offline-first Python RAG server and retrieval-only MCP server. The core app is `gate.py` (FastAPI) calling `graph.py` (LangGraph security topology), with hybrid retrieval in `retrieval/` backed by ChromaDB and BM25. It is designed to bind to `127.0.0.1:8787`, use a local Ollama model, and allow Grok/Claude only through explicit hybrid-mode gates.
+CyClaw is an offline-first Python RAG server and retrieval-only MCP server — see `CLAUDE.md` §1-2 for the full map. Core app: `gate.py` (FastAPI) → `graph.py` (LangGraph security topology) → hybrid `retrieval/` (ChromaDB + BM25). Binds to `127.0.0.1:8787` only; local Ollama model; Grok and/or Claude reachable only through explicit hybrid-mode gates.
 
-The main security invariants are RAG-first retrieval, graph topology as policy, triple-gated external fallback, audit convergence, human-gated soul changes, and module isolation. Treat these as design constraints, not implementation suggestions.
+The six security invariants (`CLAUDE.md` §3) are design constraints, not implementation suggestions: RAG-first, topology=policy, triple-gated external fallback, audit convergence, soul governance, module isolation.
 
 ## Tech Stack Detected
 
@@ -28,31 +30,23 @@ The main security invariants are RAG-first retrieval, graph topology as policy, 
 - FastAPI, Uvicorn, Pydantic.
 - LangGraph, ChromaDB embedded `PersistentClient`, BM25, sentence-transformers.
 - Local Ollama endpoint at `127.0.0.1:11434/v1`.
-- Optional Grok/xAI fallback in hybrid mode only.
+- Optional Grok (xAI) and/or Claude fallback, hybrid mode only, triple-gated (`CLAUDE.md` §3 I3).
 - Optional `sync/`, `agentic/`, and `guardrails/` layers.
 - Packaging via `pyproject.toml`, legacy/CI `requirements.txt`, reproducibility `constraints.txt`, and uv where available.
 - pytest, pytest-cov, Ruff, mypy config, Bandit config.
-- Docker and Docker Compose.
+- Docker and Docker Compose (`Dockerfile`, `docker-compose.yml`).
 - CI/security workflows for tests, lint, conda, CodeQL, Gitleaks, OSV, pip-audit, DevSkim, Defender, and Fortify.
 - No `Makefile`, `justfile`, `package.json`, `Cargo.toml`, `go.mod`, `pom.xml`, or Gradle build file was found during setup inspection.
 
 ## Repository Layout
 
-- `gate.py` - FastAPI app, auth, rate limit, telemetry kill block, static UI mount.
-- `graph.py` - LangGraph policy topology and routing.
-- `retrieval/` - indexing, embeddings, hybrid search, BM25/Chroma helpers.
-- `llm/` - local Ollama, Grok, and Claude clients.
-- `utils/` - sanitizer, logging, health, personality/soul, rate limiting, errors.
-- `schemas/` - API models.
-- `sync/` - optional out-of-band Dropbox/rclone sync.
-- `agentic/` - optional out-of-band GitHub context, governed skills registry,
-  filesystem connector, and read-only SQL connector.
-- `guardrails/` - optional NeMo/offline guardrails layer.
-- `static/` - browser terminal UI.
+Code modules mirror `CLAUDE.md` §2's "Key modules" table (more granular — treat that as the source of truth). Directories `CLAUDE.md`'s module table omits:
+
+- `static/` - browser terminal UI (`terminal.html`, served at `/`).
 - `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
-- `.claude/` - existing Claude project skills, commands, hooks, rules, and patterns.
-- `.codex/skills/` - Codex repository skills and project workflows.
+- `.claude/` - Claude project skills, commands, hooks, rules, and patterns.
+- `.codex/` - Codex instructions, skills, checklists, prompts, and routines.
 - `docs/` - setup, threat model, audits, agentic docs, sync docs, planning.
 
 ## Session Bootstrap For Codex
@@ -70,7 +64,8 @@ trivial questions, apply its defaults silently and keep the response small.
 ## Codex Skills And Routines Map
 
 Use this map to choose the narrowest reusable Codex workflow before opening
-large docs or making edits.
+large docs or making edits. **This is the canonical copy** — `.codex/README.md`
+points back here rather than duplicating the list.
 
 Skills:
 
@@ -137,22 +132,29 @@ Routines:
 
 ## Setup Commands
 
-Preferred local setup from `.github/copilot-instructions.md`:
+Preferred local setup (uv-based, when uv is available):
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
-pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-uv pip install -r pyproject.toml --constraint constraints.txt
+uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-Legacy/CI-compatible fallback:
+The `--extra-index-url` is required, not cosmetic: `uv pip install` is uv's
+pip-compatible interface, which does **not** honor `pyproject.toml`'s
+`[tool.uv.sources]`/`[[tool.uv.index]]` CPU-wheel routing the way `uv sync`
+would — without it, resolution fails outright (`no version of
+torch==2.13.0+cpu`, since the `+cpu` local-version wheel only exists on that
+index, not on PyPI). Verified by dry-run against this repo's actual
+`pyproject.toml`/`constraints.txt` before writing this down.
+
+Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
 ```bash
 python -m pip install --upgrade "pip>=26.1.2"
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt -c constraints.txt
+pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
 Runtime prep required before app/tests that touch the gateway:
@@ -167,33 +169,13 @@ Windows PowerShell setup is documented in `docs/SETUP.md`. Keep the same torch-f
 
 ## Build And Run Commands
 
-Build the retrieval index when `index/` is missing or `data/corpus/` changes:
-
-```bash
-python -m retrieval.indexer
-```
-
-Run the FastAPI gateway:
+Same commands as `CLAUDE.md` §8 (index build, `gate.py`/`cyclaw-server`, MCP server), plus the raw uvicorn invocation `CLAUDE.md` doesn't spell out:
 
 ```bash
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Or, after installing the package entry points:
-
-```bash
-cyclaw-server
-```
-
-Run the retrieval-only MCP server:
-
-```bash
-python mcp_hybrid_server.py
-# or
-cyclaw-mcp
-```
-
-Container build/run exists through `Dockerfile` and `docker-compose.yml`; no explicit documented build target was found. Conventional commands such as `docker build -t cyclaw .` and `docker compose up --build` need verification in the target environment.
+`Dockerfile` and `docker-compose.yml` exist for containerized runs; their exact invocation is unverified against a documented CI target — confirm in the target environment before relying on it rather than assuming `docker build -t cyclaw .` / `docker compose up --build` work as-is.
 
 ## Test Commands
 
@@ -203,13 +185,17 @@ Fast retrieval smoke used by CI:
 python -m tests.ci_rag_smoke
 ```
 
-General pytest run:
+General pytest run (matches `CLAUDE.md` §8):
 
 ```bash
-pytest tests/ -q --tb=short
+GROK_API_KEY=dummy pytest tests/ -q --tb=short
 ```
 
-Main CI parity uses a long explicit pytest file list in `.github/workflows/ci.yml`; use that workflow as the exact source of truth for release-risk changes.
+`tests/` auto-discovers every `test_*.py` file — CI does **not** hardcode a file
+list for the main run (`ci.yml`'s own comment confirms this); new test files
+need no `ci.yml` edit. `ci_rag_smoke.py` is deliberately excluded from that
+auto-discovery (it doesn't match `test_*.py`) and runs as its own CI step —
+don't rename it to `test_ci_rag_smoke.py` (see `CLAUDE.md` §4).
 
 Agentic targeted tests:
 
@@ -232,105 +218,80 @@ powershell -File tests/apipsTest.ps1
 
 ## Lint, Format, And Typecheck Commands
 
-PR lint workflow command:
+CI-enforced:
 
 ```bash
 ruff check --select E,F,I,B,C4,UP,S .
 ```
 
-Configured but not found as a CI command during setup inspection:
+Best-effort, not CI-enforced (see `CLAUDE.md` §4 for why a bare `mypy .` fails immediately):
 
 ```bash
-mypy .
+mypy --strict --python-version 3.12 --explicit-package-bases <touched files>
 bandit -r gate.py graph.py retrieval utils llm sync agentic guardrails
 ```
 
-No markdown formatter or markdown lint command was found in repo config.
+No markdown formatter or markdown lint command is configured in this repo.
 
-## Safe Development Workflow
+## Safe Development Workflow, Coding Conventions, Testing Expectations, Dependency Rules, Security Rules, Git Workflow, PR Expectations
 
-1. Read `CLAUDE.md`, this file, and the relevant subsystem docs before editing.
-2. Identify the smallest subsystem that owns the change.
-3. Keep diffs narrow; do not mix setup, dependency, CI, and runtime behavior in one change unless requested.
-4. Prepare the hermetic runtime directories before gateway tests.
-5. Run Ruff and the most targeted pytest/smoke command that exercises the change.
-6. For security/routing/retrieval changes, expand to the CI-equivalent command from `.github/workflows/ci.yml`.
-7. Report exactly what ran, what failed, and what remains unverified.
+These are fully covered by `CLAUDE.md` §3-7 (invariants, conventions, quality
+bar, escalation tiers) — read those sections rather than a duplicate summary
+here. The few points below have no `CLAUDE.md` equivalent and are worth
+keeping close to this file:
 
-## Coding Conventions
-
-- Preserve Python 3.12 compatibility.
-- Keep `gate.py`, `graph.py`, and `mcp_hybrid_server.py` isolated from optional `sync/` and `agentic/` imports.
-- Maintain typed exceptions from `utils.errors`; avoid broad bare `Exception` handling in production code.
-- Keep telemetry-kill environment handling before SDK/model imports.
-- Do not change routing policy by prompt text; policy belongs in graph edges and explicit guards.
-- Keep loopback-only binding unless the maintainer explicitly requests a deployment change.
-
-## Testing Expectations
-
-- Add or update tests with behavior changes.
-- Prefer targeted tests first, then broader CI parity for cross-cutting changes.
-- Do not rely on Ollama, rclone, real GitHub tokens, or real databases in ordinary unit tests unless the test is explicitly scoped to that integration.
-- Use dummy non-secret env values in tests, such as `GROK_API_KEY=dummy`.
-- Preserve committed `data/personality/soul.md` unless the task is explicitly about soul content or tests isolate and restore it.
-
-## Dependency Management Rules
-
-- Prefer `pyproject.toml` plus uv for new local installs.
-- Keep `requirements.txt` only as the legacy/CI compatibility path.
-- Keep `constraints.txt` aligned with direct pins and critical transitives.
-- Install CPU-only torch first: `torch==2.13.0+cpu` from the PyTorch CPU index.
-- Do not casually remove the documented ChromaDB CVE exception; it is accepted only for embedded, local/offline `PersistentClient` use and documented in security workflows.
-- Do not add dependencies unless the task needs them and the relevant manifests, constraints, Docker, and CI install paths are kept consistent.
-
-## Security And Secrets Rules
-
-- Never commit real secrets, tokens, local `.env` files, `rclone.conf`, logs, indexes, caches, or generated coverage artifacts.
-- Treat `data/corpus/` as potentially private user knowledge; do not expose content in summaries unless necessary and requested.
-- Keep external model/network behavior opt-in and human-gated.
-- Preserve audit convergence and PII redaction behavior.
-- Use `.github/SECURITY.md` for vulnerability handling and `docs/THREAT_MODEL.md` for deployment assumptions.
-
-## GitHub, Codex, And PR Permissions
-
-- GitHub repository metadata exposed through the connector reported `admin`, `maintain`, `pull`, `push`, and `triage` access during first setup.
-- During first setup, the connector's Git contents APIs returned `403 Resource not accessible by integration` for direct file writes. Repository files cannot grant GitHub App installation permissions; update the GitHub App/connector installation outside the repo if Codex needs contents-write through the connector.
-- Local `gh` availability is environment-specific and may be a non-GitHub-CLI shim. If using repo-local agentic GitHub flows, verify the actual binary first with `Get-Command gh` / `gh --version`, then authenticate and confirm with `gh auth status`. Prefer connector/API metadata when `gh` is missing, unauthenticated, or not the official GitHub CLI.
-- PR conversation comments require pull request/issues write permission. The connector exposes PR comment/review tools; if they return 403, update the app installation permissions outside the repo.
-- `.github/workflows/claude.yml` already grants `contents: write`, `pull-requests: write`, `issues: write`, and `id-token: write` for the existing Claude PR-comment workflow.
-
-## Git Workflow Expectations
-
-- Prefer feature branches and PRs for changes that touch multiple files unless the maintainer explicitly asks for direct `main`.
-- Never force-push without explicit human approval.
-- Do not edit open PR branches unless the user clearly asked or the repo's documented CI-failure policy applies.
-- Keep commit messages direct and scoped, for example `docs: add Codex onboarding guide`.
-
-## PR And Review Expectations
-
-- Summarize behavior impact, security impact, commands run, and unverified areas.
-- For PR reviews, lead with findings and file/line references; keep summaries secondary.
-- For dependency or CI changes, compare `pyproject.toml`, `requirements.txt`, `constraints.txt`, and `Dockerfile` for drift.
-- Leave PRs open unless the maintainer explicitly asks to merge or close them.
+- Prepare the hermetic runtime directories (Setup Commands above) before any
+  gateway test, not just before running the server.
+- Preserve committed `data/personality/soul.md` unless the task is explicitly
+  about soul content, or the test isolates and restores it.
+- Treat `data/corpus/` as potentially private user knowledge; do not expose
+  its content in summaries unless necessary and requested.
+- For security/routing/retrieval changes, expand verification to the
+  CI-equivalent command from `.github/workflows/ci.yml` rather than a
+  narrower local check.
+- For dependency or CI changes, compare `pyproject.toml`, `requirements.txt`,
+  `constraints.txt`, `Dockerfile`, and `environment.yml` for drift.
+  `.claude/skills/dep-guard/check_deps.py` (stdlib-only, runs without
+  installing anything) does this deterministically for pin agreement; there is
+  no `.codex/`-side equivalent yet.
+- Report exactly what ran, what failed, and what remains unverified — every
+  response, not just PR bodies.
+- GitHub App / connector permissions observed during Codex setup: `admin`,
+  `maintain`, `pull`, `push`, `triage`. The connector's Git contents API can
+  return `403 Resource not accessible by integration` for direct file writes —
+  that's an installation-permission gap, not something a repo file can fix; it
+  needs the GitHub App/connector installation updated outside the repo. PR
+  conversation comments specifically need pull-request/issues write
+  permission — if the connector's PR comment/review tools return 403, that is
+  the same class of gap.
+- Local `gh` availability is environment-specific and may be a non-GitHub-CLI
+  shim — verify the actual binary first (`Get-Command gh` on Windows /
+  `gh --version` elsewhere), then confirm auth with `gh auth status`; prefer
+  connector/API metadata when `gh` is missing, unauthenticated, or not the
+  official CLI.
+- `.github/workflows/claude.yml` already grants `contents: write`,
+  `pull-requests: write`, `issues: write`, and `id-token: write` for the
+  existing Claude PR-comment workflow.
+- Do not edit open PR branches unless the user clearly asked or the repo's
+  documented CI-failure policy applies.
+- For PR reviews, lead with findings and file/line references; keep
+  summaries secondary.
+- Do not rewrite existing Claude/Copilot instructions when adding Codex
+  guidance to this file — extend, don't overwrite another agent's contract.
+- Do not invent commands; mark unknowns as needs verification (see the Build
+  And Run Commands note on Docker above for how to phrase that).
 
 ## Known Gotchas
 
-- Always install CPU torch before requirements to avoid CUDA wheel resolution.
-- `requirements.txt` is deprecated for local dev but still used by CI compatibility paths.
-- `uv pip install -r pyproject.toml --constraint constraints.txt` requires uv to be installed.
-- `data/personality/soul.md`, `index/`, and `logs/` are expected by many runtime paths.
-- `/soul/*` endpoints fail closed unless `CYCLAW_API_KEY` is set.
-- The server must stay on `127.0.0.1:8787` unless explicitly changed.
-- `sync/` runtime needs external `rclone`; tests should mock it.
+Covered by `CLAUDE.md` §4 (torch-first install order, `data/personality/soul.md`/`index/`/`logs/` expected at boot, `/soul/*` fail-closed without `CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should mock it). Two with no `CLAUDE.md` equivalent:
+
 - Agentic GitHub context needs `gh` in local environments, but core CyClaw does not.
-- `.github/workflows/environment.yml` is intentionally referenced by the conda workflow from `.github/workflows/python-package-conda.yml`.
+- `.github/workflows/environment.yml` is intentionally referenced by the conda workflow from `.github/workflows/python-package-conda.yml` — don't delete it as apparently-unused.
 
 ## Do Not
 
-- Do not weaken the six security invariants.
-- Do not bind services to `0.0.0.0` casually.
-- Do not introduce autonomous soul/personality mutation.
-- Do not make optional `sync/`, `agentic/`, or `guardrails/` required for the core request path.
-- Do not rewrite existing Claude/Copilot instructions when adding Codex guidance.
-- Do not invent commands; mark unknowns as needs verification.
-- Do not commit generated scratch work, logs, caches, indexes, secrets, or local machine paths.
+Covered by `CLAUDE.md` §3 (six invariants) and §7 (escalation "Always ask
+first" / "Never" lists) — most concretely: don't weaken an invariant, don't
+bind services to `0.0.0.0` casually, don't make `sync/`/`agentic/`/`guardrails/`
+required for the core request path, don't introduce autonomous soul mutation,
+don't commit generated scratch work/logs/caches/indexes/secrets/local paths.

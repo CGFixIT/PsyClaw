@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CyClaw sandbox runtime verification — proves the entire main branch runs
 # under a clean Python 3.12 runtime. Six stages, fail-fast on required ones.
-# Run from the repo root: bash .claude/skills/sandbox-runtime-verification/verify.sh
+# Run from the repo root: bash .claude/skills/CyClaw-Sandbox/verify.sh
 set -uo pipefail
 
 # ── config ───────────────────────────────────────────────────────────────────

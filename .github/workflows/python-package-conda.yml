@@ -63,7 +63,7 @@ jobs:
       run: |
         mkdir -p data/personality index logs
         echo '# Soul' > data/personality/soul.md
-        echo 'GROK_API_KEY=dummy' >> $GITHUB_ENV
+        echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
     - name: Pytest — unit + integration + safe smoke (RAG/policy focused)
       shell: bash -l {0}
@@ -92,9 +92,9 @@ jobs:
           echo "Running project verify.sh harness..."
           ./verify.sh
         fi
-        if [ -f .claude/skills/sandbox-runtime-verification/verify.sh ]; then
+        if [ -f .claude/skills/CyClaw-Sandbox/verify.sh ]; then
           echo "Running sandbox verification harness..."
-          bash .claude/skills/sandbox-runtime-verification/verify.sh
+          bash .claude/skills/CyClaw-Sandbox/verify.sh
         fi
 
     # CodeQL analysis is owned by .github/workflows/codeql.yml which runs on

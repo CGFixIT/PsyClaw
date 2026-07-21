@@ -190,7 +190,8 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   then `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`.
 - **Trap:** running `pytest` in a fresh container — no deps are installed.
   **Rule:** a freshly-cloned container has NO Python deps. Install first
-  (`/run-cyclaw` or `/sandbox-runtime-verification`) before any test/run step.
+  (`/CyClaw-Sandbox` — Quick Mode for a fast check, or the full audit for a
+  Python 3.12 runtime gate) before any test/run step.
 - **Trap:** assuming the server refuses to boot without `GROK_API_KEY`.
   **Rule:** `security.require_env` is **decorative** — no code reads it. The
   server boots fine; Grok just reports unavailable. Tests only need
@@ -432,8 +433,8 @@ irreversible or a matter of user taste.
 
 **Blocked:** record it in `docs/SESSION_NOTES.md` (or `.claude/session-notes/`)
 and escalate — `#cyclaw-dev` for undefined behavior, a private GitHub security
-issue for security concerns, `/sandbox-runtime-verification` for suspected
-config drift.
+issue for security concerns, `/CyClaw-Sandbox` for suspected config drift
+(its Python-3.12 runtime gate phase catches this).
 
 Do NOT: re-ask a question already answered; ask the user to reveal a secret;
 change code behavior to make a stale doc "true" (fix the doc, or flag the
@@ -479,6 +480,7 @@ python -m retrieval.clear_cache                # dry-run; add --apply to delete
 python3 .claude/skills/invariant-guard/check_invariants.py
 python3 .claude/skills/config-guard/check_config.py     # add --strict to lock shipped defaults
 python3 .claude/skills/dep-guard/check_deps.py          # pure stdlib; runs pre-install
+python3 .claude/skills/verify-deps/extract_pins.py      # requirements.txt cross-check; add --json
 python3 .claude/skills/doc-sync/doc_sync.py
 python3 .claude/skills/index-doctor/doctor.py --rebuild
 python3 .claude/skills/injection-redteam/redteam.py
@@ -505,6 +507,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/invariant-guard` | check | Static-assert the six invariants + guards against a diff | Yes (stdlib) |
 | `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture) | Needs PyYAML |
 | `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints + environment.yml (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
+| `/verify-deps` | check | Extends dep-guard: adds the requirements.txt cross-check dep-guard skips, a dry-run of each install surface's actual command, and a PyPI currency + CVE sweep. Reports only — never auto-bumps a runtime pin | extract_pins.py yes (stdlib); currency sweep needs network |
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |
@@ -513,10 +516,8 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 
 | Skill | Type | Purpose |
 |---|---|---|
-| `/run-cyclaw` | task | Smoke-test the FastAPI server |
 | `/CyClaw-Optimize` | task | Scan main for optimizations; open focused draft PRs |
-| `/CyClaw-Sandbox` | task | Clone main, mock Ollama, full audit, dated report + PR |
-| `/sandbox-runtime-verification` | task | Full Python 3.12 runtime gate |
+| `/CyClaw-Sandbox` | task | Clone main, mock Ollama (3-tier realism), full audit incl. Python 3.12 runtime gate, dated report + PR. `/run` = its Quick Mode (no clone/report/PR) |
 | `/architecture-refactor` `/speed-refactor` `/tests-refactor` `/logging-refactor` | loop | Iterative refactor loops |
 | `/wrap-up` | task | End-of-session checklist (ship / remember / improve / publish) |
 | `/create-session-notes` | task | Maintain `SESSION_NOTES.md` |
@@ -527,11 +528,13 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 
 ### Agent skills
 
-`/solution-architect`, `/verification-specialist`, `/code-explorer`,
+`/verification-specialist`, `/code-explorer`,
 `/general-purpose`, `/documentation-guide`, `/next-action-suggestion`,
 `/conversation-summary`, `/session-title`, `/tool-summary`, and the memory
 skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`).
-`/python-coding-agent` auto-loads via the SessionStart hook.
+`/python-coding-agent` auto-loads via the SessionStart hook; its Planning Mode
+covers pre-implementation design (formerly a separate `solution-architect`
+skill, folded in since both need the same CyClaw-specific grounding).
 
 ### Cross-repo behavioral skill
 

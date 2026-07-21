@@ -14,13 +14,13 @@ consolidated report at the end.
 ## Phase 1: Ship It
 
 **Commit:**
-1. Run `git status` in each repo directory that was touched during the session
-2. If uncommitted changes exist, ask the human for approval and commit to main with a descriptive message in the open pr created to merge into main branch
-3. Push to remote (if needed)
+1. Run `git status` in each repo directory that was touched during the session.
+2. If uncommitted changes exist, commit them to a `claude/wrap-up-<slug>` branch and open a draft PR. Never commit directly to `main`.
+3. Push to remote (if needed).
 
 **Task cleanup:**
-9. Check the task list for in-progress or stale items
-10. Mark completed tasks as done, flag orphaned ones
+1. Check the task list for in-progress or stale items.
+2. Mark completed tasks as done, flag orphaned ones.
 
 ## Phase 2: Remember It
 
@@ -134,3 +134,10 @@ Say "Nothing worth publishing from this session" and you're done.
 - Space posts at least a few hours apart per platform
 - If multiple posts are needed, post the most time-sensitive one now and
   present a schedule for the rest
+
+## Notes
+
+Do not skip phases. Present a consolidated report at the end. Phase 1's
+branch/draft-PR rule is a hard rule (`CLAUDE.md` §7, §10): never commit
+directly to `main`, even at session end, even with the session's own prior
+approvals — a fresh PR still gets human review.

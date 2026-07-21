@@ -166,18 +166,25 @@ rising eval-awareness (~6% of rollouts).
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.9.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
-  - 7-node LangGraph state machine; FastAPI on 127.0.0.1:8787
-  - Hybrid retrieval: ChromaDB + BM25 with RRF fusion; embeddings all-MiniLM-L6-v2
-  - Local inference: LM Studio (Qwen 2.5 7B GGUF); triple-gated Grok fallback.
-    FOOTGUN: LM Studio context window must be ≥10K (10K–12,288) or RAG stalls at 0%.
+  - 9-node LangGraph state machine; FastAPI on 127.0.0.1:8787 (loopback only)
+  - Hybrid retrieval: ChromaDB + BM25 with RRF fusion (k=60); embeddings all-MiniLM-L6-v2
+  - Local inference: Ollama (qwen2.5:7b) — migrated off LM Studio; triple-gated
+    fallback to Grok and/or Claude (selected per-query via `online_provider`),
+    each gated on mode==hybrid AND <provider>.enabled AND user_confirmed_online.
+    FOOTGUN (carried over from the LM Studio era, same failure mode): Ollama's
+    context length (`num_ctx`) must clear `max_context_tokens + max_tokens +
+    ~1500` headroom (recommended 10,000–12,288) or RAG stalls at 0% processing.
     Check this first on any "CyClaw hangs" report.
   - Integrity: SHA-256 soul.md drift detection + SQLite shadow DB. In-flight:
     3-layer semantic drift detection — (1) structural diffing, (2) NLI entailment
     via DeBERTa-v3-base-MNLI, (3) embedding distance via existing MiniLM stack.
-  - OWASP-aligned injection scanner (20+ patterns)
+  - OWASP-aligned injection scanner (32 banned_patterns)
   - MCP server: retrieval-only, sampling:null; telemetry kill-block
-  - Findings gate: mandatory FINDINGS SUMMARY before any write; hard rules block
-    soul.md and gate.py modification. Architectural INVARIANT — never weaken it.
+  - Soul governance: soul.md mutation requires an explicit human `reason` string
+    and goes through PersonalityManager (atomic write) — governed, not silently
+    blocked. gate.py/graph.py edits touching auth/sanitizer/graph-edges are
+    High-risk-tier: stop and ask first, don't treat as untouchable. Architectural
+    INVARIANT — never weaken either safeguard.
   - LLM Council subgraph: 5 personas, Send API fan-out, blind peer review, chairman
     synthesis (48/48 tests at design time).
   - REJECTED: autonomous skill-write loops. Do not re-propose.

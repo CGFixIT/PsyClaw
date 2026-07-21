@@ -1245,7 +1245,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     if (e.name === 'AbortError') {
       const elapsed = Math.round(performance.now() - startTime);
       if (elapsed >= queryDeadlineMs - 500) {
-        addEntry('error', 'ERROR', `Request timed out (${Math.round(queryDeadlineMs / 1000)}s, client-side). The local LLM may be stalled — check that LM Studio is running and that its loaded context length exceeds the prompt + max_tokens.`);
+        addEntry('error', 'ERROR', `Request timed out (${Math.round(queryDeadlineMs / 1000)}s, client-side). The local LLM may be stalled — check that Ollama is running and that its context length (num_ctx) exceeds the prompt + max_tokens.`);
       } else {
         addEntry('system', 'CANCELLED', 'Query cancelled by user.');
       }

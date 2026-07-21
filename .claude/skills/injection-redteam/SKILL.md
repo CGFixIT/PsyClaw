@@ -127,6 +127,9 @@ honest. Skips cleanly (exit 0) if project deps aren't importable.
 
 ## Guardrails
 
+- **High risk tier:** editing `banned_patterns` requires stopping to ask first
+  per `CLAUDE.md` §7 — this skill proposes patterns, it does not get to
+  unilaterally ship them.
 - **The sanitizer is a security boundary.** Additions go through PR review and
   are called out explicitly. Never delete or weaken an existing pattern, and
   never disable the filter, to make a probe pass — that inverts the skill.
@@ -138,6 +141,8 @@ honest. Skips cleanly (exit 0) if project deps aren't importable.
   `check_input` there; that is a documented non-goal, not a gap.
 - **Patterns live in `config.yaml`, not code.** `utils/sanitizer.py` is the
   engine; the rules are config. Add rules to config.
+- Deleting a documented banned-pattern phrase fails `TestShippedConfigContract`;
+  only additions are safe without review.
 
 ## Gotchas
 
@@ -153,4 +158,4 @@ honest. Skips cleanly (exit 0) if project deps aren't importable.
 - **Regexes are matched with `search`, not `fullmatch`** — a pattern matches
   anywhere in the query. Anchor deliberately only when you mean to.
 - **`redteam.py` needs the venv.** Fresh containers have no deps; install first
-  (`/run-cyclaw` or `/sandbox-runtime-verification`) or the runner exits 3.
+  (`/CyClaw-Sandbox`) or the runner exits 3.

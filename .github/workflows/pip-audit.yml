@@ -91,7 +91,7 @@ jobs:
         run: |
           mkdir -p data/personality index logs
           echo '# Soul' > data/personality/soul.md
-          echo 'GROK_API_KEY=dummy' >> $GITHUB_ENV
+          echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
           python -c "import chromadb, langgraph, fastapi; print('Core imports OK on ${{ matrix.os }}')"
           # Optional: python -m tests.ci_rag_smoke if full smoke desired in verify
 

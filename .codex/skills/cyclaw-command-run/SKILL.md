@@ -28,7 +28,7 @@ python -m pytest tests/test_terminal_contract.py -q
 
 Expected signals:
 
-- `/health` may be degraded without LM Studio, but index and graph readiness
+- `/health` may be degraded without Ollama, but index and graph readiness
   should match the requested test.
 - unauthorized soul, audit, and ops requests fail closed with `401`.
 - the terminal UI and `/static/terminal.html` return `200`.

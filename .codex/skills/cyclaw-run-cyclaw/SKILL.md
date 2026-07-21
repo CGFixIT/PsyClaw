@@ -50,7 +50,7 @@ python -m pytest tests/ -q --tb=short
 
 Use targeted agentic, sync, guardrails, Postgres, or connector tests only when
 that optional integration is in scope. Ordinary core verification must not
-require LM Studio, Grok, Claude, rclone, Postgres, or live GitHub credentials.
+require Ollama, Grok, Claude, rclone, Postgres, or live GitHub credentials.
 
 Report setup performed, server lifecycle, endpoint/test results, unavailable
 optional services, and generated files left uncommitted. Stop the server when

@@ -68,7 +68,7 @@ Make the change. Keep the diff focused — one concern per commit.
 Run the project's smoke test to confirm nothing is broken:
 
 ```bash
-bash .claude/skills/run-cyclaw/smoke.sh
+bash .claude/skills/CyClaw-Sandbox/smoke.sh
 ```
 
 If the smoke script is unavailable, fall back to:
@@ -86,6 +86,17 @@ Record the test result in the tracker.
 ```
 
 Address any correctness bugs flagged before moving on. Log findings in the tracker.
+
+### 5.5. Invariant check (required if this step touched a core file)
+
+```bash
+# Required if this step touched gate.py, graph.py, mcp_hybrid_server.py,
+# gate_ops.py, or utils/config_validation.py
+python3 .claude/skills/invariant-guard/check_invariants.py
+```
+
+A non-zero exit here is a broken step, same as a failed smoke test — revert
+or rescope, don't proceed to commit.
 
 ### 6. Commit
 
@@ -154,4 +165,7 @@ Started: 2026-06-20T12:00:00Z
 - If a step breaks tests, revert and pick a smaller scope before retrying.
 - `{projectname}` in the tracker path is the literal `basename $PWD`, e.g. `CyClaw` → `/tmp/refactor-CyClaw.md`.
 - Never refactor across the six invariants (`CLAUDE.md` §3) without arguing the change explicitly and re-running `invariant-guard`.
+- Never touch `soul.md`/`apply_evolution` without a non-empty `reason` string (I5) — see `tests/test_personality.py`.
+- Never weaken or delete an assertion to make a refactor step "pass" — if a test fails, either the source is wrong or the refactor changed behavior; fix or revert, don't loosen the test.
+- Never let `agentic`/`sync`/`guardrails` import from — or be imported by — `gate.py`/`graph.py`/`mcp_hybrid_server.py` (I6); `invariant-guard` catches this both directions.
 - This is a loop — it keeps going until the codebase is clean, not a one-shot edit.

@@ -6,7 +6,7 @@
 #   - NeMo guardrails (soft import, offline path, rails)
 #   - PostgreSQL backends (skipped cleanly if CYCLAW_DB_URL unset)
 #   - Full pytest suite
-# Run from the repo root: bash .claude/skills/run-cyclaw/smoke.sh
+# Run from the repo root: bash .claude/skills/CyClaw-Sandbox/smoke.sh
 # Requires: deps installed, retrieval index built.
 # Env: GROK_API_KEY (default "dummy"), PYTHON (default "python3.12"), PORT (default 8787)
 set -euo pipefail

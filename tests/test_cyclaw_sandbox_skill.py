@@ -25,7 +25,7 @@ def _load_script(filename: str):
 
 
 def test_mock_model_list_advertises_local_grok_and_claude_ids() -> None:
-    mock = _load_script("mock_lmstudio.py")
+    mock = _load_script("mock_ollama.py")
 
     ids = {item["id"] for item in json.loads(mock.MODELS_RESP)["data"]}
 
@@ -33,7 +33,7 @@ def test_mock_model_list_advertises_local_grok_and_claude_ids() -> None:
 
 
 def test_mock_claude_message_shape_returns_text_content() -> None:
-    mock = _load_script("mock_lmstudio.py")
+    mock = _load_script("mock_ollama.py")
 
     payload = json.loads(mock._make_claude_completion("claude provider smoke"))
 

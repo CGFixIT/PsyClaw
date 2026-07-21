@@ -1,11 +1,19 @@
 # ==============================================================================
 # CyClaw CI — Tests + Coverage + Reproducible Install Gate
 # v2 hardening (June 2026):
-#   - Early pip upgrade to >=26.1.2 (eliminates 4 pip CVEs in CI env per #71 analysis)
+#   - Exact pip pin ==26.1.2, not floating >=, across every job that upgrades it
+#     (eliminates 4 pip CVEs in CI env per #71 analysis; exact pin keeps CI
+#     reproducible rather than silently picking up whatever pip ships next)
 #   - Explicit hermetic prepare (mkdirs, minimal soul.md, env var) cross-platform
 #   - Real RAG smoke validates ChromaDB (version pinned in constraints.txt) + BM25 + RRF on committed corpus
 #   - Coverage scoped to exercised modules only
-#   - Aligns with v1.4.0 invariants (reproducible CI security gate, Python 3.12, stable Chroma pin)
+#   - workflow-lint (actionlint + zizmor) and dependency-review added as
+#     fast, no-heavy-deps first gates — this file's own YAML and any new
+#     PR-introduced dependency get checked before the expensive matrix runs
+#   - ollama-mock-smoke: a real-socket HTTP-server test of LocalLLMClient
+#     against the OpenAI-compatible endpoint, complementing (not replacing)
+#     tests/test_client.py's monkeypatched error-mapping/retry coverage
+#   - Aligns with v1.9.0 invariants (reproducible CI security gate, Python 3.12, stable Chroma pin)
 #   - Cross-ref: cyclaw-advisor + python-development best practices for observable, testable CI
 # ==============================================================================
 
@@ -13,9 +21,9 @@ name: CyClaw CI (Tests + Coverage + Gate)
 
 on:
   push:
-    branches: [ main, cc, feature/CyClaw-Agent ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, cc, feature/CyClaw-Agent ]
+    branches: [ main ]
 
 # Cancel superseded runs: when new commits are pushed to the same PR/branch,
 # in-progress runs for that ref are cancelled instead of running to completion
@@ -29,6 +37,76 @@ permissions:
   contents: read
 
 jobs:
+  # Fast, no-heavy-deps gates that run before the expensive matrix below.
+  # Neither needs torch/chromadb/sentence-transformers, so both finish in
+  # well under a minute on a cache hit.
+  workflow-lint:
+    name: workflow-lint (actionlint + zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install actionlint + zizmor (pinned, from PyPI -- not curl|bash)
+        # actionlint-py's pip install fetches the prebuilt actionlint binary
+        # from GitHub releases at build time and puts it on PATH as
+        # `actionlint`; zizmor ships as a self-contained wheel, no fetch needed.
+        run: python -m pip install actionlint-py==1.7.12.24 zizmor==1.27.0
+
+      - name: Run actionlint
+        # .github/workflows/environment.yml is a conda environment spec that
+        # happens to live in this directory (referenced by
+        # python-package-conda.yml), not a workflow file -- actionlint errors
+        # trying to parse it as one ("jobs"/"on" section missing), so it's
+        # passed the explicit file list rather than let scan the whole
+        # directory by default.
+        run: |
+          for f in .github/workflows/*.yml; do
+            [ "$(basename "$f")" = "environment.yml" ] && continue
+            actionlint -color "$f"
+          done
+
+      - name: Run zizmor (Actions security static analysis)
+        # Same environment.yml exclusion as actionlint above, but zizmor only
+        # WARNs (not fails) on a file it can't parse as a workflow, so passing
+        # the whole directory is fine here -- no need for the same file-list loop.
+        # --gh-token enables the online audits (e.g. ref-version-mismatch's tag
+        # lookup) that --offline would otherwise skip.
+        #
+        # --min-severity=high: an initial full run (offline + online) found 25
+        # pre-existing medium/low findings scattered across ~10 files this PR
+        # never touched (mostly missing persist-credentials: false on
+        # read-only checkouts) -- fixing all of them needs per-job
+        # verification that nothing downstream relies on the persisted
+        # credential, which is real follow-up work, not something to block
+        # every future PR on starting today. This still fails the build on
+        # any HIGH-severity finding (the 2 that existed were already fixed
+        # in this PR) -- run without the flag locally for the full picture.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: zizmor --gh-token "$GH_TOKEN" --min-severity=high .github/workflows/
+
+  dependency-review:
+    name: dependency-review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+        with:
+          fail-on-severity: high
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -64,7 +142,7 @@ jobs:
       - name: Upgrade pip (CVE mitigation for CI env only)
         shell: bash
         run: |
-          python -m pip install --upgrade "pip>=26.1.2"
+          python -m pip install --upgrade "pip==26.1.2"
 
       - name: Cache torch CPU wheel
         # Torch (~2GB) is pinned infrequently; caching its wheel separately means
@@ -107,7 +185,7 @@ jobs:
           # Minimal soul.md + env var for gate tests. No prod secrets.
           mkdir -p data/personality index logs
           echo '# Soul' > data/personality/soul.md
-          echo 'GROK_API_KEY=dummy' >> $GITHUB_ENV
+          echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
       - name: RAG Query Smoke (ChromaDB + BM25 + RRF)
         shell: bash
@@ -172,12 +250,54 @@ jobs:
       - name: Final status
         run: echo "CI workflow completed on ${{ matrix.os }} (reproducible gate passed)"
 
+  # Real-socket smoke for LocalLLMClient against a mock OpenAI-compatible
+  # Ollama endpoint. tests/test_client.py already covers every error-mapping/
+  # retry branch via a monkeypatched httpx.Client.post (real Request/Response
+  # objects, no real socket) -- this exercises the actual wire protocol (JSON
+  # bytes over a real loopback TCP connection) instead. No torch/chromadb/
+  # sentence-transformers needed: llm/client.py only imports httpx + yaml.
+  ollama-mock-smoke:
+    name: ollama-mock-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            constraints.txt
+            pyproject.toml
+
+      - name: Install ollama-mock-smoke test deps (no torch/chromadb needed)
+        # pytest always imports tests/conftest.py regardless of which test file
+        # is targeted, and conftest.py imports retrieval.hybrid_search -> rank_bm25
+        # at module load time -- rank-bm25/nltk/numpy are required even though
+        # this specific test file never touches retrieval. Same minimal set
+        # postgres-backend already installs for the identical reason.
+        run: |
+          python -m pip install --upgrade "pip==26.1.2"
+          pip install -c constraints.txt httpx pyyaml pytest rank-bm25 nltk numpy
+
+      - name: Run LocalLLMClient real-socket tests
+        run: pytest tests/test_llm_client_ollama.py -v --tb=short
+
+      - name: Final status
+        run: echo "Ollama mock verification completed (llm.client OpenAI-compatible path, real socket)"
+
   # Optional Deep Agents contract check. This deliberately installs only the
   # lightweight agentic dependency set; default runtime CI remains offline-first.
   deepagents-harness:
     name: deepagents-harness
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
@@ -192,7 +312,7 @@ jobs:
 
       - name: Install optional Deep Agents harness dependencies
         run: |
-          python -m pip install --upgrade "pip>=26.1.2"
+          python -m pip install --upgrade "pip==26.1.2"
           pip install -c constraints.txt pyyaml httpx langgraph langchain-core pytest pytest-asyncio rank-bm25
           pip install -c constraints.txt deepagents langchain-openai
 
@@ -200,10 +320,16 @@ jobs:
         run: |
           pytest tests/test_agentic_harness_phase679.py tests/test_agentic_deepagent_optional.py -q --tb=short
 
-      - name: Audit optional Deep Agents dependencies
+      - name: Audit optional Deep Agents dependencies (freeze, not hand-written)
+        # Captures the versions actually resolved/installed above rather than a
+        # hardcoded string -- a hand-maintained version list here would be the
+        # same class of silent-drift risk dep-guard's D8 check exists to catch
+        # for torch (a bumped constraints.txt pin wouldn't update a hardcoded
+        # copy elsewhere, so pip-audit would keep auditing a version nobody runs).
         run: |
           pip install pip-audit
-          printf 'deepagents==0.6.12\nlangchain==1.3.11\nlangchain-openai==1.3.3\n' > /tmp/deepagents-requirements.txt
+          pip freeze | grep -Ei '^(deepagents|langchain|langchain-openai)==' > /tmp/deepagents-requirements.txt
+          cat /tmp/deepagents-requirements.txt
           pip-audit -r /tmp/deepagents-requirements.txt
 
   # ==============================================================================
@@ -224,7 +350,13 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        # Digest-pinned (resolved 2026-07-21), same rationale as the uv image
+        # pin in the Dockerfile: a re-tagged/compromised :pg16 image would
+        # otherwise silently enter this job. Trade-off: this image stops
+        # picking up Postgres security patches automatically -- re-pin the
+        # digest periodically (`docker manifest inspect pgvector/pgvector:pg16`
+        # or the registry API) rather than letting it go stale indefinitely.
+        image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
         env:
           POSTGRES_USER: cyclaw
           POSTGRES_PASSWORD: cyclaw
@@ -254,7 +386,7 @@ jobs:
             pyproject.toml
 
       - name: Upgrade pip (CVE mitigation for CI env only)
-        run: python -m pip install --upgrade "pip>=26.1.2"
+        run: python -m pip install --upgrade "pip==26.1.2"
 
       - name: Install Postgres-backend deps
         run: |
@@ -377,7 +509,7 @@ jobs:
       - name: Install deps (torch CPU + project)
         shell: bash
         run: |
-          python -m pip install --upgrade "pip>=26.1.2"
+          python -m pip install --upgrade "pip==26.1.2"
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -r requirements.txt -c constraints.txt
           # Some skill scripts invoke `python3.12` explicitly; ensure it resolves.
@@ -401,12 +533,22 @@ jobs:
 
       - name: Run verify.sh if present
         if: hashFiles(format('.claude/skills/{0}/verify.sh', matrix.skill)) != ''
+        # SKILL routed through env rather than interpolated into the run
+        # script: matrix.skill is a directory name under .claude/skills/, and
+        # while today those are maintainer-controlled, template-expanding it
+        # directly into shell text would let a directory named with shell
+        # metacharacters execute as code instead of just being read as a
+        # string once it reaches "$SKILL" (zizmor template-injection).
+        env:
+          SKILL: ${{ matrix.skill }}
         run: |
-          echo "Running verify for ${{ matrix.skill }}"
-          bash ".claude/skills/${{ matrix.skill }}/verify.sh"
+          echo "Running verify for $SKILL"
+          bash ".claude/skills/$SKILL/verify.sh"
 
       - name: Run smoke.sh if present
         if: hashFiles(format('.claude/skills/{0}/smoke.sh', matrix.skill)) != ''
+        env:
+          SKILL: ${{ matrix.skill }}
         run: |
-          echo "Running smoke for ${{ matrix.skill }}"
-          bash ".claude/skills/${{ matrix.skill }}/smoke.sh"
+          echo "Running smoke for $SKILL"
+          bash ".claude/skills/$SKILL/smoke.sh"

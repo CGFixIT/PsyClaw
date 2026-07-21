@@ -2,9 +2,14 @@
 # This file is kept for backward compatibility + legacy CI/tools only.
 # Pins below are synced with pyproject.toml [project.dependencies], the torch CPU
 # extra, and CI test/dev tools used by the legacy requirements path.
-# Always install with constraints for full alignment: 
-#   Preferred: uv pip install -r pyproject.toml --constraint constraints.txt
+# Always install with constraints for full alignment:
+#   Preferred: uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 #   Legacy/CI: pip install -r requirements.txt -c constraints.txt
+#
+# The --extra-index-url on the uv line is required: `uv pip install` (uv's
+# pip-compatible interface) does not honor pyproject.toml's [tool.uv.sources]
+# CPU-wheel routing, so torch==...+cpu (below) can't resolve without it —
+# verified via dry-run, 2026-07.
 #
 # See SECURITY.md for exact Chroma CVE-2026-45829 justification (local/offline air-gap only).
 # Docker support added in feature/CyClaw-Agent for production reproducibility.

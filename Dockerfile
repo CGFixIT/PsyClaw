@@ -1,6 +1,6 @@
 # CyClaw Dockerfile - Production-grade, zero-trust, reproducible
 # Python 3.12 + uv for fast installs. Seccomp/AppArmor ready. Non-root.
-# Aligns with v1.8.0 pyproject + constraints for hermetic deps; CI uses requirements.txt for compat.
+# Aligns with v1.9.0 pyproject + constraints for hermetic deps; CI uses requirements.txt for compat.
 
 FROM python:3.12-slim-bookworm AS builder
 
@@ -15,16 +15,24 @@ WORKDIR /app
 # Dependency files first for layer caching
 COPY pyproject.toml constraints.txt requirements.txt ./
 
-# Install with uv (preferred for pyproject.toml + constraints + uv.sources for torch CPU)
-# Fallback to pip + requirements.txt (proper reqs format) + constraints for legacy/CI alignment.
-# Plain pip cannot read [tool.uv.sources], so the fallback pre-installs the CPU torch wheel
-# from the PyTorch index first (mirrors ci.yml / pip-audit.yml) before the constrained install,
-# otherwise constraints.txt's `torch==2.13.0+cpu` pin is unresolvable on PyPI.
+# Install with uv (fast resolver) against requirements.txt, NOT pyproject.toml/-e .:
+# `uv pip install` is uv's pip-compatible interface, which does not honor
+# pyproject.toml's [tool.uv.sources]/[[tool.uv.index]] CPU-wheel routing (only
+# uv's project commands like `uv sync` do) -- verified via dry-run, 2026-07,
+# `uv pip install -r pyproject.toml` fails outright with "no version of
+# torch==2.13.0+cpu". This build stage also hasn't COPYed the actual source yet
+# (line 16 copies manifests only), so `-e .` couldn't build the cyclaw wheel
+# here regardless. requirements.txt's own --extra-index-url line resolves the
+# CPU wheel correctly for both the uv and pip paths below.
+# Fallback to plain pip pre-installs the CPU torch wheel explicitly (mirrors
+# ci.yml / pip-audit.yml) in case uv itself is unavailable or fails for an
+# unrelated reason -- otherwise constraints.txt's `torch==2.13.0+cpu` pin is
+# unresolvable from the default index once uv is out of the picture.
 # The fallback pre-install MUST match the constraints.txt torch pin exactly —
 # when constraints moved 2.12.1 -> 2.13.0 this line stayed behind, so the
 # fallback path installed 2.12.1 and then immediately failed the constrained
 # resolve. Keep the two in lock-step on any torch bump.
-RUN uv pip install --system --no-cache-dir -r pyproject.toml --constraint constraints.txt 2>/dev/null || \
+RUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt 2>/dev/null || \
     ( pip install --no-cache-dir torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
       pip install --no-cache-dir -r requirements.txt -c constraints.txt )
 

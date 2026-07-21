@@ -1,6 +1,8 @@
 ---
 name: ponytail
-description: Activate lazy-senior-dev mode — enforces YAGNI, stdlib-first, and minimal-abstraction constraints. Args: (none) full mode | checklist | review
+description: >-
+  Activate lazy-senior-dev mode — enforces YAGNI, stdlib-first, and
+  minimal-abstraction constraints. Args — (none) full mode | checklist | review
 ---
 
 # Ponytail — Lazy Senior Dev Mode

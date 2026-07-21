@@ -11,12 +11,13 @@ Prioritize:
 - CI or packaging failures likely caused by the diff
 - violations of CyClaw's core invariants
 
-CyClaw invariants to preserve:
+CyClaw invariants to preserve (see `CLAUDE.md` §3 for the full definitions):
 
 - RAG-first retrieval: no LLM call before retrieval
-- topology-enforced policy: routing is graph edges, not model choice
-- triple-gated external fallback: hybrid mode, Grok enabled, and explicit user confirmation
-- audit convergence: all execution paths reach audit logging
-- soul governance: personality mutation requires an explicit human reason
+- topology-enforced policy: routing is graph edges, not model choice or an ad-hoc runtime check
+- triple-gated external fallback: a call to Grok or Claude (whichever provider is selected per-query) requires hybrid mode, that provider enabled, and explicit user confirmation — all three
+- audit convergence: all execution paths reach audit logging before END
+- soul governance: personality mutation requires an explicit human reason string
+- module isolation: `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`, and those never import the core three
 
 Use repository guidance such as `CLAUDE.md`, `.github/copilot-instructions.md`, and `.codex/skills/cyclaw-project-guidance/SKILL.md` when present. If you find no serious issues, say that clearly and mention any residual risk or checks you could not verify.
