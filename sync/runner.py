@@ -24,7 +24,9 @@ path into the subprocess.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
+import importlib
 import logging
 import os
 import re
@@ -593,54 +595,19 @@ def _truncate_log(log_path: str, direction: str) -> None:
 
 # A daily scheduled run and a manual run must never drive rclone against the
 # same remote/destination at once: their log writes would interleave and corrupt
-# parsing, and concurrent filter-file writes would race. The single-instance
-# lock is a FILE created with ``os.open(O_CREAT | O_EXCL | O_WRONLY)`` -- an
-# atomic "create only if absent" on both POSIX and Windows, so it needs no
-# fcntl/msvcrt branching and no third-party dependency. O_EXCL is the SOLE
-# arbiter of ownership: two racing acquirers can never both create the same path.
-#
-# History (#587): the previous implementation was a directory lock reclaimed via
-# ``os.rmdir(); os.mkdir()``. Its stale-reclaim path was a check-then-act TOCTOU
-# -- a reclaimer that judged the lock stale would unconditionally rmdir whatever
-# was at the path, which could be a lock a *live* run had just recreated, so two
-# runs could each believe they held it. The reclaim below is instead serialized
-# through a second O_EXCL "takeover" file and re-validates staleness while
-# holding it, so a remove can only ever act on a file re-confirmed stale with no
-# other reclaimer able to interleave. See ANALYSIS.md / #587 for the full trace.
+# parsing, and concurrent filter-file writes would race. Keep one stable lock
+# file and hold an OS-backed lock on its open descriptor for the full run.
+# The OS releases that lock when the descriptor closes, including process crash,
+# so recovery never needs a stale check followed by a path deletion. That matters:
+# deleting a path after checking its age can remove a newer holder's lock if the
+# old holder releases and another run acquires between the check and the remove.
 _LOCK_FILENAME = "sync.lock"
-_LOCK_STALE_SEC = 3 * 60 * 60  # reclaim a lock left by a crashed run after 3h
-# Headroom added on top of a configured sync timeout when deriving the stale
-# threshold: covers version check, filter write, hashing, and audit I/O around
-# the rclone subprocess itself.
-_LOCK_STALE_MARGIN_SEC = 60 * 60
-
-# Serializes lock acquisition across threads WITHIN this process. O_EXCL already
-# makes the create atomic against other processes; this guards the process-local
-# read-modify-write of the stale-reclaim path so two threads here cannot both
-# enter the takeover dance at once. Cheap on the uncontended fast path.
-_ACQUIRE_MUTEX = threading.Lock()
-
-
-def _lock_stale_after_sec(cfg: RcloneConfig) -> float:
-    """Stale-lock threshold for a run configured by ``cfg``.
-
-    The retry loop bounds total sync time by ``sync_timeout_sec`` (global
-    deadline), so a bounded run can legitimately hold the lock for that long --
-    the threshold must exceed the budget or a *live* long run looks "stale" and
-    a second sync starts underneath it. When ``post_sync_check`` is enabled the
-    lock is ALSO held through ``run_post_sync_check``, which independently
-    receives the full ``sync_timeout_sec`` as its own subprocess timeout, so
-    the complete lock-held budget is ~2x the sync budget (review finding on
-    PR #585). Unbounded (0) keeps the flat 3h default; run_sync warns about
-    the degraded protection in that case.
-    """
-    if cfg.sync_timeout_sec > 0:
-        multiplier = 2 if getattr(cfg, "post_sync_check", False) else 1
-        return max(
-            _LOCK_STALE_SEC,
-            cfg.sync_timeout_sec * multiplier + _LOCK_STALE_MARGIN_SEC,
-        )
-    return _LOCK_STALE_SEC
+# Windows byte-range locks are mandatory. Keep the locked byte beyond the small
+# PID/timestamp payload so operators can still read that metadata while a run is
+# active; msvcrt.locking explicitly permits ranges beyond end-of-file.
+_LOCK_BYTE_OFFSET = 4096
+_PROCESS_LOCKS: set[str] = set()
+_PROCESS_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass
@@ -648,13 +615,15 @@ class _SyncLock:
     """Handle for an acquired single-instance lock.
 
     Returned by :func:`_acquire_sync_lock`; released by :func:`_release_sync_lock`
-    or by leaving a ``with`` block. Carries the lock file path so release removes
-    exactly the file this process created, plus the pid/start-ts recorded in it.
+    or by leaving a ``with`` block. The descriptor must stay open for the full
+    critical section because the OS lock is descriptor-scoped.
     """
 
     path: str
     pid: int
     started_at: float
+    fd: int | None
+    key: str
 
     def __enter__(self) -> _SyncLock:
         return self
@@ -669,151 +638,111 @@ def _lock_busy_error(lock_path: str) -> SyncRuntimeError:
         "Another CyClaw sync appears to be running",
         details={
             "lock_path": lock_path,
-            "hint": "Wait for the other run to finish, or remove the lock file if it is stale.",
+            "hint": "Wait for the other run to finish; the OS releases the lock if that process exits.",
         },
     )
 
 
+def _try_os_lock(fd: int) -> bool:
+    """Acquire the platform's non-blocking exclusive file lock."""
+    os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            fcntl = importlib.import_module("fcntl")
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EAGAIN):
+            return False
+        raise
+    return True
+
+
+def _unlock_os_lock(fd: int) -> None:
+    os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl = importlib.import_module("fcntl")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 def _write_lock_meta(fd: int, pid: int, started_at: float) -> None:
-    """Write ``pid`` + start timestamp into a freshly O_EXCL-created lock fd.
-
-    Best-effort content: the lock's mutual exclusion comes from the atomic
-    O_EXCL create, never from the bytes. The metadata exists so a later run can
-    judge staleness from the recorded start time (survives a crash, unlike an
-    in-memory timer) and so an operator can see which pid holds the lock. The fd
-    is always closed here.
-    """
-    try:
-        os.write(fd, f"{pid}\n{started_at:.3f}\n".encode())
-    finally:
-        os.close(fd)
+    """Replace informational lock metadata while ownership is held."""
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, f"{pid}\n{started_at:.3f}\n".encode())
 
 
-def _read_lock_started_at(path: str) -> float | None:
-    """Return the start timestamp recorded in the lock file, or ``None``.
-
-    ``None`` (empty / half-written / unparseable file) means "age unknown": the
-    caller then falls back to mtime, so a corrupt lock still ages out and is
-    never mistaken for fresh.
-    """
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return None
-    if len(lines) < 2:
-        return None
-    try:
-        return float(lines[1])
-    except ValueError:
-        return None
-
-
-def _lock_age_sec(path: str) -> float:
-    """Age of the lock in seconds, from its recorded start ts (else mtime).
-
-    Returns 0.0 when neither is readable -- an unreadable lock counts as
-    just-created (never auto-reclaimed), so a transient stat error cannot trigger
-    a spurious takeover.
-    """
-    started = _read_lock_started_at(path)
-    if started is not None:
-        return max(0.0, time.time() - started)
-    try:
-        return max(0.0, time.time() - os.path.getmtime(path))
-    except OSError:
-        return 0.0
-
-
-def _try_exclusive_create(path: str, pid: int, started_at: float) -> _SyncLock | None:
-    """Atomically create the lock file, or return ``None`` if it already exists.
-
-    ``os.O_CREAT | os.O_EXCL | os.O_WRONLY`` is the single arbiter of ownership
-    on both POSIX and Windows: exactly one caller can create a given path, every
-    other concurrent caller gets ``FileExistsError``. On success the pid+timestamp
-    metadata is written and a handle is returned.
-    """
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return None
-    _write_lock_meta(fd, pid, started_at)
-    return _SyncLock(path=path, pid=pid, started_at=started_at)
-
-
-def _acquire_sync_lock(lock_path: str, stale_after_sec: float = _LOCK_STALE_SEC) -> _SyncLock:
-    """Acquire the single-instance lock, or raise ``SyncRuntimeError``.
-
-    Ownership is decided ONLY by an atomic ``os.open(O_CREAT | O_EXCL)`` -- never
-    by a check-then-act, so two racing acquirers can never both succeed. A lock
-    left by a crashed run (older than ``stale_after_sec``) is reclaimed, but the
-    reclaim is serialized through a second O_EXCL "takeover" file and
-    re-validates staleness while holding it, so a reclaimer can never delete a
-    lock a *live* run just created (the #587 TOCTOU).
-
-    Returns a :class:`_SyncLock` handle (usable as a context manager); pass it to
-    :func:`_release_sync_lock` (or use ``with``) to release.
-    """
+def _acquire_sync_lock(lock_path: str) -> _SyncLock:
+    """Acquire a crash-safe single-instance OS lock, or raise ``SyncRuntimeError``."""
+    key = os.path.normcase(os.path.abspath(lock_path))
     pid = os.getpid()
-    with _ACQUIRE_MUTEX:
-        # Fast path: uncontended create. On the common path this is the ONLY
-        # step -- one atomic syscall, no read-modify-write to race.
-        lock = _try_exclusive_create(lock_path, pid, time.time())
-        if lock is not None:
-            return lock
+    started_at = time.time()
 
-        # The lock exists. Only a stale lock (crashed run) may be reclaimed; a
-        # fresh one means a genuine concurrent run, so refuse.
-        if _lock_age_sec(lock_path) <= stale_after_sec:
+    with _PROCESS_LOCKS_GUARD:
+        if key in _PROCESS_LOCKS:
             raise _lock_busy_error(lock_path)
 
-        # Stale reclaim, serialized. Whoever exclusively creates the takeover
-        # file earns the SOLE right to reclaim; every other racer refuses rather
-        # than racing a destructive remove. This is what closes the #587 TOCTOU.
-        takeover_path = lock_path + ".takeover"
-        takeover = _try_exclusive_create(takeover_path, pid, time.time())
-        if takeover is None:
-            raise _lock_busy_error(lock_path)
         try:
-            # Re-validate under takeover exclusivity. The lock slot has held the
-            # same stale file since the age check above: a normal acquirer only
-            # ever O_EXCL-creates (which fails while the slot is full) and any
-            # other reclaimer is excluded by the takeover file. So this check is
-            # authoritative -- if it still reads stale, the remove below acts on
-            # exactly that stale file and nothing a live run created.
-            if os.path.exists(lock_path) and _lock_age_sec(lock_path) <= stale_after_sec:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise SyncRuntimeError(
+                "Unable to open the sync lock file",
+                details={"lock_path": lock_path, "error": str(exc)},
+            ) from exc
+
+        locked = False
+        try:
+            locked = _try_os_lock(fd)
+            if not locked:
                 raise _lock_busy_error(lock_path)
+            _write_lock_meta(fd, pid, started_at)
+            _PROCESS_LOCKS.add(key)
+        except Exception:
+            if locked:
+                try:
+                    _unlock_os_lock(fd)
+                except OSError:
+                    pass
             try:
-                os.remove(lock_path)
-            except FileNotFoundError:
-                pass  # holder released cleanly while we held the takeover file
-            lock = _try_exclusive_create(lock_path, pid, time.time())
-            if lock is None:
-                # A normal acquirer won the now-empty slot between our remove and
-                # create; O_EXCL arbitrated in their favour, so we refuse.
-                raise _lock_busy_error(lock_path)
-            log.info(
-                "Reclaimed stale sync lock at %s (age > threshold %.0f s)",
-                lock_path, stale_after_sec,
-            )
-            return lock
-        finally:
-            _release_sync_lock(takeover)
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+
+    return _SyncLock(path=lock_path, pid=pid, started_at=started_at, fd=fd, key=key)
 
 
-def _release_sync_lock(lock: _SyncLock | str | None) -> None:
-    """Release the single-instance lock; tolerant if it is already gone.
-
-    Accepts a :class:`_SyncLock` handle (normal path) or a bare path string, and
-    treats a missing file as success -- release is idempotent.
-    """
+def _release_sync_lock(lock: _SyncLock | None) -> None:
+    """Release the single-instance lock; idempotent for an existing handle."""
     if lock is None:
         return
-    path = lock.path if isinstance(lock, _SyncLock) else lock
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    with _PROCESS_LOCKS_GUARD:
+        fd, lock.fd = lock.fd, None
+        if fd is None:
+            return
+        try:
+            try:
+                os.ftruncate(fd, 0)
+            except OSError:
+                pass
+            try:
+                _unlock_os_lock(fd)
+            except OSError:
+                log.warning("Failed to unlock sync lock at %s; closing descriptor", lock.path)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                log.warning("Failed to close sync lock descriptor at %s", lock.path)
+            finally:
+                _PROCESS_LOCKS.discard(lock.key)
 
 
 def run_sync(
@@ -842,18 +771,12 @@ def run_sync(
     Security: argv is a list, the binary is absolute, ``shell`` is never set, and
     only metadata is logged -- never raw stderr that could echo a token.
 
-    Concurrency: a process-wide single-instance lock (an atomically created lock
-    file under ``log_dir``, ``os.open`` with ``O_CREAT | O_EXCL``) prevents a
-    manual run and the scheduled run from driving rclone against the same remote
-    at once. A second concurrent run
-    raises ``SyncRuntimeError``; a lock left by a crashed run is reclaimed after
-    ``_lock_stale_after_sec(cfg)`` -- at least ``_LOCK_STALE_SEC``, extended past
-    the full lock-held budget (``sync_timeout_sec``, doubled when
-    ``post_sync_check`` is enabled since the check also runs under the lock with
-    its own full timeout), so a live long run is never mistaken for a crashed
-    one. With ``sync_timeout_sec: 0`` (unbounded) the threshold stays at the
-    flat 3h default and a run exceeding it loses mutual-exclusion protection;
-    a warning is logged at run start in that case.
+    Concurrency: a process-wide single-instance OS lock on ``log_dir/sync.lock``
+    prevents a manual run and the scheduled run from driving rclone against the
+    same remote at once. A second concurrent run raises ``SyncRuntimeError``.
+    The descriptor stays open through the optional post-sync check and the OS
+    releases it automatically if the process exits, so no stale-file reclaim or
+    timeout-derived ownership heuristic is needed.
     """
     check_rclone_version(rclone_bin)
     resolved_rclone = shutil.which(rclone_bin)
@@ -862,14 +785,7 @@ def run_sync(
 
     os.makedirs(cfg.log_dir or ".", exist_ok=True)
     lock_path = os.path.join(cfg.log_dir or ".", _LOCK_FILENAME)
-    if cfg.sync_timeout_sec == 0:
-        log.warning(
-            "sync_timeout_sec is 0 (unbounded): a run exceeding %ds may have its "
-            "single-instance lock reclaimed as stale while still alive, allowing a "
-            "concurrent sync. Set a finite sync_timeout_sec for full protection.",
-            _LOCK_STALE_SEC,
-        )
-    lock = _acquire_sync_lock(lock_path, _lock_stale_after_sec(cfg))
+    lock = _acquire_sync_lock(lock_path)
     try:
         return _run_sync_locked(cfg, dry_run, resync, resolved_rclone)
     finally:
