@@ -129,14 +129,24 @@ def test_node_helper_builds_context_from_docs():
 
 
 class _FakeRails:
-    """Minimal stand-in for an LLMRails instance: returns a fixed answer."""
+    """Minimal stand-in for an LLMRails instance: returns a fixed answer.
+
+    The generate_async signature deliberately mirrors the real
+    ``LLMRails.generate_async`` (nemoguardrails 0.23.0: prompt / messages /
+    options / state / streaming_handler) -- there is NO ``context`` kwarg, so
+    a caller passing one raises TypeError here exactly as it would against
+    the live engine. The previous stub accepted ``context=`` and masked the
+    API mismatch that made live rails silently never run (review P1).
+    """
 
     def __init__(self, answer: str) -> None:
         self._answer = answer
         self.calls: list[dict] = []
 
-    async def generate_async(self, *, messages, context=None):  # noqa: ANN001 - test stub
-        self.calls.append({"messages": messages, "context": context})
+    async def generate_async(  # noqa: ANN001 - test stub
+        self, *, messages, prompt=None, options=None, state=None, streaming_handler=None
+    ):
+        self.calls.append({"messages": messages})
         return {"content": self._answer}
 
 
@@ -200,9 +210,11 @@ def test_live_rails_load_failure_degrades(monkeypatch):
 
 
 def test_live_context_travels_via_relevant_chunks(monkeypatch):
-    # codex P1: the grounding action reads context["relevant_chunks"], so the
-    # retrieved text must reach NeMo through the action/message context -- not
-    # as a system message string that channel never inspects.
+    # codex P1 + review P1: the grounding action reads
+    # context["relevant_chunks"], and the ONLY supported transport is a
+    # context-role message -- not a system message (never inspected) and not
+    # a ``context=`` kwarg (does not exist on the real engine). This call
+    # shape is what nemoguardrails 0.23.0 documents for generate_async.
     rails = _FakeRails("rrf fusion combines ranks")
     _force_live(monkeypatch, lambda: rails)
     cfg = GuardrailsConfig(enabled=True)
@@ -212,10 +224,39 @@ def test_live_context_travels_via_relevant_chunks(monkeypatch):
         cfg=cfg, metrics=_metrics(),
     ))
     assert res["blocked"] is False
-    assert rails.calls[0]["context"] == {
-        "relevant_chunks": "rrf fusion combines semantic and keyword ranks"
+    (call,) = rails.calls
+    assert set(call) == {"messages"}  # nothing but the documented kwarg
+    msgs = call["messages"]
+    assert msgs[0] == {
+        "role": "context",
+        "content": {"relevant_chunks": "rrf fusion combines semantic and keyword ranks"},
     }
-    assert all(m["role"] != "system" for m in rails.calls[0]["messages"])
+    assert msgs[-1] == {"role": "user", "content": "explain fusion"}
+    assert all(m["role"] != "system" for m in msgs)
+
+
+def test_live_call_without_context_sends_only_the_user_message(monkeypatch):
+    # With no retrieved context there is nothing to ground against: no
+    # context-role message is emitted, and the call still uses only the
+    # documented messages= kwarg.
+    rails = _FakeRails("some answer")
+    _force_live(monkeypatch, lambda: rails)
+    cfg = GuardrailsConfig(enabled=True)
+    _run(safe_generate("any prompt", context="", cfg=cfg, metrics=_metrics()))
+    (call,) = rails.calls
+    assert call["messages"] == [{"role": "user", "content": "any prompt"}]
+
+
+def test_fake_rails_signature_matches_real_llmrails_contract():
+    # Pins the documented LLMRails.generate_async call shape (nemoguardrails
+    # 0.23.0) so the stub can never silently accept an argument the real
+    # engine would reject with TypeError (review P1). If NVIDIA adds a
+    # ``context`` kwarg upstream, this test fails on purpose: re-audit the
+    # transport before adopting it.
+    import inspect
+
+    params = set(inspect.signature(_FakeRails.generate_async).parameters)
+    assert params == {"self", "prompt", "messages", "options", "state", "streaming_handler"}
 
 
 def test_live_provider_error_degrades_not_raises(monkeypatch):
@@ -223,7 +264,9 @@ def test_live_provider_error_degrades_not_raises(monkeypatch):
     # must degrade to a skipped, non-blocked turn -- the documented contract
     # -- instead of propagating out of safe_generate.
     class _DownRails:
-        async def generate_async(self, *, messages, context=None):  # noqa: ANN001 - test stub
+        async def generate_async(  # noqa: ANN001 - test stub (real-engine signature)
+            self, *, messages, prompt=None, options=None, state=None, streaming_handler=None
+        ):
             raise ConnectionError("refused: http://127.0.0.1:11434/v1 should not leak")
 
     _force_live(monkeypatch, lambda: _DownRails())
