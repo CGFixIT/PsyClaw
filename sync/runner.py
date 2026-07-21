@@ -754,147 +754,187 @@ def _run_sync_locked(
         "include_soul": cfg.include_soul,
     })
 
-    # A 0 timeout means "unbounded" (subprocess.run treats timeout=None that way).
-    # When a budget IS set (the common safe case) it is the WALL-CLOCK budget for
-    # the whole retry sequence under the single-instance lock, not just one
-    # attempt -- otherwise a transient-exit-5 retry path could hold the lock for
-    # attempts * sync_timeout_sec + sum(retry_backoff_sec*2^k), a many-times
-    # multiple of the documented per-attempt ceiling.
-    has_budget = cfg.sync_timeout_sec > 0
-    deadline = (time.time() + cfg.sync_timeout_sec) if has_budget else None
+    # Audit convergence (invariant): the sync_started record above must
+    # ALWAYS be paired with a terminal record. Exceptional exits --
+    # wall-clock timeout, retry-budget exhaustion, subprocess failure, or
+    # a post-sync-check error -- previously re-raised past the summary
+    # audit and left the run open-ended in the log. Emit a sanitized
+    # sync_failed first: the exception TYPE name only, never the message
+    # (messages are built without argv/remote; this keeps that contract
+    # enforced at the audit boundary rather than by convention).
+    try:
 
-    # Outer retry loop: re-run rclone on a *transient* failure (exit code 5) up to
-    # cfg.sync_retries extra times, with exponential backoff. The log is truncated
-    # before EACH attempt so parse_log() reflects only the final attempt -- a
-    # successful retry leaves no trace of the failed one in events/errors. With
-    # the default sync_retries=0 this loop runs exactly once (historical behaviour).
-    attempts = cfg.sync_retries + 1
-    completed = None
-    for attempt in range(1, attempts + 1):
-        # Per-attempt timeout shrinks toward the global deadline. If we already
-        # have <=0 seconds left, stop now and surface the same RcloneTimeoutError
-        # the inner TimeoutExpired path raises. has_budget implies deadline is
-        # not None (set together above), so the type check is structural.
-        if has_budget and deadline is not None:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                raise SyncRuntimeError(
-                    f"rclone sync timed out after {cfg.sync_timeout_sec}s (budget exhausted by retries)",
-                    details={"direction": cfg.direction, "timeout_sec": cfg.sync_timeout_sec},
+        # A 0 timeout means "unbounded" (subprocess.run treats timeout=None that way).
+        # When a budget IS set (the common safe case) it is the WALL-CLOCK budget for
+        # the whole retry sequence under the single-instance lock, not just one
+        # attempt -- otherwise a transient-exit-5 retry path could hold the lock for
+        # attempts * sync_timeout_sec + sum(retry_backoff_sec*2^k), a many-times
+        # multiple of the documented per-attempt ceiling.
+        has_budget = cfg.sync_timeout_sec > 0
+        deadline = (time.time() + cfg.sync_timeout_sec) if has_budget else None
+
+        # Outer retry loop: re-run rclone on a *transient* failure (exit code 5) up to
+        # cfg.sync_retries extra times, with exponential backoff. The log is truncated
+        # before EACH attempt so parse_log() reflects only the final attempt -- a
+        # successful retry leaves no trace of the failed one in events/errors. With
+        # the default sync_retries=0 this loop runs exactly once (historical behaviour).
+        attempts = cfg.sync_retries + 1
+        completed = None
+        # Change evidence is CUMULATIVE across attempts: a transient attempt can
+        # copy files and only THEN fail (exit 5); the clean retry sees those files
+        # already present, logs nothing for them, and would flip corpus_changed
+        # back to False -- silently suppressing the reindex the copied content
+        # needs. So each attempt's log is parsed BEFORE the next truncation and
+        # merged here (dedup by path, earliest event wins: it marks the attempt
+        # that actually changed the file). Errors stay final-attempt-only: they
+        # feed safety-abort detection and must describe the attempt that produced
+        # the surfaced exit code, not a stale mid-retry ERROR line.
+        cumulative_events: list[FileEvent] = []
+        seen_event_paths: set[str] = set()
+        final_errors: list[str] = []
+        for attempt in range(1, attempts + 1):
+            # Per-attempt timeout shrinks toward the global deadline. If we already
+            # have <=0 seconds left, stop now and surface the same RcloneTimeoutError
+            # the inner TimeoutExpired path raises. has_budget implies deadline is
+            # not None (set together above), so the type check is structural.
+            if has_budget and deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    raise SyncRuntimeError(
+                        f"rclone sync timed out after {cfg.sync_timeout_sec}s (budget exhausted by retries)",
+                        details={"direction": cfg.direction, "timeout_sec": cfg.sync_timeout_sec},
+                    )
+                run_timeout: float | None = remaining
+            else:
+                run_timeout = None
+
+            _truncate_log(log_path, cfg.direction)
+            try:
+                # argv is a list of a fixed flag set + validated config; never shell=True.
+                completed = subprocess.run(  # noqa: S603 -- argv list, validated inputs, no shell
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=run_timeout,
                 )
-            run_timeout: float | None = remaining
-        else:
-            run_timeout = None
+            except subprocess.TimeoutExpired as exc:
+                # rclone hung past the wall-clock ceiling. subprocess.run has already
+                # killed the child and reaped it by the time TimeoutExpired propagates,
+                # so the single-instance lock is released cleanly when we raise. Do not
+                # echo argv (it carries the remote spec) — surface only the direction and
+                # the limit that tripped. A hang is not transient; never retry it.
+                raise SyncRuntimeError(
+                    f"rclone sync timed out after {cfg.sync_timeout_sec}s",
+                    details={"direction": cfg.direction, "timeout_sec": cfg.sync_timeout_sec},
+                ) from exc
+            except FileNotFoundError as exc:
+                # rclone disappeared between the version check and now (race). Do not
+                # include argv (would leak the remote spec into the error string).
+                raise RcloneNotInstalledError(
+                    "rclone binary disappeared during execution",
+                    details={"direction": cfg.direction},
+                ) from exc
+            except subprocess.SubprocessError as exc:
+                raise SyncRuntimeError(
+                    f"rclone subprocess failed: {type(exc).__name__}",
+                    details={"direction": cfg.direction},
+                ) from exc
 
-        _truncate_log(log_path, cfg.direction)
-        try:
-            # argv is a list of a fixed flag set + validated config; never shell=True.
-            completed = subprocess.run(  # noqa: S603 -- argv list, validated inputs, no shell
-                argv,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=run_timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            # rclone hung past the wall-clock ceiling. subprocess.run has already
-            # killed the child and reaped it by the time TimeoutExpired propagates,
-            # so the single-instance lock is released cleanly when we raise. Do not
-            # echo argv (it carries the remote spec) — surface only the direction and
-            # the limit that tripped. A hang is not transient; never retry it.
-            raise SyncRuntimeError(
-                f"rclone sync timed out after {cfg.sync_timeout_sec}s",
-                details={"direction": cfg.direction, "timeout_sec": cfg.sync_timeout_sec},
-            ) from exc
-        except FileNotFoundError as exc:
-            # rclone disappeared between the version check and now (race). Do not
-            # include argv (would leak the remote spec into the error string).
-            raise RcloneNotInstalledError(
-                "rclone binary disappeared during execution",
-                details={"direction": cfg.direction},
-            ) from exc
-        except subprocess.SubprocessError as exc:
-            raise SyncRuntimeError(
-                f"rclone subprocess failed: {type(exc).__name__}",
-                details={"direction": cfg.direction},
-            ) from exc
+            # Harvest this attempt's change evidence before the next _truncate_log
+            # wipes it (see the cumulative-events note above the loop).
+            attempt_events, final_errors = parse_log(log_path)
+            for ev in attempt_events:
+                if ev.path not in seen_event_paths:
+                    seen_event_paths.add(ev.path)
+                    cumulative_events.append(ev)
 
-        if completed.returncode != _RCLONE_TRANSIENT_EXIT or attempt == attempts:
-            break
-
-        # Transient failure with attempts remaining: audit, back off, retry.
-        audit_log({
-            "event": "sync_retry",
-            "direction": cfg.direction,
-            "attempt": attempt,
-            "max_attempts": attempts,
-            "rclone_exit_code": completed.returncode,
-        })
-        backoff = cfg.retry_backoff_sec * (2 ** (attempt - 1))
-        # Clip the backoff to whatever budget remains; if the budget is exhausted,
-        # break out so the FAILED attempt's result is surfaced (parsed + audited)
-        # rather than raising a bare timeout that drops the retry's stderr/events.
-        if has_budget and deadline is not None:
-            remaining = deadline - time.time()
-            if remaining <= 0:
+            if completed.returncode != _RCLONE_TRANSIENT_EXIT or attempt == attempts:
                 break
-            if backoff > remaining:
-                backoff = remaining
-        time.sleep(backoff)
 
-    finished_at = time.time()
-    if completed is None:  # pragma: no cover -- attempts >= 1 guarantees one run
-        # Unreachable: the loop runs at least once and either binds `completed`
-        # or raises. Kept as a typed guard so the type checker can narrow Optional.
-        raise SyncRuntimeError("rclone never executed", details={"direction": cfg.direction})
-    exit_code = completed.returncode
+            # Transient failure with attempts remaining: audit, back off, retry.
+            audit_log({
+                "event": "sync_retry",
+                "direction": cfg.direction,
+                "attempt": attempt,
+                "max_attempts": attempts,
+                "rclone_exit_code": completed.returncode,
+            })
+            backoff = cfg.retry_backoff_sec * (2 ** (attempt - 1))
+            # Clip the backoff to whatever budget remains; if the budget is exhausted,
+            # break out so the FAILED attempt's result is surfaced (parsed + audited)
+            # rather than raising a bare timeout that drops the retry's stderr/events.
+            if has_budget and deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                if backoff > remaining:
+                    backoff = remaining
+            time.sleep(backoff)
 
-    # Parse log -> events -> hash -> audit.
-    events, errors = parse_log(log_path)
-    events = hash_changed_files(events, cfg.local_path)
+        finished_at = time.time()
+        if completed is None:  # pragma: no cover -- attempts >= 1 guarantees one run
+            # Unreachable: the loop runs at least once and either binds `completed`
+            # or raises. Kept as a typed guard so the type checker can narrow Optional.
+            raise SyncRuntimeError("rclone never executed", details={"direction": cfg.direction})
+        exit_code = completed.returncode
 
-    aborted_for_safety = (
-        exit_code == _RCLONE_SAFETY_FUSE_EXIT
-        or _detect_safety_abort(errors, completed.stderr or "")
-    )
+        # Hash -> audit. Events are the cumulative set across all attempts (a
+        # partial-copy-then-clean-retry still requests the reindex); errors are the
+        # final attempt's only, so transient retry noise stays out of the result.
+        events = hash_changed_files(cumulative_events, cfg.local_path)
+        errors = final_errors
 
-    # rclone logs file paths RELATIVE TO THE TRANSFER ROOT (the destination
-    # directory), not relative to the repo root -- e.g. "notes.md", never
-    # "data/corpus/notes.md". Since cfg.local_path is validated to resolve under
-    # data/corpus (RcloneConfig.__post_init__), every parsed file event is by
-    # construction a corpus change. We still defensively skip rclone's own
-    # scratch/state artifacts in case one ever slips past the filter file.
-    corpus_changed = any(not _is_rclone_internal(ev.path) for ev in events)
+        aborted_for_safety = (
+            exit_code == _RCLONE_SAFETY_FUSE_EXIT
+            or _detect_safety_abort(errors, completed.stderr or "")
+        )
 
-    result = SyncResult(
-        success=(exit_code == 0),
-        direction=("dry-run" if dry_run else cfg.direction),
-        started_at=started_at,
-        finished_at=finished_at,
-        rclone_exit_code=exit_code,
-        events=events,
-        errors=errors,
-        log_path=log_path,
-        aborted_for_safety=aborted_for_safety,
-        dry_run=dry_run,
-        corpus_changed=corpus_changed,
-    )
+        # rclone logs file paths RELATIVE TO THE TRANSFER ROOT (the destination
+        # directory), not relative to the repo root -- e.g. "notes.md", never
+        # "data/corpus/notes.md". Since cfg.local_path is validated to resolve under
+        # data/corpus (RcloneConfig.__post_init__), every parsed file event is by
+        # construction a corpus change. We still defensively skip rclone's own
+        # scratch/state artifacts in case one ever slips past the filter file.
+        corpus_changed = any(not _is_rclone_internal(ev.path) for ev in events)
 
-    # Post-sync integrity check: confirm remote and local agree after a successful
-    # non-dry-run sync. Skipped on failure or dry-run because there is nothing to
-    # verify. Does not raise on differences -- sets check_result.ok=False instead
-    # so the caller can surface the discrepancy without masking the sync result.
-    if result.success and not dry_run and getattr(cfg, "post_sync_check", False):
-        result.check_result = run_post_sync_check(cfg, rclone_bin)
+        result = SyncResult(
+            success=(exit_code == 0),
+            direction=("dry-run" if dry_run else cfg.direction),
+            started_at=started_at,
+            finished_at=finished_at,
+            rclone_exit_code=exit_code,
+            events=events,
+            errors=errors,
+            log_path=log_path,
+            aborted_for_safety=aborted_for_safety,
+            dry_run=dry_run,
+            corpus_changed=corpus_changed,
+        )
 
-    # Per-file audit events -- one row per file, with sha256 when available.
-    for ev in events:
-        audit_log(ev.to_audit_dict(base=cfg.local_path))
+        # Post-sync integrity check: confirm remote and local agree after a successful
+        # non-dry-run sync. Skipped on failure or dry-run because there is nothing to
+        # verify. Does not raise on differences -- sets check_result.ok=False instead
+        # so the caller can surface the discrepancy without masking the sync result.
+        if result.success and not dry_run and getattr(cfg, "post_sync_check", False):
+            result.check_result = run_post_sync_check(cfg, rclone_bin)
 
-    # Summary audit event -- sync_completed (success) or sync_failed (otherwise).
-    audit_log(result.to_audit_dict())
+        # Per-file audit events -- one row per file, with sha256 when available.
+        for ev in events:
+            audit_log(ev.to_audit_dict(base=cfg.local_path))
 
-    return result
+        # Summary audit event -- sync_completed (success) or sync_failed (otherwise).
+        audit_log(result.to_audit_dict())
+
+        return result
+    except Exception as exc:
+        audit_log({
+            "event": "sync_failed",
+            "direction": cfg.direction,
+            "dry_run": dry_run,
+            "error_type": type(exc).__name__,
+        })
+        raise
 
 
 def reindex_exit_code_for(result: SyncResult, cfg: RcloneConfig) -> int:
