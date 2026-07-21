@@ -527,11 +527,13 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 
 ### Agent skills
 
-`/solution-architect`, `/verification-specialist`, `/code-explorer`,
+`/verification-specialist`, `/code-explorer`,
 `/general-purpose`, `/documentation-guide`, `/next-action-suggestion`,
 `/conversation-summary`, `/session-title`, `/tool-summary`, and the memory
 skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`).
-`/python-coding-agent` auto-loads via the SessionStart hook.
+`/python-coding-agent` auto-loads via the SessionStart hook; its Planning Mode
+covers pre-implementation design (formerly a separate `solution-architect`
+skill, folded in since both need the same CyClaw-specific grounding).
 
 ### Cross-repo behavioral skill
 

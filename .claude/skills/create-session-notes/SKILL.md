@@ -39,4 +39,9 @@ The notes file contains these fixed sections:
 
 ## Usage
 
-When invoked, update the session notes file at `SESSION_NOTES.md` in the repository docs/memories/ folder. If the file does not exist, create it with all section headings and italic descriptions intact. Then apply updates to the relevant sections using parallel Edit tool calls.
+When invoked, update the session notes file (`docs/SESSION_NOTES.md` or `.claude/session-notes/`, per `CLAUDE.md` §7). If the file does not exist, create it with all section headings and italic descriptions intact. Then apply updates to the relevant sections using parallel Edit tool calls.
+
+## Notes
+
+- Use this to record blockers per `CLAUDE.md` §7 (undefined behavior → `#cyclaw-dev`; security → private GitHub issue; config drift → `/sandbox-runtime-verification`).
+- Session-scoped discoveries belong here or in `docs/memories/` (live), never in `.claude/memory/` (legacy). `docs/memories/` is the separate memory-orchestrator system's directory — do not write session notes there.

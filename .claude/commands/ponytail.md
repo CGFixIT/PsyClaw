@@ -1,5 +1,7 @@
 ---
-description: Activate lazy-senior-dev mode — enforces YAGNI, stdlib-first, and minimal-abstraction constraints. Args: (none) full mode | checklist | review
+description: >-
+  Activate lazy-senior-dev mode — enforces YAGNI, stdlib-first, and
+  minimal-abstraction constraints. Args — (none) full mode | checklist | review
 ---
 
 Activate ponytail mode (lazy-senior-dev discipline). $ARGUMENTS
