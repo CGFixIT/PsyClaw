@@ -945,6 +945,9 @@ def _run_sync_locked(
             for ev in tail_events:
                 events_by_path[ev.path] = ev
         except OSError:
+            # Log unreadable/missing at teardown: keep whatever evidence was
+            # already harvested during the loop and let the ORIGINAL exception
+            # propagate below -- this best-effort re-read must never mask it.
             pass
         partial = list(events_by_path.values())
         counts = {"added": 0, "modified": 0, "deleted": 0}
