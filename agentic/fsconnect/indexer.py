@@ -206,18 +206,47 @@ class FsIndexer:
             # straight to _stage (bounded memory -- one file held at a time).
             self._walk(roots, "", manifest, on_file=_stage, cached_entry_for=probe)
 
+        # Prune staged copies whose SOURCE file disappeared (codex P1). Staging
+        # is a mirror of the share and the retrieval indexer ingests the whole
+        # staged tree -- without pruning, a deleted source file stays
+        # retrievable indefinitely. This run's manifest is the authoritative
+        # current set, so it must be built BEFORE anything is removed.
+        pruned = self._prune_staging(staging, {m["path"] for m in manifest})
+
         unchanged = sum(1 for m in manifest if m.get("unchanged"))
         if incremental:
             self._save_cache(staging, manifest)
         audit_log({"event": "fsconnect_index_apply", "index_root": self.index_root,
-                   "staged": len(copied), "unchanged": unchanged, "reindex": reindex},
+                   "staged": len(copied), "unchanged": unchanged, "pruned": len(pruned),
+                   "reindex": reindex},
                   self.config_path)
         result = {"op": "index_apply", "index_root": self.index_root,
-                  "staged": len(copied), "unchanged": unchanged, "staging_dir": str(staging),
+                  "staged": len(copied), "unchanged": unchanged, "pruned": len(pruned),
+                  "staging_dir": str(staging),
                   "reindex_required": True, "reindexed": False}
         if reindex:
             result["reindexed"] = self._run_reindex()
         return result
+
+    def _prune_staging(self, staging: Path, current: set[str]) -> list[str]:
+        """Remove staged files absent from *current* (the source manifest).
+
+        The skip-cache file itself is never pruned. Only files are removed --
+        empty directories are harmless (the retrieval indexer ingests files,
+        not directories) and pruning them would add race surface for no
+        retrieval benefit. Returns the pruned "/"-separated rel paths.
+        """
+        pruned: list[str] = []
+        if not staging.is_dir():
+            return pruned
+        for path in sorted(staging.rglob("*")):
+            if not path.is_file() or path.name == _CACHE_NAME:
+                continue
+            rel = path.relative_to(staging).as_posix()
+            if rel not in current:
+                path.unlink()
+                pruned.append(rel)
+        return pruned
 
     def _run_reindex(self) -> bool:
         """Trigger the existing indexer as a subprocess (decoupled, no import)."""
