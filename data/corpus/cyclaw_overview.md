@@ -23,4 +23,4 @@ The system uses a FastAPI server on localhost:8787 that accepts JSON queries and
 
 ## Deployment
 
-CyClaw runs offline by default, using LMStudio for local LLM inference. It can optionally escalate to Grok when high-confidence answers aren't found locally.
+CyClaw runs offline by default, using Ollama for local LLM inference. It can optionally escalate to Grok when high-confidence answers aren't found locally.
