@@ -6,7 +6,7 @@ description: Find and implement evidence-backed CyClaw improvements in reliabili
 # CyClaw Optimize
 
 Optimize current code, not historical findings. Stop when no concrete,
-deduplicated improvement justifies a change.
+deduplicated improvement justifies a change. If nothing else just run speed and arcitecture refactors but exhaust all options first
 
 ## Workflow
 
@@ -30,11 +30,17 @@ deduplicated improvement justifies a change.
 
 - drift among code, `config.yaml`, docs, tests, and workflows
 - optional modules imported into `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
+- folders like agentic/*, sync/*, guardrails/*, tests/*, etc
+- recent changes via commits and pr's
+- github actions workflows
+- CVE issues with dependencies?
+- verifying dependencies in requirements.txt, constraints.txt, pyproject.toml, dockerfile, etc - https://github.com/cgfixit/CyClaw/tree/main/.claude/skills/verify-deps
 - dependency drift across `pyproject.toml`, `requirements.txt`,
   `constraints.txt`, Docker, and CI
 - unsafe defaults, missing timeouts, secret exposure, or audit gaps
 - Windows and Linux command paths that no longer match the repository
 - performance claims without repeatable before/after measurements
+- security claims without repeatable before/after measurements
 
 ## Guardrails
 
