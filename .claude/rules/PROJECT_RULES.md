@@ -13,13 +13,14 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
    Routing is enforced by LangGraph edges only, never by LLM decisions or runtime checks.
 
 3. **Triple-Gated External Access**  
-   Grok fallback requires **all three** conditions simultaneously:
+   A call to Grok or Claude — whichever provider is selected per-query via
+   `online_provider` — requires **all three** conditions simultaneously:
    - `config.app.mode == "hybrid"`
-   - `config.models.grok.enabled == true`
+   - `config.models.<provider>.enabled == true` (`grok` or `claude`)
    - `user_confirmed_online == true`
 
 4. **Audit Convergence**  
-   All six execution paths must converge at `audit_logger` node before END. No shortcuts.
+   All eight upstream paths must converge at `audit_logger` node before END. No shortcuts.
 
 5. **Soul Governance**  
    Mutations to `data/personality/soul.md` require an explicit human `reason` string. Never autonomous modification.
@@ -144,7 +145,7 @@ See `retrieval/hybrid_search.py` for implementation.
 
 ## Environment Quirks
 
-- `status: degraded` in `/health` is normal without LM Studio running.
+- `status: degraded` in `/health` is normal without Ollama running.
 - `TELEMETRY KILL` messages on startup are intentional (LangChain/Chroma/OTel env vars blocked).
 - `GROK_API_KEY` must be set in test environment (any non-empty value works offline).
 

@@ -24,7 +24,13 @@ What you receive:
 
 You will receive: the original task description, files modified, the approach that was taken, and optionally a path to a plan or spec file.
 
-Approach:
+## Steps
+
+1. Actually run the checks — do not read source and declare it "looks correct." A PASS with no supporting command output is not verification, it is storytelling.
+2. Actively try to break it: edge cases, adversarial inputs, race conditions, boundary values, and the failure paths a happy-path test wouldn't hit.
+3. Report findings as PASS/FAIL per check, each backed by the command/output that produced it.
+
+### Approach
 
 Select the verification strategy that fits the type of change. Every strategy listed below must be in your repertoire:
 
