@@ -75,6 +75,15 @@ class FsIndexer:
                 ext = os.path.splitext(name)[1].lower()
                 if ext not in self.fs_cfg.index_extensions:
                     continue
+                if child == _CACHE_NAME:
+                    # A share-root file whose staged path would BE the skip-
+                    # cache's own path must never be staged: it would clobber
+                    # the cache that ownership-bounded pruning relies on.
+                    # Only reachable when an operator adds ".json" to
+                    # index_extensions (defaults exclude it).
+                    manifest.append({"path": child, "size": entry["size"],
+                                     "skipped": "reserved_name"})
+                    continue
                 if entry["size"] > self.fs_cfg.index_max_file_bytes:
                     manifest.append({"path": child, "size": entry["size"], "skipped": "too_large"})
                     continue
@@ -185,7 +194,10 @@ class FsIndexer:
         staging = Path(staging_dir) if staging_dir else _DEFAULT_STAGING
         staging.mkdir(parents=True, exist_ok=True)
         incremental = self.fs_cfg.index_incremental
-        cache = self._load_cache(staging) if incremental else {}
+        # The cache is ALWAYS loaded: besides driving incremental skips it is
+        # the ownership record that bounds pruning to files CyClaw itself
+        # staged (review P1) -- in every mode, not just incremental.
+        cache = self._load_cache(staging)
         copied: list[str] = []
         manifest: list[dict] = []
 
@@ -211,11 +223,21 @@ class FsIndexer:
         # staged tree -- without pruning, a deleted source file stays
         # retrievable indefinitely. This run's manifest is the authoritative
         # current set, so it must be built BEFORE anything is removed.
-        pruned = self._prune_staging(staging, {m["path"] for m in manifest})
+        #
+        # The current set is ELIGIBLE rows only (review P2): a file that became
+        # too_large or hit a read_error loses its staged copy rather than
+        # serving stale content indefinitely -- staging mirrors the ELIGIBLE
+        # share. A transient read_error self-heals on the next successful run.
+        # Pruning itself is ownership-bounded by the prior cache (see
+        # _prune_staging), so only files CyClaw staged can ever be removed.
+        pruned = self._prune_staging(
+            staging, {m["path"] for m in manifest if "skipped" not in m}, cache
+        )
 
         unchanged = sum(1 for m in manifest if m.get("unchanged"))
-        if incremental:
-            self._save_cache(staging, manifest)
+        # ALWAYS save the cache: it is next run's ownership record for pruning
+        # in every mode (review P1), not just the incremental skip-cache.
+        self._save_cache(staging, manifest)
         audit_log({"event": "fsconnect_index_apply", "index_root": self.index_root,
                    "staged": len(copied), "unchanged": unchanged, "pruned": len(pruned),
                    "reindex": reindex},
@@ -228,24 +250,47 @@ class FsIndexer:
             result["reindexed"] = self._run_reindex()
         return result
 
-    def _prune_staging(self, staging: Path, current: set[str]) -> list[str]:
-        """Remove staged files absent from *current* (the source manifest).
+    def _prune_staging(self, staging: Path, current: set[str], prior: dict) -> list[str]:
+        """Remove staged copies that CyClaw itself staged and whose source is gone.
 
-        The skip-cache file itself is never pruned. Only files are removed --
-        empty directories are harmless (the retrieval indexer ingests files,
-        not directories) and pruning them would add race surface for no
-        retrieval benefit. Returns the pruned "/"-separated rel paths.
+        OWNERSHIP-BOUNDED (review P1): the prune set is computed ONLY from the
+        prior run's manifest cache -- paths CyClaw recorded as staged last run.
+        An unrelated file sitting in the staging dir (an operator's README, a
+        stray copy dropped into a custom --staging dir, anything CyClaw did not
+        stage) is NEVER deleted. A first run with no cache prunes nothing.
+
+        The skip-cache file needs no name exemption here: it is never a
+        manifest path, so it can never enter the prune set -- and unlike the
+        old ``path.name == _CACHE_NAME`` check, a NESTED staged file that
+        happens to be called ``.fsindex_cache.json`` is pruned normally when
+        its source disappears (review P2).
+
+        Comparison keys are ``os.path.normcase``-normalized (review P1): on
+        Windows a case-only rename (Notes.md -> notes.md) must not classify
+        the current staged file as stale and delete it. normcase is the
+        identity on POSIX, so behavior there is unchanged.
+
+        Only files are removed -- empty directories are harmless (the
+        retrieval indexer ingests files, not directories) and pruning them
+        would add race surface for no retrieval benefit. Returns the pruned
+        "/"-separated rel paths (the prior-manifest spelling).
         """
         pruned: list[str] = []
-        if not staging.is_dir():
+        if not staging.is_dir() or not prior:
             return pruned
-        for path in sorted(staging.rglob("*")):
-            if not path.is_file() or path.name == _CACHE_NAME:
+        current_keys = {os.path.normcase(p) for p in current}
+        for rel in sorted(prior):
+            if os.path.normcase(rel) in current_keys:
                 continue
-            rel = path.relative_to(staging).as_posix()
-            if rel not in current:
-                path.unlink()
-                pruned.append(rel)
+            target = staging.joinpath(*split_components(rel))
+            try:
+                if target.is_file():
+                    target.unlink()
+                    pruned.append(rel)
+            except OSError:
+                # A file that cannot be removed must not abort the run; it is
+                # left staged and retried on the next apply.
+                continue
         return pruned
 
     def _run_reindex(self) -> bool:
