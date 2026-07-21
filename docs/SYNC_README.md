@@ -232,10 +232,15 @@ idempotent (re-running replaces our own entry, never touches yours).
 | Windows | `schtasks /Create /SC DAILY /ST HH:MM /RL LIMITED /F` | task name `CyClaw Dropbox Sync` |
 
 The scheduled command `cd`s into the repo root (so `config.yaml` resolves) and
-runs `python -m sync.cli sync`. On Windows the task points at a generated
-`cyclaw_sync.bat` launcher (written next to the rclone logs) rather than an
-inline `cmd /c` string — this avoids the quote fragility of passing a full
-command with a space-containing repo path through `schtasks /TR`.
+runs `python -m sync.cli sync`, propagating `--config` when the loaded config's
+identity differs from the default (e.g. `--config /alt/cfg.yaml` at setup time).
+Every path is safely escaped: the POSIX cron line is `shlex.quote`d per token,
+and the Windows `.bat` launcher quotes and `%`-doubles each path — so a repo or
+config path containing spaces or shell/batch metacharacters (`$()`, backticks,
+`%VAR%`) is passed through literally, never interpreted. On Windows the task
+points at the generated `cyclaw_sync.bat` launcher (written next to the rclone
+logs) rather than an inline `cmd /c` string — this avoids the quote fragility of
+passing a full command through `schtasks /TR`.
 
 > **Overlap protection:** `run_sync` holds a single-instance lock (an atomically
 > created lock directory under the rclone log dir) for the duration of a run, so
@@ -299,8 +304,9 @@ logged; never a token and never raw rclone stderr that could echo a secret.
 | `sync_file_added` | per file | `file`, `sha256` |
 | `sync_file_modified` | per file | `file`, `sha256` |
 | `sync_file_deleted` | per file | `file` (no hash — bytes gone) |
-| `sync_completed` | success | `direction`, `duration_sec`, `rclone_exit_code`, `counts`, `corpus_changed`, `dry_run` |
-| `sync_failed` | failure | `direction`, `rclone_exit_code`, `errors_n`, `aborted_for_safety` |
+| `sync_completed` | success | `direction`, `duration_sec`, `rclone_exit_code`, `counts`, `errors_n`, `aborted_for_safety`, `dry_run`, `corpus_changed` |
+| `sync_failed` | failure (rclone ran, exit ≠ 0) | same field set as `sync_completed` |
+| `sync_failed` | **exceptional** exit (timeout, retry-budget exhaustion, subprocess error) | same field set as above, **plus `error_type`** (the exception's type name only — never its message); `rclone_exit_code` is the last observed code or `null` if rclone never returned one. Any change evidence harvested before the exception fired is preserved (e.g. a file copied just before a timeout still counts toward `corpus_changed`/`counts`). |
 
 No field is ever named `query` (that would be SHA-256-hashed by the logger).
 
