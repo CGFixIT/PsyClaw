@@ -1,6 +1,6 @@
 # CyClaw — GitHub Setup Guide (Windows + Linux)
 
-**v1.3+ | Offline-First | LM Studio | 10–15 min**  
+**v1.3+ | Offline-First | Ollama | 10–15 min**  
 Tested & verified June 14 2026 — runs cleaner than 3.11 version
 
 ---
@@ -10,8 +10,8 @@ Tested & verified June 14 2026 — runs cleaner than 3.11 version
 | Requirement | Notes |
 |---|---|
 | Git | Any recent version |
-| Python 3.12 (or 3.11) | 3.12 is primary supported runtime |
-| LM Studio | Running on `http://127.0.0.1:1234/v1` with `qwen2.5-7b-instruct` loaded |
+| Python 3.12 | Primary supported runtime (`requires-python >=3.12`) |
+| [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434` with `qwen2.5:7b` pulled (`ollama pull qwen2.5:7b`) |
 | Corpus `.md` files | Copy from local machine or `cgfixit.com/zSafeClaw/` |
 | Windows: PowerShell as admin | Linux: bash |
 
@@ -32,9 +32,8 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 # 3. All other deps (pinned, verified Python 3.12 tree)
 pip install -r requirements.txt -c constraints.txt
 
-# 4. Env + NLTK one-time (while online)
+# 4. Env (any non-empty value is fine in offline mode; no NLTK data download needed)
 $env:GROK_API_KEY = "offline-dummy-sk-123"
-python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
 
 # 5. Corpus + Index (MANDATORY — must do before first run)
 mkdir -p data\corpus
@@ -69,9 +68,8 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 # 3. All other deps
 pip install -r requirements.txt -c constraints.txt
 
-# 4. Env + NLTK one-time
+# 4. Env (any non-empty value is fine in offline mode; no NLTK data download needed)
 export GROK_API_KEY=offline-dummy-sk-123
-python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
 
 # 5. Corpus + Index (MANDATORY)
 mkdir -p data/corpus
@@ -97,10 +95,13 @@ The dummy key value (`offline-dummy-sk-123`) is fine for `mode: offline` in
 `config.yaml`. The key is only validated at Grok call time, which never happens
 in offline mode. If you want full hygiene, set it to any non-empty string.
 
-### NLTK offline after first run
-`cyclaw_telemetry_kill.env` sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`.
-The NLTK punkt tokenizer data is cached locally after the first `nltk.download()`
-call — subsequent runs are fully offline.
+### No NLTK data download
+The `nltk` package is a pinned dependency (Porter stemmer only, which ships as
+code), but no `nltk.download()` step is needed: tokenization uses a plain
+word-regex, so the punkt tokenizer data — and its URL-encoded path-traversal
+CVE — is deliberately never loaded (see `retrieval/stemmer.py`).
+`cyclaw_telemetry_kill.env` sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`,
+so after the one-time embedding-model fetch, runs are fully offline.
 
 ### Test gate
 The committed pytest suite is the install gate:
@@ -128,10 +129,11 @@ app:
 
 models:
   local_llm:
-    base_url: "http://127.0.0.1:1234/v1"   # LM Studio default — do not change
-    model: "qwen2.5-7b-instruct"            # must match model name in LM Studio exactly
-    timeout_sec: 720
-    max_tokens: 5000
+    provider: "ollama"
+    base_url: "http://127.0.0.1:11434/v1"   # Ollama default — do not change
+    model: "qwen2.5:7b"                      # must match a model pulled in Ollama exactly
+    timeout_sec: 300      # must stay < api.graph_timeout_sec (330)
+    max_tokens: 3000
 
 retrieval:
   min_score: 0.028     # RRF fused-rank threshold (NOT cosine similarity — different scale)
@@ -172,7 +174,7 @@ sampling capability by design.
 | `IndexNotFoundError` on startup | Run `python -m retrieval.indexer` — index not built yet |
 | `Collection not found in ChromaDB` | Delete `index/` folder and reindex |
 | LLM timeout on query | Increase `timeout_sec` in `config.yaml` — long-context inference is slow on CPU |
-| `ModuleNotFoundError: nltk` | Run the NLTK download step (Step 4) |
+| `ModuleNotFoundError: nltk` | The deps install (Step 3) didn't finish — rerun `pip install -r requirements.txt -c constraints.txt` |
 | `FileNotFoundError: constraints.txt` | File restored to repo June 14 — `git pull` |
 | Soul endpoint returns 404 | Set `personality.enabled: true` in `config.yaml` |
 | `uvloop` install fails on Windows | Acceptable — uvloop is Linux-only, uvicorn falls back to asyncio automatically |
@@ -180,4 +182,4 @@ sampling capability by design.
 ---
 
 *Built by [Chris Grady](https://cgfixit.com) · Repo: [github.com/CGFixIT/CyClaw](https://github.com/CGFixIT/CyClaw)*  
-*Guide generated June 14 2026 — v1.3+ baseline, Python 3.12 verified*
+*Guide generated June 14 2026 — v1.3+ baseline, Python 3.12 verified · Updated July 21 2026 for the Ollama migration*
