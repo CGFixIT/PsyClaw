@@ -4,6 +4,7 @@ name: Claude Code (PR Comments)
 # This workflow allows @claude mentions on PRs to trigger review assistance.
 # It is intentionally limited to read-only repository access and human-initiated triggers only.
 # It does NOT participate in core governance, invariants, or agentic paths.
+# add comment write to pr ability for when i @ it
 
 on:
   issue_comment:
