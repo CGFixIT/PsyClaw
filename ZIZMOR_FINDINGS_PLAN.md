@@ -1,6 +1,6 @@
 # zizmor Medium-Severity Findings — Remediation Plan
 
-**Status:** Planning only — no fixes applied yet. Deferred from PR #596 (merged
+**Status:** Planning (7.21.2026) — no fixes applied yet. Deferred from PR #596 (merged
 2026-07-21), which added the `workflow-lint` CI job (`actionlint` + `zizmor`)
 and fixed the 2 findings that were High severity at the time. This doc tracks
 the remaining Medium-severity backlog `workflow-lint` deliberately does not
