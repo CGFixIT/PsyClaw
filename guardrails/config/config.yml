@@ -4,13 +4,16 @@
 # Loaded by guardrails/integration.py via RailsConfig.from_path("guardrails/config").
 # Points at the LOCAL Ollama OpenAI-compatible endpoint -- no cloud dependency,
 # consistent with CyClaw's offline-first posture. config.yaml's guardrails: block is
-# the authoritative source: guardrails/integration.py overrides engine/model/base_url
-# from GuardrailsConfig at engine-build time, so edit them THERE; this file is the
-# Colang rails + prompt template and a fallback default only.
+# authoritative for the MODEL CONNECTION ONLY: guardrails/integration.py overrides
+# engine/model/base_url from GuardrailsConfig at engine-build time, so edit those
+# THERE. Rail BEHAVIOUR -- the active flows, thresholds, and prompt templates --
+# is defined by THIS file (and rails.co). config.yaml's input_rails / output_rails
+# / topical_rails / hallucination_threshold knobs are NOT yet applied to the live
+# engine (they drive the offline heuristic floor only), so keep the two in sync
+# deliberately as the layer matures (review P2 on PR #590).
 #
 # NOTE: This is a starting template. The flows referenced below are defined in
-# rails.co. Tune the active rail set in CyClaw config.yaml (guardrails.input_rails
-# / output_rails / topical_rails) and mirror changes here as the layer matures.
+# rails.co.
 # =============================================================================
 
 models:
