@@ -689,7 +689,14 @@ def _acquire_sync_lock(lock_path: str) -> _SyncLock:
         if key in _PROCESS_LOCKS:
             raise _lock_busy_error(lock_path)
 
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise SyncRuntimeError(
+                "Unable to open the sync lock file",
+                details={"lock_path": lock_path, "error": str(exc)},
+            ) from exc
+
         locked = False
         try:
             locked = _try_os_lock(fd)
