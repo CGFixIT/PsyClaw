@@ -1,12 +1,17 @@
 # CyClaw Reproducible Dependency Constraints (Python 3.12 verified)
-# 
-# Preferred (uv + pyproject): uv pip install -r pyproject.toml --constraint constraints.txt
+#
+# Preferred (uv + pyproject): uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 # Legacy (pip): pip install -r requirements.txt -c constraints.txt
-# 
+#
+# The --extra-index-url on the uv line is required: `uv pip install` (uv's
+# pip-compatible interface) does not honor pyproject.toml's [tool.uv.sources]
+# CPU-wheel routing, so torch==...+cpu below can't resolve without it —
+# verified via dry-run, 2026-07.
+#
 # This pins direct dependencies (sourced from pyproject.toml) + critical transitives
 # (pydantic family to avoid resolver explosion, torch for post-CVE-2025-32434 safety).
 # For complete transitive reproducibility, run `uv lock` (recommended in pyproject.toml)
-# or `pip-compile` and commit the result. Current state: direct pins aligned with v1.8.0.
+# or `pip-compile` and commit the result. Current state: direct pins aligned with v1.9.0.
 
 # CRITICAL: pydantic family must stay synchronized or pip resolver explodes
 # pydantic 2.13.4 hard-pins pydantic-core==2.46.4 (exact ==, not a range), and
@@ -16,6 +21,12 @@
 # with a compatible pydantic bump.
 pydantic==2.13.4
 pydantic-core==2.46.4
+# Not currently imported anywhere in source (grepped 2026-07: no `pydantic_settings`
+# or `BaseSettings` usage) and not in pyproject.toml's [project.dependencies], so
+# it is never actually pulled into an install today -- this pin only takes effect
+# if a future direct import is added. Left in place (not removed) since the
+# original intent is undocumented; if config loading is ever migrated onto it,
+# this pin is already lock-step-correct with the pydantic pair above.
 pydantic-settings==2.14.2
 
 # Direct dependencies from pyproject.toml [project.dependencies] -- versions MUST match exactly

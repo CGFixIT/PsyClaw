@@ -138,9 +138,16 @@ Preferred local setup (uv-based, when uv is available):
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
-pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-uv pip install -e . -c constraints.txt
+uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
+
+The `--extra-index-url` is required, not cosmetic: `uv pip install` is uv's
+pip-compatible interface, which does **not** honor `pyproject.toml`'s
+`[tool.uv.sources]`/`[[tool.uv.index]]` CPU-wheel routing the way `uv sync`
+would — without it, resolution fails outright (`no version of
+torch==2.13.0+cpu`, since the `+cpu` local-version wheel only exists on that
+index, not on PyPI). Verified by dry-run against this repo's actual
+`pyproject.toml`/`constraints.txt` before writing this down.
 
 Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
