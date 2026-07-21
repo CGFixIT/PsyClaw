@@ -2,7 +2,7 @@
 name: CyClaw-Sandbox
 description: >
   Clone origin/main to a clean local sandbox, install all dependencies, spin up a mock
-  LM Studio (QWEN-7B-Instruct cached offline, Grok=No, Claude=No), then run a comprehensive audit
+  Ollama server (QWEN-7B-Instruct cached offline, Grok=No, Claude=No), then run a comprehensive audit
   covering config validation, gate.py/graph.py standalone checks, full unit+integration
   tests, terminal.html endpoint emulation (including the "describe CyClaw in one sentence"
   vault-hit probe), metrics.py output, and per-subsystem review (utils/, tests/, sync/,
@@ -76,21 +76,38 @@ Python 3.12 compatibility proof.
 
 ---
 
-## Phase 3 — Start mock LM Studio (port 1234, Grok = No, Claude = No)
+## Phase 3 — Start mock Ollama (port 11434, Grok = No, Claude = No)
+
+`config.yaml`'s `models.local_llm.provider` is `ollama` (see `OLLAMA_SETUP.md`).
+`mock_lmstudio.py` remains in the repo only to serve the legacy LM Studio
+config line documented there — it is not used by this audit. To exercise the
+production code path, this phase launches `mock_ollama.py` instead.
+
+Port 11434 is the **real** Ollama daemon's default port, so check for a
+collision before launching the mock:
+
+```bash
+if lsof -ti:11434 >/dev/null 2>&1; then
+  echo "WARN: port 11434 already bound — a real Ollama daemon may be running."
+  echo "      Stop it first, or the mock server will fail to bind."
+  lsof -i:11434
+fi
+```
 
 Copy the mock server into the sandbox and launch it in the background:
 
 ```bash
-cp "$ORIG_REPO/.claude/skills/CyClaw-Sandbox/mock_lmstudio.py" "$SANDBOX/"
-python "$SANDBOX/mock_lmstudio.py" > /tmp/mock_lmstudio.log 2>&1 &
+cp "$ORIG_REPO/.claude/skills/CyClaw-Sandbox/mock_ollama.py" "$SANDBOX/"
+python "$SANDBOX/mock_ollama.py" --model qwen2.5:7b > /tmp/mock_ollama.log 2>&1 &
 MOCK_PID=$!
 sleep 1
-curl -s http://127.0.0.1:1234/v1/models | python -m json.tool
-echo "Mock LM Studio PID: $MOCK_PID"
+curl -s http://127.0.0.1:11434/v1/models | python -m json.tool
+echo "Mock Ollama PID: $MOCK_PID"
 ```
 
 Where `$ORIG_REPO` is the real repo root (the parent of this venv). Confirm
-`/v1/models` returns a JSON object containing `qwen2.5-7b-instruct`.
+`/v1/models` returns a JSON object containing `qwen2.5:7b` (matches
+`models.local_llm.model` in config.yaml).
 
 > Note: `grok.enabled` and `claude.enabled` are both `false` in config.yaml by
 > default — both external fallbacks are already off. No change needed. Keep
@@ -110,6 +127,7 @@ with open('config.yaml') as f:
 
 checks = [
     ('app.mode', cfg['app']['mode'] in ('offline', 'hybrid')),
+    ('models.local_llm.provider == ollama', cfg['models']['local_llm'].get('provider') == 'ollama'),
     ('models.grok.enabled == false', not cfg['models']['grok'].get('enabled', False)),
     ('retrieval.min_score exists', 'min_score' in cfg['retrieval']),
     ('api.host == 127.0.0.1', cfg['api']['host'] == '127.0.0.1'),
@@ -117,7 +135,9 @@ checks = [
     ('personality.soul_path set', bool(cfg.get('personality', {}).get('soul_path'))),
     ('indexing.chroma_path set', bool(cfg.get('indexing', {}).get('chroma_path'))),
     ('indexing.bm25_path set', bool(cfg.get('indexing', {}).get('bm25_path'))),
-    ('policy.prompt_filter patterns >= 31', len(cfg['policy']['prompt_filter']['banned_patterns']) >= 31),
+    # Floor tracks the current curated set of 32 (config.yaml
+    # policy.prompt_filter.banned_patterns) so a future silent trim is caught.
+    ('policy.prompt_filter patterns >= 32', len(cfg['policy']['prompt_filter']['banned_patterns']) >= 32),
     ('security.allowed_hosts set', bool(cfg.get('security', {}).get('allowed_hosts'))),
 ]
 all_ok = True
@@ -217,7 +237,7 @@ A passing run prints `PASS: vault hit above gate, correct source` for each query
 
 ---
 
-## Phase 11 — Start gate.py server (with mock LM Studio)
+## Phase 11 — Start gate.py server (with mock Ollama)
 
 ```bash
 # Backup soul.md so the smoke queries can never corrupt it
@@ -282,7 +302,7 @@ DESCRIBE_EXIT=$?
 
 ---
 
-## Phase 14 — Mock LM Studio smoke (end-to-end with generation)
+## Phase 14 — Mock Ollama smoke (end-to-end with generation)
 
 Verify the full RAG → LLM path with the mock server:
 
@@ -448,8 +468,8 @@ python_version: <python --version>
 ### Phase 2 — Dependency Install
 <PASS/FAIL + any pip warnings>
 
-### Phase 3 — Mock LM Studio
-<PASS/FAIL + confirmation that /v1/models responded>
+### Phase 3 — Mock Ollama
+<PASS/FAIL + confirmation that /v1/models responded + port-11434 collision check result>
 
 ### Phase 4 — Config Validation
 <per-key PASS/FAIL table>
@@ -480,7 +500,7 @@ python_version: <python --version>
 <needs_confirm, hit_count, answer excerpt>
 <PASS/FAIL>
 
-### Phase 14 — Mock LM Studio End-to-End
+### Phase 14 — Mock Ollama End-to-End
 <model_used, answer excerpt, PASS/FAIL>
 
 ### Phase 15 — Injection Filter
@@ -526,7 +546,7 @@ git add "docs/${REPORT_NAME}"
 git commit -m "docs: add Local Sandbox Complete Audit ${AUDIT_DATE}
 
 Auto-generated by CyClaw-Sandbox skill. Covers: clean clone,
-dep install, mock LM Studio, config validation, gate/graph standalone,
+dep install, mock Ollama, config validation, gate/graph standalone,
 pytest suite, RAG smoke, terminal emulation, vault-hit probe, metrics.py,
 and per-subsystem (utils/tests/sync/agentic/.claude/.github) review.
 
@@ -544,19 +564,19 @@ Then create the PR via `mcp__github__create_pull_request` with:
 ## Summary
 
 Full sandbox audit cloned from `main` and run in a clean Python 3.12
-environment with a mock LM Studio (QWEN-7B-Instruct offline cache, Grok=No, Claude=No).
+environment with a mock Ollama (qwen2.5:7b offline cache, Grok=No, Claude=No).
 
 ### Scope
 - Clean clone of origin/main
 - Python 3.12 dependency install (torch CPU first, then requirements.txt)
-- Mock LM Studio on port 1234 (no real GPU, no weights loaded)
-- Config.yaml validation (31 injection patterns, grok.enabled=false, etc.)
+- Mock Ollama on port 11434 (no real GPU, no weights loaded)
+- Config.yaml validation (provider=ollama, 32 injection patterns, grok.enabled=false, etc.)
 - gate.py + graph.py standalone import checks
 - Full pytest suite (unit + integration + agentic sub-suite)
 - Real ChromaDB+BM25 RAG smoke (`ci_rag_smoke.py`)
 - terminal.html endpoint emulation (5 endpoint flows)
 - "Describe CyClaw in one sentence" vault-hit probe ← key functional test
-- Mock LM Studio end-to-end (RAG → generation path)
+- Mock Ollama end-to-end (RAG → generation path)
 - Injection filter (HTTP 400) check
 - metrics.py output capture
 - Per-subsystem review: utils/, tests/, sync/, agentic/, .claude/, .github/
@@ -587,8 +607,10 @@ were not modified during the audit.
 
 - **soul.md must exist** — if `data/personality/soul.md` is absent in the clone, copy
   it from the original repo before starting the server.
-- **mock LM Studio port conflict** — if port 1234 is already bound, kill the occupant
-  first: `lsof -ti:1234 | xargs kill -9`.
+- **mock Ollama port conflict** — 11434 is the real Ollama daemon's default
+  port, so collision is more likely than LM Studio's 1234 ever was. Phase 3
+  checks for this first; if you hit it manually, stop the real daemon
+  (`ollama stop` / OS service) instead of blind-killing PIDs on the port.
 - **pytest collection errors** — use `--continue-on-collection-errors` so one bad import
   doesn't mask the rest of the suite.
 - **Vault miss on "describe CyClaw"** — means `data/corpus/cyclaw_overview.md` is absent
@@ -597,3 +619,9 @@ were not modified during the audit.
   will populate `logs/audit.jsonl` during Phase 11–15.
 - **TELEMETRY KILL on startup** — intentional; not an error.
 - **`status: degraded` in /health** — normal; only `index_ready` and `graph_ready` matter.
+
+## Notes
+
+- Read-only against the real repo state — operates on a clone, not the working tree.
+- `status: degraded` without live Ollama is expected and normal.
+- Draft PR only; a human decides when to merge.
