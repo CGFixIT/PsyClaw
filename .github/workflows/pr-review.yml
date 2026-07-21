@@ -1,0 +1,193 @@
+name: PR Review Assistant
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base; owner-only same-repo PRs; candidate code is never executed
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - '**/*.py'
+      - '**/*.yml'
+      - '**/*.yaml'
+      - 'pyproject.toml'
+      - 'setup.cfg'
+      - 'pytest.ini'
+      - 'requirements.txt'
+      - 'constraints.txt'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'config.yaml'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - 'INVARIANTS.md'
+      - 'docs/THREAT_MODEL.md'
+      - '.github/SECURITY.md'
+      - '.github/copilot-instructions.md'
+      - '.codex/prompts/pr-review.md'
+
+permissions: {}
+
+concurrency:
+  group: cyclaw-pr-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner
+
+    permissions:
+      contents: read
+
+    outputs:
+      review_json: ${{ steps.run_codex.outputs.final-message }}
+
+    steps:
+      - name: Checkout trusted base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: trusted
+
+      - name: Checkout candidate as review data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Record trusted review context
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const fs = require("fs");
+            fs.writeFileSync(
+              "trusted/.codex-pr-context.json",
+              JSON.stringify({
+                pull_request: context.payload.pull_request.number,
+                base_sha: process.env.PR_BASE_SHA,
+                head_sha: process.env.PR_HEAD_SHA,
+              }, null, 2) + "\n",
+              "utf8",
+            );
+
+      - name: Check CyClaw invariants
+        continue-on-error: true
+        run: |
+          python -I trusted/.claude/skills/invariant-guard/check_invariants.py \
+            --repo-root candidate \
+            > trusted/.codex-pr-invariants.txt 2>&1
+
+      - name: Run Codex review
+        id: run_codex
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: '0.144.6'
+          prompt-file: trusted/.codex/prompts/pr-review.md
+          working-directory: trusted
+          output-schema: >-
+            {"type":"object","properties":{"has_findings":{"type":"boolean"},"comment":{"type":"string"}},"required":["has_findings","comment"],"additionalProperties":false}
+          sandbox: read-only
+          safety-strategy: drop-sudo
+
+  post_review:
+    name: Post PR review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: review
+    if: needs.review.outputs.review_json != ''
+
+    permissions:
+      issues: write
+
+    steps:
+      - name: Upsert review comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          CODEX_REVIEW_JSON: ${{ needs.review.outputs.review_json }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = "<!-- cyclaw-pr-review -->";
+            let review;
+            try {
+              review = JSON.parse(process.env.CODEX_REVIEW_JSON);
+            } catch (error) {
+              core.setFailed(`Codex returned invalid JSON: ${error.message}`);
+              return;
+            }
+
+            if (
+              typeof review.has_findings !== "boolean" ||
+              typeof review.comment !== "string" ||
+              review.comment.trim() === "" ||
+              review.comment.length > 60000
+            ) {
+              core.setFailed("Codex review did not match the expected schema.");
+              return;
+            }
+
+            const labeledFinding = /(?:^|\n)- \*\*(?:Critical|Warning)\*\*/.test(
+              review.comment,
+            );
+            if (labeledFinding !== review.has_findings) {
+              core.setFailed("Codex review verdict and finding labels disagree.");
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(marker),
+            );
+
+            if (!review.has_findings && !existing) {
+              core.info("No blocking findings; no review comment created.");
+              return;
+            }
+
+            const body = [
+              marker,
+              "## Automated PR Review",
+              "",
+              review.comment.trim(),
+            ].join("\n");
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            }

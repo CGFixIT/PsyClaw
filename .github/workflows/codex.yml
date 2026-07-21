@@ -4,7 +4,7 @@ on:
   issue_comment:
     types: [created]
 
-# Cancel superseded @codex runs on the same issue thread; keep main history.
+# Manual, advisory PR assistance only. Automatic reviews live in pr-review.yml.
 concurrency:
   group: codex-pr-comment-${{ github.event.issue.number || github.run_id }}
   cancel-in-progress: true
@@ -16,39 +16,82 @@ jobs:
     timeout-minutes: 10
     if: |
       github.event.issue.pull_request != null &&
-      (
-        contains(github.event.comment.body, '@codex') ||
-        contains(github.event.comment.body, '@github-actions[bot]')
-      ) &&
-      github.event.comment.user.login == 'CGFixIT'
+      contains(github.event.comment.body, '@codex') &&
+      github.event.comment.user.login == github.repository_owner &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.event.issue.state == 'open'
 
     permissions:
       contents: read
-      issues: read
       pull-requests: read
 
     outputs:
       final_message: ${{ steps.run_codex.outputs.final-message }}
 
     steps:
-      - name: Checkout PR merge ref
+      - name: Resolve PR commits
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+            core.setOutput("base-sha", pr.base.sha);
+            core.setOutput("head-sha", pr.head.sha);
+
+      - name: Checkout trusted base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/merge
+          ref: ${{ steps.pr.outputs.base-sha }}
           fetch-depth: 1
           persist-credentials: false
+          path: trusted
+
+      - name: Checkout PR head as review data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ steps.pr.outputs.head-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: candidate
+
+      - name: Record owner request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PR_BASE_SHA: ${{ steps.pr.outputs.base-sha }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+        with:
+          script: |
+            const fs = require("fs");
+            const request = context.payload.comment.body
+              .replace(/@codex\b/gi, "")
+              .trim() || "Review this pull request.";
+            fs.writeFileSync(
+              "trusted/.codex-pr-request.json",
+              JSON.stringify({
+                pull_request: context.payload.issue.number,
+                base_sha: process.env.PR_BASE_SHA,
+                head_sha: process.env.PR_HEAD_SHA,
+                request,
+              }, null, 2) + "\n",
+              "utf8",
+            );
 
       - name: Run Codex
         id: run_codex
         uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          codex-version: latest
-          prompt-file: .codex/prompts/pr-agent.md
-          output-file: codex-output.md
+          codex-version: '0.144.6'
+          prompt-file: trusted/.codex/prompts/pr-agent.md
+          working-directory: trusted
           sandbox: read-only
           safety-strategy: drop-sudo
-          allow-users: CGFixIT
 
   post_feedback:
     name: Post Codex feedback
@@ -59,7 +102,6 @@ jobs:
 
     permissions:
       issues: write
-      pull-requests: write
 
     steps:
       - name: Comment on PR
