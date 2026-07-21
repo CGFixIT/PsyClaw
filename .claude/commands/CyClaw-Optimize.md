@@ -1,9 +1,8 @@
 ---
-name: CyClaw-Optimize
 description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open focused, reviewable pull requests for each. Use when asked to optimize CyClaw, find competitive/trade-bot advantages, harden CI, audit for risk, propose improvements, or open optimization PRs against main.
 ---
 
-# CyClaw-Optimize
+Run a full optimization sweep of CyClaw main and open one draft PR per finding. $ARGUMENTS
 
 **Persona:** You are a modern AI engineer specializing in Python and extremely
 familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
@@ -13,7 +12,7 @@ the MCP hybrid server, the `agentic/` GitHub layer, and the out-of-band
 `sync/` Dropbox pipeline. You read code for leverage: performance, security,
 financial risk / oversight in assumptions, auditability, and maintainability.
 
-**What this skill does:** drives a time-boxed scan of the **main** branch,
+**What this does:** drives a time-boxed scan of the **main** branch,
 groups findings into ~5 small/medium PR-sized chunks, and opens one focused
 pull request per chunk **against a working branch cut from `main`** — never
 committing to `main` directly. A human decides when to merge/close.
@@ -41,16 +40,16 @@ bash .claude/skills/CyClaw-Optimize/bootstrap.sh claude/cyclaw-optimize-<topic>
 Omit the branch argument to run read-only against the current branch. The
 script never force-resets an existing branch that already has commits.
 
-> Verified this session: the harness ran clean, reported the branch /
-> merge-base / commits-ahead, and printed file counts, the largest-Python-file
-> list (refactor candidates), the CI workflow list, dependency manifests, Grok
+> Verified: the harness ran clean, reported the branch / merge-base /
+> commits-ahead, and printed file counts, the largest-Python-file list
+> (refactor candidates), the CI workflow list, dependency manifests, Grok
 > touchpoints, and recent `main` commits.
 
 ### Step 1 — Time-boxed scan (subagent, ~4 minutes)
 
 Dispatch **one read-only `Explore` subagent** to scan for ~4 minutes. Do not
 let it edit anything. Give it the persona and the concrete areas to sweep.
-This is the prompt that worked this session (adapt the topic, keep the
+This is the prompt that worked previously (adapt the topic, keep the
 structure):
 
 > You are a modern AI engineer specializing in Python and deeply familiar with
@@ -85,8 +84,7 @@ mcp__github__list_pull_requests(owner="CGFixIT", repo="CyClaw", state="open")
 > Gotcha (verified): this call returns a very large payload. Parse it down to
 > `number` + `title` only — e.g. read the saved tool-result file with a small
 > `python3 -c "import json; ..."` over `number`/`title` — rather than dumping
-> it into context. This session it showed 2 open PRs (#175, #176), both
-> dependency/pinning chores, so no overlap with the scan findings.
+> it into context.
 
 ### Step 3 — Select ~5 focus areas and announce them
 
@@ -137,11 +135,11 @@ python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"  # sti
 git checkout main && git branch -D _trial
 ```
 
-> Verified this session: two PRs both appended to `ci.yml` (one to the pytest
-> list, one to the `--cov` list) in **non-adjacent** regions. Trial merges in
-> both orders combined cleanly — both edits present, valid YAML, zero conflict
-> markers — so no consolidation/stacking was needed. The check is cheap; run it
-> whenever ≥2 chunks touch one file rather than assuming the regions are disjoint.
+> Verified: two PRs both appended to `ci.yml` (one to the pytest list, one to
+> the `--cov` list) in **non-adjacent** regions. Trial merges in both orders
+> combined cleanly — both edits present, valid YAML, zero conflict markers —
+> so no consolidation/stacking was needed. The check is cheap; run it whenever
+> ≥2 chunks touch one file rather than assuming the regions are disjoint.
 
 ### Step 4 — One focused PR per chunk
 
@@ -189,9 +187,9 @@ GROK_API_KEY=dummy pytest tests/ -q --tb=short
 GROK_API_KEY=dummy pytest tests/test_graph.py -q --tb=short
 ```
 
-> Gotcha (verified this session): a freshly-cloned web container has **no
-> Python deps installed** — `pytest` import fails outright. Install first via
-> the `/run-cyclaw` or `/sandbox-runtime-verification` skill (note the CyClaw
+> Gotcha (verified): a freshly-cloned web container has **no Python deps
+> installed** — `pytest` import fails outright. Install first via the
+> `/run-cyclaw` or `/sandbox-runtime-verification` skill (note the CyClaw
 > install quirks: `torch==2.13.0+cpu` before `requirements.txt`, and
 > `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`). For
 > CI-/docs-/workflow-only PRs that touch no Python, the YAML/lint changes are
@@ -201,7 +199,7 @@ Optionally run `/code-review` on the diff before opening the PR.
 
 ---
 
-## Branch Permissions (pre-granted for this skill)
+## Branch Permissions (pre-granted for this command)
 
 When **CyClaw-Optimize** is invoked, the user pre-authorises creation and push
 of per-chunk branches named `claude/cyclaw-optimize-<topic>` cut from
@@ -259,10 +257,10 @@ the skill file update commit (if any), never for chunk changes.
 
 ---
 
-## Example output (this session's scan, for shape — re-scan; do not reuse blindly)
+## Example output (illustrative scan shape — re-scan; do not reuse blindly)
 
-The Step-1 subagent returned 10 grounded findings and proposed this grouping
-(real file paths, current `main`):
+A previous Step-1 subagent returned 10 grounded findings and proposed this
+grouping (real file paths, `main` at that time):
 
 1. **Test-coverage completeness** — add `gate`, `retrieval.{hybrid_search,
    indexer,stemmer}`, `utils.personality_db`, and `agentic.*` to `--cov` in
@@ -283,3 +281,9 @@ The Step-1 subagent returned 10 grounded findings and proposed this grouping
    monitoring note. *(maintainability, small)*
 
 Each is independently reviewable and small/medium — exactly the target shape.
+
+## Notes
+
+- Feature freeze applies (`CLAUDE.md` §1) — the operative test is "does this polish the portfolio signal or fix a real defect?" New capabilities need explicit user justification first.
+- Never push directly to `main`; never force-push without sign-off.
+- Re-run `python3 .claude/skills/invariant-guard/check_invariants.py` before opening any PR that touches core files.
