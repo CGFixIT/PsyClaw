@@ -43,6 +43,19 @@ def test_second_acquire_blocks_while_held(tmp_path):
     _release_sync_lock(second)
 
 
+def test_open_failure_raises_typed_error(tmp_path, monkeypatch):
+    lock_path = tmp_path / "sync.lock"
+
+    def _raise_oserror(*_args, **_kwargs):
+        raise OSError("simulated open failure")
+
+    monkeypatch.setattr(os, "open", _raise_oserror)
+
+    with pytest.raises(SyncRuntimeError) as exc:
+        _acquire_sync_lock(str(lock_path))
+    assert exc.value.details["lock_path"] == str(lock_path)
+
+
 def test_context_manager_releases(tmp_path):
     lock_path = tmp_path / "sync.lock"
     with _acquire_sync_lock(str(lock_path)) as lock:
