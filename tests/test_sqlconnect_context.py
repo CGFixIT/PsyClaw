@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from agentic.sqlconnect import context
+from utils.errors import SqlConnectError
 
 # run_op only passes sql_cfg through to the (mocked) SqlClient, so a sentinel is
 # enough -- this avoids coupling the test to SqlConnectConfig's constructor.
@@ -95,8 +96,11 @@ def test_row_count_coalesces_missing_table(patched):
 
 
 def test_unknown_op_raises(patched):
-    with pytest.raises(ValueError, match="unknown sql op"):
+    # Typed SqlConnectError, not a bare ValueError -- the CLI's except clauses
+    # only map the SqlConnect* subtree to the documented exit codes.
+    with pytest.raises(SqlConnectError, match="unknown sql op") as exc:
         context.run_op({}, _SQL_CFG, "delete_everything")
+    assert exc.value.code == "SQLCONNECT_OP_NOT_ALLOWED"
 
 
 def test_config_path_threaded_to_client(patched):
