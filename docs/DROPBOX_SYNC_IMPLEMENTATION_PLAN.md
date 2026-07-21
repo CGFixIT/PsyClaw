@@ -167,7 +167,14 @@ CyClaw/
   - `direction ∈ {pull, bisync}`; `max_delete ≥ 0`; `schedule_hour ∈ 0..23`; `schedule_min ∈ 0..59`; `conflict_resolve ∈ {newer,older,larger,smaller,none}`.
   - `include_soul` bool (default False).
 - Computes default state paths under `XDG_CONFIG_HOME`/`~/.config/rclone` (filter file, log dir, bisync workdir) — all overridable.
-- **Never** holds any secret. Unknown keys are collected and surfaced as a non-fatal warning (typo visibility).
+- **Never** holds any secret.
+- **Superseded (2026-07-21):** this section originally planned unknown keys as a
+  non-fatal, collected warning. Shipped behavior hardened that to **fatal**
+  (`SyncConfigError`) — a typo'd safety fuse (e.g. `max_delte`) must never
+  silently keep its default while the operator believes it is set. `enabled`
+  (CyClaw's own toggle, not an rclone parameter) is exempt. See
+  `docs/SYNC_README.md` § Troubleshooting for the current, authoritative
+  behavior; this planning doc is not updated further for post-ship hardening.
 
 **`sync/filters.py`** — `generate_filters(cfg)` / `write_filter_file(cfg)`.
 - Emits the §4.3 hardened denylist; conditionally drops the `data/personality/**` line **only** if `include_soul=true` (and writes a loud WARNING header into the file when it does).

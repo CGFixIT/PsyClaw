@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -64,56 +65,86 @@ def _python_executable() -> str:
 def _repo_root(cfg: RcloneConfig) -> str:
     """Directory the scheduled command should cd into before running sync.
 
-    ``cfg.local_path`` resolves to ``.../data/corpus``; ``config.yaml`` lives at
-    the repo root (the parent of ``data/``). So the repo root is two levels up
-    from ``data/corpus``. If a ``config.yaml`` is found there we trust it;
-    otherwise we still fall back to that two-levels-up directory, which is the
-    documented layout. Keeping this simple and explicit avoids any taint or
-    surprise about *where* config.yaml is resolved at run time.
+    Prefers the canonical root carried on the config object (derived from the
+    code location at load time). The legacy fallback derives it from
+    ``cfg.local_path`` -- correct ONLY for the flat ``.../data/corpus`` layout:
+    a local_path nested below data/corpus would resolve to ``repo/data``
+    instead of the repo (codex finding), so the depth-based derivation is
+    never used when the canonical root is available.
     """
+    canonical = getattr(cfg, "repo_root", None)
+    if canonical:
+        return str(canonical)
     corpus = os.path.abspath(cfg.local_path)
     repo_root = os.path.dirname(os.path.dirname(corpus))  # .../data/corpus -> repo
     return repo_root
+
+
+def _bat_quote(s: str) -> str:
+    """Quote a path for safe literal use inside a cmd.exe ``.bat`` line.
+
+    Wraps in double quotes (so spaces, ``&``, ``(``, ``)`` are inert) and doubles
+    every ``%`` so a segment like ``%TEMP%`` is not expanded as an environment
+    variable when the scheduled task runs (codex #592: a naive ``f'"{path}"'``
+    let ``%VAR%`` expansion and unbalanced quoting through). Windows filenames
+    cannot contain a literal ``"``, so no inner-quote escaping is needed; our
+    ``.bat`` leaves delayed expansion off, so ``!`` stays literal too.
+    """
+    return '"' + s.replace("%", "%%") + '"'
 
 
 def _sync_command(cfg: RcloneConfig) -> str:
     """The actual command the scheduler will invoke.
 
     cd into the repo root (so ``config.yaml`` resolves correctly), then run
-    ``python -m sync.cli sync`` as a separate process.
+    ``python -m sync.cli sync`` as a separate process, carrying the loaded
+    config's identity via ``--config`` so a schedule installed with a custom
+    config keeps reading THAT file.
 
-    On Windows the scheduler does NOT register this string directly -- see
-    ``_write_windows_launcher`` and ``WindowsTaskScheduler.install``. Passing a
-    full ``cmd /c "cd /d "..." && "..." ..."`` string through ``schtasks /TR`` is
-    quote-fragile (Task Scheduler re-parses it, and a repo path containing spaces
-    can break the nesting). A ``.bat`` launcher sidesteps that entirely. This
-    string is kept only for human-readable status output.
+    POSIX: this string IS the cron line, so every operator-influenced token is
+    ``shlex.quote``-d -- a repo path or config path containing spaces or shell
+    metacharacters (``$()``, backticks, ``;``, ``&``) becomes a single inert
+    argument that cannot break out of the command (codex #592).
+
+    Windows: the scheduler does NOT register this string -- see
+    ``_write_windows_launcher`` and ``WindowsTaskScheduler.install``. A full
+    ``cmd /c`` string through ``schtasks /TR`` is quote-fragile, so a ``.bat``
+    launcher is used instead; this string is kept only for status output.
     """
     py = _python_executable()
     root = _repo_root(cfg)
+    cfg_path = getattr(cfg, "_config_path", None)
     if platform.system() == "Windows":
-        return f'cmd /c "cd /d "{root}" && "{py}" -m sync.cli sync"'
-    return f'cd "{root}" && "{py}" -m sync.cli sync'
+        config_arg = f"--config {_bat_quote(cfg_path)} " if cfg_path else ""
+        return f'cmd /c "cd /d {_bat_quote(root)} && {_bat_quote(py)} -m sync.cli {config_arg}sync"'
+    tokens = ["cd", shlex.quote(root), "&&", shlex.quote(py), "-m", "sync.cli"]
+    if cfg_path:
+        tokens += ["--config", shlex.quote(cfg_path)]
+    tokens.append("sync")
+    return " ".join(tokens)
 
 
 def _write_windows_launcher(cfg: RcloneConfig) -> str:
     """Write a ``.bat`` launcher for the scheduled sync and return its path.
 
     Registering a path to a one-line batch file via ``schtasks /TR`` avoids the
-    fragile quoting of embedding a full ``cmd /c`` command string with a repo
-    path that may contain spaces. The batch file itself uses ordinary quoting,
-    which cmd.exe handles reliably.
+    fragile quoting of embedding a full ``cmd /c`` command string. Every path in
+    the file is ``_bat_quote``-d: quoted against spaces and ``%``-doubled so no
+    path segment is reinterpreted as an environment variable at run time
+    (codex #592).
     """
     root = _repo_root(cfg)
     py = _python_executable()
     bat_dir = cfg.log_dir or root
     os.makedirs(bat_dir, exist_ok=True)
     bat_path = os.path.join(bat_dir, "cyclaw_sync.bat")
-    # CRLF line endings + explicit quoting so paths with spaces are safe.
+    cfg_path = getattr(cfg, "_config_path", None)
+    config_arg = f"--config {_bat_quote(cfg_path)} " if cfg_path else ""
+    # CRLF line endings + _bat_quote so paths with spaces or % are safe.
     content = (
         "@echo off\r\n"
-        f'cd /d "{root}"\r\n'
-        f'"{py}" -m sync.cli sync\r\n'
+        f"cd /d {_bat_quote(root)}\r\n"
+        f"{_bat_quote(py)} -m sync.cli {config_arg}sync\r\n"
     )
     with open(bat_path, "w", encoding="utf-8", newline="") as f:
         f.write(content)

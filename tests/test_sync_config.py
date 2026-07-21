@@ -237,11 +237,51 @@ def test_missing_block_raises(tmp_path: Path) -> None:
         load_sync_config(str(path))
 
 
-def test_unknown_keys_collected_not_fatal(tmp_path: Path) -> None:
+def test_unknown_keys_fail_closed(tmp_path: Path) -> None:
+    # A typo'd key must be FATAL: lenient collection lets a misspelled safety
+    # fuse (e.g. "max_delte") silently revert to its default while the operator
+    # believes the control is set. "enabled" remains exempt (own toggle).
     path = _write_config(tmp_path, _base_block(typo_field="oops", another="x"))
+    with pytest.raises(SyncConfigError) as exc:
+        load_sync_config(path)
+    assert "typo_field" in str(exc.value) and "another" in str(exc.value)
+
+
+def test_quoted_bool_master_gate_fails_closed(tmp_path: Path) -> None:
+    # bool("false") is True: a quoted YAML string would silently ENABLE the
+    # gate it was meant to disable. Safety booleans must be real booleans.
+    for key in ("enabled", "post_sync_check", "include_soul", "checksum"):
+        sub = tmp_path / key
+        sub.mkdir()
+        path = _write_config(sub, _base_block(**{key: "false"}))
+        with pytest.raises(SyncConfigError, match=rf"sync\.{key} must be a boolean"):
+            load_sync_config(path)
+
+
+def test_config_path_identity_carried(tmp_path: Path) -> None:
+    # The loader records the path it read -- resolved the SAME way _get_config
+    # loads it (repo-root anchored) -- so spawned work (scheduler, auto-reindex)
+    # can re-invoke the CLI against byte-identical config identity (codex #592 P1).
+    from utils.logger import resolve_config_path
+
+    path = _write_config(tmp_path, _base_block())
     cfg = load_sync_config(path)
-    # "enabled" is not flagged; the genuine typos are.
-    assert set(cfg._unknown_keys) == {"another", "typo_field"}  # type: ignore[attr-defined]
+    assert cfg._config_path == str(resolve_config_path(path))  # type: ignore[attr-defined]
+    assert cfg.repo_root  # canonical root carried for the scheduler
+
+
+def test_config_path_identity_is_cwd_independent(tmp_path: Path, monkeypatch) -> None:
+    # codex #592 P1: the recorded identity must match the file the loader opens.
+    # _get_config anchors RELATIVE paths to the repo root, so the recorder must
+    # too -- a cwd-anchored os.path.abspath would name a different (or missing)
+    # file when the CLI is invoked from any dir but the repo root. Proven at the
+    # shared resolver: the same relative path resolves identically from any cwd.
+    from utils.logger import resolve_config_path
+
+    default_from_repo = resolve_config_path("config.yaml")
+    monkeypatch.chdir(tmp_path)  # cwd != repo root
+    assert resolve_config_path("config.yaml") == default_from_repo  # cwd-independent
+    assert resolve_config_path("config.yaml") != (tmp_path / "config.yaml")  # not cwd
 
 
 def test_enabled_flag_read_from_block(tmp_path: Path) -> None:

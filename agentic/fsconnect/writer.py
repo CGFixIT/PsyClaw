@@ -58,6 +58,23 @@ from utils.ratelimit import RateLimiter
 FS_WRITE_HARD_DISABLE = False
 
 
+def _writes_refused_platform() -> bool:
+    """True on platforms where fsconnect writes are hard-refused (Windows).
+
+    The Windows path in pathsafe validates a target by NAME then opens/writes it
+    by NAME, with no handle-based containment against a junction swapped into an
+    in-root component between validation and use (name-based TOCTOU). POSIX holds
+    directory fds and descends O_NOFOLLOW; Windows has no equivalent yet, so
+    writes are refused there until it lands (codex #593 P1).
+
+    Factored into a helper so the refusal can be forced in tests WITHOUT
+    monkeypatching ``os.name`` globally -- doing that makes ``pathlib.Path`` raise
+    ``NotImplementedError`` on a POSIX host, so it cannot exercise the real init
+    or refusal paths (they build Paths). On genuine Windows this returns True.
+    """
+    return os.name == "nt"
+
+
 class FsWriter:
     """Gated, confined writer bound to a config's ``writable_roots``.
 
@@ -76,10 +93,24 @@ class FsWriter:
         self.fs_cfg = fs_cfg
         self.config_path = config_path
         self._clock = clock
-        # strict_roots + on_fallback complete Phase 2 item 2: a PermissionError on
-        # root-prepare either fails closed (strict) or fires an audited
-        # fsconnect_root_fallback event (lax) so silent write misdirection (R-7) is
-        # impossible. config_path is set above so the callback can audit.
+        # Refuse Windows BEFORE any root preparation (codex #593 P1). The per-op
+        # _executable gate also refuses, but ScopedRoots(create=True) below would
+        # mkdir the configured root -- or the ~/CyClaw-FS fallback -- DURING
+        # __init__, mutating the filesystem before that per-op gate ever runs,
+        # even in dry-run. Refusing here guarantees construction creates nothing
+        # on Windows. _refuse audits (fsconnect_write_refused, failed_gate
+        # "platform") then raises, so the object is never usable. POSIX is
+        # unchanged: _writes_refused_platform() is False there.
+        if _writes_refused_platform():
+            self._refuse(
+                "__init__", "platform",
+                "fsconnect writes are refused on Windows until handle-based containment is implemented",
+                "denied: writes refused on Windows (name-based TOCTOU containment gap)",
+            )
+        # strict_roots + on_fallback complete Phase 2 item 2: on POSIX a
+        # PermissionError on root-prepare either fails closed (strict) or fires an
+        # audited fsconnect_root_fallback event (lax) so silent write misdirection
+        # (R-7) is impossible. config_path is set above so the callback can audit.
         self._roots = ScopedRoots(
             fs_cfg.write_root_strs,
             create=True,
@@ -130,6 +161,20 @@ class FsWriter:
         """Return True to execute, False for dry-run. Raise FsWriteRefused on a gate fail."""
         if FS_WRITE_HARD_DISABLE or not self.fs_cfg.writes_enabled:
             return False
+        if _writes_refused_platform():
+            # Hard-refuse (codex #593 P1): covers a writer CONSTRUCTED on POSIX
+            # that later runs on Windows -- __init__ already refuses a natively
+            # Windows construction. The Windows path validates a target by NAME
+            # then opens/writes/moves/deletes it by NAME, so a junction swapped
+            # into an in-root component between validation and use redirects the
+            # write outside the configured root. This gate ENFORCES the refusal
+            # the security review documented, instead of relying on operator
+            # discipline.
+            self._refuse(
+                op, "platform",
+                "fsconnect writes are refused on Windows until handle-based containment is implemented",
+                "denied: writes refused on Windows (name-based TOCTOU containment gap)",
+            )
         if not (isinstance(reason, str) and reason.strip()):
             self._refuse(op, "reason", "a non-empty human reason is required to write",
                          "denied: human reason missing")

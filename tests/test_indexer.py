@@ -338,3 +338,24 @@ class TestBuildIndexObservability:
         # The document is still embedded (semantic leg keeps covering it).
         embedded_texts = fake_embeddings.call_args.args[0]
         assert len(embedded_texts) == 1
+
+
+class TestMainConfigArg:
+    """cyclaw-index CLI: --config is parsed and forwarded to build_index.
+
+    Patches build_index so the argparse wiring is verified without the heavy
+    embedding/vector-store path (codex #592: the sync auto-reindex passes
+    --config so a non-default config's index is rebuilt from THAT config).
+    """
+
+    def test_main_defaults_to_config_yaml(self, monkeypatch):
+        seen: dict[str, str] = {}
+        monkeypatch.setattr(indexer, "build_index", lambda cp="config.yaml": seen.setdefault("cp", cp))
+        indexer.main([])
+        assert seen["cp"] == "config.yaml"
+
+    def test_main_forwards_custom_config(self, monkeypatch):
+        seen: dict[str, str] = {}
+        monkeypatch.setattr(indexer, "build_index", lambda cp="config.yaml": seen.setdefault("cp", cp))
+        indexer.main(["--config", "/alt/cfg.yaml"])
+        assert seen["cp"] == "/alt/cfg.yaml"

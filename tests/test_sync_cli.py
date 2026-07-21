@@ -150,6 +150,27 @@ def test_auto_reindex_runs_indexer_and_returns_0_on_change():
     assert captured["argv"][1:] == ["-m", "retrieval.indexer"]
 
 
+def test_auto_reindex_propagates_custom_config_identity():
+    # codex #592: a sync started with `--config /alt/cfg.yaml` must rebuild the
+    # index from THAT config, not the default. The loader records the resolved
+    # path on the cfg; the reindex subprocess must carry it as `--config`.
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    cfg._config_path = "/alt/dir/custom.yaml"
+    captured = {}
+
+    def fake_run(argv, check=False):
+        captured["argv"] = argv
+        return MagicMock(returncode=0)
+
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run", side_effect=fake_run):
+        assert main(["sync"]) == EXIT_OK
+    assert captured["argv"][1:] == ["-m", "retrieval.indexer", "--config", "/alt/dir/custom.yaml"]
+
+
 def test_auto_reindex_off_passes_exit_10_through():
     cfg = _cfg()
     cfg.auto_reindex = False

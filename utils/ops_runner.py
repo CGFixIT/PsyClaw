@@ -141,15 +141,24 @@ def _sync_timeout_sec() -> int:
     the CLI path would complete. Adds a small overhead for Python startup and
     post-rclone bookkeeping. Config value ``0`` means unbounded in the CLI;
     the ops path still needs a finite ceiling (falls back to 3600).
+
+    When ``post_sync_check`` is enabled the runner can legitimately consume
+    one full ``sync_timeout_sec`` for the rclone sync AND a second full
+    timeout for the ``rclone check`` — both under the single-instance lock
+    (the same lifecycle ``sync.runner._lock_stale_after_sec`` scales to).
+    Mirror that doubled budget here or the shim kills a healthy run mid-check.
     """
     try:
         cfg = _get_config(str(_CONFIG_PATH))
-        sec = int((cfg.get("sync") or {}).get("sync_timeout_sec", 3600))
+        block = cfg.get("sync") or {}
+        sec = int(block.get("sync_timeout_sec", 3600))
+        post_sync_check = bool(block.get("post_sync_check", False))
     except (OSError, TypeError, ValueError, KeyError):
-        sec = 3600
+        sec, post_sync_check = 3600, False
     if sec <= 0:
         sec = 3600
-    return sec + 60
+    multiplier = 2 if post_sync_check else 1
+    return sec * multiplier + 60
 
 
 def _run(argv: list[str], *, timeout_sec: int | None = None) -> subprocess.CompletedProcess[str]:

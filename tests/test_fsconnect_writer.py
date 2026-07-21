@@ -417,3 +417,74 @@ def test_trash_empty_all_purges(env):
     trash_dir = wz / ".cyclaw-trash"
     remaining = list(trash_dir.iterdir()) if trash_dir.exists() else []
     assert remaining == []
+
+
+def test_windows_writes_hard_refused(env, monkeypatch):
+    # codex P1: the Windows fallback validates by name then writes by name -- a
+    # junction swapped in between redirects the write outside the root (TOCTOU).
+    # Until handle-based containment lands, writes are HARD-refused on Windows
+    # (not dry-run) even when every other gate passes. This case: a writer
+    # CONSTRUCTED on POSIX that later runs on Windows -- the per-op gate refuses.
+    # Forced via the platform helper, NOT os.name: os.name="nt" makes
+    # pathlib.Path raise on a POSIX host, so audit_log (and thus the refusal
+    # itself) would crash before it could be asserted.
+    cfg, fs_cfg, cp, wz, _audit = env
+    fs_cfg.writes_enabled = True
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        monkeypatch.setattr(writer_mod, "_writes_refused_platform", lambda: True)
+        with pytest.raises(FsWriteRefused) as exc:
+            w.fs_write("out.txt", b"data", reason="x")
+    assert exc.value.details.get("failed_gate") == "platform"
+    assert not (wz / "out.txt").exists()
+    # The refusal is audited with the rule applied, like every other gate.
+    rows = [json.loads(line) for line in _audit.read_text(encoding="utf-8").splitlines()]
+    refused = [r for r in rows if r.get("event") == "fsconnect_write_refused"]
+    assert refused and refused[0]["failed_gate"] == "platform"
+
+
+def test_posix_writes_still_execute_with_gates_satisfied(env):
+    # Guard against over-correction: on POSIX the same fully-gated write must
+    # still execute (the Windows refusal is platform-scoped).
+    cfg, fs_cfg, cp, wz, _audit = env
+    fs_cfg.writes_enabled = True
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        res = w.fs_write("out.txt", b"data", reason="x")
+    assert res["executed"] is True
+    assert (wz / "out.txt").read_bytes() == b"data"
+
+
+def test_windows_init_refuses_before_root_creation(env, monkeypatch):
+    # codex #593 P1 (the gap the prior test missed): a NATIVELY-Windows
+    # construction was untested. ScopedRoots(create=True) mkdirs the configured
+    # root -- or the ~/CyClaw-FS fallback -- during __init__, BEFORE any refusal,
+    # even in dry-run. Force Windows at CONSTRUCTION and prove nothing is
+    # created: init refuses (audited, failed_gate="platform") before ScopedRoots
+    # runs. Forced via the platform helper, not os.name, so pathlib.Path (used by
+    # ScopedRoots and audit_log) does not itself raise on this POSIX host.
+    cfg, fs_cfg, cp, wz, audit = env
+    fs_cfg.writes_enabled = True
+    assert not wz.exists()  # the fixture does NOT pre-create the write root
+    monkeypatch.setattr(writer_mod, "_writes_refused_platform", lambda: True)
+
+    with pytest.raises(FsWriteRefused) as exc:
+        FsWriter(cfg, fs_cfg, config_path=cp)
+
+    assert exc.value.details.get("failed_gate") == "platform"
+    assert not wz.exists()  # configured root NOT created (refused before ScopedRoots)
+    rows = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    refused = [r for r in rows if r.get("event") == "fsconnect_write_refused"]
+    assert refused and refused[0]["failed_gate"] == "platform"
+
+
+def test_windows_init_refused_even_when_writes_disabled(env, monkeypatch):
+    # Even in dry-run posture (writes_enabled False) a Windows construction must
+    # create nothing: the reviewer's concern was ScopedRoots mutating the FS
+    # "even during dry-run or before any write occurs".
+    cfg, fs_cfg, cp, wz, _audit = env
+    assert fs_cfg.writes_enabled is False  # fixture default
+    assert not wz.exists()
+    monkeypatch.setattr(writer_mod, "_writes_refused_platform", lambda: True)
+
+    with pytest.raises(FsWriteRefused):
+        FsWriter(cfg, fs_cfg, config_path=cp)
+    assert not wz.exists()  # no root created even in dry-run posture

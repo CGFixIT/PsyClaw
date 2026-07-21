@@ -70,6 +70,24 @@ class QuotaSpec:
     max_files: int | None = None
 
 
+# Boolean-typed gate fields of FsConnectConfig, strictly validated in
+# __post_init__. Explicit list (not derived): with `from __future__ import
+# annotations` field types are strings, and the list doubles as the checklist
+# of which gates are load-bearing.
+_BOOL_FIELDS = (
+    "allow_unc_roots",
+    "follow_symlinks",
+    "scan_content",
+    "writes_enabled",
+    "require_confirm_destructive",
+    "strict_roots",
+    "block_on_injection_flags",
+    "allow_hard_delete",
+    "index_enabled",
+    "index_incremental",
+)
+
+
 @dataclass
 class FsConnectConfig:
     """Parsed and validated fsconnect: block from config.yaml."""
@@ -108,6 +126,7 @@ class FsConnectConfig:
     # --- validation -------------------------------------------------------
 
     def __post_init__(self) -> None:
+        self._validate_booleans()
         self._validate_ops()
         self._validate_caps()
         self._validate_symlinks()
@@ -116,6 +135,18 @@ class FsConnectConfig:
         self._normalize_writable_roots()
         self._validate_rate_limit()
         self._normalize_index()
+
+    def _validate_booleans(self) -> None:
+        # Every execution/deletion gate must be a REAL boolean: bool("false")
+        # is True, so a quoted YAML string would silently OPEN the gate it was
+        # meant to close (codex P2: quoted writes_enabled / allow_hard_delete).
+        for name in _BOOL_FIELDS:
+            val = getattr(self, name)
+            if not isinstance(val, bool):
+                raise FsConnectConfigError(
+                    f"fsconnect.{name} must be a boolean true/false, got: {val!r}",
+                    details={"field": name, "received": repr(val)},
+                )
 
     def _validate_ops(self) -> None:
         bad = [op for op in self.allowed_fs_ops if op not in VALID_FS_OPS]
@@ -331,6 +362,11 @@ def load_fsconnect_config(config_path: str = "config.yaml") -> FsConnectConfig:
             details={"unknown_keys": sorted(unknown)},
         ) from exc
 
-    fc.enabled = bool(block.get("enabled", False))  # type: ignore[attr-defined]
+    if "enabled" in block and not isinstance(block["enabled"], bool):
+        raise FsConnectConfigError(
+            f"fsconnect.enabled must be a boolean true/false, got: {block['enabled']!r}",
+            details={"field": "enabled", "received": repr(block["enabled"])},
+        )
+    fc.enabled = block.get("enabled", False)  # type: ignore[attr-defined]  # validated bool above
     fc._unknown_keys = sorted(unknown)  # type: ignore[attr-defined]
     return fc

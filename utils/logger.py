@@ -127,12 +127,24 @@ def setup_logging(cfg: dict | None = None) -> None:
 
     _logging_initialized = True
 
-@lru_cache(maxsize=8)
-def _get_config(config_path: str = "config.yaml") -> dict:
+def resolve_config_path(config_path: str = "config.yaml") -> Path:
+    """Resolve a config path exactly as ``_get_config`` loads it.
+
+    Relative paths anchor to the repo root (``_REPO_ROOT``), never the process
+    cwd, so a caller that records "which config did I load" gets the SAME file
+    the loader opened. The sync scheduler relies on this: it re-invokes the CLI
+    with the recorded path, and a cwd-anchored ``os.path.abspath`` could name a
+    different (or missing) file than the one actually read (codex #592 P1).
+    """
     path = Path(config_path).expanduser()
     if not path.is_absolute():
         path = _REPO_ROOT / path
-    with open(path.resolve(), encoding="utf-8") as f:
+    return path.resolve()
+
+
+@lru_cache(maxsize=8)
+def _get_config(config_path: str = "config.yaml") -> dict:
+    with open(resolve_config_path(config_path), encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 def reset_config_cache() -> None:

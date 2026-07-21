@@ -232,10 +232,15 @@ idempotent (re-running replaces our own entry, never touches yours).
 | Windows | `schtasks /Create /SC DAILY /ST HH:MM /RL LIMITED /F` | task name `CyClaw Dropbox Sync` |
 
 The scheduled command `cd`s into the repo root (so `config.yaml` resolves) and
-runs `python -m sync.cli sync`. On Windows the task points at a generated
-`cyclaw_sync.bat` launcher (written next to the rclone logs) rather than an
-inline `cmd /c` string — this avoids the quote fragility of passing a full
-command with a space-containing repo path through `schtasks /TR`.
+runs `python -m sync.cli sync`, propagating `--config` when the loaded config's
+identity differs from the default (e.g. `--config /alt/cfg.yaml` at setup time).
+Every path is safely escaped: the POSIX cron line is `shlex.quote`d per token,
+and the Windows `.bat` launcher quotes and `%`-doubles each path — so a repo or
+config path containing spaces or shell/batch metacharacters (`$()`, backticks,
+`%VAR%`) is passed through literally, never interpreted. On Windows the task
+points at the generated `cyclaw_sync.bat` launcher (written next to the rclone
+logs) rather than an inline `cmd /c` string — this avoids the quote fragility of
+passing a full command through `schtasks /TR`.
 
 > **Overlap protection:** `run_sync` holds a single-instance lock (an atomically
 > created lock directory under the rclone log dir) for the duration of a run, so
@@ -299,8 +304,9 @@ logged; never a token and never raw rclone stderr that could echo a secret.
 | `sync_file_added` | per file | `file`, `sha256` |
 | `sync_file_modified` | per file | `file`, `sha256` |
 | `sync_file_deleted` | per file | `file` (no hash — bytes gone) |
-| `sync_completed` | success | `direction`, `duration_sec`, `rclone_exit_code`, `counts`, `corpus_changed`, `dry_run` |
-| `sync_failed` | failure | `direction`, `rclone_exit_code`, `errors_n`, `aborted_for_safety` |
+| `sync_completed` | success | `direction`, `duration_sec`, `rclone_exit_code`, `counts`, `errors_n`, `aborted_for_safety`, `dry_run`, `corpus_changed` |
+| `sync_failed` | failure (rclone ran, exit ≠ 0) | same field set as `sync_completed` |
+| `sync_failed` | **exceptional** exit (timeout, retry-budget exhaustion, subprocess error) | same field set as above, **plus `error_type`** (the exception's type name only — never its message); `rclone_exit_code` is the last observed code or `null` if rclone never returned one. Any change evidence harvested before the exception fired is preserved (e.g. a file copied just before a timeout still counts toward `corpus_changed`/`counts`). |
 
 No field is ever named `query` (that would be SHA-256-hashed by the logger).
 
@@ -314,7 +320,7 @@ No field is ever named `query` (that would be SHA-256-hashed by the logger).
 | `RCLONE_VERSION_TOO_OLD` (exit 3) | Upgrade to **v1.68.2** or higher (CVE-2024-52522 fix) |
 | `SYNC_CONFIG_INVALID` (exit 3) | Check the `sync:` block in `config.yaml` — error details name the failing field |
 | `aborted_for_safety: true` (exit 1) | A safety fuse tripped (`--max-delete`/`--max-transfer`). Either many files were genuinely changed upstream (raise the fuse only if intentional) or the remote is wrong — investigate, don't blindly raise it. |
-| `unknown_keys` warning at setup | Typo in `config.yaml` — extra `sync:` keys are ignored but flagged |
+| `SYNC_CONFIG_INVALID` naming an unknown `sync:` key (exit 3) | A typo such as `max_delte` is now **fatal** (fail closed): a misspelled safety fuse would otherwise silently keep its default while the operator believes it is set. Correct the key name — the error details list the offending keys. (`enabled` is exempt: it is CyClaw's own on/off toggle, not an rclone parameter.) |
 | `SYNC_SCHEDULER_ERROR` | `crontab`/`schtasks` not on PATH (e.g. running schtasks under WSL), or the scheduler write failed — see the error details |
 | Soul changed on a second machine | `include_soul` was set to true. Set it back to false and rebuild soul from the canonical machine's `data/personality/` via `POST /soul/apply`. |
 | Stale answers after a sync | The gateway caches the index at import time. After exit 10 + reindex, **restart the gateway**. |

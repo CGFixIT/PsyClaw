@@ -170,12 +170,18 @@ def _run_auto_reindex(cfg: Any) -> int:
     relative to the freshly-synced corpus, which the operator must see rather
     than have masked behind a success code.
 
-    argv is a fixed list (``sys.executable -m retrieval.indexer``); never
-    ``shell=True``. The indexer reads the repo's ``config.yaml`` itself, so this
-    runs in the inherited working directory (the same one the scheduled job uses).
+    argv is a fixed list (``sys.executable -m retrieval.indexer [--config PATH]``);
+    never ``shell=True``. The loaded config's identity is propagated via
+    ``--config`` so a sync started with ``--config /alt/cfg.yaml`` rebuilds the
+    index from THAT config, not the default ``config.yaml`` (codex #592). The
+    recorded path is repo-root-anchored absolute, so it resolves regardless of
+    the child's working directory.
     """
     _heading("Corpus changed -- auto-reindexing")
     argv = [sys.executable, "-m", "retrieval.indexer"]
+    cfg_path = getattr(cfg, "_config_path", None)
+    if cfg_path:
+        argv += ["--config", cfg_path]
     try:
         completed = subprocess.run(argv, check=False)  # noqa: S603 -- fixed argv, no shell
     except OSError as exc:
