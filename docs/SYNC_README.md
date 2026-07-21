@@ -242,11 +242,13 @@ points at the generated `cyclaw_sync.bat` launcher (written next to the rclone
 logs) rather than an inline `cmd /c` string — this avoids the quote fragility of
 passing a full command through `schtasks /TR`.
 
-> **Overlap protection:** `run_sync` holds a single-instance lock (an atomically
-> created lock directory under the rclone log dir) for the duration of a run, so
-> a scheduled run and a manual run cannot drive rclone concurrently — the second
-> exits with `SYNC_RUNTIME` rather than racing. A lock left behind by a crashed
-> run is reclaimed automatically after 3 hours.
+> **Overlap protection:** `run_sync` holds a single-instance lock (an
+> `os.O_CREAT|os.O_EXCL` lock file under the rclone log dir, storing PID + start
+> timestamp) for the duration of a run, so a scheduled run and a manual run
+> cannot drive rclone concurrently — the second exits with `SYNC_RUNTIME` rather
+> than racing. A lock left behind by a crashed run is reclaimed automatically
+> after 3 hours, via a re-validated takeover so two stale-reclaim attempts can't
+> race each other.
 >
 > **More robust Linux option:** a systemd `--user` `Type=oneshot` service driven
 > by a timer unit additionally gives journald logging and `Persistent=true`
