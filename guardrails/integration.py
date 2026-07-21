@@ -254,13 +254,21 @@ async def safe_generate(
     # crashes the caller.
     try:
         rails = get_cyclaw_guardrails(cfg)
-        messages = [{"role": "user", "content": prompt}]
-        # Retrieved context travels via NeMo's action/message context -- the
-        # grounding action reads context["relevant_chunks"] (codex P1). The
-        # previous system-message injection never reached that channel, so the
-        # configured output rail could not see the evidence it scores against.
-        gen_context = {"relevant_chunks": context} if context else None
-        result = await rails.generate_async(messages=messages, context=gen_context)
+        # Retrieved context travels as a context-role message -- the ONLY
+        # context channel the real LLMRails.generate_async supports. Its
+        # signature (prompt/messages/options/state/streaming_handler) has no
+        # ``context`` kwarg: passing one raises TypeError, which the degrade
+        # handler below then masked as a "skipped" turn -- live rails looked
+        # enabled while never running (review P1 on PR #590). A context-role
+        # message's content dict becomes the runtime ``context`` the grounding
+        # action reads as context["relevant_chunks"] (codex P1); the previous
+        # system-message injection never reached that channel either (NeMo
+        # docs: "System messages are not yet supported").
+        messages: list[dict] = []
+        if context:
+            messages.append({"role": "context", "content": {"relevant_chunks": context}})
+        messages.append({"role": "user", "content": prompt})
+        result = await rails.generate_async(messages=messages)
         response = result.get("content", "") if isinstance(result, dict) else str(result)
     except (GuardrailsDependencyError, RailsLoadError) as exc:
         metrics.record_skipped(reason=f"rails unavailable: {exc.code}", query=prompt)
