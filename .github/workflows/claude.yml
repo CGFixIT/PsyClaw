@@ -1,38 +1,44 @@
 name: Claude Code (PR Comments)
 
+# Out-of-band assistance tool only.
+# This workflow allows @claude mentions on PRs to trigger review assistance.
+# It is intentionally limited to read-only repository access and human-initiated triggers only.
+# It does NOT participate in core governance, invariants, or agentic paths.
+
 on:
   issue_comment:
     types: [created]
 
-# Cancel superseded @claude runs on the same issue thread; keep main history.
 concurrency:
   group: claude-pr-comment-${{ github.event.issue.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   claude:
-    name: Claude Code
+    name: Claude Code Review
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+
+    # Only you can trigger this, and only on open Pull Requests
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@claude') &&
-      github.event.comment.user.login == 'CGFixIT'
+      github.event.comment.user.login == 'CGFixIT' &&
+      github.event.issue.state == 'open'
 
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       issues: write
-      id-token: write
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run Claude Code
-        uses: anthropics/claude-code-action@fad22eb3fa582b7357fc0ea48af6645851b884fd  # beta
+        uses: anthropics/claude-code-action@fad22eb3fa582b7357fc0ea48af6645851b884fd
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
