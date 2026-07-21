@@ -61,20 +61,27 @@ jobs:
         run: python -m pip install actionlint-py==1.7.12.24 zizmor==1.27.0
 
       - name: Run actionlint
-        run: actionlint -color
-
-      - name: Run zizmor (Actions security static analysis)
         # .github/workflows/environment.yml is a conda environment spec that
         # happens to live in this directory (referenced by
-        # python-package-conda.yml), not a workflow file -- zizmor can't
-        # parse it as one, so it's excluded rather than left to warn on every run.
+        # python-package-conda.yml), not a workflow file -- actionlint errors
+        # trying to parse it as one ("jobs"/"on" section missing), so it's
+        # passed the explicit file list rather than let scan the whole
+        # directory by default.
+        run: |
+          for f in .github/workflows/*.yml; do
+            [ "$(basename "$f")" = "environment.yml" ] && continue
+            actionlint -color "$f"
+          done
+
+      - name: Run zizmor (Actions security static analysis)
+        # Same environment.yml exclusion as actionlint above, but zizmor only
+        # WARNs (not fails) on a file it can't parse as a workflow, so passing
+        # the whole directory is fine here -- no need for the same file-list loop.
         # --gh-token enables the online audits (e.g. artipacked's tag lookup
         # against actions/checkout) that --offline would otherwise skip.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          zizmor --gh-token "$GH_TOKEN" \
-            $(find .github/workflows -name '*.yml' ! -name 'environment.yml')
+        run: zizmor --gh-token "$GH_TOKEN" .github/workflows/
 
   dependency-review:
     name: dependency-review
@@ -86,12 +93,7 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
-      # Not SHA-pinned like every other action in this file: this repo's
-      # GitHub-Actions Dependabot lane (.github/dependabot.yml) will propose
-      # the pinned-SHA bump on its normal weekly run, matching how the other
-      # pins here were very likely obtained in the first place. Pin it by
-      # hand sooner if that PR doesn't show up within a couple of weeks.
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
         with:
           fail-on-severity: high
 
@@ -173,7 +175,7 @@ jobs:
           # Minimal soul.md + env var for gate tests. No prod secrets.
           mkdir -p data/personality index logs
           echo '# Soul' > data/personality/soul.md
-          echo 'GROK_API_KEY=dummy' >> $GITHUB_ENV
+          echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
       - name: RAG Query Smoke (ChromaDB + BM25 + RRF)
         shell: bash
@@ -263,9 +265,14 @@ jobs:
             pyproject.toml
 
       - name: Install ollama-mock-smoke test deps (no torch/chromadb needed)
+        # pytest always imports tests/conftest.py regardless of which test file
+        # is targeted, and conftest.py imports retrieval.hybrid_search -> rank_bm25
+        # at module load time -- rank-bm25/nltk/numpy are required even though
+        # this specific test file never touches retrieval. Same minimal set
+        # postgres-backend already installs for the identical reason.
         run: |
           python -m pip install --upgrade "pip==26.1.2"
-          pip install -c constraints.txt httpx pyyaml pytest
+          pip install -c constraints.txt httpx pyyaml pytest rank-bm25 nltk numpy
 
       - name: Run LocalLLMClient real-socket tests
         run: pytest tests/test_llm_client_ollama.py -v --tb=short

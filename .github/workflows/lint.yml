@@ -115,4 +115,9 @@ jobs:
           # instead of just being read as a string argument (zizmor
           # template-injection).
           CHANGED_FILES: ${{ steps.changed.outputs.files }}
-        run: flake8 $CHANGED_FILES
+        run: |
+          # CHANGED_FILES is a space-separated list that must word-split into
+          # one flake8 argument per file (see the xargs comment on the step
+          # above for why a trailing-space edge case ruled out the alternatives).
+          # shellcheck disable=SC2086
+          flake8 $CHANGED_FILES

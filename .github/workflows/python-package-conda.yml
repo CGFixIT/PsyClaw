@@ -63,7 +63,7 @@ jobs:
       run: |
         mkdir -p data/personality index logs
         echo '# Soul' > data/personality/soul.md
-        echo 'GROK_API_KEY=dummy' >> $GITHUB_ENV
+        echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
     - name: Pytest — unit + integration + safe smoke (RAG/policy focused)
       shell: bash -l {0}
