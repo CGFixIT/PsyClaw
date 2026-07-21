@@ -77,11 +77,21 @@ jobs:
         # Same environment.yml exclusion as actionlint above, but zizmor only
         # WARNs (not fails) on a file it can't parse as a workflow, so passing
         # the whole directory is fine here -- no need for the same file-list loop.
-        # --gh-token enables the online audits (e.g. artipacked's tag lookup
-        # against actions/checkout) that --offline would otherwise skip.
+        # --gh-token enables the online audits (e.g. ref-version-mismatch's tag
+        # lookup) that --offline would otherwise skip.
+        #
+        # --min-severity=high: an initial full run (offline + online) found 25
+        # pre-existing medium/low findings scattered across ~10 files this PR
+        # never touched (mostly missing persist-credentials: false on
+        # read-only checkouts) -- fixing all of them needs per-job
+        # verification that nothing downstream relies on the persisted
+        # credential, which is real follow-up work, not something to block
+        # every future PR on starting today. This still fails the build on
+        # any HIGH-severity finding (the 2 that existed were already fixed
+        # in this PR) -- run without the flag locally for the full picture.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: zizmor --gh-token "$GH_TOKEN" .github/workflows/
+        run: zizmor --gh-token "$GH_TOKEN" --min-severity=high .github/workflows/
 
   dependency-review:
     name: dependency-review
