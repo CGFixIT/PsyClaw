@@ -133,8 +133,10 @@ class _FakeRails:
 
     def __init__(self, answer: str) -> None:
         self._answer = answer
+        self.calls: list[dict] = []
 
-    async def generate_async(self, *, messages):  # noqa: ANN001 - test stub
+    async def generate_async(self, *, messages, context=None):  # noqa: ANN001 - test stub
+        self.calls.append({"messages": messages, "context": context})
         return {"content": self._answer}
 
 
@@ -195,6 +197,82 @@ def test_live_rails_load_failure_degrades(monkeypatch):
     assert res["blocked"] is False
     assert res["guardrails_active"] is False
     assert m.counters["guardrail_skipped"] == 1
+
+
+def test_live_context_travels_via_relevant_chunks(monkeypatch):
+    # codex P1: the grounding action reads context["relevant_chunks"], so the
+    # retrieved text must reach NeMo through the action/message context -- not
+    # as a system message string that channel never inspects.
+    rails = _FakeRails("rrf fusion combines ranks")
+    _force_live(monkeypatch, lambda: rails)
+    cfg = GuardrailsConfig(enabled=True)
+    res = _run(safe_generate(
+        "explain fusion",
+        context="rrf fusion combines semantic and keyword ranks",
+        cfg=cfg, metrics=_metrics(),
+    ))
+    assert res["blocked"] is False
+    assert rails.calls[0]["context"] == {
+        "relevant_chunks": "rrf fusion combines semantic and keyword ranks"
+    }
+    assert all(m["role"] != "system" for m in rails.calls[0]["messages"])
+
+
+def test_live_provider_error_degrades_not_raises(monkeypatch):
+    # codex P2: a live-provider failure (connect/timeout/5xx/Colang runtime)
+    # must degrade to a skipped, non-blocked turn -- the documented contract
+    # -- instead of propagating out of safe_generate.
+    class _DownRails:
+        async def generate_async(self, *, messages, context=None):  # noqa: ANN001 - test stub
+            raise ConnectionError("refused: http://127.0.0.1:11434/v1 should not leak")
+
+    _force_live(monkeypatch, lambda: _DownRails())
+    cfg = GuardrailsConfig(enabled=True)
+    m = _metrics()
+    res = _run(safe_generate("benign prompt", context="some context", cfg=cfg, metrics=m))
+    assert res["blocked"] is False
+    assert res["guardrails_active"] is False
+    assert res["reason"] == "rails provider error: ConnectionError"
+    assert "11434" not in res["reason"]  # redacted to the type name only
+    assert m.counters["guardrail_skipped"] == 1
+
+
+def test_apply_guardrails_config_overrides_static_template(monkeypatch):
+    # codex P1: config.yaml's guardrails: block is authoritative -- the static
+    # NeMo template's engine/model/base_url are overridden at engine-build
+    # time, so a stale template can never redirect the live engine.
+    from types import SimpleNamespace
+
+    from guardrails.integration import _apply_guardrails_config
+
+    fake_config = SimpleNamespace(models=[
+        SimpleNamespace(engine="openai", model="stale-model",
+                        parameters={"base_url": "http://127.0.0.1:1234/v1"}),
+        SimpleNamespace(engine="openai", model="stale-model", parameters=None),
+    ])
+    cfg = GuardrailsConfig(enabled=True, base_url="http://127.0.0.1:11434/v1",
+                           model="qwen2.5:7b", engine="openai")
+    _apply_guardrails_config(fake_config, cfg)
+    for m in fake_config.models:
+        assert m.model == "qwen2.5:7b"
+        assert m.parameters["base_url"] == "http://127.0.0.1:11434/v1"
+
+
+def test_nemo_template_matches_guardrails_block():
+    # Drift pin: the shipped NeMo template must keep pointing at the same
+    # local endpoint as config.yaml's guardrails: block (LM Studio -> Ollama
+    # migration left it stale once -- codex P1).
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parent.parent
+    top = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+    nemo = yaml.safe_load((root / "guardrails" / "config" / "config.yml").read_text(encoding="utf-8"))
+    gr = top["guardrails"]
+    for model in nemo["models"]:
+        assert model["parameters"]["base_url"] == gr["base_url"]
+        assert model["model"] == gr["model"]
 
 
 # --- Phase 2 input rail: check_input (sync, offline-only) --------------------
