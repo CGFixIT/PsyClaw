@@ -19,8 +19,8 @@ The system uses a FastAPI server on localhost:8787 that accepts JSON queries and
 2. Semantic search via ChromaDB embeddings
 3. Keyword search via BM25 index
 4. Result fusion using Reciprocal Rank Fusion
-5. LLM response generation with a local Ollama model, or an optional Grok/Claude fallback
+5. LLM response generation with local or Grok models
 
 ## Deployment
 
-CyClaw runs offline by default, using Ollama for local LLM inference. It can optionally escalate to Grok or Claude when high-confidence answers aren't found locally.
+CyClaw runs offline by default, using Ollama for local LLM inference. It can optionally escalate to Grok when high-confidence answers aren't found locally.
