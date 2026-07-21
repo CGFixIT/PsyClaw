@@ -77,6 +77,20 @@ _VALID_CONFLICT_RESOLVE = ("newer", "older", "larger", "smaller", "none")
 # argv-hygiene goal of keeping --bwlimit a single clean token.
 _BWLIMIT_RE = re.compile(r"^(?:off|\d+(?:\.\d+)?[bkmgtpi]*)$", re.IGNORECASE)
 
+# Boolean-typed safety fields of RcloneConfig -- strictly validated in
+# load_sync_config (quoted YAML strings must not pass). Listed explicitly
+# rather than derived from the dataclass: with `from __future__ import
+# annotations` the field .type is a string, and an explicit list doubles as
+# the checklist of which gates are load-bearing.
+_BOOL_FIELDS = (
+    "include_soul",
+    "reindex_on_change",
+    "auto_reindex",
+    "post_sync_check",
+    "checksum",
+    "fast_list",
+)
+
 
 def _default_rclone_state_dir() -> Path:
     """Return rclone's state directory, honouring XDG_CONFIG_HOME."""
@@ -236,6 +250,11 @@ class RcloneConfig:
         # After resolution, store an absolute path so callers never see a
         # relative value or an unresolved "..".
         self.local_path = str(resolved)
+        # Canonical repo root for spawned work (the scheduler's cd target).
+        # Derived from the CODE location -- never from local_path depth -- so
+        # a local_path nested below data/corpus cannot shift it (codex P2:
+        # two-parents-up from a nested local_path resolves to repo/data).
+        self.repo_root = str(repo_root)
 
     def _validate_remote_name(self) -> None:
         # Reject a leading '-' first: remote_name is composed into the rclone
@@ -348,8 +367,10 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
 
     Loads through ``utils.logger._get_config`` (cached; tests reset via
     ``reset_config_cache``). Raises ``SyncConfigError`` if the block is absent,
-    malformed, or any value fails validation. Unknown keys are collected on a
-    non-fatal ``_unknown_keys`` attribute for typo visibility.
+    malformed, or any value fails validation. Unknown keys are FATAL (fail
+    closed): a typo'd safety fuse must never silently revert to its default.
+    Safety booleans must be real YAML booleans -- a quoted ``"false"`` is
+    truthy in Python and would fail the gate OPEN.
     """
     cfg = _get_config(config_path) or {}
 
@@ -370,13 +391,29 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
         )
 
     # Pass through only fields RcloneConfig knows about (excluding the constant
-    # REINDEX_EXIT_CODE). Unknown keys are collected, not fatal.
+    # REINDEX_EXIT_CODE). Unknown keys are FATAL: with lenient collection a
+    # typo like ``max_delte: 5`` parses fine while the deletion fuse silently
+    # stays at its default -- the operator believes a safety control is set
+    # when it is not. "enabled" is CyClaw's own on/off toggle, not an rclone
+    # parameter, so it is not an RcloneConfig field and not a typo.
     known_fields = {f for f in RcloneConfig.__dataclass_fields__ if f != "REINDEX_EXIT_CODE"}
     unknown = set(block.keys()) - known_fields
-    # "enabled" is CyClaw's own on/off toggle, not an rclone parameter, so it is
-    # not an RcloneConfig field and not a typo. It is read out here and enforced
-    # by the CLI (``cmd_sync`` no-ops when false); drop it from the unknown set.
     unknown.discard("enabled")
+    if unknown:
+        raise SyncConfigError(
+            f"sync: unknown keys (typo?): {sorted(unknown)}",
+            details={"unknown_keys": sorted(unknown)},
+        )
+
+    # Safety booleans must be REAL booleans. bool("false") is True, so a quoted
+    # YAML string would silently ENABLE the very gate it was meant to disable
+    # (master gate fails open on quoted booleans -- codex finding).
+    for name in (*_BOOL_FIELDS, "enabled"):
+        if name in block and not isinstance(block[name], bool):
+            raise SyncConfigError(
+                f"sync.{name} must be a boolean true/false, got: {block[name]!r}",
+                details={"field": name, "received": repr(block[name])},
+            )
     kwargs = {k: v for k, v in block.items() if k in known_fields}
 
     try:
@@ -390,6 +427,9 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
     # Default to enabled when the key is absent (a present sync: block is opt-in
     # already). Stored as a plain attribute, not a dataclass field, to keep it
     # out of the rclone-parameter surface (to_dict / argv).
-    rc.enabled = bool(block.get("enabled", True))  # type: ignore[attr-defined]
-    rc._unknown_keys = sorted(unknown)  # type: ignore[attr-defined]
+    rc.enabled = block.get("enabled", True)  # type: ignore[attr-defined]  # validated bool above
+    # One propagated config identity for all spawned work: the scheduler's
+    # generated command re-invokes the CLI with this exact path, so a schedule
+    # installed via `--config /alt/path.yaml` keeps reading THAT file.
+    rc._config_path = os.path.abspath(config_path)  # type: ignore[attr-defined]
     return rc

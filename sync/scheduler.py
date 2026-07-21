@@ -64,16 +64,31 @@ def _python_executable() -> str:
 def _repo_root(cfg: RcloneConfig) -> str:
     """Directory the scheduled command should cd into before running sync.
 
-    ``cfg.local_path`` resolves to ``.../data/corpus``; ``config.yaml`` lives at
-    the repo root (the parent of ``data/``). So the repo root is two levels up
-    from ``data/corpus``. If a ``config.yaml`` is found there we trust it;
-    otherwise we still fall back to that two-levels-up directory, which is the
-    documented layout. Keeping this simple and explicit avoids any taint or
-    surprise about *where* config.yaml is resolved at run time.
+    Prefers the canonical root carried on the config object (derived from the
+    code location at load time). The legacy fallback derives it from
+    ``cfg.local_path`` -- correct ONLY for the flat ``.../data/corpus`` layout:
+    a local_path nested below data/corpus would resolve to ``repo/data``
+    instead of the repo (codex finding), so the depth-based derivation is
+    never used when the canonical root is available.
     """
+    canonical = getattr(cfg, "repo_root", None)
+    if canonical:
+        return str(canonical)
     corpus = os.path.abspath(cfg.local_path)
     repo_root = os.path.dirname(os.path.dirname(corpus))  # .../data/corpus -> repo
     return repo_root
+
+
+def _config_arg(cfg: RcloneConfig) -> str:
+    """``--config <path>`` fragment carrying the loaded config's identity.
+
+    The loader records the absolute path it read; the scheduled command must
+    re-invoke the CLI with that SAME path or a schedule installed via
+    ``--config /alt/cfg.yaml`` would silently read the default config.yaml
+    (codex finding: --config only partially honoured by scheduling).
+    """
+    path = getattr(cfg, "_config_path", None)
+    return f'--config "{path}"' if path else ""
 
 
 def _sync_command(cfg: RcloneConfig) -> str:
@@ -91,9 +106,11 @@ def _sync_command(cfg: RcloneConfig) -> str:
     """
     py = _python_executable()
     root = _repo_root(cfg)
+    config_arg = _config_arg(cfg)
+    cli = f'"{py}" -m sync.cli {config_arg} sync' if config_arg else f'"{py}" -m sync.cli sync'
     if platform.system() == "Windows":
-        return f'cmd /c "cd /d "{root}" && "{py}" -m sync.cli sync"'
-    return f'cd "{root}" && "{py}" -m sync.cli sync'
+        return f'cmd /c "cd /d "{root}" && {cli}"'
+    return f'cd "{root}" && {cli}'
 
 
 def _write_windows_launcher(cfg: RcloneConfig) -> str:
@@ -110,10 +127,12 @@ def _write_windows_launcher(cfg: RcloneConfig) -> str:
     os.makedirs(bat_dir, exist_ok=True)
     bat_path = os.path.join(bat_dir, "cyclaw_sync.bat")
     # CRLF line endings + explicit quoting so paths with spaces are safe.
+    config_arg = _config_arg(cfg)
+    cli = f'"{py}" -m sync.cli {config_arg} sync' if config_arg else f'"{py}" -m sync.cli sync'
     content = (
         "@echo off\r\n"
         f'cd /d "{root}"\r\n'
-        f'"{py}" -m sync.cli sync\r\n'
+        f"{cli}\r\n"
     )
     with open(bat_path, "w", encoding="utf-8", newline="") as f:
         f.write(content)

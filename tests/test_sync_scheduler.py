@@ -363,3 +363,48 @@ def test_scheduler_from_loaded_config(tmp_path: Path) -> None:
     assert isinstance(sched, CronScheduler)
     assert sched.cfg.schedule_hour == 6
     assert sched.cfg.schedule_min == 30
+
+
+# ---------------------------------------------------------------------------
+# Canonical repo root + propagated config identity (codex findings)
+# ---------------------------------------------------------------------------
+
+def test_repo_root_canonical_for_nested_local_path() -> None:
+    # A local_path nested below data/corpus is valid config, but the legacy
+    # two-parents-up derivation would resolve to repo/data instead of the
+    # repo. The canonical root carried from load time must win.
+    from sync.scheduler import _repo_root
+
+    nested = str(Path(_CORPUS) / "sub" / "vault")
+    cfg = _make_cfg(local_path=nested)
+    assert cfg.repo_root == str(_REPO_ROOT)
+    assert _repo_root(cfg) == str(_REPO_ROOT)
+
+
+def test_repo_root_legacy_fallback_only_without_canonical() -> None:
+    # Without the carried attribute the depth-based fallback still works for
+    # the flat .../data/corpus layout (back-compat for hand-built configs).
+    from sync.scheduler import _repo_root
+
+    cfg = _make_cfg()
+    del cfg.repo_root
+    assert _repo_root(cfg) == str(_REPO_ROOT)
+
+
+def test_sync_command_propagates_config_identity() -> None:
+    # A schedule installed via `--config /alt/cfg.yaml` must keep reading THAT
+    # file: the generated command re-invokes the CLI with the same path.
+    from sync.scheduler import _sync_command
+
+    cfg = _make_cfg()
+    cfg._config_path = "/alt/dir/custom.yaml"
+    cmd = _sync_command(cfg)
+    assert '--config "/alt/dir/custom.yaml"' in cmd
+    assert cmd.index("--config") < cmd.rindex("sync")  # flag before subcommand
+
+
+def test_sync_command_omits_config_flag_when_unset() -> None:
+    from sync.scheduler import _sync_command
+
+    cfg = _make_cfg()  # direct RcloneConfig: loader never attached a path
+    assert "--config" not in _sync_command(cfg)
