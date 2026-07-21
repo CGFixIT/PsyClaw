@@ -8,7 +8,7 @@
 #   $env:CYCLAW_API_KEY = "verify-soul-key-ci"   # /soul is API-key gated (PR #249)
 #   python -m uvicorn gate:app --host 127.0.0.1 --port 8787
 # Then, from the repo root:
-#   .\.claude\skills\sandbox-runtime-verification\windows-smoke.ps1
+#   ..claude\skills\CyClaw-Sandbox\windows-smoke.ps1
 
 param(
     [int]$Port = 8787

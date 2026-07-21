@@ -145,7 +145,7 @@ Re-run the full measurement protocol (all endpoints, 5 runs each, median). Compa
 Speed wins are worthless if correctness breaks:
 
 ```bash
-bash .claude/skills/run-cyclaw/smoke.sh
+bash .claude/skills/CyClaw-Sandbox/smoke.sh
 ```
 
 If any smoke check fails, **revert the change** and pick a different approach.

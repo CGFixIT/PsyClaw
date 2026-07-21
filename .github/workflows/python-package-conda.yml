@@ -92,9 +92,9 @@ jobs:
           echo "Running project verify.sh harness..."
           ./verify.sh
         fi
-        if [ -f .claude/skills/sandbox-runtime-verification/verify.sh ]; then
+        if [ -f .claude/skills/CyClaw-Sandbox/verify.sh ]; then
           echo "Running sandbox verification harness..."
-          bash .claude/skills/sandbox-runtime-verification/verify.sh
+          bash .claude/skills/CyClaw-Sandbox/verify.sh
         fi
 
     # CodeQL analysis is owned by .github/workflows/codeql.yml which runs on

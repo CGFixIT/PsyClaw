@@ -6,7 +6,7 @@ FastAPI app builds, telemetry-kill is active, the expected endpoints register,
 and the entry point is callable. Exits non-zero on any failure so it can gate CI.
 
 Run from the repo root with deps installed:
-    GROK_API_KEY=dummy python .claude/skills/sandbox-runtime-verification/gate_runtime_check.py
+    GROK_API_KEY=dummy python .claude/skills/CyClaw-Sandbox/gate_runtime_check.py
 """
 
 import os

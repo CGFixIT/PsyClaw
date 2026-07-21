@@ -68,7 +68,7 @@ Make the change. Keep the diff focused — one concern per commit.
 Run the project's smoke test to confirm nothing is broken:
 
 ```bash
-bash .claude/skills/run-cyclaw/smoke.sh
+bash .claude/skills/CyClaw-Sandbox/smoke.sh
 ```
 
 If the smoke script is unavailable, fall back to:

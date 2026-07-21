@@ -265,7 +265,7 @@ _TORCH_PROSE_VERSION_RE = re.compile(r"torch\s+(\d+\.\d+\.\d+)\+cpu")
 # INSTALLING 2.12.1+cpu after the manifest moved to 2.13.0+cpu, reproducing
 # the double-fetch failure outside CI -- so they FAIL like the workflows.
 _TORCH_SCRIPT_FILES = (
-    ".claude/skills/sandbox-runtime-verification/verify.sh",
+    ".claude/skills/CyClaw-Sandbox/verify.sh",
     ".codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py",
 )
 # Agent-facing docs/SKILL.md install instructions with the same hardcoded
@@ -279,7 +279,6 @@ _TORCH_DOC_FILES = (
     "docs/SETUP.md",
     ".github/copilot-instructions.md",
     ".claude/rules/PROJECT_RULES.md",
-    ".claude/skills/run-cyclaw/SKILL.md",
     ".claude/skills/CyClaw-Sandbox/SKILL.md",
     ".claude/skills/python-coding-agent/SKILL.md",
     ".claude/skills/cyclaw-advisor/SKILL.md",

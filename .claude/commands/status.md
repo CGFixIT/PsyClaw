@@ -69,7 +69,7 @@ ChromaDB:      EXISTS  ✅
 BM25 index:    EXISTS  ✅
 Config mode:   offline ✅
 Server:        RUNNING / NOT RUNNING
-Health status: healthy / degraded (normal without LM Studio)
+Health status: healthy / degraded (normal without a live Ollama daemon)
 ```
 
 List any ❌ failures with remediation steps.

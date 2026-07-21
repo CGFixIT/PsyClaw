@@ -190,7 +190,8 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   then `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`.
 - **Trap:** running `pytest` in a fresh container — no deps are installed.
   **Rule:** a freshly-cloned container has NO Python deps. Install first
-  (`/run-cyclaw` or `/sandbox-runtime-verification`) before any test/run step.
+  (`/CyClaw-Sandbox` — Quick Mode for a fast check, or the full audit for a
+  Python 3.12 runtime gate) before any test/run step.
 - **Trap:** assuming the server refuses to boot without `GROK_API_KEY`.
   **Rule:** `security.require_env` is **decorative** — no code reads it. The
   server boots fine; Grok just reports unavailable. Tests only need
@@ -432,8 +433,8 @@ irreversible or a matter of user taste.
 
 **Blocked:** record it in `docs/SESSION_NOTES.md` (or `.claude/session-notes/`)
 and escalate — `#cyclaw-dev` for undefined behavior, a private GitHub security
-issue for security concerns, `/sandbox-runtime-verification` for suspected
-config drift.
+issue for security concerns, `/CyClaw-Sandbox` for suspected config drift
+(its Python-3.12 runtime gate phase catches this).
 
 Do NOT: re-ask a question already answered; ask the user to reveal a secret;
 change code behavior to make a stale doc "true" (fix the doc, or flag the
@@ -513,10 +514,8 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 
 | Skill | Type | Purpose |
 |---|---|---|
-| `/run-cyclaw` | task | Smoke-test the FastAPI server |
 | `/CyClaw-Optimize` | task | Scan main for optimizations; open focused draft PRs |
-| `/CyClaw-Sandbox` | task | Clone main, mock Ollama, full audit, dated report + PR |
-| `/sandbox-runtime-verification` | task | Full Python 3.12 runtime gate |
+| `/CyClaw-Sandbox` | task | Clone main, mock Ollama (3-tier realism), full audit incl. Python 3.12 runtime gate, dated report + PR. `/run` = its Quick Mode (no clone/report/PR) |
 | `/architecture-refactor` `/speed-refactor` `/tests-refactor` `/logging-refactor` | loop | Iterative refactor loops |
 | `/wrap-up` | task | End-of-session checklist (ship / remember / improve / publish) |
 | `/create-session-notes` | task | Maintain `SESSION_NOTES.md` |
