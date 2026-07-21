@@ -40,8 +40,10 @@ The six security invariants (`CLAUDE.md` §3) are design constraints, not implem
 
 ## Repository Layout
 
-Code modules mirror `CLAUDE.md` §2's "Key modules" table (more granular — treat that as the source of truth). Non-code directories `CLAUDE.md`'s module table omits:
+Code modules mirror `CLAUDE.md` §2's "Key modules" table (more granular — treat that as the source of truth). Directories `CLAUDE.md`'s module table omits:
 
+- `static/` - browser terminal UI (`terminal.html`, served at `/`).
+- `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
 - `.claude/` - Claude project skills, commands, hooks, rules, and patterns.
 - `.codex/` - Codex instructions, skills, checklists, prompts, and routines.
@@ -140,7 +142,7 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e . -c constraints.txt
 ```
 
-Legacy/CI-compatible fallback (this is the path `CLAUDE.md` §8 documents and CI uses):
+Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
 ```bash
 python -m pip install --upgrade "pip>=26.1.2"
@@ -160,7 +162,13 @@ Windows PowerShell setup is documented in `docs/SETUP.md`. Keep the same torch-f
 
 ## Build And Run Commands
 
-Same commands as `CLAUDE.md` §8 (index build, `gate.py`/`cyclaw-server`, MCP server). `Dockerfile` and `docker-compose.yml` exist for containerized runs; their exact invocation is unverified against a documented CI target — confirm in the target environment before relying on it rather than assuming `docker build -t cyclaw .` / `docker compose up --build` work as-is.
+Same commands as `CLAUDE.md` §8 (index build, `gate.py`/`cyclaw-server`, MCP server), plus the raw uvicorn invocation `CLAUDE.md` doesn't spell out:
+
+```bash
+uvicorn gate:app --host 127.0.0.1 --port 8787
+```
+
+`Dockerfile` and `docker-compose.yml` exist for containerized runs; their exact invocation is unverified against a documented CI target — confirm in the target environment before relying on it rather than assuming `docker build -t cyclaw .` / `docker compose up --build` work as-is.
 
 ## Test Commands
 
@@ -229,18 +237,38 @@ keeping close to this file:
   gateway test, not just before running the server.
 - Preserve committed `data/personality/soul.md` unless the task is explicitly
   about soul content, or the test isolates and restores it.
+- Treat `data/corpus/` as potentially private user knowledge; do not expose
+  its content in summaries unless necessary and requested.
+- For security/routing/retrieval changes, expand verification to the
+  CI-equivalent command from `.github/workflows/ci.yml` rather than a
+  narrower local check.
+- For dependency or CI changes, compare `pyproject.toml`, `requirements.txt`,
+  `constraints.txt`, `Dockerfile`, and `environment.yml` for drift.
+  `.claude/skills/dep-guard/check_deps.py` (stdlib-only, runs without
+  installing anything) does this deterministically for pin agreement; there is
+  no `.codex/`-side equivalent yet.
+- Report exactly what ran, what failed, and what remains unverified — every
+  response, not just PR bodies.
 - GitHub App / connector permissions observed during Codex setup: `admin`,
   `maintain`, `pull`, `push`, `triage`. The connector's Git contents API can
   return `403 Resource not accessible by integration` for direct file writes —
   that's an installation-permission gap, not something a repo file can fix; it
-  needs the GitHub App/connector installation updated outside the repo.
+  needs the GitHub App/connector installation updated outside the repo. PR
+  conversation comments specifically need pull-request/issues write
+  permission — if the connector's PR comment/review tools return 403, that is
+  the same class of gap.
 - Local `gh` availability is environment-specific and may be a non-GitHub-CLI
-  shim — verify the actual binary (`gh --version`) before relying on it; prefer
+  shim — verify the actual binary first (`Get-Command gh` on Windows /
+  `gh --version` elsewhere), then confirm auth with `gh auth status`; prefer
   connector/API metadata when `gh` is missing, unauthenticated, or not the
   official CLI.
 - `.github/workflows/claude.yml` already grants `contents: write`,
   `pull-requests: write`, `issues: write`, and `id-token: write` for the
   existing Claude PR-comment workflow.
+- Do not edit open PR branches unless the user clearly asked or the repo's
+  documented CI-failure policy applies.
+- For PR reviews, lead with findings and file/line references; keep
+  summaries secondary.
 - Do not rewrite existing Claude/Copilot instructions when adding Codex
   guidance to this file — extend, don't overwrite another agent's contract.
 - Do not invent commands; mark unknowns as needs verification (see the Build
