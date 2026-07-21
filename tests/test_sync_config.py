@@ -259,12 +259,29 @@ def test_quoted_bool_master_gate_fails_closed(tmp_path: Path) -> None:
 
 
 def test_config_path_identity_carried(tmp_path: Path) -> None:
-    # The loader records the absolute path it read so spawned work (scheduler)
-    # can re-invoke the CLI with the same config identity.
+    # The loader records the path it read -- resolved the SAME way _get_config
+    # loads it (repo-root anchored) -- so spawned work (scheduler, auto-reindex)
+    # can re-invoke the CLI against byte-identical config identity (codex #592 P1).
+    from utils.logger import resolve_config_path
+
     path = _write_config(tmp_path, _base_block())
     cfg = load_sync_config(path)
-    assert cfg._config_path == os.path.abspath(path)  # type: ignore[attr-defined]
+    assert cfg._config_path == str(resolve_config_path(path))  # type: ignore[attr-defined]
     assert cfg.repo_root  # canonical root carried for the scheduler
+
+
+def test_config_path_identity_is_cwd_independent(tmp_path: Path, monkeypatch) -> None:
+    # codex #592 P1: the recorded identity must match the file the loader opens.
+    # _get_config anchors RELATIVE paths to the repo root, so the recorder must
+    # too -- a cwd-anchored os.path.abspath would name a different (or missing)
+    # file when the CLI is invoked from any dir but the repo root. Proven at the
+    # shared resolver: the same relative path resolves identically from any cwd.
+    from utils.logger import resolve_config_path
+
+    default_from_repo = resolve_config_path("config.yaml")
+    monkeypatch.chdir(tmp_path)  # cwd != repo root
+    assert resolve_config_path("config.yaml") == default_from_repo  # cwd-independent
+    assert resolve_config_path("config.yaml") != (tmp_path / "config.yaml")  # not cwd
 
 
 def test_enabled_flag_read_from_block(tmp_path: Path) -> None:

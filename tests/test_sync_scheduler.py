@@ -393,13 +393,16 @@ def test_repo_root_legacy_fallback_only_without_canonical() -> None:
 
 def test_sync_command_propagates_config_identity() -> None:
     # A schedule installed via `--config /alt/cfg.yaml` must keep reading THAT
-    # file: the generated command re-invokes the CLI with the same path.
+    # file: the generated command re-invokes the CLI with the same path. shlex
+    # leaves a clean path unquoted, so assert the path is carried verbatim
+    # rather than a specific quoting.
     from sync.scheduler import _sync_command
 
     cfg = _make_cfg()
     cfg._config_path = "/alt/dir/custom.yaml"
     cmd = _sync_command(cfg)
-    assert '--config "/alt/dir/custom.yaml"' in cmd
+    assert "--config" in cmd
+    assert "/alt/dir/custom.yaml" in cmd
     assert cmd.index("--config") < cmd.rindex("sync")  # flag before subcommand
 
 
@@ -408,3 +411,45 @@ def test_sync_command_omits_config_flag_when_unset() -> None:
 
     cfg = _make_cfg()  # direct RcloneConfig: loader never attached a path
     assert "--config" not in _sync_command(cfg)
+
+
+def test_sync_command_shlex_escapes_hostile_paths(monkeypatch) -> None:
+    # codex #592: the POSIX cron line must treat a hostile config/repo path as a
+    # single inert argument -- $(), backticks, ;, & must never break out. Prove
+    # it by round-tripping the generated command through shlex.split: every
+    # dangerous fragment stays inside ONE quoted token.
+    import shlex
+
+    from sync import scheduler
+    from sync.scheduler import _sync_command
+
+    monkeypatch.setattr(scheduler.platform, "system", lambda: "Linux")
+    cfg = _make_cfg()
+    hostile = "/tmp/evil; rm -rf ~ $(id) `whoami`/cfg.yaml"
+    cfg._config_path = hostile
+    cmd = _sync_command(cfg)
+
+    toks = shlex.split(cmd)  # POSIX word-splitting, honouring the quoting
+    assert "--config" in toks
+    assert toks[toks.index("--config") + 1] == hostile  # survives as ONE argument
+    # The injection fragments are NOT standalone shell tokens.
+    assert "rm" not in toks and "$(id)" not in toks and "`whoami`/cfg.yaml" not in toks
+    # The only shell-active operator we emit is our own && between cd and python.
+    assert toks.count("&&") == 1
+
+
+def test_windows_launcher_doubles_percent_and_quotes(tmp_path) -> None:
+    # codex #592: a config path containing %VAR% must be written into the .bat
+    # with % doubled (so cmd.exe cannot expand it at run time) and quoted (so
+    # spaces are safe). _write_windows_launcher builds the .bat on any OS.
+    from sync.scheduler import _bat_quote, _write_windows_launcher
+
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
+    cfg._config_path = r"C:\cfg %TEMP% dir\config.yaml"
+    bat = _write_windows_launcher(cfg)
+    content = Path(bat).read_text(encoding="utf-8")
+
+    assert _bat_quote(cfg._config_path) in content       # quoted + %-doubled
+    assert "%%TEMP%%" in content                          # not expandable
+    assert '"%TEMP%"' not in content                      # never a bare, expandable form
+    assert content.startswith("@echo off")               # (read_text normalizes CRLF->LF)

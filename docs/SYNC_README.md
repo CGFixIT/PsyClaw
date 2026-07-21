@@ -314,7 +314,7 @@ No field is ever named `query` (that would be SHA-256-hashed by the logger).
 | `RCLONE_VERSION_TOO_OLD` (exit 3) | Upgrade to **v1.68.2** or higher (CVE-2024-52522 fix) |
 | `SYNC_CONFIG_INVALID` (exit 3) | Check the `sync:` block in `config.yaml` — error details name the failing field |
 | `aborted_for_safety: true` (exit 1) | A safety fuse tripped (`--max-delete`/`--max-transfer`). Either many files were genuinely changed upstream (raise the fuse only if intentional) or the remote is wrong — investigate, don't blindly raise it. |
-| `unknown_keys` warning at setup | Typo in `config.yaml` — extra `sync:` keys are ignored but flagged |
+| `SYNC_CONFIG_INVALID` naming an unknown `sync:` key (exit 3) | A typo such as `max_delte` is now **fatal** (fail closed): a misspelled safety fuse would otherwise silently keep its default while the operator believes it is set. Correct the key name — the error details list the offending keys. (`enabled` is exempt: it is CyClaw's own on/off toggle, not an rclone parameter.) |
 | `SYNC_SCHEDULER_ERROR` | `crontab`/`schtasks` not on PATH (e.g. running schtasks under WSL), or the scheduler write failed — see the error details |
 | Soul changed on a second machine | `include_soul` was set to true. Set it back to false and rebuild soul from the canonical machine's `data/personality/` via `POST /soul/apply`. |
 | Stale answers after a sync | The gateway caches the index at import time. After exit 10 + reindex, **restart the gateway**. |

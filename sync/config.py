@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from utils.errors import SyncConfigError
-from utils.logger import _get_config
+from utils.logger import _get_config, resolve_config_path
 
 # Defaults -- every key here can be overridden by config.yaml.
 DEFAULT_REMOTE_NAME = "dropbox_cyclaw"
@@ -430,6 +430,10 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
     rc.enabled = block.get("enabled", True)  # type: ignore[attr-defined]  # validated bool above
     # One propagated config identity for all spawned work: the scheduler's
     # generated command re-invokes the CLI with this exact path, so a schedule
-    # installed via `--config /alt/path.yaml` keeps reading THAT file.
-    rc._config_path = os.path.abspath(config_path)  # type: ignore[attr-defined]
+    # installed via `--config /alt/path.yaml` keeps reading THAT file. Resolve it
+    # the SAME way _get_config did (repo-root anchored, not cwd) so the recorded
+    # identity is byte-identical to the file actually loaded -- a cwd-anchored
+    # os.path.abspath would name a different/missing file when the CLI is invoked
+    # from any dir but the repo root (codex #592 P1).
+    rc._config_path = str(resolve_config_path(config_path))  # type: ignore[attr-defined]
     return rc

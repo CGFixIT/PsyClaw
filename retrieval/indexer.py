@@ -228,18 +228,34 @@ def build_index(config_path: str = "config.yaml") -> None:
     logger.info("Done. Semantic backend: %s, BM25: %s", backend, bm25_path)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Console entry point for ``cyclaw-index`` (see pyproject [project.scripts]).
 
     Thin wrapper over :func:`build_index`. The declared
     ``cyclaw-index = "retrieval.indexer:main"`` script previously raised
     AttributeError because this module only defined ``build_index``.
 
+    Accepts ``--config`` so a caller that loaded a non-default config (e.g. the
+    sync auto-reindex spawned after ``sync.cli --config /alt/cfg.yaml``) rebuilds
+    the index from THAT config rather than the default ``config.yaml`` (codex
+    #592: auto-reindex previously dropped the custom config identity). Relative
+    paths anchor to the repo root, so an absolute path from a caller is honoured.
+
     Configures root logging here (not at import time) so the CLI keeps showing
     progress, while importers of ``build_index`` control their own log handlers.
     """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="cyclaw-index", description="Build the CyClaw hybrid retrieval index."
+    )
+    parser.add_argument(
+        "--config", default="config.yaml",
+        help="Path to config.yaml (relative paths anchor to the repo root).",
+    )
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    build_index()
+    build_index(args.config)
 
 
 if __name__ == "__main__":
