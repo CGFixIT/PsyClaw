@@ -245,7 +245,7 @@ passing a full command through `schtasks /TR`.
 > **Overlap protection:** `run_sync` holds a single-instance OS-backed lock
 > on `sync.lock` under the rclone log dir, storing PID + start timestamp while
 > held. A scheduled run and a manual run therefore cannot drive rclone
-> concurrently — the second exits with `SYNC_RUNTIME` rather than racing. The
+> concurrently — the second exits with `SYNC_RUNTIME_ERROR` rather than racing. The
 > descriptor remains open through the optional post-sync check, and the OS
 > releases ownership automatically on a clean exit or crash. The empty lock file
 > remains for reuse; its existence does not mean a sync is active and it must not
