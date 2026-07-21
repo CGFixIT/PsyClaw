@@ -3,7 +3,10 @@
 Subcommands:
 
     status   Print guardrails config + NeMo-config presence + dep availability.
-    check    Run the offline rails over a query string (no LLM, no NeMo needed).
+    check    Probe the guardrails path over a query string. With guardrails
+             enabled AND nemoguardrails installed this performs a LIVE
+             generation through the configured local LLM; otherwise it runs
+             the offline heuristic floor (no LLM, no NeMo needed).
     metrics  Summarize the guardrail metrics stream (logs/guardrails.jsonl).
     test     Run the pre-flight self-test.
 
@@ -125,7 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Print guardrails config + dependency status.")
     p_status.set_defaults(func=cmd_status)
 
-    p_check = sub.add_parser("check", help="Run offline rails over a query (no LLM/NeMo needed).")
+    p_check = sub.add_parser(
+        "check",
+        help="Probe the guardrails path over a query. Live generation when guardrails "
+        "+ nemoguardrails are enabled; offline heuristic floor otherwise.",
+    )
     p_check.add_argument("query", help="The user query to evaluate.")
     p_check.add_argument("--context", help="Optional retrieved-context string to ground against.")
     p_check.set_defaults(func=cmd_check)

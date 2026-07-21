@@ -2,9 +2,11 @@
 # CyClaw NeMo Guardrails -- RailsConfig  [v0.1 skeleton]
 # =============================================================================
 # Loaded by guardrails/integration.py via RailsConfig.from_path("guardrails/config").
-# Points at the LOCAL LM Studio OpenAI-compatible endpoint -- no cloud dependency,
-# consistent with CyClaw's offline-first posture. Keep model/base_url in sync with
-# config.yaml -> models.local_llm and the guardrails: block.
+# Points at the LOCAL Ollama OpenAI-compatible endpoint -- no cloud dependency,
+# consistent with CyClaw's offline-first posture. config.yaml's guardrails: block is
+# the authoritative source: guardrails/integration.py overrides engine/model/base_url
+# from GuardrailsConfig at engine-build time, so edit them THERE; this file is the
+# Colang rails + prompt template and a fallback default only.
 #
 # NOTE: This is a starting template. The flows referenced below are defined in
 # rails.co. Tune the active rail set in CyClaw config.yaml (guardrails.input_rails
@@ -14,23 +16,23 @@
 models:
   - type: main
     engine: openai
-    model: qwen2.5-7b-instruct          # match LM Studio loaded model
+    model: qwen2.5:7b                   # Ollama tag (authoritative: config.yaml guardrails.model)
     parameters:
-      # Loopback-only binding to local LM Studio is a core CyClaw security
+      # Loopback-only binding to local Ollama is a core CyClaw security
       # invariant (offline-first), not debug code -- suppress devskim heuristic.
-      base_url: http://127.0.0.1:1234/v1  # DevSkim: ignore DS162092
+      base_url: http://127.0.0.1:11434/v1  # DevSkim: ignore DS162092
       api_key: "not-needed-for-local"
 
   # Optional: a smaller/faster local model dedicated to guardrail checks keeps
-  # latency low. Point it at a second LM Studio model if you load one. Until then
+  # latency low. Point it at a second Ollama model if you pull one. Until then
   # it can mirror `main`.
   - type: self_check
     engine: openai
-    model: qwen2.5-7b-instruct
+    model: qwen2.5:7b
     parameters:
-      # Loopback-only binding to local LM Studio is a core CyClaw security
+      # Loopback-only binding to local Ollama is a core CyClaw security
       # invariant (offline-first), not debug code -- suppress devskim heuristic.
-      base_url: http://127.0.0.1:1234/v1  # DevSkim: ignore DS162092
+      base_url: http://127.0.0.1:11434/v1  # DevSkim: ignore DS162092
       api_key: "not-needed-for-local"
 
 # Instructions injected as the bot's general system framing. The soul/identity
