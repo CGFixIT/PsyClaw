@@ -20,8 +20,6 @@ import pytest
 
 from sync.config import RcloneConfig
 from sync.runner import (
-    _LOCK_STALE_MARGIN_SEC,
-    _LOCK_STALE_SEC,
     MIN_RCLONE_MAJOR,
     MIN_RCLONE_MINOR,
     MIN_RCLONE_PATCH,
@@ -30,7 +28,7 @@ from sync.runner import (
     SyncResult,
     _acquire_sync_lock,
     _detect_safety_abort,
-    _lock_stale_after_sec,
+    _release_sync_lock,
     build_bisync_argv,
     build_check_argv,
     build_pull_argv,
@@ -448,124 +446,31 @@ def test_run_sync_corpus_changed_fires_on_nested_corpus_file(tmp_path):
 
 
 def test_run_sync_single_instance_lock_blocks_concurrent_run(tmp_path):
-    # A pre-existing (fresh) lock directory means another run holds the lock;
-    # run_sync must refuse rather than race a second rclone invocation.
+    # A held OS lock means another run owns the sync slot; run_sync must refuse
+    # rather than race a second rclone invocation.
     cfg = _make_cfg(tmp_path)
     lock_path = Path(cfg.log_dir) / "sync.lock"
     lock_path.parent.mkdir(parents=True)
-    lock_path.write_text("", encoding="utf-8")
+    held = _acquire_sync_lock(str(lock_path))
 
     def dispatch(argv, **kwargs):
         if argv[1] == "version":
             return _version_mock("1.70.0")
         raise AssertionError("rclone must not run while the lock is held")
 
-    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
-         patch("sync.runner.subprocess.run", side_effect=dispatch), \
-         _patch_audit():
-        with pytest.raises(SyncRuntimeError):
-            run_sync(cfg, rclone_bin=FAKE_RCLONE)
-
-
-def test_lock_stale_threshold_tracks_bounded_timeout(tmp_path):
-    # A run with sync_timeout_sec above the flat 3h default must extend the
-    # stale threshold past its own budget -- otherwise a *live* long run looks
-    # stale and a second sync starts underneath it.
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=_LOCK_STALE_SEC + 3600)
-    assert _lock_stale_after_sec(cfg) == cfg.sync_timeout_sec + _LOCK_STALE_MARGIN_SEC
-
-
-def test_lock_stale_threshold_doubles_when_post_sync_check_enabled(tmp_path):
-    # Regression for the PR #585 review finding: with post_sync_check=True the
-    # lock is held through BOTH the sync (up to sync_timeout_sec across retries)
-    # AND run_post_sync_check, which independently receives the full
-    # sync_timeout_sec as its own subprocess timeout -- so the budget is ~2x,
-    # not sync_timeout_sec + margin. Codex's example: 4h timeout -> threshold
-    # must approach 9h (2*4h + 1h margin), not 5h.
-    four_hours = 4 * 3600
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=four_hours, post_sync_check=True)
-    assert _lock_stale_after_sec(cfg) == 2 * four_hours + _LOCK_STALE_MARGIN_SEC
-
-
-def test_lock_stale_threshold_post_sync_check_still_floored(tmp_path):
-    # The 3h floor dominates small timeouts even with the 2x multiplier, so the
-    # default configuration's behavior is unchanged either way.
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=600, post_sync_check=True)
-    assert _lock_stale_after_sec(cfg) == _LOCK_STALE_SEC
-
-
-def test_run_sync_passes_doubled_threshold_when_post_sync_check(tmp_path):
-    # End-to-end on the derivation wiring: a configured run with
-    # post_sync_check=True must acquire the lock with the 2x threshold --
-    # this is the lifecycle the review finding was about (sync + check under
-    # one lock), pinned at the acquisition point.
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=_LOCK_STALE_SEC + 3600, post_sync_check=True)
-    log_path = cfg.log_path
-    acquired: list[float] = []
-
-    check_output = (
-        "2026/06/20 00:00:00 INFO  : 0 differences found\n"
-        "2026/06/20 00:00:00 INFO  : Found 0 missing on Local\n"
-        "2026/06/20 00:00:00 INFO  : Found 0 missing on Remote\n"
-    )
-
-    def dispatch(argv, **kwargs):
-        if argv[1] == "version":
-            return _version_mock("1.70.0")
-        if argv[1] == "check":
-            return MagicMock(returncode=0, stdout="", stderr=check_output)
-        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(log_path).write_text("", encoding="utf-8")
-        return MagicMock(returncode=0, stdout="", stderr="")
-
-    def spy_acquire(lock_path, stale_after_sec=_LOCK_STALE_SEC):
-        acquired.append(stale_after_sec)
-        # This module's own import binding still points at the real function
-        # (patch only swaps the attribute on sync.runner). Return the handle so
-        # run_sync's finally-block release removes the lock cleanly.
-        return _acquire_sync_lock(lock_path, stale_after_sec)
-
-    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
-         patch("sync.runner.subprocess.run", side_effect=dispatch), \
-         patch("sync.runner._acquire_sync_lock", side_effect=spy_acquire), \
-         _patch_audit():
-        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
-
-    assert result.check_result is not None  # the check really ran under the lock
-    assert acquired == [2 * cfg.sync_timeout_sec + _LOCK_STALE_MARGIN_SEC]
-
-
-def test_lock_stale_threshold_floored_at_default(tmp_path):
-    # Short bounded runs keep the flat default; the threshold never shrinks.
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=600)
-    assert _lock_stale_after_sec(cfg) == _LOCK_STALE_SEC
-
-
-def test_lock_stale_threshold_unbounded_keeps_default(tmp_path):
-    # 0 = unbounded: no finite threshold can cover it, so the flat default
-    # stays (run_sync logs the degraded protection at run start).
-    cfg = _make_cfg(tmp_path, sync_timeout_sec=0)
-    assert _lock_stale_after_sec(cfg) == _LOCK_STALE_SEC
-
-
-def test_acquire_lock_reclaims_only_past_threshold(tmp_path):
-    # A lock younger than the supplied threshold blocks; one older than it is
-    # reclaimed. Threshold is a parameter so the bounded-timeout derivation
-    # above is what actually gates reclamation.
-    lock_path = tmp_path / "sync.lock"
-    lock_path.write_text("", encoding="utf-8")  # empty -> staleness falls back to mtime
-    with pytest.raises(SyncRuntimeError):
-        _acquire_sync_lock(str(lock_path), stale_after_sec=3600)
-    old = time.time() - 7200
-    os.utime(lock_path, (old, old))
-    lock = _acquire_sync_lock(str(lock_path), stale_after_sec=3600)  # reclaimed, no raise
-    assert lock_path.exists()
-    assert lock.path == str(lock_path)
+    try:
+        with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+             patch("sync.runner.subprocess.run", side_effect=dispatch), \
+             _patch_audit():
+            with pytest.raises(SyncRuntimeError):
+                run_sync(cfg, rclone_bin=FAKE_RCLONE)
+    finally:
+        _release_sync_lock(held)
 
 
 def test_run_sync_releases_lock_after_run(tmp_path):
-    # After a normal run the lock file must be gone so the next run can
-    # acquire it.
+    # After a normal run the stable lock file remains, but no OS lock is held,
+    # so the next run can acquire it immediately.
     cfg = _make_cfg(tmp_path)
     log_path = cfg.log_path
 
@@ -581,7 +486,10 @@ def test_run_sync_releases_lock_after_run(tmp_path):
          _patch_audit():
         run_sync(cfg, rclone_bin=FAKE_RCLONE)
 
-    assert not (Path(cfg.log_dir) / "sync.lock").exists()
+    lock_path = Path(cfg.log_dir) / "sync.lock"
+    assert lock_path.exists()
+    lock = _acquire_sync_lock(str(lock_path))
+    _release_sync_lock(lock)
 
 
 def test_run_sync_no_change_exit_0(tmp_path):
