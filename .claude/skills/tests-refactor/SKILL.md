@@ -40,27 +40,17 @@ Run this exact command every iteration — do not vary flags between runs:
 ```bash
 GROK_API_KEY=dummy pytest tests/ \
   --tb=short -q \
-  --cov=. \
-  --cov-report=term-missing \
-  --cov-config=.coveragerc 2>&1 | tee /tmp/pytest-last-run.txt
+  --cov --cov-report=term-missing 2>&1 | tee /tmp/pytest-last-run.txt
 ```
 
-If `.coveragerc` doesn't exist, create a minimal one first:
-
-```bash
-[ -f .coveragerc ] || cat > .coveragerc <<EOF
-[run]
-omit =
-    tests/*
-    .claude/*
-    */__pycache__/*
-
-[report]
-exclude_lines =
-    pragma: no cover
-    if __name__ == .__main__.:
-EOF
-```
+Bare `--cov` (no argument) picks up `[tool.coverage.run] source=`/`omit=`
+from `pyproject.toml` automatically — coverage.py auto-discovers that file
+from the repo root, same as CI. **Do not create a `.coveragerc`** and do
+not use `--cov=.`: a blanket `--cov=.` would include `agentic/fsconnect/*`
+and `agentic/sqlconnect/*`, which `pyproject.toml` deliberately omits
+(POSIX-only security core, unmeasurable on Windows CI — see the comment
+above `omit=` in `pyproject.toml`), so the loop would chase a coverage %
+that doesn't match the real gate.
 
 ### Extract key metrics after each run
 
@@ -119,7 +109,7 @@ For each failure group, read the traceback fully. Common patterns in this projec
 
 - `GROK_API_KEY` not set → ensure env var is set in test or conftest
 - ChromaDB / BM25 index not built → check if `tests/conftest.py` builds the index
-- LangGraph node error → mock the LLM call; don't require LM Studio in tests
+- LangGraph node error → mock the LLM call; don't require Ollama in tests
 - Rate-limit state leaking between tests → reset `RateLimiter` state in fixture teardown
 - Personality file missing → fixture must create `data/personality/soul.md`
 
@@ -153,7 +143,7 @@ Once pass rate ≥ 85%, shift to adding missing coverage:
 ### 1. Find uncovered lines
 
 ```bash
-GROK_API_KEY=dummy pytest tests/ --cov=. --cov-report=term-missing -q \
+GROK_API_KEY=dummy pytest tests/ --cov --cov-report=term-missing -q \
   2>&1 | grep -E "^\S.*\d+%.*\d+-\d+" | sort -t'%' -k1 -n
 ```
 
@@ -203,12 +193,12 @@ def test_<specific_behavior>(client):
 
 ### 4. Re-measure
 
-Run full measurement. Check both pass rate and coverage. If a new test reveals a source bug, fix it (don't skip the test).
+Run full measurement. Check both pass rate and coverage. If a new test reveals a source bug, fix it (don't skip the test). If the fix required changing source code (not just adding a test) and it touched `gate.py`/`graph.py`/`mcp_hybrid_server.py`/`utils/`, also run `invariant-guard` and `config-guard`.
 
 ### 5. Commit if coverage improved
 
 ```bash
-git add tests/ .coveragerc
+git add tests/
 git commit -m "test(coverage): add tests for <module> — coverage N% → M%"
 ```
 
@@ -276,6 +266,7 @@ def reset_rate_limiter():
 
 - **Fix source bugs, not tests** — if a test correctly describes expected behavior and the source is wrong, fix the source.
 - **No `# pragma: no cover` without justification** — only mark code unreachable if you can prove it (e.g., defensive else on an exhaustive enum).
-- **Don't mock what you can control** — mock external I/O (LM Studio, Grok API, disk), not internal logic.
+- **Don't mock what you can control** — mock external I/O (Ollama, Grok API, Claude API, disk), not internal logic.
 - **`{projectname}`** in tracker path is `basename $PWD`, e.g. `CyClaw` → `/tmp/refactor-CyClaw.md`.
 - **Pass rate formula**: `passed / (passed + failed + error) * 100` — skipped tests do not count toward or against the rate.
+- Coverage gate is 80% `fail_under` in `pyproject.toml` — do not lower it to make the loop exit early.

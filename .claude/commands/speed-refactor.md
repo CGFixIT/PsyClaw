@@ -150,6 +150,12 @@ bash .claude/skills/CyClaw-Sandbox/smoke.sh
 
 If any smoke check fails, **revert the change** and pick a different approach.
 
+If the change touched `gate.py`, `graph.py`, or `mcp_hybrid_server.py` (e.g.
+caching, short-circuiting a LangGraph node, deferring an audit-log flush),
+also run `python3 .claude/skills/invariant-guard/check_invariants.py` before
+committing — a speed win that breaks I1 (RAG-first) or I4 (audit
+convergence) is not a valid optimization.
+
 ### 6. Commit
 
 Only commit if both the speed gate improved **and** smoke tests pass:
@@ -205,3 +211,4 @@ All endpoints < 50 ms for 2 consecutive measurement runs.
 - **Revert if correctness breaks** — a 50 ms page that returns wrong data is worse than a 200 ms page that returns correct data.
 - **Module-level load time counts** — if `import gate` takes 300 ms, that's a cold-start problem worth fixing even if per-request latency is fast.
 - **`{projectname}`** in tracker/baseline paths is `basename $PWD`, e.g. `CyClaw` → `/tmp/refactor-CyClaw.md`.
+- **Deferring audit-log flushes or "telemetry hooks" out of the hot path must not move them past `audit_logger`/`END`** in the graph — that breaks I4 (audit convergence). Check with `invariant-guard`, not just the smoke test.

@@ -39,10 +39,12 @@ Run this exact command every iteration:
 ```bash
 GROK_API_KEY=dummy pytest tests/ \
   --tb=short -q \
-  --cov=. \
-  --cov-report=term-missing \
-  --cov-config=.coveragerc 2>&1 | tee /tmp/pytest-last-run.txt
+  --cov --cov-report=term-missing 2>&1 | tee /tmp/pytest-last-run.txt
 ```
+
+Bare `--cov` picks up `[tool.coverage.run] source=`/`omit=` from
+`pyproject.toml` automatically — do not create a `.coveragerc` or use
+`--cov=.` (see `tests-refactor`'s Measurement Protocol for why).
 
 Extract metrics:
 
@@ -85,11 +87,12 @@ Scan the source for code paths that should emit logs but don't. "Important path"
 
 - **Request entry/exit** — every API endpoint should log the request (sanitized) and outcome
 - **Branch decisions** — when the system chooses a path (e.g. vault hit vs miss, online vs offline), log which branch and why
-- **External I/O** — every call to ChromaDB, BM25, LM Studio, Grok API should log attempt + result/error
+- **External I/O** — every call to ChromaDB, BM25, Ollama, Grok API, Claude API should log attempt + result/error
 - **Security events** — prompt injection blocked, rate limit hit, auth failure
 - **State transitions** — LangGraph node entry/exit, graph routing decisions
 - **Errors and exceptions** — every `except` block must log the exception with context
 - **Startup/shutdown** — index load, personality load, telemetry kill hooks
+- **Invariant-relevant transitions** — anywhere `invariant-guard`'s I4 (audit convergence) or I1 (RAG-first) checks structural reachability, the corresponding log statement is the human-readable proof; don't add a log that implies a path `invariant-guard` would flag as unreachable
 
 ```bash
 # Find except blocks with no logging
@@ -178,9 +181,14 @@ Place log tests in:
 ### 5. Measure and commit
 
 ```bash
-GROK_API_KEY=dummy pytest tests/ --tb=short -q --cov=. --cov-report=term-missing \
+GROK_API_KEY=dummy pytest tests/ --tb=short -q --cov --cov-report=term-missing \
   2>&1 | tee /tmp/pytest-last-run.txt
 ```
+
+If new logging touched `gate.py`/`graph.py`/`mcp_hybrid_server.py` control
+flow (not just an added `logger.x()` call), run
+`python3 .claude/skills/invariant-guard/check_invariants.py` before
+committing.
 
 If pass rate held or improved, commit:
 
@@ -274,7 +282,7 @@ Paths covered:
 - [x] POST /query offline — offline path log
 - [x] Prompt injection blocked
 - [x] Rate limit exceeded
-- [x] LLM error (LM Studio down)
+- [x] LLM error (Ollama down)
 - [x] Personality load
 - [x] BM25 + ChromaDB retrieval
 - [x] LangGraph node transitions
@@ -289,4 +297,5 @@ Paths covered:
 - **Never assert exact log strings** — assert substrings (`"vault miss" in record.message`) so log wording can evolve without breaking tests
 - **Structured fields** — assert `record.extra["key"] == value` for structured log fields when the message alone isn't distinctive
 - **Security logs must never contain raw PII** — assert that the log does NOT contain the raw query string; check only hash or truncated form
+- **Security-event logs must stay covered by the sanitizer contract phrases `invariant-guard` checks (G3)** — don't rename or remove a matched pattern while adding its log line
 - **`{projectname}`** in tracker path is `basename $PWD`, e.g. `CyClaw` → `/tmp/refactor-CyClaw.md`
