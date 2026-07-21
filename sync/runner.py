@@ -596,12 +596,38 @@ def _truncate_log(log_path: str, direction: str) -> None:
 # on every platform, so it doubles as a zero-dependency, cross-platform lock --
 # no fcntl/msvcrt branching, no third-party dep.
 _LOCK_STALE_SEC = 3 * 60 * 60  # reclaim a lock left by a crashed run after 3h
+# Headroom added on top of a configured sync timeout when deriving the stale
+# threshold: covers version check, filter write, hashing, and audit I/O around
+# the rclone subprocess itself.
+_LOCK_STALE_MARGIN_SEC = 60 * 60
 
 
-def _acquire_sync_lock(lock_dir: str) -> None:
+def _lock_stale_after_sec(cfg: RcloneConfig) -> float:
+    """Stale-lock threshold for a run configured by ``cfg``.
+
+    The retry loop bounds total sync time by ``sync_timeout_sec`` (global
+    deadline), so a bounded run can legitimately hold the lock for that long --
+    the threshold must exceed the budget or a *live* long run looks "stale" and
+    a second sync starts underneath it. When ``post_sync_check`` is enabled the
+    lock is ALSO held through ``run_post_sync_check``, which independently
+    receives the full ``sync_timeout_sec`` as its own subprocess timeout, so
+    the complete lock-held budget is ~2x the sync budget (review finding on
+    PR #585). Unbounded (0) keeps the flat 3h default; run_sync warns about
+    the degraded protection in that case.
+    """
+    if cfg.sync_timeout_sec > 0:
+        multiplier = 2 if getattr(cfg, "post_sync_check", False) else 1
+        return max(
+            _LOCK_STALE_SEC,
+            cfg.sync_timeout_sec * multiplier + _LOCK_STALE_MARGIN_SEC,
+        )
+    return _LOCK_STALE_SEC
+
+
+def _acquire_sync_lock(lock_dir: str, stale_after_sec: float = _LOCK_STALE_SEC) -> None:
     """Acquire the single-instance lock, or raise ``SyncRuntimeError``.
 
-    Reclaims a lock older than ``_LOCK_STALE_SEC`` (a prior run that crashed
+    Reclaims a lock older than ``stale_after_sec`` (a prior run that crashed
     without releasing it) so a stale directory can never wedge sync forever.
     """
     try:
@@ -613,11 +639,14 @@ def _acquire_sync_lock(lock_dir: str) -> None:
         age = time.time() - os.path.getmtime(lock_dir)
     except OSError:
         age = 0.0
-    if age > _LOCK_STALE_SEC:
+    if age > stale_after_sec:
         try:
             os.rmdir(lock_dir)
             os.mkdir(lock_dir)
-            log.info("Reclaimed stale sync lock at %s (age %.0f s)", lock_dir, age)
+            log.info(
+                "Reclaimed stale sync lock at %s (age %.0f s > threshold %.0f s)",
+                lock_dir, age, stale_after_sec,
+            )
             return
         except OSError:
             log.warning("Stale sync lock reclamation failed at %s (age %.0f s); raising", lock_dir, age)
@@ -668,7 +697,13 @@ def run_sync(
     directory under ``log_dir``) prevents a manual run and the scheduled run from
     driving rclone against the same remote at once. A second concurrent run
     raises ``SyncRuntimeError``; a lock left by a crashed run is reclaimed after
-    ``_LOCK_STALE_SEC``.
+    ``_lock_stale_after_sec(cfg)`` -- at least ``_LOCK_STALE_SEC``, extended past
+    the full lock-held budget (``sync_timeout_sec``, doubled when
+    ``post_sync_check`` is enabled since the check also runs under the lock with
+    its own full timeout), so a live long run is never mistaken for a crashed
+    one. With ``sync_timeout_sec: 0`` (unbounded) the threshold stays at the
+    flat 3h default and a run exceeding it loses mutual-exclusion protection;
+    a warning is logged at run start in that case.
     """
     check_rclone_version(rclone_bin)
     resolved_rclone = shutil.which(rclone_bin)
@@ -677,7 +712,14 @@ def run_sync(
 
     os.makedirs(cfg.log_dir or ".", exist_ok=True)
     lock_dir = os.path.join(cfg.log_dir or ".", "sync.lock.d")
-    _acquire_sync_lock(lock_dir)
+    if cfg.sync_timeout_sec == 0:
+        log.warning(
+            "sync_timeout_sec is 0 (unbounded): a run exceeding %ds may have its "
+            "single-instance lock reclaimed as stale while still alive, allowing a "
+            "concurrent sync. Set a finite sync_timeout_sec for full protection.",
+            _LOCK_STALE_SEC,
+        )
+    _acquire_sync_lock(lock_dir, _lock_stale_after_sec(cfg))
     try:
         return _run_sync_locked(cfg, dry_run, resync, resolved_rclone)
     finally:
