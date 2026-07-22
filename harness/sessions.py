@@ -3,27 +3,31 @@
 One file per session under ``~/.CyClaw/sessions/``. Every LLM exchange records
 Ollama's ``prompt_eval_count`` / ``eval_count`` so the console can show a
 running tally (the grok-build style "tokens in/out" readout). Files are small
-and human-inspectable; writes are atomic (tmp + os.replace), matching the
-repo's soul/registry durability pattern.
+and human-inspectable; writes are atomic (staged file + os.replace), matching
+the repo's soul/registry durability pattern.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
+from os.path import getmtime
 from pathlib import Path
 
+from harness.config import _UTF8, _atomic_write_json
 from utils.errors import AgenticError
 
 _LOCK = threading.Lock()
 _ID_RE = re.compile(r"^[0-9a-f]{12}$")
+_SESSION_ID_CHARS = 12
 _MAX_MESSAGES = 500  # bound per-session growth; oldest turns drop off first
+_TITLE_TS_FORMAT = "%Y-%m-%d %H:%M"
+_EXCERPT_CHARS = 80
+_SID_KEY = "session_id"
 
 
 class SessionStoreError(AgenticError):
@@ -49,7 +53,7 @@ class TokenTally:
 @dataclass
 class Message:
     role: str  # "user" | "assistant" | "system"
-    content: str
+    text: str
     ts: float = field(default_factory=time.time)
 
 
@@ -63,9 +67,11 @@ class Session:
     tally: TokenTally = field(default_factory=TokenTally)
 
     def summary(self) -> dict:
-        last = self.messages[-1].content[:80] if self.messages else ""
+        last = ""
+        if self.messages:
+            last = self.messages[-1].text[:_EXCERPT_CHARS]
         return {
-            "session_id": self.session_id,
+            _SID_KEY: self.session_id,
             "title": self.title,
             "created_ts": self.created_ts,
             "model": self.model,
@@ -75,6 +81,32 @@ class Session:
         }
 
 
+def _session_path(sessions_dir: Path, session_id: str) -> Path:
+    if not _ID_RE.match(session_id):
+        raise SessionStoreError("invalid session id", details={_SID_KEY: session_id})
+    # IDs are server-generated hex; the regex above is the traversal gate.
+    return sessions_dir / f"{session_id}.json"
+
+
+def _session_from_dict(parsed: dict) -> Session:
+    tally = parsed.get("tally", {})
+    messages = []
+    for msg in parsed.get("messages", []):
+        messages.append(Message(**msg))
+    return Session(
+        session_id=parsed[_SID_KEY],
+        title=parsed.get("title", ""),
+        created_ts=float(parsed.get("created_ts", 0)),
+        model=parsed.get("model", ""),
+        messages=messages,
+        tally=TokenTally(
+            prompt_tokens=int(tally.get("prompt_tokens", 0)),
+            completion_tokens=int(tally.get("completion_tokens", 0)),
+            exchanges=int(tally.get("exchanges", 0)),
+        ),
+    )
+
+
 class SessionStore:
     """Load/save sessions under a directory. Thread-safe within one process."""
 
@@ -82,16 +114,10 @@ class SessionStore:
         self._dir = sessions_dir
         self._dir.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, session_id: str) -> Path:
-        if not _ID_RE.match(session_id):
-            raise SessionStoreError("invalid session id", details={"session_id": session_id})
-        # IDs are server-generated hex; the regex above is the traversal gate.
-        return self._dir / f"{session_id}.json"
-
     def create(self, *, model: str, title: str = "") -> Session:
         session = Session(
-            session_id=uuid.uuid4().hex[:12],
-            title=title.strip() or f"session {time.strftime('%Y-%m-%d %H:%M')}",
+            session_id=uuid.uuid4().hex[:_SESSION_ID_CHARS],
+            title=title.strip() or f"session {time.strftime(_TITLE_TS_FORMAT)}",
             created_ts=time.time(),
             model=model,
         )
@@ -99,35 +125,25 @@ class SessionStore:
         return session
 
     def get(self, session_id: str) -> Session:
-        path = self._path(session_id)
+        path = _session_path(self._dir, session_id)
         if not path.exists():
-            raise SessionStoreError("unknown session", details={"session_id": session_id})
+            raise SessionStoreError("unknown session", details={_SID_KEY: session_id})
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            parsed = json.loads(path.read_text(encoding=_UTF8))
         except (OSError, json.JSONDecodeError) as exc:
             raise SessionStoreError(f"unreadable session file: {path.name}") from exc
-        tally = data.get("tally", {})
-        return Session(
-            session_id=data["session_id"],
-            title=data.get("title", ""),
-            created_ts=float(data.get("created_ts", 0.0)),
-            model=data.get("model", ""),
-            messages=[Message(**m) for m in data.get("messages", [])],
-            tally=TokenTally(
-                prompt_tokens=int(tally.get("prompt_tokens", 0)),
-                completion_tokens=int(tally.get("completion_tokens", 0)),
-                exchanges=int(tally.get("exchanges", 0)),
-            ),
-        )
+        return _session_from_dict(parsed)
 
     def list(self) -> list[dict]:
-        out: list[dict] = []
-        for path in sorted(self._dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        summaries: list[dict] = []
+        paths = list(self._dir.glob("*.json"))
+        paths.sort(key=getmtime, reverse=True)
+        for path in paths:
             try:
-                out.append(self.get(path.stem).summary())
+                summaries.append(self.get(path.stem).summary())
             except SessionStoreError:
-                continue  # skip corrupt files rather than break the listing
-        return out
+                ...  # skip corrupt files rather than break the listing
+        return summaries
 
     def record_exchange(
         self,
@@ -136,18 +152,17 @@ class SessionStore:
         user_text: str,
         assistant_text: str,
         model: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        usage: TokenTally,
     ) -> Session:
         with _LOCK:
             session = self.get(session_id)
-            session.messages.append(Message(role="user", content=user_text))
-            session.messages.append(Message(role="assistant", content=assistant_text))
+            session.messages.append(Message(role="user", text=user_text))
+            session.messages.append(Message(role="assistant", text=assistant_text))
             if len(session.messages) > _MAX_MESSAGES:
                 session.messages = session.messages[-_MAX_MESSAGES:]
             session.model = model
-            session.tally.prompt_tokens += max(prompt_tokens, 0)
-            session.tally.completion_tokens += max(completion_tokens, 0)
+            session.tally.prompt_tokens += max(usage.prompt_tokens, 0)
+            session.tally.completion_tokens += max(usage.completion_tokens, 0)
             session.tally.exchanges += 1
             self._write(session)
             return session
@@ -161,21 +176,14 @@ class SessionStore:
 
     def _write(self, session: Session) -> None:
         payload = {
-            "session_id": session.session_id,
+            _SID_KEY: session.session_id,
             "title": session.title,
             "created_ts": session.created_ts,
             "model": session.model,
-            "messages": [asdict(m) for m in session.messages],
+            "messages": [asdict(msg) for msg in session.messages],
             "tally": asdict(session.tally),
         }
-        fd, tmp = tempfile.mkstemp(dir=str(self._dir), prefix=".sess.", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2)
-            os.replace(tmp, self._path(session.session_id))
+            _atomic_write_json(_session_path(self._dir, session.session_id), payload)
         except OSError as exc:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
             raise SessionStoreError("could not persist session") from exc

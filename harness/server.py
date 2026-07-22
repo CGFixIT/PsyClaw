@@ -16,64 +16,59 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
 
-from harness import __version__
 from harness.config import HarnessConfig
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
-from harness.sessions import SessionStore, SessionStoreError
+from harness.schemas import (
+    ChatRequest,
+    ModelSelectRequest,
+    RenameRequest,
+    SessionCreateRequest,
+    SoulToggleRequest,
+)
+from harness.sessions import SessionStore, SessionStoreError, TokenTally
 from utils.errors import AgenticError
 from utils.logger import _get_config
 from utils.ops_runner import OpsError, run_agentic_op
 
 logger = logging.getLogger("cyclaw.harness.server")
 
+_HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
 _RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
-
-
-class ChatRequest(BaseModel, extra="forbid"):
-    message: str = Field(min_length=1, max_length=32768)
-    session_id: str | None = None
-    model: str | None = None
-
-
-class SessionCreateRequest(BaseModel, extra="forbid"):
-    title: str = Field(default="", max_length=200)
-
-
-class RenameRequest(BaseModel, extra="forbid"):
-    title: str = Field(min_length=1, max_length=200)
-
-
-class SoulToggleRequest(BaseModel, extra="forbid"):
-    enabled: bool
-
-
-class ModelSelectRequest(BaseModel, extra="forbid"):
-    model: str = Field(min_length=1, max_length=200)
+_MAX_RUNS = 50
+_HTTP_CREATED = 201
+_HTTP_BAD_REQUEST = 400
+_HTTP_NOT_FOUND = 404
+_HTTP_BAD_GATEWAY = 502
+_DEFAULT_TIMEOUT_SEC = 300
+_DEFAULT_MAX_TOKENS = 3000
+_DEFAULT_TEMPERATURE = 0.3
+_MODEL_KEY = "model"
 
 
 def _llm_settings() -> dict:
     """Read-only view of the repo config's ``models.local_llm`` block."""
-    cfg = _get_config(str(_CONFIG_PATH))
-    if not isinstance(cfg, dict):
+    parsed = _get_config(str(_CONFIG_PATH))
+    if not isinstance(parsed, dict):
         return {}
-    models = cfg.get("models", {})
+    models = parsed.get("models", {})
     return models.get("local_llm", {}) if isinstance(models, dict) else {}
 
 
 def _err(status: int, exc: AgenticError) -> HTTPException:
-    return HTTPException(status_code=status, detail={"code": exc.code, "message": exc.message, "details": exc.details})
+    detail = {"code": exc.code, "message": exc.message, "details": exc.details}
+    return HTTPException(status_code=status, detail=detail)
 
 
 def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
@@ -85,11 +80,11 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     client = chat_client or HarnessChatClient(
         base_url=str(llm.get("base_url", "http://127.0.0.1:11434/v1")),
         model=str(llm.get("model", "")),
-        timeout_sec=float(llm.get("timeout_sec", 300)),
+        timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
         api_key=str(llm.get("api_key", "") or ""),
     )
 
-    app = FastAPI(title="CyClaw Harness", version=__version__)
+    app = FastAPI(title="CyClaw Harness", version=_HARNESS_VERSION)
 
     def _current_model() -> str:
         return cfg.selected_model or str(llm.get("model", ""))
@@ -103,10 +98,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/status")
     def status() -> dict:
         sessions = store.list()
-        total_tokens = sum(s["tokens"]["total"] for s in sessions)
+        total_tokens = sum(entry["tokens"]["total"] for entry in sessions)
         return {
-            "version": __version__,
-            "model": _current_model(),
+            "version": _HARNESS_VERSION,
+            _MODEL_KEY: _current_model(),
             "provider": llm.get("provider", "ollama"),
             "base_url": llm.get("base_url", ""),
             "soul_enabled": cfg.soul_enabled,
@@ -132,7 +127,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def list_sessions() -> dict:
         return {"sessions": store.list()}
 
-    @app.post("/api/sessions", status_code=201)
+    @app.post("/api/sessions", status_code=_HTTP_CREATED)
     def create_session(req: SessionCreateRequest) -> dict:
         session = store.create(model=_current_model(), title=req.title)
         return session.summary()
@@ -140,17 +135,21 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str) -> dict:
         try:
-            s = store.get(session_id)
+            session = store.get(session_id)
         except SessionStoreError as exc:
-            raise _err(404, exc) from exc
-        return s.summary() | {"messages": [{"role": m.role, "content": m.content, "ts": m.ts} for m in s.messages]}
+            raise _err(_HTTP_NOT_FOUND, exc) from exc
+        messages = [
+            {"role": msg.role, "content": msg.text, "ts": msg.ts}
+            for msg in session.messages
+        ]
+        return session.summary() | {"messages": messages}
 
     @app.post("/api/sessions/{session_id}/rename")
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
         except SessionStoreError as exc:
-            raise _err(404, exc) from exc
+            raise _err(_HTTP_NOT_FOUND, exc) from exc
 
     # -- soul / model toggles (harness-local; soul.md itself untouched) --
     @app.get("/api/soul")
@@ -167,7 +166,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def model_select(req: ModelSelectRequest) -> dict:
         cfg.selected_model = req.model.strip()
         cfg.save()
-        return {"model": _current_model()}
+        return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
     @app.post("/api/chat")
@@ -178,41 +177,43 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             else:
                 session = store.create(model=_current_model())
         except SessionStoreError as exc:
-            raise _err(404, exc) from exc
+            raise _err(_HTTP_NOT_FOUND, exc) from exc
 
         system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled)
         history = [
-            {"role": m.role, "content": m.content}
-            for m in session.messages[-_HISTORY_TURNS:]
-            if m.role in {"user", "assistant"}
+            {"role": msg.role, "content": msg.text}
+            for msg in session.messages[-_HISTORY_TURNS:]
+            if msg.role in {"user", "assistant"}
         ]
         history.append({"role": "user", "content": req.message})
         try:
-            result = client.chat(
+            reply = client.chat(
                 system_prompt=system_prompt,
                 messages=history,
                 model=req.model or None,
-                max_tokens=int(llm.get("max_tokens", 3000)),
-                temperature=float(llm.get("temperature", 0.3)),
+                max_tokens=int(llm.get("max_tokens", _DEFAULT_MAX_TOKENS)),
+                temperature=float(llm.get("temperature", _DEFAULT_TEMPERATURE)),
             )
         except HarnessLLMError as exc:
-            raise _err(502, exc) from exc
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
 
         updated = store.record_exchange(
             session.session_id,
             user_text=req.message,
-            assistant_text=result.content,
-            model=result.model,
-            prompt_tokens=result.prompt_tokens,
-            completion_tokens=result.completion_tokens,
+            assistant_text=reply.body_text,
+            model=reply.model,
+            usage=TokenTally(
+                prompt_tokens=reply.prompt_tokens,
+                completion_tokens=reply.completion_tokens,
+            ),
         )
         return {
             "session_id": session.session_id,
-            "reply": result.content,
-            "model": result.model,
+            "reply": reply.body_text,
+            _MODEL_KEY: reply.model,
             "usage": {
-                "prompt_tokens": result.prompt_tokens,
-                "completion_tokens": result.completion_tokens,
+                "prompt_tokens": reply.prompt_tokens,
+                "completion_tokens": reply.completion_tokens,
             },
             "tally": updated.summary()["tokens"],
         }
@@ -221,17 +222,17 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/github/status")
     def github_status() -> dict:
         try:
-            result = run_agentic_op("status")
+            gh_result = run_agentic_op("status")
         except OpsError as exc:
-            raise _err(400, AgenticError(str(exc))) from exc
-        return result.to_dict()
+            raise _err(_HTTP_BAD_REQUEST, AgenticError(str(exc))) from exc
+        return gh_result.to_dict()
 
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")
     def harness_runs() -> dict:
         runs: list[dict] = []
         if _RUNS_DIR.is_dir():
-            for path in sorted(_RUNS_DIR.iterdir(), reverse=True)[:50]:
+            for path in sorted(_RUNS_DIR.iterdir(), reverse=True)[:_MAX_RUNS]:
                 if path.is_dir():
                     runs.append({"run_id": path.name, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
@@ -246,7 +247,7 @@ def main() -> None:
     cfg = HarnessConfig.load()
     host = os.environ.get("CYCLAW_HARNESS_HOST", cfg.host)
     if host not in {"127.0.0.1", "localhost", "::1"}:
-        raise SystemExit("harness binds loopback only (threat model: single-operator)")
+        sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
     port = int(port_env) if port_env.isdigit() else cfg.port
     app = create_app(cfg)

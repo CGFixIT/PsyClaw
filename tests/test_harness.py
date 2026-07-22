@@ -18,8 +18,7 @@ from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_mcp_tools, list_repo_skills
 from harness.server import create_app
-from harness.sessions import SessionStore, SessionStoreError
-
+from harness.sessions import SessionStore, SessionStoreError, TokenTally
 
 # -- fixtures -------------------------------------------------------------------
 
@@ -123,7 +122,7 @@ def test_session_store_roundtrip(tmp_path):
     s = store.create(model="m", title="t1")
     updated = store.record_exchange(
         s.session_id, user_text="hi", assistant_text="yo", model="m",
-        prompt_tokens=10, completion_tokens=5,
+        usage=TokenTally(prompt_tokens=10, completion_tokens=5),
     )
     assert updated.tally.total == 15
     loaded = store.get(s.session_id)
@@ -144,7 +143,7 @@ def test_chat_client_extracts_usage():
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport("hello", 21, 9)
     )
     result = chat.chat(system_prompt="s", messages=[{"role": "user", "content": "hi"}])
-    assert result.content == "hello"
+    assert result.body_text == "hello"
     assert result.prompt_tokens == 21
     assert result.completion_tokens == 9
 

@@ -21,6 +21,10 @@ import httpx
 
 from utils.errors import AgenticError
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+_HTTP_OK = 200
+_ERROR_BODY_PREVIEW = 300
+
 
 class HarnessLLMError(AgenticError):
     """Chat call failed (unreachable, refused, or malformed response)."""
@@ -31,15 +35,40 @@ class HarnessLLMError(AgenticError):
 
 @dataclass(frozen=True)
 class ChatResult:
-    content: str
+    body_text: str
     model: str
     prompt_tokens: int
     completion_tokens: int
 
 
 def _is_loopback(url: str) -> bool:
-    host = urlparse(url).hostname or ""
-    return host in {"127.0.0.1", "localhost", "::1"}
+    return (urlparse(url).hostname or "") in _LOOPBACK_HOSTS
+
+
+def _parse_chat_response(resp: httpx.Response, fallback_model: str) -> ChatResult:
+    """Extract body text + token usage, or raise a typed error."""
+    try:
+        parsed = resp.json()
+    except ValueError as exc:
+        raise HarnessLLMError("malformed response from model server") from exc
+    if not isinstance(parsed, dict):
+        raise HarnessLLMError("malformed response from model server")
+    first = (parsed.get("choices") or [{}])[0]
+    if not isinstance(first, dict):
+        first = {}
+    body = first.get("message", {})
+    if not isinstance(body, dict):
+        body = {}
+    body_text = body.get("content")
+    if not isinstance(body_text, str):
+        raise HarnessLLMError("malformed response from model server")
+    usage = parsed.get("usage") or {}
+    return ChatResult(
+        body_text=body_text,
+        model=str(parsed.get("model", fallback_model)),
+        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+    )
 
 
 class HarnessChatClient:
@@ -87,28 +116,17 @@ class HarnessChatClient:
             "temperature": temperature,
             "stream": False,
         }
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        auth = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         try:
-            resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+            resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=auth)
         except httpx.HTTPError as exc:
             raise HarnessLLMError(
                 "model server unreachable — is Ollama running?",
                 details={"base_url": self.base_url, "error": str(exc)},
             ) from exc
-        if resp.status_code != 200:
+        if resp.status_code != _HTTP_OK:
             raise HarnessLLMError(
                 f"model server returned HTTP {resp.status_code}",
-                details={"body": resp.text[:300]},
+                details={"body": resp.text[:_ERROR_BODY_PREVIEW]},
             )
-        try:
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            usage = data.get("usage") or {}
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise HarnessLLMError("malformed response from model server") from exc
-        return ChatResult(
-            content=str(content),
-            model=str(data.get("model", use_model)),
-            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-        )
+        return _parse_chat_response(resp, use_model)
