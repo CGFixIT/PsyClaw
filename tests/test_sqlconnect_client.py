@@ -233,6 +233,11 @@ def test_execute_timeout_disabled_when_non_positive(monkeypatch):
         "SELECT * FROM t WITH (XLOCK)",
         "select * from t with (updlock, holdlock)",
         "SELECT * FROM t WITH (NOLOCK, XLOCK)",
+        "SELECT * FROM t WITH (TABLOCKX)",
+        "SELECT * FROM t WITH (TABLOCK)",
+        "SELECT * FROM t WITH (PAGLOCK)",
+        "SELECT * FROM t WITH (SERIALIZABLE)",
+        "select * from t with (serializable)",
     ],
 )
 def test_assert_rejects_lock_taking_hints(bad):

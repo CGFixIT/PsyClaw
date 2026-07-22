@@ -35,15 +35,16 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # rejected legitimate read queries like ``SELECT replace(name,'a','b') FROM t``.
 # Even if a REPLACE write statement existed, the leading-keyword gate (must start
 # with SELECT/WITH) plus the single-statement check would already stop it.
-# ``updlock``/``holdlock``/``xlock`` are MSSQL table hints that take
-# write-grade locks inside an otherwise valid SELECT (``SELECT * FROM t WITH
+# ``updlock``/``holdlock``/``xlock``/``tablock``/``tablockx``/``paglock``/
+# ``serializable`` are MSSQL table hints that take write-grade or aggressively
+# escalated locks inside an otherwise valid SELECT (``SELECT * FROM t WITH
 # (UPDLOCK)``). On a connector whose contract is read-only that is an
 # availability risk (blocking other writers/readers), so the hints are
 # forbidden even though the statement itself only reads.
 _FORBIDDEN_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|"
     r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback|"
-    r"updlock|holdlock|xlock)\b",
+    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable)\b",
     re.IGNORECASE,
 )
 
