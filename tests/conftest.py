@@ -23,7 +23,7 @@ TEST_CONFIG = {
                       "model": "test-model", "max_tokens": 256, "temperature": 0.1, "timeout_sec": 10},
         "embeddings": {"provider": "sentence-transformers", "model": "all-MiniLM-L6-v2",
                        "dim": 384, "cache_dir": None},
-        "grok": {"enabled": False, "base_url": "https://api.x.ai/v1", "model": "grok-4.3",
+        "grok": {"enabled": False, "base_url": "https://api.x.ai/v1", "model": "grok-4.5",
                  "timeout_sec": 10, "max_tokens": 256, "temperature": 0.2},
         "claude": {"enabled": False, "base_url": "https://api.anthropic.com/v1",
                    "model": "claude-sonnet-5", "anthropic_version": "2023-06-01",

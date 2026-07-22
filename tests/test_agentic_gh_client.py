@@ -95,6 +95,12 @@ def test_build_requires_number_for_view():
         build_read_argv("pr_view", "owner/repo")
 
 
+def test_build_limit_is_clamped():
+    # A five-digit limit must not flow verbatim into the gh CLI.
+    argv = build_read_argv("pr_list", "owner/repo", limit=99999)
+    assert argv[argv.index("--limit") + 1] == str(gh_client.MAX_LIST_LIMIT)
+
+
 @pytest.mark.parametrize(
     "bad_repo",
     [
@@ -195,6 +201,17 @@ def test_run_read_diff_op():
                       return_value=_completed(stdout="diff --git a b\n")):
         out = run_read("pr_diff", "owner/repo", number=1)
     assert out["diff"].startswith("diff --git")
+
+
+def test_run_read_diff_is_truncated():
+    # A multi-hundred-KB diff is capped, with a marker, before reaching consumers.
+    big = "x" * (gh_client.MAX_DIFF_CHARS + 1000)
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run", return_value=_completed(stdout=big)):
+        out = run_read("pr_diff", "owner/repo", number=1)
+    assert len(out["diff"]) < len(big)
+    assert out["diff"].endswith(f"[diff truncated at {gh_client.MAX_DIFF_CHARS} chars]")
 
 
 def test_run_read_nonzero_exit_raises():

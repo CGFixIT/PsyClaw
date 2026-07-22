@@ -24,7 +24,6 @@ services:
       # A named volume keeps the root fs read-only without re-downloading on boot.
       - emb-cache:/app/.emb_cache:rw
     environment:
-      - CYCLAW_CONFIG=/app/config.yaml
       - CYCLAW_TELEMETRY_KILL=1
       - PYTHONPATH=/app
       # Redirect model/framework caches under the already-rw ./data mount so a
