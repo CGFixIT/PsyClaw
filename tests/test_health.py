@@ -154,6 +154,26 @@ class TestCheckAll:
         assert "qwen2.5:7b" in ollama.error
         assert "not in provider /models list" in ollama.error
 
+    def test_offline_ollama_empty_model_catalog_reports_unhealthy(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _ModelsResp([]))
+        statuses = health.check_all(cfg_path)
+        ollama = next(s for s in statuses if s.name == "ollama")
+        assert ollama.healthy is False
+        assert "qwen2.5:7b" in ollama.error
+
+    def test_offline_ollama_malformed_model_catalog_stays_healthy(self, tmp_path, monkeypatch):
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        response = httpx.Response(
+            200,
+            json={"object": "list", "data": None},
+            request=httpx.Request("GET", _OLLAMA_MODELS),
+        )
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: response)
+        statuses = health.check_all(cfg_path)
+        ollama = next(s for s in statuses if s.name == "ollama")
+        assert ollama.healthy is True
+
     def test_offline_ollama_unparseable_models_body_stays_healthy(self, tmp_path, monkeypatch):
         # Same tolerance as Grok/Claude: an up endpoint with an odd body must
         # not invent a new failure mode for the availability probe.
