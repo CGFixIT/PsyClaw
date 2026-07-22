@@ -1,3 +1,10 @@
+## Note: when initiated pr draft from grok build, kimi/kimi code, or codex use preferred branch naming conventions:
+> claude code: claude/{feature}
+> codex: cx/{feature}
+> grok build: grok/{feature}
+> kimi or kimi code: kimi/{feature}
+> CyClaw (directly or via mcp connector in claude code or similar): CyClaw/{wow!}{feature}-{date} 
+
 ## Title
 **Use this format:**  
 `[prefix] - Short descriptive sentence of the change`
