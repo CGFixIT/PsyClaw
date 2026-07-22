@@ -10,6 +10,12 @@ on:
     paths:
       - .github/workflows/copilot-setup-steps.yml
 
+# Cancel superseded in-progress runs on the same ref, matching every other
+# workflow in this repo (e.g. pip-audit.yml); pushes to main are exempt.
+concurrency:
+  group: copilot-setup-steps-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   # Must be named exactly `copilot-setup-steps` to be picked up by Copilot.
   copilot-setup-steps:
@@ -34,7 +40,8 @@ jobs:
             pyproject.toml
 
       - name: Upgrade pip
-        run: python -m pip install --upgrade "pip>=26.1.2"
+        # Exact pin per ci.yml header policy (==26.1.2, not floating >=).
+        run: python -m pip install --upgrade "pip==26.1.2"
 
       - name: Install torch CPU (must precede requirements.txt to avoid CUDA wheel)
         run: pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu

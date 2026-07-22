@@ -52,7 +52,9 @@ jobs:
 
       - name: Upgrade pip (CVE mitigation)
         shell: bash
-        run: python -m pip install --upgrade "pip>=26.1.2"
+        # Exact pin per ci.yml header policy (==26.1.2, not floating >=) — keeps
+        # CI reproducible instead of silently picking up whatever pip ships next.
+        run: python -m pip install --upgrade "pip==26.1.2"
 
       - name: Cache torch CPU wheel
         # Mirrors ci.yml's dedicated torch cache: torch (~2GB) is pinned
