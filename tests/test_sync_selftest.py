@@ -68,3 +68,17 @@ class TestRunSelfTestHappyPath:
             run_self_test("ignored.yaml")
         # Check 05 writes the rclone filter file to disk.
         assert Path(cfg.filter_file).is_file()
+
+    def test_all_checks_pass_with_include_soul_true(self, tmp_path):
+        # include_soul is a deprecated no-op: check 04 must still find the soul
+        # exclusion present, so a config with include_soul=true passes cleanly.
+        cfg = _cfg(tmp_path)
+        cfg.include_soul = True
+        with patch("sync.selftest.load_sync_config", return_value=cfg), \
+             patch("sync.selftest.check_rclone_version", return_value=(1, 68, 2)):
+            passed, total, lines = run_self_test("ignored.yaml")
+
+        assert total == 8
+        assert passed == 8, "\n".join(lines)
+        assert not any("[FAIL]" in ln for ln in lines)
+        assert any("04" in ln and "data/personality" in ln for ln in lines)

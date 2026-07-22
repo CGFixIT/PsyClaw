@@ -49,16 +49,16 @@ the audit log, or any argv.
 | Default | Why |
 |---|---|
 | **`direction: pull`** | `rclone copy` never deletes at the destination. One-way pull is the safest default for an RAG corpus. Bidirectional `bisync` is a silent-rewrite path into governed state. |
-| **`include_soul: false`** | `data/personality/` is governed via `POST /soul/apply` with a human reason string and an injection scan. Replicating it via cron bypasses that gate. **This is the single most important path-safety rule.** |
+| **`include_soul` deprecated** | `data/personality/` is governed via `POST /soul/apply` with a human reason string and an injection scan. Sync can never touch it: `local_path` is validated to resolve inside `data/corpus`, and the soul filter rule is unconditional. The `include_soul` key is kept only so old configs still load — it has no effect. **This is the single most important path-safety rule.** |
 | **Hardened exclude list** | Model weights, indices, caches, venvs, logs, secrets, `.git`, and the soul DB (`*.db*`) are all excluded by default. See `sync/filters.py`. |
 | **`max_delete: 20`** | rclone aborts the run if more than 20 deletions would occur. Tune up only when you understand exactly why. |
 | **Per-file SHA-256 audit** | Every added/modified file under `data/corpus/` gets a SHA-256 hash logged in `logs/audit.jsonl`. |
 | **No gateway surface** | No FastAPI endpoint, no socket, no listener, no graph node/edge. The only outbound call is `rclone` → Dropbox, operator-initiated, out-of-band. |
 | **Zero new deps** | stdlib + existing `pyyaml`/`utils.*` only. `rclone` is an external binary, installed out-of-band like LM Studio. |
 
-If you flip `include_soul: true`, `python -m sync.cli setup` prints a loud
-`[WARN]` and the generated filter file carries a warning header — so it is never
-an accident.
+If an old config still sets `include_soul: true`, `python -m sync.cli setup` prints a
+`[WARN]` noting the flag has no effect — soul data is never mirrored, because the
+sync root is confined to `data/corpus` and the soul filter rule is unconditional.
 
 ### Why these invariants hold
 
@@ -144,7 +144,7 @@ sync:
   remote_name: "dropbox_cyclaw"  # must match `rclone listremotes`
   remote_path: "CyClaw/corpus"   # folder inside the Dropbox App Folder
   direction: "pull"              # "pull" (safe default) | "bisync" (opt-in, discouraged)
-  include_soul: false            # leave false — data/personality/ is NOT sync-safe
+  include_soul: false            # deprecated no-op — soul is never mirrored (sync root confined to data/corpus)
   reindex_on_change: true        # exit 10 when data/corpus/** changed
   checksum: true                 # rclone --checksum (hash compare, not mtime)
   max_delete: 20                 # safety fuse: abort if > N deletions
@@ -325,7 +325,7 @@ No field is ever named `query` (that would be SHA-256-hashed by the logger).
 | `aborted_for_safety: true` (exit 1) | A safety fuse tripped (`--max-delete`/`--max-transfer`). Either many files were genuinely changed upstream (raise the fuse only if intentional) or the remote is wrong — investigate, don't blindly raise it. |
 | `SYNC_CONFIG_INVALID` naming an unknown `sync:` key (exit 3) | A typo such as `max_delte` is now **fatal** (fail closed): a misspelled safety fuse would otherwise silently keep its default while the operator believes it is set. Correct the key name — the error details list the offending keys. (`enabled` is exempt: it is CyClaw's own on/off toggle, not an rclone parameter.) |
 | `SYNC_SCHEDULER_ERROR` | `crontab`/`schtasks` not on PATH (e.g. running schtasks under WSL), or the scheduler write failed — see the error details |
-| Soul changed on a second machine | `include_soul` was set to true. Set it back to false and rebuild soul from the canonical machine's `data/personality/` via `POST /soul/apply`. |
+| Soul changed on a second machine | Never via sync — the sync root is confined to `data/corpus` and `include_soul` is a no-op. If the soul changed, it was edited out-of-band; rebuild it from the canonical machine's `data/personality/` via `POST /soul/apply`. |
 | Stale answers after a sync | The gateway caches the index at import time. After exit 10 + reindex, **restart the gateway**. |
 
 ---

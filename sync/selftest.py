@@ -60,25 +60,16 @@ def run_self_test(
     except (RcloneNotInstalledError, RcloneTimeoutError, RcloneVersionError) as exc:
         results.append(fail("03. rclone >= 1.68.2 installed", exc.message))
 
-    # 4. Filter content asserts the hardened soul exclusion (or its loud absence).
+    # 4. Filter content asserts the hardened soul exclusion -- unconditional;
+    #    the deprecated include_soul key can no longer drop it.
     text = generate_filters(cfg)
-    soul_rule_present = "- data/personality/**" in text
-    if cfg.include_soul:
-        if not soul_rule_present:
-            results.append(ok("04. include_soul=true and soul rule absent"))
-        else:
-            results.append(fail(
-                "04. include_soul=true and soul rule absent",
-                "soul exclusion still present in filter",
-            ))
+    if "- data/personality/**" in text:
+        results.append(ok("04. data/personality/** excluded (unconditional)"))
     else:
-        if soul_rule_present:
-            results.append(ok("04. data/personality/** excluded by default"))
-        else:
-            results.append(fail(
-                "04. data/personality/** excluded by default",
-                "soul exclusion missing from filter",
-            ))
+        results.append(fail(
+            "04. data/personality/** excluded (unconditional)",
+            "soul exclusion missing from filter",
+        ))
 
     # 5. Filter file can be written to disk.
     try:
@@ -87,9 +78,9 @@ def run_self_test(
     except OSError as exc:
         results.append(fail("05. Write filter file", str(exc)))
 
-    # 6. Filter summary is consistent with the config.
+    # 6. Filter summary is consistent with the (unconditional) soul exclusion.
     summary = filter_summary(cfg)
-    if summary["soul_excluded"] == (not cfg.include_soul):
+    if summary["soul_excluded"] is True:
         results.append(ok("06. Filter summary consistent with config"))
     else:
         results.append(fail("06. Filter summary consistent with config", f"got: {summary}"))

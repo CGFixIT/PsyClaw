@@ -69,11 +69,13 @@ def test_hardened_categories_present(tmp_path: Path) -> None:
         assert rule in text, f"missing hardened rule: {rule}"
 
 
-def test_soul_dropped_with_warning_when_include_soul(tmp_path: Path) -> None:
+def test_soul_excluded_even_when_include_soul(tmp_path: Path) -> None:
+    # include_soul is a deprecated no-op (kept for config compat): the soul
+    # rule is unconditional and must survive include_soul=True with no
+    # "is being synced" warning header.
     text = generate_filters(_load(tmp_path, include_soul=True))
-    assert SOUL_RULE not in text
-    assert "WARNING" in text
-    assert "include_soul=true" in text
+    assert SOUL_RULE in text
+    assert "WARNING" not in text
     # Other hardened rules survive.
     assert "- *.db" in text
 
@@ -170,7 +172,9 @@ def test_filter_summary_shape(tmp_path: Path) -> None:
     assert summary["extra_excludes"] == ["scratch/**"]
 
 
-def test_filter_summary_soul_included(tmp_path: Path) -> None:
+def test_filter_summary_soul_excluded_even_when_include_soul(tmp_path: Path) -> None:
+    # The soul exclusion is unconditional; include_soul only echoes the raw
+    # (deprecated, no-op) configured value for audit.
     summary = filter_summary(_load(tmp_path, include_soul=True))
-    assert summary["soul_excluded"] is False
+    assert summary["soul_excluded"] is True
     assert summary["include_soul"] is True

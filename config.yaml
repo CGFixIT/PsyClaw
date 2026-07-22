@@ -368,7 +368,7 @@ sync:
   remote_name: "dropbox_cyclaw"  # must match `rclone listremotes`
   remote_path: "CyClaw/corpus"   # folder inside the Dropbox App Folder
   direction: "pull"              # "pull" (safe default) | "bisync" (opt-in, discouraged)
-  include_soul: false            # leave false — data/personality/ is NOT sync-safe
+  include_soul: false            # deprecated no-op — soul is never mirrored (local_path is confined to data/corpus); key kept only so old configs still load
   reindex_on_change: true        # exit 10 when data/corpus/** changed
   auto_reindex: false            # when true, `sync.cli sync` runs the indexer itself on change (no exit-10 cron chain needed)
   checksum: true                 # rclone --checksum (hash compare, not mtime)

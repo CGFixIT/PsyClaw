@@ -283,8 +283,35 @@ def test_setup_schedule_uses_lazy_scheduler():
 
 def test_cli_imports_without_scheduler():
     import importlib
+    import sys
 
     import sync.cli as cli_mod
 
+    # sys.modules["sync.scheduler"] = None makes any import of the scheduler
+    # raise ImportError, so the reload below genuinely proves sync.cli does not
+    # import the scheduler at module scope (it is lazy-loaded inside handlers).
+    with patch.dict(sys.modules, {"sync.scheduler": None}):
+        importlib.reload(cli_mod)
+        assert callable(cli_mod.main)
+    # Restore a clean module state for subsequent tests.
     importlib.reload(cli_mod)
-    assert callable(cli_mod.main)
+
+
+# ---------------------------------------------------------------------------
+# include_soul -- deprecated no-op; setup output must be truthful
+# ---------------------------------------------------------------------------
+
+def test_setup_include_soul_warns_it_has_no_effect(capsys):
+    # The old warning claimed soul data "WILL be mirrored" -- impossible, since
+    # local_path is confined to data/corpus. The replacement must say the flag
+    # has no effect and that soul data is never mirrored.
+    cfg = _cfg()
+    cfg.include_soul = True
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.write_filter_file", return_value="/tmp/filters.txt"):
+        assert main(["setup"]) == EXIT_OK
+    err = capsys.readouterr().err
+    assert "WILL be mirrored" not in err
+    assert "has no effect" in err
+    assert "never mirrored" in err

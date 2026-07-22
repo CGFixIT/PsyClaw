@@ -10,8 +10,10 @@ Why this matters (security posture, in priority order):
 
   1. data/personality/  -- soul.md and cyclaw_soul.db. Mirroring these is a
      silent-rewrite path: a stale soul.md on a second machine can clobber an
-     evolved one without going through POST /soul/apply. Excluded by default;
-     the override (include_soul=true) is loud.
+     evolved one without going through POST /soul/apply. The exclusion is
+     UNCONDITIONAL (defense in depth): the sync root is already confined to
+     data/corpus by sync.config, so the soul layer can never be mirrored.
+     The legacy ``include_soul`` config key no longer drops this rule.
   2. AI model weights (*.gguf, *.bin, *.safetensors, ...). Managed per machine.
   3. ChromaDB / BM25 indices and embedding caches. Rebuildable in seconds via
      `python -m retrieval.indexer`.
@@ -30,12 +32,16 @@ from pathlib import Path
 
 from sync.config import RcloneConfig
 
-# The single soul-layer rule -- conditionally dropped when include_soul=true.
+# The single soul-layer rule -- unconditional; the deprecated include_soul
+# config key no longer drops it. (It is also unreachable in practice: the rule
+# is evaluated relative to the sync root, which sync.config confines to
+# data/corpus, so it can never match. Kept as defense in depth in case the
+# local_path confinement is ever revisited.)
 _SOUL_RULE = "- data/personality/**"
 
 # Built-in hardened exclusions. Order matters -- most-specific first.
 _HARDENED_EXCLUDES: list[str] = [
-    # 1. Soul layer -- governed via POST /soul/apply only (opt-in to sync).
+    # 1. Soul layer -- governed via POST /soul/apply only; never synced.
     _SOUL_RULE,
     # 2. AI model weights.
     "- *.gguf",
@@ -96,24 +102,11 @@ _HEADER = """# CyClaw rclone filter file
 # https://rclone.org/filtering/
 """
 
-_SOUL_WARNING = [
-    "# WARNING: include_soul=true -- data/personality/ IS being synced.",
-    "#          This bypasses POST /soul/apply governance. Stale soul.md on a",
-    "#          second machine can silently clobber an evolved one. See config.yaml.",
-]
-
-
 def generate_filters(cfg: RcloneConfig) -> str:
     """Return the full text content of cyclaw_filters.txt for the given config."""
     lines: list[str] = [_HEADER.rstrip(), ""]
 
     excludes = list(_HARDENED_EXCLUDES)
-    if cfg.include_soul:
-        # Drop the data/personality/** rule (and only that one) so the soul
-        # layer is mirrored. Loud, opt-in, discouraged.
-        excludes = [e for e in excludes if e != _SOUL_RULE]
-        lines.extend(_SOUL_WARNING)
-        lines.append("")
 
     lines.extend(excludes)
 
@@ -176,7 +169,9 @@ def filter_summary(cfg: RcloneConfig) -> dict:
     """Return a small dict describing the active filter posture (for status/test)."""
     rules = [r for r in generate_filters(cfg).splitlines() if r and not r.startswith("#")]
     return {
-        "soul_excluded": not cfg.include_soul,
+        # The soul rule is unconditional, so the soul layer is always excluded.
+        "soul_excluded": True,
+        # Raw configured value of the deprecated no-op key, echoed for audit.
         "include_soul": cfg.include_soul,
         "total_rules": len(rules),
         "filter_file": cfg.filter_file,
