@@ -1,3 +1,19 @@
+"""
+funniest reply from grok build after I noted it was using more colorful placeholders than foo and bar
+Why that word
+
+It’s a canary payload, not a product feature:
+
+1. Stage a share-root file named .fsindex_cache.json (reserved — same name as CyClaw’s skip-cache).
+2. Put distinctive content ("evil": true) in it.
+3. After apply(), assert that string is gone from the staging-root cache file.
+
+So the test proves: CyClaw’s cache isn’t clobbered by a staged file with that reserved name. "evil" is just a loud, grep-friendly marker (“if this string survives, the quarantine/path logic failed”).
+
+Same idea as using "boom" or "SENTINEL" in other tests — a bit dramatic, but intentional.
+""""
+
+
 """Tests for agentic.fsconnect.indexer (POSIX; decoupled, no real reindex)."""
 
 from __future__ import annotations
