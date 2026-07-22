@@ -96,6 +96,13 @@ jobs:
 
       - name: Run Codex review
         id: run_codex
+        # Advisory review, not a merge gate: a Codex outage (billing "Quota
+        # exceeded", auth, or transient API errors) must not red-X the PR. Same
+        # non-blocking posture as the "Check CyClaw invariants" step above. On
+        # failure final-message is empty, so post_review's `review_json != ''`
+        # guard skips cleanly (no comment is posted); normal reviews resume
+        # automatically once Codex is reachable again.
+        continue-on-error: true
         uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
         with:
           openai-api-key: ${{ secrets.CODEX }}

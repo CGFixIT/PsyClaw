@@ -11,14 +11,16 @@ dependencies = [
     "fastapi==0.138.0",
     "uvicorn[standard]==0.49.0",
     "pydantic==2.13.4",
-    "pydantic-core==2.46.4",
+    # pydantic-core is intentionally not pinned here: pydantic==2.13.4 hard-pins its
+    # exact pydantic-core (2.46.4), and constraints.txt locks that same version. The
+    # dep-guard D1 lock-step check reads the pair from constraints.txt, not pyproject.
     "chromadb==1.5.9",  # CVE-2026-45829 (Critical pre-auth RCE; no upstream patch). Risk accepted ONLY for local/offline air-gapped use via PersistentClient (embedded mode, path from config.yaml). No HttpClient, no trust_remote_code. See SECURITY.md + pip-audit workflow.
     "sentence-transformers==5.6.0",
     "rank-bm25==0.2.2",
     "httpx==0.28.1",
     "pyyaml==6.0.3",
     "python-dotenv==1.2.2",
-    "numpy<2",
+    "numpy==1.26.4",
     "aiofiles==25.1.0",
     "langgraph==1.2.6",
     "langchain-core==1.4.8",
