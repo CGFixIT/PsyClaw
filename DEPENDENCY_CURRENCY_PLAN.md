@@ -20,7 +20,7 @@ dependency is Medium-High risk** — this plan is a starting point for that
 review, not a pre-approved change list. Nothing here should be bumped
 without running the affected test suite afterward, and touching **all**
 relevant pin files together (`pyproject.toml` + `constraints.txt` at minimum;
-`requirements.txt` and `.github/workflows/environment.yml` too if the package
+`requirements.txt` and `environment.yml` too if the package
 appears there — `verify-deps`'s `extract_pins.py` shows exactly which files
 pin which package).
 
@@ -74,7 +74,7 @@ version-number edit.
 | `mypy` | 2.1.0 | 2.3.0 | minor |
 
 **Where pinned:** both in `pyproject.toml` (`[project.optional-dependencies].dev`
-and `.full`), `constraints.txt`, and `.github/workflows/environment.yml`.
+and `.full`), `constraints.txt`, and `environment.yml`.
 
 **Verification after bumping:** `ruff check --select E,F,I,B,C4,UP,S .` must
 stay clean (or any new findings fixed in the same PR — don't silently widen

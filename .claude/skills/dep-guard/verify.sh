@@ -96,8 +96,7 @@ echo "mutation E (D8 osv-scanner doc drift): PASS (WARN, exit 0)"
 # 2f. D9 FAIL: environment.yml pins a version the pip manifests moved past
 # (the real nltk 3.9.4 -> 3.10.0 conda-lane drift, reproduced synthetically).
 f="$(_mktree)"
-mkdir -p "$f/.github/workflows"
-printf 'dependencies:\n  - nltk=0.0.1\n' > "$f/.github/workflows/environment.yml"
+printf 'dependencies:\n  - nltk=0.0.1\n' > "$f/environment.yml"
 out="$(python3 "$checker" --repo-root "$f" 2>&1)"; rc=$?
 rm -rf "$f"
 if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D9\]"; then

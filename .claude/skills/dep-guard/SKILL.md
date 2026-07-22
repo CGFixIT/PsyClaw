@@ -52,7 +52,7 @@ It checks (severity in brackets):
 | D6 | FAIL | every package pinned in BOTH files agrees on version (`constraints.txt`'s own header says they MUST match) |
 | D7 | INFO | `chromadb` pin is CVE-2026-45829 risk-accepted, embedded `PersistentClient` only (SECURITY.md) — do not "fix" it |
 | D8 | FAIL/WARN | every CI workflow and install script that hardcodes a torch version agrees with the manifest pin (FAIL); stale doc / `.osv-scanner.toml` references are WARN |
-| D9 | FAIL | `.github/workflows/environment.yml` (conda CI lane) pins agree with the pip manifests — `fastapi` exempt (conda-forge's chromadb build pins it; documented in the file itself) |
+| D9 | FAIL | `environment.yml` (conda CI lane) pins agree with the pip manifests — `fastapi` exempt (conda-forge's chromadb build pins it; documented in the file itself) |
 
 ### Step 2 — Interpret failures
 
