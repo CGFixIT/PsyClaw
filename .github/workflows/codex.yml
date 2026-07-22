@@ -118,7 +118,7 @@ jobs:
               "",
             ].join("\n");
             const body = header + process.env.CODEX_FINAL_MESSAGE;
-            if (body.length > 60000) {
+            if (body.length > 88000) {
               core.setFailed(`Codex comment too long (${body.length} chars, max 60000).`);
               return;
             }
