@@ -30,6 +30,7 @@
 - [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
 - [MCP Server](#mcp-server)
 - [Security Model](#security-model)
+- [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
 
 ---
 
@@ -697,6 +698,8 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
 
 > **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
+>
+> **Compared to peers:** where policy lives (topology vs prompts) vs AnythingLLM, Open WebUI, and PrivateGPT — [`docs/comparisons/INVARIANTS_COMPARISON.md`](docs/comparisons/INVARIANTS_COMPARISON.md).
 
 ---
 
