@@ -313,12 +313,11 @@ logging:
   level: "INFO"
   log_file: "logs/cyclaw.log"
   audit_file: "logs/audit.jsonl"
+  # Only include_query_hash is read (utils/logger.py). The audit record's
+  # other fields (top_score, retrieval_mode, online_escalated, model_used)
+  # are always written; there are no per-field include toggles.
   audit_fields:
     include_query_hash: true
-    include_top_score: true
-    include_retrieval_mode: true
-    include_online_escalated: true
-    include_model_used: true
 
 security:
   # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).

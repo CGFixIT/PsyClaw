@@ -55,9 +55,7 @@ TEST_CONFIG = {
     # TEST_CONFIG raw and writes audit lines, this placeholder fails loudly
     # (missing directory) instead of scattering files under /tmp.
     "logging": {"level": "DEBUG", "log_file": "", "audit_file": "OVERRIDDEN-PER-TEST/audit.jsonl",
-                "audit_fields": {"include_query_hash": True, "include_top_score": True,
-                                 "include_retrieval_mode": True, "include_online_escalated": True,
-                                 "include_model_used": True}},
+                "audit_fields": {"include_query_hash": True}},
     "security": {"require_env": ["GROK_API_KEY"],
                  "allowed_origins": ["http://127.0.0.1", "http://localhost"]},  # DevSkim: ignore DS162092,DS137138
     "personality": {"enabled": False, "soul_path": "", "db_path": "", "interaction_ttl_days": 90}
