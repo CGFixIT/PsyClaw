@@ -768,7 +768,9 @@ def run_sync(
     4. Run rclone, capturing exit code and the log file.
     5. Parse the log into FileEvents.
     6. Hash any added/modified files under data/corpus/ for the audit row.
-    7. Emit audit events: sync_started, sync_file_*, sync_completed | sync_failed.
+    7. Emit audit events: sync_started, sync_file_*, sync_completed | sync_failed
+       (skipped entirely under ``dry_run`` -- a preview changes no corpus or
+       remote state, so it must not leave rows that read like a real sync).
     8. Return a SyncResult.
 
     Raises ``RcloneNotInstalledError`` / ``RcloneVersionError`` on environment
@@ -808,6 +810,11 @@ def _run_sync_locked(
     rclone_bin: str,
 ) -> SyncResult:
     """Body of ``run_sync`` executed while holding the single-instance lock."""
+    # Deliberately NOT skipped under dry_run: the argv below passes
+    # cfg.filter_file via --filter-from, so a missing file would break the
+    # preview outright and a stale one would make it lie about what is in
+    # scope. The documented dry-run promise covers corpus/remote state only
+    # (docs/SYNC_README.md names the support files a preview still writes).
     write_filter_file(cfg)
 
     log_path = cfg.log_path
@@ -820,14 +827,20 @@ def _run_sync_locked(
         argv = build_pull_argv(cfg, dry_run=dry_run, log_path=log_path, rclone_bin=rclone_bin)
 
     started_at = time.time()
-    audit_log({
-        "event": "sync_started",
-        "direction": cfg.direction,
-        "dry_run": dry_run,
-        "remote": cfg.remote,
-        "local_path": cfg.local_path,
-        "include_soul": cfg.include_soul,
-    })
+    # Audit honesty: under dry_run nothing about the corpus or remote changes,
+    # so NO audit rows are emitted -- a sync_started/sync_completed pair (or
+    # per-file rows with hashes) would read like a real sync happened. The
+    # preview is still returned to the caller via SyncResult. The pairing
+    # invariant below holds vacuously: no sync_started, no terminal row owed.
+    if not dry_run:
+        audit_log({
+            "event": "sync_started",
+            "direction": cfg.direction,
+            "dry_run": dry_run,
+            "remote": cfg.remote,
+            "local_path": cfg.local_path,
+            "include_soul": cfg.include_soul,
+        })
 
     # Accumulators hoisted ABOVE the try so the evidence-preserving except
     # (below) can always reference them -- even if an exception fires before the
@@ -934,13 +947,14 @@ def _run_sync_locked(
                 break
 
             # Transient failure with attempts remaining: audit, back off, retry.
-            audit_log({
-                "event": "sync_retry",
-                "direction": cfg.direction,
-                "attempt": attempt,
-                "max_attempts": attempts,
-                "rclone_exit_code": completed.returncode,
-            })
+            if not dry_run:
+                audit_log({
+                    "event": "sync_retry",
+                    "direction": cfg.direction,
+                    "attempt": attempt,
+                    "max_attempts": attempts,
+                    "rclone_exit_code": completed.returncode,
+                })
             backoff = cfg.retry_backoff_sec * (2 ** (attempt - 1))
             # Clip the backoff to whatever budget remains; if the budget is exhausted,
             # break out so the FAILED attempt's result is surfaced (parsed + audited)
@@ -1001,11 +1015,13 @@ def _run_sync_locked(
             result.check_result = run_post_sync_check(cfg, rclone_bin)
 
         # Per-file audit events -- one row per file, with sha256 when available.
-        for ev in events:
-            audit_log(ev.to_audit_dict(base=cfg.local_path))
-
         # Summary audit event -- sync_completed (success) or sync_failed (otherwise).
-        audit_log(result.to_audit_dict())
+        # Both skipped under dry_run (see the sync_started guard above): the
+        # events describe what rclone WOULD copy, not what changed.
+        if not dry_run:
+            for ev in events:
+                audit_log(ev.to_audit_dict(base=cfg.local_path))
+            audit_log(result.to_audit_dict())
 
         return result
     except Exception as exc:
@@ -1033,18 +1049,20 @@ def _run_sync_locked(
         # fields a normal failure would, plus error_type. rclone_exit_code is the
         # last observed code (None if rclone never returned one); aborted_for_safety
         # is False -- an exceptional exit is not a --max-delete/--max-transfer trip.
-        audit_log({
-            "event": "sync_failed",
-            "direction": cfg.direction,
-            "duration_sec": round(max(0.0, time.time() - started_at), 3),
-            "rclone_exit_code": completed.returncode if completed is not None else None,
-            "counts": counts,
-            "errors_n": len(final_errors),
-            "aborted_for_safety": False,
-            "dry_run": dry_run,
-            "corpus_changed": any(not _is_rclone_internal(ev.path) for ev in partial),
-            "error_type": type(exc).__name__,
-        })
+        # Skipped under dry_run like every other audit row in this body.
+        if not dry_run:
+            audit_log({
+                "event": "sync_failed",
+                "direction": cfg.direction,
+                "duration_sec": round(max(0.0, time.time() - started_at), 3),
+                "rclone_exit_code": completed.returncode if completed is not None else None,
+                "counts": counts,
+                "errors_n": len(final_errors),
+                "aborted_for_safety": False,
+                "dry_run": dry_run,
+                "corpus_changed": any(not _is_rclone_internal(ev.path) for ev in partial),
+                "error_type": type(exc).__name__,
+            })
         raise
 
 

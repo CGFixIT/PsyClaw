@@ -956,6 +956,37 @@ def test_run_sync_skips_check_on_dry_run(tmp_path):
     assert len(check_calls) == 0
 
 
+def test_run_sync_dry_run_emits_no_audit_rows(tmp_path):
+    # Audit honesty: a --dry-run preview changes no corpus or remote state, so
+    # it must leave no sync_started / sync_file_* / sync_completed rows that
+    # would read like a real sync happened (docs/SYNC_README.md). The preview
+    # is still returned via SyncResult, and the support files the preview
+    # needs (the --filter-from filter file) are still written.
+    cfg = _make_cfg(tmp_path)
+    log_path = cfg.log_path
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(
+            "2026/06/20 02:10:01 INFO  : notes.md: Copied (new)\n",
+            encoding="utf-8",
+        )
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.audit_log") as maudit:
+        result = run_sync(cfg, dry_run=True, rclone_bin=FAKE_RCLONE)
+
+    assert result.success is True
+    assert result.dry_run is True
+    assert result.events  # the preview itself is still populated
+    assert maudit.call_count == 0
+    assert Path(cfg.filter_file).exists()  # documented support-file write
+
+
 def test_run_sync_skips_check_when_sync_failed(tmp_path):
     cfg = _make_cfg(tmp_path, post_sync_check=True)
     log_path = cfg.log_path
