@@ -690,3 +690,28 @@ class TestSoulSizeCap:
             pm = PersonalityManager(cfg)
 
         assert pm.soul_core == "# Small soul"          # default 8000 cap, no truncation
+
+    def test_backup_preserves_full_oversized_soul(self, cfg, tmp_paths):
+        """Regression: apply_evolution's .bak must be the raw soul.md bytes on
+        disk, not the bounded in-memory soul_core. An externally-edited soul
+        larger than soul_max_chars was silently truncated by the backup, and
+        restore_from_backup() could never bring the overflow back (data loss)."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        original = "S" * 5000
+        soul_path.write_text(original, encoding="utf-8")
+        cfg["personality"]["soul_max_chars"] = 1000
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            assert len(pm.soul_core) == 1000  # in-memory copy is bounded
+            pm.apply_evolution("# V2", "test upgrade")
+
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        assert bak_path.read_text(encoding="utf-8") == original
+
+        # restore_from_backup round-trips the full, untruncated content.
+        with patch("utils.personality.audit_log"):
+            pm.restore_from_backup()
+        assert soul_path.read_text(encoding="utf-8") == original

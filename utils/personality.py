@@ -310,7 +310,11 @@ class PersonalityManager:
         # publish sequence under one lock acquisition makes each apply atomic.
         with self._lock:
             if self.soul_path.exists():
-                bak_path.write_text(self.soul_core, encoding="utf-8")
+                # Back up the raw soul.md on disk, NOT self.soul_core: the
+                # in-memory copy is bounded to soul_max_chars by _bounded_soul,
+                # so backing it up would silently truncate any overflow from an
+                # externally-edited oversized soul.md (data loss on restore).
+                bak_path.write_text(self.soul_path.read_text(encoding="utf-8"), encoding="utf-8")
                 os.chmod(bak_path, 0o600)
             tmp_path.write_text(new_soul, encoding="utf-8")
             os.replace(tmp_path, self.soul_path)
