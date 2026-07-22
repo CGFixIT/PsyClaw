@@ -234,7 +234,8 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         if _RUNS_DIR.is_dir():
             # dirs-only BEFORE the slice: a stray file (index, .lock) among the
             # newest entries must not push a real run out of the _MAX_RUNS window
-            for path in sorted((p for p in _RUNS_DIR.iterdir() if p.is_dir()), reverse=True)[:_MAX_RUNS]:
+            entries = (entry for entry in _RUNS_DIR.iterdir() if entry.is_dir())
+            for path in sorted(entries, reverse=True)[:_MAX_RUNS]:
                 runs.append({"run_id": path.name, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
 
