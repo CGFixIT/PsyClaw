@@ -10,12 +10,6 @@ from utils.errors import AgenticError
 _VIRTUAL_SKILLS_ROOT = "/skills"
 
 
-def governed_skill_source() -> str:
-    """Return the only approved Deep Agents skill source."""
-
-    return "agentic.registry"
-
-
 def governed_skill_files(registry: SkillRegistry) -> dict[str, str]:
     """Project applied registry entries into virtual Deep Agents skill files."""
 
