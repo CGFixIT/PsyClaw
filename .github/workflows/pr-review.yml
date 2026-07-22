@@ -98,7 +98,7 @@ jobs:
         id: run_codex
         uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          openai-api-key: ${{ secrets.CODEX }}
           codex-version: '0.144.6'
           prompt-file: trusted/.codex/prompts/pr-review.md
           working-directory: trusted
