@@ -684,7 +684,14 @@ class ScopedRoots:
 
     def _mkdir_win(self, sr: SafeRoot, comps: list[str]) -> dict:  # pragma: no cover
         real = self._win_resolve(sr, comps, must_exist=False)
-        real.mkdir()
+        try:
+            real.mkdir()
+        except FileExistsError as exc:
+            # Mirror the POSIX branch: callers (e.g. writer._ensure_trash) suppress
+            # FsConnectRuntimeError for the already-exists case, not raw OSError.
+            raise FsConnectRuntimeError(
+                f"{real} already exists", details={"path": str(real)}
+            ) from exc
         return {"created": str(real)}
 
     def _move_win(  # pragma: no cover

@@ -1,6 +1,6 @@
 """Unit tests for agentic.fsconnect.trash helpers (Phase 2 item 4).
 
-Pure policy/formatting: entry-name determinism + collision resistance, meta sidecar
+Pure policy/formatting: entry-name sortability + collision-proofing, meta sidecar
 round-trip, retention/expiry logic (unparseable expiry treated as expired), and the
 find_entry lookup contract. No filesystem needed for the helper math.
 """
@@ -21,14 +21,22 @@ def test_entry_name_is_sortable_and_hashed():
     name = trash.entry_name("sub/dir/file.txt", NOW)
     assert name.startswith("20260709T145501Z__")
     assert "sub__dir__file.txt" in name
-    # 8-hex digest suffix
-    assert len(name.rsplit("__", 1)[-1]) == 8
+    # 8-hex path digest + 8-hex random suffix
+    assert len(name.rsplit("__", 1)[-1]) == 16
 
 
 def test_entry_name_disambiguates_same_second():
     a = trash.entry_name("a.txt", NOW)
     b = trash.entry_name("b.txt", NOW)
     assert a != b  # different original paths -> different digest
+
+
+def test_entry_name_no_collision_same_path_same_second():
+    # The digest's only inputs (path + second-resolution stamp) are identical
+    # here, so the random suffix must carry the disambiguation.
+    a = trash.entry_name("a.txt", NOW)
+    b = trash.entry_name("a.txt", NOW)
+    assert a != b
 
 
 def test_meta_roundtrip():
