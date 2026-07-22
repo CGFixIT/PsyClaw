@@ -16,13 +16,26 @@ import httpx
 import pytest
 import yaml
 
-from llm.client import ClaudeClient, GrokClient, LocalLLMClient
+from llm.client import (
+    ClaudeClient,
+    GrokClient,
+    LocalLLMClient,
+    reset_local_backend_cache,
+    resolve_local_backend,
+)
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError
 
 _URL = "http://127.0.0.1:1234/v1/chat/completions"  # DevSkim: ignore DS162092,DS137138 - loopback test URL
 
 
-def _write_config(tmp_path, retry: dict = None) -> str:
+@pytest.fixture(autouse=True)
+def _clear_local_backend_cache():
+    reset_local_backend_cache()
+    yield
+    reset_local_backend_cache()
+
+
+def _write_config(tmp_path, retry: dict = None, local_llm_extra: dict | None = None) -> str:
     """Minimal config.yaml with the models.* blocks both clients read.
 
     When ``retry`` is given it is injected into both model blocks so the retry
@@ -37,6 +50,8 @@ def _write_config(tmp_path, retry: dict = None) -> str:
         "temperature": 0.1,
         "timeout_sec": 5,
     }
+    if local_llm_extra:
+        local_llm.update(local_llm_extra)
     grok = {
         "base_url": "https://api.x.ai/v1",
         "model": "grok-4.3",
@@ -675,3 +690,144 @@ class TestRetryConfigBounds:
         client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": -99}))
         assert client.retry_max == 0
         client.close()
+
+
+# =============================================================================
+# Local backend failover (Ollama → LM Studio)
+# =============================================================================
+
+class TestResolveLocalBackend:
+    def test_fallback_disabled_no_probe(self, monkeypatch):
+        probes: list[str] = []
+
+        def capture(url, **kw):
+            probes.append(url)
+            return True
+
+        monkeypatch.setattr("llm.client._probe_openai_models", capture)
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {"enabled": False},
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        assert resolved.provider == "ollama"
+        assert probes == []
+
+    def test_fallback_uses_secondary_when_primary_down(self, monkeypatch):
+        def probe(base_url, **kw):
+            return "1234" in base_url
+
+        monkeypatch.setattr("llm.client._probe_openai_models", probe)
+        monkeypatch.setattr("utils.logger.audit_log", lambda *a, **k: None)
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "local-gguf-model",
+                "probe_timeout_sec": 0.5,
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "fallback"
+        assert resolved.provider == "lmstudio"
+        assert resolved.model == "local-gguf-model"
+        assert "1234" in resolved.base_url
+
+    def test_fallback_keeps_primary_when_probe_ok(self, monkeypatch):
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: True)
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "other-model",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        assert resolved.model == "qwen2.5:7b"
+
+    def test_fallback_enabled_requires_model(self):
+        llm_cfg = {
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {
+                "enabled": True,
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "",
+            },
+        }
+        with pytest.raises(LLMServiceError, match="fallback requires"):
+            resolve_local_backend(llm_cfg)
+
+    def test_fallback_rejects_non_loopback_secondary(self):
+        llm_cfg = {
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {
+                "enabled": True,
+                "base_url": "http://10.0.0.5:1234/v1",  # DevSkim: ignore DS162092
+                "model": "x",
+            },
+        }
+        with pytest.raises(LLMServiceError, match="loopback"):
+            resolve_local_backend(llm_cfg)
+
+    def test_client_generate_uses_fallback_url_and_model(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "llm.client._probe_openai_models",
+            lambda base_url, **kw: "1234" in base_url,
+        )
+        monkeypatch.setattr("utils.logger.audit_log", lambda *a, **k: None)
+        path = _write_config(
+            tmp_path,
+            local_llm_extra={
+                "provider": "ollama",
+                "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                "model": "qwen2.5:7b",
+                "fallback": {
+                    "enabled": True,
+                    "provider": "lmstudio",
+                    "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                    "model": "lmstudio-model",
+                },
+            },
+        )
+        client = LocalLLMClient(path)
+        assert client.backend_source == "fallback"
+        assert client.model == "lmstudio-model"
+        assert client.provider == "lmstudio"
+        fake = _FakePost(response=_ok_response("from lmstudio"))
+        client._client.post = fake
+        assert client.generate("hi") == "from lmstudio"
+        url, kwargs = fake.calls[0]
+        assert "1234" in url
+        assert kwargs["json"]["model"] == "lmstudio-model"
+        client.close()
+
+    def test_both_probes_fail_still_uses_primary(self, monkeypatch):
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: False)
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen2.5:7b",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "x",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        assert resolved.provider == "ollama"

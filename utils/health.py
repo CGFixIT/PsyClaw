@@ -96,22 +96,43 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
 
     try:
         cfg = _health_cfg(config_path)
-        llm_base = cfg["models"]["local_llm"]["base_url"]
+        llm_cfg = cfg["models"]["local_llm"]
     except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
         return [HealthStatus(name="config", healthy=False, error=f"config load failed: {_safe_error(exc)}")]
 
     results = []
-    # Same model-pin drift guard as Grok/Claude: a healthy Ollama *endpoint*
-    # with a missing/renamed tag (config pins qwen2.5:7b but the operator never
-    # pulled it) would otherwise stay green until the first /query stalls or
-    # 4xxs. Only applied when models.local_llm.model is set; empty pin is a
-    # pure availability probe (backward compatible with minimal test fixtures).
-    local_model = cfg["models"]["local_llm"].get("model") or ""
-    results.append(_ping(
-        f"{llm_base}/models",
-        "ollama",
-        expect_model=local_model if local_model else None,
-    ))
+    # Resolve the same local backend LocalLLMClient uses (primary Ollama, or
+    # LM Studio when models.local_llm.fallback is enabled and primary is down).
+    # Model-pin drift guard: a healthy endpoint with a missing/renamed tag
+    # otherwise stays green until the first /query stalls. Only applied when
+    # the resolved model pin is non-empty.
+    try:
+        from llm.client import resolve_local_backend
+
+        resolved = resolve_local_backend(llm_cfg)
+        llm_base = resolved.base_url
+        local_model = resolved.model or ""
+        local_name = resolved.provider or "ollama"
+        local_headers = (
+            {"Authorization": f"Bearer {resolved.api_key}"} if resolved.api_key else None
+        )
+    except Exception as exc:
+        # Resolver validation (e.g. fallback enabled without model) should not
+        # 500 the whole /health payload — surface as unhealthy local status.
+        err = getattr(exc, "message", None) or _safe_error(exc)
+        results.append(HealthStatus(name="local_llm", healthy=False, error=str(err)))
+        llm_base = None
+        local_model = ""
+        local_name = "local_llm"
+        local_headers = None
+
+    if llm_base is not None:
+        results.append(_ping(
+            f"{llm_base.rstrip('/')}/models",
+            local_name,
+            headers=local_headers,
+            expect_model=local_model if local_model else None,
+        ))
     if (cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]

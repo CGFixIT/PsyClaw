@@ -1,6 +1,6 @@
-"""Ollama (local), Grok, and Claude online fallback client wrappers.
+"""Local OpenAI-compatible LLM (Ollama / LM Studio), Grok, and Claude clients.
 
-Local Ollama and Grok use the OpenAI-compatible /chat/completions endpoint.
+Local backends and Grok use the OpenAI-compatible /chat/completions endpoint.
 Claude uses Anthropic's Messages API.
 
 Transient failures (timeouts, transport/network errors, and retryable HTTP
@@ -9,13 +9,22 @@ errors (other 4xx) and unexpected exceptions fail fast — retrying a 400/401
 only wastes time and, for Grok, external credits. Retry is config-driven via a
 ``retry`` block under each model; when absent, ``max_retries`` defaults to 0,
 preserving the original single-attempt behavior.
+
+Optional local failover (``models.local_llm.fallback``): when enabled, a short
+HTTP probe prefers the primary (Ollama) and, if unreachable, selects the
+secondary (LM Studio). Selection is cached for the process; default is
+fallback disabled so single-backend installs stay fail-closed.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -26,6 +35,8 @@ log = logging.getLogger(__name__)
 
 _RETRYABLE_STATUS_FLOOR = 500
 _RETRYABLE_EXTRA_STATUS = frozenset({429})
+_DEFAULT_PROBE_TIMEOUT_SEC = 1.5
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def _is_retryable_status(status: int) -> bool:
@@ -204,14 +215,192 @@ def _post_with_retry(
     raise LLMServiceError("retry loop exited without return/raise")  # pragma: no cover
 
 
+# =============================================================================
+# Local backend resolution (Ollama primary → optional LM Studio fallback)
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class ResolvedLocalBackend:
+    """Active local OpenAI-compatible backend after optional failover probe."""
+
+    provider: str
+    base_url: str
+    model: str
+    source: str  # "primary" | "fallback"
+    api_key: str = ""
+
+
+# Process-level resolution cache so LocalLLMClient and /health share one probe.
+_resolved_local_backends: dict[str, ResolvedLocalBackend] = {}
+
+
+def reset_local_backend_cache() -> None:
+    """Drop cached local-backend resolution (tests / config reload)."""
+    _resolved_local_backends.clear()
+
+
+def _provider_label(provider: str) -> str:
+    labels = {
+        "ollama": "Ollama",
+        "lmstudio": "LM Studio",
+        "openai_compatible": "local LLM",
+    }
+    return labels.get(provider, provider or "local LLM")
+
+
+def _is_loopback_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host in _LOOPBACK_HOSTS
+
+
+def _probe_openai_models(
+    base_url: str,
+    *,
+    timeout_sec: float,
+    api_key: str = "",
+) -> bool:
+    """True if GET {base}/models returns 2xx within timeout (discovery only)."""
+    url = f"{base_url.rstrip('/')}/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        with httpx.Client(timeout=timeout_sec) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            return True
+    except Exception:
+        return False
+
+
+def _cache_key_for_local_llm(llm_cfg: dict) -> str:
+    fb = llm_cfg.get("fallback") or {}
+    return "|".join(
+        [
+            str(llm_cfg.get("base_url", "")),
+            str(llm_cfg.get("model", "")),
+            str(llm_cfg.get("provider", "ollama")),
+            str(bool((fb or {}).get("enabled", False))),
+            str((fb or {}).get("base_url", "")),
+            str((fb or {}).get("model", "")),
+            str((fb or {}).get("provider", "")),
+            str((fb or {}).get("probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC)),
+        ]
+    )
+
+
+def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLocalBackend:
+    """Pick primary or fallback local backend.
+
+    When ``fallback.enabled`` is false (default), returns primary with **no**
+    network probe — identical to pre-failover behaviour.
+
+    When enabled: short-probe primary; on hard failure short-probe secondary.
+    If both probes fail, still returns primary (gate boot must not die) and
+    logs a warning — generate will surface the connection error as today.
+    """
+    key = _cache_key_for_local_llm(llm_cfg)
+    if not force and key in _resolved_local_backends:
+        return _resolved_local_backends[key]
+
+    primary_url = str(llm_cfg.get("base_url") or "").strip()
+    primary_model = str(llm_cfg.get("model") or "").strip()
+    primary_provider = str(llm_cfg.get("provider") or "ollama").strip() or "ollama"
+    primary_key = str(llm_cfg.get("api_key") or "").strip()
+    # model may be empty on minimal test fixtures / availability-only probes;
+    # generate still needs a real pin in production config.yaml.
+    if not primary_url:
+        raise LLMServiceError(
+            "models.local_llm.base_url is required",
+            details={"base_url": primary_url},
+        )
+
+    primary = ResolvedLocalBackend(
+        provider=primary_provider,
+        base_url=primary_url.rstrip("/"),
+        model=primary_model,
+        source="primary",
+        api_key=primary_key,
+    )
+
+    fb = llm_cfg.get("fallback") or {}
+    if not isinstance(fb, dict) or not fb.get("enabled", False):
+        _resolved_local_backends[key] = primary
+        return primary
+
+    fb_url = str(fb.get("base_url") or "").strip()
+    fb_model = str(fb.get("model") or "").strip()
+    fb_provider = str(fb.get("provider") or "lmstudio").strip() or "lmstudio"
+    probe_timeout = float(fb.get("probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC))
+    if probe_timeout <= 0:
+        probe_timeout = _DEFAULT_PROBE_TIMEOUT_SEC
+
+    if not fb_url or not fb_model:
+        raise LLMServiceError(
+            "models.local_llm.fallback requires base_url and model when enabled",
+            details={"base_url": bool(fb_url), "model": bool(fb_model)},
+        )
+    if not _is_loopback_url(fb_url):
+        raise LLMServiceError(
+            "models.local_llm.fallback.base_url must be loopback (127.0.0.1 / localhost / ::1)",
+            details={"hint": "non-loopback local servers must be set as primary base_url explicitly"},
+        )
+    if not _is_loopback_url(primary_url):
+        # Primary already non-loopback is an operator choice; still allow fallback
+        # only if secondary is loopback (validated above).
+        pass
+
+    if _probe_openai_models(primary_url, timeout_sec=probe_timeout, api_key=primary_key):
+        log.info("local LLM backend: primary (%s) probe ok", primary_provider)
+        _resolved_local_backends[key] = primary
+        return primary
+
+    secondary = ResolvedLocalBackend(
+        provider=fb_provider,
+        base_url=fb_url.rstrip("/"),
+        model=fb_model,
+        source="fallback",
+        api_key=str(fb.get("api_key") or "").strip(),
+    )
+    if _probe_openai_models(secondary.base_url, timeout_sec=probe_timeout, api_key=secondary.api_key):
+        log.warning(
+            "local LLM backend: primary unreachable; using fallback (%s)",
+            fb_provider,
+        )
+        try:
+            from utils.logger import audit_log
+
+            audit_log(
+                {
+                    "event": "local_llm_backend_selected",
+                    "source": "fallback",
+                    "provider": fb_provider,
+                    "primary_provider": primary_provider,
+                }
+            )
+        except Exception:
+            log.debug("audit_log for local_llm_backend_selected failed", exc_info=True)
+        _resolved_local_backends[key] = secondary
+        return secondary
+
+    log.warning(
+        "local LLM backend: primary and fallback probes failed; using primary (%s)",
+        primary_provider,
+    )
+    _resolved_local_backends[key] = primary
+    return primary
+
+
 class LocalLLMClient:
     def __init__(self, config_path: str = "config.yaml", cfg: dict | None = None):
         if cfg is None:
             with open(config_path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
         llm_cfg = cfg["models"]["local_llm"]
-        self.base_url = llm_cfg["base_url"]
-        self.model = llm_cfg["model"]
+        resolved = resolve_local_backend(llm_cfg)
+        self.provider = resolved.provider
+        self.base_url = resolved.base_url
+        self.model = resolved.model
+        self.backend_source = resolved.source  # "primary" | "fallback"
         self.max_tokens = llm_cfg["max_tokens"]
         self.temperature = llm_cfg["temperature"]
         self.timeout = llm_cfg["timeout_sec"]
@@ -219,13 +408,16 @@ class LocalLLMClient:
         # Coerce to a stripped str so a bare YAML number (parsed as int) or an
         # accidental whitespace value can't produce a malformed header. Empty /
         # whitespace-only -> "" -> no Authorization header is sent (see generate).
-        self.api_key = str(llm_cfg.get("api_key") or "").strip()
+        self.api_key = resolved.api_key or str(llm_cfg.get("api_key") or "").strip()
         self._client = httpx.Client(timeout=self.timeout)
+        self._label = _provider_label(self.provider)
 
     def close(self) -> None:
         self._client.close()
 
     def generate(self, prompt: str) -> str:
+        label = self._label
+
         def do_post() -> httpx.Response:
             headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
             return self._client.post(
@@ -240,7 +432,7 @@ class LocalLLMClient:
             )
 
         return _post_with_retry(
-            service="ollama",
+            service=self.provider or "ollama",
             do_post=do_post,
             max_retries=self.retry_max,
             backoff_base=self.retry_backoff,
@@ -250,17 +442,18 @@ class LocalLLMClient:
             # returned 504). Transport/5xx/429 still retry — those fail fast.
             retry_on_timeout=False,
             on_http=lambda e: LLMServiceError(
-                f"Ollama HTTP error: {e.response.status_code}",
-                details={"status": e.response.status_code},
+                f"{label} HTTP error: {e.response.status_code}",
+                details={"status": e.response.status_code, "provider": self.provider},
             ),
             on_timeout=lambda e: LLMServiceError(
-                "Ollama timeout", details={"timeout_sec": self.timeout}
+                f"{label} timeout",
+                details={"timeout_sec": self.timeout, "provider": self.provider},
             ),
             # Type-only: str(e) can carry URLs, body fragments, or secrets that
             # graph embeds into HTTP 200 answers via _generate_or_error.
             on_other=lambda e: LLMServiceError(
-                f"Ollama error: {type(e).__name__}",
-                details={"exc_type": type(e).__name__},
+                f"{label} error: {type(e).__name__}",
+                details={"exc_type": type(e).__name__, "provider": self.provider},
             ),
         )
 

@@ -1,8 +1,12 @@
 ## Note: when initiated pr draft from grok build, kimi/kimi code, or codex use preferred branch naming conventions:
 > claude code: claude/{feature}
+> 
 > codex: cx/{feature}
+> 
 > grok build: grok/{feature}
+> 
 > kimi or kimi code: kimi/{feature}
+> 
 > CyClaw (directly or via mcp connector in claude code or similar): CyClaw/{wow!}{feature}-{date} 
 
 ## Title
@@ -78,6 +82,7 @@ If this is a relatively large, complex, or core-path change, kick off the discus
 - Explicit before/after invariant matrix
 - Sandbox validation diff or key evidence
 - Any compensating controls or observability added
+- a mature technical and eli5 version description of whats changed and whats at risk and where to monitor
 
 **Examples of what good "Further comments" look like for core changes:**
 - "No change to graph topology or entry points. RAG-first and audit convergence remain enforced by edges only."
