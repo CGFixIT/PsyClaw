@@ -8,9 +8,11 @@
 # engine/model/base_url from GuardrailsConfig at engine-build time, so edit those
 # THERE. Rail BEHAVIOUR -- the active flows, thresholds, and prompt templates --
 # is defined by THIS file (and rails.co). config.yaml's input_rails / output_rails
-# / topical_rails / hallucination_threshold knobs are NOT yet applied to the live
-# engine (they drive the offline heuristic floor only), so keep the two in sync
-# deliberately as the layer matures (review P2 on PR #590).
+# / topical_rails lists still select which offline heuristic siblings run via
+# CLI status; the live Colang flows below are the engine's active set.
+# guardrails.hallucination_threshold IS applied to live rails via the
+# is_ungrounded action (register_actions at engine build) — same floor as
+# offline safe_generate.
 #
 # NOTE: This is a starting template. The flows referenced below are defined in
 # rails.co.

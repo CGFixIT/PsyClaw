@@ -122,7 +122,9 @@ def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
         rails = LLMRails(rails_config)
     except Exception as exc:  # noqa: BLE001 - surface any NeMo load failure as RailsLoadError
         raise RailsLoadError(f"failed to load NeMo rails: {exc}", details={"dir": cfg.nemo_config_dir}) from exc
-    register_actions(rails)
+    # Wire config.yaml guardrails.hallucination_threshold into the live Colang
+    # is_ungrounded action so rails.co no longer hardcodes 0.18.
+    register_actions(rails, hallucination_threshold=cfg.hallucination_threshold)
     _rails_singleton = rails
     return rails
 

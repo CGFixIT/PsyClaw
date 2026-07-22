@@ -16,6 +16,7 @@ from rank_bm25 import BM25Okapi
 from retrieval.stemmer import tokenize_and_stem
 from retrieval.hybrid_search import HybridRetriever, SearchResult
 from retrieval.vector_store import parse_stem_tags
+from utils.errors import EmbeddingServiceError
 
 
 class TestRRFFusion:
@@ -108,6 +109,86 @@ class TestFusionReturnsFullUnion:
         # Pre-fix this returned only 5 (max(5, 5)); the other 5 were dropped.
         assert len(out) == 10
         assert {r.chunk_id for r in out} == set(range(10))
+
+
+class TestHybridDegradePaths:
+    """Fail-soft dual-leg paths in hybrid_search — load-bearing for /query
+    availability when embeddings or BM25 index shape is broken."""
+
+    @staticmethod
+    def _hit(mode: str, chunk_id: int, score: float = 1.0) -> SearchResult:
+        return SearchResult(
+            text=f"t{chunk_id}", score=score, source="s.md", chunk_id=chunk_id,
+            stem_tags=[], retrieval_mode=mode,
+        )
+
+    def test_semantic_failure_falls_back_to_normalized_keyword(self) -> None:
+        # EmbeddingServiceError on semantic must not crash hybrid_search; BM25
+        # hits are rebased via _normalize_single_path (raw 9.9 would clear min_score).
+        import types
+
+        kw = [self._hit("keyword", 0, score=9.9), self._hit("keyword", 1, score=0.5)]
+
+        def boom_sem(_q: str) -> list[SearchResult]:
+            raise EmbeddingServiceError("embedder offline")
+
+        fake = SimpleNamespace(
+            rrf_k=60, top_k_semantic=5, top_k_keyword=5,
+            semantic_search=boom_sem,
+            keyword_search=lambda q: kw,
+        )
+        # Bind the real instance method so hybrid_search's self._normalize_* works.
+        fake._normalize_single_path = types.MethodType(
+            HybridRetriever._normalize_single_path, fake
+        )
+        with patch("retrieval.hybrid_search.audit_log") as audit:
+            out = HybridRetriever.hybrid_search(fake, "q")
+        assert len(out) == 2
+        assert out[0].score == pytest.approx(1 / 60)
+        assert out[1].score == pytest.approx(1 / 61)
+        assert any(
+            c.args and c.args[0].get("event") == "retrieval_degraded"
+            and c.args[0].get("path") == "semantic"
+            for c in audit.call_args_list
+        )
+
+    def test_keyword_failure_falls_back_to_semantic_unchanged(self) -> None:
+        # Soft-degrade keyword path; semantic scores stay raw (not rebased).
+        sem = [self._hit("semantic", 0, score=0.91)]
+
+        def boom_kw(_q: str) -> list[SearchResult]:
+            raise ValueError("corrupt bm25 meta")
+
+        fake = SimpleNamespace(
+            rrf_k=60, top_k_semantic=5, top_k_keyword=5,
+            semantic_search=lambda q: sem,
+            keyword_search=boom_kw,
+        )
+        with patch("retrieval.hybrid_search.audit_log") as audit:
+            out = HybridRetriever.hybrid_search(fake, "q")
+        assert len(out) == 1
+        assert out[0].score == pytest.approx(0.91)
+        assert any(
+            c.args and c.args[0].get("event") == "retrieval_degraded"
+            and c.args[0].get("path") == "keyword"
+            for c in audit.call_args_list
+        )
+
+    def test_both_legs_fail_returns_empty(self) -> None:
+        def boom_sem(_q: str) -> list[SearchResult]:
+            raise EmbeddingServiceError("down")
+
+        def boom_kw(_q: str) -> list[SearchResult]:
+            raise TypeError("bad shape")
+
+        fake = SimpleNamespace(
+            rrf_k=60, top_k_semantic=5, top_k_keyword=5,
+            semantic_search=boom_sem,
+            keyword_search=boom_kw,
+        )
+        with patch("retrieval.hybrid_search.audit_log"):
+            out = HybridRetriever.hybrid_search(fake, "q")
+        assert out == []
 
 
 class TestConfigPathAnchoring:

@@ -294,10 +294,20 @@ class FsIndexer:
         return pruned
 
     def _run_reindex(self) -> bool:
-        """Trigger the existing indexer as a subprocess (decoupled, no import)."""
+        """Trigger the existing indexer as a subprocess (decoupled, no import).
+
+        Always forwards ``--config`` so a non-default config path (the same
+        identity the FsIndexer was constructed with) is the one the reindex
+        rebuilds against. Without this, apply() after ``--config /alt.yaml``
+        stages correctly then reindexes against CWD ``config.yaml`` — wrong
+        chroma/bm25 paths (and a false "indexed" outcome).
+        """
+        cmd: list[str] = [sys.executable, "-m", "retrieval.indexer"]
+        if self.config_path:
+            cmd.extend(["--config", str(self.config_path)])
         try:
             completed = subprocess.run(  # noqa: S603 -- argv list, no shell
-                [sys.executable, "-m", "retrieval.indexer"],
+                cmd,
                 capture_output=True, text=True, timeout=900, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
