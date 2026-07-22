@@ -634,9 +634,20 @@ class FsWriter:
             kind=("dir" if kind == "dir" else "file"),
             retention_days=self.fs_cfg.trash_retention_days, sha256_skipped=skipped)
         dst = f"{trash.TRASH_DIR}/{entry.name}"
-        move_res = self._roots.move(target, dst, root=root, overwrite=False)
-        self._roots.write_bytes(f"{dst}{trash.META_SUFFIX}", entry.meta_bytes(),
-                                root=root, overwrite=False)
+        meta = f"{dst}{trash.META_SUFFIX}"
+        # Sidecar BEFORE the payload move: trash.list_entries only reads sidecars,
+        # so a crash/failure after the move with no sidecar yet would strand the
+        # payload in .cyclaw-trash undiscoverable forever. Sidecar-first means the
+        # worst case is an orphan sidecar -- visible to trash-list/trash-empty --
+        # and if the move itself fails the sidecar is rolled back so the delete
+        # leaves no partial state at all.
+        self._roots.write_bytes(meta, entry.meta_bytes(), root=root, overwrite=False)
+        try:
+            move_res = self._roots.move(target, dst, root=root, overwrite=False)
+        except Exception:  # noqa: BLE001 -- any move failure rolls back the sidecar
+            with suppress(FsConnectError):
+                self._roots.unlink(meta, root=root, sha_max_bytes=0)
+            raise
         return {"removed": move_res["from"], "trash_entry": entry.name,
                 "retention_expires_at": entry.retention_expires_at,
                 "sha256": entry.sha256, "size": size, "kind": entry.kind}

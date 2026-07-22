@@ -1,7 +1,7 @@
 """Trash-first governed-deletion helpers for the filesystem connector (Phase 2).
 
 This module is pure policy/formatting glue on top of the ``pathsafe`` mechanism: it
-computes deterministic, collision-resistant trash entry names, serializes/parses the
+computes collision-proof, time-sortable trash entry names, serializes/parses the
 ``.meta.json`` sidecars, and lists/expires entries. It performs NO privileged syscall
 itself -- every filesystem touch goes through :class:`agentic.fsconnect.pathsafe.ScopedRoots`
 so trash operations inherit the exact same root containment as ordinary writes.
@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import secrets
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -44,17 +45,18 @@ def iso(now: datetime) -> str:
 
 
 def entry_name(original: str, now: datetime) -> str:
-    """Deterministic, collision-resistant, time-sortable trash entry name.
+    """Collision-proof, time-sortable trash entry name.
 
-    ``<UTCstamp>__<orig path, '/'->'__'>__<8-hex of sha256(orig_path + stamp)>``. The
-    hash disambiguates two deletes of the same path in the same second and makes the
-    name unforgeable without knowing the exact original path + stamp.
+    ``<UTCstamp>__<orig path, '/'->'__'>__<8-hex of sha256(orig_path + stamp)><8-hex random>``.
+    The digest binds the name to the exact original path + stamp; the random suffix
+    disambiguates two deletes of the same path in the same second (the digest alone
+    cannot -- both its inputs are identical in that case).
     """
     stamp = _stamp(now)
     comps = split_components(original)
     slug = "__".join(comps) if comps else "root"
     digest = hashlib.sha256(f"{original}{stamp}".encode()).hexdigest()[:8]
-    return f"{stamp}__{slug}__{digest}"
+    return f"{stamp}__{slug}__{digest}{secrets.token_hex(4)}"
 
 
 @dataclass(frozen=True)
