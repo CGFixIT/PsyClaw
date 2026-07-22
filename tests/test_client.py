@@ -12,6 +12,8 @@ is monkeypatched. Real ``httpx.Request``/``Response`` objects are used so the
 ``e.response.status_code`` path in the production code runs unmocked.
 """
 
+import logging
+
 import httpx
 import pytest
 import yaml
@@ -204,6 +206,41 @@ class TestLocalLLMClient:
         assert "connection reset" not in exc.value.message
         assert "sk-leak" not in exc.value.message
         assert exc.value.details.get("exc_type") == "ValueError"
+        client.close()
+
+    def test_generate_truncated_response_logs_warning(self, tmp_path, caplog):
+        # finish_reason=length means the reply was cut off at max_tokens. The
+        # partial text is still returned (a partial answer beats none), but a
+        # WARNING must fire — a silently-truncated answer is otherwise
+        # indistinguishable from a complete one.
+        client = LocalLLMClient(_write_config(tmp_path))
+        req = httpx.Request("POST", _URL)
+        resp = httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "cut off answ"},
+                               "finish_reason": "length"}]},
+            request=req,
+        )
+        client._client.post = _FakePost(response=resp)
+        with caplog.at_level(logging.WARNING, logger="llm.client"):
+            assert client.generate("a prompt") == "cut off answ"
+        assert any("finish_reason=length" in r.message for r in caplog.records)
+        client.close()
+
+    def test_generate_complete_response_logs_no_truncation_warning(self, tmp_path, caplog):
+        # The normal finish_reason=stop path stays silent.
+        client = LocalLLMClient(_write_config(tmp_path))
+        req = httpx.Request("POST", _URL)
+        resp = httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "full answer"},
+                               "finish_reason": "stop"}]},
+            request=req,
+        )
+        client._client.post = _FakePost(response=resp)
+        with caplog.at_level(logging.WARNING, logger="llm.client"):
+            assert client.generate("a prompt") == "full answer"
+        assert not any("truncated" in r.message for r in caplog.records)
         client.close()
 
 
@@ -426,6 +463,24 @@ class TestClaudeClient:
         assert "dns failure" not in exc.value.message
         assert "sk-leak" not in exc.value.message
         assert exc.value.details.get("exc_type") == "ValueError"
+        client.close()
+
+    def test_generate_truncated_response_logs_warning(self, tmp_path, monkeypatch, caplog):
+        # Anthropic's dialect of the truncation signal is stop_reason=max_tokens
+        # (vs the OpenAI-compatible finish_reason=length the local/Grok path uses).
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        resp = httpx.Response(
+            200,
+            json={"content": [{"type": "text", "text": "cut off answ"}],
+                  "stop_reason": "max_tokens"},
+            request=req,
+        )
+        client._client.post = _FakePost(response=resp)
+        with caplog.at_level(logging.WARNING, logger="llm.client"):
+            assert client.generate("a prompt") == "cut off answ"
+        assert any("stop_reason=max_tokens" in r.message for r in caplog.records)
         client.close()
 
 
