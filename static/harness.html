@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CyClaw Harness</title>
+<!-- No external fonts or CDNs: offline-first, loopback-only. System stacks. -->
+<style>
+  :root {
+    --bg-primary: #0d0f11;
+    --bg-secondary: #13161a;
+    --bg-tertiary: #1a1e24;
+    --bg-input: #0a0c0e;
+    --border: #2a2f38;
+    --border-focus: #d4920b;
+    --text-primary: #c8cdd5;
+    --text-secondary: #6b7280;
+    --text-muted: #454d59;
+    --accent-amber: #d4920b;
+    --accent-green: #2dd4a0;
+    --accent-red: #ef5350;
+    --accent-blue: #4a9eff;
+    --accent-purple: #b48cff;
+    --mono: 'Cascadia Code', 'Fira Code', ui-monospace, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  button, input { font: inherit; }
+  body {
+    background: var(--bg-primary); color: var(--text-primary);
+    font-family: var(--sans); font-size: 13px; line-height: 1.5;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+    padding: 8px 16px; display: flex; align-items: center; gap: 14px; flex-shrink: 0;
+  }
+  .logo {
+    font-family: var(--mono); font-weight: 700; font-size: 14px;
+    color: var(--accent-amber); letter-spacing: 1.5px; text-transform: uppercase;
+  }
+  .logo span { color: var(--text-muted); font-weight: 400; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .pill {
+    font-family: var(--mono); font-size: 10.5px; padding: 3px 10px;
+    border: 1px solid var(--border); border-radius: 999px; color: var(--text-secondary);
+    background: var(--bg-tertiary); white-space: nowrap;
+  }
+  .pill b { color: var(--accent-green); font-weight: 600; }
+  .pill.model b { color: var(--accent-amber); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-green); }
+
+  /* ── LAYOUT ── */
+  .main { display: flex; flex: 1; min-height: 0; }
+
+  /* sidebar */
+  .sidebar {
+    width: 264px; flex-shrink: 0; background: var(--bg-secondary);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  }
+  .side-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .side-tab {
+    flex: 1; padding: 8px 0; text-align: center; font-family: var(--mono);
+    font-size: 10.5px; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--text-muted); background: none; border: none; cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .side-tab.active { color: var(--accent-amber); border-bottom-color: var(--accent-amber); }
+  .side-body { flex: 1; overflow-y: auto; padding: 10px; }
+  .side-pane { display: none; }
+  .side-pane.active { display: block; }
+
+  .cmd-item {
+    display: block; width: 100%; text-align: left; background: none; border: none;
+    padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-primary);
+  }
+  .cmd-item:hover { background: var(--bg-tertiary); }
+  .cmd-item .c { color: var(--accent-blue); }
+  .cmd-item .d { display: block; color: var(--text-muted); font-size: 10px; font-family: var(--sans); }
+
+  .sess-item {
+    padding: 7px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 3px;
+    border: 1px solid transparent;
+  }
+  .sess-item:hover { background: var(--bg-tertiary); }
+  .sess-item.current { border-color: var(--accent-amber); background: rgba(212,146,11,.07); }
+  .sess-item .t { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-item .m { font-family: var(--mono); font-size: 9.5px; color: var(--text-muted); }
+
+  .reg-entry { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .reg-entry .n { font-family: var(--mono); font-size: 11px; color: var(--accent-green); }
+  .reg-entry .n.catalog { color: var(--accent-purple); }
+  .reg-entry .d { font-size: 10.5px; color: var(--text-secondary); }
+  .reg-entry .a { font-size: 9.5px; color: var(--text-muted); font-family: var(--mono); }
+  .reg-head {
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-muted); margin: 10px 4px 4px;
+  }
+
+  /* console */
+  .console { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .stream { flex: 1; overflow-y: auto; padding: 16px 20px; font-family: var(--mono); font-size: 12.5px; }
+  .msg { margin-bottom: 14px; max-width: 860px; }
+  .msg .who { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 3px; }
+  .msg.user .who { color: var(--accent-blue); }
+  .msg.agent .who { color: var(--accent-amber); }
+  .msg.sys .who { color: var(--accent-purple); }
+  .msg .body { white-space: pre-wrap; word-break: break-word; color: var(--text-primary); }
+  .msg.sys .body { color: var(--text-secondary); font-size: 12px; }
+  .msg .meta { font-size: 9.5px; color: var(--text-muted); margin-top: 3px; }
+  .msg table { border-collapse: collapse; margin-top: 4px; font-size: 11.5px; }
+  .msg td, .msg th { border: 1px solid var(--border); padding: 3px 9px; text-align: left; }
+  .msg th { color: var(--accent-amber); }
+
+  .inputbar {
+    border-top: 1px solid var(--border); background: var(--bg-secondary);
+    padding: 10px 16px; display: flex; gap: 10px; align-items: center; flex-shrink: 0;
+  }
+  .prompt-sym { font-family: var(--mono); color: var(--accent-amber); font-weight: 700; }
+  #input {
+    flex: 1; background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text-primary); padding: 9px 12px;
+    font-family: var(--mono); font-size: 12.5px; outline: none;
+  }
+  #input:focus { border-color: var(--border-focus); }
+  #send {
+    background: var(--accent-amber); color: #000; border: none; border-radius: 8px;
+    padding: 9px 18px; font-family: var(--mono); font-size: 12px; font-weight: 700;
+    cursor: pointer;
+  }
+  #send:disabled { opacity: .4; cursor: default; }
+
+  /* status bar */
+  .statusbar {
+    border-top: 1px solid var(--border); background: var(--bg-secondary);
+    padding: 5px 16px; display: flex; gap: 16px; align-items: center;
+    font-family: var(--mono); font-size: 10px; color: var(--text-secondary); flex-shrink: 0;
+  }
+  .statusbar .k { color: var(--text-muted); }
+  .statusbar .v { color: var(--text-primary); }
+  .statusbar .spacer { flex: 1; }
+  .toggle { cursor: pointer; background: none; border: none; font: inherit; color: inherit; padding: 0; }
+  .toggle .v.on { color: var(--accent-green); }
+  .toggle .v.off { color: var(--accent-red); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">CyClaw <span>/ harness</span></div>
+    <div class="header-right">
+      <div class="pill model">model <b id="hModel">…</b></div>
+      <div class="pill">tokens <b id="hTokens">0</b></div>
+      <div class="dot" id="hDot" title="server status"></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="sidebar">
+      <div class="side-tabs">
+        <button class="side-tab active" data-pane="commands">Commands</button>
+        <button class="side-tab" data-pane="sessions">Sessions</button>
+        <button class="side-tab" data-pane="registry">Registry</button>
+      </div>
+      <div class="side-body">
+        <div class="side-pane active" id="pane-commands"></div>
+        <div class="side-pane" id="pane-sessions"></div>
+        <div class="side-pane" id="pane-registry"></div>
+      </div>
+    </div>
+
+    <div class="console">
+      <div class="stream" id="stream"></div>
+      <div class="inputbar">
+        <span class="prompt-sym">❯</span>
+        <input id="input" autocomplete="off" spellcheck="false"
+               placeholder="message the agent, or /help for commands" />
+        <button id="send">SEND</button>
+      </div>
+      <div class="statusbar">
+        <span><span class="k">provider </span><span class="v" id="sProvider">…</span></span>
+        <span><span class="k">session </span><span class="v" id="sSession">none</span></span>
+        <button class="toggle" id="sSoul" title="toggle soul/memory in the system prompt">
+          <span class="k">soul </span><span class="v" id="sSoulV">…</span>
+        </button>
+        <span class="spacer"></span>
+        <span class="k" id="sHome" title="harness home"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+'use strict';
+/* Model output and registry data are DATA, never HTML: everything rendered
+   through textContent or the table() builder (createElement + textContent). */
+const $ = id => document.getElementById(id);
+const stream = $('stream'), input = $('input'), sendBtn = $('send');
+
+let currentSession = null;   // session_id string or null
+let soulEnabled = true;
+
+/* ── stream rendering ── */
+function addMsg(kind, who, body, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + kind;
+  const w = document.createElement('div'); w.className = 'who'; w.textContent = who;
+  const b = document.createElement('div'); b.className = 'body';
+  if (body instanceof Node) { b.appendChild(body); } else { b.textContent = body; }
+  div.appendChild(w); div.appendChild(b);
+  if (meta) { const m = document.createElement('div'); m.className = 'meta'; m.textContent = meta; div.appendChild(m); }
+  stream.appendChild(div);
+  stream.scrollTop = stream.scrollHeight;
+  return div;
+}
+const sys   = (t, m) => addMsg('sys',   'harness', t, m);
+const user  = t      => addMsg('user',  'you', t);
+const agent = (t, m) => addMsg('agent', 'cyclaw', t, m);
+
+function table(rows, headers) {
+  const t = document.createElement('table');
+  if (headers) {
+    const tr = document.createElement('tr');
+    headers.forEach(h => { const th = document.createElement('th'); th.textContent = h; tr.appendChild(th); });
+    t.appendChild(tr);
+  }
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    r.forEach(c => { const td = document.createElement('td'); td.textContent = c; tr.appendChild(td); });
+    t.appendChild(tr);
+  });
+  return t;
+}
+
+/* ── API ── */
+async function api(path, method, body) {
+  const opts = { method: method || 'GET', headers: {} };
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
+  if (!resp.ok) {
+    const d = data && data.detail;
+    throw new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+  }
+  return data;
+}
+
+/* ── status / statusbar ── */
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    $('hModel').textContent = s.model || '(unset)';
+    $('hTokens').textContent = s.total_tokens.toLocaleString();
+    $('sProvider').textContent = s.provider;
+    $('sHome').textContent = s.home;
+    $('sHome').title = 'harness home: ' + s.home + '  ·  repo: ' + s.repo_root;
+    soulEnabled = s.soul_enabled;
+    paintSoul();
+    $('hDot').style.background = 'var(--accent-green)';
+  } catch (e) {
+    $('hDot').style.background = 'var(--accent-red)';
+  }
+}
+function paintSoul() {
+  const v = $('sSoulV');
+  v.textContent = soulEnabled ? 'on' : 'off';
+  v.className = 'v ' + (soulEnabled ? 'on' : 'off');
+}
+
+/* ── sessions pane ── */
+async function refreshSessions() {
+  const pane = $('pane-sessions');
+  pane.textContent = '';
+  const add = document.createElement('button');
+  add.className = 'cmd-item';
+  const plus = document.createElement('span'); plus.className = 'c'; plus.textContent = '+ new session';
+  add.appendChild(plus);
+  add.addEventListener('click', () => runSlash('/session new'));
+  pane.appendChild(add);
+  const data = await api('/api/sessions');
+  data.sessions.forEach(s => {
+    const el = document.createElement('div');
+    el.className = 'sess-item' + (s.session_id === currentSession ? ' current' : '');
+    const t = document.createElement('div'); t.className = 't'; t.textContent = s.title;
+    const m = document.createElement('div'); m.className = 'm';
+    m.textContent = s.session_id + ' · ' + s.message_count + ' msgs · ' + s.tokens.total + ' tok';
+    el.appendChild(t); el.appendChild(m);
+    el.addEventListener('click', () => runSlash('/session use ' + s.session_id));
+    pane.appendChild(el);
+  });
+}
+
+/* ── registry pane ── */
+async function refreshRegistry() {
+  const pane = $('pane-registry');
+  pane.textContent = '';
+  const reg = await api('/api/registry');
+  const entry = (name, desc, aux, catalog) => {
+    const e = document.createElement('div'); e.className = 'reg-entry';
+    const n = document.createElement('div'); n.className = 'n' + (catalog ? ' catalog' : ''); n.textContent = name;
+    const d = document.createElement('div'); d.className = 'd'; d.textContent = desc || '';
+    e.appendChild(n); e.appendChild(d);
+    if (aux) { const a = document.createElement('div'); a.className = 'a'; a.textContent = aux; e.appendChild(a); }
+    return e;
+  };
+  const section = (label, items, render) => {
+    const h = document.createElement('div'); h.className = 'reg-head'; h.textContent = label;
+    pane.appendChild(h);
+    items.forEach(it => pane.appendChild(render(it)));
+  };
+  section('skills (' + reg.skills.length + ')', reg.skills,
+    s => entry(s.name, s.description, s.source));
+  section('tools (' + reg.tools.length + ')', reg.tools,
+    t => entry(t.name, t.description));
+  section('connectors (' + reg.connectors.length + ')', reg.connectors,
+    c => entry(c.name, c.notes, 'auth: ' + (c.auth || ''), c.kind === 'catalog'));
+}
+
+/* ── commands pane ── */
+const COMMANDS = [
+  ['/help', 'list commands'],
+  ['/session new|list|use|rename', 'manage chat sessions'],
+  ['/soul on|off|status', 'memory/soul in system prompt'],
+  ['/model [use <name>]', 'show or select the model'],
+  ['/skills', 'skill registry'],
+  ['/tools', 'tool registry'],
+  ['/connectors', 'connector catalog'],
+  ['/github', 'agentic GitHub status'],
+  ['/harness', 'harness optimizer runs'],
+  ['/tokens', 'token tally'],
+  ['/status', 'server status'],
+  ['/clear', 'clear the console'],
+];
+function buildCommands() {
+  const pane = $('pane-commands');
+  COMMANDS.forEach(([c, d]) => {
+    const b = document.createElement('button');
+    b.className = 'cmd-item';
+    const inner = document.createElement('span'); inner.className = 'c'; inner.textContent = c;
+    const desc = document.createElement('span'); desc.className = 'd'; desc.textContent = d;
+    b.appendChild(inner); b.appendChild(desc);
+    b.addEventListener('click', () => { input.value = c.split(' ')[0] + ' '; input.focus(); });
+    pane.appendChild(b);
+  });
+}
+
+/* ── slash commands ── */
+async function runSlash(line) {
+  const parts = line.slice(1).split(/\s+/);
+  const cmd = parts[0];
+  const rest = parts.slice(1);
+  const arg = rest.join(' ').trim();
+  try {
+    switch (cmd) {
+      case 'help':
+        sys(table(COMMANDS.map(c => [c[0], c[1]]), ['command', 'action']));
+        break;
+
+      case 'session': {
+        const sub = rest[0] || 'list';
+        if (sub === 'new') {
+          const s = await api('/api/sessions', 'POST', { title: rest.slice(1).join(' ') });
+          currentSession = s.session_id;
+          sys('session created: ' + s.session_id + ' — ' + s.title);
+        } else if (sub === 'use') {
+          const s = await api('/api/sessions/' + encodeURIComponent(rest[1] || ''));
+          currentSession = s.session_id;
+          sys('switched to session ' + s.session_id + ' — ' + s.title +
+              ' (' + s.message_count + ' messages, ' + s.tokens.total + ' tokens)');
+          s.messages.slice(-10).forEach(m => {
+            if (m.role === 'user') user(m.content); else if (m.role === 'assistant') agent(m.content);
+          });
+        } else if (sub === 'rename') {
+          if (!currentSession) { sys('no active session'); break; }
+          const s = await api('/api/sessions/' + currentSession + '/rename', 'POST', { title: rest.slice(1).join(' ') });
+          sys('renamed to: ' + s.title);
+        } else if (sub === 'info') {
+          if (!currentSession) { sys('no active session'); break; }
+          const s = await api('/api/sessions/' + currentSession);
+          sys(table([['id', s.session_id], ['title', s.title], ['model', s.model],
+                     ['messages', String(s.message_count)], ['tokens', String(s.tokens.total)]]));
+        } else {
+          const data = await api('/api/sessions');
+          sys(table(data.sessions.map(s =>
+            [s.session_id, s.title, String(s.message_count), String(s.tokens.total)]),
+            ['id', 'title', 'msgs', 'tokens']));
+        }
+        $('sSession').textContent = currentSession || 'none';
+        await refreshSessions();
+        break;
+      }
+
+      case 'soul': {
+        if (arg === 'on' || arg === 'off') {
+          const r = await api('/api/soul', 'POST', { enabled: arg === 'on' });
+          soulEnabled = r.enabled; paintSoul();
+          sys('soul/memory ' + (r.enabled ? 'enabled' : 'disabled') +
+              ' (system prompt only — soul.md itself is governed and untouched)');
+        } else {
+          const r = await api('/api/soul');
+          sys('soul/memory is ' + (r.enabled ? 'ON' : 'OFF'));
+        }
+        break;
+      }
+
+      case 'model': {
+        if (rest[0] === 'use' && rest[1]) {
+          const r = await api('/api/model', 'POST', { model: rest.slice(1).join(' ') });
+          sys('model selected: ' + r.model);
+          await refreshStatus();
+        } else {
+          const s = await api('/api/status');
+          sys(table([['model', s.model || '(unset)'], ['provider', s.provider], ['base_url', s.base_url]]));
+        }
+        break;
+      }
+
+      case 'skills': case 'tools': case 'connectors': case 'registry': {
+        const reg = await api('/api/registry');
+        if (cmd === 'skills' || cmd === 'registry')
+          sys(table(reg.skills.map(s => [s.name, s.source]), ['skill', 'source']));
+        if (cmd === 'tools' || cmd === 'registry')
+          sys(table(reg.tools.map(t => [t.name, t.description]), ['tool', 'description']));
+        if (cmd === 'connectors' || cmd === 'registry')
+          sys(table(reg.connectors.map(c => [c.name, c.kind, c.auth]), ['connector', 'kind', 'auth']));
+        break;
+      }
+
+      case 'github': {
+        sys('querying agentic GitHub status (subprocess, read-only)…');
+        const r = await api('/api/github/status');
+        sys('ok=' + r.ok + '  label=' + r.label + (r.stdout ? '\n' + r.stdout : '') + (r.stderr ? '\n' + r.stderr : ''));
+        break;
+      }
+
+      case 'harness': {
+        const r = await api('/api/harness/runs');
+        if (!r.count) { sys('no harness optimizer runs yet'); break; }
+        sys(table(r.runs.map(x => [x.run_id]), ['run']));
+        break;
+      }
+
+      case 'tokens': {
+        if (!currentSession) { sys('no active session'); break; }
+        const s = await api('/api/sessions/' + currentSession);
+        sys(table([['prompt tokens', String(s.tokens.prompt_tokens)],
+                   ['completion tokens', String(s.tokens.completion_tokens)],
+                   ['total', String(s.tokens.total)],
+                   ['exchanges', String(s.tokens.exchanges)]]));
+        break;
+      }
+
+      case 'status': {
+        const s = await api('/api/status');
+        sys(table([['version', s.version], ['model', s.model || '(unset)'], ['provider', s.provider],
+                   ['soul', s.soul_enabled ? 'on' : 'off'], ['sessions', String(s.sessions)],
+                   ['total tokens', String(s.total_tokens)], ['home', s.home]]));
+        break;
+      }
+
+      case 'clear':
+        stream.textContent = '';
+        break;
+
+      default:
+        sys('unknown command: /' + cmd + ' — try /help');
+    }
+  } catch (e) {
+    sys('error: ' + e.message);
+  }
+}
+
+/* ── chat ── */
+async function sendChat(text) {
+  user(text);
+  sendBtn.disabled = true;
+  try {
+    const r = await api('/api/chat', 'POST', { message: text, session_id: currentSession });
+    currentSession = r.session_id;
+    $('sSession').textContent = currentSession;
+    agent(r.reply, r.model + ' · +' + r.usage.prompt_tokens + '/' + r.usage.completion_tokens +
+          ' tok · session total ' + r.tally.total);
+    await refreshStatus();
+    await refreshSessions();
+  } catch (e) {
+    sys('error: ' + e.message);
+  } finally {
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+async function onSend() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  if (text.startsWith('/')) { await runSlash(text); } else { await sendChat(text); }
+}
+
+/* ── wiring ── */
+sendBtn.addEventListener('click', onSend);
+input.addEventListener('keydown', e => { if (e.key === 'Enter') onSend(); });
+document.querySelectorAll('.side-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.side-pane').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    $('pane-' + tab.dataset.pane).classList.add('active');
+  });
+});
+$('sSoul').addEventListener('click', () => runSlash('/soul ' + (soulEnabled ? 'off' : 'on')));
+
+buildCommands();
+refreshStatus();
+refreshSessions().catch(() => {});
+refreshRegistry().catch(() => {});
+sys('CyClaw harness — local coding console (PowerShell launcher: cyclaw).');
+sys('System prompt: ponytail + karpathy-guidelines discipline contracts for agentic GitHub coding.');
+sys('Type /help for commands.');
+input.focus();
+</script>
+</body>
+</html>
