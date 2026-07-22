@@ -111,9 +111,20 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
+            const header = [
+              "Codex",
+              "",
+              "> Advisory, auto-generated over untrusted PR content — verify before acting on it.",
+              "",
+            ].join("\n");
+            const body = header + process.env.CODEX_FINAL_MESSAGE;
+            if (body.length > 88000) {
+              core.setFailed(`Codex comment too long (${body.length} chars, max 60000).`);
+              return;
+            }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: ["Codex", "", process.env.CODEX_FINAL_MESSAGE].join("\n"),
+              body,
             });
