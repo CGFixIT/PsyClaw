@@ -1,8 +1,10 @@
 """JSON-backed chat session store with per-session token tallies.
 
 One file per session under ``~/.CyClaw/sessions/``. Every LLM exchange records
-Ollama's ``prompt_eval_count`` / ``eval_count`` so the console can show a
-running tally (the grok-build style "tokens in/out" readout). Files are small
+the ``usage.prompt_tokens`` / ``usage.completion_tokens`` counts from the
+OpenAI-compatible ``/v1`` endpoint (see ``harness/ollama.py`` for why that
+surface, not the native Ollama API) so the console can show a running tally
+(the grok-build style "tokens in/out" readout). Files are small
 and human-inspectable; writes are atomic (staged file + os.replace), matching
 the repo's soul/registry durability pattern.
 """
@@ -130,9 +132,14 @@ class SessionStore:
             raise SessionStoreError("unknown session", details={_SID_KEY: session_id})
         try:
             parsed = json.loads(path.read_text(encoding=_UTF8))
-        except (OSError, json.JSONDecodeError) as exc:
+            return _session_from_dict(parsed)
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
+            # _session_from_dict raises KeyError/TypeError/ValueError/AttributeError
+            # on JSON that parses but isn't session-shaped (non-dict payload, missing
+            # session_id, unexpected message keys). Mapping them all to
+            # SessionStoreError is what lets list() actually skip corrupt files
+            # instead of 500-ing the console listing.
             raise SessionStoreError(f"unreadable session file: {path.name}") from exc
-        return _session_from_dict(parsed)
 
     def list(self) -> list[dict]:
         summaries: list[dict] = []

@@ -136,6 +136,27 @@ def test_session_store_rejects_traversal(tmp_path):
         store.get("../../etc/passwd")
 
 
+def test_session_store_skips_corrupt_files_in_listing(tmp_path):
+    """JSON that parses but isn't session-shaped must not break the listing.
+
+    Regression: get() used to catch only OSError/JSONDecodeError, so a
+    valid-JSON-but-corrupt file (non-dict payload, missing session_id,
+    unknown message keys) escaped as KeyError/TypeError/AttributeError and
+    500-ed /api/sessions instead of being skipped.
+    """
+    store = SessionStore(tmp_path / "sessions")
+    good = store.create(model="m", title="keep me")
+    (tmp_path / "sessions" / "aaaaaaaaaaaa.json").write_text("[1, 2, 3]", encoding="utf-8")
+    (tmp_path / "sessions" / "bbbbbbbbbbbb.json").write_text('{"title": "no id"}', encoding="utf-8")
+    (tmp_path / "sessions" / "cccccccccccc.json").write_text(
+        json.dumps({"session_id": "cccccccccccc", "messages": [{"bogus": "key"}]}), encoding="utf-8"
+    )
+    listed = store.list()
+    assert [s["session_id"] for s in listed] == [good.session_id]
+    with pytest.raises(SessionStoreError):
+        store.get("aaaaaaaaaaaa")
+
+
 # -- chat client -------------------------------------------------------------------
 
 def test_chat_client_extracts_usage():
