@@ -1,11 +1,14 @@
 # zizmor Medium-Severity Findings — Remediation Plan
 
-**Status:** Planning (7.21.2026) — no fixes applied yet. Deferred from PR #596 (merged
+**Status:** RESOLVED (2026-07-22) — both finding classes below are closed. All 23
+`artipacked` findings and both `excessive-permissions` findings were fixed in
+PR #617 (merged 2026-07-22, commit `1ffac97`). This doc is retained as
+historical context; the per-finding tables below are the pre-fix state and
+their line cites have drifted. Originally deferred from PR #596 (merged
 2026-07-21), which added the `workflow-lint` CI job (`actionlint` + `zizmor`)
-and fixed the 2 findings that were High severity at the time. This doc tracks
-the remaining Medium-severity backlog `workflow-lint` deliberately does not
-gate on (`--min-severity=high` in `.github/workflows/ci.yml`), so a future PR
-can work through it without blocking every PR in the meantime.
+and fixed the 2 findings that were High severity at the time. The backlog was
+allowed to persist because `workflow-lint` gates on `--min-severity=high` in
+`.github/workflows/ci.yml`.
 
 **Re-derive this list before starting work** — it may have drifted since this
 doc was written:
@@ -21,7 +24,12 @@ plan; re-run without a severity filter to see everything).
 
 ---
 
-## Finding class 1 — `artipacked` (23 instances)
+## Finding class 1 — `artipacked` (23 instances) — RESOLVED
+
+**Resolved in PR #617 (merged 2026-07-22).** Verified 2026-07-22: all 27
+`actions/checkout` steps across `.github/workflows/*.yml` (17 files) set
+`persist-credentials: false` — no exceptions. The table and execution plan
+below are the pre-fix state, kept for the record.
 
 **What it flags:** an `actions/checkout` step that does not set
 `persist-credentials: false`. By default, `actions/checkout` configures a git
@@ -111,7 +119,18 @@ For jobs that already have a `with:` block (several do, e.g. `fetch-depth:
 
 ---
 
-## Finding class 2 — `excessive-permissions` (2 instances, both in `fortify.yml`)
+## Finding class 2 — `excessive-permissions` (2 instances, both in `fortify.yml`) — RESOLVED
+
+**Resolved in PR #617 (merged 2026-07-22).** Re-checked 2026-07-22 against the
+current file — both jobs now declare explicit `permissions:` blocks (the
+original `:16`/`:43` cites drifted as the file grew):
+
+- `config-check` job: `fortify.yml:46-47` — `contents: read` only.
+- `Fortify-AST-Scan` job: `fortify.yml:71-75` — `actions: read`, `contents:
+  read`, `security-events: write` (SARIF upload), `pull-requests: write`
+  (only exercised if `DO_PR_COMMENT` is enabled).
+
+The "What it flags" / "Fix" text below is the pre-fix state, kept for the record.
 
 **What it flags:** `fortify.yml:16` and `fortify.yml:43` — "default
 permissions used due to no `permissions:` block." When a workflow (or a job
@@ -152,9 +171,8 @@ should show 0 `excessive-permissions` findings after.
   installed fresh each `workflow-lint` run from `.github/workflows/ci.yml`, not
   version-locked anywhere else — check the current version if these numbers
   look off).
-- `--min-severity=high` in `ci.yml`'s `workflow-lint` job is what allows this
-  backlog to exist without blocking merges. Do not remove that flag as a
-  side effect of this cleanup unless the backlog above is actually fully
-  resolved first — removing it prematurely reintroduces the exact
-  "blocks every future PR on unrelated pre-existing debt" problem #596's
-  `af258e1` commit fixed.
+- `--min-severity=high` in `ci.yml`'s `workflow-lint` job is what allowed this
+  backlog to exist without blocking merges. The backlog tracked here is now
+  fully resolved (2026-07-22), so the removal precondition above is met — but
+  tightening the gate is still a deliberate decision (new Medium findings can
+  appear as workflows change), not a side effect of this cleanup.
