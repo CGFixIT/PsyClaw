@@ -97,3 +97,25 @@ def test_same_path_same_second_deletes_both_succeed(env):
     for entry_name, expected in contents.items():
         assert (trash_dir / entry_name).read_bytes() == expected
         assert (trash_dir / f"{entry_name}{trash.META_SUFFIX}").exists()
+
+
+def test_orphan_sidecar_reclaimed_by_trash_empty(env):
+    # Crash window in _to_trash: sidecar written, payload move never happened.
+    # trash_empty must still reclaim the entry (unlink the sidecar) instead of
+    # skipping it forever as permanent litter.
+    cfg, fs_cfg, cp, wz = env
+    fs_cfg.allow_hard_delete = True
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        entry = trash.make_entry(
+            "ghost.txt", w._now_dt(), reason="simulated crash", sha256=None,
+            size=3, kind="file", retention_days=fs_cfg.trash_retention_days)
+        sidecar_rel = f"{trash.TRASH_DIR}/{entry.name}{trash.META_SUFFIX}"
+        w._ensure_trash(None)
+        w._roots.write_bytes(sidecar_rel, entry.meta_bytes(), root=None, overwrite=False)
+        assert entry.name in [e.name for e in trash.list_entries(w._roots, None)]
+
+        res = w.trash_empty(reason="empty all", confirm=True, all_entries=True)
+        assert entry.name in res["purged"]
+        assert trash.list_entries(w._roots, None) == []
+
+    assert not (wz / trash.TRASH_DIR / f"{entry.name}{trash.META_SUFFIX}").exists()

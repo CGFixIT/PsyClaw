@@ -700,19 +700,27 @@ class FsWriter:
                 "purged": purged, "swept_tmp": swept}
 
     def _purge_trash_entry(self, sr: SafeRoot, entry: trash.TrashEntry, root: str | None) -> bool:
-        """Purge one trash entry. Returns True iff the payload was actually removed --
-        the caller must not report success (audit event, purged list, ledger credit)
-        for an entry whose removal silently failed."""
+        """Purge one trash entry. Returns True iff the entry was reclaimed (payload
+        removed or already absent, sidecar unlinked) -- the caller must not report
+        success (audit event, purged list, ledger credit) for an entry whose
+        removal silently failed."""
         payload = f"{trash.TRASH_DIR}/{entry.name}"
-        removed = False
         try:
-            self._purge_tree(sr, payload, root)
-            removed = True
+            self._roots.stat(payload, root=root)
         except FsConnectError:
+            # Orphan sidecar: the payload never landed (crash/failure between the
+            # sidecar write and the payload move in _to_trash). Nothing to remove,
+            # but the entry is still reclaimed -- fall through to unlink the
+            # sidecar so trash-list stops reporting it.
             pass
+        else:
+            try:
+                self._purge_tree(sr, payload, root)
+            except FsConnectError:
+                return False
         with suppress(FsConnectError):
             self._roots.unlink(f"{payload}{trash.META_SUFFIX}", root=root, sha_max_bytes=0)
-        return removed
+        return True
 
     def _purge_tree(self, sr: SafeRoot, rel: str, root: str | None) -> None:
         """Recursively remove a trash payload (file or whole dir) via pathsafe.
