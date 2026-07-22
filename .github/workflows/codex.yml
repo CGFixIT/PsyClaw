@@ -111,9 +111,20 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
+            const message = process.env.CODEX_FINAL_MESSAGE;
+            if (message.length > 60000) {
+              core.setFailed(`Codex final message too long (${message.length} chars, max 60000).`);
+              return;
+            }
+            const header = [
+              "Codex",
+              "",
+              "> Advisory, auto-generated over untrusted PR content — verify before acting on it.",
+              "",
+            ].join("\n");
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: ["Codex", "", process.env.CODEX_FINAL_MESSAGE].join("\n"),
+              body: header + message,
             });
