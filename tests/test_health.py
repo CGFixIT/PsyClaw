@@ -79,11 +79,15 @@ class _ModelsResp(_OKResp):
 def _clear_health_cfg_cache():
     # health.py uses module-level TTL caches; isolate every test from cached
     # parses/probes by emptying them before and after each test.
+    from llm.client import reset_local_backend_cache
+
     health._cfg_cache.clear()
     health._status_cache.clear()
+    reset_local_backend_cache()
     yield
     health._cfg_cache.clear()
     health._status_cache.clear()
+    reset_local_backend_cache()
 
 
 class TestPing:

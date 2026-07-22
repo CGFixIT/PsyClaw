@@ -57,6 +57,17 @@ models:
       # llm/client.py). It means Ollama is stalled ("0% processing"); a retry
       # would just wait another full timeout_sec and, since api.graph_timeout_sec
       # cuts the request first, only orphans a worker thread on a 2nd stalled call.
+    # Optional local backend failover (opt-in). When enabled, a short HTTP probe
+    # prefers primary (above); if unreachable, LM Studio (or any OpenAI-compat
+    # loopback server) is used for LocalLLMClient + /health. Not hybrid/cloud —
+    # loopback only. fallback.model is REQUIRED when enabled (do not reuse the
+    # Ollama tag; LM Studio ids usually differ).
+    fallback:
+      enabled: false
+      provider: "lmstudio"                       # label only; same OpenAI-compat stack
+      base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
+      model: ""                                  # set to your LM Studio loaded model id when enabling
+      probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
   embeddings:
     provider: "sentence-transformers"
     model: "all-MiniLM-L6-v2"
