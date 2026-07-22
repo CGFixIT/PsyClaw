@@ -453,3 +453,30 @@ def test_windows_launcher_doubles_percent_and_quotes(tmp_path) -> None:
     assert "%%TEMP%%" in content                          # not expandable
     assert '"%TEMP%"' not in content                      # never a bare, expandable form
     assert content.startswith("@echo off")               # (read_text normalizes CRLF->LF)
+
+
+def test_cron_line_escapes_percent_in_config_path(monkeypatch) -> None:
+    # POSIX twin of the Windows % doubling: crontab(5) turns bare % into a
+    # newline + stdin feed, truncating the scheduled command. The installed
+    # line must backslash-escape every % in the command field.
+    from sync.scheduler import CronScheduler, _cron_escape_command, _sync_command
+
+    monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Linux")
+    cfg = _make_cfg()
+    cfg._config_path = "/tmp/cfg%20dir/config.yaml"
+    cfg.schedule_min = 15
+    cfg.schedule_hour = 3
+
+    raw = _sync_command(cfg)
+    assert "%" in raw  # unescaped in the shell-facing string is fine
+    escaped = _cron_escape_command(raw)
+    assert r"\%" in escaped
+    # No bare % left in the escaped command field.
+    assert "%" not in escaped.replace(r"\%", "")
+
+    line = CronScheduler(cfg)._our_line()
+    assert line.startswith("15 3 * * * ")
+    assert r"cfg\%20dir" in line
+    # Command field (between schedule and tag) has no unescaped %.
+    cmd_field = line.rsplit("#", 1)[0].split(None, 5)[5]
+    assert "%" not in cmd_field.replace(r"\%", "")

@@ -162,13 +162,59 @@ async def _action_get_grounding_score(context: dict | None = None) -> float:
     return grounding_score(ctx.get("bot_message", ""), ctx.get("relevant_chunks", ""))
 
 
-def register_actions(rails: object) -> int:
+# Floor used by :func:`_action_is_ungrounded`. Set at engine build via
+# :func:`register_actions` so live Colang matches config.yaml's
+# guardrails.hallucination_threshold (default 0.18 matches GuardrailsConfig).
+_active_hallucination_threshold: float = 0.18
+
+
+def set_hallucination_threshold(threshold: float) -> None:
+    """Update the live-rail grounding floor (call from engine build / tests)."""
+    global _active_hallucination_threshold
+    if not isinstance(threshold, (int, float)) or not (0.0 <= float(threshold) <= 1.0):
+        raise ValueError(
+            f"hallucination_threshold must be a float in [0.0, 1.0], got: {threshold!r}"
+        )
+    _active_hallucination_threshold = float(threshold)
+
+
+def get_hallucination_threshold() -> float:
+    """Return the threshold currently applied by :func:`_action_is_ungrounded`."""
+    return _active_hallucination_threshold
+
+
+@_nemo_action(name="is_ungrounded")
+async def _action_is_ungrounded(context: dict | None = None) -> bool:
+    """NeMo action: True when the bot answer is below the configured floor.
+
+    Used by the ``check grounding`` Colang flow so the refuse decision shares
+    the same ``hallucination_threshold`` as the offline ``safe_generate`` path
+    instead of a hardcoded ``0.18`` in rails.co.
+    """
+    ctx = context or {}
+    return is_possible_hallucination(
+        ctx.get("bot_message", ""),
+        ctx.get("relevant_chunks", ""),
+        _active_hallucination_threshold,
+    )
+
+
+def register_actions(
+    rails: object,
+    *,
+    hallucination_threshold: float | None = None,
+) -> int:
     """Register the soul/personality actions on a live ``LLMRails`` instance.
+
+    When ``hallucination_threshold`` is provided it becomes the floor for the
+    live ``is_ungrounded`` action (wired from ``config.yaml`` at engine build).
 
     Returns the number of actions registered. A no-op returning 0 when
     ``nemoguardrails`` is not installed (the decorators above are already shims),
     so callers can invoke it unconditionally.
     """
+    if hallucination_threshold is not None:
+        set_hallucination_threshold(hallucination_threshold)
     if not NEMO_AVAILABLE:
         return 0
     register = getattr(rails, "register_action", None)
@@ -177,4 +223,5 @@ def register_actions(rails: object) -> int:
     register(_action_check_soul_mutation, name="check_soul_mutation")
     register(_action_check_injection, name="check_injection")
     register(_action_get_grounding_score, name="get_grounding_score")
-    return 3
+    register(_action_is_ungrounded, name="is_ungrounded")
+    return 4

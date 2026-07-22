@@ -103,12 +103,13 @@ define flow block prompt extraction
 # OUTPUT RAILS
 # -----------------------------------------------------------------------------
 
-# RAG grounding / hallucination guard. get_grounding_score returns the
-# token-overlap fraction of the answer supported by retrieved context; below the
-# configured floor we refuse rather than emit an ungrounded answer.
+# RAG grounding / hallucination guard. is_ungrounded applies the operator
+# floor from config.yaml guardrails.hallucination_threshold (wired at
+# register_actions time) — do NOT hardcode 0.18 here or live rails drift from
+# the offline safe_generate / CLI path when the knob is changed.
 define flow check grounding
-  $score = execute get_grounding_score
-  if $score < 0.18
+  $ungrounded = execute is_ungrounded
+  if $ungrounded
     bot refuse out of knowledge
     stop
 

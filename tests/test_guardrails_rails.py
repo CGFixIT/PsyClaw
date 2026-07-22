@@ -117,3 +117,38 @@ def test_register_actions_noop_without_nemo():
         assert count == 0
     else:
         assert count == 0
+
+
+def test_is_ungrounded_uses_configured_threshold() -> None:
+    """Live Colang floor must track set_hallucination_threshold (not a rails.co 0.18 literal)."""
+    import asyncio
+
+    from guardrails.rails import (
+        _action_is_ungrounded,
+        get_hallucination_threshold,
+        set_hallucination_threshold,
+    )
+
+    # Barely overlapping answer: score is small but non-zero.
+    ctx = {
+        "bot_message": "alpha beta gamma delta epsilon",
+        "relevant_chunks": "alpha only",
+    }
+    # With a high floor, one shared token is not enough -> ungrounded.
+    set_hallucination_threshold(0.9)
+    assert get_hallucination_threshold() == pytest.approx(0.9)
+    assert asyncio.run(_action_is_ungrounded(context=ctx)) is True
+    # With a near-zero floor, any positive overlap is enough -> grounded.
+    set_hallucination_threshold(0.01)
+    assert asyncio.run(_action_is_ungrounded(context=ctx)) is False
+    # Restore shipped default so later tests / engines are not polluted.
+    set_hallucination_threshold(0.18)
+
+
+def test_set_hallucination_threshold_rejects_out_of_range() -> None:
+    from guardrails.rails import set_hallucination_threshold
+
+    with pytest.raises(ValueError, match="hallucination_threshold"):
+        set_hallucination_threshold(1.5)
+    with pytest.raises(ValueError, match="hallucination_threshold"):
+        set_hallucination_threshold(-0.1)

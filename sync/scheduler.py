@@ -93,6 +93,19 @@ def _bat_quote(s: str) -> str:
     return '"' + s.replace("%", "%%") + '"'
 
 
+def _cron_escape_command(cmd: str) -> str:
+    """Escape crontab(5) command-field specials so paths with ``%`` stay intact.
+
+    On POSIX the installed line is ``MIN HOUR * * * <command> # tag``. Before
+    the shell ever sees ``<command>``, crontab treats an unescaped ``%`` as a
+    newline and feeds everything after it as stdin — silently truncating a
+    schedule whose repo or ``--config`` path contains ``%`` (Windows ``.bat``
+    already doubles ``%`` via :func:`_bat_quote`; this is the POSIX twin).
+    Backslash-escaped ``\\%`` is the documented fix.
+    """
+    return cmd.replace("%", r"\%")
+
+
 def _sync_command(cfg: RcloneConfig) -> str:
     """The actual command the scheduler will invoke.
 
@@ -216,8 +229,13 @@ class CronScheduler:
             )
 
     def _our_line(self) -> str:
-        """The single tagged cron line we want active."""
-        cmd = _sync_command(self.cfg)
+        """The single tagged cron line we want active.
+
+        Command-field ``%`` is escaped for crontab(5) (see
+        :func:`_cron_escape_command`); the shell-facing argv quoting stays in
+        :func:`_sync_command`.
+        """
+        cmd = _cron_escape_command(_sync_command(self.cfg))
         return f"{self.cfg.schedule_min} {self.cfg.schedule_hour} * * * {cmd} # {TASK_TAG}"
 
     def install(self) -> ScheduleEntry:
