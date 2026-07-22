@@ -3,7 +3,7 @@ name = "cyclaw"
 version = "1.9.0"
 description = "Offline-first, RAG-enforced, soul-governed personal AI assistant. Secure local CyClaw with LangGraph invariants and zero telemetry."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = {text = "MIT"}
 authors = [{name = "CGFixIT"}]
 keywords = ["rag", "ai-agent", "offline", "security", "fastapi", "langgraph", "chromadb", "soul-governance"]
