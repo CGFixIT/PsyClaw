@@ -359,6 +359,26 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - Don't duplicate another doc's authority; link to it. `config.yaml` owns the
   numbers — cite, don't copy-and-drift.
 
+### Kimi Code agents
+- This operating manual applies verbatim to Kimi Code sessions — same
+  invariants, same test gate, same draft-PR flow. Kimi reads `CLAUDE.md` /
+  `AGENTS.md` like any other agent.
+- **Branches:** use the `kimi/<topic>` prefix (e.g.
+  `kimi/cyclaw-optimize-<topic>`); everything in §5 "Commits, branches, PRs"
+  otherwise holds.
+- **`gh` trap (Windows operator machine):** bare `gh` on PATH is a py3dot12
+  shim, NOT GitHub CLI. Always call the real one by full path:
+  `"/c/Program Files/GitHub CLI/gh.exe"` (authenticated as `cgfixit`).
+  The §4 Git-MCP traps apply to `gh pr`/`git push` identically.
+- **No GitHub MCP / stop-hook assumptions:** Kimi has neither the GitHub MCP
+  tools nor the session stop-hook this repo's Claude skills reference — use
+  `gh` for PR list/create and the user's own configured git identity.
+- **Optimize skill:** the Kimi port of `.claude/skills/CyClaw-Optimize/` lives
+  machine-side at `~/.agents/skills/cyclaw-optimize/` (same workflow:
+  bootstrap → 4-minute read-only scan subagent → PR dedup via `gh` → ~5
+  focused draft PRs). The in-repo Claude skill remains canonical; keep the
+  two in step when the workflow changes.
+
 ---
 
 ## 6. Quality Bar per Deliverable (checkable criteria, not adjectives)
