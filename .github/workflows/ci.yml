@@ -110,6 +110,16 @@ jobs:
       - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
         with:
           fail-on-severity: high
+          # chromadb's pre-auth code-injection advisory is risk-accepted for CyClaw's
+          # embedded PersistentClient: the HTTP server surface that carries the RCE is
+          # never instantiated (docs/THREAT_MODEL.md: "No HTTP DB"). This is the SAME
+          # acceptance already encoded in .osv-scanner.toml (GHSA-f4j7-r4q5-qw2c /
+          # PYSEC-2026-311) and pip-audit.yml (--ignore-vuln CVE-2026-45829) -- all
+          # aliases of one advisory. dependency-review was the one gate still missing
+          # it, so it failed on every PR that touches chromadb's pin. Allow-list the
+          # single documented GHSA only; every other high/critical advisory (including
+          # any future chromadb CVE) still fails this gate. See SECURITY.md.
+          allow-ghsas: GHSA-f4j7-r4q5-qw2c
 
   test:
     name: ${{ matrix.os }}
