@@ -155,7 +155,7 @@ sync:
   remote_name: "dropbox_cyclaw"  # must match the name you gave in Step 2
   remote_path: "CyClaw/corpus"   # folder inside your Dropbox App Folder
   direction: "pull"              # pull = Dropbox→local only (safe default)
-  include_soul: false            # leave false — soul is governed separately
+  include_soul: false            # deprecated no-op — soul is never synced (sync root is confined to data/corpus)
   reindex_on_change: true        # auto-trigger reindex when files change
   checksum: true
   max_delete: 20                 # safety: abort if >20 files would be deleted
@@ -404,7 +404,7 @@ Register this script in cron or systemd instead of the bare `sync.cli sync`.
 | Stale answers after sync | After exit 10 + reindex, **restart the CyClaw gateway** — the index is loaded at startup, not hot-reloaded. |
 | Schedule doesn't fire on Windows | Check Task Scheduler → "CyClaw Dropbox Sync" → Last Run Result. Code `0x1` usually means the batch file path has changed; run `python -m sync.cli unschedule` then `python -m sync.cli schedule` to re-register. |
 | Another sync is running (exit `SYNC_RUNTIME`) | A previous run is in progress, or it crashed and left a lock. The lock in `~/.config/rclone/logs/sync.lock.d` (Linux) or `%APPDATA%\rclone\logs\sync.lock.d` (Windows) is auto-cleaned after 3 hours; or remove it manually. |
-| Soul changed unexpectedly | `include_soul` was set to `true`. Set it back to `false`, and use `POST /soul/apply` to manage `data/personality/` intentionally. |
+| Soul changed unexpectedly | Not via sync — the sync root is confined to `data/corpus` and `include_soul` is a deprecated no-op. The soul was edited out-of-band; use `POST /soul/apply` to manage `data/personality/` intentionally. |
 
 ---
 

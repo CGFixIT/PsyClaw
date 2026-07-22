@@ -258,6 +258,19 @@ def test_quoted_bool_master_gate_fails_closed(tmp_path: Path) -> None:
             load_sync_config(path)
 
 
+def test_include_soul_key_still_loads_as_deprecated_noop(tmp_path: Path) -> None:
+    # Config compat: old config.yaml files carry include_soul, and unknown
+    # sync: keys are FATAL -- so the key must keep loading. It is now a
+    # deprecated no-op: the value is parsed and echoed, but soul data stays
+    # un-mirrorable (local_path confined to data/corpus; soul rule
+    # unconditional in sync.filters).
+    for value in (True, False):
+        sub = tmp_path / str(value)
+        sub.mkdir()
+        cfg = load_sync_config(_write_config(sub, _base_block(include_soul=value)))
+        assert cfg.include_soul is value
+
+
 def test_config_path_identity_carried(tmp_path: Path) -> None:
     # The loader records the path it read -- resolved the SAME way _get_config
     # loads it (repo-root anchored) -- so spawned work (scheduler, auto-reindex)

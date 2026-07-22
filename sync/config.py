@@ -9,7 +9,9 @@ Hardened defaults (conservative, in line with CyClaw's offline-first /
 soul-governance posture):
 
   - direction:        "pull"      one-way Dropbox -> local; bisync is opt-in
-  - include_soul:     False       data/personality/ NOT synced by default
+  - include_soul:     False       DEPRECATED no-op (kept for config compat):
+                                  soul data is structurally un-mirrorable --
+                                  local_path is confined to data/corpus
   - max_delete:       20          safety fuse: rclone aborts if > N deletions
   - conflict_resolve: "newer"     bisync only -- newer modtime wins
   - conflict_loser:   "rename"    bisync only -- loser saved as .conflict1
@@ -113,6 +115,12 @@ class RcloneConfig:
 
     # Sync behaviour.
     direction: str = DEFAULT_DIRECTION  # "pull" | "bisync"
+    # DEPRECATED no-op, kept so old config.yaml files with this key still load
+    # (unknown sync: keys are fatal). Soul data is structurally un-mirrorable:
+    # local_path is confined to data/corpus (see _validate_local_path), which
+    # can never contain data/personality/, and the soul filter rule is
+    # unconditional. The value is still parsed/validated and echoed in status
+    # output and the sync_started audit event for operator visibility.
     include_soul: bool = DEFAULT_INCLUDE_SOUL
     reindex_on_change: bool = DEFAULT_REINDEX_ON_CHANGE
     # When true AND reindex_on_change fires, `sync.cli sync` runs the indexer

@@ -123,8 +123,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
     _kv("include_soul", cfg.include_soul)
 
     if cfg.include_soul:
-        _warn("include_soul=true -- soul.md and cyclaw_soul.db WILL be mirrored.")
-        _warn("This bypasses the POST /soul/apply governance path. Confirm this is intentional.")
+        # Honest note, not an alarm: include_soul is a deprecated no-op. The
+        # sync root is confined to data/corpus (sync.config), which can never
+        # contain data/personality/, and the soul filter rule is unconditional
+        # -- so soul data cannot be mirrored regardless of this flag.
+        _warn("include_soul=true has no effect: soul data is never mirrored.")
+        _warn("sync.local_path is confined to data/corpus; data/personality/ is outside the sync root.")
 
     try:
         v = check_rclone_version()
@@ -301,7 +305,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("local_path", cfg.local_path)
     _kv("remote", cfg.remote)
     _kv("direction", cfg.direction)
-    _kv("include_soul", cfg.include_soul)
+    _kv("include_soul", f"{cfg.include_soul} (deprecated no-op -- soul is never mirrored)")
     _kv("schedule", f"{cfg.schedule_hour:02d}:{cfg.schedule_min:02d}")
     _kv("filter_file", cfg.filter_file)
     _kv("log_dir", cfg.log_dir)
