@@ -1,7 +1,7 @@
-"""HarnessConfig: home-directory layout and read-only view of CyClaw config.
+r"""HarnessConfig: home-directory layout and read-only view of CyClaw config.
 
 The harness keeps ALL of its mutable state under a per-user home directory —
-``%USERPROFILE%\\.CyClaw`` on Windows 10/11 and Server 2019-2022 (``~/.CyClaw``
+``%USERPROFILE%\.CyClaw`` on Windows 10/11 and Server 2019-2022 (``~/.CyClaw``
 elsewhere), overridable with the ``CYCLAW_HOME`` env var. The repo checkout
 itself is never written to.
 
@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,14 +35,17 @@ from utils.errors import AgenticError
 logger = logging.getLogger("cyclaw.harness.config")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _SKILLS_SRC = _REPO_ROOT / ".claude" / "skills"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8790
 _HOME_ENV = "CYCLAW_HOME"
+_UTF8 = "utf-8"
+_SKILLS_DIRNAME = "skills"
+_MIN_USER_PORT = 1024
+_MAX_PORT = 65535
 
-_HOME_SUBDIRS = ("sessions", "skills", "tools", "memory")
+_HOME_SUBDIRS = ("sessions", _SKILLS_DIRNAME, "tools", "memory")
 
 
 class HarnessConfigError(AgenticError):
@@ -64,17 +68,46 @@ def default_home() -> Path:
 
 def _load_json(path: Path) -> dict:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding=_UTF8))
     except json.JSONDecodeError as exc:
         raise HarnessConfigError(f"{path.name} is not valid JSON", details={"path": str(path)}) from exc
-    if not isinstance(data, dict):
+    if not isinstance(parsed, dict):
         raise HarnessConfigError(f"{path.name} must contain a JSON object", details={"path": str(path)})
-    return data
+    return parsed
+
+
+def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
+    with os.fdopen(fd, "w", encoding=_UTF8) as stream:
+        json.dump(payload, stream, indent=2)
+    os.replace(staged, path)
+
+
+def _discard_staged(staged: str) -> None:
+    """Best-effort cleanup of a staged temp file after a failed replace."""
+    try:
+        os.unlink(staged)
+    except OSError:
+        ...  # the replace either happened or it did not; nothing to enforce here
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    """Atomic JSON write (staged file + os.replace), the soul/registry pattern."""
+    staged_dir = str(path.parent)
+    fd, staged = tempfile.mkstemp(dir=staged_dir, prefix=".staged.", suffix=".tmp")
+    try:
+        _write_and_replace(fd, staged, path, payload)
+    except OSError:
+        _discard_staged(staged)
+        raise
 
 
 @dataclass
 class HarnessConfig:
-    """Resolved harness settings. Mutable fields persist to ``config.json``."""
+    """Resolved harness settings. Mutable fields persist to ``config.json``.
+
+    Path fields are derived in ``__post_init__`` from ``home`` (fields, not
+    properties, so callers get plain ``Path`` attributes).
+    """
 
     home: Path
     host: str = DEFAULT_HOST
@@ -82,82 +115,58 @@ class HarnessConfig:
     soul_enabled: bool = True
     selected_model: str = ""
     repo_root: Path = field(default=_REPO_ROOT)
+    config_path: Path = field(init=False)
+    sessions_dir: Path = field(init=False)
+    skills_dir: Path = field(init=False)
+    tools_dir: Path = field(init=False)
+    memory_dir: Path = field(init=False)
 
-    # -- paths ---------------------------------------------------------
-    @property
-    def config_path(self) -> Path:
-        return self.home / "config.json"
+    def __post_init__(self) -> None:
+        self.config_path = self.home / "config.json"
+        self.sessions_dir = self.home / "sessions"
+        self.skills_dir = self.home / _SKILLS_DIRNAME
+        self.tools_dir = self.home / "tools"
+        self.memory_dir = self.home / "memory"
 
-    @property
-    def sessions_dir(self) -> Path:
-        return self.home / "sessions"
-
-    @property
-    def skills_dir(self) -> Path:
-        return self.home / "skills"
-
-    @property
-    def tools_dir(self) -> Path:
-        return self.home / "tools"
-
-    @property
-    def memory_dir(self) -> Path:
-        return self.home / "memory"
-
-    @property
-    def skills_src(self) -> Path:
-        return self.repo_root / ".claude" / "skills"
-
-    # -- lifecycle -----------------------------------------------------
     @classmethod
     def load(cls, home: Path | None = None) -> HarnessConfig:
         """Create the home layout and load (or seed) ``config.json``."""
-        resolved = (home or default_home()).expanduser().resolve()
-        cfg = cls(home=resolved)
+        cfg = cls(home=(home or default_home()).expanduser().resolve())
         cfg._ensure_layout()
         if cfg.config_path.exists():
-            stored = _load_json(cfg.config_path)
-            if isinstance(stored.get("soul_enabled"), bool):
-                cfg.soul_enabled = stored["soul_enabled"]
-            if isinstance(stored.get("selected_model"), str):
-                cfg.selected_model = stored["selected_model"]
-            port = stored.get("port")
-            if isinstance(port, int) and 1024 <= port <= 65535:
-                cfg.port = port
+            cfg._apply_stored(_load_json(cfg.config_path))
         else:
             cfg.save()
         cfg._seed_skills()
         return cfg
 
     def save(self) -> None:
-        """Atomic write (tmp + os.replace), matching the soul/registry pattern."""
-        payload = {
+        """Persist the mutable fields via an atomic staged write."""
+        _atomic_write_json(self.config_path, {
             "soul_enabled": self.soul_enabled,
             "selected_model": self.selected_model,
             "port": self.port,
-        }
-        fd, tmp = tempfile.mkstemp(dir=str(self.home), prefix=".config.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2)
-            os.replace(tmp, self.config_path)
-        except OSError:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
+        })
+
+    def _apply_stored(self, stored: dict) -> None:
+        if isinstance(stored.get("soul_enabled"), bool):
+            self.soul_enabled = stored["soul_enabled"]
+        if isinstance(stored.get("selected_model"), str):
+            self.selected_model = stored["selected_model"]
+        port = stored.get("port")
+        if isinstance(port, int) and _MIN_USER_PORT <= port <= _MAX_PORT:
+            self.port = port
 
     def _ensure_layout(self) -> None:
         try:
             self.home.mkdir(parents=True, exist_ok=True)
-            for sub in _HOME_SUBDIRS:
-                (self.home / sub).mkdir(exist_ok=True)
         except OSError as exc:
             raise HarnessConfigError(
                 "cannot create harness home directory",
                 details={"home": str(self.home), "error": str(exc)},
             ) from exc
+        for sub in _HOME_SUBDIRS:
+            (self.home / sub).mkdir(exist_ok=True)
 
     def _seed_skills(self) -> None:
         """Copy repo ``.claude/skills`` SKILL.md files into the home once.
@@ -165,15 +174,19 @@ class HarnessConfig:
         The home copy is the user-facing catalog (browse/edit); the repo copy
         stays the governed source. Existing home skills are never overwritten.
         """
-        if not self.skills_src.is_dir():
+        skills_src = self.repo_root / ".claude" / _SKILLS_DIRNAME
+        if not skills_src.is_dir():
             return
-        for skill_md in sorted(self.skills_src.glob("*/SKILL.md")):
-            dest_dir = self.skills_dir / skill_md.parent.name
-            dest = dest_dir / "SKILL.md"
-            if dest.exists():
-                continue
-            try:
-                dest_dir.mkdir(exist_ok=True)
-                dest.write_text(skill_md.read_text(encoding="utf-8"), encoding="utf-8")
-            except OSError:
-                logger.warning("harness: could not seed skill %s", skill_md.parent.name)
+        for skill_md in sorted(skills_src.glob("*/SKILL.md")):
+            self._seed_one_skill(skill_md)
+
+    def _seed_one_skill(self, skill_md: Path) -> None:
+        dest = self.skills_dir / skill_md.parent.name / "SKILL.md"
+        if dest.exists():
+            return
+        with suppress(OSError):
+            dest.parent.mkdir(exist_ok=True)
+        try:
+            dest.write_text(skill_md.read_text(encoding=_UTF8), encoding=_UTF8)
+        except OSError:
+            logger.warning("harness: could not seed skill %s", skill_md.parent.name)
