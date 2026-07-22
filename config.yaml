@@ -336,20 +336,19 @@ security:
     - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - with port
     - "http://10.0.0.111"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
     - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - with port
-    # NOTE: null conclusively is removed after thread understood and weighed against minor inconvenience on why i kept re enabling it  — curl/MCP clients send no Origin header and are not
-    # subject to CORS filtering. null in allow_origins is invalid for starlette
-    # CORSMiddleware and would cause a runtime error or silent rejection.
-    # TrustedHostMiddleware Host allow-list (DNS-rebinding defense, PR #99
-    # Host matching ignores port. Add any name/IP you reach CyClaw by; a request
-    # whose Host header is not listed gets HTTP 400 before any handler runs.
-      # If issues later resolve the browser or test flows that
-    # Send origin: null or any kg the following:
-    # •  file:// URLs
-    # •  Sandboxed iframes
-    # •  Certain data: / blob: contexts
-    # •  Some extensions, workers, or redirect scenarios
+    # NOTE: "null" is deliberately absent from this list — do not re-add it.
+    # curl/MCP clients send no Origin header at all, so they are never subject
+    # to CORS filtering and lose nothing. "null" in allow_origins is invalid
+    # for starlette CORSMiddleware and would cause a runtime error or silent
+    # rejection. It would also match every opaque-origin context (browsers send
+    # "Origin: null" for file:// URLs, sandboxed iframes, certain data:/blob:
+    # contexts, and some extension/worker/redirect scenarios). If a browser or
+    # test flow ever sends "Origin: null", serve it from one of the http
+    # origins listed above instead of re-enabling null.
 
-
+  # TrustedHostMiddleware Host allow-list (DNS-rebinding defense, PR #99).
+  # Host matching ignores port. Add any name/IP you reach CyClaw by; a request
+  # whose Host header is not listed gets HTTP 400 before any handler runs.
   allowed_hosts:
     - "127.0.0.1"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
     - "localhost"  # DevSkim: ignore DS162092,DS137138 - loopback host by design
