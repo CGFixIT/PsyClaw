@@ -17,6 +17,7 @@ from harness.config import HarnessConfig, default_home
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_mcp_tools, list_repo_skills
+from harness import server as harness_server
 from harness.server import create_app
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
 
@@ -209,6 +210,21 @@ def test_chat_unknown_session_404(client):
 def test_harness_runs_endpoint(client):
     data = client.get("/api/harness/runs").json()
     assert data["count"] == len(data["runs"])
+
+
+def test_harness_runs_stray_file_does_not_displace_runs(client, tmp_path, monkeypatch):
+    """Regression: the newest-N slice used to happen BEFORE the is_dir filter,
+    so a stray file (index, .lock) inside the window silently dropped a real run."""
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    for name in ("run-a", "run-b", "run-c"):
+        (runs_dir / name).mkdir()
+    (runs_dir / "zzz-stray.lock").write_text("", encoding="utf-8")  # sorts first
+    monkeypatch.setattr(harness_server, "_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(harness_server, "_MAX_RUNS", 3)
+    data = client.get("/api/harness/runs").json()
+    assert data["count"] == 3
+    assert {r["run_id"] for r in data["runs"]} == {"run-a", "run-b", "run-c"}
 
 
 def test_console_served(client):

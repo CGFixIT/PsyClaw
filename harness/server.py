@@ -22,7 +22,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
-from harness.config import HarnessConfig
+from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
@@ -232,9 +232,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def harness_runs() -> dict:
         runs: list[dict] = []
         if _RUNS_DIR.is_dir():
-            for path in sorted(_RUNS_DIR.iterdir(), reverse=True)[:_MAX_RUNS]:
-                if path.is_dir():
-                    runs.append({"run_id": path.name, "path": str(path)})
+            # dirs-only BEFORE the slice: a stray file (index, .lock) among the
+            # newest entries must not push a real run out of the _MAX_RUNS window
+            for path in sorted((p for p in _RUNS_DIR.iterdir() if p.is_dir()), reverse=True)[:_MAX_RUNS]:
+                runs.append({"run_id": path.name, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
 
     return app
@@ -250,6 +251,10 @@ def main() -> None:
         sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
     port = int(port_env) if port_env.isdigit() else cfg.port
+    if not _MIN_USER_PORT <= port <= _MAX_PORT:
+        # same bounds config.py applies to the stored port; without this the env
+        # override accepts 0 (ephemeral bind — console link breaks) or >65535
+        sys.exit(f"CYCLAW_HARNESS_PORT out of range ({_MIN_USER_PORT}-{_MAX_PORT}): {port_env}")
     app = create_app(cfg)
     uvicorn.run(app, host=host, port=port)  # DevSkim: ignore DS162092 - loopback-only binding by design
 
