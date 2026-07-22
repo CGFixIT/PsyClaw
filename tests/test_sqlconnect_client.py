@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from agentic.sqlconnect.client import (
     SqlClient,
@@ -216,6 +217,120 @@ def test_execute_timeout_disabled_when_non_positive(monkeypatch):
     client._execute("SELECT 1")
     # No timeout SET issued; only the user query runs.
     assert fake.conn.cur.executed == [("SELECT 1", ())]
+
+
+# ---------------------------------------------------------------------------
+# read-only enforcement: fail-closed, never a silently read-write session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        # MSSQL table hints that take write-grade locks inside a valid SELECT.
+        "SELECT * FROM t WITH (UPDLOCK)",
+        "SELECT * FROM t WITH (HOLDLOCK)",
+        "SELECT * FROM t WITH (XLOCK)",
+        "select * from t with (updlock, holdlock)",
+        "SELECT * FROM t WITH (NOLOCK, XLOCK)",
+        "SELECT * FROM t WITH (TABLOCKX)",
+        "SELECT * FROM t WITH (TABLOCK)",
+        "SELECT * FROM t WITH (PAGLOCK)",
+        "SELECT * FROM t WITH (SERIALIZABLE)",
+        "select * from t with (serializable)",
+    ],
+)
+def test_assert_rejects_lock_taking_hints(bad):
+    """Lock hints are forbidden even though the statement only reads."""
+    with pytest.raises(SqlConnectError):
+        assert_read_only_sql(bad)
+
+
+def test_execute_sets_read_only_for_psycopg_style_driver(monkeypatch):
+    sc = SqlConnectConfig(driver="postgres")
+    monkeypatch.setenv(sc.dsn_env, "postgresql://x")
+    client = SqlClient({}, sc)
+    fake = _FakeDriver()
+    monkeypatch.setattr(client, "_import_driver", lambda: fake)
+    client._execute("SELECT 1")
+    assert fake.conn.read_only is True
+
+
+class _NoReadOnlyConn:
+    """pyodbc-like connection: no settable ``read_only`` property."""
+
+    def __init__(self) -> None:
+        self.cur = _FakeCursor()
+        self.attrs: dict = {}
+
+    @property
+    def read_only(self):  # read-only property -> assignment raises AttributeError
+        return False
+
+    def cursor(self):
+        return self.cur
+
+    def close(self) -> None:
+        pass
+
+
+class _PyodbcConn(_NoReadOnlyConn):
+    """pyodbc-like connection that supports ``set_attr`` (SQLSetConnectAttr)."""
+
+    def set_attr(self, attr, value) -> None:
+        self.attrs[attr] = value
+
+
+def test_execute_readonly_pyodbc_uses_access_mode(monkeypatch):
+    """A driver without ``read_only`` gets SQL_ATTR_ACCESS_MODE=READ_ONLY instead."""
+    sc = SqlConnectConfig(driver="mssql")
+    monkeypatch.setenv(sc.dsn_env, "Driver=ODBC;")
+    client = SqlClient({}, sc)
+    conn = _PyodbcConn()
+    fake = SimpleNamespace(
+        connect=lambda dsn: conn,
+        SQL_ATTR_ACCESS_MODE=101,
+        SQL_MODE_READ_ONLY=1,
+    )
+    monkeypatch.setattr(client, "_import_driver", lambda: fake)
+    client._execute("SELECT 1")
+    assert conn.attrs == {101: 1}
+
+
+def test_execute_readonly_fails_closed_when_unsupported(monkeypatch):
+    """A driver with neither read_only nor set_attr must refuse to run."""
+    sc = SqlConnectConfig(driver="mssql")
+    monkeypatch.setenv(sc.dsn_env, "Driver=ODBC;")
+    client = SqlClient({}, sc)
+    conn = _NoReadOnlyConn()
+    fake = SimpleNamespace(connect=lambda dsn: conn)  # no SQL_ATTR_ACCESS_MODE consts
+    monkeypatch.setattr(client, "_import_driver", lambda: fake)
+    with pytest.raises(SqlConnectRuntimeError, match="read-only"):
+        client._execute("SELECT 1")
+    # Fail-closed means the user query never reached the connection.
+    assert conn.cur.executed == []
+
+
+def test_execute_readonly_fails_closed_when_set_attr_rejected(monkeypatch):
+    """If the driver rejects the read-only attribute, refuse to run."""
+
+    class _RejectingConn(_PyodbcConn):
+        def set_attr(self, attr, value) -> None:
+            raise RuntimeError("driver rejected the attribute")
+
+    sc = SqlConnectConfig(driver="mssql")
+    monkeypatch.setenv(sc.dsn_env, "Driver=ODBC;")
+    client = SqlClient({}, sc)
+    conn = _RejectingConn()
+    fake = SimpleNamespace(
+        connect=lambda dsn: conn,
+        SQL_ATTR_ACCESS_MODE=101,
+        SQL_MODE_READ_ONLY=1,
+    )
+    monkeypatch.setattr(client, "_import_driver", lambda: fake)
+    with pytest.raises(SqlConnectRuntimeError, match="read-only"):
+        client._execute("SELECT 1")
+    assert conn.cur.executed == []
 
 
 # ---------------------------------------------------------------------------

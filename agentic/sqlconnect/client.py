@@ -35,9 +35,16 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # rejected legitimate read queries like ``SELECT replace(name,'a','b') FROM t``.
 # Even if a REPLACE write statement existed, the leading-keyword gate (must start
 # with SELECT/WITH) plus the single-statement check would already stop it.
+# ``updlock``/``holdlock``/``xlock``/``tablock``/``tablockx``/``paglock``/
+# ``serializable`` are MSSQL table hints that take write-grade or aggressively
+# escalated locks inside an otherwise valid SELECT (``SELECT * FROM t WITH
+# (UPDLOCK)``). On a connector whose contract is read-only that is an
+# availability risk (blocking other writers/readers), so the hints are
+# forbidden even though the statement itself only reads.
 _FORBIDDEN_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|"
-    r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback)\b",
+    r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback|"
+    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable)\b",
     re.IGNORECASE,
 )
 
@@ -238,13 +245,45 @@ class SqlClient:
             with suppress_attr_error():
                 conn.timeout = max(1, timeout_ms // 1000)
 
+    def _enforce_read_only(self, driver: Any, conn: Any) -> None:
+        """Fail closed: the read-only session must actually take effect.
+
+        psycopg exposes a settable ``read_only`` property; pyodbc does not --
+        it enforces read-only via ``SQL_ATTR_ACCESS_MODE = SQL_MODE_READ_ONLY``
+        on the connection. Silently ignoring ``AttributeError`` here would mean
+        a driver without the property runs on a *read-write* session while the
+        connector claims to be read-only (fail-open), so a driver that
+        supports neither mechanism raises instead of executing the query.
+        """
+        try:
+            conn.read_only = True
+            return  # psycopg
+        except AttributeError:
+            pass
+        # pyodbc (MSSQL): set the ODBC access mode on the connection.
+        set_attr = getattr(conn, "set_attr", None)
+        access_mode = getattr(driver, "SQL_ATTR_ACCESS_MODE", None)
+        mode_read_only = getattr(driver, "SQL_MODE_READ_ONLY", None)
+        if callable(set_attr) and access_mode is not None and mode_read_only is not None:
+            try:
+                set_attr(access_mode, mode_read_only)
+            except Exception as exc:
+                raise SqlConnectRuntimeError(
+                    "failed to set the connection read-only (SQL_ATTR_ACCESS_MODE=SQL_MODE_READ_ONLY)",
+                    details={"driver": self.sql_cfg.driver},
+                ) from exc
+            return
+        raise SqlConnectRuntimeError(
+            "SQL driver does not support read-only sessions; refusing to run on a read-write connection",
+            details={"driver": self.sql_cfg.driver},
+        )
+
     def _execute(self, sql: str, params: tuple = ()) -> dict:  # pragma: no cover - needs live DB
         driver = self._import_driver()
         dsn = self._dsn()
         conn = driver.connect(dsn)
         try:
-            with suppress_attr_error():
-                conn.read_only = True
+            self._enforce_read_only(driver, conn)
             cur = conn.cursor()
             self._apply_statement_timeout(conn, cur)
             cur.execute(sql, params)
@@ -320,7 +359,11 @@ class SqlClient:
 
 
 class suppress_attr_error:  # pragma: no cover - trivial helper used only in live path
-    """Context manager: ignore AttributeError when a driver lacks ``read_only``."""
+    """Context manager: ignore AttributeError when a driver lacks a conn attr.
+
+    Only for best-effort knobs (e.g. ``conn.timeout``); the read-only session
+    itself is enforced fail-closed by :meth:`SqlClient._enforce_read_only`.
+    """
 
     def __enter__(self) -> None:
         return None
