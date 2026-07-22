@@ -31,7 +31,7 @@ Check all six CyClaw invariants:
 5. Soul writes require a non-empty human reason and remain atomic; do not overclaim that reload/drift paths are injection-scanned.
 6. `gate.py`, `graph.py`, and `mcp_hybrid_server.py` remain bidirectionally isolated from `agentic`, `sync`, and `guardrails`; `gate_ops.py` must avoid direct out-of-band imports and preserve the `utils/ops_runner.py` subprocess-shim boundary.
 
-Also flag regressions that disable audit query hashing, add an LLM path to the MCP server, move telemetry-kill below heavy imports, weaken fail-closed API-key auth, expose the host beyond loopback (container-internal `0.0.0.0` is intentional), or drift dependency pins across `pyproject.toml`, `requirements.txt`, `constraints.txt`, `.github/workflows/environment.yml`, and `Dockerfile`.
+Also flag regressions that disable audit query hashing, add an LLM path to the MCP server, move telemetry-kill below heavy imports, weaken fail-closed API-key auth, expose the host beyond loopback (container-internal `0.0.0.0` is intentional), or drift dependency pins across `pyproject.toml`, `requirements.txt`, `constraints.txt`, `environment.yml`, and `Dockerfile`.
 
 The invariant checker is structural evidence, not proof of semantic safety. Report a checker failure only when the PR introduced it. If it passes, still inspect changed invariant-sensitive code.
 

@@ -286,7 +286,7 @@ keeping close to this file:
 Covered by `CLAUDE.md` §4 (torch-first install order, `data/personality/soul.md`/`index/`/`logs/` expected at boot, `/soul/*` fail-closed without `CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should mock it). Two with no `CLAUDE.md` equivalent:
 
 - Agentic GitHub context needs `gh` in local environments, but core CyClaw does not.
-- `.github/workflows/environment.yml` is intentionally referenced by the conda workflow from `.github/workflows/python-package-conda.yml` — don't delete it as apparently-unused.
+- `environment.yml` (repo root) is intentionally referenced by the conda workflow from `.github/workflows/python-package-conda.yml` — don't delete it as apparently-unused.
 
 ## Do Not
 

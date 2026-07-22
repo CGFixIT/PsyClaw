@@ -90,7 +90,7 @@ Read the failure class if any command errors:
   approved hosts); note it as unverified rather than asserting pass or fail.
 - Environment.yml (conda): there's no equivalent dry-run flag for `conda`/
   `mamba env create`; if you need to verify it, the honest option is a real
-  `mamba env create -f .github/workflows/environment.yml --dry-run` in an
+  `mamba env create -f environment.yml --dry-run` in an
   environment where conda is installed — otherwise report it as "not
   dry-run-verified this pass," don't assert it works from reading the file.
 

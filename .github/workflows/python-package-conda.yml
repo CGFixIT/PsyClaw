@@ -38,7 +38,7 @@ jobs:
         channels: conda-forge
         channel-priority: strict
         activate-environment: cyclaw
-        environment-file: .github/workflows/environment.yml
+        environment-file: environment.yml
         auto-activate-base: false
         use-mamba: true
 
@@ -48,7 +48,7 @@ jobs:
         path: |
           /home/runner/miniconda3/envs/cyclaw
           /home/runner/miniconda3/pkgs
-        key: conda-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('.github/workflows/environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
+        key: conda-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
         restore-keys: |
           conda-${{ runner.os }}-${{ matrix.python-version }}-
 

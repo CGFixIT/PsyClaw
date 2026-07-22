@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """extract_pins.py — normalize every pinned package/version across CyClaw's
 four install surfaces (pyproject.toml, constraints.txt, requirements.txt,
-.github/workflows/environment.yml) into one JSON table.
+environment.yml) into one JSON table.
 
 Usage:
     python3 .claude/skills/verify-deps/extract_pins.py [--repo-root PATH]
@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dep-guard"))
 import check_deps as _dep_guard  # noqa: E402  (sibling-skill import, path set above)
 
-_ENV_YML_FILE = ".github/workflows/environment.yml"
+_ENV_YML_FILE = "environment.yml"
 _ENV_SKIP = {"python", "pip"}
 
 

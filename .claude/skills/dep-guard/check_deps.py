@@ -362,7 +362,7 @@ def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
 # what happened by 2026-07-19: PYSEC-2026-597 moved nltk 3.9.4 -> 3.10.0 in
 # all three pip manifests while environment.yml kept the conda lane testing
 # 3.9.4, a version the project no longer ships.
-_ENV_YML_FILE = ".github/workflows/environment.yml"
+_ENV_YML_FILE = "environment.yml"
 # Not pip packages -- the manifests have nothing to compare them against.
 _ENV_SKIP = {"python", "pip"}
 # fastapi diverges on purpose: conda-forge's chromadb=1.5.9 build hard-pins
