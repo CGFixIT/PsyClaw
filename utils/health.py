@@ -101,7 +101,17 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         return [HealthStatus(name="config", healthy=False, error=f"config load failed: {_safe_error(exc)}")]
 
     results = []
-    results.append(_ping(f"{llm_base}/models", "ollama"))
+    # Same model-pin drift guard as Grok/Claude: a healthy Ollama *endpoint*
+    # with a missing/renamed tag (config pins qwen2.5:7b but the operator never
+    # pulled it) would otherwise stay green until the first /query stalls or
+    # 4xxs. Only applied when models.local_llm.model is set; empty pin is a
+    # pure availability probe (backward compatible with minimal test fixtures).
+    local_model = cfg["models"]["local_llm"].get("model") or ""
+    results.append(_ping(
+        f"{llm_base}/models",
+        "ollama",
+        expect_model=local_model if local_model else None,
+    ))
     if (cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]

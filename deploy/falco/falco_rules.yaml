@@ -9,8 +9,8 @@
 #
 # Scope rationale: docs/THREAT_MODEL.md. Driver/why-eBPF: docs/SECCOMP_EBPF_HARDENING.md.
 #
-# Tune the macros below to your deployment (container name, LM Studio host/port)
-# before relying on the alerts — the defaults match docker-compose.yml.
+# Tune the macros below to your deployment (container name, Ollama host/port)
+# before relying on the alerts — the defaults match docker-compose.yml / config.yaml.
 
 - required_engine_version: 0.31.0
 
@@ -43,12 +43,13 @@
      fd.name startswith "/app/.emb_cache/" or
      fd.name startswith "/tmp/")
 
-# The only egress CyClaw makes off-container is to the LM Studio / Grok endpoints.
-# Loopback stays in-container; adjust the host/port to your LM Studio if remote.
-# Loopback literals are intentional (CyClaw is loopback-only by design), not debug
-# code -- suppress the devskim DS162092 heuristic on this line.
+# The only egress CyClaw makes off-container is to the local Ollama / optional
+# Grok·Claude endpoints. Loopback stays in-container; adjust host/port if Ollama
+# is not on the shipped default (11434). Loopback literals are intentional
+# (CyClaw is loopback-only by design), not debug code -- suppress the devskim
+# DS162092 heuristic on this line.
 - macro: cyclaw_expected_outbound
-  condition: '(fd.sip = "127.0.0.1" or fd.sip = "::1" or fd.sport = 1234)'  # DevSkim: ignore DS162092
+  condition: '(fd.sip = "127.0.0.1" or fd.sip = "::1" or fd.sport = 11434)'  # DevSkim: ignore DS162092
 
 # ---------------------------------------------------------------------------
 # Rules.
@@ -104,13 +105,14 @@
   priority: ERROR
   tags: [cyclaw, filesystem]
 
-# 4) Unexpected outbound network. CyClaw is loopback-only plus the local LM Studio
-#    endpoint; egress to anywhere else from the app container is suspicious
-#    (data exfiltration, C2, unexpected cloud call).
+# 4) Unexpected outbound network. CyClaw is loopback-only plus local Ollama
+#    (and optional hybrid cloud providers when explicitly enabled); egress to
+#    anywhere else from the app container is suspicious (data exfiltration, C2,
+#    unexpected cloud call).
 - rule: CyClaw unexpected outbound connection
   desc: >
     The CyClaw container opened an outbound connection to something other than
-    loopback or the local LM Studio endpoint. Tune cyclaw_expected_outbound to
+    loopback or the local Ollama endpoint. Tune cyclaw_expected_outbound to
     your model host before relying on this in production.
   condition: >
     outbound and cyclaw_container and
