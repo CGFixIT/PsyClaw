@@ -127,6 +127,7 @@ subsystems.
 | `agentic/fsconnect/` | Out-of-band local/SMB filesystem connector; POSIX-only security core |
 | `agentic/sqlconnect/` | Out-of-band SQL connector; SELECT/WITH-only guard |
 | `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`, via `utils/guardrail_bridge.py` — still opt-in, still never imported directly by `gate.py`/`graph.py` |
+| `harness/` | Out-of-band PowerShell coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home, reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. See `docs/HARNESS_POWERSHELL.md` |
 
 ### Load-bearing numbers (all from `config.yaml`/`pyproject.toml` — do not invent)
 
