@@ -30,13 +30,7 @@ def audit_config(tmp_path):
     cfg = {
         "logging": {
             "audit_file": audit_file,
-            "audit_fields": {
-                "include_query_hash": True,
-                "include_top_score": True,
-                "include_retrieval_mode": True,
-                "include_online_escalated": True,
-                "include_model_used": True
-            }
+            "audit_fields": {"include_query_hash": True}
         },
         "policy": {
             "privacy": {
