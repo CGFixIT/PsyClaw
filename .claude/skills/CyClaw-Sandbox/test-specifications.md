@@ -119,7 +119,7 @@ def test_grok_connection_only():
     call = client._client.post.call_args
     assert call[0][0].endswith("/chat/completions")
     assert "Bearer test-grok-key" in call[1]["headers"]["Authorization"]
-    assert call[1]["json"]["model"] == "grok-4.3"
+    assert call[1]["json"]["model"] == "grok-4.5"
     assert call[1]["json"]["max_tokens"] == 256
     assert call[1]["json"]["temperature"] == 0.2
 ```

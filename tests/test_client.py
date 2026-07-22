@@ -56,7 +56,7 @@ def _write_config(tmp_path, retry: dict = None, local_llm_extra: dict | None = N
         local_llm.update(local_llm_extra)
     grok = {
         "base_url": "https://api.x.ai/v1",
-        "model": "grok-4.3",
+        "model": "grok-4.5",
         "max_tokens": 256,
         "temperature": 0.2,
         "timeout_sec": 5,
@@ -293,7 +293,7 @@ class TestGrokClient:
         client._client.post = fake
         client.generate("a prompt")
         _url, kwargs = fake.calls[0]
-        assert kwargs["json"]["model"] == "grok-4.3"
+        assert kwargs["json"]["model"] == "grok-4.5"
         assert kwargs["json"]["messages"][0]["content"] == "a prompt"
         client.close()
 
