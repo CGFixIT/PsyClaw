@@ -74,7 +74,7 @@ single-operator threat model — and refuses to pretend it is a multi-tenant Saa
 | **AnythingLLM** | Fast personal/team “chat my docs” with agents and low setup | Topology-enforced offline; hash-audit as a non-bypassable path |
 | **Open WebUI** | Polished multi-user interface over any model backend | Single binary policy that cannot be UI-configured away |
 | **PrivateGPT** | Standard local API so you can build your own app/UI | A finished fail-closed RAG product with soul + injection gates |
-| **CyClaw** | Enforced offline-first RAG + audit + identity governance | Multi-tenant org search, white-label chat portal, one-click non-technical install |
+| **CyClaw** | Enforced offline RAG and offline-first optional online MCP w/ hggf model, grok/claude optional online  + audit + identity governance | Multi-tenant org search, white-label chat portal, one-click non-technical install |
 
 ---
 
@@ -107,17 +107,21 @@ Details and adversary coverage: [`docs/THREAT_MODEL.md`](../THREAT_MODEL.md).
 
 Pick something else when:
 
-- You need a multi-user corporate chat portal tomorrow → **Open WebUI** or **Onyx**-class tools.
+- You need a multi-user corporate chat portal tomorrow → **Open WebUI** or **Onyx**-class tools. This is coning but hardware aint cheap.
 - You want zero-setup desktop chat with docs → **AnythingLLM Desktop**.
 - You are building a custom product on a Claude/OpenAI-shaped local API → **PrivateGPT**.
-- You need 40+ SaaS connectors and org-wide enterprise search → not CyClaw’s scope.
+- You need 40+ SaaS connectors (most of which lets be real arent useful) and org-wide enterprise search for data that isnt unstructured and local or 
+- Dropbox sync-able → not CyClaw’s scope currently unless someone is interested in the consulting/data corpus tuning and initial setup and maintenance.
 
 Pick CyClaw when:
 
 - The corpus is personal / sensitive and **must not** leave the machine by default.
+- For ai queries that dont return info from RAG corpus, you want open weight model, grok api, and claude api optional with config config hardening and audited sanitization.
 - You care that **routing and audit are non-negotiable**, even under injection pressure.
 - You want a local MCP retrieval tool that stays isolated from agentic side-effects.
 - You accept a single-operator, loopback, engineering-owned deployment.
+- You'vee seen recent evals for Qwen, GLM5.2, and Kimi3 and want the best of chinese models without worry they are spying on your work.
+- More when I add more
 
 ---
 
