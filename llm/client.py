@@ -68,6 +68,11 @@ def _extract_content(resp: httpx.Response) -> str:
     # response so the caller maps it to a clear typed LLM/Grok error instead.
     if not isinstance(content, str) or not content.strip():
         raise ValueError("empty LLM response: content missing or blank")
+    # A reply cut off at max_tokens is otherwise indistinguishable from a
+    # complete one — the truncated text is still returned (partial answer beats
+    # none), but the operator gets an audit-visible WARNING instead of silence.
+    if data["choices"][0].get("finish_reason") == "length":
+        log.warning("LLM response truncated at max_tokens (finish_reason=length)")
     return content
 
 
@@ -85,6 +90,9 @@ def _extract_claude_content(resp: httpx.Response) -> str:
     content = "\n".join(p for p in parts if isinstance(p, str) and p.strip()).strip()
     if not content:
         raise ValueError("empty Claude response: no text content")
+    # Same truncation visibility as _extract_content, in Anthropic's dialect.
+    if data.get("stop_reason") == "max_tokens":
+        log.warning("Claude response truncated at max_tokens (stop_reason=max_tokens)")
     return content
 
 
@@ -268,7 +276,11 @@ def _probe_openai_models(
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             return True
-    except Exception:
+    # Only network/HTTP failures mean "backend down". A programming or config
+    # error (e.g. a malformed base_url raising InvalidURL) must propagate
+    # instead of silently masquerading as an unreachable backend and steering
+    # discovery to the fallback.
+    except (httpx.HTTPError, OSError):
         return False
 
 
