@@ -643,10 +643,10 @@ def _lock_busy_error(lock_path: str) -> SyncRuntimeError:
     )
 
 
-def _try_os_lock(fd: int) -> bool:
+def _try_os_lock(fd: int, lock_path: str) -> bool:
     """Acquire the platform's non-blocking exclusive file lock."""
-    os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
     try:
+        os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
         if os.name == "nt":
             import msvcrt
 
@@ -657,7 +657,10 @@ def _try_os_lock(fd: int) -> bool:
     except OSError as exc:
         if exc.errno in (errno.EACCES, errno.EAGAIN):
             return False
-        raise
+        raise SyncRuntimeError(
+            "Unable to lock the sync lock file",
+            details={"lock_path": lock_path, "error": str(exc)},
+        ) from exc
     return True
 
 
@@ -672,11 +675,17 @@ def _unlock_os_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
-def _write_lock_meta(fd: int, pid: int, started_at: float) -> None:
+def _write_lock_meta(fd: int, pid: int, started_at: float, lock_path: str) -> None:
     """Replace informational lock metadata while ownership is held."""
-    os.ftruncate(fd, 0)
-    os.lseek(fd, 0, os.SEEK_SET)
-    os.write(fd, f"{pid}\n{started_at:.3f}\n".encode())
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{pid}\n{started_at:.3f}\n".encode())
+    except OSError as exc:
+        raise SyncRuntimeError(
+            "Unable to write the sync lock metadata",
+            details={"lock_path": lock_path, "error": str(exc)},
+        ) from exc
 
 
 def _acquire_sync_lock(lock_path: str) -> _SyncLock:
@@ -699,10 +708,10 @@ def _acquire_sync_lock(lock_path: str) -> _SyncLock:
 
         locked = False
         try:
-            locked = _try_os_lock(fd)
+            locked = _try_os_lock(fd, lock_path)
             if not locked:
                 raise _lock_busy_error(lock_path)
-            _write_lock_meta(fd, pid, started_at)
+            _write_lock_meta(fd, pid, started_at, lock_path)
             _PROCESS_LOCKS.add(key)
         except Exception:
             if locked:

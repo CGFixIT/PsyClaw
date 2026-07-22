@@ -8,6 +8,7 @@ resolution via ``sync.runner.shutil.which``.
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -251,6 +252,21 @@ def test_hash_changed_files_skips_paths_outside_local_root(tmp_path):
     assert out[0].sha256 is None
 
 
+def test_hash_changed_files_tolerates_cross_drive_commonpath_valueerror(monkeypatch, tmp_path):
+    # os.path.commonpath raises ValueError for paths on different drives
+    # (Windows); the event must pass through un-hashed, not crash the sync.
+    f = tmp_path / "a.md"
+    f.write_text("hello", encoding="utf-8")
+
+    def _raise_value_error(_paths):
+        raise ValueError("paths are on different drives")
+
+    monkeypatch.setattr(os.path, "commonpath", _raise_value_error)
+    out = hash_changed_files([FileEvent(kind="added", path="a.md")], str(tmp_path))
+
+    assert out[0].sha256 is None
+
+
 # ---------------------------------------------------------------------------
 # Audit dicts -- "file" key, never "query", no secret fields
 # ---------------------------------------------------------------------------
@@ -490,6 +506,51 @@ def test_run_sync_releases_lock_after_run(tmp_path):
     assert lock_path.exists()
     lock = _acquire_sync_lock(str(lock_path))
     _release_sync_lock(lock)
+
+
+def _patch_platform_lock_failure(monkeypatch, exc: OSError):
+    """Make the platform's lock primitive raise ``exc`` on any OS."""
+
+    def _raise(*_args, **_kwargs):
+        raise exc
+
+    if os.name == "nt":
+        import msvcrt
+
+        monkeypatch.setattr(msvcrt, "locking", _raise)
+    else:
+        import fcntl
+
+        monkeypatch.setattr(fcntl, "flock", _raise)
+
+
+def test_try_os_lock_reraises_unexpected_oserror_as_typed(monkeypatch, tmp_path):
+    # A non-busy OSError from the platform lock call (e.g. ENOLCK) must surface
+    # as SyncRuntimeError, not a bare OSError, through the acquire path.
+    _patch_platform_lock_failure(monkeypatch, OSError(errno.ENOLCK, "no locks available"))
+    lock_path = str(tmp_path / "sync.lock")
+
+    with pytest.raises(SyncRuntimeError) as excinfo:
+        _acquire_sync_lock(lock_path)
+
+    assert excinfo.value.details["lock_path"] == lock_path
+    assert excinfo.value.__cause__.errno == errno.ENOLCK
+
+
+def test_write_lock_meta_ioerror_does_not_leave_untyped_exception(monkeypatch, tmp_path):
+    # An I/O fault writing the lock metadata (e.g. ENOSPC, disk full) must
+    # surface as SyncRuntimeError, not a bare OSError.
+    def _raise_write(_fd, _data):
+        raise OSError(errno.ENOSPC, "no space left on device")
+
+    monkeypatch.setattr(os, "write", _raise_write)
+    lock_path = str(tmp_path / "sync.lock")
+
+    with pytest.raises(SyncRuntimeError) as excinfo:
+        _acquire_sync_lock(lock_path)
+
+    assert excinfo.value.details["lock_path"] == lock_path
+    assert excinfo.value.__cause__.errno == errno.ENOSPC
 
 
 def test_run_sync_no_change_exit_0(tmp_path):
