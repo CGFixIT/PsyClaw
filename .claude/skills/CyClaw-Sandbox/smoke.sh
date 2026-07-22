@@ -56,6 +56,21 @@ if [ ! -f index/bm25.json ]; then
 fi
 
 # ── launch server ────────────────────────────────────────────────────────────
+# verify.sh runs in the previous CI step against the SAME port. Its server can
+# still be shutting down when this step starts; without this wait the first
+# health probe below succeeds against that orphan, the orphan then dies, and
+# the next curl hits a dead port (exit 7 → set -e aborts the step).
+echo "[smoke] Waiting for :$PORT to be free ..."
+PORT_FREE=0
+for _ in $(seq 1 60); do
+  curl -sf --max-time 1 "$BASE/health" > /dev/null 2>&1 || { PORT_FREE=1; break; }
+  sleep 0.5
+done
+if [ "$PORT_FREE" -ne 1 ]; then
+  echo "[smoke] FATAL: :$PORT still serving after 30s — stale server from a previous step?" >&2
+  exit 1
+fi
+
 echo "[smoke] Starting server on :$PORT ..."
 GROK_API_KEY="$GROK_API_KEY" CYCLAW_API_KEY="$CYCLAW_API_KEY" \
   "$PYTHON" -m uvicorn gate:app --host 127.0.0.1 --port "$PORT" > "$LOG" 2>&1 &  # DevSkim: ignore DS162092
@@ -63,6 +78,13 @@ SERVER_PID=$!
 
 for i in $(seq 1 30); do
   curl -sf "$BASE/health" > /dev/null 2>&1 && break
+  # Fail fast if OUR server died during startup instead of probing whatever
+  # else might answer on the port.
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "[smoke] FATAL: server (pid $SERVER_PID) exited during startup — see $LOG" >&2
+    tail -20 "$LOG" >&2 || true
+    exit 1
+  fi
   sleep 0.5
 done
 

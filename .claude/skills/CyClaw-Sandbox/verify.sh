@@ -33,12 +33,26 @@ fail()   { echo "  FAIL  $1"; REPORT_ROWS+=("| $1 | FAIL | $2 |"); FAILURES=$((F
 declare -a REPORT_ROWS=()
 
 cleanup() {
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    # SIGTERM only asks uvicorn to shut down — don't leave :$PORT bound for
+    # the next CI step (smoke.sh runs against the same port). Wait for the
+    # process to actually exit, escalating to SIGKILL if it lingers.
+    for _ in $(seq 1 20); do
+      kill -0 "$SERVER_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -9 "$SERVER_PID" 2>/dev/null || true
+  fi
   if [ -n "$SOUL_BACKUP" ] && [ -f "$SOUL_BACKUP" ]; then
     mv "$SOUL_BACKUP" data/personality/soul.md
   fi
 }
 trap cleanup EXIT
+# Route INT/TERM through exit so the EXIT trap above still runs (a bare trap
+# on INT would resume the script instead of stopping it).
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # ── stage 1: 3.12 runtime provisioning ────────────────────────────────────────
 note "Stage 1 — provisioning Python 3.12 runtime"
