@@ -6,6 +6,7 @@ reject chunking misconfiguration before a corrupt index can be written.
 
 import hashlib
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -269,6 +270,86 @@ class TestLoadCorpusCaseInsensitive:
         # Only .md should be loaded; .json should be skipped
         assert len(docs) == 1
         assert "doc.md" in docs[0][0]
+
+
+class TestLoadCorpusSymlinkGuard:
+    """Test-spec tier 1.2: a corpus entry resolving OUTSIDE the corpus dir must
+    be refused (retrieval/indexer.py:71-76). rglob follows symlinks, so without
+    this guard a planted link could pull arbitrary filesystem content into the
+    index. Symlink creation needs privileges on Windows — skip only if creation
+    itself is denied."""
+
+    def test_symlink_escaping_corpus_is_skipped(self, tmp_path, caplog):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "real.md").write_text("real corpus content", encoding="utf-8")
+        outside = tmp_path / "secret.md"
+        outside.write_text("outside-the-corpus secret", encoding="utf-8")
+        link = corpus / "linked.md"
+        try:
+            os.symlink(outside, link)
+        except OSError as e:
+            pytest.skip(f"symlink creation denied on this platform: {e}")
+
+        with caplog.at_level("WARNING", logger="retrieval.indexer"):
+            docs = load_corpus(str(corpus), extensions=[".md"])
+
+        sources = [source for source, _ in docs]
+        assert any("real.md" in s for s in sources)
+        assert not any("linked.md" in s for s in sources)
+        assert all("outside-the-corpus secret" not in content for _, content in docs)
+        assert any(
+            "linked.md" in rec.getMessage() and "outside corpus" in rec.getMessage()
+            for rec in caplog.records
+        ), f"no symlink-skip warning in: {[r.getMessage() for r in caplog.records]}"
+
+    def test_symlink_staying_inside_corpus_is_allowed(self, tmp_path):
+        # The guard rejects escapes, not symlinks per se: a link that resolves
+        # back inside the corpus must still be indexed.
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "real.md").write_text("real corpus content", encoding="utf-8")
+        link = corpus / "alias.md"
+        try:
+            os.symlink(corpus / "real.md", link)
+        except OSError as e:
+            pytest.skip(f"symlink creation denied on this platform: {e}")
+
+        docs = load_corpus(str(corpus), extensions=[".md"])
+        sources = [source for source, _ in docs]
+        assert any("real.md" in s for s in sources)
+        assert any("alias.md" in s for s in sources)
+
+    def test_guard_branch_skips_entry_resolving_outside(self, tmp_path, monkeypatch, caplog):
+        """Platform-independent guard-branch check: Windows hosts without the
+        symlink privilege skip the tests above, so drive the guard's condition
+        directly — make a real corpus file's resolve() land outside the corpus
+        (exactly what an escaping symlink produces) and assert it is refused."""
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "real.md").write_text("real corpus content", encoding="utf-8")
+        planted = corpus / "planted.md"
+        planted.write_text("planted content", encoding="utf-8")
+        outside = tmp_path / "outside.md"
+
+        real_resolve = indexer.Path.resolve
+
+        def fake_resolve(self, *args, **kwargs):
+            if self == planted:
+                return outside
+            return real_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(indexer.Path, "resolve", fake_resolve)
+        with caplog.at_level("WARNING", logger="retrieval.indexer"):
+            docs = load_corpus(str(corpus), extensions=[".md"])
+
+        sources = [source for source, _ in docs]
+        assert any("real.md" in s for s in sources)
+        assert not any("planted.md" in s for s in sources)
+        assert any(
+            "planted.md" in rec.getMessage() and "outside corpus" in rec.getMessage()
+            for rec in caplog.records
+        ), f"no guard warning in: {[r.getMessage() for r in caplog.records]}"
 
 
 class TestBuildIndexObservability:

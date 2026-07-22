@@ -283,6 +283,52 @@ class TestApplyEvolutionInjectionGate:
         assert soul_path.read_text() == self.INJECTED
 
 
+class TestApplyEvolutionReasonGate:
+    """I5: apply_evolution is human-gated — an explicit, non-blank reason is
+    required before any file/DB write. An empty or whitespace-only reason must
+    be rejected before the scan/write path runs."""
+
+    @pytest.mark.parametrize("bad_reason", ["", "   ", "\t\n "])
+    def test_blank_reason_rejected_before_any_write(self, cfg, tmp_paths, bad_reason):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        with patch("utils.personality.audit_log"):
+            with pytest.raises(ValueError, match="reason must not be empty"):
+                pm.apply_evolution("# V2", bad_reason)
+
+        # Nothing was written: disk, in-memory, and version are all unchanged.
+        assert soul_path.read_text() == "# V1"
+        assert pm.soul_core == "# V1"
+        assert pm.get_version() == 1
+
+    def test_restore_from_backup_without_bak_raises(self, cfg, tmp_paths):
+        """restore_from_backup() with no .bak sibling must raise FileNotFoundError
+        and leave disk, in-memory state, and version untouched."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        assert not bak_path.exists()
+        with patch("utils.personality.audit_log"):
+            with pytest.raises(FileNotFoundError, match=r"No \.bak file found"):
+                pm.restore_from_backup()
+
+        assert soul_path.read_text() == "# V1"
+        assert pm.soul_core == "# V1"
+        assert pm.get_version() == 1
+
+
 class TestScannerUnification:
     """PR #99 #2: the soul scanner must use the config banned_patterns set
     (incl. the Memory/Persistence category), not only the legacy 13-pattern OWASP

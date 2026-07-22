@@ -22,6 +22,44 @@ from utils.errors import EmbeddingServiceError
 class TestRRFFusion:
     """Test Reciprocal Rank Fusion math independently."""
 
+    def test_real_fusion_path_combines_both_legs(self):
+        """Exercise the REAL HybridRetriever.hybrid_search fusion path.
+
+        The pure-math tests below recompute RRF on bare Python literals and
+        stay green even if the fusion formula in hybrid_search changes; this
+        test fails if the real formula drifts from 1/(rrf_k + rank) summed
+        across legs.
+        """
+        def hit(mode, chunk_id, leg_score):
+            return SearchResult(
+                text=f"t{chunk_id}", score=leg_score, source="s.md",
+                chunk_id=chunk_id, stem_tags=[], retrieval_mode=mode,
+            )
+
+        # Chunk 0 ranks first in BOTH legs; chunk 1 is semantic-only (rank 1).
+        sem = [hit("semantic", 0, 0.91), hit("semantic", 1, 0.80)]
+        kw = [hit("keyword", 0, 5.2)]
+        fake = SimpleNamespace(
+            rrf_k=60, top_k_semantic=5, top_k_keyword=5,
+            semantic_search=lambda q: sem,
+            keyword_search=lambda q: kw,
+        )
+        out = HybridRetriever.hybrid_search(fake, "q")
+
+        by_id = {r.chunk_id: r for r in out}
+        # Dual-leg hit: two RRF terms, merged as "hybrid", ranked first.
+        assert by_id[0].rrf_score == pytest.approx(1 / 60 + 1 / 60)
+        assert by_id[0].score == pytest.approx(by_id[0].rrf_score)
+        assert by_id[0].retrieval_mode == "hybrid"
+        assert by_id[0].rrf_semantic_contrib == pytest.approx(1 / 60)
+        assert by_id[0].rrf_keyword_contrib == pytest.approx(1 / 60)
+        assert by_id[0].semantic_rank == 0
+        assert by_id[0].keyword_rank == 0
+        # Single-leg hit: one RRF term at its own rank, outranked by the fused hit.
+        assert by_id[1].rrf_score == pytest.approx(1 / 61)
+        assert by_id[1].rrf_keyword_contrib is None
+        assert out[0].chunk_id == 0
+
     def test_rrf_score_calculation(self):
         """Verify RRF formula: 1 / (k + rank)"""
         k = 60
