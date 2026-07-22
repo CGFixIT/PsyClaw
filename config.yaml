@@ -318,10 +318,10 @@ logging:
   # are always written; there are no per-field include toggles.
   audit_fields:
     include_query_hash: true
-    include_top_score: true  #currently placeholders
-    include_retrieval_mode: true  #currently placeholders
-    include_online_escalated: true  #currently placeholders
-    include_model_used: true #currently placeholders
+    # include_top_score: true  #currently placeholders
+    # include_retrieval_mode: true  #currently placeholders
+    # include_online_escalated: true  #currently placeholders
+    # include_model_used: true #currently placeholders
 
 security:
   # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).
