@@ -31,7 +31,7 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 
 ### Python
 
-- **Default:** Python 3.12 (range: 3.10–3.13+)
+- **Default:** Python 3.12 (`requires-python: >=3.12,<3.13` — numpy 1.26.x has no cp313 wheels)
 - **Typing:** Fully annotated. `from __future__ import annotations` when supporting <3.10.
 - **Linting:** `ruff check` + `ruff format` (line-length 120, py312)
 - **Type Checking:** `mypy --strict --python-version 3.12`
