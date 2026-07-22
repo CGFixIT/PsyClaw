@@ -101,7 +101,17 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         return [HealthStatus(name="config", healthy=False, error=f"config load failed: {_safe_error(exc)}")]
 
     results = []
-    results.append(_ping(f"{llm_base}/models", "ollama"))
+    # Same model-pin drift guard as Grok/Claude: a healthy Ollama *endpoint*
+    # with a missing/renamed tag (config pins qwen2.5:7b but the operator never
+    # pulled it) would otherwise stay green until the first /query stalls or
+    # 4xxs. Only applied when models.local_llm.model is set; empty pin is a
+    # pure availability probe (backward compatible with minimal test fixtures).
+    local_model = cfg["models"]["local_llm"].get("model") or ""
+    results.append(_ping(
+        f"{llm_base}/models",
+        "ollama",
+        expect_model=local_model if local_model else None,
+    ))
     if (cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]
@@ -161,13 +171,16 @@ def _ping(url: str, name: str, headers: dict | None = None,
     # a runtime HTTP 4xx on the first live fallback — after the user already
     # confirmed the escalation. Checked only when the endpoint is up and the
     # body parses to the documented shape; an unparseable/odd body never fails
-    # an otherwise-healthy availability probe.
+    # an otherwise-healthy availability probe. An empty documented list is
+    # authoritative, though: it means the configured model is unavailable.
     if expect_model:
         try:
-            listed = {m.get("id") for m in resp.json().get("data", []) if isinstance(m, dict)}
-        except (ValueError, AttributeError):
-            listed = set()
-        if listed and expect_model not in listed:
+            payload = resp.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            listed = {m.get("id") for m in data if isinstance(m, dict)} if isinstance(data, list) else None
+        except ValueError:
+            listed = None
+        if listed is not None and expect_model not in listed:
             return HealthStatus(
                 name=name, healthy=False,
                 error=f"configured model '{expect_model}' not in provider /models list",

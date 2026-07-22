@@ -104,6 +104,18 @@ def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:
         load_agentic_config(_write_config(tmp_path, block))
 
 
+def test_deepagent_config_rejects_retired_lmstudio_provider(tmp_path: Path) -> None:
+    """Post-Ollama migration: the 'lmstudio' provider id is retired.
+
+    Operators still running LM Studio's OpenAI-compatible server should set
+    provider: openai_compatible (or ollama for Ollama itself). Accepting the
+    legacy label would silently disagree with shipped config comments.
+    """
+    block = _base_block(deepagent_github={"provider": "lmstudio"})
+    with pytest.raises(AgenticConfigError, match="ollama"):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
 def test_deepagent_config_rejects_workspace_escape(tmp_path: Path) -> None:
     block = _base_block(deepagent_github={"workspace_root": "data/../outside"})
     with pytest.raises(AgenticConfigError):
