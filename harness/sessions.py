@@ -30,6 +30,12 @@ _MAX_MESSAGES = 500  # bound per-session growth; oldest turns drop off first
 _TITLE_TS_FORMAT = "%Y-%m-%d %H:%M"
 _EXCERPT_CHARS = 80
 _SID_KEY = "session_id"
+# Everything get() must map to SessionStoreError so list() can skip corrupt
+# files instead of 500-ing the console listing: OSError/JSONDecodeError from
+# the read, and KeyError/TypeError/ValueError/AttributeError from
+# _session_from_dict on JSON that parses but isn't session-shaped (non-dict
+# payload, missing session_id, unexpected message keys).
+_CORRUPT_SESSION_ERRORS = (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError)
 
 
 class SessionStoreError(AgenticError):
@@ -131,14 +137,8 @@ class SessionStore:
         if not path.exists():
             raise SessionStoreError("unknown session", details={_SID_KEY: session_id})
         try:
-            parsed = json.loads(path.read_text(encoding=_UTF8))
-            return _session_from_dict(parsed)
-        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError) as exc:
-            # _session_from_dict raises KeyError/TypeError/ValueError/AttributeError
-            # on JSON that parses but isn't session-shaped (non-dict payload, missing
-            # session_id, unexpected message keys). Mapping them all to
-            # SessionStoreError is what lets list() actually skip corrupt files
-            # instead of 500-ing the console listing.
+            return _session_from_dict(json.loads(path.read_text(encoding=_UTF8)))
+        except _CORRUPT_SESSION_ERRORS as exc:
             raise SessionStoreError(f"unreadable session file: {path.name}") from exc
 
     def list(self) -> list[dict]:
