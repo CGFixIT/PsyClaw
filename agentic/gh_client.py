@@ -169,6 +169,13 @@ _READ_OPS = frozenset(
     {"pr_view", "pr_list", "pr_diff", "issue_view", "issue_list", "repo_view"}
 )
 
+# Hard ceilings on caller-tunable sizes. ``limit`` flows verbatim into
+# ``gh ... --limit`` argv, and a ``pr diff`` stdout flows whole into consumers
+# (CLI output, downstream harness context) -- cap both so a five-digit limit or
+# a multi-MB diff cannot blow up argv or downstream memory.
+MAX_LIST_LIMIT = 1000
+MAX_DIFF_CHARS = 200_000
+
 
 # A non-zero `gh` exit whose stderr matches this is a TRANSIENT network/server
 # condition worth retrying. Deterministic failures (404 not found, bad flag, auth)
@@ -234,7 +241,7 @@ def build_read_argv(
         ) from exc
 
     try:
-        safe_limit = str(int(limit))
+        safe_limit = str(min(int(limit), MAX_LIST_LIMIT))
     except (TypeError, ValueError) as exc:
         raise AgenticError(
             f"'limit' must be an integer, got {type(limit).__name__}: {limit!r}",
@@ -272,9 +279,10 @@ def run_read(
     """Run a read-only ``gh`` op and return a structured result dict.
 
     Verifies the gh version, resolves the binary to an absolute path, runs it
-    (argv list, no shell), and audits the call. ``pr_diff`` returns raw text under
-    ``{"diff": ...}``; the JSON ops return ``{"data": <parsed>}``. Raises
-    ``AgenticError`` on non-zero exit. Never raises with secret-bearing details.
+    (argv list, no shell), and audits the call. ``pr_diff`` returns text under
+    ``{"diff": ...}``, capped at ``MAX_DIFF_CHARS`` with a truncation marker;
+    the JSON ops return ``{"data": <parsed>}``. Raises ``AgenticError`` on
+    non-zero exit. Never raises with secret-bearing details.
 
     ``retries`` adds up to N extra attempts with exponential backoff, but ONLY on
     a transient failure: a timeout, or a non-zero exit whose stderr matches a
@@ -347,7 +355,10 @@ def run_read(
         )
 
     if op == "pr_diff":
-        return {"op": op, "repo": repo, "diff": completed.stdout}
+        diff = completed.stdout or ""
+        if len(diff) > MAX_DIFF_CHARS:
+            diff = diff[:MAX_DIFF_CHARS] + f"\n... [diff truncated at {MAX_DIFF_CHARS} chars]"
+        return {"op": op, "repo": repo, "diff": diff}
 
     try:
         data = json.loads(completed.stdout or "null")
