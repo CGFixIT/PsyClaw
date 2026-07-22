@@ -58,6 +58,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      with:
+        persist-credentials: false
 
     - name: Run Microsoft Security DevOps (Bandit for Python)
       uses: microsoft/security-devops-action@08976cb623803b1b36d7112d4ff9f59eae704de0  # v1.12.0
