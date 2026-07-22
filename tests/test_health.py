@@ -3,9 +3,10 @@
 health.py was previously only ever *mocked out* (``patch("gate.check_all")``
 in test_gate.py); none of its own branches were exercised directly:
   - ``_ping`` success vs. failure (and the URL-redaction on failure)
-  - ``check_all`` offline (LM Studio only) vs. hybrid (Grok) paths
+  - ``check_all`` offline (Ollama only) vs. hybrid (Grok) paths
   - the hybrid Grok key-set / key-missing split
   - the ``_health_cfg`` per-path parse cache
+  - the Ollama model-pin drift guard (mirrors Grok/Claude)
 
 All HTTP is mocked; no live service is required.
 """
@@ -29,7 +30,7 @@ _HOST_MODELS = "http://host/models"  # DevSkim: ignore DS137138
 
 
 def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
-               claude_enabled=False, claude_model=None):
+               claude_enabled=False, claude_model=None, local_model=None):
     grok_cfg = {"enabled": grok_enabled, "base_url": "https://api.x.ai/v1"}
     if grok_model is not None:
         grok_cfg["model"] = grok_model
@@ -37,10 +38,13 @@ def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
                   "anthropic_version": "2023-06-01"}
     if claude_model is not None:
         claude_cfg["model"] = claude_model
+    local_llm: dict = {"base_url": _OLLAMA_BASE}
+    if local_model is not None:
+        local_llm["model"] = local_model
     cfg = {
         "app": {"mode": mode},
         "models": {
-            "local_llm": {"base_url": _OLLAMA_BASE},
+            "local_llm": local_llm,
             "grok": grok_cfg,
             "claude": claude_cfg,
         },
@@ -123,6 +127,41 @@ class TestCheckAll:
         names = {s.name for s in statuses}
         assert names == {"ollama", "embeddings_local"}
         assert all(s.healthy for s in statuses)
+
+    def test_offline_ollama_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
+        # Mirror of the Grok/Claude model-pin guard for the local Ollama probe:
+        # when config pins a tag and /api-or-/v1/models lists it, ollama is healthy.
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        monkeypatch.setattr(
+            health, "_http_get",
+            lambda url, **kw: _ModelsResp(["qwen2.5:7b", "nomic-embed-text"]),
+        )
+        statuses = health.check_all(cfg_path)
+        ollama = next(s for s in statuses if s.name == "ollama")
+        assert ollama.healthy is True
+
+    def test_offline_ollama_missing_model_pin_reports_unhealthy(self, tmp_path, monkeypatch):
+        # Operator never pulled the configured tag: endpoint is up, model is not.
+        # Without this, /health stays green until the first /query fails.
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        monkeypatch.setattr(
+            health, "_http_get",
+            lambda url, **kw: _ModelsResp(["llama3.2:3b", "nomic-embed-text"]),
+        )
+        statuses = health.check_all(cfg_path)
+        ollama = next(s for s in statuses if s.name == "ollama")
+        assert ollama.healthy is False
+        assert "qwen2.5:7b" in ollama.error
+        assert "not in provider /models list" in ollama.error
+
+    def test_offline_ollama_unparseable_models_body_stays_healthy(self, tmp_path, monkeypatch):
+        # Same tolerance as Grok/Claude: an up endpoint with an odd body must
+        # not invent a new failure mode for the availability probe.
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
+        statuses = health.check_all(cfg_path)
+        ollama = next(s for s in statuses if s.name == "ollama")
+        assert ollama.healthy is True
 
     def test_hybrid_without_key_reports_key_not_set(self, tmp_path, monkeypatch):
         cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True)
