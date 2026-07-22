@@ -183,7 +183,7 @@ working as intended.
 ```bash
 python -m sync.cli setup             # validate config + write filter file + print OAuth steps
 python -m sync.cli setup --schedule  # also register the daily job in one shot
-python -m sync.cli sync --dry-run    # preview — nothing changes
+python -m sync.cli sync --dry-run    # preview — no corpus or remote changes
 python -m sync.cli sync              # live sync (pull by default)
 python -m sync.cli status            # current state + last schedule
 python -m sync.cli schedule          # (re-)register the daily job
@@ -192,6 +192,14 @@ python -m sync.cli unschedule        # remove the daily job
 
 Sync is invoked **only** via `python -m sync.cli`; it is never imported by the
 gateway or the graph.
+
+A `--dry-run` preview touches no corpus or remote content, but it still writes
+the support files the preview itself needs: the rclone filter file (the
+preview's `--filter-from` input — a stale or missing one would make the
+preview wrong), the rclone log under `log_dir`, and the single-instance
+`sync.lock` (held so a preview can never run concurrently with a real sync).
+It emits **no** audit rows: nothing changed, so `logs/audit.jsonl` stays a
+record of real syncs only.
 
 ### Exit codes
 
@@ -297,9 +305,11 @@ accidentally re-include something the hardened rules already excluded.
 
 ## Audit events
 
-Every sync run emits these into `logs/audit.jsonl` via `utils.logger.audit_log()`
-— the same path the gateway uses, with the same PII redaction. Only metadata is
-logged; never a token and never raw rclone stderr that could echo a secret.
+Every real (non-dry-run) sync run emits these into `logs/audit.jsonl` via
+`utils.logger.audit_log()` — the same path the gateway uses, with the same PII
+redaction. Only metadata is logged; never a token and never raw rclone stderr
+that could echo a secret. A `--dry-run` preview emits none of these rows (its
+events describe what rclone *would* copy, not what changed).
 
 | Event | When | Key fields |
 |---|---|---|
