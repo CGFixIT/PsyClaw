@@ -705,7 +705,9 @@ def user_gate_router(
     confirmed = state.get("user_confirmed_online")
 
     if confirmed is None:
-        # Pause state — gate.py will return 202 and await /confirm
+        # Pause state — gate.py returns 200 with needs_confirm=True and a
+        # confirm_message; the client re-POSTs /query with
+        # user_confirmed_online set (there is no 202 or /confirm endpoint).
         return "audit_logger"
 
     if not confirmed:
@@ -807,6 +809,12 @@ def build_graph(
     graph.add_edge("local_llm", "audit_logger")
 
     # user_gate → grok_fallback | offline_best_effort | audit_logger (conditional)
+    # KNOWN GAP: offline_best_effort bypasses guardrail_input — the offline
+    # input rail covers only the high-score route above. A low-score or
+    # declined-escalation injection-pattern query reaches the local LLM
+    # un-railed while a high-score twin is blocked. Closing this needs
+    # guardrail_router to learn the offline target — a maintainer design
+    # decision, flagged in the linked PR.
     graph.add_conditional_edges(
         "user_gate",
         partial(user_gate_router, grok=grok, claude=claude),
