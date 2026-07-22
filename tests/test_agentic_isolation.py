@@ -41,6 +41,36 @@ def test_request_path_does_not_import_agentic(module_file):
     )
 
 
+@pytest.mark.parametrize("planted_source", [
+    "import agentic\n",
+    "from agentic import fsconnect\n",
+    "import os, agentic.fsconnect\n",
+])
+def test_guard_flags_planted_agentic_import(tmp_path, planted_source):
+    # Negative self-test: if _imports() ever stopped detecting an `import agentic`
+    # (or was weakened to a no-op), test_request_path_does_not_import_agentic
+    # would green on a real violation. Feed the guard a planted temp file and
+    # assert the flag actually fires.
+    planted = tmp_path / "gate.py"
+    planted.write_text(planted_source, encoding="utf-8")
+    imported = _imports(planted.read_text(encoding="utf-8"))
+    assert "agentic" in imported, (
+        f"guard is blind: a planted {planted_source.strip()!r} must be flagged"
+    )
+
+
+def test_reverse_guard_flags_planted_request_path_import(tmp_path):
+    # Symmetric negative self-test for test_agentic_does_not_import_request_path:
+    # a planted agentic-side module importing gate/graph must trip the forbidden set.
+    forbidden = {"gate", "graph", "mcp_hybrid_server"}
+    planted = tmp_path / "agentic_probe.py"
+    planted.write_text("import gate\nfrom graph import build_graph\n", encoding="utf-8")
+    leaked = forbidden & _imports(planted.read_text(encoding="utf-8"))
+    assert leaked == {"gate", "graph"}, (
+        f"guard is blind: planted request-path imports must be flagged, got {leaked}"
+    )
+
+
 def test_agentic_does_not_import_request_path():
     # Symmetric guard: agentic must not pull in gate/graph/mcp either. rglob so the
     # out-of-band sub-packages (agentic/fsconnect, agentic/sqlconnect) are covered too.
