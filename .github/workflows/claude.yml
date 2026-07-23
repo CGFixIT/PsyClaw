@@ -20,11 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Only you can trigger this, and only on open Pull Requests
+    # Only the repository owner can trigger this, and only on open Pull Requests
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@claude') &&
-      github.event.comment.user.login == 'CGFixIT' &&
+      github.event.comment.user.login == github.repository_owner &&
       github.event.issue.state == 'open'
 
     permissions:
