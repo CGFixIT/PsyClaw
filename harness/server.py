@@ -67,7 +67,7 @@ def _llm_settings() -> dict:
     return models.get("local_llm", {}) if isinstance(models, dict) else {}
 
 
-def _resolve_backend(llm: dict) -> ResolvedLocalBackend:
+def _resolve_backend() -> ResolvedLocalBackend:
     """Route the console through the same primary/fallback resolution gate.py
     uses (llm.client.resolve_local_backend), so that when fallback.enabled is
     true and the primary (Ollama) is down, chat targets the live backend (LM
@@ -75,6 +75,7 @@ def _resolve_backend(llm: dict) -> ResolvedLocalBackend:
     (the shipped default) this returns the primary with no network probe. An
     empty/unreadable config degrades to the Ollama default rather than failing
     app build, preserving the previous hardcoded-default behavior."""
+    llm = _llm_settings()
     if not str(llm.get("base_url") or "").strip():
         return ResolvedLocalBackend(
             provider="ollama",
@@ -83,6 +84,17 @@ def _resolve_backend(llm: dict) -> ResolvedLocalBackend:
             source="primary",
         )
     return resolve_local_backend(llm)
+
+
+def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
+    """Chat client for the resolved backend (tests inject their own instead)."""
+    llm = _llm_settings()
+    return HarnessChatClient(
+        base_url=backend.base_url,
+        model=backend.model,
+        timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
+        api_key=backend.api_key,
+    )
 
 
 def _err(status: int, exc: AgenticError) -> HTTPException:
@@ -95,14 +107,8 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     cfg = config or HarnessConfig.load()
     store = SessionStore(cfg.sessions_dir)
 
-    llm = _llm_settings()
-    backend = _resolve_backend(llm)
-    client = chat_client or HarnessChatClient(
-        base_url=backend.base_url,
-        model=backend.model,
-        timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
-        api_key=backend.api_key,
-    )
+    backend = _resolve_backend()
+    client = chat_client or _default_chat_client(backend)
 
     app = FastAPI(title="CyClaw Harness", version=_HARNESS_VERSION)
 
@@ -208,6 +214,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             if msg.role in {"user", "assistant"}
         ]
         history.append({"role": "user", "content": req.message})
+        llm = _llm_settings()
         try:
             reply = client.chat(
                 system_prompt=system_prompt,
