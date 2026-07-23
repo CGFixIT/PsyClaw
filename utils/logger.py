@@ -1,9 +1,12 @@
 """Append-only audit logging with query hashing and privacy redaction,
 plus standard Python logging setup for operational diagnostics.
 
-Every query, miss, escalation, and error gets a JSONL line.
-Query text is SHA256-hashed to prevent the audit log from becoming
-a data exfiltration vector.
+Every query, miss, escalation, and error gets a JSONL line. When
+logging.audit_fields.include_query_hash is true (the shipped default),
+query text is SHA256-hashed so the audit log cannot become a data
+exfiltration vector; setting that toggle false stores the raw query text
+(PII redaction still applies) and is privacy-affecting — see config.yaml
+logging.audit_fields and the invariant in tests/test_due_diligence_invariants.py.
 """
 
 import atexit

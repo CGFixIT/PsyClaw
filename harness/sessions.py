@@ -89,6 +89,16 @@ class Session:
         }
 
 
+def _safe_mtime(path: Path) -> float:
+    """mtime for the listing sort, tolerating a file deleted between the glob
+    and the sort (otherwise the OSError escapes list()'s per-file skip loop and
+    500s /api/sessions — the exact failure that loop exists to prevent)."""
+    try:
+        return getmtime(path)
+    except OSError:
+        return 0.0
+
+
 def _session_path(sessions_dir: Path, session_id: str) -> Path:
     if not _ID_RE.match(session_id):
         raise SessionStoreError("invalid session id", details={_SID_KEY: session_id})
@@ -144,7 +154,7 @@ class SessionStore:
     def list(self) -> list[dict]:
         summaries: list[dict] = []
         paths = list(self._dir.glob("*.json"))
-        paths.sort(key=getmtime, reverse=True)
+        paths.sort(key=_safe_mtime, reverse=True)
         for path in paths:
             try:
                 summaries.append(self.get(path.stem).summary())
