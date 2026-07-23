@@ -121,7 +121,7 @@ class HarnessChatClient:
             resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=auth)
         except httpx.HTTPError as exc:
             raise HarnessLLMError(
-                "model server unreachable — is Ollama running?",
+                "local model server unreachable — check that it is running",
                 details={"base_url": self.base_url, "error": str(exc)},
             ) from exc
         if resp.status_code != _HTTP_OK:

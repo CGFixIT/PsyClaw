@@ -34,6 +34,7 @@ from harness.schemas import (
     SoulToggleRequest,
 )
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
+from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.errors import AgenticError
 from utils.logger import _get_config
 from utils.ops_runner import OpsError, run_agentic_op
@@ -66,6 +67,24 @@ def _llm_settings() -> dict:
     return models.get("local_llm", {}) if isinstance(models, dict) else {}
 
 
+def _resolve_backend(llm: dict) -> ResolvedLocalBackend:
+    """Route the console through the same primary/fallback resolution gate.py
+    uses (llm.client.resolve_local_backend), so that when fallback.enabled is
+    true and the primary (Ollama) is down, chat targets the live backend (LM
+    Studio) exactly like /query and /health already do. With fallback disabled
+    (the shipped default) this returns the primary with no network probe. An
+    empty/unreadable config degrades to the Ollama default rather than failing
+    app build, preserving the previous hardcoded-default behavior."""
+    if not str(llm.get("base_url") or "").strip():
+        return ResolvedLocalBackend(
+            provider="ollama",
+            base_url="http://127.0.0.1:11434/v1",
+            model="",
+            source="primary",
+        )
+    return resolve_local_backend(llm)
+
+
 def _err(status: int, exc: AgenticError) -> HTTPException:
     detail = {"code": exc.code, "message": exc.message, "details": exc.details}
     return HTTPException(status_code=status, detail=detail)
@@ -77,17 +96,18 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     store = SessionStore(cfg.sessions_dir)
 
     llm = _llm_settings()
+    backend = _resolve_backend(llm)
     client = chat_client or HarnessChatClient(
-        base_url=str(llm.get("base_url", "http://127.0.0.1:11434/v1")),
-        model=str(llm.get("model", "")),
+        base_url=backend.base_url,
+        model=backend.model,
         timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
-        api_key=str(llm.get("api_key", "") or ""),
+        api_key=backend.api_key,
     )
 
     app = FastAPI(title="CyClaw Harness", version=_HARNESS_VERSION)
 
     def _current_model() -> str:
-        return cfg.selected_model or str(llm.get("model", ""))
+        return cfg.selected_model or backend.model
 
     # -- console -------------------------------------------------------
     @app.get("/", response_class=FileResponse)
@@ -102,8 +122,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return {
             "version": _HARNESS_VERSION,
             _MODEL_KEY: _current_model(),
-            "provider": llm.get("provider", "ollama"),
-            "base_url": llm.get("base_url", ""),
+            # resolved (active) backend, not the raw config primary — when
+            # fallback is live these are what chat actually talks to
+            "provider": backend.provider,
+            "base_url": backend.base_url,
             "soul_enabled": cfg.soul_enabled,
             "home": str(cfg.home),
             "repo_root": str(cfg.repo_root),
