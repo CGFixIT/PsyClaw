@@ -1,8 +1,10 @@
 """JSON-backed chat session store with per-session token tallies.
 
 One file per session under ``~/.CyClaw/sessions/``. Every LLM exchange records
-Ollama's ``prompt_eval_count`` / ``eval_count`` so the console can show a
-running tally (the grok-build style "tokens in/out" readout). Files are small
+the ``usage.prompt_tokens`` / ``usage.completion_tokens`` counts from the
+OpenAI-compatible ``/v1`` endpoint (see ``harness/ollama.py`` for why that
+surface, not the native Ollama API) so the console can show a running tally
+(the grok-build style "tokens in/out" readout). Files are small
 and human-inspectable; writes are atomic (staged file + os.replace), matching
 the repo's soul/registry durability pattern.
 """
@@ -28,6 +30,12 @@ _MAX_MESSAGES = 500  # bound per-session growth; oldest turns drop off first
 _TITLE_TS_FORMAT = "%Y-%m-%d %H:%M"
 _EXCERPT_CHARS = 80
 _SID_KEY = "session_id"
+# Everything get() must map to SessionStoreError so list() can skip corrupt
+# files instead of 500-ing the console listing: OSError/JSONDecodeError from
+# the read, and KeyError/TypeError/ValueError/AttributeError from
+# _session_from_dict on JSON that parses but isn't session-shaped (non-dict
+# payload, missing session_id, unexpected message keys).
+_CORRUPT_SESSION_ERRORS = (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError)
 
 
 class SessionStoreError(AgenticError):
@@ -129,10 +137,9 @@ class SessionStore:
         if not path.exists():
             raise SessionStoreError("unknown session", details={_SID_KEY: session_id})
         try:
-            parsed = json.loads(path.read_text(encoding=_UTF8))
-        except (OSError, json.JSONDecodeError) as exc:
+            return _session_from_dict(json.loads(path.read_text(encoding=_UTF8)))
+        except _CORRUPT_SESSION_ERRORS as exc:
             raise SessionStoreError(f"unreadable session file: {path.name}") from exc
-        return _session_from_dict(parsed)
 
     def list(self) -> list[dict]:
         summaries: list[dict] = []
