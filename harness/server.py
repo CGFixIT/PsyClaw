@@ -214,14 +214,15 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             if msg.role in {"user", "assistant"}
         ]
         history.append({"role": "user", "content": req.message})
-        llm = _llm_settings()
         try:
             reply = client.chat(
                 system_prompt=system_prompt,
                 messages=history,
                 model=req.model or None,
-                max_tokens=int(llm.get("max_tokens", _DEFAULT_MAX_TOKENS)),
-                temperature=float(llm.get("temperature", _DEFAULT_TEMPERATURE)),
+                # _llm_settings() is lru-cached upstream, so the per-request
+                # inline reads cost a dict lookup, not a config re-parse
+                max_tokens=int(_llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)),
+                temperature=float(_llm_settings().get("temperature", _DEFAULT_TEMPERATURE)),
             )
         except HarnessLLMError as exc:
             raise _err(_HTTP_BAD_GATEWAY, exc) from exc
