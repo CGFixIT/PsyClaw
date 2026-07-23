@@ -188,6 +188,14 @@ def _write_body(body: str) -> str:
     )
     try:
         handle.write(body)
+    except (OSError, UnicodeError):
+        # The file already exists on disk; run_agentic_op only unlinks the name
+        # we RETURN, so a write failure here (disk full, un-encodable body) would
+        # orphan a cyclaw_skill_*.md. Close first (Windows can't unlink an open
+        # file), then remove it, before the exception propagates.
+        handle.close()
+        Path(handle.name).unlink(missing_ok=True)
+        raise
     finally:
         handle.close()
     return handle.name
