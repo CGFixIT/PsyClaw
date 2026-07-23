@@ -35,7 +35,6 @@ from utils.errors import AgenticError
 logger = logging.getLogger("cyclaw.harness.config")
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_SKILLS_SRC = _REPO_ROOT / ".claude" / "skills"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8790
