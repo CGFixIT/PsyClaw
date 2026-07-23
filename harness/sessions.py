@@ -16,6 +16,7 @@ import re
 import threading
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from os.path import getmtime
 from pathlib import Path
@@ -89,16 +90,6 @@ class Session:
         }
 
 
-def _safe_mtime(path: Path) -> float:
-    """mtime for the listing sort, tolerating a file deleted between the glob
-    and the sort (otherwise the OSError escapes list()'s per-file skip loop and
-    500s /api/sessions — the exact failure that loop exists to prevent)."""
-    try:
-        return getmtime(path)
-    except OSError:
-        return 0.0
-
-
 def _session_path(sessions_dir: Path, session_id: str) -> Path:
     if not _ID_RE.match(session_id):
         raise SessionStoreError("invalid session id", details={_SID_KEY: session_id})
@@ -154,7 +145,12 @@ class SessionStore:
     def list(self) -> list[dict]:
         summaries: list[dict] = []
         paths = list(self._dir.glob("*.json"))
-        paths.sort(key=_safe_mtime, reverse=True)
+        # tolerate a file deleted between the glob and the sort: getmtime would
+        # otherwise raise OSError straight out of this listing path, which the
+        # per-file skip loop below deliberately guards against. On the race the
+        # list stays a full permutation of the survivors, just not fully ordered.
+        with suppress(OSError):
+            paths.sort(key=getmtime, reverse=True)
         for path in paths:
             try:
                 summaries.append(self.get(path.stem).summary())
