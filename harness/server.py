@@ -21,6 +21,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
 from harness.ollama import HarnessChatClient, HarnessLLMError
@@ -56,6 +57,13 @@ _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
 _MODEL_KEY = "model"
+# Loopback allow-list, enforced at BOTH the bind (main) and the Host header
+# (TrustedHostMiddleware). Deliberately loopback-only — tighter than gate.py's
+# LAN-inclusive CORS list — because the harness is a single-operator console
+# that refuses any non-loopback bind. The Host check is the DNS-rebinding
+# defense gate.py added for the same threat model (a rebinding page can drive
+# a loopback server's state-changing POSTs even though CORS blocks reads).
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 def _llm_settings() -> dict:
@@ -111,6 +119,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     client = chat_client or _default_chat_client(backend)
 
     app = FastAPI(title="CyClaw Harness", version=_HARNESS_VERSION)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
 
     def _current_model() -> str:
         return cfg.selected_model or backend.model
@@ -278,7 +287,7 @@ def main() -> None:
 
     cfg = HarnessConfig.load()
     host = os.environ.get("CYCLAW_HARNESS_HOST", cfg.host)
-    if host not in {"127.0.0.1", "localhost", "::1"}:
+    if host not in _LOOPBACK_HOSTS:
         sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
     port = int(port_env) if port_env.isdigit() else cfg.port

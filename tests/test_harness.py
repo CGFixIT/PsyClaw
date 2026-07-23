@@ -45,7 +45,9 @@ def client(cfg):
     chat = HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
     )
-    return TestClient(create_app(cfg, chat))
+    # base_url sets the Host header to an allowed loopback host; the default
+    # "testserver" is now rejected by TrustedHostMiddleware (see the rebinding test).
+    return TestClient(create_app(cfg, chat), base_url="http://127.0.0.1")
 
 
 # -- config ---------------------------------------------------------------------
@@ -209,7 +211,7 @@ def test_console_follows_local_backend_fallback(cfg, monkeypatch):
     )
     llm_client.reset_local_backend_cache()
     try:
-        data = TestClient(create_app(cfg)).get("/api/status").json()
+        data = TestClient(create_app(cfg), base_url="http://127.0.0.1").get("/api/status").json()
     finally:
         llm_client.reset_local_backend_cache()
     assert data["provider"] == "lmstudio"
@@ -220,6 +222,21 @@ def test_console_follows_local_backend_fallback(cfg, monkeypatch):
 def test_registry_endpoint(client):
     data = client.get("/api/registry").json()
     assert any(s["name"] == "ponytail" for s in data["skills"])
+
+
+def test_rejects_non_loopback_host_header(cfg):
+    """DNS-rebinding defense: a request whose Host header is not a loopback host
+    is rejected by TrustedHostMiddleware before reaching a state-changing route,
+    mirroring gate.py's protection for the same single-operator threat model."""
+    rebind = TestClient(create_app(cfg, _loopback_chat()), base_url="http://attacker.example")
+    assert rebind.get("/api/status").status_code == 400
+    assert rebind.post("/api/soul", json={"enabled": False}).status_code == 400
+
+
+def _loopback_chat() -> HarnessChatClient:
+    return HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+    )
 
 
 def test_soul_toggle_persists(client, cfg):
