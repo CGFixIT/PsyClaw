@@ -418,7 +418,7 @@ agentic:
   deepagent_github:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
-    base_url: "http://localhost:11434/v1"        # local Ollama OpenAI-compatible endpoint
+    base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
     model: ""
     allow_deepagents_dependency: false           # extras must be installed explicitly
     allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
