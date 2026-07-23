@@ -55,14 +55,15 @@ testpaths = ["tests"]
 addopts = "-q --tb=short"
 
 [tool.coverage.run]
-source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails"]
+source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness"]
 # fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
 # Windows branch needs a separate Windows CI lane (deferred -- see
 # docs/agentic/FSCONNECT_SQL_ROADMAP.md, FS Phase 4). Their tests run on Linux CI for
 # correctness, but the per-OS coverage gate is unmeasurable on Windows (the POSIX
 # paths skip there), so they are omitted from the coverage metric until that lane
-# exists. Re-include them once Windows coverage is wired. "harness" is intentionally
-# absent from source above: ci.yml has no matching --cov=harness flag (dep-guard D10).
+# exists. Re-include them once Windows coverage is wired. "harness" here is paired
+# with --cov=harness in ci.yml and python-package-conda.yml (dep-guard D10 checks
+# the pairing); tests/test_harness.py measured it at 85% standalone (2026-07-22).
 omit = ["tests/*", "*/test_*", "*/__pycache__/*", "agentic/fsconnect/*", "agentic/sqlconnect/*"]
 
 [tool.coverage.report]
