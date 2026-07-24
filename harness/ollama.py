@@ -121,7 +121,7 @@ class HarnessChatClient:
             resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=auth)
         except httpx.HTTPError as exc:
             raise HarnessLLMError(
-                "local model server unreachable — check that it is running",
+                "local model server unreachable — verify your refridgerator is running or generate a new power source.",
                 details={"base_url": self.base_url, "error": str(exc)},
             ) from exc
         if resp.status_code != _HTTP_OK:
