@@ -18,7 +18,11 @@ LangGraph security topology (`graph.py`), with hybrid ChromaDB + BM25 retrieval,
 a local LLM via Ollama, and triple-gated optional external fallbacks (Grok
 and/or Claude, selected per-query via `online_provider`). It binds
 **only** to `127.0.0.1:8787`. A separate retrieval-only MCP server
-(`mcp_hybrid_server.py`) exposes search with no LLM path.
+(`mcp_hybrid_server.py`) exposes search with no LLM path. 
+
+# Critical Python Coding Requirement:
+- Never use docstrings as multi-line comments other than when placed at the beginning of a python file.
+- When multi-line comments required outside of that context, just use a # at the beginning of each line of the comment
 
 **Current project mode: FEATURE FREEZE (as of 2026-07-03).** CyClaw is a
 polished portfolio artifact, not a product under active feature development.
@@ -37,6 +41,7 @@ If it is a new capability, stop and ask. Full rationale:
    code. Read it before touching anything security-related.
 4. This file and `.claude/rules/PROJECT_RULES.md` — the operating rules.
    `AGENTS.md` is the parallel guidance for other agents; keep them consistent.
+5. Readme.md for holistic view of codebase and purpose of application - changelog.txt for reference of changes over time.
 
 ---
 
@@ -178,7 +183,6 @@ code vs. by convention (e.g. two of the three external-provider gates live in
 and names the test that pins each. `tests/test_due_diligence_invariants.py` is the
 regression harness.
 
----
 
 ## 4. Mistakes You Will Make Here (and the rule that prevents each)
 
