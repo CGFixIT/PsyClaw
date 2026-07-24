@@ -84,7 +84,6 @@ def _resolve_backend() -> ResolvedLocalBackend:
             source="primary",
         )
     return resolve_local_backend(llm)
-    # Only add -Instruct at the end of model= when making fallback.enabled=true to use lm studio - also change in config.yaml 
 
 
 def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
