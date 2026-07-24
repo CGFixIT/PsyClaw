@@ -28,6 +28,7 @@
 - [Filesystem & SQL Connectors](#filesystem--sql-connectors-v18)
 - [NeMo Guardrails](#nemo-guardrails-v18)
 - [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
+- [PowerShell Coding Harness](#powershell-coding-harness-v19)
 - [MCP Server](#mcp-server)
 - [Security Model](#security-model)
 - [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
@@ -47,6 +48,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13); phase 9 is the terminal security gate, so real writes stay disabled by design
+10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
 
 ---
 
@@ -397,6 +399,18 @@ CyClaw/
 │   ├── rails.py                # offline heuristic rails (injection/soul/grounding)
 │   ├── metrics.py              # separate logs/guardrails.jsonl stream (hashes only)
 │   └── config/                 # NeMo config.yml + rails.co (Colang flows)
+├── harness/                    # (v1.9) PowerShell coding-harness console (out-of-band)
+│   ├── server.py               # FastAPI control plane, 127.0.0.1:8790 (cyclaw-harness)
+│   ├── sessions.py             # JSON session store with per-session token tallies
+│   ├── ollama.py               # loopback-only OpenAI-compatible /v1 chat client
+│   ├── config.py               # %USERPROFILE%\.CyClaw home layout + config.json
+│   ├── prompts.py              # system prompt from ponytail + karpathy skills (+ soul, read-only)
+│   ├── registry_view.py        # merged skills/tools/connectors view (AST-parses MCP tools)
+│   └── schemas.py              # request models
+├── powershell/                 # Windows installer/launcher for the harness
+│   ├── Install-CyClaw.ps1      # home + venv + PATH shim + profile function
+│   ├── Invoke-CyClaw.ps1
+│   └── Uninstall-CyClaw.ps1
 ├── .claude/                    # local operator workflows and prompts
 │   ├── commands/
 │   ├── hooks/
@@ -656,6 +670,34 @@ agentic:
     require_human_confirm_for_accept: true
     allow_local_model_judge: false
 ```
+
+---
+
+## PowerShell Coding Harness (v1.9)
+
+A grok-build-style local coding console for Windows 10/11 and Server 2019–2022,
+shipped as the strictly out-of-band `harness/` package (merged 2026-07-22). Like
+`agentic/`, `sync/`, and `guardrails/`, it is never imported by `gate.py`,
+`graph.py`, or `mcp_hybrid_server.py` and never imports them (invariant I6).
+
+- **Launch:** `cyclaw-harness` (or `python -m harness.server`) serves a
+  slash-command console at `http://127.0.0.1:8790` (`static/harness.html`);
+  loopback-only bind, non-loopback hosts refused. `gate.py` keeps `:8787`.
+- **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
+  sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
+  a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
+- **Chat:** talks to the local model through the OpenAI-compatible `/v1`
+  endpoint from `config.yaml`'s `models.local_llm.base_url` (Ollama by
+  default) — no keys, no login, offline. Every reply shows prompt/completion
+  token counts; sessions persist as human-inspectable JSON with atomic writes.
+- **Reuse, not duplication:** GitHub actions go through the same
+  `utils.ops_runner` subprocess shim as `/ops/agentic` (read mode by default);
+  the skills/tools/connectors panes are read-only registry views; the system
+  prompt is composed from the repo's own `ponytail` + `karpathy-guidelines`
+  skills, with the governed soul appended read-only when enabled.
+
+Full setup, slash-command reference, home layout, and security posture:
+[`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md).
 
 ---
 
