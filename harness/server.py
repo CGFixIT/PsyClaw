@@ -80,7 +80,7 @@ def _resolve_backend() -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
             provider="ollama",
             base_url="http://127.0.0.1:11434/v1",
-            model="",
+            model="qwen2.5:7b-instruct",
             source="primary",
         )
     return resolve_local_backend(llm)
