@@ -184,6 +184,39 @@ def test_status_endpoint(client, cfg):
     assert "skills" in data["layout"]
 
 
+def test_console_follows_local_backend_fallback(cfg, monkeypatch):
+    """Regression: create_app read models.local_llm directly, bypassing
+    llm.client.resolve_local_backend — so with fallback.enabled true and the
+    primary (Ollama) down, /query and /health switched to the fallback (LM
+    Studio) but the console still targeted the dead primary."""
+    import llm.client as llm_client
+
+    llm_cfg = {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:7b",
+        "provider": "ollama",
+        "fallback": {
+            "enabled": True,
+            "provider": "lmstudio",
+            "base_url": "http://127.0.0.1:1234/v1",
+            "model": "my-lmstudio-model",
+        },
+    }
+    monkeypatch.setattr(harness_server, "_llm_settings", lambda: llm_cfg)
+    # primary probe fails, fallback probe succeeds
+    monkeypatch.setattr(
+        llm_client, "_probe_openai_models", lambda base_url, **kw: ":1234" in base_url
+    )
+    llm_client.reset_local_backend_cache()
+    try:
+        data = TestClient(create_app(cfg)).get("/api/status").json()
+    finally:
+        llm_client.reset_local_backend_cache()
+    assert data["provider"] == "lmstudio"
+    assert data["base_url"] == "http://127.0.0.1:1234/v1"
+    assert data["model"] == "my-lmstudio-model"
+
+
 def test_registry_endpoint(client):
     data = client.get("/api/registry").json()
     assert any(s["name"] == "ponytail" for s in data["skills"])
