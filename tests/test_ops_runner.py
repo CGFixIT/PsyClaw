@@ -199,6 +199,36 @@ def test_agentic_apply_body_file_cleaned_up_when_run_raises(monkeypatch: pytest.
     assert not Path(body_file).exists()
 
 
+class _WriteFailsHandle:
+    """Stand-in for NamedTemporaryFile whose .write raises after the on-disk
+    file already exists — the exact orphan scenario _write_body must clean up."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def write(self, body: str) -> None:
+        raise OSError("disk full")
+
+    def close(self) -> None:
+        pass
+
+
+def test_write_body_unlinks_temp_file_when_write_fails(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    # _write_body creates the temp file BEFORE writing; run_agentic_op only unlinks
+    # the name _write_body RETURNS, so a mid-write failure must remove its own
+    # orphan here or it leaks a cyclaw_skill_*.md into the OS temp dir.
+    from pathlib import Path
+
+    orphan = tmp_path / "cyclaw_skill_boom.md"
+    orphan.write_text("stale", encoding="utf-8")  # simulate the created-but-unwritten temp file
+    monkeypatch.setattr(
+        ops_runner.tempfile, "NamedTemporaryFile", lambda *a, **k: _WriteFailsHandle(str(orphan))
+    )
+    with pytest.raises(OSError):
+        ops_runner._write_body("# body")
+    assert not orphan.exists()
+
+
 def test_agentic_apply_no_confirm_omits_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     runner, captured = _fake_run(returncode=4, stderr="apply-skill requires --confirm")
     monkeypatch.setattr(ops_runner, "_run", runner)
