@@ -75,4 +75,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # "127.0.0.1:8787:8787" publish (the loopback invariant lives at the host
 # boundary); TrustedHostMiddleware additionally rejects non-allow-listed
 # Host headers. Port 8787 matches config.yaml api.port.
-CMD ["uvicorn", "gate:app", "--host", "0.0.0.0", "--port", "8787", "--log-level", "info"]
+# --no-proxy-headers mirrors gate.py's uvicorn.run(proxy_headers=False): without
+# it a spoofed X-Forwarded-For rewrites the client IP the rate limiter keys on.
+CMD ["uvicorn", "gate:app", "--host", "0.0.0.0", "--port", "8787", "--no-proxy-headers", "--log-level", "info"]
