@@ -11,6 +11,7 @@ every chunk at index time) does not recompile regexes on each call.
 
 import logging
 import re
+import unicodedata
 from functools import lru_cache
 from pathlib import Path
 from re import Pattern
@@ -33,6 +34,28 @@ _DEFAULT_MAX_INPUT_CHARS = 4000
 # prevent. Anchoring here keeps the injection filter CWD-independent like the
 # rest of the config readers.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Zero-width and format characters: they render as nothing, but dropped INSIDE
+# a word they break the regex while leaving the text perfectly readable to the
+# model -- "ig<ZWSP>nore all previous instructions" matches no pattern, yet
+# tokenizes back to the instruction it spells. Deleting them (rather than
+# replacing with a space) is what rejoins the split word.
+# Covers zero-width space/non-joiner/joiner, the LTR/RTL marks, word joiner,
+# BOM, and soft hyphen.
+_INVISIBLE_CHARS = re.compile(r"[​-‏⁠﻿­]")
+
+
+def _normalize_for_match(text: str) -> str:
+    # Match against a normalized COPY so the pattern list doesn't have to
+    # enumerate every Unicode spelling of the same phrase. NFKC folds
+    # compatibility forms back to ASCII, so fullwidth
+    # "ｉｇｎｏｒｅ ａｌｌ ｐｒｅｖｉｏｕｓ ｉｎｓｔｒｕｃｔｉｏｎｓ" collapses onto
+    # the plain form the patterns already catch; stripping the invisible
+    # characters closes the zero-width-splitting variant. Both transforms only
+    # ever fold text TOWARD the ASCII the patterns are written in, so the
+    # normalized copy matches a superset of what the raw string would — this
+    # cannot silently stop catching something that used to be caught.
+    return _INVISIBLE_CHARS.sub("", unicodedata.normalize("NFKC", text))
 
 
 def _resolve_config_path(config_path: str) -> Path:
@@ -70,7 +93,10 @@ def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
     compiled = []
     for idx, p in enumerate(pf.get("banned_patterns", [])):
         try:
-            compiled.append(re.compile(p, re.IGNORECASE))
+            # DOTALL so a pattern whose halves straddle a newline still matches:
+            # without it 'maintenance\s+mode.*safety\s+filters\s+disabled' is
+            # defeated by putting the two halves on separate lines.
+            compiled.append(re.compile(p, re.IGNORECASE | re.DOTALL))
         except re.error as exc:
             logger.warning(
                 "banned_patterns entry #%d in %s failed to compile (%s); it is "
@@ -106,8 +132,9 @@ def check_input(query: str, config_path: str = "config.yaml") -> str:
             details={"length": len(query), "max": max_chars},
         )
 
+    probe = _normalize_for_match(query)
     for pattern in patterns:
-        if pattern.search(query):
+        if pattern.search(probe):
             raise PromptInjectionError(
                 "Potential prompt injection detected",
                 details={},
@@ -125,6 +152,14 @@ def sanitize_chunk(text: str, config_path: str = "config.yaml") -> str:
     if not enabled:
         return text
 
+    # Deliberately NOT normalized the way check_input is. check_input only TESTS
+    # its input, so it can match against a folded copy and still hand the caller
+    # back the original. This function SUBSTITUTES and its return value is what
+    # gets stored in the index, so matching against a normalized copy would mean
+    # either writing the normalized text into the corpus (silently rewriting
+    # documents at ingestion) or mapping offsets back to the raw string. Chunks
+    # are author-controlled corpus content rather than adversarial live input, so
+    # the raw-text pass is the right trade here.
     for pattern in patterns:
         text = pattern.sub("[FILTERED]", text)
     return text
