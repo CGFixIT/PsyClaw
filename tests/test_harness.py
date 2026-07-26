@@ -137,6 +137,28 @@ def test_session_store_rejects_traversal(tmp_path):
         store.get("../../etc/passwd")
 
 
+def test_session_store_listing_survives_file_removed_mid_sort(tmp_path, monkeypatch):
+    """Regression: list() sorted by getmtime BEFORE the per-file skip loop, so a
+    session file deleted between glob and sort raised OSError straight out of a
+    listing path meant to tolerate corrupt/missing files."""
+    from harness import sessions as sessions_mod
+
+    store = SessionStore(tmp_path / "sessions")
+    keep = store.create(model="m", title="keep")
+    doomed = tmp_path / "sessions" / "dddddddddddd.json"
+    doomed.write_text('{"session_id": "dddddddddddd"}', encoding="utf-8")
+    real_getmtime = sessions_mod.getmtime
+
+    def _getmtime_racing(path):
+        if path.name == doomed.name:
+            raise OSError("file vanished between glob and sort")
+        return real_getmtime(path)
+
+    monkeypatch.setattr(sessions_mod, "getmtime", _getmtime_racing)
+    listed = store.list()
+    assert keep.session_id in [s["session_id"] for s in listed]
+
+
 def test_session_store_skips_corrupt_files_in_listing(tmp_path):
     """JSON that parses but isn't session-shaped must not break the listing.
 

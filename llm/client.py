@@ -356,11 +356,9 @@ def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLoca
             "models.local_llm.fallback.base_url must be loopback (127.0.0.1 / localhost / ::1)",
             details={"hint": "non-loopback local servers must be set as primary base_url explicitly"},
         )
-    if not _is_loopback_url(primary_url):
-        # Primary already non-loopback is an operator choice; still allow fallback
-        # only if secondary is loopback (validated above).
-        pass
-
+    # A non-loopback primary base_url is a deliberate operator choice (unlike the
+    # fallback, which is validated loopback-only just above); no check is enforced
+    # on the primary here.
     if _probe_openai_models(primary_url, timeout_sec=probe_timeout, api_key=primary_key):
         log.info("local LLM backend: primary (%s) probe ok", primary_provider)
         _resolved_local_backends[key] = primary
