@@ -29,6 +29,21 @@ from utils.logger import audit_log
 
 logger = logging.getLogger("cyclaw.personality")
 
+# Anchor relative personality paths to the repo root, mirroring utils/logger.py's
+# _REPO_ROOT/_anchor and utils/sanitizer.py. config.yaml ships soul_path and
+# db_path as relative values, so resolving them against the process CWD meant
+# launching cyclaw-server from anywhere else made _load_soul() find no soul.md,
+# silently write _DEFAULT_SOUL into a fresh tree, and open an empty version DB —
+# drift detection then has nothing to compare against and the real identity is
+# quietly replaced. Same CWD fragility gate.py's _BASE_DIR exists to prevent.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _anchor(path_str: str) -> Path:
+    """Resolve path_str against the repo root when it isn't already absolute."""
+    path = Path(path_str).expanduser()
+    return path if path.is_absolute() else _REPO_ROOT / path
+
 # Memory-poisoning / instruction-override patterns shared by both lists below.
 # Any pattern here must never appear in soul.md (write-boundary enforcement)
 # and is also suspicious in propose_evolution advisory review.
@@ -67,8 +82,8 @@ class PersonalityManager:
     def __init__(self, cfg: dict):
         self.cfg = cfg
         pers_cfg = cfg.get("personality", {})
-        self.soul_path = Path(pers_cfg.get("soul_path", "data/personality/soul.md"))
-        self.db_path = Path(pers_cfg.get("db_path", "data/personality/cyclaw_soul.db"))
+        self.soul_path = _anchor(pers_cfg.get("soul_path", "data/personality/soul.md"))
+        self.db_path = _anchor(pers_cfg.get("db_path", "data/personality/cyclaw_soul.db"))
         self.ttl_days = pers_cfg.get("interaction_ttl_days", 365)
         # Amortize TTL pruning: sweep once per this many inserts instead of on
         # every record_interaction() call (see record_interaction for rationale).
@@ -249,8 +264,15 @@ class PersonalityManager:
         (:meth:`apply_evolution`) uses only critical patterns (memory-poisoning).
         """
         flags = self._scan_advisory(new_soul)
+        # Diff and hash against the file on disk, NOT self.soul_core: soul_core
+        # is bounded to soul_max_chars (8000) by _bounded_soul, while the HTTP
+        # cap is 8192 — so for an oversized soul.md the diff and current_sha
+        # would describe a truncated copy rather than the real current file.
+        # This is the artifact the human governance gate (I5) reviews before
+        # approving a write; it has to describe what is actually there.
+        current = self.soul_path.read_text(encoding="utf-8") if self.soul_path.exists() else self.soul_core
         diff = list(difflib.unified_diff(
-            self.soul_core.splitlines(keepends=True),
+            current.splitlines(keepends=True),
             new_soul.splitlines(keepends=True),
             fromfile="soul.md (current)",
             tofile="soul.md (proposed)"
@@ -263,7 +285,7 @@ class PersonalityManager:
             "safe_to_apply": len(flags) == 0,
             "status": "proposed",
             "proposed_soul": new_soul,
-            "current_sha": self._sha256(self.soul_core),
+            "current_sha": self._sha256(current),
             "proposed_sha": self._sha256(new_soul),
         }
 
@@ -317,6 +339,15 @@ class PersonalityManager:
                 bak_path.write_text(self.soul_path.read_text(encoding="utf-8"), encoding="utf-8")
                 os.chmod(bak_path, 0o600)
             tmp_path.write_text(new_soul, encoding="utf-8")
+            # Tighten the temp file BEFORE the rename, not soul.md after it:
+            # os.replace carries the temp file's mode onto the destination, so
+            # without this every apply silently reset soul.md to 0644 (the .bak
+            # above was already hardened, the live file was not). soul.md is
+            # prepended to every LLM system prompt, so any local user could read
+            # the operator's full identity/policy text. Setting the mode before
+            # the rename also means the file is never briefly world-readable
+            # under its real name.
+            os.chmod(tmp_path, 0o600)
             os.replace(tmp_path, self.soul_path)
             self.conn.execute(
                 self._sql_insert_soul,
