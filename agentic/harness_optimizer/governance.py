@@ -8,9 +8,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from utils.errors import AgenticError
 from utils.personality import OWASP_INJECTION_PATTERNS
+
+# Shared with core.RunReport.has_critical_governance_finding: the gate there
+# recognizes this exact severity string by convention (parsed back out of
+# as_gate_string()'s "severity: code: message" format). Importing the constant
+# instead of a bare literal means a rename here is at least a visible import,
+# not a silent two-file drift.
+CRITICAL_SEVERITY = "critical"
 
 
 @dataclass(frozen=True)
@@ -22,7 +30,7 @@ class GovernanceFinding:
     message: str
 
     def __post_init__(self) -> None:
-        if self.severity not in {"info", "warning", "critical"}:
+        if self.severity not in {"info", "warning", CRITICAL_SEVERITY}:
             raise AgenticError("severity must be info, warning, or critical", details={"severity": self.severity})
 
     def as_gate_string(self) -> str:
@@ -57,6 +65,26 @@ def governance_gate_strings(findings: tuple[GovernanceFinding, ...]) -> tuple[st
     return tuple(finding.as_gate_string() for finding in findings)
 
 
+@lru_cache(maxsize=8)
+def _compile_governance_patterns(sources: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """Compile and cache the injection-pattern set by its exact tuple of sources.
+
+    Mirrors agentic.registry._compile_injection_patterns / agentic.fsconnect.
+    client._compile_injection_patterns (same lru_cache-by-source-tuple idea) --
+    inspect_candidate_text is called at least 3x per candidate decision
+    (propose_candidate_application, apply_candidate_artifact, and
+    github_coding_runner.evaluate), and was recompiling/re-running every
+    pattern from scratch on each call.
+    """
+    compiled = []
+    for pattern in sources:
+        try:
+            compiled.append(re.compile(pattern, re.IGNORECASE))
+        except re.error:
+            continue
+    return tuple(compiled)
+
+
 def inspect_candidate_text(candidate_text: str, cfg: dict | None = None) -> tuple[GovernanceFinding, ...]:
     """Flag prompt-injection-shaped candidate content before acceptance or apply."""
 
@@ -64,16 +92,13 @@ def inspect_candidate_text(candidate_text: str, cfg: dict | None = None) -> tupl
     for pattern in ((cfg or {}).get("policy", {}).get("prompt_filter", {}).get("banned_patterns", []) or []):
         if isinstance(pattern, str) and pattern not in patterns:
             patterns.append(pattern)
-    for pattern in patterns:
-        try:
-            if re.search(pattern, candidate_text, re.IGNORECASE):
-                return (
-                    GovernanceFinding(
-                        "critical",
-                        "candidate_injection_pattern",
-                        "candidate content matches a governed injection pattern",
-                    ),
-                )
-        except re.error:
-            continue
+    for compiled in _compile_governance_patterns(tuple(patterns)):
+        if compiled.search(candidate_text):
+            return (
+                GovernanceFinding(
+                    "critical",
+                    "candidate_injection_pattern",
+                    "candidate content matches a governed injection pattern",
+                ),
+            )
     return ()
