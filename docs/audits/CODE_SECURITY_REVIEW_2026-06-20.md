@@ -5,6 +5,20 @@
 **Runtime verified:** Python 3.12.3 — 98 tests passed  
 **References:** `CyClaw_Architecture_v1.3.0.pdf` (security invariants), OWASP Top 10  
 
+**2026-07-27 reconciliation:** re-checked every P0/P1/P2 item below against current
+`main`, over a month and hundreds of commits later. The large majority (rate limiter
+lock, ReDoS module, config-path anchoring via `_BASE_DIR`/`_anchor`, soul-preamble
+sanitization, soul-endpoint rate limiting, SQLite isolation, score clamping, `top_k`
+bound, router `state.get()` guards, error-message leak removal) were already fixed by
+later work, most traceable to a documented "PR #99" cleanup pass. Two items were
+genuinely still open and are now fixed (see inline notes at "No Maximum Request Body
+Size" and "Audit Write Failure Crashes Queries" below). One P2 item — "Maintenance on
+`__init__` Blocks Startup" (`utils/personality.py`, still runs `self.maintenance()`
+synchronously) — remains open: confirmed still true, but it's a startup-latency
+polish item, not a bug fix or security hardening recommendation, so it's out of scope
+for this pass rather than silently dropped. The rest of this doc is historical
+record, not a live task list.
+
 ---
 
 ## Recent PRs Reviewed
@@ -93,7 +107,18 @@ with open(_CONFIG_PATH) as f:
 
 **Claude Code task:** Replace all `open("config.yaml")` occurrences in `gate.py` with `open(Path(__file__).parent / "config.yaml")`. Check `utils/logger.py`, `utils/sanitizer.py` for the same pattern and fix there too.
 
-#### 3. No Maximum Request Body Size
+#### 3. No Maximum Request Body Size — RESOLVED (2026-07-27)
+
+**Fixed differently than sketched below:** `gate.py`'s `_MaxBodySizeMiddleware` uses a
+config-driven cap (`config.yaml` `security.max_request_body_bytes`, shipped at 1 MiB)
+rather than a hardcoded 64 KB, sized with headroom over the largest real Pydantic field
+(`schemas/api.py`'s 65536-char fields, which can exceed 64 KB on the wire under
+multi-byte UTF-8). Pinned by `tests/test_gate.py::TestMaxBodySize`. Placed between
+`TrustedHostMiddleware` and `_SecurityHeadersMiddleware` in the stack so the latter
+(outermost) still stamps its headers on a 413 rejection, same as it already does for
+TrustedHost's 400. Enforced via the client-declared `Content-Length` header only — a
+client that lies about it or uses chunked transfer-encoding without one isn't covered,
+an accepted gap under this project's single-operator, loopback-bound threat model.
 
 **Problem:** FastAPI has no built-in body size limit. A malicious client could send a 100MB JSON body to `/query` or `/soul/propose`. The body is buffered before `check_input()` is called.
 
@@ -186,7 +211,14 @@ raise PromptInjectionError(query, details={"reason": "banned pattern matched"})
 
 ### `utils/logger.py` — Severity: HIGH
 
-#### Audit Write Failure Crashes Queries (line ~96)
+#### Audit Write Failure Crashes Queries (line ~96) — RESOLVED (2026-07-27)
+
+`utils/logger.py`'s `audit_log()` now wraps the write in `try/except OSError`, logging
+`logger.warning("audit_log write failed for %s: %s", ...)` instead of letting the
+exception propagate. Pinned by `tests/test_logger.py::TestAuditLogWriteFailure`. This
+matters specifically because `audit_logger` is the unconditional terminal node every
+graph path converges on (invariant I4), running *after* the answer is already computed
+— a disk/permission failure there must never turn an already-good response into a 500.
 
 ```python
 with open(log_path, "a") as f:
