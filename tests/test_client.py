@@ -351,6 +351,19 @@ class TestGrokClient:
         assert exc.value.details.get("exc_type") == "ValueError"
         client.close()
 
+    def test_base_url_trailing_slash_is_stripped(self, monkeypatch):
+        # An operator-configured trailing slash on models.grok.base_url must
+        # not survive into the client, or the request URL doubles up ("//")
+        # on a real gateway. ClaudeClient already normalizes this the same way.
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        cfg = {"models": {"grok": {
+            "base_url": "https://api.x.ai/v1/",
+            "model": "grok-4.5", "max_tokens": 256, "temperature": 0.2, "timeout_sec": 5,
+        }}}
+        client = GrokClient(cfg=cfg)
+        assert client.base_url == "https://api.x.ai/v1"
+        client.close()
+
 
 # =============================================================================
 # ClaudeClient

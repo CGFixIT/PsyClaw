@@ -154,8 +154,8 @@ def _post_with_retry(
     per-call ``timeout_sec`` again — and, because the gateway wraps the whole graph
     in a shorter ``api.graph_timeout_sec`` deadline, the extra attempt is already
     unreachable (the client returns 504 first) and only orphans a worker thread on
-    a second stalled call. Cloud Grok keeps the default (transient network blips
-    behind its short timeout are worth a retry).
+    a second stalled call. Cloud Grok and Claude keep the default (transient
+    network blips behind their short timeout are worth a retry).
 
     Each transient retry logs a WARNING and each terminal give-up / fail-fast a
     ERROR, tagged with ``service`` (e.g. ``ollama`` / ``grok``), the attempt
@@ -473,7 +473,7 @@ class GrokClient:
             with open(config_path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
         grok_cfg = cfg["models"]["grok"]
-        self.base_url = grok_cfg["base_url"]
+        self.base_url = grok_cfg["base_url"].rstrip("/")
         self.model = grok_cfg["model"]
         self.max_tokens = grok_cfg["max_tokens"]
         self.temperature = grok_cfg["temperature"]
