@@ -3,6 +3,7 @@
 Run: pytest tests/test_personality.py -v
 """
 
+import os
 import threading
 import pytest
 from unittest.mock import patch
@@ -715,3 +716,96 @@ class TestSoulSizeCap:
         with patch("utils.personality.audit_log"):
             pm.restore_from_backup()
         assert soul_path.read_text(encoding="utf-8") == original
+
+
+class TestSoulFilePermissions:
+    """soul.md is prepended to every LLM system prompt, so it must not be
+    world-readable. os.replace carries the TEMP file's mode onto the
+    destination, so without an explicit chmod on the temp file every apply
+    silently reset soul.md to 0644 — while the .bak beside it was already
+    hardened to 0600."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_apply_evolution_leaves_soul_owner_only(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Soul\n\nUpdated identity.\n", "test: permission check")
+        assert soul_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_backup_stays_owner_only(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Soul\n\nfirst.\n", "test: seed")
+            pm.apply_evolution("# Soul\n\nsecond.\n", "test: creates a .bak")
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        assert bak_path.stat().st_mode & 0o777 == 0o600
+
+
+class TestPathAnchoring:
+    """config.yaml ships soul_path/db_path as RELATIVE values. Resolving them
+    against the process CWD meant launching the server from elsewhere made
+    _load_soul() find no soul.md, write the default into a fresh tree, and open
+    an empty version DB — so drift detection had nothing to compare against and
+    the real identity was silently replaced."""
+
+    def test_relative_path_anchors_to_repo_root(self):
+        from utils.personality import _REPO_ROOT, _anchor
+        resolved = _anchor("data/personality/soul.md")
+        assert resolved.is_absolute()
+        assert resolved == _REPO_ROOT / "data" / "personality" / "soul.md"
+
+    def test_absolute_path_left_alone(self, tmp_path):
+        from utils.personality import _anchor
+        target = tmp_path / "elsewhere" / "soul.md"
+        assert _anchor(str(target)) == target
+
+    def test_manager_stores_absolute_paths(self, cfg):
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+        assert pm.soul_path.is_absolute()
+        assert pm.db_path.is_absolute()
+
+
+class TestProposeEvolutionReflectsDisk:
+    """propose_evolution's diff and current_sha are the artifact the human
+    governance gate (I5) reviews before approving a write. They must describe
+    the file that is actually on disk, not the soul_max_chars-truncated
+    in-memory copy."""
+
+    def test_current_sha_hashes_full_file_not_bounded_core(self, cfg, tmp_paths):
+        import hashlib
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        oversized = "# Soul\n\n" + ("x" * 9000)
+        soul_path.write_text(oversized, encoding="utf-8")
+        cfg["personality"]["soul_max_chars"] = 8000
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            assert len(pm.soul_core) == 8000  # in-memory copy IS truncated
+            result = pm.propose_evolution("# Soul\n\nreplacement", "test: review artifact")
+
+        assert result["current_sha"] == hashlib.sha256(oversized.encode("utf-8")).hexdigest()
+
+    def test_diff_is_against_disk_content(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        tail_marker = "UNIQUE-TAIL-MARKER"
+        soul_path.write_text("# Soul\n\n" + ("x" * 9000) + tail_marker, encoding="utf-8")
+        cfg["personality"]["soul_max_chars"] = 8000
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            result = pm.propose_evolution("# Soul\n\nreplacement", "test: review artifact")
+
+        # The truncated soul_core cannot contain the tail, so seeing it in the
+        # diff proves the diff was taken against the real file.
+        assert tail_marker in result["diff"]

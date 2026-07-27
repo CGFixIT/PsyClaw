@@ -819,7 +819,7 @@
     <button class="toolbar-btn" id="fsToggleBtn" onclick="toggleFsPanel()" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
     <button class="toolbar-btn" id="sqlToggleBtn" onclick="toggleSqlPanel()" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
     <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
-    <input class="api-key-input" id="apiKeyInput" type="password" placeholder="API key (optional)">
+    <input class="api-key-input" id="apiKeyInput" type="password" placeholder="API key (optional)" autocomplete="off">
   </div>
 
   <div class="soul-panel" id="soulPanel">
@@ -1177,7 +1177,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     addEntry('query', 'QUERY', query);
   }
 
-  const loadingId = addEntry('system', '', '<span class="spinner"></span>searching vault... <span class="cancel-hint">(Esc to cancel)</span>', true);
+  const loadingId = addLoadingEntry();
   sendBtn.disabled = true;
   const startTime = performance.now();
 
@@ -1230,7 +1230,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
       { k: 'hits', v: data.hit_count },
       { k: 'time', v: `${elapsed}ms` }
     ];
-    const answerEl = document.getElementById(addEntry('answer', 'ANSWER', data.answer, false, meta));
+    const answerEl = document.getElementById(addEntry('answer', 'ANSWER', data.answer, meta));
     if (answerEl && data.sources && data.sources.length > 0) {
       addSources(answerEl, data.sources);
     }
@@ -1260,7 +1260,38 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
   }
 }
 
-function addEntry(type, label, text, isHtml = false, meta = null) {
+// Builds the loading row with createElement instead of an HTML string. It is
+// the only entry needing child elements (spinner + cancel hint), and giving
+// addEntry a raw-HTML mode just to serve it left an innerHTML escape hatch one
+// argument away from every caller that renders LLM answers, corpus filenames,
+// and /ops/* subprocess output. One hardcoded caller today is exactly how the
+// next caller ends up passing server text.
+function addLoadingEntry() {
+  const id = `entry-${entryCounter++}`;
+  const el = document.createElement('div');
+  el.className = 'entry system-entry';
+  el.id = id;
+
+  const textEl = document.createElement('div');
+  textEl.className = 'entry-text';
+
+  const spinner = document.createElement('span');
+  spinner.className = 'spinner';
+  textEl.appendChild(spinner);
+  textEl.appendChild(document.createTextNode('searching vault... '));
+
+  const hint = document.createElement('span');
+  hint.className = 'cancel-hint';
+  hint.textContent = '(Esc to cancel)';
+  textEl.appendChild(hint);
+
+  el.appendChild(textEl);
+  resultsEl.appendChild(el);
+  resultsEl.scrollTop = resultsEl.scrollHeight;
+  return id;
+}
+
+function addEntry(type, label, text, meta = null) {
   const id = `entry-${entryCounter++}`;
   const el = document.createElement('div');
   el.className = `entry ${type}-entry`;
@@ -1268,9 +1299,13 @@ function addEntry(type, label, text, isHtml = false, meta = null) {
 
   let html = '';
   if (label) {
-    html += `<div class="entry-label">${label}</div>`;
+    // Escaped like text and meta below. Every current caller passes a hardcoded
+    // literal, so this is not a live bug — but it sits in the same template as
+    // two escaped interpolations, and the first caller to pass a server-supplied
+    // field as a label would otherwise get stored XSS.
+    html += `<div class="entry-label">${escHtml(label)}</div>`;
   }
-  html += `<div class="entry-text">${isHtml ? text : escHtml(text)}</div>`;
+  html += `<div class="entry-text">${escHtml(text)}</div>`;
 
   if (meta) {
     html += '<div class="meta-row">';
@@ -1914,6 +1949,12 @@ async function toggleSqlPanel() {
   if (open && !sqlLoaded && apiKeyInput.value.trim()) { sqlLoaded = true; await runSql('status'); }
 }
 
+// TEXT CONTEXTS ONLY -- not attribute-safe. Serializing a text node escapes
+// &, < and >, but leaves " and ' intact, which is correct and sufficient for
+// every current use (all of them element text). Interpolating this into a
+// quoted attribute -- title="${escHtml(x)}" -- would NOT be safe: a corpus
+// filename like  " onmouseover=alert(1) x="  breaks straight out. Use
+// setAttribute/textContent for attributes instead of extending this.
 const _escDiv = document.createElement('div');
 function escHtml(str) {
   _escDiv.textContent = str;
