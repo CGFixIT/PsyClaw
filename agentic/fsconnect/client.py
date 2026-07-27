@@ -16,45 +16,30 @@ from __future__ import annotations
 
 import fnmatch
 import re
-from functools import lru_cache
 
 from agentic.fsconnect.config import FsConnectConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
+from guardrails.rails import (
+    build_injection_patterns as _shared_build_injection_patterns,
+)
+from guardrails.rails import scan_injection_patterns
 from utils.errors import FsConnectError
 from utils.logger import audit_log
-
-# Reuse the soul scanner's OWASP baseline so the scanners never drift.
-from utils.personality import OWASP_INJECTION_PATTERNS
 
 _MAX_GREP_MATCHES = 200
 _MAX_GLOB_MATCHES = 1000
 
 
-@lru_cache(maxsize=8)
-def _compile_injection_patterns(sources: tuple[str, ...]) -> tuple[tuple[str, re.Pattern[str]], ...]:
-    """Compile (and memoize) a pattern-source tuple. Pure: same sources -> same result.
-
-    Memoized because the CLI builds short-lived clients per op and each rebuild
-    otherwise recompiles ~46 regexes (13 OWASP + 33 banned). Keyed on the source
-    tuple, so a config change with different patterns produces a fresh entry.
-    """
-    compiled: list[tuple[str, re.Pattern[str]]] = []
-    for p in sources:
-        try:
-            compiled.append((p, re.compile(p, re.IGNORECASE)))
-        except re.error:
-            continue
-    return tuple(compiled)
-
-
 def build_injection_patterns(cfg: dict) -> list[tuple[str, re.Pattern[str]]]:
-    """Compile ``OWASP ∪ policy.prompt_filter.banned_patterns`` (advisory scanner)."""
-    sources: list[str] = list(OWASP_INJECTION_PATTERNS)
-    pf = (cfg.get("policy") or {}).get("prompt_filter") or {}
-    for p in pf.get("banned_patterns") or []:
-        if p not in sources:
-            sources.append(p)
-    return list(_compile_injection_patterns(tuple(sources)))
+    """Compile ``OWASP ∪ policy.prompt_filter.banned_patterns`` (advisory scanner).
+
+    Thin re-export of the shared builder in ``guardrails.rails`` -- the pattern
+    union, dedup order, IGNORECASE flag, and memoization all live there now so
+    this scanner cannot drift from the skills-registry and harness-optimizer
+    ones. The ADVISORY posture stays here: guardrails owns how the pattern set is
+    built, never whether a given caller blocks on a hit.
+    """
+    return _shared_build_injection_patterns(cfg)
 
 
 def _looks_binary(data: bytes) -> bool:
@@ -101,7 +86,7 @@ class FsClient:
             )
 
     def _scan(self, text: str) -> list[str]:
-        return [src for src, pat in self._patterns if pat.search(text)]
+        return scan_injection_patterns(text, self._patterns)
 
     def _audit(self, event: dict) -> None:
         audit_log(event, self.config_path)

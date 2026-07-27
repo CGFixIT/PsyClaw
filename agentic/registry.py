@@ -30,15 +30,16 @@ import re
 import threading
 import time
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 
 from agentic.config import AgenticConfig
+from guardrails.rails import (
+    build_injection_pattern_sources,
+    compile_injection_patterns,
+    scan_injection_patterns,
+)
 from utils.errors import PromptInjectionError, SkillRegistryError
 from utils.logger import audit_log
-
-# Reuse the soul scanner's OWASP baseline so the two never drift.
-from utils.personality import OWASP_INJECTION_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -98,25 +99,6 @@ def _release_registry_lock(lock_dir: Path) -> None:
         pass
 
 
-@lru_cache(maxsize=8)
-def _compile_injection_patterns(sources: tuple[str, ...]) -> tuple[tuple[str, re.Pattern[str]], ...]:
-    """Compile (and memoize) a pattern-source tuple. Pure: same sources -> same result.
-
-    Memoized because the agentic CLI builds a fresh ``SkillRegistry`` per op
-    (``status`` / ``propose-skill`` / ``apply-skill``) and each construction
-    otherwise recompiles ~46 regexes (OWASP baseline + banned_patterns). Keyed on
-    the source tuple, so a config change with different patterns yields a fresh
-    entry. Mirrors ``agentic.fsconnect.client._compile_injection_patterns``.
-    """
-    compiled: list[tuple[str, re.Pattern[str]]] = []
-    for p in sources:
-        try:
-            compiled.append((p, re.compile(p, re.IGNORECASE)))
-        except re.error:
-            continue
-    return tuple(compiled)
-
-
 class SkillRegistry:
     """File-as-truth skills catalog with propose/apply governance.
 
@@ -172,13 +154,14 @@ class SkillRegistry:
     # --- scanning (mirrors PersonalityManager) ----------------------------
 
     def _build_injection_patterns(self) -> list[tuple]:
-        sources: list[str] = list(OWASP_INJECTION_PATTERNS)
-        pf = (self.cfg.get("policy") or {}).get("prompt_filter") or {}
-        for p in (pf.get("banned_patterns") or []):
-            if p not in sources:
-                sources.append(p)
-        compiled: list[tuple] = list(_compile_injection_patterns(tuple(sources)))
-        # Surface uncompilable patterns. _compile_injection_patterns silently drops
+        # Pattern construction is shared with agentic.fsconnect.client and
+        # agentic.harness_optimizer.governance via guardrails.rails so the three
+        # scanners cannot drift. The ENFORCEMENT below (drop logging, audit, and
+        # the fail-closed refusal) stays here: guardrails owns how the set is
+        # built, this registry owns what an empty or shrunken set means.
+        sources = build_injection_pattern_sources(self.cfg)
+        compiled: list[tuple] = list(compile_injection_patterns(tuple(sources)))
+        # Surface uncompilable patterns. compile_injection_patterns silently drops
         # an invalid regex (re.error), which quietly SHRINKS the enforced injection
         # gate: a malformed banned_patterns entry in config would weaken
         # skill-poisoning defense with no signal at all. Log + audit the dropped
@@ -208,12 +191,18 @@ class SkillRegistry:
             raise SkillRegistryError(
                 "injection pattern set is empty; refusing to operate with a "
                 "defeated skill-injection gate (fail-closed)",
-                details={"owasp_baseline_count": len(OWASP_INJECTION_PATTERNS)},
+                # Report what the SHARED builder actually saw rather than a
+                # separately-imported baseline length: the two could disagree
+                # (different module bindings of the same constant), and the
+                # source count is the useful diagnostic anyway -- it says
+                # whether the union came back empty or everything failed to
+                # compile.
+                details={"pattern_source_count": len(sources)},
             )
         return compiled
 
     def _scan_injection(self, text: str) -> list[str]:
-        return [src for src, pat in self._injection_patterns if pat.search(text)]
+        return scan_injection_patterns(text, self._injection_patterns)
 
     @staticmethod
     def _sha256(text: str) -> str:

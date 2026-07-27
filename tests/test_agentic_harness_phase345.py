@@ -131,13 +131,16 @@ def test_governance_finding_rejects_invalid_severity_as_agentic_error() -> None:
 
 
 def test_inspect_candidate_text_reuses_compiled_patterns() -> None:
-    from agentic.harness_optimizer.governance import _compile_governance_patterns
+    # The compile cache moved to guardrails.rails when the three agentic
+    # injection scanners were consolidated; the behaviour under test (a repeat
+    # call with the same pattern tuple does not recompile) is unchanged.
+    from guardrails.rails import compile_injection_patterns
 
-    _compile_governance_patterns.cache_clear()
+    compile_injection_patterns.cache_clear()
     cfg = {"policy": {"prompt_filter": {"banned_patterns": ["ignore previous instructions"]}}}
     inspect_candidate_text("hello world", cfg)
     inspect_candidate_text("a different safe string", cfg)
-    info = _compile_governance_patterns.cache_info()
+    info = compile_injection_patterns.cache_info()
     assert info.hits >= 1  # second call with the same pattern-tuple hit the cache
 
 
