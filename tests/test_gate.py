@@ -293,6 +293,29 @@ class TestTrustedHost:
         assert resp.status_code == 200
 
 
+class TestMaxBodySize:
+    """_MaxBodySizeMiddleware rejects a request whose declared Content-Length
+    exceeds config.yaml's security.max_request_body_bytes (1 MiB in the
+    shipped config), before Starlette buffers the body into memory. Built at
+    gate.py import time from the real config.yaml, same as TrustedHostMiddleware
+    and CORSMiddleware above -- the client fixture's per-test cfg patch does
+    not retroactively change already-constructed middleware."""
+
+    def test_oversized_body_rejected(self, client):
+        test_client, _ = client
+        oversized = b"x" * (1_048_576 + 1)
+        resp = test_client.post(
+            "/query", content=oversized, headers={"content-type": "application/json"}
+        )
+        assert resp.status_code == 413
+        assert resp.json()["code"] == "PAYLOAD_TOO_LARGE"
+
+    def test_normal_body_not_rejected(self, client):
+        test_client, _ = client
+        resp = test_client.post("/query", json={"query": "a normal-sized query"})
+        assert resp.status_code == 200
+
+
 class TestSecurityResponseHeaders:
     """Every response must carry the full set of hardening headers added by
     _SecurityHeadersMiddleware: CSP, X-Frame-Options, X-Content-Type-Options,
