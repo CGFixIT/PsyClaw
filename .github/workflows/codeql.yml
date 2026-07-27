@@ -64,10 +64,13 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-          # Run the extended query suite (default security queries PLUS the
-          # security-and-quality pack) so CodeQL also surfaces maintainability
-          # and reliability issues, not just the smaller default security set.
-          queries: security-and-quality
+          # Query suite and query-filters both live in the config file now --
+          # query-filters (used to exclude the documented false-positive
+          # py/file-not-closed finding on utils/logger.py's intentionally
+          # long-lived audit handle) require a config file, so the previously
+          # inline `queries: security-and-quality` moved there too rather than
+          # splitting the query configuration across two places.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Run manual build steps
         if: matrix.build-mode == 'manual'
