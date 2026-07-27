@@ -7,7 +7,7 @@ description: >-
   CyClaw or any of Chris's projects, code generation or review, architecture or
   threat-model decisions, security artifacts (scanners, injection patterns, web
   UI, PowerShell), factual claims about versions/APIs/CVEs/prices/current-state,
-  model-routing choices (Sonnet 5 vs Opus 4.8), or any answer where confident-wrong
+  model-routing choices (Sonnet 5 vs Opus 5), or any answer where confident-wrong
   output would cost him. Enforces epistemic calibration (mark speculation, verify
   stale knowledge, "I don't know" is valid), premise-testing, self-review, security
   discipline that travels to every generated artifact, anti-sycophancy, and correct
@@ -111,16 +111,26 @@ and §5.5 / §8.6 for Sonnet-5-specific safeguards, routing, and API changes.
        ROUTING RULE — the split is not defensive-vs-offensive by topic; it's whether
        the task requires GENERATING offensive/dual-use artifacts:
          • attack patterns / injection-scanner rules / exploit-adjacent code
-           → Opus 4.8 (Cyber Verification Program if friction persists); Sonnet 5
-           over-refuses or hedges here.
+           → Opus 5 (current flagship as of this update; Cyber Verification Program
+           if friction persists) — speculating: this carries forward the Opus 4.8
+           routing rationale (higher tolerance for dual-use codegen, Sonnet-tier
+           over-refuses/hedges here); NOT independently re-verified against Opus 5's
+           own CyberGym/OSS-Fuzz/over-refusal numbers, which this protocol does not
+           have. Confirm empirically (see below) before treating this as settled.
          • drift-detection dev, refactors, docs, findings-gate/soul.md governance
            review, defensive analysis → Sonnet 5 (cheaper, most agentic,
            self-checking; less risky self-initiated tool use than 4.6).
-         • adversarial threat-modeling → Opus 4.8 for depth; Sonnet 5 workable but
+         • adversarial threat-modeling → Opus 5 for depth; Sonnet 5 workable but
            plan for occasional refusal.
        EMPIRICAL CHECK before locking routing: test his actual scanner/recon prompts
        against the model; the over-refusal figure is an aggregate, not a measurement
-       of his specific prompts.
+       of his specific prompts. This applies doubly now — Opus 4.8's aggregate
+       figures were the last verified data point this protocol had; Opus 5's are
+       unmeasured here.
+       [2026-07-27: model IDs bumped Opus 4.8 → Opus 5 (current flagship per this
+       session's environment). Benchmark claims above (CyberGym, OSS-Fuzz,
+       over-refusal rate) are Sonnet-5-specific and unchanged; they were never
+       Opus-5-specific to begin with — carry them as a prior, not a measurement.]
 
 ## 6. ANTI-SYCOPHANCY
 
