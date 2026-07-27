@@ -157,15 +157,18 @@ Residual findings (none block, all worth a small follow-up):
   compensating control is real: zizmor (pinned 1.27.0) runs in `ci.yml` at
   `--min-severity=high` and its `dangerous-triggers` audit fires on any new
   `pull_request_target` usage — so a future dangerous workflow still fails CI unless
-  explicitly annotated. Defensible trade, but note it in `ZIZMOR_FINDINGS_PLAN.md` so
-  the repo-wide scope is a deliberate, tracked decision rather than implicit.
+  explicitly annotated. Defensible trade — **the "note it" ask is already satisfied**
+  (re-checked 2026-07-27): `.github/workflows/semgrep.yml`'s `--exclude-rule` step
+  carries an inline comment explaining exactly this ("Zizmor owns the dangerous-trigger
+  control..."), and `docs/ZIZMOR_FINDINGS_PLAN.md` itself has since been deleted
+  (both its finding classes resolved in PR #617) — the compensating-control reasoning
+  now lives next to the suppression it explains instead of in a separate tracking doc.
 - **F3 (low)** — `OPENAI_API_KEY` is available in the same job that processes
   untrusted PR content in both workflows; exfil is constrained by Codex's read-only
   sandbox mode and pinned CLI version, but worth re-verifying against the specific
   pinned `codex-version` if it's ever bumped.
-- **F4 (low)** — `pr-review.yml`'s `paths` filter includes `.codex/prompts/pr-review.md`
-  but not `.codex/prompts/pr-agent.md`, so edits to the comment-agent's trust-boundary
-  prompt get no automated review.
+- **F4 (low)** — RESOLVED (2026-07-27). `pr-review.yml`'s `paths` filter now includes
+  both `.codex/prompts/pr-agent.md` and `.codex/prompts/pr-review.md`.
 - **F5/F6 (info)** — `codex.yml` lacks a top-level `permissions: {}` default (relies on
   per-job blocks only); the verdict cross-check regex in `pr-review.yml` is
   format-brittle but fails closed (acceptable).
@@ -173,7 +176,14 @@ Residual findings (none block, all worth a small follow-up):
   *pre-#598* pattern: an LLM agent (`anthropics/claude-code-action`) holds
   `pull-requests: write` + `issues: write` directly, on the same owner-gated
   `issue_comment` trigger. Recommend a follow-up PR applying the #598 split
-  (read-only reviewer job → validated poster job) to `claude.yml` too.
+  (read-only reviewer job → validated poster job) to `claude.yml` too. **Still open,
+  deliberately deferred (2026-07-27):** unlike `pr-review.yml`/`codex.yml` (which
+  drive a bespoke `codex` CLI CyClaw's own scripts can split across a read-only job
+  and a separate trusted poster job), `claude-code-action` is a self-contained
+  third-party action that decides for itself when to post — whether it supports being
+  invoked in a "generate here, post from a separate trusted job" shape at all needs
+  its own research spike before attempting the split, not a drive-by change that risks
+  breaking the only workflow that posts Claude Code PR feedback.
 
 ### 5.2 PR #597 — "race-safe O_EXCL lock file replaces rmdir/mkdir reclaim" (fixes #587)
 
@@ -233,7 +243,17 @@ exploitable security holes under the single-operator/loopback threat model:
   auto-reindex (exit-10) signal never fires because no `SyncResult` exists to carry
   the "corpus changed" evidence — the retrieval index can go stale until the next
   clean run touches the same files or an operator manually reindexes after reading
-  `audit.jsonl`.
+  `audit.jsonl`. **Still open, deliberately deferred (re-checked 2026-07-27):**
+  `sync/runner.py`'s exception handler now preserves the `corpus_changed` evidence
+  into a `sync_failed` **audit log row** before re-raising (closing half of this
+  finding — the forensic record is no longer lost), but `sync/cli.py`'s
+  `except SyncError` handler still returns `EXIT_FAIL` unconditionally rather than
+  consulting that evidence. Wiring it through cleanly means deciding how the evidence
+  should travel from `runner.py` to `cli.py` (a typed exception attribute vs.
+  re-reading the just-written audit log), which is a design decision, not a
+  mechanical fix — left for a dedicated follow-up rather than a drive-by change to
+  the out-of-band sync layer's exit-code contract (CLAUDE.md documents exit codes as
+  an API).
 - **Medium** — a raising post-sync check (subprocess timeout) after a **fully
   successful** sync destroys that run's per-file audit rows and forces a `sync_failed`
   summary for a run whose rclone exit code was 0 — compounding the above (files
@@ -243,7 +263,15 @@ exploitable security holes under the single-operator/loopback threat model:
   missing one) is indistinguishable from "every source file deleted" and triggers a
   full prune of previously-staged content. A single transient read error on one file
   also immediately prunes that file's staged copy (by design, per an existing pinned
-  test) rather than tolerating a few failed runs first.
+  test) rather than tolerating a few failed runs first. **Still open, deliberately
+  deferred (re-checked 2026-07-27):** confirmed live in `agentic/fsconnect/indexer.py`'s
+  `apply()`/`_prune_staging()`. Any heuristic to distinguish "genuinely emptied" from
+  "transiently unmounted" changes behavior on CyClaw's **governed delete/trash write
+  path** — CLAUDE.md requires two-phase audit, quota enforcement, and write-guard
+  verification for any fsconnect write change, and a wrong heuristic could go either
+  direction (fail to protect against the transient-unmount case, or block a
+  legitimate prune so staged files never get cleaned up). Needs its own careful design
+  and review, not a fix folded into a docs-reconciliation pass.
 - **Low (adversarial-flavored)** — the fsconnect prune "ownership manifest" cache file
   defaults to living inside the synced corpus tree itself
   (`data/corpus/fsconnect/.fsindex_cache.json`) and `sync/filters.py`'s hardened

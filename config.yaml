@@ -330,6 +330,19 @@ security:
   # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
   require_env:
     - "GROK_API_KEY"
+  # Starlette buffers a request's entire raw body into memory before Pydantic
+  # validation runs, so schemas/api.py's per-field max_length caps (largest is
+  # 65536 chars) don't bound memory use for an oversized POST -- they only
+  # bound what survives parsing. 1 MiB gives generous headroom over the
+  # largest real payload (one 65536-char field plus JSON structural overhead)
+  # while still rejecting a grossly oversized body before it's buffered.
+  # Enforced via the client-declared Content-Length header only (gate.py's
+  # _MaxBodySizeMiddleware) -- a client that lies about Content-Length or uses
+  # chunked transfer-encoding without one is not covered by this check, which
+  # is an accepted gap under this project's single-operator, loopback-bound
+  # threat model (docs/THREAT_MODEL.md), not a defense against a sophisticated
+  # adversary already on the loopback interface.
+  max_request_body_bytes: 1048576
   allowed_origins:
     - "http://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
     - "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138

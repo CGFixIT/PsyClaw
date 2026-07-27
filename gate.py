@@ -357,6 +357,45 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 _allowed_hosts = cfg.get("security", {}).get("allowed_hosts", ["127.0.0.1", "localhost"])  # DevSkim: ignore DS162092,DS137138 - loopback host allow-list by design
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
+# Max-body-size middleware (added before _SecurityHeadersMiddleware below, so
+# that middleware — the outermost layer — still wraps this one and stamps its
+# headers on a 413 rejection too, same as it already does for TrustedHost's
+# 400). schemas/api.py's per-field max_length caps only bound what survives
+# Pydantic parsing; Starlette buffers the entire raw body into memory first,
+# so an oversized POST costs memory regardless of what the parsed fields turn
+# out to be. See config.yaml security.max_request_body_bytes for the accepted
+# scope of this check (Content-Length only).
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse as _JSONResponse
+
+
+class _MaxBodySizeMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_bytes: int):
+        super().__init__(app)
+        self._max_bytes = max_bytes
+
+    async def dispatch(self, request: StarletteRequest, call_next):  # type: ignore[override]
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                declared_bytes = int(declared)
+            except ValueError:
+                declared_bytes = None
+            if declared_bytes is not None and declared_bytes > self._max_bytes:
+                return _JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": f"request body exceeds {self._max_bytes} bytes",
+                        "code": "PAYLOAD_TOO_LARGE",
+                    },
+                )
+        return await call_next(request)
+
+
+_max_body_bytes = cfg.get("security", {}).get("max_request_body_bytes", 1048576)
+app.add_middleware(_MaxBodySizeMiddleware, max_bytes=_max_body_bytes)
+
 # Security response headers middleware: sets defense-in-depth headers on every
 # response (X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
 # Permissions-Policy) and adds Cache-Control: no-store on the root / static paths
@@ -365,8 +404,6 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 # TrustedHost check — it therefore stamps these headers on every response,
 # including the 400 a rejected Host produces. That is intentional: defense-in-depth
 # headers belong on error responses too, and they carry no request data.
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
 
