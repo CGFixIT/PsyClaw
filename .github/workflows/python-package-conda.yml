@@ -65,6 +65,19 @@ jobs:
         echo '# Soul' > data/personality/soul.md
         echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
+    - name: Cache embeddings model (sentence-transformers)
+      # See ci.yml's identical step for the full rationale: this job's
+      # verify.sh (CyClaw-Sandbox) Stage 3 builds a real index via
+      # retrieval.indexer, which fetches models.embeddings.model from
+      # HuggingFace into .emb_cache on first use. Caching it here removes that
+      # repeat network fetch on every run.
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      with:
+        path: .emb_cache
+        key: emb-model-${{ hashFiles('config.yaml') }}
+        restore-keys: |
+          emb-model-
+
     - name: Pytest — unit + integration + safe smoke (RAG/policy focused)
       shell: bash -l {0}
       run: |

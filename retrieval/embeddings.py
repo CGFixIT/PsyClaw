@@ -13,6 +13,7 @@ Security note (2026-06):
 """
 
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -21,6 +22,16 @@ import yaml
 from utils.errors import EmbeddingServiceError
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# On a cache miss, loading the model fetches it from HuggingFace (see
+# _load_model below) -- a transient network hiccup during that one-time fetch
+# would otherwise raise straight out of the first query or index build.
+# Bounded retry matches the pattern already used for LLM calls
+# (llm/client.py's _post_with_retry); no config knob for this one since it is
+# a one-time load, not a hot path (see also CI's own actions/cache step for
+# .emb_cache, which avoids the fetch entirely on a cache hit).
+_MODEL_LOAD_MAX_ATTEMPTS = 3
+_MODEL_LOAD_RETRY_DELAY_SEC = 2.0
 
 
 def resolve_cache_dir(config_path: str, cache_dir: str | None) -> str:
@@ -42,9 +53,22 @@ def _load_model(model_name: str, cache_dir: str):
     Note: sentence-transformers will use safetensors when available.
     If a .pth or .bin file is explicitly provided via model_name, it may still
     hit torch.load paths. Treat such cases as requiring extra scrutiny.
+
+    Retries a bounded number of times on OSError/RuntimeError: on a cache miss
+    this call fetches the model over the network, and huggingface_hub surfaces
+    a transient connection failure as one of those two types. lru_cache does
+    not memoize a raised exception, so a still-failing final attempt propagates
+    normally and the next call retries from scratch.
     """
     from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(model_name, cache_folder=cache_dir or None)
+
+    for attempt in range(_MODEL_LOAD_MAX_ATTEMPTS):
+        try:
+            return SentenceTransformer(model_name, cache_folder=cache_dir or None)
+        except (OSError, RuntimeError):
+            if attempt == _MODEL_LOAD_MAX_ATTEMPTS - 1:
+                raise
+            time.sleep(_MODEL_LOAD_RETRY_DELAY_SEC)
 
 @lru_cache(maxsize=8)
 def _embeddings_cfg(config_path: str) -> tuple:
