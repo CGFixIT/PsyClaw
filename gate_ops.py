@@ -114,9 +114,8 @@ def register_ops_routes(
             "max_rows": s.get("max_rows", 1000),
         }
 
-    @app.post("/ops/sync", dependencies=[Depends(require_api_key)])
+    @app.post("/ops/sync", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_sync(request: Request, req: OpsSyncRequest) -> dict[str, Any]:
-        await enforce_rate_limit(request)
         try:
             result = await asyncio.to_thread(run_sync_op, req.action, dry_run=req.dry_run)
         except OpsError as e:
@@ -135,9 +134,8 @@ def register_ops_routes(
         payload["config"] = _ops_sync_config()
         return payload
 
-    @app.post("/ops/agentic", dependencies=[Depends(require_api_key)])
+    @app.post("/ops/agentic", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_agentic(request: Request, req: OpsAgenticRequest) -> dict[str, Any]:
-        await enforce_rate_limit(request)
         try:
             result = await asyncio.to_thread(
                 run_agentic_op, req.action,
@@ -160,9 +158,8 @@ def register_ops_routes(
         payload["config"] = _ops_agentic_config()
         return payload
 
-    @app.post("/ops/fsconnect", dependencies=[Depends(require_api_key)])
+    @app.post("/ops/fsconnect", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_fsconnect(request: Request, req: OpsFsConnectRequest) -> dict[str, Any]:
-        await enforce_rate_limit(request)
         try:
             result = await asyncio.to_thread(
                 run_fsconnect_op, req.action,
@@ -185,9 +182,8 @@ def register_ops_routes(
         payload["config"] = _ops_fsconnect_config()
         return payload
 
-    @app.post("/ops/sqlconnect", dependencies=[Depends(require_api_key)])
+    @app.post("/ops/sqlconnect", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_sqlconnect(request: Request, req: OpsSqlConnectRequest) -> dict[str, Any]:
-        await enforce_rate_limit(request)
         try:
             result = await asyncio.to_thread(
                 run_sqlconnect_op, req.action,
