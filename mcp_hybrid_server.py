@@ -44,6 +44,9 @@ CAPABILITIES = {
     "sampling": None  # CRITICAL: No LLM path at protocol level
 }
 
+# top_k's minimum/maximum below are literals, not a reference to _MAX_TOP_K --
+# a JSON Schema dict has to stay JSON-serializable as authored, so keep this in
+# sync by hand if _MAX_TOP_K ever changes (see _coerce_top_k above).
 TOOLS = [
     {
         "name": "hybrid_search",
@@ -52,7 +55,16 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
-                "top_k": {"type": "integer", "default": 5, "description": "Max results"},
+                "top_k": {
+                    "type": "integer",
+                    "default": 5,
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": (
+                        "Max results (clamped to [1, 50] server-side; non-integer or "
+                        "out-of-range values fall back to the default of 5)"
+                    ),
+                },
                 "mode": {
                     "type": "string",
                     "enum": ["hybrid", "semantic", "keyword"],
