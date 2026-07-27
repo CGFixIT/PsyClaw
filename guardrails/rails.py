@@ -18,7 +18,15 @@ This module is NEVER imported by gate.py, graph.py, or mcp_hybrid_server.py.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from functools import lru_cache
+from typing import Any
+
+# Reuse the soul scanner's OWASP baseline so the scanners never drift. Imported
+# rather than moved: utils/personality.py enforces ENFORCED_SOUL_PATTERNS at the
+# soul-write boundary, and relocating the constant out of that module would put
+# an invariant-I5 scan behind a cross-module import for no gain.
+from utils.personality import OWASP_INJECTION_PATTERNS
 
 # --- Soft, import-safe NeMo action decorator -------------------------------
 # Importing nemoguardrails must never be required just to import this module.
@@ -98,9 +106,97 @@ def detect_soul_mutation_intent(query: str) -> bool:
 
 
 def scan_injection(text: str) -> list[str]:
-    """Return the list of light injection markers found in ``text`` (may be empty)."""
+    """Return the list of light injection markers found in ``text`` (may be empty).
+
+    Deliberately the SMALL scan, and deliberately not the full pattern set built
+    by :func:`build_injection_patterns` below. Two reasons, both load-bearing:
+
+      * Its only production caller is the query-path input rail
+        (``integration.check_input`` via ``_offline_checks``), which sits BEHIND
+        ``utils/sanitizer.py``'s 32-pattern fail-closed filter -- a query
+        carrying an obvious payload never reaches it.
+      * ``OWASP_INJECTION_PATTERNS`` is documented in ``utils/personality.py`` as
+        the ADVISORY set (it carries ``act as`` / ``you are now`` / ``pretend to
+        be``, "legitimate in author-controlled identity statements"), which is
+        why the soul write boundary enforces the narrower
+        ``ENFORCED_SOUL_PATTERNS`` instead. Blocking a live query on an advisory
+        pattern is a category error; scanning untrusted third-party content with
+        it is exactly what it is for.
+
+    Out-of-band callers scanning content the operator did not author (skill
+    definitions from GitHub, files from shares, harness-optimizer candidates)
+    want :func:`build_injection_patterns` / :func:`scan_injection_patterns`.
+    """
     low = text.lower()
     return [marker for marker in _INJECTION_MARKERS if marker in low]
+
+
+# --- Shared full-strength scanner (out-of-band callers) ---------------------
+# Single home for the OWASP-union scan that agentic/registry.py,
+# agentic/fsconnect/client.py, and agentic/harness_optimizer/governance.py each
+# used to rebuild independently. Consolidated here so the pattern set, the
+# dedup order, the IGNORECASE flag, and the drop-on-uncompilable behaviour
+# cannot drift between the three call sites. Callers keep their OWN policy on
+# top of it (fsconnect stays advisory, the skills registry stays fail-closed) --
+# only the pattern construction is shared, never the enforcement decision.
+
+
+def build_injection_pattern_sources(cfg: dict[str, Any]) -> list[str]:
+    """Return ``OWASP_INJECTION_PATTERNS`` ∪ ``policy.prompt_filter.banned_patterns``.
+
+    Order-preserving (OWASP baseline first, then config entries not already
+    present) so the compiled tuple is stable and the ``lru_cache`` in
+    :func:`compile_injection_patterns` keys deterministically.
+
+    Non-string config entries are skipped: ``re.compile`` raises ``TypeError``
+    (not ``re.error``) on one, which would escape the compile loop's handler and
+    crash the caller. Dropping them here means a malformed ``banned_patterns``
+    entry degrades the scan by one pattern instead of taking down the operation.
+    """
+    sources: list[str] = list(OWASP_INJECTION_PATTERNS)
+    pf = (cfg.get("policy") or {}).get("prompt_filter") or {}
+    for pattern in pf.get("banned_patterns") or []:
+        if isinstance(pattern, str) and pattern not in sources:
+            sources.append(pattern)
+    return sources
+
+
+@lru_cache(maxsize=8)
+def compile_injection_patterns(sources: tuple[str, ...]) -> tuple[tuple[str, re.Pattern[str]], ...]:
+    """Compile (and memoize) a pattern-source tuple. Pure: same sources -> same result.
+
+    Memoized because the agentic CLI builds short-lived objects per op and each
+    construction otherwise recompiles the whole set. Keyed on the source tuple,
+    so a config change with different patterns yields a fresh entry.
+
+    An uncompilable pattern is skipped rather than raised. Callers that treat the
+    scan as an enforced gate must check for a shrunken/empty result themselves --
+    ``agentic/registry.py`` does exactly that and refuses to construct rather than
+    operate with a defeated gate.
+    """
+    compiled: list[tuple[str, re.Pattern[str]]] = []
+    for pattern in sources:
+        try:
+            compiled.append((pattern, re.compile(pattern, re.IGNORECASE)))
+        except re.error:
+            continue
+    return tuple(compiled)
+
+
+def build_injection_patterns(cfg: dict[str, Any]) -> list[tuple[str, re.Pattern[str]]]:
+    """Compile ``OWASP ∪ policy.prompt_filter.banned_patterns`` for ``cfg``."""
+    return list(compile_injection_patterns(tuple(build_injection_pattern_sources(cfg))))
+
+
+def scan_injection_patterns(
+    text: str, patterns: Sequence[tuple[str, re.Pattern[str]]]
+) -> list[str]:
+    """Return the pattern SOURCES matching ``text`` (may be empty).
+
+    Returns sources rather than match objects so callers can audit-log which
+    rule fired without echoing the matched text itself.
+    """
+    return [src for src, pat in patterns if pat.search(text)]
 
 
 def grounding_score(answer: str, context: str) -> float:

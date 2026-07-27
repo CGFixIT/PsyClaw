@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 
+from guardrails.rails import build_injection_pattern_sources, compile_injection_patterns
 from utils.errors import AgenticError
-from utils.personality import OWASP_INJECTION_PATTERNS
 
 # Shared with core.RunReport.has_critical_governance_finding: the gate there
 # recognizes this exact severity string by convention (parsed back out of
@@ -65,34 +64,16 @@ def governance_gate_strings(findings: tuple[GovernanceFinding, ...]) -> tuple[st
     return tuple(finding.as_gate_string() for finding in findings)
 
 
-@lru_cache(maxsize=8)
-def _compile_governance_patterns(sources: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
-    """Compile and cache the injection-pattern set by its exact tuple of sources.
-
-    Mirrors agentic.registry._compile_injection_patterns / agentic.fsconnect.
-    client._compile_injection_patterns (same lru_cache-by-source-tuple idea) --
-    inspect_candidate_text is called at least 3x per candidate decision
-    (propose_candidate_application, apply_candidate_artifact, and
-    github_coding_runner.evaluate), and was recompiling/re-running every
-    pattern from scratch on each call.
-    """
-    compiled = []
-    for pattern in sources:
-        try:
-            compiled.append(re.compile(pattern, re.IGNORECASE))
-        except re.error:
-            continue
-    return tuple(compiled)
-
-
 def inspect_candidate_text(candidate_text: str, cfg: dict | None = None) -> tuple[GovernanceFinding, ...]:
     """Flag prompt-injection-shaped candidate content before acceptance or apply."""
 
-    patterns = list(OWASP_INJECTION_PATTERNS)
-    for pattern in ((cfg or {}).get("policy", {}).get("prompt_filter", {}).get("banned_patterns", []) or []):
-        if isinstance(pattern, str) and pattern not in patterns:
-            patterns.append(pattern)
-    for compiled in _compile_governance_patterns(tuple(patterns)):
+    # Pattern union + compile are shared with agentic.registry and
+    # agentic.fsconnect.client via guardrails.rails; the non-string guard this
+    # module carried is now part of that shared builder, so all three sites get
+    # it. The finding severity below stays local -- guardrails owns the pattern
+    # set, this module owns what a match means for a candidate artifact.
+    sources = build_injection_pattern_sources(cfg or {})
+    for _src, compiled in compile_injection_patterns(tuple(sources)):
         if compiled.search(candidate_text):
             return (
                 GovernanceFinding(
