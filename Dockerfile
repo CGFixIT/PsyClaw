@@ -2,7 +2,11 @@
 # Python 3.12 + uv for fast installs. Seccomp/AppArmor ready. Non-root.
 # Aligns with v1.9.0 pyproject + constraints for hermetic deps; CI uses requirements.txt for compat.
 
-FROM python:3.12-slim-bookworm AS builder
+# Pinned to the multi-arch manifest-list digest of the 3.12-slim-bookworm tag
+# (fetched from Docker Hub 2026-07-27): a bare tag is mutable, so a re-tagged/
+# compromised base image would silently enter every build. The tag is kept
+# alongside the digest for human readability; re-pin on any base-image bump.
+FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS builder
 
 # Install uv (fast, reproducible). Pinned to the multi-arch manifest digest of
 # the 0.7 tag (fetched from GHCR 2026-07-18): a bare tag is mutable, so a
@@ -37,7 +41,9 @@ RUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.tx
       pip install --no-cache-dir -r requirements.txt -c constraints.txt )
 
 # Runtime stage
-FROM python:3.12-slim-bookworm
+# Same digest as the builder stage above (both MUST match — they are meant to
+# be the identical image); see the builder FROM line for the pin rationale.
+FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 WORKDIR /app
 
