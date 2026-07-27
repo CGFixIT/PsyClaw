@@ -323,7 +323,11 @@ def test_empty_pattern_set_fails_closed(tmp_path, monkeypatch):
     # no banned_patterns, the compiled set would be empty -> _scan_injection a
     # silent no-op -> every skill passes the injection gate. The registry must
     # refuse to construct (fail-closed) rather than operate with a defeated gate.
-    monkeypatch.setattr("agentic.registry.OWASP_INJECTION_PATTERNS", [])
+    # Patch the binding the shared union actually reads. The registry composes
+    # guardrails.rails.build_injection_pattern_sources now, so emptying a
+    # registry-local alias would no longer empty the compiled set -- and this
+    # test would pass vacuously without ever exercising the fail-closed path.
+    monkeypatch.setattr("guardrails.rails.OWASP_INJECTION_PATTERNS", [])
     try:
         with pytest.raises(SkillRegistryError) as exc:
             _registry_with_cfg(tmp_path, {"policy": {"prompt_filter": {"banned_patterns": []}}})
