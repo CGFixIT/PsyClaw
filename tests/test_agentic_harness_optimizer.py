@@ -10,6 +10,7 @@ import pytest
 
 from agentic.harness_optimizer import (
     Experiment,
+    GovernanceFinding,
     ProposerWorkspaceTools,
     RunReport,
     Surface,
@@ -114,6 +115,27 @@ def test_candidate_rejects_critical_governance_finding() -> None:
 
     assert decision.accepted is False
     assert "critical_governance_finding" in decision.rejected_gates
+
+
+def test_has_critical_governance_finding_recognizes_real_serialization() -> None:
+    # Round-trips through the real GovernanceFinding.as_gate_string() serialization
+    # instead of a hand-typed "critical: ..." literal, so a format drift in
+    # as_gate_string() (or a severity-string rename) would actually be caught here.
+    critical = GovernanceFinding("critical", "candidate_injection_pattern", "matched").as_gate_string()
+    warning = GovernanceFinding("warning", "some_code", "non-fatal").as_gate_string()
+
+    assert (
+        RunReport(
+            "c", train_passed=True, holdout_passed=True, score=0.5, governance_findings=(critical,)
+        ).has_critical_governance_finding
+        is True
+    )
+    assert (
+        RunReport(
+            "c", train_passed=True, holdout_passed=True, score=0.5, governance_findings=(warning,)
+        ).has_critical_governance_finding
+        is False
+    )
 
 
 def test_proposer_workspace_builder_creates_local_artifacts(tmp_path: Path) -> None:
