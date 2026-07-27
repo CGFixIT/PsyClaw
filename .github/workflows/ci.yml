@@ -207,6 +207,24 @@ jobs:
           echo '# Soul' > data/personality/soul.md
           echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
+      - name: Cache embeddings model (sentence-transformers)
+        # retrieval/embeddings.py fetches models.embeddings.model (all-MiniLM-L6-v2,
+        # ~90MB) from HuggingFace on first use into cache_dir (config.yaml:
+        # models.embeddings.cache_dir, ".emb_cache" relative to repo root) -- no
+        # prior step seeds it, so every run re-downloads it fresh. That's the one
+        # real external network fetch this job's RAG smoke step depends on;
+        # caching it removes the repeat download and narrows exposure to the kind
+        # of transient fetch failure that surfaced as a one-off CyClaw Conda CI
+        # red X during a multi-PR merge landing on 2026-07-27 (a rerun and the
+        # very next push both came back clean, pointing at a transient fetch, not
+        # a code regression).
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .emb_cache
+          key: emb-model-${{ hashFiles('config.yaml') }}
+          restore-keys: |
+            emb-model-
+
       - name: RAG Query Smoke (ChromaDB + BM25 + RRF)
         shell: bash
         run: |
