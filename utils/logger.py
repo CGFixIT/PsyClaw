@@ -255,7 +255,13 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
     line = json.dumps(record) + "\n"
     try:
         with _AUDIT_WRITE_LOCK:
-            handle = _audit_handle(log_path)
+            # _audit_handle returns the same cached, intentionally long-lived
+            # handle its own open() call already carries a codeql suppression
+            # for (line ~64 above), closed only via atexit/close_audit_handles(),
+            # never per-call. Wrapping this call in a try is what made CodeQL
+            # newly attribute "opened, never closed" to this call site too;
+            # the suppression tag must sit on the flagged line itself.
+            handle = _audit_handle(log_path)  # codeql[py/file-not-closed] cached; see close_audit_handles()
             handle.write(line)
             handle.flush()
     except OSError as exc:
