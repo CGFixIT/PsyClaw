@@ -253,7 +253,16 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
         record[key] = _redact_value(value, cfg)
     record["timestamp"] = datetime.now(UTC).isoformat()
     line = json.dumps(record) + "\n"
-    with _AUDIT_WRITE_LOCK:
-        handle = _audit_handle(log_path)
-        handle.write(line)
-        handle.flush()
+    try:
+        with _AUDIT_WRITE_LOCK:
+            handle = _audit_handle(log_path)
+            handle.write(line)
+            handle.flush()
+    except OSError as exc:
+        # audit_logger is the unconditional terminal node every graph path
+        # converges on (invariant I4) -- it runs AFTER the answer is already
+        # computed. Letting a disk-full/permission failure here escape would
+        # turn an already-good response into an HTTP 500 purely because the
+        # audit trail couldn't be persisted. Degrade loudly to the app log
+        # instead of raising; the caller still gets its answer.
+        logger.warning("audit_log write failed for %s: %s", log_path, exc)
