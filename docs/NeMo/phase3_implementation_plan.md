@@ -1,223 +1,187 @@
 ---
-title: "NeMo Guardrails — Phase 3 Plan (output rails + full input-rail coverage)"
+title: "NeMo Guardrails — Phase 3 Plan (redirect to agentic/ and harness/)"
 date: 2026-07-27
-tags: [guardrails, nemo, graph, topology, security, plan]
+tags: [guardrails, nemo, agentic, harness, security, plan]
 source: "planning session vs main @ d863494"
 related:
   - docs/NeMo/later_development_guideline.md
   - docs/NeMo/phase2_implementation_plan.md
-  - guardrails/integration.py
-  - utils/guardrail_bridge.py
-  - graph.py
+  - docs/agentic/AGENTIC_README.md
+  - docs/HARNESS_POWERSHELL.md
+  - guardrails/rails.py
+  - agentic/registry.py
 ---
 
 ## Summary
 
-This document is the planning contract for **Phase 3** of the NeMo Guardrails
-roadmap: closing the gap between what `guardrails.enabled: true` *appears* to
-switch on and what it actually enforces today. It is a plan, not an approved
-change — the graph-edge work it describes sits in the High risk tier
-(`CLAUDE.md` §7, "editing a graph edge") and needs explicit sign-off before any
-code is written.
+This document redirects **Phase 3** of the NeMo Guardrails roadmap away from the
+RAG query path and toward `agentic/` and `harness/`. It is a plan, not an
+approved change.
 
-Phase 3 covers three separable pieces, deliberately ranked by how well each
-clears the FEATURE FREEZE bar (`CLAUDE.md` §1):
+The roadmap in `docs/NeMo/later_development_guideline.md` assumed Phase 3 meant
+"add output rails to the graph." Auditing the shipped code against that
+assumption on 2026-07-27 surfaced a mismatch worth fixing before writing any
+code: **the guardrails layer is currently deployed where a prompt injection is
+least dangerous, and is absent from the paths where one is most dangerous.**
 
-| Piece | Nature | Freeze verdict |
-|---|---|---|
-| A. Close the `offline_best_effort` input-rail bypass | Real defect — identical query blocked or not depending on retrieval score | **Passes** (bug fix) |
-| B. Reconcile stale guardrails documentation with shipped code | Documentation accuracy | **Passes** (docs) |
-| C. Add a `guardrail_output` node (grounding / hallucination floor) | New capability on the live request path | **Needs explicit justification** |
-
-Each piece is a separate reviewable PR. Piece C must not be bundled with A or B.
+Phase 3 as redirected has one organising goal: make `guardrails/` the shared home
+for injection/abuse scanning that `agentic/` has already re-implemented three
+times, and extend that coverage to the PowerShell harness, which has none of its
+own.
 
 ---
 
-## Correction: what `guardrails.enabled: true` already does today
+## Finding 1 — the capability asymmetry
 
-Verified against `main` @ `d863494` on 2026-07-27. Two claims that circulated in
-earlier planning material (`PR #415`, opened 2026-07-03) are **no longer true**
-and must not be carried into Phase 3 work:
+Prompt injection matters in proportion to what the model's output can *do*. The
+four surfaces in this repo differ enormously on that axis, and the guardrails
+coverage runs backwards to it:
 
-- **The NeMo endpoint is not stale.** `guardrails/config/config.yml` lines 24 and
-  28 name `qwen2.5:7b` at `http://127.0.0.1:11434/v1` (Ollama), not the retired
-  LM Studio port 1234. Independently, `_apply_guardrails_config()`
-  (`guardrails/integration.py:70-92`) overrides `engine` / `model` / `base_url`
-  from `GuardrailsConfig` at engine-build time, so `config.yaml`'s `guardrails:`
-  block is authoritative regardless of what the static NeMo directory names.
-- **`nemoguardrails` is already declared.** `pyproject.toml:29-31` carries it as
-  the optional extra `[project.optional-dependencies] guardrails` pinned to
-  `nemoguardrails==0.18.2`. The roadmap's Phase 5 item "add the dependency" is
-  therefore partially complete.
+| Surface | Input | What output can do | Injection guard today |
+|---|---|---|---|
+| `/query` (gate → graph) | Operator typing at a loopback terminal | Return text; append an audit line | `utils/sanitizer.py` (32 patterns, fail-closed) **plus** the Phase 2 guardrails input rail |
+| `agentic/registry.py` | Skill definitions sourced from GitHub | Mutate the governed skills registry — decides which capabilities exist | Own scanner, enforcing |
+| `agentic/fsconnect/` | File contents from local/SMB shares | **Write files**, trash/quota operations | Own scanner, explicitly labelled *advisory* (`agentic/fsconnect/client.py:50`) |
+| `harness/` (PowerShell console, `127.0.0.1:8790`) | Operator slash-commands plus model output | Reaches `agentic.cli` through the `utils.ops_runner` subprocess shim (`harness/server.py:41`) | **None of its own** |
 
-What `guardrails.enabled: true` switches on today is exactly one thing: the
-**offline input rail** at the `guardrail_input` node in `graph.py`, built through
-the `utils/guardrail_bridge.py` inversion shim and wired by Phase 2. It runs
-`guardrails.integration.check_input()` — light injection markers plus the
-soul-mutation regex, both model-free — and routes a blocked query straight to
-`audit_logger` via `guardrail_router`. No LLM round-trip is added.
+The `/query` path is the only one that is double-guarded, and it is the only one
+whose worst case is "the operator reads a sentence they did not want." The paths
+that mutate a capability registry or write to a filesystem carry one guard each,
+one of which is advisory. The harness carries none and inherits only whatever
+`agentic/` enforces at the subprocess boundary.
 
----
-
-## Gap 1 — the input rail covers only one of four answer paths
-
-`graph.py` reaches an answer through four terminal producers: `local_llm`,
-`grok_fallback`, `claude_fallback`, and `offline_best_effort`. The Phase 2
-`guardrail_input` node sits only on the `route_by_score` → `local_llm` edge, so
-only the high-score path is railed. `graph.py:850-855` already records this as a
-KNOWN GAP in a maintainer comment.
-
-The observable defect: a query carrying an injection or soul-mutation payload is
-**blocked when it retrieves well and answered when it retrieves poorly**. Scoring
-above or below `retrieval.min_score` (`0.028`, `config.yaml`) is unrelated to
-whether the query is hostile, so the rail's coverage is decided by an orthogonal
-signal. An attacker who phrases a soul-mutation attempt in terms absent from the
-corpus lands on the un-railed branch by construction.
-
-Scope note: `gate.py`'s sanitizer (`utils/sanitizer.py`, 32 `banned_patterns`)
-remains the fail-closed front door on *every* path and is unaffected — this gap
-is in the defense-in-depth layer behind it, not the primary filter.
-
-Phase 2 deliberately deferred this (`later_development_guideline.md`, resolved
-open question: "`local_llm` branch only in Phase 2"), on the reasoning that the
-low-score branch is sanitizer-screened and human-confirmed before any external
-call. That reasoning holds for `grok_fallback` and `claude_fallback`, which
-require `user_confirmed_online`. It does **not** hold for `offline_best_effort`,
-which answers locally with no confirmation gate.
+Threat-model note: `docs/THREAT_MODEL.md` scopes CyClaw to a single operator on
+loopback, which is what makes the `/query` path genuinely low-risk — the operator
+attacking their own terminal is not a threat. That same reasoning does **not**
+extend to `agentic/`, which ingests content the operator did not author: GitHub
+skill definitions and files from shares.
 
 ---
 
-## Gap 2 — no output rail runs on the live path at any setting
+## Finding 2 — the same scanner is implemented four times, and guardrails has the weakest copy
 
-`guardrails/integration.py` contains the grounding / hallucination check
-(`grounding_score`, `is_possible_hallucination`, floor
-`guardrails.hallucination_threshold: 0.18` from `config.yaml`) and the live NeMo
-engine handoff (`get_cyclaw_guardrails`). Both are reachable only through
-`safe_generate()`, and `safe_generate()` has **zero production callers** — it is
-exercised by tests and the `guardrails.cli` only.
+`OWASP_INJECTION_PATTERNS` (13 patterns) is defined once, in
+`utils/personality.py:71`. Three `agentic/` modules import it and each rebuilds
+its own compile-and-scan layer around the union with `config.yaml`'s
+`policy.prompt_filter.banned_patterns` (32 patterns) — **37 patterns after
+deduplication**:
 
-`guardrail_safety_node` (`guardrails/integration.py:326`) is documented as
-"PROVIDED FOR FUTURE WIRING ONLY" and is not imported by `graph.py`.
+- `agentic/registry.py:41` — imports it; `_build_injection_patterns()` /
+  `_scan_injection()` at lines 174 and 215, with its own uncompilable-pattern
+  logging
+- `agentic/fsconnect/client.py:27` — imports it; `build_injection_patterns()` at
+  line 50
+- `agentic/harness_optimizer/governance.py:14` — imports it; own compile at
+  line 92
 
-Consequence: with `guardrails.enabled: true`, `nemoguardrails==0.18.2` installed,
-and Ollama reachable, the live NeMo engine is still **never built** on the
-request path, and no answer is ever checked for grounding. The Colang output
-flows in `guardrails/config/rails.co` (`check grounding` at line 110,
-`check soul leak` at 118, `self check facts` at 125) never execute in production.
+`guardrails/rails.py` — the module whose entire stated purpose is this — imports
+**none** of it. Its only imports are `re` and `collections.abc.Iterable`
+(lines 20-21). Its injection scan is 7 hardcoded substrings
+(`_INJECTION_MARKERS`, lines 63-71), matched by `str.__contains__`, with no
+config input and no OWASP set.
 
----
+So the scanner wired into the graph checks against 7 literal strings, while the
+scanners guarding filesystem writes and registry mutation check against 37
+regexes. The weakest implementation is the one carrying the "guardrails" name.
 
-## The blocking design constraint: `safe_generate` generates
-
-The single most important constraint on Phase 3, and the reason
-`guardrail_safety_node` was left unwired rather than simply plugged in:
-
-`safe_generate()` is the guardrailed analogue of a raw LLM call — it *produces*
-an answer via `rails.generate_async()`. By the time any output rail would run in
-`graph.py`, `local_llm_node` has **already produced the answer**. Wiring
-`safe_generate` (or the `guardrail_safety_node` that wraps it) as an output node
-would generate the answer a second time: double latency, double token spend, and
-a returned answer that is not the one the graph actually computed or audited.
-
-Phase 3 therefore **must not reuse `safe_generate`** for the output node. It
-needs a new, non-generating, synchronous entry point in
-`guardrails/integration.py` mirroring the shape `check_input()` already
-established:
-
-```python
-def check_output(
-    answer: str, context: str, *, cfg=None, metrics=None
-) -> dict[str, Any]:
-    # returns {"blocked": bool, "message": str, "rails": list[str],
-    #          "grounding_score": float}
-```
-
-Offline-only, no generation, no LLM round-trip — the same discipline that let
-`check_input()` be wired safely in Phase 2. The model-assisted Colang rails
-(`self_check_input`, `self_check_facts`) stay out of scope for Phase 3 precisely
-because they *do* require an extra LLM round-trip per query; they are a separate
-later decision with a measured latency budget attached.
+Consolidation is the obvious win, and it is not a new capability: it is moving
+logic `agentic/` already runs into the module that should own it.
 
 ---
 
-## Invariant analysis for the proposed `guardrail_output` node
+## Why this direction is cheaper than the query-path plan it replaces
 
-Each of the six invariants (`CLAUDE.md` §3), evaluated against a design that adds
-one `guardrail_output` node plus one `guardrail_output_router` between the answer
-producers and `audit_logger`:
+The original Phase 3 (a `guardrail_output` node in `graph.py`) requires changing
+the audit-convergence topology that invariant **I4** asserts statically — adding
+a node changes the count of upstream paths reaching `audit_logger`, so
+`.claude/skills/invariant-guard/check_invariants.py` and `test_graph`'s edge
+assertions both have to be updated and argued. That is a deliberate change to the
+shape of a security invariant.
+
+The redirected Phase 3 requires **no invariant change at all**, because the import
+direction it needs is already legal:
+
+- `tests/test_guardrails_isolation.py:60-65` forbids `guardrails` → `{agentic, sync}`
+- `tests/test_agentic_isolation.py:74-86` forbids `agentic` → `{gate, gate_ops, graph, mcp_hybrid_server}`
+
+Neither test forbids **`agentic` → `guardrails`**. The dependency runs from the
+higher-capability out-of-band layer into the shared safety module, which is the
+direction that was always going to be correct, and the isolation suite already
+permits it verbatim.
+
+Verify before relying on it: re-run
+`GROK_API_KEY=dummy pytest tests/test_agentic_isolation.py tests/test_guardrails_isolation.py -q`
+after any consolidation commit, since a careless import added in the wrong
+direction is exactly what those suites exist to catch.
+
+---
+
+## Proposed Phase 3 scope
+
+**3A — consolidate the injection scanner into `guardrails/`.**
+Give `guardrails/rails.py` a real scanner: the `OWASP ∪ banned_patterns` union
+(37 patterns) that `agentic/` already trusts, replacing the 7 hardcoded markers.
+Have `agentic/registry.py`, `agentic/fsconnect/client.py`, and
+`agentic/harness_optimizer/governance.py` import it instead of each rebuilding
+one. Behaviour-preserving for `agentic/` by construction (same pattern set, same
+verdicts); a strict upgrade for `guardrails/`. This is the piece that makes
+everything after it worth doing.
+
+**3B — close the `harness/` gap.**
+The PowerShell harness has no scanner of its own and reaches `agentic.cli`
+through a subprocess shim. Decide deliberately whether that inherited boundary is
+sufficient, or whether harness-side input needs its own pre-flight scan before it
+reaches `run_agentic_op`. Requires reading `docs/HARNESS_POWERSHELL.md` and the
+`utils/ops_runner.py` contract first — the answer may legitimately be "the
+subprocess boundary is the right place and nothing is needed," and that
+conclusion should be recorded rather than assumed either way.
+
+**3C — promote the fsconnect scanner from advisory to enforcing (needs a decision).**
+`agentic/fsconnect/client.py:50` labels its scanner *advisory*. Filesystem writes
+are the highest-capability operation in the repo. Whether that stays advisory is
+an operator risk decision, not a code cleanup, and it should be made explicitly
+rather than inherited from a comment. Out of scope for the consolidation PR.
+
+**Deferred from this plan: query-path output rails.** The `guardrail_output` node
+work is not cancelled, only re-ranked below the above. One query-path item does
+survive as an independent bug fix, described in the next section.
+
+---
+
+## The one query-path item that still stands on its own
+
+Independent of the redirect: the Phase 2 input rail sits only on the
+`route_by_score` → `local_llm` edge, so an injection or soul-mutation payload is
+blocked when it retrieves well and answered when it retrieves poorly. Scoring
+above or below `retrieval.min_score` (`0.028`, `config.yaml`) is orthogonal to
+whether a query is hostile. `graph.py:850-855` already records this as a KNOWN
+GAP.
+
+This is a real inconsistency and a legitimate bug fix under FEATURE FREEZE
+(`CLAUDE.md` §1), but it is a graph-edge change and therefore still High tier
+(`CLAUDE.md` §7). It can proceed on its own schedule, before or after Phase 3,
+and should not be bundled with the consolidation work.
+
+---
+
+## Invariant analysis for the redirected scope
+
+Evaluated against Phase 3A (consolidating the scanner into `guardrails/` and
+importing it from `agentic/`):
 
 | # | Invariant | Verdict | Reasoning |
 |---|---|---|---|
-| I1 | RAG-first | **Preserved** | `retrieve` remains the unconditional entry point; an output rail attaches strictly after an answer exists, so nothing precedes retrieval. |
-| I2 | Topology = policy | **Preserved, with care** | The rail must be a visible node plus a conditional edge, never middleware inside `local_llm_node`. Routing stays a graph edge decided by a plain Python router, not an LLM. |
-| I3 | Triple-gated external fallback | **Untouched** | An output rail neither adds nor removes a condition on reaching `grok_fallback` / `claude_fallback`. Placing the rail after those nodes does not weaken the three gates in front of them. |
-| I4 | Audit convergence | **Preserved, and load-bearing** | A blocked answer must route to `audit_logger`, never to `END`. The count of upstream paths reaching `audit_logger` changes, so `.claude/skills/invariant-guard/check_invariants.py` and `test_graph`'s edge assertions both need updating in the same PR — argued explicitly in the PR body, not silently. |
-| I5 | Soul governance | **Preserved** | Rails in `guardrails/rails.py` only read; a rail may refuse a soul-mutation attempt but never writes `data/personality/soul.md`. Soul evolution stays the reason-bearing `gate.py` endpoint. |
-| I6 | Module isolation | **Preserved via the existing pattern** | Extend `utils/guardrail_bridge.py` with a `build_output_guard()` factory injected at `build_graph()` time, exactly as `build_input_guard()` already is. `gate.py` and `graph.py` continue never naming `guardrails`. |
+| I1 | RAG-first | **Untouched** | No change to `graph.py`; `retrieve` remains the unconditional entry point. |
+| I2 | Topology = policy | **Untouched** | No node added, no edge changed, no router introduced. |
+| I3 | Triple-gated external fallback | **Untouched** | No change to the conditions guarding `grok_fallback` / `claude_fallback`. |
+| I4 | Audit convergence | **Untouched** | The `audit_logger` convergence topology is not modified — this is the invariant the deferred query-path plan would have had to change. |
+| I5 | Soul governance | **Preserved, with care** | `OWASP_INJECTION_PATTERNS` currently lives in `utils/personality.py`, which owns soul governance. Consolidation must not weaken the soul write-path scan that `PersonalityManager` performs; if the constant moves rather than being re-exported, `utils/personality.py` must keep scanning against the identical set. `test_personality` and `test_due_diligence_invariants` both pin this. |
+| I6 | Module isolation | **Preserved** | `agentic` → `guardrails` is permitted by both isolation suites (see the import-direction section of this document). `gate.py` / `graph.py` / `mcp_hybrid_server.py` continue to name neither. |
 
-The invariant that costs real work is **I4**: adding a node changes the audit
-convergence topology that `invariant-guard` asserts statically. That is a
-deliberate, reviewable change to a security invariant's *shape* (not its
-guarantee) and is the single strongest reason Phase 3 piece C needs sign-off
-before implementation rather than after.
-
----
-
-## Fail-open versus fail-closed for an output rail
-
-Phase 2 chose **fail-open** for the input rail: `guardrail_input_node` catches
-every exception from the injected guard and answers normally
-(`graph.py:340-345`), on the reasoning that a raising defense-in-depth layer must
-never take down `/query` when the fail-closed sanitizer already ran.
-
-An output rail inherits that reasoning for *exceptions* — a crashing rail should
-not swallow an answer the graph already computed. It does **not** automatically
-inherit it for *verdicts*: a low grounding score is the rail working correctly,
-not failing, and suppressing the answer is the intended behavior.
-
-The trap to avoid: `guardrails.hallucination_threshold` is documented in
-`later_development_guideline.md` as an untuned placeholder ("tune against the
-real corpus; current value is a placeholder"). Shipping a blocking output rail on
-an untuned floor risks suppressing correct answers — a false-positive rate nobody
-has measured. Phase 3 should therefore land the output rail in **observe-only
-mode first** (record the grounding score and the would-block verdict to
-`logs/guardrails.jsonl`, return the answer unchanged), gather real distribution
-data, and only then flip to enforcing behind a separate config key. That ordering
-also keeps the first PR's blast radius to "adds a node that cannot change any
-answer."
-
----
-
-## Proposed sequencing
-
-Three PRs, in this order, each independently revertible:
-
-**PR 1 — documentation reconciliation (piece B, no code).**
-`docs/NeMo/later_development_guideline.md` carries drift that would mislead any
-future implementer: line 31-32 states the skeleton "is *not* wired into the
-request path yet" (Phase 2 wired it), and line 44 describes
-`guardrails/config/config.yml` as pointing at "loopback LM Studio" (it points at
-Ollama 11434). Correcting the guideline's current-state section, marking Phase 2
-DONE, and recording the verified state from this document's correction section is
-a pure docs change that clears the freeze bar and de-risks everything after it.
-
-**PR 2 — close the `offline_best_effort` bypass (piece A, bug fix).**
-Route `offline_best_effort` through the same offline input rail the high-score
-path already gets, so the rail's coverage stops depending on `retrieval.min_score`
-(`0.028`). This is an edge change and still High tier, but it *narrows* a
-documented inconsistency rather than adding a capability, and it reuses the
-already-shipped `check_input()` with no new guardrails surface area. The
-`grok_fallback` / `claude_fallback` paths stay out of scope: their
-`user_confirmed_online` gate is a real compensating control that
-`offline_best_effort` lacks.
-
-**PR 3 — `guardrail_output` node, observe-only (piece C, new capability).**
-Requires: explicit user approval against the FEATURE FREEZE test, a new
-non-generating `check_output()` in `guardrails/integration.py`, a
-`build_output_guard()` factory in `utils/guardrail_bridge.py`, the
-`invariant-guard` and `test_graph` topology updates for I4, and the observe-only
-posture described in this document's fail-open section. Not to be started before
-PR 1 and PR 2 have merged.
+The invariant that needs attention here is **I5**, not I4 — because the shared
+pattern set currently lives inside the soul-governance module. The safest shape
+is for `guardrails/` to import from `utils/personality.py` rather than to move
+the constant, leaving the soul write-path scan byte-identical.
 
 ---
 
@@ -226,63 +190,58 @@ PR 1 and PR 2 have merged.
 Commands are the canonical ones from `CLAUDE.md` §8 — no invented invocations:
 
 ```bash
-# Static invariants — run FIRST (before the change, to capture the baseline)
-# and LAST (after, to argue any intentional topology delta explicitly).
+# Both isolation suites — the load-bearing check for this redirect
+GROK_API_KEY=dummy pytest tests/test_agentic_isolation.py tests/test_guardrails_isolation.py -q
+
+# Static invariants, with attention to I5 (soul write-path scan)
 python3 .claude/skills/invariant-guard/check_invariants.py
 
-# Config contract (any config.yaml key added for the observe-only toggle)
-python3 .claude/skills/config-guard/check_config.py --strict
-
-# Dependency pins (relevant if the optional guardrails extra is touched)
-python3 .claude/skills/dep-guard/check_deps.py
+# Adversarial probe of the consolidated scanner against the sanitizer corpus
+python3 .claude/skills/injection-redteam/redteam.py
 
 # Lint (CI-enforced) and the full suite
 ruff check --select E,F,I,B,C4,UP,S .
 GROK_API_KEY=dummy pytest tests/ -q --tb=short
-
-# Guardrails-specific suites (8 files today; no heavy deps, no live services)
-GROK_API_KEY=dummy pytest tests/test_guardrails_*.py tests/test_guardrail_bridge.py -q
 ```
 
-Runtime probe, both settings, because the shipped default must stay inert:
-
-1. `guardrails.enabled: false` (the shipped default in `config.yaml`) —
-   `/query` behavior byte-identical to `main`, and `guardrails` never imported.
-2. `guardrails.enabled: true` — a probe that clears the `gate.py` sanitizer but
-   trips the rail under test; expect HTTP 200, one event in
-   `logs/guardrails.jsonl` (SHA-256 hashes only, never raw text), and a converged
-   event in `logs/audit.jsonl`.
+A consolidation PR must additionally demonstrate **behaviour preservation for
+`agentic/`**: the three call sites currently scan against the same 37-pattern
+union, so the consolidated scanner must produce identical verdicts. A test that
+asserts the pre- and post-consolidation pattern sets are equal is the cheapest
+proof.
 
 ---
 
 ## Open questions to resolve before Phase 3 code
 
-- [ ] **Does `guardrail_output` block, or only observe, in its first shipped
-      form?** This document recommends observe-only until
-      `guardrails.hallucination_threshold` (`0.18`, `config.yaml`) has been tuned
-      against the real corpus. Needs an operator decision. (Priority: high)
-- [ ] **Is `nemoguardrails==0.18.2` required in `constraints.txt` as well as
-      `pyproject.toml`?** `CLAUDE.md` §6 requires an exact pin in both for a new
-      dependency; it is currently declared only in `pyproject.toml:30` as an
-      optional extra. Confirm whether `dep-guard` treats optional extras as
-      in-scope for the cross-file agreement rule before adding or dismissing it.
-      (Priority: medium)
-- [ ] **Do the model-assisted Colang rails (`self_check_input`,
-      `self_check_facts`) ever go live?** Each adds an LLM round-trip per query.
-      Requires a measured latency budget and a false-positive rate against a
-      soul-attack corpus first. (Priority: low — explicitly out of Phase 3 scope)
-- [ ] **Second guardrail model in Ollama, or reuse `main`?** Carried forward
-      unresolved from `later_development_guideline.md`; only becomes blocking if
-      the model-assisted rails are approved. (Priority: low)
+- [ ] **Does `guardrails/rails.py` import `OWASP_INJECTION_PATTERNS` from
+      `utils/personality.py`, or does the constant move to a neutral home?**
+      Importing is safer for invariant I5 (the soul write-path scan stays
+      byte-identical); moving is cleaner but touches soul governance. Recommend
+      importing. (Priority: high — blocks 3A)
+- [ ] **Does the PowerShell harness need its own pre-flight scan, or is the
+      `utils.ops_runner` subprocess boundary the right and sufficient place?**
+      Requires reading `docs/HARNESS_POWERSHELL.md` and `utils/ops_runner.py`
+      before deciding. (Priority: high — is the whole of 3B)
+- [ ] **Should `agentic/fsconnect/`'s scanner stay advisory?** Filesystem writes
+      are the highest-capability operation in the repo. An operator risk
+      decision, not a cleanup. (Priority: medium)
+- [ ] **Do the query-path output rails ever get built?** Deferred by this
+      redirect, not cancelled. Revisit once 3A has landed and the consolidated
+      scanner exists to back them. (Priority: low)
 
 ---
 
 ## References
 
-- `docs/NeMo/later_development_guideline.md` — the roadmap and the invariant
-  contract for the guardrails layer (carries known current-state drift; see this
-  document's proposed PR 1)
-- `docs/NeMo/phase2_implementation_plan.md` — the input-rail node contract this
-  document extends, including the inversion-shim decision
+- `docs/NeMo/later_development_guideline.md` — the original roadmap this document
+  redirects (carries known current-state drift: it still describes the skeleton
+  as unwired, which Phase 2 changed)
+- `docs/NeMo/phase2_implementation_plan.md` — the input-rail node contract and
+  the inversion-shim decision
+- `docs/agentic/AGENTIC_README.md`, `docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md` —
+  binding governance for the layer this redirect targets
+- `docs/HARNESS_POWERSHELL.md` — the PowerShell harness contract
+- `docs/THREAT_MODEL.md` — single-operator, loopback-bound scope; the basis for
+  the capability-asymmetry argument
 - `CLAUDE.md` §3 (the six invariants), §7 (risk tiers and escalation)
-- `docs/THREAT_MODEL.md` — single-operator, loopback-bound security scope
