@@ -21,6 +21,7 @@ on:
       - 'docs/THREAT_MODEL.md'
       - '.github/SECURITY.md'
       - '.github/copilot-instructions.md'
+      - '.codex/prompts/pr-agent.md'
       - '.codex/prompts/pr-review.md'
 
 permissions: {}
