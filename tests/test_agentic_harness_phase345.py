@@ -30,6 +30,7 @@ from agentic.harness_optimizer import (
     build_proposer_workspace,
     decide_candidate,
     detect_visible_case_hardcoding,
+    inspect_candidate_text,
     invoke_workspace_proposer,
     score_cases,
 )
@@ -127,6 +128,17 @@ def test_visible_case_hardcoding_detector_does_not_false_positive_on_dash_delimi
 def test_governance_finding_rejects_invalid_severity_as_agentic_error() -> None:
     with pytest.raises(AgenticError):
         GovernanceFinding(severity="fatal", code="x", message="y")
+
+
+def test_inspect_candidate_text_reuses_compiled_patterns() -> None:
+    from agentic.harness_optimizer.governance import _compile_governance_patterns
+
+    _compile_governance_patterns.cache_clear()
+    cfg = {"policy": {"prompt_filter": {"banned_patterns": ["ignore previous instructions"]}}}
+    inspect_candidate_text("hello world", cfg)
+    inspect_candidate_text("a different safe string", cfg)
+    info = _compile_governance_patterns.cache_info()
+    assert info.hits >= 1  # second call with the same pattern-tuple hit the cache
 
 
 def test_workspace_tools_scope_writes_reads_and_audit(tmp_path: Path) -> None:

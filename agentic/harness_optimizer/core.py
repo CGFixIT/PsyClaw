@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
+from agentic.harness_optimizer.governance import CRITICAL_SEVERITY
 from utils.errors import AgenticError, require_non_empty
 
 
@@ -157,10 +158,12 @@ class RunReport:
         # governance_findings arrives here as plain strings, not GovernanceFinding
         # objects -- governance_gate_strings() flattens them via
         # GovernanceFinding.as_gate_string() into "severity: code: message". This
-        # check is only recognizing that same "critical:" prefix by convention, so
-        # if that serialization format in governance.py ever changes, this needs to
-        # change with it -- nothing enforces the two stay in sync.
-        return any(finding.lower().startswith("critical:") for finding in self.governance_findings)
+        # check recognizes that same "critical:" prefix by convention, but the
+        # coupling is now import-enforced: CRITICAL_SEVERITY is imported from
+        # governance.py rather than re-typed as a bare literal here, so a rename
+        # in governance.py is at least a visible import to update, not a silent
+        # two-file drift.
+        return any(finding.lower().startswith(f"{CRITICAL_SEVERITY}:") for finding in self.governance_findings)
 
 
 @dataclass(frozen=True)
