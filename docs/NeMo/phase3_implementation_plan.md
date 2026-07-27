@@ -42,13 +42,12 @@ coverage runs backwards to it:
 | `/query` (gate → graph) | Operator typing at a loopback terminal | Return text; append an audit line | `utils/sanitizer.py` (32 patterns, fail-closed) **plus** the Phase 2 guardrails input rail |
 | `agentic/registry.py` | Skill definitions sourced from GitHub | Mutate the governed skills registry — decides which capabilities exist | Own scanner, enforcing |
 | `agentic/fsconnect/` | File contents from local/SMB shares | **Write files**, trash/quota operations | Own scanner, explicitly labelled *advisory* (`agentic/fsconnect/client.py:50`) |
-| `harness/` (PowerShell console, `127.0.0.1:8790`) | Operator slash-commands plus model output | Reaches `agentic.cli` through the `utils.ops_runner` subprocess shim (`harness/server.py:41`) | **None of its own** |
+| `harness/` (PowerShell console, `127.0.0.1:8790`) | Operator slash-commands; model output stays in chat, never reaches `agentic/` | Today: `run_agentic_op("status")` only — a hardcoded action, zero caller-controlled arguments (`harness/server.py:264`) | N/A today (see Finding 3 — nothing to guard yet) |
 
 The `/query` path is the only one that is double-guarded, and it is the only one
 whose worst case is "the operator reads a sentence they did not want." The paths
 that mutate a capability registry or write to a filesystem carry one guard each,
-one of which is advisory. The harness carries none and inherits only whatever
-`agentic/` enforces at the subprocess boundary.
+one of which is advisory.
 
 Threat-model note: `docs/THREAT_MODEL.md` scopes CyClaw to a single operator on
 loopback, which is what makes the `/query` path genuinely low-risk — the operator
@@ -86,6 +85,40 @@ regexes. The weakest implementation is the one carrying the "guardrails" name.
 
 Consolidation is the obvious win, and it is not a new capability: it is moving
 logic `agentic/` already runs into the module that should own it.
+
+---
+
+## Finding 3 — 3B resolved: the harness has no live attack surface to guard yet
+
+This section corrects Finding 1's original table, which described `harness/` as
+reaching `agentic.cli` via the `ops_runner` shim carrying "operator slash-commands
+plus model output." That was true of the wiring documented in
+`docs/HARNESS_POWERSHELL.md`, but not of what the code in `harness/server.py`
+currently does with it — verified by reading the module, not inferred from the
+docs describing it.
+
+`harness/server.py` has exactly **one** call into `agentic/`:
+`run_agentic_op("status")` (line 264) — a hardcoded action string, zero
+caller-controlled arguments. `/api/chat`, the only endpoint that accepts free
+text, never calls `ops_runner` at all: it is LLM-in, LLM-out, recorded to a
+session JSON file, with no write capability downstream. `/api/registry` and
+`/api/harness/runs` are read-only (`harness/registry_view.py` parses
+`SKILL.md` frontmatter and lists a directory; neither imports `ops_runner`).
+`harness/schemas.py` already applies `extra="forbid"` and a length cap
+(32KB) to the one free-text field that exists (`ChatRequest.message`).
+
+**Conclusion: no harness-side scanner is needed today.** There is no code path
+by which a chat message or model output reaches `propose-skill`, `apply-skill`,
+fsconnect, or sqlconnect. A pre-flight scan added now would guard nothing, since
+nothing reaches the guarded operations yet. If the harness console is ever wired
+to expose those write operations directly (rather than only `status`), revisit
+this finding — at that point `run_agentic_op`'s existing validation (`name`/
+`desc` required, non-empty `reason` for `apply-skill`) and `agentic/registry.py`'s
+fail-closed scanner (consolidated onto `guardrails.rails` in 3A) already sit
+behind that boundary and would need no new gate, only a live caller.
+
+**3B is therefore complete as a decision, with no code change**, which is the
+outcome the original open question named as legitimate rather than assumed.
 
 ---
 
@@ -127,14 +160,12 @@ one. Behaviour-preserving for `agentic/` by construction (same pattern set, same
 verdicts); a strict upgrade for `guardrails/`. This is the piece that makes
 everything after it worth doing.
 
-**3B — close the `harness/` gap.**
-The PowerShell harness has no scanner of its own and reaches `agentic.cli`
-through a subprocess shim. Decide deliberately whether that inherited boundary is
-sufficient, or whether harness-side input needs its own pre-flight scan before it
-reaches `run_agentic_op`. Requires reading `docs/HARNESS_POWERSHELL.md` and the
-`utils/ops_runner.py` contract first — the answer may legitimately be "the
-subprocess boundary is the right place and nothing is needed," and that
-conclusion should be recorded rather than assumed either way.
+**3B — close the `harness/` gap. RESOLVED, no code needed (see Finding 3).**
+Verified by reading `harness/server.py`, `harness/schemas.py`, and
+`harness/registry_view.py`: the harness has no live call path into any
+write-capable `agentic/` operation today, so there is nothing for a harness-side
+scanner to guard. No PR for this piece. Revisit if the console is later wired to
+expose `propose-skill` / `apply-skill` / fsconnect / sqlconnect directly.
 
 **3C — promote the fsconnect scanner from advisory to enforcing (needs a decision).**
 `agentic/fsconnect/client.py:50` labels its scanner *advisory*. Filesystem writes
@@ -219,10 +250,11 @@ proof.
       Importing is safer for invariant I5 (the soul write-path scan stays
       byte-identical); moving is cleaner but touches soul governance. Recommend
       importing. (Priority: high — blocks 3A)
-- [ ] **Does the PowerShell harness need its own pre-flight scan, or is the
+- [x] **Does the PowerShell harness need its own pre-flight scan, or is the
       `utils.ops_runner` subprocess boundary the right and sufficient place?**
-      Requires reading `docs/HARNESS_POWERSHELL.md` and `utils/ops_runner.py`
-      before deciding. (Priority: high — is the whole of 3B)
+      Resolved 2026-07-27 (Finding 3): neither is needed yet — the harness has
+      no live call path into any write-capable `agentic/` operation to guard.
+      Revisit only if the console is later wired to expose one directly.
 - [ ] **Should `agentic/fsconnect/`'s scanner stay advisory?** Filesystem writes
       are the highest-capability operation in the repo. An operator risk
       decision, not a cleanup. (Priority: medium)
