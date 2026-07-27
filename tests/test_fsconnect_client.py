@@ -159,6 +159,12 @@ def test_context_run_read_fs_glob(env):
     assert res["match_count"] >= 2  # hello.txt + danger.txt
 
 
+def test_run_read_rejects_unknown_op(env):
+    cfg, fs_cfg, cp, _share, _audit = env
+    with pytest.raises(FsConnectError):
+        context.run_read(cfg, fs_cfg, "not_a_real_op", config_path=cp)
+
+
 def test_op_not_allowed(env):
     cfg, fs_cfg, cp, _share, _audit = env
     fs_cfg.allowed_fs_ops = ["fs_list"]  # restrict

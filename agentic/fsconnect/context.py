@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from agentic.fsconnect.client import FsClient
 from agentic.fsconnect.config import FsConnectConfig
+from utils.errors import FsConnectError
 
 
 def run_read(
@@ -36,7 +37,15 @@ def run_read(
             return client.fs_grep(target, pattern or "", root=root, regex=regex)
         if op == "fs_glob":
             return client.fs_glob(target, pattern or "", root=root, recursive=recursive)
-        raise ValueError(f"unknown read op: {op!r}")
+        # Typed, not ValueError: fsconnect/cli.py's _run_read() only catches
+        # FsConnectError, so a bare builtin would escape as an uncaught traceback
+        # (exit 1) instead of the documented fsconnect exit-code API. Mirrors
+        # sqlconnect/context.py's run_op() for the same reason.
+        raise FsConnectError(
+            f"unknown read op: {op!r}",
+            code="FSCONNECT_BAD_ARG",
+            details={"op": op},
+        )
 
 
 def overview(cfg: dict, fs_cfg: FsConnectConfig, *, config_path: str = "config.yaml") -> dict:
