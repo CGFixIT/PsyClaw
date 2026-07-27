@@ -12,6 +12,8 @@ import hmac
 import json
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +25,56 @@ from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+# An apply completes in milliseconds, so a lock directory older than this is from
+# a crashed run and is safe to reclaim. Mirrors agentic.registry's identical
+# atomic-mkdir mutex, which exists for the same reason: apply_candidate_artifact's
+# read-version-increment-write below is a plain read-modify-write with no
+# cross-process exclusion otherwise, so two concurrent accept calls for the same
+# variant_id could interleave and lose an update.
+_LOCK_STALE_SEC = 60
+_write_lock = threading.Lock()
+
+
+def _acquire_artifact_lock(lock_dir: Path) -> None:
+    """Acquire a cross-process write lock, or raise ``AgenticError``.
+
+    ``Path.mkdir`` is atomic on every platform, so an atomically-created lock
+    directory doubles as a zero-dependency, cross-platform mutex -- the same
+    pattern ``agentic.registry._acquire_registry_lock`` uses. A lock left by a
+    crashed run is reclaimed after ``_LOCK_STALE_SEC``.
+    """
+    try:
+        lock_dir.mkdir(parents=True)
+        return
+    except FileExistsError:
+        # Lock is already held; fall through to the stale-age check below.
+        pass
+    try:
+        age = time.time() - lock_dir.stat().st_mtime
+    except OSError:
+        age = 0.0
+    if age > _LOCK_STALE_SEC:
+        try:
+            lock_dir.rmdir()
+            lock_dir.mkdir(parents=True)
+            return
+        except OSError:
+            # Another process won the reclaim race; fall through and refuse below.
+            pass
+    raise AgenticError(
+        "another harness-optimizer accept is in progress for this candidate",
+        details={"lock_dir": str(lock_dir)},
+    )
+
+
+def _release_artifact_lock(lock_dir: Path) -> None:
+    """Release the cross-process write lock; tolerant if it is already gone."""
+    try:
+        lock_dir.rmdir()
+    except OSError:
+        # Best-effort: the lock dir may already be gone (or never created).
+        pass
 
 
 @dataclass(frozen=True)
@@ -38,8 +90,14 @@ class HarnessApplicationProposal:
 def _atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp_path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(temp_path, path)
+    try:
+        temp_path.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(temp_path, path)
+    except OSError:
+        # A failure between write_text() and os.replace() would otherwise leave
+        # a stray .{name}.{pid}.tmp file with nothing to clean it up.
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def propose_candidate_application(
@@ -122,24 +180,32 @@ def apply_candidate_artifact(
         raise AgenticWriteRefused(refusal)
 
     artifact_path = Path(harness_cfg.output_dir) / "accepted" / f"{proposal.variant_id}.json"
-    previous = {}
-    if artifact_path.exists():
+    lock_dir = artifact_path.with_suffix(artifact_path.suffix + ".lock.d")
+    with _write_lock:  # serialize threads within this process
+        _acquire_artifact_lock(lock_dir)  # serialize other processes too
         try:
-            previous = json.loads(artifact_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise AgenticError("existing harness artifact is malformed", details={"path": str(artifact_path)}) from exc
-    version = int(previous.get("version", 0)) + 1
-    record = {
-        "version": version,
-        "variant_id": proposal.variant_id,
-        "changed_surfaces": list(proposal.changed_surfaces),
-        "proposal_sha256": proposal.proposal_sha256,
-        "reason": reason,
-        "proposal_text": proposal.proposal_text,
-    }
-    _atomic_json(artifact_path, record)
-    memory_path = Path(harness_cfg.memory_dir) / f"{proposal.variant_id}-{proposal.proposal_sha256[:12]}.json"
-    _atomic_json(memory_path, {key: value for key, value in record.items() if key != "proposal_text"})
+            previous = {}
+            if artifact_path.exists():
+                try:
+                    previous = json.loads(artifact_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise AgenticError(
+                        "existing harness artifact is malformed", details={"path": str(artifact_path)}
+                    ) from exc
+            version = int(previous.get("version", 0)) + 1
+            record = {
+                "version": version,
+                "variant_id": proposal.variant_id,
+                "changed_surfaces": list(proposal.changed_surfaces),
+                "proposal_sha256": proposal.proposal_sha256,
+                "reason": reason,
+                "proposal_text": proposal.proposal_text,
+            }
+            _atomic_json(artifact_path, record)
+            memory_path = Path(harness_cfg.memory_dir) / f"{proposal.variant_id}-{proposal.proposal_sha256[:12]}.json"
+            _atomic_json(memory_path, {key: value for key, value in record.items() if key != "proposal_text"})
+        finally:
+            _release_artifact_lock(lock_dir)
     audit_log(
         {
             "event": "agentic_harness_candidate_accepted",
