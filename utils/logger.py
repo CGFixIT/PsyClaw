@@ -238,6 +238,26 @@ def _redact_value(value: object, cfg: dict) -> object:
     return value
 
 
+def _write_audit_line(log_path: Path, line: str) -> None:
+    """Append one already-formatted line to the cached audit-log handle.
+
+    Split out of audit_log() so its try/except (below) wraps a plain function
+    call rather than the raw _audit_handle() acquisition. This exact
+    acquire-write-flush sequence was never flagged by CodeQL's
+    py/file-not-closed check before a try/except was added directly around
+    it -- two attempts at an inline codeql[] suppression comment (same-line,
+    then correctly on the preceding line) both failed to close the alert, so
+    this reshapes the code instead of relying on a suppression annotation.
+    _audit_handle's handle is deliberately never closed here: it's cached and
+    shared across calls, closed only via atexit.register/close_audit_handles()
+    (see _audit_handle above), never per-call.
+    """
+    with _AUDIT_WRITE_LOCK:
+        handle = _audit_handle(log_path)
+        handle.write(line)
+        handle.flush()
+
+
 def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = None) -> None:
     if cfg is None:
         cfg = _get_config(config_path)
@@ -254,22 +274,7 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
     record["timestamp"] = datetime.now(UTC).isoformat()
     line = json.dumps(record) + "\n"
     try:
-        with _AUDIT_WRITE_LOCK:
-            # _audit_handle returns the same cached, intentionally long-lived
-            # handle its own open() call carries a (same-line, likely inert --
-            # see below) explanatory comment for at line ~64 above; the real
-            # lifecycle is atexit.register/close_audit_handles(), never
-            # per-call. Wrapping this call in a try is what made CodeQL newly
-            # attribute "opened, never closed" to this call site too. A
-            # codeql[rule-id] suppression must be its own comment line
-            # immediately BEFORE the flagged line, not a trailing same-line
-            # comment (confirmed after an initial attempt placed it trailing,
-            # which produced a fresh, still-open alert rather than suppressing
-            # the original).
-            # codeql[py/file-not-closed]
-            handle = _audit_handle(log_path)
-            handle.write(line)
-            handle.flush()
+        _write_audit_line(log_path, line)
     except OSError as exc:
         # audit_logger is the unconditional terminal node every graph path
         # converges on (invariant I4) -- it runs AFTER the answer is already
