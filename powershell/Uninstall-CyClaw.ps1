@@ -9,7 +9,7 @@
   no data is lost; pass -RemoveHome to delete it (prompts first).
 
 .EXAMPLE
-  .\Uninstall-CyClaw.ps1              # keep ~/.CyClaw data
+  .\Uninstall-CyClaw.ps1              # keep ~/.CyClaw data w/ uninstall
   .\Uninstall-CyClaw.ps1 -RemoveHome  # also delete ~/.CyClaw
 #>
 [CmdletBinding()]
