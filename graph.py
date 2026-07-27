@@ -249,10 +249,11 @@ def _generate_or_error(client: _GeneratingClient, prompt: str, *, label: str) ->
     """Call client.generate(prompt); translate a RAGError into a safe answer.
 
     local_llm_node, offline_best_effort_node (both call LocalLLMClient) and
-    grok_fallback_node (GrokClient) each independently re-derived this same
-    try/except + "[<label> Error: ...]" formatting. LLMServiceError and
-    GrokServiceError both derive from RAGError with .code/.message, so one
-    handler covers both clients. Returns (answer, error) where error is the
+    grok_fallback_node (GrokClient) and claude_fallback_node (ClaudeClient)
+    each independently re-derived this same try/except + "[<label> Error: ...]"
+    formatting. LLMServiceError, GrokServiceError, and ClaudeServiceError all
+    derive from RAGError with .code/.message, so one handler covers all three
+    clients. Returns (answer, error) where error is the
     "{code}: {message}" string for audit_logger_node, or None on success —
     node functions and their public signatures/return dicts are unchanged.
     """
