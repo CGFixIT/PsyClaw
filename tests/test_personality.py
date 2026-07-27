@@ -746,6 +746,46 @@ class TestSoulFilePermissions:
         assert bak_path.stat().st_mode & 0o777 == 0o600
 
 
+class TestBackupAtomicity:
+    """The .bak used to be written directly via Path.write_text with no
+    temp-file-plus-rename, unlike soul.md itself a few lines below it. A crash
+    mid-write left a truncated .bak on disk that restore_from_backup would
+    then install as the new soul. The backup now goes through the same
+    temp-file + os.replace pattern soul.md already used."""
+
+    def test_backup_write_leaves_no_temp_file_behind(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Soul\n\nfirst.\n", "test: seed")
+            pm.apply_evolution("# Soul\n\nsecond.\n", "test: creates a .bak")
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        bak_tmp_path = bak_path.with_suffix(bak_path.suffix + ".tmp")
+        assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nfirst.\n"
+        assert not bak_tmp_path.exists()
+
+    def test_backup_unharmed_when_rename_fails(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Soul\n\nfirst.\n", "test: seed")
+            bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+            pm.apply_evolution("# Soul\n\nsecond.\n", "test: creates a .bak")
+            assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nfirst.\n"
+
+            with patch("os.replace", side_effect=OSError("simulated crash mid-backup")), \
+                 pytest.raises(OSError):
+                pm.apply_evolution("# Soul\n\nthird.\n", "test: simulated crash")
+
+            # bak_path itself is only ever touched by the rename, which never
+            # completed -- it must still hold the last GOOD backup ("first.",
+            # written by the "second." apply above), untouched by the failed
+            # attempt to overwrite it with "second.".
+            assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nfirst.\n"
+
+
 class TestPathAnchoring:
     """config.yaml ships soul_path/db_path as RELATIVE values. Resolving them
     against the process CWD meant launching the server from elsewhere made
