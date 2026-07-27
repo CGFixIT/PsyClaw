@@ -615,6 +615,18 @@ async def apply_soul_evolution(request: Request, req: SoulEvolutionRequest):
             status_code=400,
             detail={"error": e.message, "code": e.code, "details": e.details},
         ) from e
+    except ValueError as e:
+        # apply_evolution enforces the I5 human-reason gate itself and signals a
+        # bad reason with ValueError. SoulEvolutionRequest only caps reason at
+        # min_length=1, so an all-whitespace reason passes validation, reaches
+        # that raise, and — with no exception_handler registered anywhere in
+        # gate.py/gate_ops.py — escaped as an unhandled 500. It's a malformed
+        # request, so report it as one.
+        await _audit({"event": "soul_apply_rejected", "reason": req.reason})
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(e), "code": "INVALID_REASON"},
+        ) from e
     return result
 
 @app.post("/soul/reload", dependencies=[Depends(require_api_key)])
@@ -707,7 +719,14 @@ def _serve(host: str, port: int) -> None:
     serve step without standing up a real server."""
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)  # DevSkim: ignore DS162092 - loopback-only binding by design
+    # proxy_headers=False: uvicorn defaults it to True with forwarded_allow_ips
+    # "127.0.0.1", so on a loopback deployment EVERY peer is trusted and
+    # ProxyHeadersMiddleware rewrites scope["client"] from an attacker-supplied
+    # X-Forwarded-For. That is the value _enforce_rate_limit keys its per-IP
+    # bucket on, so any local process could mint a fresh 60/min budget per
+    # request just by varying the header. CyClaw sits behind no reverse proxy —
+    # the real peer is always the right answer here.
+    uvicorn.run(app, host=host, port=port, proxy_headers=False)  # DevSkim: ignore DS162092 - loopback-only binding by design
 
 
 def _hold_console() -> None:

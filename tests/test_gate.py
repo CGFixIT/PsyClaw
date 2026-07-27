@@ -368,6 +368,34 @@ class TestPromptInjection:
         blocked = [e for e in events if e.get("event") == "soul_apply_injection_blocked"]
         assert blocked, "Expected a soul_apply_injection_blocked audit event"
 
+    def test_soul_apply_bad_reason_is_400_not_500(self, client, monkeypatch, tmp_path):
+        """apply_evolution enforces the I5 human-reason gate itself and signals a
+        bad reason with ValueError. SoulEvolutionRequest only caps reason at
+        min_length=1, so an all-whitespace reason passes schema validation,
+        reaches that raise, and — with no exception_handler registered in
+        gate.py/gate_ops.py — used to escape as an unhandled 500. It is a
+        malformed request and must be reported as one."""
+        import json
+        import gate
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "correct-key-xyz")
+        audit_file = tmp_path / "audit_soul_reason.jsonl"
+        gate.cfg["logging"]["audit_file"] = str(audit_file)
+        with patch.object(
+            gate.personality, "apply_evolution",
+            side_effect=ValueError("reason must not be empty"),
+        ):
+            resp = test_client.post(
+                "/soul/apply",
+                json={"new_soul": "# Soul\n\nlegitimate content", "reason": "   "},
+                headers={"Authorization": "Bearer correct-key-xyz"},
+            )
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "INVALID_REASON"
+        events = [json.loads(line) for line in audit_file.read_text().splitlines() if line]
+        assert [e for e in events if e.get("event") == "soul_apply_rejected"], \
+            "Expected a soul_apply_rejected audit event"
+
 
 class TestErrorSanitization:
     """_sanitize_error must strip live credential env-var values from exception
@@ -675,3 +703,28 @@ class TestAuditSummaryEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["total_events"] == 1
+
+
+class TestProxyHeaderTrust:
+    """uvicorn defaults proxy_headers=True with forwarded_allow_ips "127.0.0.1",
+    so on a loopback bind EVERY peer is trusted and ProxyHeadersMiddleware
+    rewrites scope["client"] from an attacker-supplied X-Forwarded-For — the
+    exact value _enforce_rate_limit keys its per-IP bucket on. Reproduced
+    against a live uvicorn before this was pinned: a spoofed header returned
+    the spoofed IP as request.client.host, giving each value a fresh 60/min
+    budget. CyClaw sits behind no reverse proxy, so the real peer is correct."""
+
+    def test_serve_disables_proxy_headers(self):
+        import gate
+        with patch("uvicorn.run") as mock_run:
+            gate._serve("127.0.0.1", 8787)
+        assert mock_run.call_args.kwargs.get("proxy_headers") is False
+
+    def test_dockerfile_cmd_passes_no_proxy_headers(self):
+        from pathlib import Path
+        dockerfile = Path(__file__).resolve().parent.parent / "Dockerfile"
+        cmd_lines = [ln for ln in dockerfile.read_text(encoding="utf-8").splitlines()
+                     if ln.startswith("CMD")]
+        assert cmd_lines, "Dockerfile has no CMD line"
+        assert any("--no-proxy-headers" in ln for ln in cmd_lines), \
+            "Dockerfile CMD must pass --no-proxy-headers to match gate._serve"
