@@ -624,6 +624,71 @@ class TestSoulRateLimit:
         assert resp.json()["detail"]["code"] == "RATE_LIMIT"
 
 
+class TestFailedAuthDoesNotBypassRateLimit:
+    """The rate limiter dependency now runs BEFORE require_api_key in every
+    protected route's dependencies=[...] list (previously the limiter was only
+    called inside the handler body, i.e. after auth had already accepted or
+    rejected the request). Before this fix, a wrong/missing API key always hit
+    401 first and the limiter never ran — unlimited key guesses were never
+    throttled. Now an exhausted budget produces 429 regardless of whether the
+    key presented is right, wrong, or missing."""
+
+    @pytest.mark.parametrize("path,headers", [
+        ("/soul", {}),
+        ("/soul", {"Authorization": "Bearer wrong-key"}),
+        ("/audit/summary", {}),
+        ("/audit/summary", {"Authorization": "Bearer wrong-key"}),
+    ])
+    def test_get_route_429_not_401_when_budget_spent_with_bad_key(self, client, monkeypatch, path, headers):
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            resp = test_client.get(path, headers=headers)
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+
+    @pytest.mark.parametrize("path,headers", [
+        ("/soul/reload", {}),
+        ("/soul/reload", {"Authorization": "Bearer wrong-key"}),
+        ("/soul/restore", {}),
+    ])
+    def test_post_route_429_not_401_when_budget_spent_with_bad_key(self, client, monkeypatch, path, headers):
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            resp = test_client.post(path, headers=headers)
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+
+    def test_bad_key_still_401_when_budget_not_spent(self, client, monkeypatch):
+        """Sanity check on the ordering: the limiter running first does not
+        weaken auth — with budget remaining, a wrong key is still rejected 401."""
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        resp = test_client.get("/soul", headers={"Authorization": "Bearer wrong-key"})
+        assert resp.status_code == 401
+
+    def test_correct_key_still_works_when_budget_not_spent(self, client, monkeypatch):
+        """No regression to the happy path: a correct key with budget remaining
+        still succeeds normally."""
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        resp = test_client.get("/soul", headers={"Authorization": "Bearer test-key-123"})
+        assert resp.status_code == 200
+
+    def test_limiter_called_exactly_once_for_authenticated_request(self, client, monkeypatch):
+        """Reordering the dependency ahead of auth must not double-count an
+        authenticated caller's budget — the limiter check still runs exactly
+        once per request."""
+        test_client, _ = client
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        mock_check = AsyncMock(return_value=True)
+        with patch("gate._check_rate_limit_async", new=mock_check):
+            resp = test_client.get("/soul", headers={"Authorization": "Bearer test-key-123"})
+        assert resp.status_code == 200
+        assert mock_check.call_count == 1
+
+
 class TestAuditSummaryEndpoint:
     """GET /audit/summary is API-key-gated and returns aggregates only — never
     raw query text (the audit log stores SHA-256 hashes by design)."""

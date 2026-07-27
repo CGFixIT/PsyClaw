@@ -107,6 +107,34 @@ class TestOpsAuth:
         assert resp.status_code == 401
 
 
+class TestOpsFailedAuthDoesNotBypassRateLimit:
+    """Each /ops/* route's dependencies=[...] list now runs the rate limiter
+    BEFORE require_api_key (previously the limiter ran only inside the handler
+    body, after auth had already accepted or rejected). A wrong/missing API key
+    used to always hit 401 first, so unlimited key guesses against /ops/* were
+    never throttled. With an exhausted budget the caller now gets 429
+    regardless of whether the key presented is right, wrong, or missing."""
+
+    @pytest.mark.parametrize("path", _OPS_ROUTES)
+    def test_429_not_401_when_budget_spent_with_wrong_key(self, monkeypatch, path):
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        client, _ = _build_app(rate_limited=True)
+        resp = client.post(
+            path, json=_ROUTE_BODIES[path],
+            headers={"Authorization": "Bearer wrong-key"},
+        )
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+
+    @pytest.mark.parametrize("path", _OPS_ROUTES)
+    def test_429_not_401_when_budget_spent_with_missing_key(self, monkeypatch, path):
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        client, _ = _build_app(rate_limited=True)
+        resp = client.post(path, json=_ROUTE_BODIES[path])
+        assert resp.status_code == 429
+        assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+
+
 class TestOpsSync:
     def test_unknown_action_rejected_at_schema_boundary(self, monkeypatch):
         monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
