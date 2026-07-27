@@ -53,7 +53,7 @@ jobs:
 
     environment:
       name: pypi
-      # url: https://pypi.org/p/YOURPROJECT
+      # url: https://pypi.org/p/cyclaw
 
     steps:
       - name: Retrieve release distributions
