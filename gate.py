@@ -581,9 +581,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
         error=result.get("error")
     )
 
-@app.get("/soul", dependencies=[Depends(require_api_key)])
+@app.get("/soul", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def get_soul(request: Request):
-    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     await _audit({"event": "soul_read", "version": personality.get_version()})
@@ -593,18 +592,16 @@ async def get_soul(request: Request):
         "source": str(personality.soul_path)
     }
 
-@app.post("/soul/propose", dependencies=[Depends(require_api_key)])
+@app.post("/soul/propose", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def propose_soul_evolution(request: Request, req: SoulEvolutionRequest):
-    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     proposal = await asyncio.to_thread(personality.propose_evolution, req.new_soul, req.reason)
     await _audit({"event": "soul_evolution_proposed", "reason": req.reason})
     return proposal
 
-@app.post("/soul/apply", dependencies=[Depends(require_api_key)])
+@app.post("/soul/apply", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def apply_soul_evolution(request: Request, req: SoulEvolutionRequest):
-    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     try:
@@ -629,17 +626,15 @@ async def apply_soul_evolution(request: Request, req: SoulEvolutionRequest):
         ) from e
     return result
 
-@app.post("/soul/reload", dependencies=[Depends(require_api_key)])
+@app.post("/soul/reload", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def reload_soul(request: Request):
-    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     await asyncio.to_thread(personality.reload)
     return {"status": "reloaded", "version": personality.get_version()}
 
-@app.post("/soul/restore", dependencies=[Depends(require_api_key)])
+@app.post("/soul/restore", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def restore_soul(request: Request):
-    await _enforce_rate_limit(request)
     if personality is None:
         raise HTTPException(status_code=404, detail="Personality system not enabled")
     try:
@@ -663,7 +658,7 @@ async def health():
     )
 
 
-@app.get("/audit/summary", dependencies=[Depends(require_api_key)])
+@app.get("/audit/summary", dependencies=[Depends(_enforce_rate_limit), Depends(require_api_key)])
 async def audit_summary(request: Request):
     """API-key-gated compliance summary over the audit log.
 
@@ -673,7 +668,6 @@ async def audit_summary(request: Request):
     exposed here either. This is operational evidence, not a formal compliance
     artifact or certification.
     """
-    await _enforce_rate_limit(request)
     # _BASE_DIR / value resolves correctly whether the configured path is
     # relative or already absolute (Path.__truediv__ discards the left side
     # for an absolute right-hand operand) -- same cwd-independence _BASE_DIR
