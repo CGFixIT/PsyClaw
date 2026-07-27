@@ -19,7 +19,10 @@ import re
 
 from agentic.fsconnect.config import FsConnectConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
-from guardrails.rails import build_injection_patterns as _shared_build_injection_patterns
+from guardrails.rails import (
+    build_injection_patterns as _shared_build_injection_patterns,
+)
+from guardrails.rails import scan_injection_patterns
 from utils.errors import FsConnectError
 from utils.logger import audit_log
 
@@ -83,7 +86,7 @@ class FsClient:
             )
 
     def _scan(self, text: str) -> list[str]:
-        return [src for src, pat in self._patterns if pat.search(text)]
+        return scan_injection_patterns(text, self._patterns)
 
     def _audit(self, event: dict) -> None:
         audit_log(event, self.config_path)

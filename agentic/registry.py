@@ -33,7 +33,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agentic.config import AgenticConfig
-from guardrails.rails import build_injection_pattern_sources, compile_injection_patterns
+from guardrails.rails import (
+    build_injection_pattern_sources,
+    compile_injection_patterns,
+    scan_injection_patterns,
+)
 from utils.errors import PromptInjectionError, SkillRegistryError
 from utils.logger import audit_log
 
@@ -157,7 +161,7 @@ class SkillRegistry:
         # built, this registry owns what an empty or shrunken set means.
         sources = build_injection_pattern_sources(self.cfg)
         compiled: list[tuple] = list(compile_injection_patterns(tuple(sources)))
-        # Surface uncompilable patterns. _compile_injection_patterns silently drops
+        # Surface uncompilable patterns. compile_injection_patterns silently drops
         # an invalid regex (re.error), which quietly SHRINKS the enforced injection
         # gate: a malformed banned_patterns entry in config would weaken
         # skill-poisoning defense with no signal at all. Log + audit the dropped
@@ -198,7 +202,7 @@ class SkillRegistry:
         return compiled
 
     def _scan_injection(self, text: str) -> list[str]:
-        return [src for src, pat in self._injection_patterns if pat.search(text)]
+        return scan_injection_patterns(text, self._injection_patterns)
 
     @staticmethod
     def _sha256(text: str) -> str:
