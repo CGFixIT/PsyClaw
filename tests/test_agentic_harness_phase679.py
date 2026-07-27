@@ -292,3 +292,123 @@ def test_apply_candidate_artifact_requires_all_human_gates(tmp_path: Path) -> No
     record = json.loads(Path(result["path"]).read_text(encoding="utf-8"))
     assert result["status"] == "applied_artifact"
     assert record["proposal_sha256"] == proposal.proposal_sha256
+
+
+def test_apply_candidate_artifact_blocked_when_lock_held(tmp_path: Path) -> None:
+    # A held lock (another accept in progress) makes a concurrent apply refuse
+    # rather than race the read-modify-write of the version counter.
+    workspace, cfg = _workspace(tmp_path)
+    workspace.proposal_path.write_text("# Proposal\n\nGeneral fix.", encoding="utf-8")
+    decision = decide_candidate(
+        baseline=RunReport("baseline", train_passed=True, holdout_passed=True, score=0.1),
+        candidate=RunReport(
+            "candidate",
+            train_passed=True,
+            holdout_passed=True,
+            score=0.9,
+            changed_surfaces=("planner",),
+        ),
+        allowed_surface_ids={"planner"},
+        proposal_present=True,
+    )
+    proposal = propose_candidate_application(decision, Variant("candidate", ("planner",), "proposal.md", str(workspace.root)), workspace, cfg=cfg)
+    config = _config(harness={"enabled": True})
+    config.mode = "write"
+    config.writes_enabled = True
+    config.harness_optimizer.output_dir = str(tmp_path / "output")
+    config.harness_optimizer.memory_dir = str(tmp_path / "memory")
+
+    artifact_path = Path(config.harness_optimizer.output_dir) / "accepted" / f"{proposal.variant_id}.json"
+    lock_dir = artifact_path.with_suffix(artifact_path.suffix + ".lock.d")
+    lock_dir.mkdir(parents=True)
+    try:
+        with pytest.raises(AgenticError):
+            apply_candidate_artifact(proposal, config, reason="blocked", confirm=True, cfg=cfg)
+        assert not artifact_path.exists()  # nothing written
+    finally:
+        lock_dir.rmdir()
+
+
+def test_apply_candidate_artifact_releases_lock(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    workspace.proposal_path.write_text("# Proposal\n\nGeneral fix.", encoding="utf-8")
+    decision = decide_candidate(
+        baseline=RunReport("baseline", train_passed=True, holdout_passed=True, score=0.1),
+        candidate=RunReport(
+            "candidate",
+            train_passed=True,
+            holdout_passed=True,
+            score=0.9,
+            changed_surfaces=("planner",),
+        ),
+        allowed_surface_ids={"planner"},
+        proposal_present=True,
+    )
+    proposal = propose_candidate_application(decision, Variant("candidate", ("planner",), "proposal.md", str(workspace.root)), workspace, cfg=cfg)
+    config = _config(harness={"enabled": True})
+    config.mode = "write"
+    config.writes_enabled = True
+    config.harness_optimizer.output_dir = str(tmp_path / "output")
+    config.harness_optimizer.memory_dir = str(tmp_path / "memory")
+
+    result = apply_candidate_artifact(proposal, config, reason="apply once", confirm=True, cfg=cfg)
+    artifact_path = Path(result["path"])
+    lock_dir = artifact_path.with_suffix(artifact_path.suffix + ".lock.d")
+    assert not lock_dir.exists()  # lock dir gone after a normal apply
+
+
+def test_stale_candidate_lock_is_reclaimed(tmp_path: Path) -> None:
+    # A lock left by a crashed run (older than _LOCK_STALE_SEC) must be reclaimed
+    # so a stale directory can never wedge the artifact accept path forever.
+    import os as _os
+    import time as _time
+
+    from agentic.harness_optimizer.patching import _LOCK_STALE_SEC
+
+    workspace, cfg = _workspace(tmp_path)
+    workspace.proposal_path.write_text("# Proposal\n\nGeneral fix.", encoding="utf-8")
+    decision = decide_candidate(
+        baseline=RunReport("baseline", train_passed=True, holdout_passed=True, score=0.1),
+        candidate=RunReport(
+            "candidate",
+            train_passed=True,
+            holdout_passed=True,
+            score=0.9,
+            changed_surfaces=("planner",),
+        ),
+        allowed_surface_ids={"planner"},
+        proposal_present=True,
+    )
+    proposal = propose_candidate_application(decision, Variant("candidate", ("planner",), "proposal.md", str(workspace.root)), workspace, cfg=cfg)
+    config = _config(harness={"enabled": True})
+    config.mode = "write"
+    config.writes_enabled = True
+    config.harness_optimizer.output_dir = str(tmp_path / "output")
+    config.harness_optimizer.memory_dir = str(tmp_path / "memory")
+
+    artifact_path = Path(config.harness_optimizer.output_dir) / "accepted" / f"{proposal.variant_id}.json"
+    lock_dir = artifact_path.with_suffix(artifact_path.suffix + ".lock.d")
+    lock_dir.mkdir(parents=True)
+    old = _time.time() - (_LOCK_STALE_SEC + 60)
+    _os.utime(lock_dir, (old, old))
+
+    result = apply_candidate_artifact(proposal, config, reason="reclaim stale lock", confirm=True, cfg=cfg)
+    assert result["status"] == "applied_artifact"
+    assert not lock_dir.exists()  # reclaimed then released
+
+
+def test_atomic_json_cleans_up_tmp_file_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A failure between write_text() and os.replace() must not orphan a
+    # .{name}.{pid}.tmp file with nothing left to clean it up.
+    from agentic.harness_optimizer import patching
+
+    def _raise_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(patching.os, "replace", _raise_replace)
+    target = tmp_path / "artifact.json"
+    with pytest.raises(OSError, match="simulated replace failure"):
+        patching._atomic_json(target, {"version": 1})
+
+    assert not target.exists()
+    assert list(tmp_path.glob(".*.tmp")) == []
