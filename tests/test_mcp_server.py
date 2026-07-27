@@ -125,6 +125,9 @@ def test_tools_list_returns_hybrid_search(retriever):
 
     hybrid_tool = next(t for t in tools if t["name"] == "hybrid_search")
     assert "query" in hybrid_tool["inputSchema"]["required"]
+    top_k_schema = hybrid_tool["inputSchema"]["properties"]["top_k"]
+    assert top_k_schema["minimum"] == 1
+    assert top_k_schema["maximum"] == mcp_hybrid_server._MAX_TOP_K
     # TOOLS module constant should match what the handler returns
     assert tools == TOOLS
 
