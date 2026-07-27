@@ -166,6 +166,18 @@ though `REQUEST_PATH_MODULES` (line 18 of this file) already includes `gate_ops.
 as a protected module. Add `"gate_ops"` to the `forbidden` set so an `agentic/` file
 importing `gate_ops` would actually be caught.
 
+**RESOLVED (2026-07-27).** `gate_ops` added to the `forbidden` set in both
+`test_agentic_isolation.py` (`test_reverse_guard_flags_planted_request_path_import`
+and `test_agentic_does_not_import_request_path`) and the equivalent set in
+`test_guardrails_isolation.py::test_guardrails_does_not_import_request_path`, which
+had the identical gap. Went further than this spec: `sync/` had **no** dedicated
+reverse-isolation pytest file at all (only `agentic/` and `guardrails/` had one) even
+though `invariant-guard`'s own `check_invariants.py` I6 check has always covered
+`sync` correctly in both directions — added `tests/test_sync_isolation.py` mirroring
+the other two files' pattern, so all three out-of-band packages now have the same
+standalone regression guard. This was a test-coverage gap, not a live violation —
+confirmed no out-of-band file actually imports `gate_ops` before or after this fix.
+
 **Verify:** `GROK_API_KEY=dummy pytest tests/test_agentic_isolation.py -q --tb=short`,
 then re-run `python3 .claude/skills/invariant-guard/check_invariants.py` to confirm
 I6 still passes (it will, since the tree is compliant — this fix only strengthens the

@@ -1,8 +1,19 @@
 # Tech Note — `StarletteDeprecationWarning` in the test suite (httpx / TestClient)
 
-**Status:** warning **filtered** (2026-07-19, Option 2 applied) · no runtime impact · `httpx2` migration still owed before a future Starlette major
-**Filed:** 2026-06-19 · **Updated:** 2026-07-19
+**Status:** warning **filtered** (restored 2026-07-27, see below) · no runtime impact · `httpx2` migration still owed before a future Starlette major
+**Filed:** 2026-06-19 · **Updated:** 2026-07-27
 **Applies to:** `starlette==1.3.1`, `httpx==0.28.1`, `fastapi==0.138.0` (current pins; starlette is transitive via fastapi)
+
+**2026-07-27 regression + fix:** the `filterwarnings` entry described below as "Done
+2026-07-19" was silently dropped as collateral damage by an unrelated commit
+(`0618f04`, wiring the harness entry point into `pyproject.toml`) on 2026-07-22, and a
+later same-day fix-up (`f444339`, "restore pyproject.toml so main's CI goes green")
+restored three *other* regressions from that same clobbering incident but not this one
+— its absence doesn't fail CI, so nothing caught it for five days. Found because the
+warning was observed firing live in a routine test run, then confirmed via
+`git show <rev>:pyproject.toml` across the three commits plus a repo-wide
+`grep filterwarnings` (zero hits outside this doc). Restored verbatim to
+`[tool.pytest.ini_options]` in `pyproject.toml`; re-verified silent.
 
 ---
 

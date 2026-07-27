@@ -336,8 +336,14 @@ class PersonalityManager:
                 # in-memory copy is bounded to soul_max_chars by _bounded_soul,
                 # so backing it up would silently truncate any overflow from an
                 # externally-edited oversized soul.md (data loss on restore).
-                bak_path.write_text(self.soul_path.read_text(encoding="utf-8"), encoding="utf-8")
-                os.chmod(bak_path, 0o600)
+                # Written through a temp file + os.replace, same as soul.md
+                # itself below: a direct write_text to bak_path left a window
+                # where a crash mid-write truncated the .bak in place, and
+                # restore_from_backup would then install that truncated copy.
+                bak_tmp_path = bak_path.with_suffix(bak_path.suffix + ".tmp")
+                bak_tmp_path.write_text(self.soul_path.read_text(encoding="utf-8"), encoding="utf-8")
+                os.chmod(bak_tmp_path, 0o600)
+                os.replace(bak_tmp_path, bak_path)
             tmp_path.write_text(new_soul, encoding="utf-8")
             # Tighten the temp file BEFORE the rename, not soul.md after it:
             # os.replace carries the temp file's mode onto the destination, so

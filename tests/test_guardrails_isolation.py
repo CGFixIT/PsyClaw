@@ -42,7 +42,11 @@ def test_request_path_does_not_import_guardrails(module_file):
 
 
 def test_guardrails_does_not_import_request_path():
-    forbidden = {"gate", "graph", "mcp_hybrid_server"}
+    # gate_ops was missing from this set even though REQUEST_PATH_MODULES
+    # (forward direction, above) already covered it -- invariant-guard's own
+    # reverse check has always included it (check_invariants.py core_roots),
+    # this test just hadn't matched it.
+    forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
     scanned = 0
     for py in (REPO_ROOT / "guardrails").rglob("*.py"):
         scanned += 1

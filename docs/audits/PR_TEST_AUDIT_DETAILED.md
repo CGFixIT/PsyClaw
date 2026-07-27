@@ -3,6 +3,15 @@
 > **Audience:** Claude Code agents in future sessions. Every finding carries a file path, the exact defect, and a concrete fix with acceptance criteria. Work the **Prioritized Roadmap** top-down; each item is independently shippable and CI-gated.
 >
 > **Provenance:** This document is the synthesis of a 38-target parallel audit (one agent per `tests/` file + 2 under-tested-module gap analyses) with an adversarial verification pass. Findings were re-checked against the actual source at HEAD `5795dfe`. Suite ground truth: **463 passed, 0 failed, 88% coverage** on Python 3.12.3.
+>
+> **2026-07-27 reconciliation:** re-checked against current `main` (~159 commits since
+> `5795dfe`; suite is now 1493 passed, 14 skipped). This doc's own headline claims —
+> "CI gates an explicit hand-picked file list, not `pytest tests/`" and
+> `test_ops_runner.py` "absent from CI and from `--cov`" — are **no longer true**:
+> `.github/workflows/ci.yml`'s `test` job runs full `pytest tests/` auto-discovery
+> with `--cov=utils.ops_runner` present. Treat findings below against their own
+> per-item evidence, not this doc's executive summary, which predates hundreds of
+> commits of fixes.
 
 ---
 
@@ -335,9 +344,10 @@ _Low/nit polish items are summarized as counts in the table above; the high+medi
 
 > A genuinely good, hermetic AST-based invariant guard that exercises real source and provably fails on a broken import — its only real weakness is scope: it enforces the agentic boundary but silently ignores the equally-documented sync/ boundary.
 
-- **[MEDIUM] sync/ isolation is documented as a hard rule but completely untested**  _(coverage-gap)_
+- **[MEDIUM] sync/ isolation is documented as a hard rule but completely untested**  _(coverage-gap)_ — **RESOLVED (2026-07-27)**, structured differently than suggested
     - **What:** The module docstring itself frames agentic isolation as being 'exactly like sync/' (lines 3-4), and both CLAUDE.md and .claude/rules/PROJECT_RULES.md state the hard rule: gate.py/graph.py/mcp_hybrid_server.py must never import agentic/ OR sync/. This test only ever checks the literal string 'agentic' (line 38) and only globs REPO_ROOT/'agentic' (line 47). There is no assertion anywhere in tests/ that the request-path modules avoid importing 'sync', and no symmetric guard that sync/*.py avoids gate/graph/mcp. I grepped tests/ — no isolation test references sync. So if a future change added 'import sync.runner' to gate.py, the suite would stay green.
     - **Fix:** Parametrize the forbidden package over both packages, e.g. add 'sync' alongside 'agentic' in the forward test, and add a symmetric guard that globs REPO_ROOT/'sync'/*.py. Concretely: change line 38 to assert that {'agentic','sync'}.isdisjoint(_imports(source)), or add a second @pytest.mark.parametrize axis (module_file x forbidden_pkg). Then add a sync analog of test_agentic_does_not_import_request_path.
+    - **Actually done:** rather than parametrizing this file over both packages, added a standalone `tests/test_sync_isolation.py` mirroring this file's own structure (forward test, reverse-guard self-test, reverse test, sibling-out-of-band test) — giving `sync/` the same dedicated pytest-level guard `agentic/` and `guardrails/` already had, instead of coupling the two packages' tests together in one file. Also caught and fixed a related gap while in this area: both this file's and `test_guardrails_isolation.py`'s reverse-direction `forbidden` sets were missing `gate_ops` (see `Test_Suite_Defects_And_Fix_Spec_2026-07-21.md` Tier 2.1, same fix). `invariant-guard`'s own I6 check (`check_invariants.py`) has always covered `sync` correctly in both directions — this was a pytest-suite coverage gap, not a live violation.
 
 ### `test_agentic_selftest.py`  —  **minor-issues**
 

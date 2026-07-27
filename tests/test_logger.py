@@ -73,6 +73,34 @@ class TestAuditLogPathAnchoring:
         assert absolute.exists()
 
 
+class TestAuditLogWriteFailure:
+    """audit_logger is the unconditional terminal node every graph path
+    converges on (invariant I4), running AFTER the answer is already
+    computed. A disk/permission failure writing the audit line must degrade
+    to a warning, not raise -- an already-good response should never become
+    an HTTP 500 purely because the audit trail couldn't be persisted."""
+
+    def test_write_failure_does_not_raise(self, tmp_path, monkeypatch, caplog):
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+
+        def _boom(_log_path):
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(logger, "_audit_handle", _boom)
+        with caplog.at_level("WARNING", logger="cyclaw.logger"):
+            logger.audit_log({"event": "test_event"}, cfg=cfg)  # must not raise
+        assert "audit_log write failed" in caplog.text
+
+    def test_write_failure_leaves_no_partial_file_state(self, tmp_path, monkeypatch):
+        # A failed handle open must not leave the caller's dict mutated or
+        # raise something other than the documented fail-soft path.
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+        event = {"event": "test_event"}
+        monkeypatch.setattr(logger, "_audit_handle", lambda _log_path: (_ for _ in ()).throw(OSError("boom")))
+        logger.audit_log(event, cfg=cfg)
+        assert event == {"event": "test_event"}  # caller's dict is never mutated
+
+
 class TestSetupLoggingPathAnchoring:
     def test_relative_log_file_resolves_regardless_of_cwd(self, tmp_path, monkeypatch):
         monkeypatch.setattr(logger, "_REPO_ROOT", tmp_path)
