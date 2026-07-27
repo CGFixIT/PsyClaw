@@ -48,3 +48,33 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: trivy
+
+  docker-image:
+    name: Trivy Container Image Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t cyclaw:ci .
+
+      - name: Run Trivy image scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: 'cyclaw:ci'
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          version: 'v0.72.0'
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        with:
+          sarif_file: trivy-image-results.sarif
+          category: trivy-image
