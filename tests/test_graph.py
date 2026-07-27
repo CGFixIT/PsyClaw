@@ -27,7 +27,7 @@ from tests.conftest import (
     TEST_CONFIG
 )
 from utils.logger import reset_config_cache
-from utils.errors import RAGError, LLMServiceError, GrokServiceError
+from utils.errors import RAGError, LLMServiceError, GrokServiceError, ClaudeServiceError
 
 
 @pytest.fixture(autouse=True)
@@ -783,6 +783,10 @@ class TestNodeErrorRecovery:
         def generate(self, prompt):
             raise GrokServiceError("xAI 500")
 
+    class _RaisingClaude:
+        def generate(self, prompt):
+            raise ClaudeServiceError("Anthropic 500")
+
     def test_retrieve_node_rag_error_returns_safe_error_state(self):
         out = retrieve_node({"query": "anything"}, self._RaisingRetriever(), cfg={})
         assert out["retrieved_docs"] == []
@@ -818,6 +822,14 @@ class TestNodeErrorRecovery:
         assert out["answer"].startswith("[Grok Error:")
         assert "xAI 500" in out["answer"]
         assert out["error"] == "GROK_SERVICE_ERROR: xAI 500"
+
+    def test_claude_fallback_node_handles_claude_service_error(self):
+        cfg = {"policy": {"fallback": {"send_local_context_to_claude": False}}}
+        out = claude_fallback_node({"query": "q"}, claude=self._RaisingClaude(), cfg=cfg)
+        assert out["answer_model"] == "claude"
+        assert out["answer"].startswith("[Claude Error:")
+        assert "Anthropic 500" in out["answer"]
+        assert out["error"] == "CLAUDE_SERVICE_ERROR: Anthropic 500"
 
     def test_local_llm_node_success_does_not_set_error(self):
         # On the success path the node must NOT emit an "error" key, so it can
