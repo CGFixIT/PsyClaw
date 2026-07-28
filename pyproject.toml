@@ -26,6 +26,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# nemoguardrails' own base dependencies (not gated behind any of its extras)
+# include fastembed, onnxruntime, and pandas. fastembed's documented default
+# behavior is to fetch ONNX embedding models from a remote CDN on first use —
+# real friction against CyClaw's offline-first, no-egress posture even though
+# this extra is opt-in and policy.guardrails.enabled stays false by default.
+# Installing it is a deliberate choice; nothing here constrains fastembed to
+# a local-only embedder yet.
 guardrails = [
     "nemoguardrails==0.23.0",
 ]
