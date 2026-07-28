@@ -134,7 +134,7 @@ def test_interrupt_resumption_covers_approve_reject_and_timeout(decision: str, e
     events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
     assert [event["event"] for event in events] == [
         "agentic_deepagent_interrupt_resume_started",
-        "agentic_deepagent_interrupt_finished",
+        "agentic_deepagent_interrupt_resumed",
     ]
 
 
