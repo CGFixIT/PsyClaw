@@ -64,6 +64,10 @@ pgvector==0.4.2
 # Optional NeMo Guardrails layer (pyproject extra: guardrails). This is not
 # installed by the default offline runtime; the constraint keeps the opt-in
 # resolve aligned with pyproject.toml.
+# NOTE: this pulls in fastembed/onnxruntime/pandas as nemoguardrails' own base
+# deps (not behind any of its own extras); fastembed fetches ONNX embedding
+# models from a remote CDN by default -- see the caveat next to this extra in
+# pyproject.toml before enabling policy.guardrails.enabled.
 nemoguardrails==0.23.0
 
 # Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
