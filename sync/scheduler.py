@@ -304,12 +304,13 @@ class WindowsTaskScheduler:
         return path
 
     def install(self) -> ScheduleEntry:
+        schtasks = self._schtasks()
         # Register a .bat launcher path (robust) rather than an inline cmd /c
         # string (quote-fragile through schtasks /TR for paths with spaces).
         launcher = _write_windows_launcher(self.cfg)
         time_str = f"{self.cfg.schedule_hour:02d}:{self.cfg.schedule_min:02d}"
         argv = [
-            self._schtasks(),
+            schtasks,
             "/Create",
             "/TN",
             WINDOWS_TASK_NAME,
