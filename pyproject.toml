@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 guardrails = [
-    "nemoguardrails==0.18.2",
+    "nemoguardrails==0.23.0",
 ]
 postgres = [
     "psycopg==3.2.13",

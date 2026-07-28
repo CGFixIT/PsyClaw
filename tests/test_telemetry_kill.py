@@ -114,7 +114,37 @@ def test_chroma_telemetry_disabled():
 
 
 # ---------------------------------------------------------------------------
-# 4. API keys hard-removed
+# 4. NeMo Guardrails telemetry disabled
+# ---------------------------------------------------------------------------
+
+def test_nemo_usage_stats_disabled_by_gate():
+    """Gateway startup must opt out before an optional NeMo import can occur."""
+    snippet = (
+        "import gate, os\n"
+        "assert os.environ['NEMO_GUARDRAILS_NO_USAGE_STATS'] == '1'\n"
+    )
+    result = _run_in_subprocess(
+        snippet,
+        extra_env={"NEMO_GUARDRAILS_NO_USAGE_STATS": "0"},
+    )
+    _assert_subprocess_ok(result, "nemo_usage_stats_disabled_by_gate")
+
+
+def test_nemo_usage_stats_disabled_by_standalone_guardrails_package():
+    """The standalone guardrails CLI/import path does not pass through gate."""
+    snippet = (
+        "import guardrails.rails, os\n"
+        "assert os.environ['NEMO_GUARDRAILS_NO_USAGE_STATS'] == '1'\n"
+    )
+    result = _run_in_subprocess(
+        snippet,
+        extra_env={"NEMO_GUARDRAILS_NO_USAGE_STATS": "0"},
+    )
+    _assert_subprocess_ok(result, "nemo_usage_stats_disabled_by_standalone_package")
+
+
+# ---------------------------------------------------------------------------
+# 5. API keys hard-removed
 # ---------------------------------------------------------------------------
 
 def test_api_keys_hard_removed():
@@ -145,7 +175,7 @@ def test_api_keys_hard_removed():
 
 
 # ---------------------------------------------------------------------------
-# 5. Every kill-switch key is present with the expected value
+# 6. Every kill-switch key is present with the expected value
 # ---------------------------------------------------------------------------
 
 def test_all_kill_keys_present():
