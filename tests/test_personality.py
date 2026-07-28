@@ -5,8 +5,10 @@ Run: pytest tests/test_personality.py -v
 
 import os
 import threading
-import pytest
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 @pytest.fixture
 def tmp_paths(tmp_path):
@@ -109,10 +111,98 @@ class TestPersonalityManager:
         assert pm.soul_core == "# V2"
         assert soul_path.read_text() == "# V2"
         assert pm.get_version() == 2
-        # I5 half that's never regression-tested: the atomic-write .tmp sibling
-        # (os.replace source) must not survive a successful apply_evolution.
-        tmp_path = soul_path.with_suffix(soul_path.suffix + ".tmp")
-        assert not tmp_path.exists()
+        # I5 half that's never regression-tested: the atomic-write temp source
+        # must not survive a successful apply_evolution.
+        assert not list(soul_path.parent.glob(".*.tmp"))
+
+    def test_apply_evolution_restores_live_soul_when_db_commit_fails(self, cfg, tmp_paths):
+        """A rejected history write must not publish an unversioned soul."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Governed V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Governed V2", "test: seed prior backup")
+
+        class CommitFailingConnection:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, *args, **kwargs):
+                return self.wrapped.execute(*args, **kwargs)
+
+            def commit(self):
+                raise RuntimeError("simulated history commit failure")
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+        initial_version = pm.get_version()
+        pm.conn = CommitFailingConnection(pm.conn)
+
+        with patch("utils.personality.audit_log") as mock_audit, \
+             pytest.raises(RuntimeError, match="simulated history commit failure"):
+            pm.apply_evolution("# Ungoverned V3", "test: force commit failure")
+
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        assert soul_path.read_text(encoding="utf-8") == "# Governed V2"
+        assert bak_path.read_text(encoding="utf-8") == "# Governed V1"
+        assert pm.soul_core == "# Governed V2"
+        assert pm.get_version() == initial_version
+        assert not list(soul_path.parent.glob(".*.tmp"))
+        events = [call.args[0]["event"] for call in mock_audit.call_args_list]
+        assert "soul_evolution_failed" in events
+        assert "soul_evolution_applied" not in events
+
+    def test_apply_evolution_surfaces_incomplete_file_compensation(self, cfg, tmp_paths):
+        """A compensation failure must be explicit and retain the DB root cause."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Governed V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.errors import SoulPersistenceError
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        class CommitFailingConnection:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, *args, **kwargs):
+                return self.wrapped.execute(*args, **kwargs)
+
+            def commit(self):
+                raise RuntimeError("simulated history commit failure")
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+        pm.conn = CommitFailingConnection(pm.conn)
+        real_replace = os.replace
+        soul_replace_count = 0
+
+        def fail_compensation_replace(src, dst):
+            nonlocal soul_replace_count
+            if Path(dst) == soul_path:
+                soul_replace_count += 1
+                if soul_replace_count == 2:
+                    raise OSError("simulated compensation failure")
+            return real_replace(src, dst)
+
+        with patch("utils.personality.os.replace", side_effect=fail_compensation_replace), \
+             patch("utils.personality.audit_log") as mock_audit, \
+             pytest.raises(SoulPersistenceError) as exc_info:
+            pm.apply_evolution("# Ungoverned V2", "test: force compensation failure")
+
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert exc_info.value.details["restore_error_type"] == "OSError"
+        failure_event = mock_audit.call_args.args[0]
+        assert failure_event["event"] == "soul_evolution_failed"
+        assert failure_event["previous_soul_restored"] is False
+        assert not list(soul_path.parent.glob(".*.tmp"))
 
     def test_reload_picks_up_manual_edits(self, cfg, tmp_paths):
         """reload() re-reads the file after external modification."""
@@ -735,6 +825,59 @@ class TestSoulFilePermissions:
         assert soul_path.stat().st_mode & 0o777 == 0o600
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_initial_soul_and_sqlite_db_are_owner_only(self, cfg, tmp_paths):
+        soul_path, db_path, _ = tmp_paths
+        previous_umask = os.umask(0o022)
+        try:
+            with patch("utils.personality.audit_log"):
+                from utils.personality import PersonalityManager
+                PersonalityManager(cfg)
+        finally:
+            os.umask(previous_umask)
+
+        assert soul_path.stat().st_mode & 0o777 == 0o600
+        assert db_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_existing_soul_and_sqlite_db_are_hardened(self, cfg, tmp_paths):
+        soul_path, db_path, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+        db_path.touch()
+        soul_path.chmod(0o644)
+        db_path.chmod(0o644)
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            PersonalityManager(cfg)
+
+        assert soul_path.stat().st_mode & 0o777 == 0o600
+        assert db_path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_atomic_write_temps_are_owner_only_before_publish(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        real_replace = os.replace
+        observed_modes = []
+
+        def verify_mode_before_replace(src, dst):
+            observed_modes.append(Path(src).stat().st_mode & 0o777)
+            return real_replace(src, dst)
+
+        with patch("utils.personality.os.replace", side_effect=verify_mode_before_replace), \
+             patch("utils.personality.audit_log"):
+            pm.apply_evolution("# Updated soul", "test: temp permissions")
+
+        assert observed_modes == [0o600, 0o600]
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
     def test_backup_stays_owner_only(self, cfg, tmp_paths):
         soul_path, _, _ = tmp_paths
         with patch("utils.personality.audit_log"):
@@ -761,9 +904,8 @@ class TestBackupAtomicity:
             pm.apply_evolution("# Soul\n\nfirst.\n", "test: seed")
             pm.apply_evolution("# Soul\n\nsecond.\n", "test: creates a .bak")
         bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
-        bak_tmp_path = bak_path.with_suffix(bak_path.suffix + ".tmp")
         assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nfirst.\n"
-        assert not bak_tmp_path.exists()
+        assert not list(soul_path.parent.glob(".*.tmp"))
 
     def test_backup_unharmed_when_rename_fails(self, cfg, tmp_paths):
         soul_path, _, _ = tmp_paths
@@ -784,6 +926,34 @@ class TestBackupAtomicity:
             # written by the "second." apply above), untouched by the failed
             # attempt to overwrite it with "second.".
             assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nfirst.\n"
+
+    def test_prior_backup_restored_when_live_publish_fails(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# Soul\n\nV1.\n", "test: V1")
+            pm.apply_evolution("# Soul\n\nV2.\n", "test: V2")
+
+        bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
+        real_replace = os.replace
+        replace_count = 0
+
+        def fail_live_publish(src, dst):
+            nonlocal replace_count
+            replace_count += 1
+            if replace_count == 2:
+                raise OSError("simulated live publish failure")
+            return real_replace(src, dst)
+
+        with patch("utils.personality.os.replace", side_effect=fail_live_publish), \
+             patch("utils.personality.audit_log"), \
+             pytest.raises(OSError, match="simulated live publish failure"):
+            pm.apply_evolution("# Soul\n\nV3.\n", "test: V3 fails")
+
+        assert soul_path.read_text(encoding="utf-8") == "# Soul\n\nV2.\n"
+        assert bak_path.read_text(encoding="utf-8") == "# Soul\n\nV1.\n"
+        assert not list(soul_path.parent.glob(".*.tmp"))
 
 
 class TestPathAnchoring:

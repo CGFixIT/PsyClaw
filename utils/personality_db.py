@@ -80,6 +80,12 @@ def connect(db_path: Path, pers_cfg: dict) -> tuple[Any, str, str]:
     # Default: SQLite (offline-first, zero-config)
     import sqlite3
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    # sqlite3.connect() creates the database with the process umask, which
+    # commonly leaves the full soul/version history at 0644. Pre-create it
+    # owner-only and also repair permissions on databases from older installs.
+    fd = os.open(db_path, os.O_RDWR | os.O_CREAT, 0o600)
+    os.close(fd)
+    os.chmod(db_path, 0o600)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn, "?", "sqlite"

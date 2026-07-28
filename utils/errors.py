@@ -42,6 +42,14 @@ class PromptInjectionError(RAGError):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(message, code="PROMPT_INJECTION_BLOCKED", details=details)
 
+
+class SoulPersistenceError(RAGError):
+    """A soul update failed and its filesystem compensation was incomplete."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="SOUL_PERSISTENCE_INCONSISTENT", details=details)
+
+
 class ConfigError(RAGError):
     def __init__(self, message: str, details: dict | None = None):
         super().__init__(message, code="CONFIG_ERROR", details=details)
