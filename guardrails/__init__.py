@@ -25,14 +25,22 @@ Usage from the CLI:
     python -m guardrails.cli test
 """
 
-from guardrails.config import GuardrailsConfig, load_guardrails_config
-from guardrails.errors import (
+import os
+
+# NeMo reads this opt-out while its package is imported and otherwise starts
+# anonymous startup/heartbeat reporting. Set it before importing any CyClaw
+# guardrails submodule: those modules may soft-import NeMo, and the standalone
+# ``python -m guardrails.cli`` path never passes through gate.py's kill switch.
+os.environ["NEMO_GUARDRAILS_NO_USAGE_STATS"] = "1"
+
+from guardrails.config import GuardrailsConfig, load_guardrails_config  # noqa: E402
+from guardrails.errors import (  # noqa: E402
     GuardrailsConfigError,
     GuardrailsDependencyError,
     GuardrailsError,
     RailsLoadError,
 )
-from guardrails.metrics import GuardrailMetrics, compute_guardrail_metrics
+from guardrails.metrics import GuardrailMetrics, compute_guardrail_metrics  # noqa: E402
 
 __all__ = [
     "GuardrailsConfig",

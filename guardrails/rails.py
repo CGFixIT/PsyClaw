@@ -228,11 +228,19 @@ def is_possible_hallucination(answer: str, context: str, threshold: float) -> bo
 # --- NeMo action registration (no-op when nemoguardrails is absent) ---------
 
 
+def _context_user_message(context: dict | None) -> str:
+    """Return NeMo's current user message, with legacy-context compatibility."""
+    ctx = context or {}
+    message = ctx.get("last_user_message")
+    if message is None:
+        message = ctx.get("user_message", "")
+    return message if isinstance(message, str) else ""
+
+
 @_nemo_action(name="check_soul_mutation")
 async def _action_check_soul_mutation(context: dict | None = None) -> bool:
     """NeMo action: True (allowed) unless the user message tries to mutate the soul."""
-    user_message = (context or {}).get("user_message", "")
-    return not detect_soul_mutation_intent(user_message)
+    return not detect_soul_mutation_intent(_context_user_message(context))
 
 
 @_nemo_action(name="check_injection")
@@ -247,7 +255,7 @@ async def _action_check_injection(context: dict | None = None, text: str | None 
     time. When ``text`` is omitted it falls back to the user message in context,
     preserving the input-rail behaviour.
     """
-    target = text if text is not None else (context or {}).get("user_message", "")
+    target = text if text is not None else _context_user_message(context)
     return not scan_injection(target)
 
 
