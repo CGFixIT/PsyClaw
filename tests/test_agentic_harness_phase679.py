@@ -122,14 +122,39 @@ def test_builder_adds_hitl_for_scoped_workspace_writes(tmp_path: Path) -> None:
 @pytest.mark.parametrize(("decision", "expected"), [("approve", "approve"), ("reject", "reject"), ("timeout", "reject")])
 def test_interrupt_resumption_covers_approve_reject_and_timeout(decision: str, expected: str, tmp_path: Path) -> None:
     seen: dict[str, object] = {}
+    cfg = _audit_cfg(tmp_path)
 
     class FakeAgent:
         def invoke(self, payload: object, *, config: dict, version: str) -> dict:
             seen.update({"payload": payload, "config": config, "version": version})
             return {"ok": True}
 
-    assert resume_deepagent_interrupt(FakeAgent(), task_id="fixture-task", decision=decision, cfg=_audit_cfg(tmp_path)) == {"ok": True}  # type: ignore[arg-type]
+    assert resume_deepagent_interrupt(FakeAgent(), task_id="fixture-task", decision=decision, cfg=cfg) == {"ok": True}  # type: ignore[arg-type]
     assert seen["payload"].resume["decisions"][0]["type"] == expected  # type: ignore[index,union-attr]
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == [
+        "agentic_deepagent_interrupt_resume_started",
+        "agentic_deepagent_interrupt_finished",
+    ]
+
+
+def test_interrupt_resumption_wraps_and_audits_runtime_failures(tmp_path: Path) -> None:
+    cfg = _audit_cfg(tmp_path)
+
+    class FailingAgent:
+        def invoke(self, payload: object, *, config: dict, version: str) -> dict:
+            raise LookupError("fixture failure")
+
+    with pytest.raises(AgenticError, match="interrupt resume failed"):
+        resume_deepagent_interrupt(FailingAgent(), task_id="fixture-task", decision="reject", cfg=cfg)
+
+    events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    assert [event["event"] for event in events] == [
+        "agentic_deepagent_interrupt_resume_started",
+        "agentic_deepagent_interrupt_failed",
+    ]
+    assert events[-1]["task_id"] == "fixture-task"
+    assert events[-1]["error_type"] == "LookupError"
 
 
 def test_invoke_deepagent_uses_virtual_files_and_audits_runtime_failures(tmp_path: Path) -> None:
@@ -156,7 +181,7 @@ def test_invoke_deepagent_uses_virtual_files_and_audits_runtime_failures(tmp_pat
 
     class FailingAgent:
         def invoke(self, payload: dict, *, config: dict, version: str) -> dict:
-            raise RuntimeError("fixture failure")
+            raise LookupError("fixture failure")
 
     with pytest.raises(AgenticError, match="invocation failed"):
         invoke_deepagent(
@@ -166,7 +191,8 @@ def test_invoke_deepagent_uses_virtual_files_and_audits_runtime_failures(tmp_pat
         )
     events = [json.loads(line) for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
     assert any(event["event"] == "agentic_deepagent_invocation_finished" for event in events)
-    assert any(event["event"] == "agentic_deepagent_invocation_failed" for event in events)
+    failed = next(event for event in events if event["event"] == "agentic_deepagent_invocation_failed")
+    assert failed["error_type"] == "LookupError"
 
 
 def test_local_memory_and_governed_skills_only_use_local_applied_content(tmp_path: Path) -> None:

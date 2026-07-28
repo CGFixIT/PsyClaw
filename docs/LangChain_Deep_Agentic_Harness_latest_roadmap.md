@@ -970,20 +970,24 @@ and mapped to a checklist item.
 def resume_deepagent_interrupt(agent, *, task_id, decision, config_path="config.yaml", cfg=None):
     resolved = "reject" if decision == "timeout" else decision
     message = _RESUME_MESSAGES[resolved]
-    audit_log({"event": "agentic_deepagent_interrupt_resumed",
-               "decision": decision, "resolved_decision": resolved},
-              config_path=config_path, cfg=cfg)
+    audit_log({"event": "agentic_deepagent_interrupt_resume_started",
+               "task_id": task_id, "decision": decision,
+               "resolved_decision": resolved},
+               config_path=config_path, cfg=cfg)
     from langgraph.types import Command
     try:
-        return agent.invoke(
+        result = agent.invoke(
             Command(resume={"decisions": [{"type": resolved, "message": message}]}),
             config={"configurable": {"thread_id": task_id}}, version="v2",
         )
-    except (HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
-        audit_log({"event": "agentic_deepagent_resume_failed",
-                   "error_type": type(exc).__name__},          # type-only, never str(exc)
-                  config_path=config_path, cfg=cfg)
+    except Exception as exc:
+        audit_log({"event": "agentic_deepagent_interrupt_failed",
+                   "task_id": task_id, "error_type": type(exc).__name__},
+                   config_path=config_path, cfg=cfg)
         raise AgenticError("Deep Agents interrupt resume failed") from exc
+    audit_log({"event": "agentic_deepagent_interrupt_finished",
+               "task_id": task_id}, config_path=config_path, cfg=cfg)
+    return result
 ```
 
 **R4 — provenance binding (`agentic/harness_optimizer/patching.py`):** make
