@@ -463,6 +463,18 @@ class TestErrorSanitization:
         assert secret not in sanitized
         assert "[REDACTED]" in sanitized
 
+    def test_xai_style_key_pattern_redacted(self):
+        # Real xAI Grok keys (xai-...) carry no sk- prefix and no Bearer or
+        # api_key anchor, so every pre-existing pattern missed them — the one
+        # integrated provider whose key shape reached HTTP 500 bodies and
+        # audit.jsonl verbatim (2026-07-28 sandbox verification, anomaly A3).
+        # Pattern-based leg, mirroring test_anthropic_style_key_pattern_redacted.
+        import gate
+        secret = "xai-abcdefghijklmnopqrstuvwxyz0123456789abcd"
+        sanitized = gate._sanitize_error(RuntimeError(f"upstream rejected key {secret}"))
+        assert secret not in sanitized
+        assert "[REDACTED]" in sanitized
+
 
 class TestSoulAndErrorPaths:
     """Soul endpoints must 404 when the personality system is disabled, and
