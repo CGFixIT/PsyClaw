@@ -7,7 +7,7 @@
 > 
 > kimi or kimi code: kimi/{feature}
 > 
-> CyClaw (directly or via mcp connector in claude code or similar): CyClaw/{wow!}{feature}-{date} 
+> CyClaw (directly or via mcp connector ): CyClaw/{feature}-{date} 
 
 ## Title
 **Use this format:**  
@@ -76,7 +76,7 @@ _Put an `x` in the boxes that apply. You can fill these out after creating the P
 ---
 
 ## Further comments
-If this is a relatively large, complex, or core-path change, kick off the discussion here.
+If this is a relatively large, complex, or core-path change, kick off the discussion here in ELI5 technical tone.
 
 **For changes touching `graph.py`, `gate.py`, soul paths, RAG retrieval/sanitization, or agentic subsystems, include:**
 - Explicit before/after invariant matrix
