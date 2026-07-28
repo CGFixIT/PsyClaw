@@ -285,6 +285,7 @@ policy:
       # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
       # so the OpenAI-style pattern above (no hyphens allowed) never matches them.
       - "sk-ant-[a-zA-Z0-9_-]{20,}"  # Anthropic (Claude) API keys
+      - "xai-[a-zA-Z0-9]{20,}"       # xAI (Grok) API keys
 
 api:
   host: "127.0.0.1"  # DevSkim: ignore DS162092 - loopback-only binding by design
