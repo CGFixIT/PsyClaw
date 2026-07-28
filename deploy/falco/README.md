@@ -46,7 +46,9 @@ deployment:
 
 1. `cyclaw_container` — the app container name (default `cyclaw-prod`).
 2. `cyclaw_expected_outbound` — your Ollama host/port if the model is not on
-   the shipped default (`127.0.0.1:11434`).
+   the shipped default (`127.0.0.1:11434`). Keep the destination address and
+   port joined with `and`; a port-only alternative permits that port on every
+   external host.
 
 ## Requirements & caveats
 

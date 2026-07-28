@@ -76,7 +76,16 @@ services:
       - /proc:/host/proc:ro
       - /sys/kernel/debug:/sys/kernel/debug:ro
       - ./deploy/falco/falco_rules.yaml:/etc/falco/rules.d/cyclaw_rules.yaml:ro
-    command: ["/usr/bin/falco", "--modern-bpf", "-r", "/etc/falco/rules.d/cyclaw_rules.yaml"]
+    # Supplying any -r flag makes Falco ignore falco.yaml's rules_files list.
+    # Load the shipped defaults first because the CyClaw rules use their
+    # spawned_process, open_write, and outbound macros.
+    command:
+      - /usr/bin/falco
+      - --modern-bpf
+      - -r
+      - /etc/falco/falco_rules.yaml
+      - -r
+      - /etc/falco/rules.d/cyclaw_rules.yaml
 
   # Optional: redis or postgres for future checkpointer / state if scaling
   # redis:
