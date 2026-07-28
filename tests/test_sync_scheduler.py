@@ -326,11 +326,12 @@ def test_windows_remove_success_returns_true() -> None:
         assert WindowsTaskScheduler(cfg).remove() is True
 
 
-def test_windows_missing_schtasks_raises() -> None:
-    cfg = _make_cfg()
+def test_windows_missing_schtasks_raises(tmp_path: Path) -> None:
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
     with patch("sync.scheduler.shutil.which", return_value=None):
-        with pytest.raises(SchedulerError):
+        with pytest.raises(SchedulerError, match="schtasks.exe not available"):
             WindowsTaskScheduler(cfg).install()
+    assert not (tmp_path / "logs").exists()
 
 
 # ---------------------------------------------------------------------------
