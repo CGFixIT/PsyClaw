@@ -888,6 +888,82 @@ class TestSoulFilePermissions:
         bak_path = soul_path.with_suffix(soul_path.suffix + ".bak")
         assert bak_path.stat().st_mode & 0o777 == 0o600
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_load_soul_survives_chmod_permission_error(self, cfg, tmp_paths):
+        """A soul.md owned by another account (root-installed service, a
+        deliberately read-only ops deployment) must not crash startup: the
+        unconditional chmod() this guards against previously raised
+        PermissionError on every load, not just the first."""
+        soul_path, db_path, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+        soul_path.chmod(0o644)
+        db_path.touch()
+
+        with patch("utils.personality.os.chmod", side_effect=PermissionError("not owner")), \
+             patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)  # must not raise
+
+        assert pm.soul_core == "# Existing soul"
+        assert soul_path.stat().st_mode & 0o777 == 0o644  # unchanged, not crashed
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_load_soul_skips_chmod_when_already_owner_only(self, cfg, tmp_paths):
+        """No chmod() call at all when the mode is already correct — so a
+        soul.md that's already 0600 but owned by another account still loads
+        even though this process could not chmod it if asked to."""
+        soul_path, db_path, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+        soul_path.chmod(0o600)
+        db_path.touch()
+        db_path.chmod(0o600)
+
+        with patch("utils.personality.os.chmod") as mock_chmod, \
+             patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            PersonalityManager(cfg)
+
+        mock_chmod.assert_not_called()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_connect_sqlite_survives_chmod_permission_error(self, cfg, tmp_paths):
+        """The same crash-on-connect risk as soul.md, for the SQLite history
+        database: a pre-existing DB owned by another account must still open
+        for read instead of raising PermissionError out of connect()."""
+        soul_path, db_path, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+        soul_path.chmod(0o600)
+        db_path.touch()
+        db_path.chmod(0o644)
+
+        with patch("utils.personality_db.os.chmod", side_effect=PermissionError("not owner")), \
+             patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            PersonalityManager(cfg)  # must not raise
+
+        assert db_path.stat().st_mode & 0o777 == 0o644  # unchanged, not crashed
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
+    def test_connect_sqlite_skips_chmod_when_already_owner_only(self, cfg, tmp_paths):
+        """No chmod() call at all on a pre-existing DB whose mode is already
+        correct."""
+        soul_path, db_path, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Existing soul", encoding="utf-8")
+        soul_path.chmod(0o600)
+        db_path.touch()
+        db_path.chmod(0o600)
+
+        with patch("utils.personality_db.os.chmod") as mock_chmod, \
+             patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            PersonalityManager(cfg)
+
+        mock_chmod.assert_not_called()
+
 
 class TestBackupAtomicity:
     """The .bak used to be written directly via Path.write_text with no

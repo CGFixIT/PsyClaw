@@ -18,9 +18,13 @@ Security posture (Postgres path):
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("cyclaw.personality_db")
 
 # Connection hardening defaults (Postgres). statement_timeout mirrors the
 # sqlconnect convention (agentic/sqlconnect/config.py: statement_timeout_ms=5000).
@@ -82,10 +86,24 @@ def connect(db_path: Path, pers_cfg: dict) -> tuple[Any, str, str]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # sqlite3.connect() creates the database with the process umask, which
     # commonly leaves the full soul/version history at 0644. Pre-create it
-    # owner-only and also repair permissions on databases from older installs.
+    # owner-only via os.open()'s mode (umask only ever narrows 0600, never
+    # widens it, so a freshly created file needs no further chmod).
+    db_existed = db_path.exists()
     fd = os.open(db_path, os.O_RDWR | os.O_CREAT, 0o600)
     os.close(fd)
-    os.chmod(db_path, 0o600)
+    # Repair permissions on a pre-existing database from an older install —
+    # but only when the mode actually needs tightening, and never let a
+    # permission failure here crash startup: an unconditional chmod() raises
+    # PermissionError when the database is owned by another account (a
+    # root-installed service running as a lower-privileged user, or an ops
+    # team that deliberately shipped it read-only), which would otherwise
+    # turn every connect() into a boot crash instead of a read.
+    if db_existed:
+        try:
+            if stat.S_IMODE(db_path.stat().st_mode) != 0o600:
+                os.chmod(db_path, 0o600)
+        except OSError:
+            logger.warning("Could not harden personality DB permissions to 0600: %s", db_path)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn, "?", "sqlite"

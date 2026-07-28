@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 import re
+import stat
 import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
@@ -180,8 +181,19 @@ class PersonalityManager:
             return
 
         # Manual edits and older installations may leave soul.md readable by
-        # other local accounts. Harden it before loading its contents.
-        os.chmod(self.soul_path, 0o600)
+        # other local accounts. Harden it before loading its contents — but
+        # only when the mode actually needs tightening, and never let a
+        # permission failure here crash startup: an unconditional chmod()
+        # raises PermissionError when soul.md is owned by another account (a
+        # root-installed service running as a lower-privileged user, or an
+        # ops team that deliberately shipped it read-only), which would
+        # otherwise turn every soul.md load into a boot crash instead of a
+        # read.
+        try:
+            if stat.S_IMODE(self.soul_path.stat().st_mode) != 0o600:
+                os.chmod(self.soul_path, 0o600)
+        except OSError:
+            logger.warning("Could not harden soul.md permissions to 0600: %s", self.soul_path)
 
         # Hold the lock across the read-then-conditional-write so a concurrent
         # apply_evolution()/reload() on another thread cannot interleave with
