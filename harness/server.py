@@ -118,7 +118,13 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
 
-    app = FastAPI(title="CyClaw Harness", version=_HARNESS_VERSION)
+    app = FastAPI(
+        title="CyClaw Harness",
+        version=_HARNESS_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
 
     def _current_model() -> str:
@@ -127,7 +133,13 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # -- console -------------------------------------------------------
     @app.get("/", response_class=FileResponse)
     def console() -> FileResponse:
-        return FileResponse(str(_STATIC / "harness.html"))
+        return FileResponse(
+            str(_STATIC / "harness.html"),
+            headers={
+                "Content-Security-Policy": "frame-ancestors 'none'",
+                "X-Frame-Options": "DENY",
+            },
+        )
 
     # -- status --------------------------------------------------------
     @app.get("/api/status")
