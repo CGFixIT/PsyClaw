@@ -1,7 +1,7 @@
 ## Note: when initiated pr draft from grok build, kimi/kimi code, or codex use preferred branch naming conventions:
 > claude code: claude/{feature}
 > 
-> codex: cx/{feature}
+> codex: codex/{feature}
 > 
 > grok build: grok/{feature}
 > 
