@@ -20,12 +20,15 @@ gate.py, graph.py, or mcp_hybrid_server.py.
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from utils.logger import hash_query
+
+logger = logging.getLogger("cyclaw.guardrails.metrics")
 
 # Canonical event types. Kept as constants so producers and the analyzer agree.
 EVENT_TOOL_CALL = "tool_call"
@@ -62,9 +65,19 @@ class GuardrailMetrics:
         record["timestamp"] = datetime.now(UTC).isoformat()
         self.counters[event] += 1
         if self.persist:
-            self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.metrics_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
+            try:
+                self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self.metrics_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record) + "\n")
+            except (OSError, TypeError, ValueError, RecursionError) as exc:
+                # Metrics are telemetry, never policy. Letting a disk-full or
+                # serialization failure escape causes graph.guardrail_input_node
+                # to fail open and discard an already-computed block verdict.
+                # Log only the exception class; never paths, fields, or queries.
+                logger.warning(
+                    "Guardrail metrics persistence skipped (%s)",
+                    type(exc).__name__,
+                )
         return record
 
     def record_tool_call(self, tool: str, *, ok: bool = True, query: str | None = None, **fields: Any) -> dict:

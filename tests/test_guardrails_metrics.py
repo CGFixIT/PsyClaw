@@ -38,6 +38,46 @@ def test_persist_false_does_not_write(tmp_path):
     assert m.tools_called["gh_pr_view"] == 1
 
 
+def test_persistence_failure_does_not_break_metrics_call(tmp_path, caplog):
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_text("occupied", encoding="utf-8")
+    m = GuardrailMetrics(blocked_parent / "guardrails.jsonl")
+
+    record = m.record_blocked(
+        stage="input",
+        rail="check_soul_mutation",
+        reason="offline heuristic",
+        query="rewrite your soul",
+    )
+
+    assert record["event"] == EVENT_BLOCKED
+    assert m.counters[EVENT_BLOCKED] == 1
+    assert "Guardrail metrics persistence skipped (FileExistsError)" in caplog.text
+    assert str(blocked_parent) not in caplog.text
+
+
+def test_serialization_failure_does_not_log_metric_fields(tmp_path, caplog):
+    secret_marker = "do-not-log-this-metric-field"
+
+    class NonSerializable:
+        def __repr__(self):
+            return secret_marker
+
+    m = GuardrailMetrics(tmp_path / "guardrails.jsonl")
+    record = m.record_blocked(
+        stage="input",
+        rail="check_injection",
+        query="private query",
+        payload=NonSerializable(),
+    )
+
+    assert record["event"] == EVENT_BLOCKED
+    assert m.counters[EVENT_BLOCKED] == 1
+    assert "Guardrail metrics persistence skipped (TypeError)" in caplog.text
+    assert secret_marker not in caplog.text
+    assert "private query" not in caplog.text
+
+
 def test_compute_summary_aggregates(tmp_path):
     path = tmp_path / "guardrails.jsonl"
     m = GuardrailMetrics(path)
