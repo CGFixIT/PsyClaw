@@ -8,7 +8,10 @@
 #
 # PROMPT FILTER UPDATE (2026-06):
 # Expanded banned_patterns from 13 → 32 curated high-signal regex
-# (2026-07: tightened bare "urgent"/"act as"/"base64" to cut false positives).
+# (2026-07: tightened bare "urgent"/"act as"/"base64" to cut false positives;
+# 2026-07: injection-redteam closed 7 more coverage gaps, 32 → 39;
+# 2026-07: closed 1 more gap and tightened 2 of those 7 for false positives
+# found outside the redteam corpus's own benign probes, 39 → 40).
 # Categories: Core Override, Role Reassignment, System/New Instructions,
 # Memory/Persistence Manipulation (critical for RAG + soul poisoning defense),
 # Authority/Urgency, Tool/Action Hijacking, Light Obfuscation/Jailbreak.
@@ -191,7 +194,7 @@ policy:
     # newlines that corpus chunks routinely contain — and the alternations
     # cover the previous/all/prior variants. Compiled with re.IGNORECASE.
     #
-    # Expanded set (32 patterns total) for stronger defense against:
+    # Expanded set (40 patterns total) for stronger defense against:
     # - Direct override / jailbreak
     # - Role reassignment & impersonation
     # - Memory/persistence poisoning (zombie agent risk in RAG/soul)
@@ -199,7 +202,7 @@ policy:
     # - Tool/MCP action hijacking
     # - Light obfuscation
     banned_patterns:
-      # === Core Override (8) ===
+      # === Core Override (10) ===
       - 'ignore\s+(previous|all|prior)\s+instructions'
       - 'ignore\s+all\s+previous'
       - 'ignore\s+safety'
@@ -208,8 +211,19 @@ policy:
       - 'override\s+instructions'
       - 'bypass\s+(safety|filters|restrictions|rules)'
       - 'do\s+anything\s+now'
+      # injection-redteam hx-01: a filler word inserted between "ignore all"
+      # and the target noun, plus a synonym ("directives"/"guidance") for
+      # "instructions", both defeated the patterns above.
+      - 'ignore\s+(all|any)\s+\S+\s+(instructions|directives|guidance)'
+      # Verified during hx-01 review: hx-01's own pattern requires "all"/"any"
+      # literally, so dropping that word ("ignore earlier directives", no
+      # "all") still bypassed every pattern above -- "earlier" wasn't in the
+      # first pattern's (previous|all|prior) list, and no other pattern covers
+      # "directives"/"guidance" without "all"/"any". Tested against the full
+      # benign corpus plus this phrasing; no false positives introduced.
+      - 'ignore\s+earlier\s+(instructions|directives|guidance)'
 
-      # === Role Reassignment / Impersonation (5) ===
+      # === Role Reassignment / Impersonation (6) ===
       # Bare "act as <profession>" is legitimate product language (e.g. "act as
       # local counsel"); require a jailbreak-ish complement after "act as".
       - 'you\s+are\s+now'
@@ -231,39 +245,77 @@ policy:
       # local counsel...", "act as project manager...", "act as a translator...".
       - 'act\s+as\s+(?:\S+\s+){0,4}(if\b|your\s+developer|uncensored|dan\b|without\b|no\s+(?:restrictions?|filters?|limits?|rules?)|jailbreak|penetration\s+tester|unrestricted|\bai\b)'
       - 'roleplay\s+as|assume\s+the\s+role'
+      # injection-redteam hx-02: "from now on you will/-- behave/act as" is an
+      # uncovered role-swap phrasing distinct from "you are now"/"pretend to be".
+      - 'from\s+now\s+on\s+you\s+(will\s+)?(behave|act)\s+as'
 
-      # === System / New Instructions (6) ===
+      # === System / New Instructions (7) ===
       - 'new\s+instructions\s*:'
       - 'system\s+prompt\s*:'
       - 'admin\s*:|developer\s+override'
       - 'sudo\s+mode|root\s+access'
       - 'maintenance\s+mode.*safety\s+filters\s+disabled'
       - 'critical\s+update\s+to\s+your\s+instructions'
+      # injection-redteam hx-03: an authority-spoof variant ("a message from
+      # your creators/developers") with no previously-covered trigger phrase.
+      - 'message\s+from\s+your\s+(creators?|developers?|makers?)'
 
-      # === Memory / Persistence Manipulation (6) — HIGH PRIORITY for RAG + soul ===
+      # === Memory / Persistence Manipulation (8) — HIGH PRIORITY for RAG + soul ===
       - 'remember\s+(for\s+future|this\s+for\s+later|as\s+permanent|in\s+memory)'
       - 'save\s+this\s+(for\s+later|in\s+your\s+memory|permanently)'
       - 'update\s+your\s+(memory|knowledge\s+base|soul)'
       - 'store\s+this\s+as\s+(a\s+rule|permanent|core\s+instruction)'
       - 'core\s+instruction,\s*never\s+forget'
       - 'add\s+to\s+your\s+(knowledge|memory|personality)\s+base'
+      # injection-redteam me-05: the "core instruction" branch above requires
+      # no article; "store this as A core instruction" slipped through it.
+      - 'store\s+this\s+as\s+a\s+core\s+instruction'
+      # injection-redteam hx-05: "persist ... across sessions" (a distinct verb
+      # from "remember"/"save"/"store" above) was not covered by any pattern.
+      # Bare "persist X across sessions" is legitimate product language too
+      # ("how do I persist my settings across sessions?"); the hx-05 probe
+      # itself is "persist this note across sessions: <injected directive>",
+      # so -- same convention as "new instructions:"/"system prompt:" above --
+      # require the colon-introduced directive the actual attack carries,
+      # not the bare phrase. Verified against the full benign corpus plus
+      # "persist my settings/conversation history across sessions"; neither
+      # false-positives.
+      - 'persist\s+.{0,30}across\s+sessions\s*:\s*\S'
 
-      # === Authority / Urgency / Social Engineering (3) ===
+      # === Authority / Urgency / Social Engineering (4) ===
       # Bare "urgent" alone is normal ops/legal language ("urgent deadline");
       # require urgent+action/request/override/update, or "action required".
       - 'critical\s+update|important\s+update'
       - 'from\s+(it\s+department|system\s+administrator)'
       - 'urgent\s+(action|request|override|update)|action\s+required'
+      # injection-redteam au-02: the article "the" ("from THE IT department")
+      # defeated the bare "from {it department|system administrator}" pattern.
+      # Bare "from the IT department" is also legitimate on its own -- a
+      # security assistant should be able to answer "I got an email from the
+      # IT department, is this phishing?" without tripping its own filter.
+      # The au-02 probe itself is "from the IT department: <injected
+      # directive>"; require that colon-introduced directive, same as the
+      # bare "from {it department|...}" pattern's sibling patterns in this
+      # section do via their own action/urgency complements. Verified against
+      # the full benign corpus plus two phishing-awareness-style questions;
+      # neither false-positives.
+      - 'from\s+the\s+(it\s+department|system\s+administrator)\s*:\s*\S'
 
       # === Tool / Action / MCP Hijacking (2) ===
       - 'execute\s+command|run\s+this\s+code'
       - 'call\s+function|use\s+tool\s+to|invoke\s+tool'
 
-      # === Light Obfuscation / Jailbreak Variants (2) — 32 patterns total ===
+      # === Light Obfuscation / Jailbreak Variants (3) — 40 patterns total ===
       # Bare "base64" is legitimate (attachment/encoding questions); only pair
       # it with execute/decode-and-execute style jailbreak phrasing.
       - 'jailbreak|dan\s+mode|developer\s+mode'
       - 'decode\s+and\s+execute|base64.{0,40}execute|execute.{0,40}base64'
+      # injection-redteam hx-04: "reveal your instructions" (and the
+      # zero-width-obfuscated variant, now caught because check_input
+      # normalizes NFKC + strips invisible characters before matching) had no
+      # covered trigger phrase — the closest pattern, "system prompt:", only
+      # matches the label form, not the "reveal ..." extraction phrasing.
+      - 'reveal\s+(your\s+)?(instructions|system\s+prompt)'
     max_input_chars: 4000
   privacy:
     redact_emails: true
