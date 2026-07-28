@@ -19,12 +19,14 @@ import hashlib
 import logging
 import os
 import re
+import stat
+import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from utils import personality_db
-from utils.errors import PromptInjectionError
+from utils.errors import PromptInjectionError, SoulPersistenceError
 from utils.logger import audit_log
 
 logger = logging.getLogger("cyclaw.personality")
@@ -37,6 +39,31 @@ logger = logging.getLogger("cyclaw.personality")
 # drift detection then has nothing to compare against and the real identity is
 # quietly replaced. Same CWD fragility gate.py's _BASE_DIR exists to prevent.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _atomic_write_owner_only(path: Path, content: str) -> None:
+    """Replace ``path`` atomically using an owner-only temporary file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
+            fd = -1
+            tmp_file.write(content)
+        os.replace(tmp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove failed soul temporary file: %s", tmp_path)
 
 
 def _anchor(path_str: str) -> Path:
@@ -133,7 +160,16 @@ class PersonalityManager:
     def _load_soul(self) -> None:
         if not self.soul_path.exists():
             self.soul_path.parent.mkdir(parents=True, exist_ok=True)
-            self.soul_path.write_text(_DEFAULT_SOUL, encoding="utf-8")
+            # Create the live identity file owner-only from its first byte.
+            # Path.write_text() follows the process umask and commonly produced
+            # 0644 on shared POSIX hosts, exposing every future system prompt.
+            fd = os.open(
+                self.soul_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as soul_file:
+                soul_file.write(_DEFAULT_SOUL)
             file_hash = self._sha256(_DEFAULT_SOUL)
             with self._lock:
                 self.conn.execute(
@@ -143,6 +179,21 @@ class PersonalityManager:
                 self.conn.commit()
             self.soul_core = _DEFAULT_SOUL
             return
+
+        # Manual edits and older installations may leave soul.md readable by
+        # other local accounts. Harden it before loading its contents — but
+        # only when the mode actually needs tightening, and never let a
+        # permission failure here crash startup: an unconditional chmod()
+        # raises PermissionError when soul.md is owned by another account (a
+        # root-installed service running as a lower-privileged user, or an
+        # ops team that deliberately shipped it read-only), which would
+        # otherwise turn every soul.md load into a boot crash instead of a
+        # read.
+        try:
+            if stat.S_IMODE(self.soul_path.stat().st_mode) != 0o600:
+                os.chmod(self.soul_path, 0o600)
+        except OSError:
+            logger.warning("Could not harden soul.md permissions to 0600: %s", self.soul_path)
 
         # Hold the lock across the read-then-conditional-write so a concurrent
         # apply_evolution()/reload() on another thread cannot interleave with
@@ -321,7 +372,6 @@ class PersonalityManager:
                 )
         new_hash = self._sha256(new_soul)
         bak_path = self.soul_path.with_suffix(self.soul_path.suffix + ".bak")
-        tmp_path = self.soul_path.with_suffix(self.soul_path.suffix + ".tmp")
         # Publishing soul_core and reading the version MUST stay inside this same
         # critical section: releasing the lock after the DB commit and only then
         # doing `self.soul_core = ...` / `self.get_version()` left a window where
@@ -331,37 +381,104 @@ class PersonalityManager:
         # that belongs to the OTHER call's write. Keeping the whole write-then-
         # publish sequence under one lock acquisition makes each apply atomic.
         with self._lock:
-            if self.soul_path.exists():
-                # Back up the raw soul.md on disk, NOT self.soul_core: the
-                # in-memory copy is bounded to soul_max_chars by _bounded_soul,
-                # so backing it up would silently truncate any overflow from an
-                # externally-edited oversized soul.md (data loss on restore).
-                # Written through a temp file + os.replace, same as soul.md
-                # itself below: a direct write_text to bak_path left a window
-                # where a crash mid-write truncated the .bak in place, and
-                # restore_from_backup would then install that truncated copy.
-                bak_tmp_path = bak_path.with_suffix(bak_path.suffix + ".tmp")
-                bak_tmp_path.write_text(self.soul_path.read_text(encoding="utf-8"), encoding="utf-8")
-                os.chmod(bak_tmp_path, 0o600)
-                os.replace(bak_tmp_path, bak_path)
-            tmp_path.write_text(new_soul, encoding="utf-8")
-            # Tighten the temp file BEFORE the rename, not soul.md after it:
-            # os.replace carries the temp file's mode onto the destination, so
-            # without this every apply silently reset soul.md to 0644 (the .bak
-            # above was already hardened, the live file was not). soul.md is
-            # prepended to every LLM system prompt, so any local user could read
-            # the operator's full identity/policy text. Setting the mode before
-            # the rename also means the file is never briefly world-readable
-            # under its real name.
-            os.chmod(tmp_path, 0o600)
-            os.replace(tmp_path, self.soul_path)
-            self.conn.execute(
-                self._sql_insert_soul,
-                (new_hash, new_soul, reason, datetime.now(UTC).isoformat())
+            previous_soul: str | None = None
+            previous_backup_exists = bak_path.exists()
+            previous_backup = (
+                bak_path.read_text(encoding="utf-8") if previous_backup_exists else ""
             )
-            self.conn.commit()
+            backup_published = False
+            soul_published = False
+            db_write_started = False
+            try:
+                if self.soul_path.exists():
+                    # Back up the raw soul.md on disk, NOT self.soul_core: the
+                    # in-memory copy is bounded to soul_max_chars by
+                    # _bounded_soul, so using it would lose overflow on restore.
+                    previous_soul = self.soul_path.read_text(encoding="utf-8")
+                    _atomic_write_owner_only(bak_path, previous_soul)
+                    backup_published = True
+
+                _atomic_write_owner_only(self.soul_path, new_soul)
+                soul_published = True
+                db_write_started = True
+                self.conn.execute(
+                    self._sql_insert_soul,
+                    (new_hash, new_soul, reason, datetime.now(UTC).isoformat())
+                )
+                # Read the version inside the transaction. If this query fails,
+                # the DB row and both files can still be rolled back together.
+                new_version = self._max_version_id()
+                self.conn.commit()
+            except Exception as operation_exc:
+                # File-as-truth and version history must advance together. A
+                # failed DB write previously left an unversioned soul active;
+                # a failed live-file publication could also overwrite the prior
+                # recovery backup. Compensate every resource already published.
+                rollback_attempted = db_write_started
+                rollback_succeeded: bool | None = None
+                if rollback_attempted:
+                    try:
+                        self.conn.rollback()
+                        rollback_succeeded = True
+                    except Exception:
+                        rollback_succeeded = False
+                        logger.exception("Soul history transaction rollback failed")
+
+                live_restored = not soul_published
+                backup_restored = not backup_published
+                try:
+                    if soul_published:
+                        if previous_soul is None:
+                            self.soul_path.unlink(missing_ok=True)
+                        else:
+                            _atomic_write_owner_only(self.soul_path, previous_soul)
+                        live_restored = True
+
+                    if backup_published:
+                        if previous_backup_exists:
+                            _atomic_write_owner_only(bak_path, previous_backup)
+                        else:
+                            bak_path.unlink(missing_ok=True)
+                        backup_restored = True
+                except Exception as restore_exc:
+                    failure_details = {
+                        "error_type": type(operation_exc).__name__,
+                        "restore_error_type": type(restore_exc).__name__,
+                        "rollback_attempted": rollback_attempted,
+                        "rollback_succeeded": rollback_succeeded,
+                        "previous_soul_restored": live_restored,
+                        "previous_backup_restored": backup_restored,
+                    }
+                    audit_log(
+                        {
+                            "event": "soul_evolution_failed",
+                            "reason": reason,
+                            "sha256": new_hash,
+                            **failure_details,
+                        },
+                        cfg=self.cfg,
+                    )
+                    raise SoulPersistenceError(
+                        "Soul history update failed and the previous files "
+                        "could not be fully restored",
+                        details=failure_details,
+                    ) from operation_exc
+
+                audit_log(
+                    {
+                        "event": "soul_evolution_failed",
+                        "reason": reason,
+                        "sha256": new_hash,
+                        "error_type": type(operation_exc).__name__,
+                        "rollback_attempted": rollback_attempted,
+                        "rollback_succeeded": rollback_succeeded,
+                        "previous_soul_restored": live_restored,
+                        "previous_backup_restored": backup_restored,
+                    },
+                    cfg=self.cfg,
+                )
+                raise
             self.soul_core = self._bounded_soul(new_soul)
-            new_version = self._max_version_id()
         audit_log({"event": "soul_evolution_applied", "reason": reason, "version": new_version, "sha256": new_hash})
         return {"status": "applied", "version": new_version, "sha256": new_hash}
 
