@@ -65,7 +65,7 @@ _SOUL_MUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Light injection markers (defense-in-depth; the authoritative 32-pattern filter
+# Light injection markers (defense-in-depth; the authoritative 40-pattern filter
 # stays in utils/sanitizer.py + config.yaml). These exist so the guardrails CLI
 # can flag obvious payloads offline without loading the full sanitizer config.
 _INJECTION_MARKERS = (
@@ -113,7 +113,7 @@ def scan_injection(text: str) -> list[str]:
 
       * Its only production caller is the query-path input rail
         (``integration.check_input`` via ``_offline_checks``), which sits BEHIND
-        ``utils/sanitizer.py``'s 32-pattern fail-closed filter -- a query
+        ``utils/sanitizer.py``'s 40-pattern fail-closed filter -- a query
         carrying an obvious payload never reaches it.
       * ``OWASP_INJECTION_PATTERNS`` is documented in ``utils/personality.py`` as
         the ADVISORY set (it carries ``act as`` / ``you are now`` / ``pretend to

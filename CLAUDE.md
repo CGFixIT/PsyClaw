@@ -147,7 +147,7 @@ subsystems.
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |
 | `60` per `60`s | `api.rate_limit` | per-IP |
-| `32` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
+| `40` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
 | `qwen2.5:7b` | `local_llm.model` | Ollama |
 | `grok-4.5` | `grok.model` | disabled by default |
@@ -257,7 +257,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** a fresh `MockGrokClient` to simulate "no API key."
   **Rule:** it defaults `available=True`. Pass `available=False` for that path.
 - **Trap:** trimming `banned_patterns` and assuming a count test catches it.
-  **Rule:** no test asserts `== 32`. But `TestShippedConfigContract` runs
+  **Rule:** no test asserts `== 40`. But `TestShippedConfigContract` runs
   specific **phrases** against the real config — deleting a documented phrase
   fails tests. Adding patterns is safe; removing coverage is not.
 - **Trap:** adding a state-changing POST route without touching the console
