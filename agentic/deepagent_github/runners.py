@@ -126,7 +126,12 @@ def resume_deepagent_interrupt(
         )
         raise AgenticError("Deep Agents interrupt resume failed") from exc
     audit_log(
-        {"event": "agentic_deepagent_interrupt_finished", "task_id": task_id},
+        {
+            "event": "agentic_deepagent_interrupt_resumed",
+            "task_id": task_id,
+            "decision": decision,
+            "resolved_decision": resolved,
+        },
         config_path=config_path,
         cfg=cfg,
     )
