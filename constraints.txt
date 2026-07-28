@@ -14,13 +14,13 @@
 # or `pip-compile` and commit the result. Current state: direct pins aligned with v1.9.0.
 
 # CRITICAL: pydantic family must stay synchronized or pip resolver explodes
-# pydantic 2.13.4 hard-pins pydantic-core==2.46.4 (exact ==, not a range), and
+# pydantic 2.13.4 hard-pins pydantic-core==2.47.0 (exact ==, not a range), and
 # 2.13.4 is the latest pydantic on PyPI — no release pairs with pydantic-core
 # 2.47.0 yet. Bumping pydantic-core alone makes `pip install -c constraints.txt`
 # unresolvable. Keep these two in lock-step; only bump pydantic-core together
 # with a compatible pydantic bump.
 pydantic==2.13.4
-pydantic-core==2.46.4
+pydantic-core==2.47.0
 # Not currently imported anywhere in source (grepped 2026-07: no `pydantic_settings`
 # or `BaseSettings` usage) and not in pyproject.toml's [project.dependencies], so
 # it is never actually pulled into an install today -- this pin only takes effect
@@ -30,20 +30,20 @@ pydantic-core==2.46.4
 pydantic-settings==2.14.2
 
 # Direct dependencies from pyproject.toml [project.dependencies] -- versions MUST match exactly
-fastapi==0.138.0
+fastapi==0.140.9
 # Constraints pin versions only; the `[standard]` extra stays in requirements.txt.
 # pip >= 26.1.2 rejects extras in a -c constraints file ("Constraints cannot have
 # extras"), which broke the verify-install gate. See pypa/pip#8210.
-uvicorn==0.49.0
+uvicorn==0.51.0
 pyyaml==6.0.3
 httpx==0.28.1
 # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
 # so legacy/no-deps paths cannot strand the app on websockets 12.x.
-websockets==15.0.1
-langgraph==1.2.6
-langchain-core==1.4.8
+websockets==16.1.1
+langgraph==1.2.9
+langchain-core==1.5.1
 chromadb==1.5.9  # CVE-2026-45829 (Critical pre-auth RCE; risk accepted ONLY for local/offline air-gapped PersistentClient embedded mode). See SECURITY.md + pip-audit.
-sentence-transformers==5.6.0
+sentence-transformers==5.6.1
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.0
@@ -57,15 +57,15 @@ torch==2.13.0+cpu
 # job), keeping that resolve reproducible without forcing the dep on SQLite installs.
 # NB: a -c constraints file cannot carry the [binary] extra (pip >= 26.1.2 rejects
 # extras in constraints), so the binary wheel package is pinned by its own name.
-psycopg==3.2.13
-psycopg-binary==3.2.13
-pgvector==0.4.2
+psycopg==3.3.4
+psycopg-binary==3.3.4
+pgvector==0.5.0
 
 # Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
 # not installed by the default offline runtime or legacy requirements path.
 deepagents==0.6.12
-langchain==1.3.11
-langchain-openai==1.3.3
+langchain==1.3.14
+langchain-openai==1.4.1
 
 # Test optional-dependencies (for CI / dev)
 pytest==9.1.1
@@ -79,6 +79,6 @@ pytest-cov==7.1.0
 # Previously unpinned, so `pip install -e ".[dev]" -c constraints.txt` could pull in
 # ruff/mypy/bandit releases that changed lint rules mid-CI or (for mypy) type-check
 # semantics — silently breaking a green run. Pinned to the currently-green versions.
-ruff==0.15.20
-mypy==2.1.0
+ruff==0.16.0
+mypy==2.3.0
 bandit==1.9.4
