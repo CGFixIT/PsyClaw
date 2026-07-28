@@ -62,8 +62,15 @@ When uncertain, choose the higher tier.
 ## Pull Request Discipline
 
 - Draft PRs are the default. Keep each PR to one reviewable concern.
-- The PR body should include `What`, `Why`, `Verification`, `Risk to monitor`,
-  and any skipped checks or environment limits.
+- Before opening a PR, read `.github/PULL_REQUEST_TEMPLATE.md` and write the
+  body into its sections (Proposed changes / Invariant impact, Types of
+  changes, Benefits / why, Risks to monitor, Checklist, Further comments) --
+  not a separate ad hoc structure. Its own "Notes for contributors" section
+  already allows a lighter pass for out-of-band/docs-only changes.
+- At minimum, whatever the PR's shape, the body must cover what changed, why,
+  verification run, and risks to monitor, and any skipped checks or
+  environment limits -- the template's sections are the canonical place to
+  say that, not a substitute for it.
 - Before drafting a new PR, fetch `origin/main` again and confirm the branch is
   still current.
 

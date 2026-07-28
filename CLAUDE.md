@@ -383,6 +383,14 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   bootstrap → 4-minute read-only scan subagent → PR dedup via `gh` → ~5
   focused draft PRs). The in-repo Claude skill remains canonical; keep the
   two in step when the workflow changes.
+- **PR body = the template, not an ad hoc shape:** before opening a PR, read
+  `.github/PULL_REQUEST_TEMPLATE.md` and populate its sections. (Root-caused
+  2026-07-28: Kimi's PR bodies were observed using a fixed `What`/`Why`/
+  `Verification`/`Risk to monitor` shape identical to `.codex/`'s pre-fix
+  instructions — Kimi's machine-side prompt likely mirrors that same spec.
+  If so, update `~/.agents/` to point at the template the same way
+  `.codex/Codex_quick_instructions.md` now does, per the "keep the two in
+  step" rule above.)
 
 ---
 

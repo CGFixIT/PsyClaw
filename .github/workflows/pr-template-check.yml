@@ -1,0 +1,145 @@
+# Advisory check: does this PR's description follow .github/PULL_REQUEST_TEMPLATE.md?
+#
+# Non-blocking by design. CyClaw is a solo-maintainer repo fed by several
+# agent tools (Claude Code, Codex, Kimi Code, Dependabot), each with its own
+# native PR-body convention (see 2026-07-28 doc-sync review: Codex and Kimi
+# PRs consistently use their own "## What/Why/Verification"-style bodies
+# instead of the CyClaw template's named sections). The template's own
+# "Notes for contributors" section already allows lighter paths for
+# out-of-band and docs-only changes, so a hard-fail gate here would either
+# block legitimate variation or need constant exception-listing. Instead this
+# posts (and updates) a single sticky PR comment naming what the template
+# expects and what this PR's body seems to be missing -- visibility without
+# a red X. Tighten to a hard gate later if drift becomes a real problem.
+#
+# No checkout, no execution of anything from the PR: this only reads the PR
+# body string already present in the pull_request event payload.
+
+name: PR Template Check
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize, ready_for_review]
+    branches: [main, cc]
+
+permissions: {}
+
+concurrency:
+  group: pr-template-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check PR body against template
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Dependabot bodies are auto-generated changelog tables, not authored
+    # descriptions -- the template does not apply to them.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+
+    permissions:
+      pull-requests: write
+
+    steps:
+      - name: Evaluate template coverage and upsert comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const marker = "<!-- cyclaw-pr-template-check -->";
+            const body = context.payload.pull_request.body || "";
+
+            // Universal minimum: CLAUDE.md quality bar and the template's own
+            // "Notes for contributors" require Benefits/why + Risks in every
+            // PR, even lighter out-of-band or docs-only ones. Matched loosely
+            // (header text, any level) so Claude's exact template headers,
+            // Codex's "## Why"/"## Risk to monitor", and Kimi's variants all
+            // pass without forcing one tool's exact wording on another.
+            const checks = [
+              {
+                key: "rationale",
+                label: "Why this change / benefits (e.g. `## Proposed changes`, `## Why`, `## Benefits`, `## Summary`)",
+                re: /^#{1,4}\s*(proposed changes|benefits|why|summary|what)\b/im,
+              },
+              {
+                key: "risk",
+                label: "Risks to monitor (e.g. `## Risks to monitor`, `## Risk`)",
+                re: /^#{1,4}\s*risks?(\s*(to\s*monitor|impact))?\b/im,
+              },
+            ];
+
+            const missing = checks.filter((c) => !c.re.test(body));
+            const tooShort = body.trim().length < 40;
+
+            // Extra, sharper check: PRs touching core/security-relevant paths
+            // should say something about invariant impact (CLAUDE.md I1-I6).
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const corePathRe = /^(gate\.py|graph\.py|mcp_hybrid_server\.py|utils\/personality\.py|config\.yaml)$/;
+            const touchesCore = files.some((f) => corePathRe.test(f.filename));
+            const mentionsInvariant = /invariant/i.test(body);
+            if (touchesCore && !mentionsInvariant) {
+              missing.push({
+                label:
+                  "Invariant / Governance impact statement -- this PR touches a core-path file " +
+                  "(gate.py/graph.py/mcp_hybrid_server.py/utils/personality.py/config.yaml) but its " +
+                  "body never mentions an invariant",
+              });
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user?.login === "github-actions[bot]" && c.body?.includes(marker),
+            );
+
+            if (!tooShort && missing.length === 0) {
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body: `${marker}\nPR body now covers the sections \`.github/PULL_REQUEST_TEMPLATE.md\` expects (rationale, risk${touchesCore ? ", invariant impact" : ""}).`,
+                });
+              }
+              core.info("PR body covers the expected template sections.");
+              return;
+            }
+
+            const lines = [
+              marker,
+              "**PR template check** (advisory, non-blocking)",
+              "",
+              tooShort
+                ? "This PR body is very short. `.github/PULL_REQUEST_TEMPLATE.md` expects at least a rationale and a risk note, even for light out-of-band/docs changes."
+                : "This PR body doesn't look like it covers everything `.github/PULL_REQUEST_TEMPLATE.md` expects:",
+              "",
+              ...missing.map((c) => `- ${c.label}`),
+              "",
+              "This isn't a required check -- it won't block merge. See the template's own \"Notes for contributors\" for which sections lighter-path PRs can skip.",
+            ];
+            const commentBody = lines.join("\n");
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: commentBody,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: commentBody,
+              });
+            }
