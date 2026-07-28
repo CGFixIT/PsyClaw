@@ -246,6 +246,20 @@ def test_registry_endpoint(client):
     assert any(s["name"] == "ponytail" for s in data["skills"])
 
 
+def test_console_denies_framing(client):
+    """The local control surface must not be embeddable by another page."""
+    response = client.get("/")
+
+    assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
+    assert response.headers["x-frame-options"] == "DENY"
+
+
+@pytest.mark.parametrize("path", ("/docs", "/redoc", "/openapi.json"))
+def test_auto_docs_routes_absent(client, path):
+    """Do not expose alternate interactive HTML or the harness API schema."""
+    assert client.get(path).status_code == 404
+
+
 def test_rejects_non_loopback_host_header(cfg):
     """DNS-rebinding defense: a request whose Host header is not a loopback host
     is rejected by TrustedHostMiddleware before reaching a state-changing route,
