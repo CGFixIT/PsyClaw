@@ -238,6 +238,11 @@ _SECRET_PATTERNS = [
     # so the OpenAI-style sk- pattern above (no hyphens allowed) never matches
     # them — this is a distinct shape, not a subset of the pattern above.
     re.compile(r'sk-ant-[A-Za-z0-9_\-]{20,}'),  # Anthropic (Claude) API keys
+    # xAI keys (xai-...) match none of the shapes above: no sk- prefix, no
+    # Bearer/api_key anchor. They were the one integrated provider whose key
+    # shape passed through un-redacted (found in the 2026-07-28 sandbox
+    # verification, anomaly A3).
+    re.compile(r'xai-[A-Za-z0-9]{20,}'),       # xAI (Grok) API keys
     re.compile(r'ghp_[A-Za-z0-9]{36}'),        # GitHub PATs
     re.compile(r'xox[baprs]-[0-9a-zA-Z\-]+'), # Slack tokens
     re.compile(r'AKIA[0-9A-Z]{16}'),           # AWS access keys
