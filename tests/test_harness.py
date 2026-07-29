@@ -347,3 +347,33 @@ def test_session_files_written_under_home(client, cfg):
     payload = json.loads(files[0].read_text(encoding="utf-8"))
     # "total" is a computed property of TokenTally, not a persisted field.
     assert payload["tally"]["prompt_tokens"] + payload["tally"]["completion_tokens"] == 18
+
+
+# -- shutdown -------------------------------------------------------------------
+
+def test_app_shutdown_closes_chat_client(cfg):
+    # HarnessChatClient owns a persistent httpx.Client. create_app must close it
+    # on app shutdown (same contract gate.py's lifespan implements); before the
+    # lifespan hook existed, close() was defined but never called and every
+    # create_app leaked its connection pool.
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+    )
+    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1") as c:
+        assert c.post("/api/chat", json={"message": "hi"}).status_code == 200
+        assert chat._client.is_closed is False
+    assert chat._client.is_closed is True
+
+
+def test_app_shutdown_survives_a_failing_client_close(cfg):
+    # A teardown failure must not turn shutdown into an exception.
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+    )
+
+    def boom() -> None:
+        raise RuntimeError("close failed")
+
+    chat.close = boom  # type: ignore[method-assign]
+    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1") as c:
+        assert c.get("/").status_code == 200
