@@ -48,25 +48,120 @@ _FORBIDDEN_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Single-quoted string literals (``''`` escapes a quote) and double-quoted
-# identifiers (``""`` escapes a quote) can legitimately contain SQL keywords or
-# comment/``;`` punctuation as *data* or as a quoted column name -- e.g.
+# Quoted regions can legitimately contain SQL keywords or comment/``;``
+# punctuation as *data* or as a quoted column name -- e.g.
 # ``SELECT 'please do not delete'`` or ``SELECT "delete" FROM t``. Those are never
 # executable SQL, so the structural guards below scan a copy with quoted regions
 # blanked out to avoid false-rejecting valid read queries. Real DML, comments and
 # stacked statements always live OUTSIDE quotes, so the ``WITH (DELETE ... RETURNING)``
 # CTE bypass and ``--``/``/* */`` comment hiding are still caught.
-_QUOTED_RE = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"")
+#
+# This MUST be a single left-to-right scan rather than a regex alternation.
+# The previous ``re.sub`` of ``'...'|"..."`` did not know about the other
+# quoting forms, so a quote character sitting INSIDE one of them opened a
+# phantom region that swallowed real SQL:
+#
+#     SELECT $$'$$ ; DROP TABLE t ; SELECT $$'$$
+#          -> scanned as  SELECT $$ $$   (the ';' and 'DROP' are gone)
+#
+# and the guard accepted it as a single SELECT. Same shape with MSSQL bracket
+# identifiers (``SELECT [a'b] ; DROP TABLE t ; SELECT [c'd]``). Scanning left
+# to right gives each opener the precedence the database gives it, so a quote
+# inside another quoted region is data, not an opener.
+_SIMPLE_QUOTES = {"'": "'", '"': '"', "[": "]"}
+# ``$$``/``$tag$`` -- Postgres dollar-quoting. A bare ``$1`` placeholder does not
+# match (no closing ``$``), so it falls through and is emitted literally.
+_DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+# Postgres escape-string literals (``E'a\'b'``) are the one form where a
+# backslash escapes the closing quote. Rather than teach the scanner a second
+# escape convention, they are refused outright -- the same call the guard
+# already makes for SQL comments, and for the same reason: a read-only preview
+# never needs one, so rejecting beats parsing. The check is made INSIDE the
+# scan, against the unquoted text emitted so far, because a plain string may
+# legitimately end in an E (``SELECT 'grade E' AS g``) and a raw pre-pass over
+# the whole statement rejected exactly those.
+_IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$")
+
+
+def _skip_simple_quote(sql: str, start: int, opener: str) -> int:
+    """Index just past the region opened by ``opener`` at ``start``.
+
+    Covers the three doubled-escape forms: ``'...''...'`` string literals,
+    ``"..."" ..."`` quoted identifiers, and ``[...]]...]`` MSSQL bracket
+    identifiers. Raises on an unterminated region.
+    """
+    closer = _SIMPLE_QUOTES[opener]
+    cursor = start + 1
+    while True:
+        end = sql.find(closer, cursor)
+        if end < 0:
+            raise SqlConnectError(
+                f"unterminated {opener!r} quoted region in SQL",
+                code="SQLCONNECT_BAD_QUERY",
+            )
+        if sql[end + 1:end + 2] == closer:
+            cursor = end + 2  # doubled closer escapes itself; keep going
+            continue
+        return end + 1
+
+
+def _skip_dollar_quote(sql: str, start: int) -> int | None:
+    """Index just past a ``$tag$...$tag$`` region, or None if this is not one."""
+    opener = _DOLLAR_TAG_RE.match(sql, start)
+    if opener is None:
+        return None
+    tag = opener.group(0)
+    end = sql.find(tag, opener.end())
+    if end < 0:
+        raise SqlConnectError(
+            f"unterminated {tag} dollar-quoted region in SQL",
+            code="SQLCONNECT_BAD_QUERY",
+        )
+    return end + len(tag)
+
+
+def _is_escape_string_prefix(emitted: list[str]) -> bool:
+    """True if the unquoted text so far ends in a standalone ``E``/``e`` token.
+
+    ``emitted`` holds only characters seen OUTSIDE a quoted region, so this
+    distinguishes the ``E'...'`` escape-string prefix from an ``E`` that is
+    merely the last character of an ordinary string literal.
+    """
+    if not emitted or emitted[-1] not in {"E", "e"}:
+        return False
+    return len(emitted) < 2 or emitted[-2] not in _IDENT_CHARS
 
 
 def _strip_quoted(sql: str) -> str:
-    """Blank out single-quoted literals and double-quoted identifiers for scanning.
+    """Blank out every quoted region so the structural guards scan only real SQL.
 
-    Replaces each quoted region with a single space (preserving token boundaries).
-    Note: PostgreSQL dollar-quoting (``$$...$$``) is not stripped; a keyword inside
-    a dollar-quoted literal would still be rejected -- fail-closed, never open.
+    Each region collapses to a single space, preserving token boundaries.
+    Handles single quotes, double-quoted identifiers, MSSQL bracket
+    identifiers and Postgres dollar-quoting in one left-to-right pass, so no
+    quoting form can hide a statement separator or a forbidden keyword inside
+    another. Unterminated regions raise rather than swallow the remainder.
     """
-    return _QUOTED_RE.sub(" ", sql)
+    out: list[str] = []
+    cursor = 0
+    while cursor < len(sql):
+        char = sql[cursor]
+        if char in _SIMPLE_QUOTES:
+            if char == "'" and _is_escape_string_prefix(out):
+                raise SqlConnectError(
+                    "escape-string literals (E'...') are not allowed in read-only queries",
+                    code="SQLCONNECT_BAD_QUERY",
+                )
+            cursor = _skip_simple_quote(sql, cursor, char)
+            out.append(" ")
+            continue
+        dollar_end = _skip_dollar_quote(sql, cursor) if char == "$" else None
+        if dollar_end is None:
+            out.append(char)
+            cursor += 1
+        else:
+            out.append(" ")
+            cursor = dollar_end
+    return "".join(out)
 
 
 def assert_read_only_sql(sql: str) -> str:

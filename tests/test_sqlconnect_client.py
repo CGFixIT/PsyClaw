@@ -534,3 +534,104 @@ def test_run_select_returns_json_by_default(monkeypatch):
     res = client.run_select("SELECT 1")
     assert "rows" in res
     assert res.get("format") != "csv"
+
+
+# -- quote-scanner bypasses (regression) --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        # Dollar-quoting: a "'" inside $$...$$ used to open a phantom
+        # single-quoted region that swallowed the ";" and the DML keyword.
+        "SELECT $$'$$ ; DROP TABLE t ; SELECT $$'$$",
+        "SELECT $tag$'$tag$ ; DELETE FROM users ; SELECT $tag$'$tag$",
+        "SELECT $$'$$ -- DROP TABLE t\nSELECT $$'$$",
+        # MSSQL bracket identifiers: same shape, different quoting form.
+        "SELECT [a'b] ; DROP TABLE t ; SELECT [c'd]",
+        # Double-quoted identifiers holding a "'".
+        'SELECT "a\'b" ; DROP TABLE t ; SELECT "c\'d"',
+        # The mirror case: "$$" inside a normal string must not be read as a
+        # dollar-quote opener (this is why the scan runs left to right).
+        "SELECT '$$', 'x' ; DROP TABLE t ; SELECT '$$'",
+        # Postgres escape strings can escape their own closing quote.
+        "SELECT E'\\'' ; DROP TABLE t ; SELECT E'\\''",
+    ],
+)
+def test_assert_rejects_quote_form_confusion(bad):
+    """No quoting form may hide a statement separator inside another.
+
+    Regression: _strip_quoted was a regex alternation over '...' and "..."
+    only. Any quote character living inside a dollar-quoted body or a bracket
+    identifier opened a region the database never sees, blanking the ";" and
+    the forbidden keyword out of the scanned copy. assert_read_only_sql then
+    accepted a stacked DROP/DELETE as "a single SELECT".
+    """
+    with pytest.raises(SqlConnectError) as exc:
+        assert_read_only_sql(bad)
+    assert exc.value.code == "SQLCONNECT_BAD_QUERY"
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        "SELECT $$plain body$$ AS x",
+        "SELECT $tag$body with ' quote$tag$ AS x",
+        "SELECT [my col] FROM [my table]",
+        "SELECT a[1] FROM t",
+        "SELECT ARRAY[1,2] FROM t",
+        "SELECT 'it''s fine' FROM t",
+        'SELECT "he said ""hi""" FROM t',
+        "SELECT * FROM t WHERE x LIKE 'a\\_b'",
+        # A plain literal may END in an E. The escape-string guard must look at
+        # the unquoted text only, or these get rejected as E'...' prefixes.
+        "SELECT 'The value is E' FROM t",
+        "SELECT 'grade E' AS g",
+        "SELECT 'Eve' FROM t",
+    ],
+)
+def test_assert_still_accepts_legitimate_quoting(good):
+    """Closing the bypass must not start rejecting valid read queries.
+
+    Doubled-quote escapes, dollar-quoted bodies, bracket identifiers and
+    array subscripts are all ordinary SELECT syntax on the two supported
+    drivers.
+    """
+    assert assert_read_only_sql(good).lower().startswith("select")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "SELECT 'unterminated FROM t",
+        "SELECT $$unterminated FROM t",
+        'SELECT "unterminated FROM t',
+        "SELECT [unterminated FROM t",
+    ],
+)
+def test_assert_rejects_unterminated_quoted_regions(bad):
+    """An unterminated region is refused rather than scanned to end-of-string.
+
+    Swallowing the remainder would hide whatever followed from the keyword and
+    statement-separator guards, which is the fail-open direction.
+    """
+    with pytest.raises(SqlConnectError) as exc:
+        assert_read_only_sql(bad)
+    assert exc.value.code == "SQLCONNECT_BAD_QUERY"
+
+
+def test_dollar_placeholder_is_not_a_quote_opener():
+    """A bare $1 parameter placeholder has no closing $, so it is literal."""
+    assert assert_read_only_sql("SELECT * FROM t WHERE id = $1").endswith("$1")
+    with pytest.raises(SqlConnectError):
+        assert_read_only_sql("SELECT * FROM t WHERE id = $1 ; DROP TABLE t")
+
+
+@pytest.mark.parametrize("bad", ["SELECT E'\\'' FROM t", "select e'\\'' from t"])
+def test_assert_rejects_escape_string_literals(bad):
+    """E'...' is the one form where a backslash escapes the closing quote, so
+    it is refused outright rather than lexed with a second escape convention --
+    the same call the guard already makes for SQL comments."""
+    with pytest.raises(SqlConnectError) as exc:
+        assert_read_only_sql(bad)
+    assert exc.value.code == "SQLCONNECT_BAD_QUERY"
