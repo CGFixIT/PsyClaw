@@ -38,6 +38,23 @@ DEFAULT_METRICS_PATH = "logs/guardrails.jsonl"
 DEFAULT_BLOCK_MESSAGE = (
     "I can't help with that request. It was stopped by a CyClaw safety guardrail."
 )
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _anchor_to_repo_root(raw: str) -> str:
+    """Expand a configured path, anchoring a relative one to the repo root.
+
+    Never the process cwd. CyClaw is launched from a service manager, a
+    Windows double-click and the CLI from arbitrary directories, so a
+    cwd-relative path names a different file on each of them (CLAUDE.md 4).
+    """
+    expanded = os.path.expanduser(os.path.expandvars(raw))
+    path = Path(expanded)
+    if not path.is_absolute():
+        path = _REPO_ROOT / expanded
+    return str(path)
+
+
 DEFAULT_INPUT_RAILS = ("check_injection", "check_jailbreak", "check_soul_mutation")
 DEFAULT_OUTPUT_RAILS = ("check_grounding", "check_soul_leak")
 DEFAULT_TOPICAL_RAILS = ("stay_in_local_knowledge", "no_unauthed_external_advice")
@@ -90,6 +107,7 @@ class GuardrailsConfig:
         self._validate_base_url()
         self._validate_threshold()
         self._validate_nemo_config_dir()
+        self._validate_metrics_path()
 
     def _validate_engine(self) -> None:
         if self.engine not in _VALID_ENGINES:
@@ -119,13 +137,22 @@ class GuardrailsConfig:
                 "guardrails.nemo_config_dir is required",
                 details={"hint": "Directory holding config.yml + rails.co (default: guardrails/config)"},
             )
-        # Resolve relative to the repo root so the CLI works from any CWD.
-        expanded = os.path.expanduser(os.path.expandvars(self.nemo_config_dir))
-        path = Path(expanded)
-        if not path.is_absolute():
-            repo_root = Path(__file__).resolve().parent.parent
-            path = repo_root / expanded
-        self.nemo_config_dir = str(path)
+        self.nemo_config_dir = _anchor_to_repo_root(self.nemo_config_dir)
+
+    def _validate_metrics_path(self) -> None:
+        if not self.metrics_path:
+            raise GuardrailsConfigError(
+                "guardrails.metrics_path is required",
+                details={"hint": f"JSONL event stream (default: {DEFAULT_METRICS_PATH}). "
+                                 "Use GuardrailMetrics(persist=False) to disable persistence."},
+            )
+        # Anchored for the same reason nemo_config_dir is: the shipped default
+        # is relative, and GuardrailMetrics swallows the resulting OSError, so
+        # a cwd-relative path meant guardrail telemetry silently landed in
+        # (or vanished from) whichever directory the process happened to start
+        # in -- while the rail itself kept enforcing. gate.py:718 already
+        # anchors logs/audit.jsonl this way; this brings the second stream in line.
+        self.metrics_path = _anchor_to_repo_root(self.metrics_path)
 
     # --- Computed helpers -------------------------------------------------
 
