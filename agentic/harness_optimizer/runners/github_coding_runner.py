@@ -33,9 +33,20 @@ from utils.logger import audit_log
 def _safe_child(root: Path, relative: str) -> Path:
     if not isinstance(relative, str) or not relative or "\x00" in relative:
         raise AgenticError("fixture path must be a non-empty relative string")
-    if Path(relative).is_absolute() or PureWindowsPath(relative).is_absolute():
+    # Reject every rooted shape on every host. `Path(...)` is HOST-flavoured, so
+    # it cannot carry this alone: on Windows it is a WindowsPath, whose
+    # is_absolute() is False for a drive-less root, and PureWindowsPath agrees --
+    # so "/etc/passwd" passed both checks and was then split into the *relative*
+    # ("etc", "passwd"), landing inside the root instead of raising. The mirror
+    # case leaks on POSIX: "\Windows\system.ini" is one filename to PurePosixPath
+    # and driveless to PureWindowsPath, yet the split below turns the backslashes
+    # into separators. Testing the leading separator AFTER normalising covers
+    # both root-relative forms identically on either platform; PureWindowsPath
+    # still carries the drive ("C:\...") and UNC ("\\server\share") shapes.
+    normalized = relative.replace("\\", "/")
+    if normalized.startswith("/") or PureWindowsPath(relative).is_absolute():
         raise AgenticError("fixture path must be relative", details={"path": relative})
-    parts = tuple(part for part in relative.replace("\\", "/").split("/") if part not in {"", "."})
+    parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
     if not parts or any(part == ".." or ":" in part for part in parts):
         raise AgenticError("fixture path escaped its root", details={"path": relative})
     resolved_root = root.resolve()
