@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from harness.config import HarnessConfig, default_home
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
-from harness.registry_view import full_registry, list_mcp_tools, list_repo_skills
+from harness.registry_view import full_registry, list_governed_skills, list_mcp_tools, list_repo_skills
 from harness import server as harness_server
 from harness.server import create_app
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
@@ -116,6 +116,66 @@ def test_full_registry_shape():
     reg = full_registry()
     assert set(reg) == {"skills", "tools", "connectors"}
     assert any(c["id"] == "github" for c in reg["connectors"])
+
+
+# -- governed skills registry view --------------------------------------------------
+
+def _write_registry(path: Path, skills: object, **extra: object) -> Path:
+    payload = {"version": 1, "updated": None, "skills": skills, "history": []}
+    payload.update(extra)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_list_governed_skills_surfaces_mapping_entries(tmp_path):
+    # The governed schema stores "skills" as a name -> entry mapping. The view
+    # previously iterated the mapping itself (bare name strings), so a fully
+    # populated, schema-conformant registry rendered zero skills in the console.
+    reg = _write_registry(tmp_path / "reg.json", {
+        "demo": {"name": "demo", "description": "A governed demo skill.",
+                 "body": "Do the governed thing.", "sha256": "x" * 64,
+                 "reason": "seed", "updated": "2026-07-29T00:00:00+00:00"},
+        "review": {"name": "review", "description": "Review candidate diffs.",
+                   "body": "Review only the candidate.", "sha256": "y" * 64,
+                   "reason": "seed", "updated": "2026-07-29T00:00:00+00:00"},
+    })
+    skills = list_governed_skills(reg)
+    assert {s["name"] for s in skills} == {"demo", "review"}
+    assert all(s["source"] == "agentic-registry" for s in skills)
+    assert all(s["path"] == str(reg) for s in skills)
+    demo = next(s for s in skills if s["name"] == "demo")
+    assert demo["description"] == "A governed demo skill."
+
+
+def test_list_governed_skills_empty_registry(tmp_path):
+    reg = _write_registry(tmp_path / "reg.json", {})
+    assert list_governed_skills(reg) == []
+
+
+def test_list_governed_skills_missing_and_malformed(tmp_path):
+    assert list_governed_skills(tmp_path / "absent.json") == []
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert list_governed_skills(bad) == []
+
+
+def test_list_governed_skills_skips_non_mapping_entries(tmp_path):
+    # Hand-corrupted values must not crash the view or fabricate entries.
+    reg = _write_registry(tmp_path / "reg.json", {
+        "ok": {"name": "ok", "description": "fine", "body": "b"},
+        "broken": "not-a-dict",
+    })
+    assert [s["name"] for s in list_governed_skills(reg)] == ["ok"]
+
+
+def test_list_governed_skills_tolerates_legacy_list_shapes(tmp_path):
+    # A "skills": [...] list (or a bare top-level list) is not the governed
+    # schema, but the view stays tolerant rather than dropping them.
+    listed = _write_registry(tmp_path / "listed.json", [{"name": "legacy", "description": "d", "body": "b"}])
+    assert [s["name"] for s in list_governed_skills(listed)] == ["legacy"]
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps([{"name": "bare", "description": "d", "body": "b"}]), encoding="utf-8")
+    assert [s["name"] for s in list_governed_skills(bare)] == ["bare"]
 
 
 # -- sessions ---------------------------------------------------------------------
