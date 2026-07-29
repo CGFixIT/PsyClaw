@@ -12,9 +12,12 @@ on:
     - cron: '45 4 * * 2'
   workflow_dispatch:
 
+# Workflow-level grant stays read-only; the SARIF-upload permission is declared
+# per-job below. zizmor's excessive-permissions audit flags a workflow-level
+# `security-events: write` in a multi-job workflow because every future job
+# inherits it silently -- see pr-template-check.yml for the same shape.
 permissions:
   contents: read
-  security-events: write
 
 concurrency:
   group: trivy-${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +28,9 @@ jobs:
     name: Trivy Filesystem Scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write  # upload-sarif
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -53,6 +59,9 @@ jobs:
     name: Trivy Container Image Scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write  # upload-sarif
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
