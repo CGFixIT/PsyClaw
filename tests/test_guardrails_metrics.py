@@ -121,11 +121,13 @@ def test_load_events_missing_file(tmp_path):
     assert load_events(tmp_path / "nope.jsonl") == []
 
 
-def test_load_events_skips_bad_lines(tmp_path):
+def test_load_events_skips_invalid_event_lines(tmp_path):
     path = tmp_path / "guardrails.jsonl"
     path.write_text(
-        json.dumps({"event": EVENT_HALLUCINATION, "grounding_score": 0.1}) + "\nnot json\n\n",
+        json.dumps({"event": EVENT_HALLUCINATION, "grounding_score": 0.1})
+        + '\nnull\n[]\n"text"\n1\nnot json\n\n',
         encoding="utf-8",
     )
     events = load_events(path)
     assert len(events) == 1
+    assert compute_guardrail_metrics(events)["hallucinations_flagged"] == 1

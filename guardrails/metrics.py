@@ -134,11 +134,13 @@ def load_events(metrics_path: str | Path) -> list[dict]:
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 # Gracefully skip malformed JSONL lines to allow partial metrics
                 # analysis even when the stream contains bad entries.
-                pass
+                continue
+            if isinstance(event, dict):
+                events.append(event)
     return events
 
 
