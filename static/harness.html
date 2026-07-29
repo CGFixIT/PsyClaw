@@ -374,11 +374,11 @@ async function runSlash(line) {
           });
         } else if (sub === 'rename') {
           if (!currentSession) { sys('no active session'); break; }
-          const s = await api('/api/sessions/' + currentSession + '/rename', 'POST', { title: rest.slice(1).join(' ') });
+          const s = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/rename', 'POST', { title: rest.slice(1).join(' ') });
           sys('renamed to: ' + s.title);
         } else if (sub === 'info') {
           if (!currentSession) { sys('no active session'); break; }
-          const s = await api('/api/sessions/' + currentSession);
+          const s = await api('/api/sessions/' + encodeURIComponent(currentSession));
           sys(table([['id', s.session_id], ['title', s.title], ['model', s.model],
                      ['messages', String(s.message_count)], ['tokens', String(s.tokens.total)]]));
         } else {
@@ -444,7 +444,7 @@ async function runSlash(line) {
 
       case 'tokens': {
         if (!currentSession) { sys('no active session'); break; }
-        const s = await api('/api/sessions/' + currentSession);
+        const s = await api('/api/sessions/' + encodeURIComponent(currentSession));
         sys(table([['prompt tokens', String(s.tokens.prompt_tokens)],
                    ['completion tokens', String(s.tokens.completion_tokens)],
                    ['total', String(s.tokens.total)],
