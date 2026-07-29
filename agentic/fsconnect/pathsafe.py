@@ -136,6 +136,23 @@ class ScopedRoots:
         self.strict_roots = strict_roots
         self._on_fallback = on_fallback
         self._roots: list[SafeRoot] = []
+        try:
+            self._open_roots(root_strs, create=create)
+        except BaseException:
+            # A root that fails validation aborts __init__, so the caller never
+            # receives the object and can never reach close()/__exit__ -- every
+            # directory fd opened by an EARLIER iteration would leak for the
+            # life of the process. Release what was opened, then let the
+            # original error propagate untouched.
+            self.close()
+            raise
+
+    def _open_roots(self, root_strs: list[str], *, create: bool) -> None:
+        """Validate each root and record it with a held directory fd.
+
+        Partial failure is the caller's to clean up: see __init__, which is the
+        only caller and which closes whatever this managed to open.
+        """
         seen: list[str] = []
         for raw in root_strs:
             resolved = self._prepare_root(raw, create=create)
