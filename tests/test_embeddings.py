@@ -263,7 +263,6 @@ class TestOfflineEligibility:
 
     def test_load_model_sets_offline_env_when_cached(self, monkeypatch):
         monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: True)
-        fake_st = type("_M", (), {"__call__": staticmethod(lambda *a, **kw: _FakeModel())})()
         monkeypatch.setitem(
             sys.modules, "sentence_transformers",
             type("_Mod", (), {"SentenceTransformer": lambda *a, **kw: _FakeModel()})(),
