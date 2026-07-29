@@ -139,6 +139,36 @@ def test_session_store_rejects_traversal(tmp_path):
         store.get("../../etc/passwd")
 
 
+def test_listing_summary_matches_full_load_summary(tmp_path):
+    """list() builds summaries without constructing Message objects; the two
+    paths must stay byte-identical or the console shows different numbers
+    depending on which endpoint produced them."""
+    store = SessionStore(tmp_path / "sessions")
+    empty = store.create(model="m", title="no turns yet")
+    busy = store.create(model="m", title="has turns")
+    for i in range(3):
+        store.record_exchange(
+            busy.session_id, user_text=f"q{i}", assistant_text=f"a{i}" * 100, model="m2",
+            usage=TokenTally(prompt_tokens=7, completion_tokens=11),
+        )
+
+    listed = {entry["session_id"]: entry for entry in store.list()}
+    assert set(listed) == {empty.session_id, busy.session_id}
+    for sid, entry in listed.items():
+        assert entry == store.get(sid).summary()
+
+
+def test_listing_skips_files_whose_name_is_not_a_session_id(tmp_path):
+    """The _ID_RE gate used to be applied by get() inside the listing loop.
+    A stray .json in the sessions dir must still be skipped, not listed."""
+    store = SessionStore(tmp_path / "sessions")
+    good = store.create(model="m", title="real")
+    (tmp_path / "sessions" / "notasession.json").write_text(
+        json.dumps({"session_id": "notasession", "messages": [], "tally": {}}), encoding="utf-8"
+    )
+    assert [s["session_id"] for s in store.list()] == [good.session_id]
+
+
 def test_session_store_listing_survives_file_removed_mid_sort(tmp_path, monkeypatch):
     """Regression: list() sorted by getmtime BEFORE the per-file skip loop, so a
     session file deleted between glob and sort raised OSError straight out of a
