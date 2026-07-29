@@ -27,9 +27,18 @@ from utils.logger import _get_config, close_audit_handles, reset_config_cache
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = REPO_ROOT / "data" / "agentic" / "skills_registry.json"
 
+# The two suppressions below are DevSkim false positives on schema KEY NAMES --
+# this file computes no ciphers and hashes no secrets. They are needed because
+# the whole file is new to main, so every line counts as changed and is eligible
+# for a code-scanning alert:
+#   DS106863 (DES cipher)     - matches the three letters inside the field name
+#                               used for a skill's summary text.
+#   DS197836 (hash of low-    - regex is (MD4|MD5|SHA...).*Time, which matches
+#   entropy content)            the "sha256" and "timestamp" key names sitting
+#                               in the same set literal.
 TOP_LEVEL_KEYS = {"version", "updated", "skills", "history"}
-SKILL_KEYS = {"name", "description", "body", "sha256", "reason", "updated"}
-HISTORY_KEYS = {"version", "name", "sha256", "reason", "timestamp"}
+SKILL_KEYS = {"name", "description", "body", "sha256", "reason", "updated"}  # DevSkim: ignore DS106863
+HISTORY_KEYS = {"version", "name", "sha256", "reason", "timestamp"}  # DevSkim: ignore DS197836
 # Same slug rule agentic/registry.py enforces at propose/apply time: the first
 # character is anchored to an alphanumeric so the name can never be an
 # argv-flag shape ("-foo") or a path-traversal shape ("..evil").
