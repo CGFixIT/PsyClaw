@@ -19,6 +19,19 @@ Deliberately stdlib-only (``os``). It is imported at the very top of entry
 points, ahead of anything heavy, so it must never pull in a third-party package
 of its own.
 
+NOT included here on purpose: ``HF_HUB_OFFLINE`` / ``TRANSFORMERS_OFFLINE``.
+docs/security-philosophy/cyclaw_telemetry_kill.env documents both (for an
+operator who wants full manual lockdown), but forcing them on unconditionally
+for every process would turn retrieval/embeddings.py's documented cache-miss
+bootstrap fetch into a guaranteed failure on any machine that has never run
+CyClaw before -- huggingface_hub freezes HF_HUB_OFFLINE at its own import
+time, so there is no way to retry past that once set. Those two are instead
+applied conditionally, only once the embedding model is confirmed already on
+disk, by ``retrieval/embeddings.py::_load_model`` (see
+``_model_offline_eligible`` there). Do not "complete" this dict by adding them
+here -- that reintroduces the first-run breakage this split was written to
+avoid.
+
 Applying this is an intentional process-wide side effect: it mutates
 ``os.environ`` for the whole interpreter. That is the point -- the libraries
 read the process environment, not a config object.
@@ -36,6 +49,20 @@ TELEMETRY_KILL: dict[str, str] = {
     "LANGGRAPH_CLI_NO_ANALYTICS": "1",
     "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
     "ANONYMIZED_TELEMETRY": "False",
+    # ONNX Runtime, a transitive dependency of chromadb (and of nemoguardrails's
+    # fastembed base, when guardrails is enabled) -- see constraints.txt. Kept
+    # for parity with docs/security-philosophy/cyclaw_telemetry_kill.env, which
+    # documents this as one of the vars "gate.py also sets... at import time"
+    # (it previously did not). Stated precisely: this specific env var is NOT
+    # read by onnxruntime -- verified 2026-07-29 by grepping the installed
+    # 1.28.0 package for the name; zero references. ORT's own Privacy.md
+    # confirms telemetry is implemented ONLY for official Windows builds (ETW/
+    # TraceLogging), off by construction on Linux/macOS, and the real opt-out
+    # is the runtime API `onnxruntime.disable_telemetry_events()` -- not an env
+    # var. Retained as documented, harmless (unread) belt-and-suspenders rather
+    # than silently dropped; wiring the real API call is a separate, deliberate
+    # change this module does not make.
+    "ORT_TELEMETRY_OPT_OUT": "1",
     # ChromaDB OpenTelemetry. `chroma_otel_granularity` is the actual on/off
     # switch: chromadb's otel_init() returns immediately when it is "none", and
     # only builds a TracerProvider + BatchSpanProcessor + OTLPSpanExporter when
