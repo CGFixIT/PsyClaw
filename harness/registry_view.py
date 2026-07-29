@@ -138,7 +138,20 @@ def list_governed_skills(registry_path: Path | None = None) -> list[dict]:
         parsed = json.loads(path.read_text(encoding=_UTF8))
     except (OSError, json.JSONDecodeError):
         return []
-    entries = parsed.get("skills", parsed if isinstance(parsed, list) else [])
+    # The governed schema (docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) stores
+    # "skills" as a name -> entry MAPPING, so the entries live in .values() --
+    # iterating the mapping itself yields bare name strings and every entry is
+    # silently dropped below. A list shape is tolerated for hand-built or legacy
+    # files, as is a bare top-level list with no "skills" wrapper at all.
+    raw = parsed.get("skills") if isinstance(parsed, dict) else None
+    if isinstance(raw, dict):
+        entries: list = list(raw.values())
+    elif isinstance(raw, list):
+        entries = raw
+    elif isinstance(parsed, list):
+        entries = parsed
+    else:
+        entries = []
     governed: list[dict] = []
     for entry in entries:
         if isinstance(entry, dict) and entry.get(_NAME_KEY):
