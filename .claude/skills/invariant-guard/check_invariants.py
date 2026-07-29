@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
-OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails")
+OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness")
 # Conditional-edge sources and their router function names. Single source of
 # truth for I2 (topology=policy) and I4 (audit convergence), which both need
 # to agree on which nodes route conditionally and via which router -- I4's

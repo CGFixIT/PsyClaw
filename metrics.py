@@ -4,12 +4,22 @@ Usage:
    python metrics.py
 """
 
-import json
-import math
-from collections import Counter
-from pathlib import Path
+# This process never imports gate.py, so without this it would inherit
+# whatever telemetry env the operator's shell/container/observability agent
+# happens to carry. Today's imports below (json/math/collections/pathlib/yaml)
+# pull in no telemetry-emitting library, so this is prophylactic -- but every
+# other CyClaw entry point applies the same block unconditionally rather than
+# betting on what a future edit here does or doesn't import.
+from utils.telemetry_kill import apply_telemetry_kill
 
-import yaml
+apply_telemetry_kill()
+
+import json  # noqa: E402 - must follow the telemetry kill above
+import math  # noqa: E402 - must follow the telemetry kill above
+from collections import Counter  # noqa: E402 - must follow the telemetry kill above
+from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
+
+import yaml  # noqa: E402 - must follow the telemetry kill above
 
 
 def iter_events(audit_file: str):
