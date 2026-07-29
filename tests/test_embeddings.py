@@ -8,6 +8,9 @@ test proving a repeat query is a cache hit. The heavy SentenceTransformer load
 (``_load_model``) is mocked, so no model download is required.
 """
 
+import os
+import sys
+
 import pytest
 import yaml
 
@@ -202,3 +205,92 @@ class TestEmbeddingFailureWrapping:
         result = embeddings.get_embedding("same query", cfg_path)
         assert result == [float(len("same query")), 0.5]
         assert model.calls == 1
+
+
+class TestOfflineEligibility:
+    """_model_offline_eligible + _load_model's conditional HF_HUB_OFFLINE set.
+
+    Real _load_model is exercised here (not mocked wholesale like the tests
+    above), with `sentence_transformers` itself replaced via sys.modules so no
+    heavy/network-dependent import is required. _load_model is lru_cache'd, so
+    each test clears it to avoid a stale hit from a previous test's args.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_load_model_cache(self):
+        embeddings._load_model.cache_clear()
+        yield
+        embeddings._load_model.cache_clear()
+
+    @pytest.fixture(autouse=True)
+    def _clean_offline_env(self, monkeypatch):
+        # Isolate from any ambient/leftover HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE
+        # so assertions on "was it set" are never polluted by outside state.
+        monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+        monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+
+    def test_not_cached_when_probe_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "huggingface_hub.try_to_load_from_cache", lambda **kw: None
+        )
+        assert embeddings._model_offline_eligible("some/model", "") is False
+
+    def test_cached_when_probe_returns_a_path(self, monkeypatch):
+        monkeypatch.setattr(
+            "huggingface_hub.try_to_load_from_cache", lambda **kw: "/cache/config.json"
+        )
+        assert embeddings._model_offline_eligible("some/model", "") is True
+
+    def test_not_cached_when_probe_returns_the_negative_cache_sentinel(self, monkeypatch):
+        # huggingface_hub's own "we already asked and it doesn't exist" marker --
+        # a non-None, non-str return that must NOT be treated as a real hit.
+        sentinel = object()
+        monkeypatch.setattr(
+            "huggingface_hub.try_to_load_from_cache", lambda **kw: sentinel
+        )
+        assert embeddings._model_offline_eligible("some/model", "") is False
+
+    def test_not_cached_when_probe_raises(self, monkeypatch):
+        def _boom(**kw):
+            raise OSError("cache index unreadable")
+
+        monkeypatch.setattr("huggingface_hub.try_to_load_from_cache", _boom)
+        assert embeddings._model_offline_eligible("some/model", "") is False
+
+    def test_not_cached_when_huggingface_hub_unimportable(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+        assert embeddings._model_offline_eligible("some/model", "") is False
+
+    def test_load_model_sets_offline_env_when_cached(self, monkeypatch):
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: True)
+        fake_st = type("_M", (), {"__call__": staticmethod(lambda *a, **kw: _FakeModel())})()
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": lambda *a, **kw: _FakeModel()})(),
+        )
+        embeddings._load_model("cached-model", "")
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"
+        assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+
+    def test_load_model_leaves_offline_env_untouched_when_not_cached(self, monkeypatch):
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": lambda *a, **kw: _FakeModel()})(),
+        )
+        embeddings._load_model("fresh-model", "")
+        assert "HF_HUB_OFFLINE" not in os.environ
+        assert "TRANSFORMERS_OFFLINE" not in os.environ
+
+    def test_load_model_never_clears_an_operators_own_stricter_choice(self, monkeypatch):
+        # An operator who already sourced cyclaw_telemetry_kill.env by hand has
+        # made an explicit, stricter choice. A cold-cache probe result must not
+        # override it.
+        monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": lambda *a, **kw: _FakeModel()})(),
+        )
+        embeddings._load_model("some-model", "")
+        assert os.environ.get("HF_HUB_OFFLINE") == "1"

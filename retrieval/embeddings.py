@@ -33,6 +33,59 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 _MODEL_LOAD_MAX_ATTEMPTS = 3
 _MODEL_LOAD_RETRY_DELAY_SEC = 2.0
 
+# The one file every HF Hub model repo carries, used purely as a cheap presence
+# probe below -- confirmed present for the shipped default (all-MiniLM-L6-v2)
+# via a live fetch during development of this check.
+_CACHE_PROBE_FILENAME = "config.json"
+
+
+def _model_offline_eligible(model_name: str, cache_dir: str) -> bool:
+    """True if huggingface_hub's own on-disk cache index already has this model.
+
+    Scopes HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE (set by the caller below) to runs
+    where they cannot break anything: forcing offline mode unconditionally would
+    turn the documented cache-miss bootstrap fetch above into a guaranteed
+    failure on any machine that has never run CyClaw before, since
+    huggingface_hub.constants freezes HF_HUB_OFFLINE at its own import time --
+    once set, no retry in this process can undo it.
+
+    Uses ``try_to_load_from_cache`` -- huggingface_hub's own public, disk-only
+    cache lookup (it makes no network call) -- rather than re-deriving the
+    blobs/snapshots cache layout by hand. ``cache_folder`` (this module's
+    parameter) flows straight through SentenceTransformer -> Transformer as
+    huggingface_hub's own ``cache_dir``, so the same helper that library uses
+    internally applies here unchanged.
+
+    Checks a single well-known file, not the model's full file set: knowing
+    every file a specific model needs would itself require asking the Hub.
+    That is the same level of certainty SentenceTransformer's own internal
+    cache check already accepts -- this is a cheap pre-check ahead of it, not a
+    replacement for it.
+
+    Any ambiguity -- huggingface_hub not importable yet, an unexpected return
+    shape, a probe error -- resolves to False (not cached). That is the
+    direction that preserves the existing online-fetch-on-cache-miss behavior;
+    the alternative (assume cached on doubt) risks silently forcing offline
+    mode on a machine that actually needs the network fetch to succeed.
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except ImportError:
+        return False
+    try:
+        hit = try_to_load_from_cache(
+            repo_id=model_name, filename=_CACHE_PROBE_FILENAME, cache_dir=cache_dir or None
+        )
+    except Exception:  # noqa: BLE001 -- a probe failure must never block model load
+        return False
+    # try_to_load_from_cache returns the file path (str) on a real hit; None
+    # when never fetched; or a private sentinel object when the Hub previously
+    # answered "this file does not exist" for this repo/revision (itself only
+    # knowable from an earlier online call). Only the str case is a usable
+    # local copy -- checking isinstance rather than importing that sentinel
+    # keeps this from depending on a huggingface_hub internal name.
+    return isinstance(hit, str)
+
 
 def resolve_cache_dir(config_path: str, cache_dir: str | None) -> str:
     """Resolve a configured embedding cache path relative to its config file."""
@@ -59,7 +112,19 @@ def _load_model(model_name: str, cache_dir: str):
     a transient connection failure as one of those two types. lru_cache does
     not memoize a raised exception, so a still-failing final attempt propagates
     normally and the next call retries from scratch.
+
+    Sets HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE when _model_offline_eligible finds
+    this model already on disk -- see that function for why this is
+    conditional rather than unconditional. Deliberately only ever SETS these to
+    "1" here; it never clears or overrides them when the model is not yet
+    cached, so an operator who has already opted into full lockdown by
+    sourcing docs/security-philosophy/cyclaw_telemetry_kill.env by hand keeps
+    that explicit, stricter choice regardless of what this probe finds.
     """
+    if _model_offline_eligible(model_name, cache_dir):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
     from sentence_transformers import SentenceTransformer
 
     for attempt in range(_MODEL_LOAD_MAX_ATTEMPTS):
