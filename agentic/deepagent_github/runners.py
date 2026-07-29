@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from httpx import HTTPError
-
 from agentic.deepagent_github.builder import DeepAgentBuildResult
 from agentic.deepagent_github.core import DeepAgentGitHubTask, DeepAgentPlan
 from utils.errors import AgenticError
@@ -61,9 +59,12 @@ def invoke_deepagent(
         "files": dict(build.input_files),
     }
     run_config = {"configurable": {"thread_id": task.task_id}}
+    # Deep Agents can surface provider, graph, and governed-tool exceptions
+    # without a stable shared base class. Normalize only at this framework
+    # boundary; BaseException subclasses still propagate.
     try:
         result = build.agent.invoke(payload, config=run_config, version="v2")  # type: ignore[attr-defined]
-    except (HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    except Exception as exc:
         audit_log(
             {"event": "agentic_deepagent_invocation_failed", "error_type": type(exc).__name__},
             config_path=config_path,
@@ -96,6 +97,36 @@ def resume_deepagent_interrupt(
     message = "approval timed out" if decision == "timeout" else f"human {resolved}d the action"
     audit_log(
         {
+            "event": "agentic_deepagent_interrupt_resume_started",
+            "task_id": task_id,
+            "decision": decision,
+            "resolved_decision": resolved,
+        },
+        config_path=config_path,
+        cfg=cfg,
+    )
+    # Deep Agents can surface provider, graph, and governed-tool exceptions
+    # without a stable shared base class. Normalize only at this framework
+    # boundary; BaseException subclasses still propagate.
+    try:
+        result = agent.invoke(
+            Command(resume={"decisions": [{"type": resolved, "message": message}]}),
+            config={"configurable": {"thread_id": task_id}},
+            version="v2",
+        )
+    except Exception as exc:
+        audit_log(
+            {
+                "event": "agentic_deepagent_interrupt_failed",
+                "task_id": task_id,
+                "error_type": type(exc).__name__,
+            },
+            config_path=config_path,
+            cfg=cfg,
+        )
+        raise AgenticError("Deep Agents interrupt resume failed") from exc
+    audit_log(
+        {
             "event": "agentic_deepagent_interrupt_resumed",
             "task_id": task_id,
             "decision": decision,
@@ -104,8 +135,4 @@ def resume_deepagent_interrupt(
         config_path=config_path,
         cfg=cfg,
     )
-    return agent.invoke(
-        Command(resume={"decisions": [{"type": resolved, "message": message}]}),
-        config={"configurable": {"thread_id": task_id}},
-        version="v2",
-    )
+    return result
