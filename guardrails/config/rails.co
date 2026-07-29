@@ -84,8 +84,8 @@ define flow check injection
 
 # Model-assisted jailbreak check (NeMo self_check_input prompt in config.yml).
 define flow check jailbreak
-  $blocked = execute self_check_input
-  if $blocked
+  $allowed = execute self_check_input
+  if not $allowed
     bot refuse prompt extraction
     stop
 
