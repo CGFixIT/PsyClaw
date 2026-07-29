@@ -37,6 +37,11 @@ _SID_KEY = "session_id"
 # _session_from_dict on JSON that parses but isn't session-shaped (non-dict
 # payload, missing session_id, unexpected message keys).
 _CORRUPT_SESSION_ERRORS = (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError)
+# Message's field names, split by whether the dataclass gives them a default.
+# _summary_from_dict uses these to reproduce Message(**msg)'s accept/reject
+# decision without paying for the construction.
+_MSG_FIELDS = frozenset({"role", "text", "ts"})
+_MSG_REQUIRED = frozenset({"role", "text"})
 
 
 class SessionStoreError(AgenticError):
@@ -97,6 +102,41 @@ def _session_path(sessions_dir: Path, session_id: str) -> Path:
     return sessions_dir / f"{session_id}.json"
 
 
+def _summary_from_dict(parsed: dict) -> dict:
+    # The listing path needs seven scalar fields, none of which require a
+    # Message object: count, last excerpt, and the tally. Round-tripping every
+    # stored turn through Message(**msg) just to throw the objects away cost
+    # _MAX_MESSAGES dataclass constructions per session per listing, and both
+    # /api/sessions and /api/status call list() on every console refresh.
+    # Reads the same keys Session.summary() does, so the output is identical.
+    messages = parsed.get("messages") or []
+    for msg in messages:
+        # Same shape contract Message(**msg) enforced, without building the
+        # object: required keys present, no unexpected ones. A file that
+        # get() would reject as corrupt must still be skipped by the listing
+        # (test_session_store_skips_corrupt_files_in_listing pins this).
+        if not isinstance(msg, dict) or not _MSG_REQUIRED <= msg.keys() <= _MSG_FIELDS:
+            raise TypeError("message is not Message-shaped")
+    tally = parsed.get("tally", {})
+    prompt_tokens = int(tally.get("prompt_tokens", 0))
+    completion_tokens = int(tally.get("completion_tokens", 0))
+    last = str(messages[-1].get("text", ""))[:_EXCERPT_CHARS] if messages else ""
+    return {
+        _SID_KEY: parsed[_SID_KEY],
+        "title": parsed.get("title", ""),
+        "created_ts": float(parsed.get("created_ts", 0)),
+        "model": parsed.get("model", ""),
+        "message_count": len(messages),
+        "last_excerpt": last,
+        "tokens": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "exchanges": int(tally.get("exchanges", 0)),
+            "total": prompt_tokens + completion_tokens,
+        },
+    }
+
+
 def _session_from_dict(parsed: dict) -> Session:
     tally = parsed.get("tally", {})
     messages = []
@@ -152,9 +192,13 @@ class SessionStore:
         with suppress(OSError):
             paths.sort(key=getmtime, reverse=True)
         for path in paths:
+            # _ID_RE is still the gate: a stray non-session file in the
+            # directory is skipped here exactly as get() used to reject it.
+            if not _ID_RE.match(path.stem):
+                continue
             try:
-                summaries.append(self.get(path.stem).summary())
-            except SessionStoreError:
+                summaries.append(_summary_from_dict(json.loads(path.read_text(encoding=_UTF8))))
+            except _CORRUPT_SESSION_ERRORS:
                 ...  # skip corrupt files rather than break the listing
         return summaries
 
