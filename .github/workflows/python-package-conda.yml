@@ -42,15 +42,16 @@ jobs:
         auto-activate-base: false
         use-mamba: true
 
-    - name: Cache conda environment
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-      with:
-        path: |
-          /home/runner/miniconda3/envs/cyclaw
-          /home/runner/miniconda3/pkgs
-        key: conda-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
-        restore-keys: |
-          conda-${{ runner.os }}-${{ matrix.python-version }}-
+    # No conda cache step here on purpose. The one removed in this PR sat AFTER
+    # "Setup Miniconda + mamba" above, so its restore always landed on an
+    # already-solved environment -- the mamba solve was paid in full on every
+    # run and only the post-job save did anything, uploading a multi-GB env to
+    # the repo's shared Actions cache for nothing. Re-adding caching here means
+    # doing it the way setup-miniconda documents (a CONDA_PKGS_DIRS package
+    # cache declared before the setup step), not moving this block up: with
+    # miniforge-version: latest the install root is not necessarily the
+    # /home/runner/miniconda3 path the old step named. Left as follow-up rather
+    # than guessed at.
 
     - name: Install CyClaw in editable mode + test extras
       shell: bash -l {0}
