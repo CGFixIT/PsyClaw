@@ -140,20 +140,14 @@ def list_governed_skills(registry_path: Path | None = None) -> list[dict]:
         return []
     # The governed schema (docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) stores
     # "skills" as a name -> entry MAPPING, so the entries live in .values() --
-    # iterating the mapping itself yields bare name strings and every entry is
-    # silently dropped below. A list shape is tolerated for hand-built or legacy
-    # files, as is a bare top-level list with no "skills" wrapper at all.
-    raw = parsed.get("skills") if isinstance(parsed, dict) else None
-    if isinstance(raw, dict):
-        entries: list = list(raw.values())
-    elif isinstance(raw, list):
-        entries = raw
-    elif isinstance(parsed, list):
-        entries = parsed
-    else:
-        entries = []
+    # iterating the mapping itself yields bare name strings that the dict guard
+    # in the loop below then drops. A list shape is tolerated for hand-built or
+    # legacy files, as is a bare top-level list with no "skills" wrapper at all.
+    entries = parsed.get("skills", parsed) if isinstance(parsed, dict) else parsed
+    if isinstance(entries, dict):
+        entries = list(entries.values())
     governed: list[dict] = []
-    for entry in entries:
+    for entry in entries if isinstance(entries, list) else ():
         if isinstance(entry, dict) and entry.get(_NAME_KEY):
             governed.append({
                 _NAME_KEY: str(entry[_NAME_KEY]),
