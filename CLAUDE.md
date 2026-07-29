@@ -246,7 +246,10 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   `_load_model` sets both, but only after `_model_offline_eligible` confirms
   the model is already on disk via `huggingface_hub.try_to_load_from_cache`
   (network-free) — never unconditionally, and never by clearing an operator's
-  own stricter choice if they sourced the `.env` file by hand.
+  own stricter choice if they sourced the `.env` file by hand. The env vars
+  alone do NOT enforce this in-process (the probe's own `huggingface_hub`
+  import latches the offline constant before the vars are set) — the actual
+  gate is `local_files_only=eligible` passed to `SentenceTransformer(...)`.
 - **Trap:** treating ONNX Runtime's `ORT_TELEMETRY_OPT_OUT` env var as a real
   kill switch. **Rule:** it isn't read by onnxruntime at all (verified by
   grepping the installed package — zero references). ORT's actual telemetry
