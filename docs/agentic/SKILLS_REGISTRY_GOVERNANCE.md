@@ -66,3 +66,9 @@ registry generalizes the soul governance pattern to a second surface.
 `tests/test_agentic_registry.py` proves: propose never writes; apply writes &
 versions; injection blocked (nothing persisted); reason required; bad names
 rejected; reload sees persisted state.
+
+`tests/test_agentic_registry_contract.py` pins the committed artifact itself:
+the documented top-level shape, `version == len(history)` with rows numbered
+1..N, per-skill sha256 recomputed from the canonical `name\ndescription\nbody`
+text, and history rows that reference applied skills — so a hand-edit of the
+store (a governance bypass) fails CI instead of passing unnoticed.
