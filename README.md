@@ -22,6 +22,7 @@
 - [Architecture](#architecture)
 - [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
 - [Quick Start](#quick-start)
+- [Full Setup Guide](setup-guide.md)
 - [Project Structure](#project-structure)
 - [Dropbox Corpus Sync](#dropbox-corpus-sync)
 - [Agentic Layer](#agentic-layer-v160)
@@ -343,10 +344,14 @@ pip install -r requirements.txt -c constraints.txt
 ### Required local prep
 
 ```bash
-mkdir -p data/personality index logs
-printf '# Soul\n' > data/personality/soul.md
+mkdir -p index logs   # optional — gate.py/the retriever/logger self-create these on first run
 export GROK_API_KEY=dummy
 ```
+
+`data/personality/soul.md` ships committed to git with CyClaw's real
+personality already in place — do not recreate it from a placeholder on a
+fresh clone. If it's ever deleted, `PersonalityManager` self-heals with a
+generic default, but that's a recovery path, not the normal first-run state.
 
 ### Run
 
