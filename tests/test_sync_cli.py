@@ -7,6 +7,7 @@ or real scheduler is touched. Asserts the documented exit-code contract (§7).
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -136,8 +137,9 @@ def test_auto_reindex_runs_indexer_and_returns_0_on_change():
     cfg.auto_reindex = True
     captured = {}
 
-    def fake_run(argv, check=False):
+    def fake_run(argv, check=False, timeout=None):
         captured["argv"] = argv
+        captured["timeout"] = timeout
         return MagicMock(returncode=0)
 
     with patch("sync.cli.load_sync_config", return_value=cfg), \
@@ -148,6 +150,8 @@ def test_auto_reindex_runs_indexer_and_returns_0_on_change():
         assert main(["sync"]) == EXIT_OK
     # Fixed argv, module form, never shell=True.
     assert captured["argv"][1:] == ["-m", "retrieval.indexer"]
+    # The child is bounded by the same knob rclone children use, not unbounded.
+    assert captured["timeout"] == cfg.sync_timeout_sec
 
 
 def test_auto_reindex_propagates_custom_config_identity():
@@ -159,7 +163,7 @@ def test_auto_reindex_propagates_custom_config_identity():
     cfg._config_path = "/alt/dir/custom.yaml"
     captured = {}
 
-    def fake_run(argv, check=False):
+    def fake_run(argv, check=False, timeout=None):
         captured["argv"] = argv
         return MagicMock(returncode=0)
 
@@ -191,6 +195,40 @@ def test_auto_reindex_failure_returns_exit_2():
          patch("sync.cli.subprocess.run", return_value=MagicMock(returncode=3)):
         # A failed rebuild must surface as a failure, not be masked as success.
         assert main(["sync"]) == EXIT_FAIL
+
+
+def test_auto_reindex_timeout_returns_exit_2():
+    # A wedged indexer (hung model fetch, ChromaDB file lock) must not pin the
+    # scheduled sync forever -- it has to surface as EXIT_FAIL like any other
+    # failed rebuild, since the index is now stale relative to the corpus.
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run",
+               side_effect=subprocess.TimeoutExpired(cmd="indexer", timeout=cfg.sync_timeout_sec)):
+        assert main(["sync"]) == EXIT_FAIL
+
+
+def test_auto_reindex_zero_timeout_means_unbounded():
+    # sync.sync_timeout_sec == 0 is the documented "disable the timeout" value
+    # (sync/config.py); it must become None, not a zero-second deadline.
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    cfg.sync_timeout_sec = 0
+    captured = {}
+
+    def fake_run(argv, check=False, timeout=None):
+        captured["timeout"] = timeout
+        return MagicMock(returncode=0)
+
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run", side_effect=fake_run):
+        assert main(["sync"]) == EXIT_OK
+    assert captured["timeout"] is None
 
 
 def test_auto_reindex_not_triggered_without_corpus_change():

@@ -180,14 +180,26 @@ def _run_auto_reindex(cfg: Any) -> int:
     index from THAT config, not the default ``config.yaml`` (codex #592). The
     recorded path is repo-root-anchored absolute, so it resolves regardless of
     the child's working directory.
+
+    Bounded by ``cfg.sync_timeout_sec`` (0 = unbounded), the same knob and
+    ``value if value > 0 else None`` idiom ``sync/runner.py`` already uses for
+    every rclone child. Without a ceiling a wedged indexer -- a HuggingFace
+    model fetch hanging on a cache miss, a ChromaDB file lock -- pins
+    ``cyclaw-sync`` forever, and this path is reached from the scheduled
+    cron/schtasks run where nobody is watching to Ctrl-C it.
     """
     _heading("Corpus changed -- auto-reindexing")
     argv = [sys.executable, "-m", "retrieval.indexer"]
     cfg_path = getattr(cfg, "_config_path", None)
     if cfg_path:
         argv += ["--config", cfg_path]
+    timeout_sec = getattr(cfg, "sync_timeout_sec", 0) or 0
+    timeout = timeout_sec if timeout_sec > 0 else None
     try:
-        completed = subprocess.run(argv, check=False)  # noqa: S603 -- fixed argv, no shell
+        completed = subprocess.run(argv, check=False, timeout=timeout)  # noqa: S603 -- fixed argv, no shell
+    except subprocess.TimeoutExpired:
+        _err(f"Indexer timed out after {timeout_sec}s; the index may be stale.")
+        return EXIT_FAIL
     except OSError as exc:
         _err(f"Could not launch the indexer: {exc}")
         return EXIT_FAIL
