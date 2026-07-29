@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -118,12 +120,29 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
 
+    # Same shutdown contract gate.py's lifespan already implements: close the
+    # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
+    # sockets promptly on restart. HarnessChatClient.close() existed but nothing
+    # ever called it, so every create_app leaked a pool for the process's life.
+    # Isolated in try/except for the same reason gate.py isolates each close --
+    # a failing teardown must not turn shutdown into an exception.
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        yield
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.warning("shutdown close failed for harness chat client", exc_info=True)
+
     app = FastAPI(
         title="CyClaw Harness",
         version=_HARNESS_VERSION,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=lifespan,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
 
