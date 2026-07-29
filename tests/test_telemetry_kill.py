@@ -197,3 +197,84 @@ def test_all_kill_keys_present():
     )
     result = _run_in_subprocess(snippet)
     _assert_subprocess_ok(result, "all_kill_keys_present")
+
+
+# ---------------------------------------------------------------------------
+# 7. The kill switch reaches the entry points that never import gate
+# ---------------------------------------------------------------------------
+# gate.py is not the only process that loads ChromaDB. `python -m retrieval.indexer`
+# (cyclaw-index) and mcp_hybrid_server.py both reach it without importing gate, so
+# before utils/telemetry_kill.py existed they applied nothing and inherited whatever
+# the ambient environment carried. These tests pin that each entry point enforces the
+# block on its own, under an environment that actively tries to enable telemetry.
+
+# Values a hostile / careless ambient environment might carry. CHROMA_OTEL_GRANULARITY
+# is the one that matters most: it is ChromaDB's actual on/off switch (otel_init returns
+# immediately only when it is "none"), and gate.py's original block never set it.
+_HOSTILE_ENV = {
+    "CHROMA_OTEL_GRANULARITY": "all",
+    "CHROMA_OTEL_COLLECTION_ENDPOINT": "https://collector.example.invalid",
+    "CHROMA_OTEL_SERVICE_NAME": "leaky",
+    "OTEL_SDK_DISABLED": "false",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "ANONYMIZED_TELEMETRY": "True",
+    "LANGCHAIN_TRACING_V2": "true",
+    "LANGCHAIN_API_KEY": "leaked-key-should-be-removed",
+    "LANGSMITH_API_KEY": "leaked-key-should-be-removed",
+}
+
+_ASSERT_KILLED = (
+    "from utils.telemetry_kill import TELEMETRY_KILL\n"
+    "bad = [f'{k}: expected={v!r} actual={os.environ.get(k)!r}'\n"
+    "       for k, v in TELEMETRY_KILL.items() if os.environ.get(k) != v]\n"
+    "assert not bad, 'kill vars not enforced: ' + '; '.join(bad)\n"
+    "leaked = [k for k in ('LANGCHAIN_API_KEY', 'LANGSMITH_API_KEY', 'LANGCHAIN_ENDPOINT')\n"
+    "          if k in os.environ]\n"
+    "assert not leaked, f'tracing credentials survived: {leaked}'\n"
+)
+
+
+@pytest.mark.parametrize(
+    "entry_import",
+    [
+        "import mcp_hybrid_server",
+        "import retrieval.indexer",
+        "import retrieval.vector_store",
+    ],
+)
+def test_kill_switch_applied_without_importing_gate(entry_import: str) -> None:
+    """Each non-gate entry point enforces the block over a hostile ambient env."""
+    snippet = (
+        "import os\n"
+        f"{entry_import}\n"
+        "assert 'gate' not in __import__('sys').modules, 'this path must not import gate'\n"
+        + _ASSERT_KILLED
+    )
+    result = _run_in_subprocess(snippet, extra_env=dict(_HOSTILE_ENV))
+    _assert_subprocess_ok(result, f"kill_switch_via_{entry_import}")
+
+
+def test_chroma_otel_granularity_is_pinned_none() -> None:
+    """The switch that actually stops ChromaDB building an OTLP exporter.
+
+    ChromaDB's otel_init() early-returns only on granularity "none"; for any other
+    value it constructs a TracerProvider + BatchSpanProcessor + OTLPSpanExporter,
+    and only OTEL_SDK_DISABLED then downgrades the tracer to a NoOp. Pinning
+    granularity means nothing is constructed at all. Settings(anonymized_telemetry=
+    False) does not cover this -- that governs the separate PostHog path.
+    """
+    from utils.telemetry_kill import TELEMETRY_KILL
+
+    assert TELEMETRY_KILL["CHROMA_OTEL_GRANULARITY"] == "none"
+
+
+def test_gate_and_shared_module_agree() -> None:
+    """gate._TELEMETRY_KILL is the shared mapping, not a drifting copy."""
+    snippet = (
+        "import os, gate\n"
+        "from utils.telemetry_kill import TELEMETRY_KILL\n"
+        "assert gate._TELEMETRY_KILL == TELEMETRY_KILL, 'gate copy diverged from shared mapping'\n"
+        + _ASSERT_KILLED
+    )
+    result = _run_in_subprocess(snippet, extra_env=dict(_HOSTILE_ENV))
+    _assert_subprocess_ok(result, "gate_and_shared_module_agree")

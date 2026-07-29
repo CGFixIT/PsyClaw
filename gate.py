@@ -34,26 +34,22 @@ from pathlib import Path
 # the traceback could be read. Anchoring to __file__ makes startup cwd-independent.
 _BASE_DIR = Path(__file__).resolve().parent
 
-_TELEMETRY_KILL = {
-    "LANGCHAIN_TRACING_V2": "false",
-    "LANGSMITH_TRACING": "false",
-    "LANGGRAPH_CLI_NO_ANALYTICS": "1",
-    "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
-    "ANONYMIZED_TELEMETRY": "False",
-    "CHROMA_OTEL_COLLECTION_ENDPOINT": "",
-    "CHROMA_OTEL_SERVICE_NAME": "",
-    "OTEL_SDK_DISABLED": "true",        # kills entire OTel SDK
-    "OTEL_TRACES_EXPORTER": "none",
-    "OTEL_METRICS_EXPORTER": "none",
-    "OTEL_LOGS_EXPORTER": "none",
-}
-for k, v in _TELEMETRY_KILL.items():
-    os.environ[k] = v
+# The kill block itself now lives in utils/telemetry_kill.py so the entry points
+# that never import gate -- mcp_hybrid_server.py and `python -m retrieval.indexer`
+# -- enforce the identical set instead of relying on upstream defaults. This must
+# still run BEFORE the heavy imports below (graph/retrieval/langchain/chromadb):
+# those libraries latch their telemetry config at import time, so a later apply is
+# too late. utils.telemetry_kill is stdlib-only for exactly this reason -- importing
+# it cannot drag in a package that reads these vars on the way in.
+#
+# apply_telemetry_kill() both sets the vars and drops LangChain/LangSmith
+# credentials, and returns the mapping it enforced so the startup table below can
+# report it. Keep the local _TELEMETRY_KILL name: invariant-guard's G1 check
+# asserts (by AST) that an assignment to this name precedes the first heavy import.
+from utils.telemetry_kill import apply_telemetry_kill
 
-# Hard-remove any accidentally set API keys
-for _key in ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT"):
-    os.environ.pop(_key, None)
-    
+_TELEMETRY_KILL = apply_telemetry_kill()
+
 _verified = {k: os.environ.get(k, "NOT SET") for k in _TELEMETRY_KILL}
 print("[TELEMETRY KILL] Verified env state:")
 for k, v in _verified.items():
