@@ -63,3 +63,12 @@ def test_unknown_op_rejected(tmp_path):
 def test_enabled_default_false(tmp_path):
     sc = load_sqlconnect_config(_cfg(tmp_path, {"driver": "mssql"}))
     assert getattr(sc, "enabled", None) is False
+
+
+@pytest.mark.parametrize("key", ["enabled", "read_only", "allow_write"])
+@pytest.mark.parametrize("value", ["false", 0, 1])
+def test_boolean_fields_reject_non_bools(tmp_path: Path, key: str, value: object) -> None:
+    block: dict[str, object] = {"enabled": True}
+    block[key] = value
+    with pytest.raises(SqlConnectConfigError, match=rf"sqlconnect\.{key} must be a boolean"):
+        load_sqlconnect_config(_cfg(tmp_path, block))
