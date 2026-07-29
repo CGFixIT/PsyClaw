@@ -45,7 +45,7 @@ jobs:
             core.setOutput("head-sha", pr.head.sha);
 
       - name: Checkout trusted base
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ steps.pr.outputs.base-sha }}
           fetch-depth: 1
@@ -53,7 +53,7 @@ jobs:
           path: trusted
 
       - name: Checkout PR head as review data
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ steps.pr.outputs.head-sha }}
           fetch-depth: 0
@@ -84,7 +84,7 @@ jobs:
 
       - name: Run Codex
         id: run_codex
-        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56  # v1
         with:
           openai-api-key: ${{ secrets.CODEX }}
           codex-version: '0.144.6'
