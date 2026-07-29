@@ -129,8 +129,26 @@ def _load_model(model_name: str, cache_dir: str) -> "SentenceTransformer":
     cached, so an operator who has already opted into full lockdown by
     sourcing docs/security-philosophy/cyclaw_telemetry_kill.env by hand keeps
     that explicit, stricter choice regardless of what this probe finds.
+
+    The env vars alone do NOT make this process offline: huggingface_hub.
+    constants.HF_HUB_OFFLINE is read from os.environ once, at huggingface_hub's
+    own import time, and _model_offline_eligible's own `from huggingface_hub
+    import try_to_load_from_cache` above has already forced that import (and
+    latched the constant to whatever the environment said BEFORE this
+    function ran) -- so setting os.environ here, after the probe, is too late
+    to change huggingface_hub's in-process is_offline_mode() for this run.
+    (Verified 2026-07-30: a fresh interpreter that imports huggingface_hub via
+    the probe, then sets HF_HUB_OFFLINE=1, still reports is_offline_mode() ==
+    False.) The env vars are kept anyway -- for subprocess inheritance, and so
+    an operator's own pre-set stricter value (present before this process
+    started, i.e. before the latch) is honored, which still works correctly.
+    What actually enforces offline behavior IN this process is the
+    `local_files_only` argument below, passed straight through by
+    sentence-transformers to huggingface_hub's download path, which gates
+    independently of the (broken-for-this-purpose) is_offline_mode() global.
     """
-    if _model_offline_eligible(model_name, cache_dir):
+    eligible = _model_offline_eligible(model_name, cache_dir)
+    if eligible:
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
@@ -138,7 +156,7 @@ def _load_model(model_name: str, cache_dir: str) -> "SentenceTransformer":
 
     for attempt in range(_MODEL_LOAD_MAX_ATTEMPTS):
         try:
-            return SentenceTransformer(model_name, cache_folder=cache_dir or None)
+            return SentenceTransformer(model_name, cache_folder=cache_dir or None, local_files_only=eligible)
         except (OSError, RuntimeError):
             if attempt == _MODEL_LOAD_MAX_ATTEMPTS - 1:
                 raise
