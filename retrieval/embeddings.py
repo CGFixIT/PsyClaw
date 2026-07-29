@@ -12,14 +12,23 @@ Security note (2026-06):
 - Model weights should come from verified/trusted sources only (HF official or local hashed files).
 """
 
+import logging
 import os
 import time
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from utils.errors import EmbeddingServiceError
+
+if TYPE_CHECKING:
+    # Type-only: the real import stays inside _load_model so importing this
+    # module never drags in sentence-transformers (and torch) at startup.
+    from sentence_transformers import SentenceTransformer
+
+log = logging.getLogger("cyclaw.retrieval.embeddings")
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -47,7 +56,7 @@ def resolve_cache_dir(config_path: str, cache_dir: str | None) -> str:
 
 
 @lru_cache(maxsize=1)
-def _load_model(model_name: str, cache_dir: str):
+def _load_model(model_name: str, cache_dir: str) -> "SentenceTransformer":
     """Load SentenceTransformer with security-conscious defaults.
 
     Note: sentence-transformers will use safetensors when available.
@@ -69,6 +78,16 @@ def _load_model(model_name: str, cache_dir: str):
             if attempt == _MODEL_LOAD_MAX_ATTEMPTS - 1:
                 raise
             time.sleep(_MODEL_LOAD_RETRY_DELAY_SEC)
+    # Unreachable: the final attempt either returns or re-raises. Spelled out
+    # rather than left to fall off the end, mirroring llm/client.py's retry
+    # helper -- an implicit `return None` here would reach callers as
+    # `None.encode(...)`, and AttributeError is NOT in _cached_embedding's
+    # catch tuple, so it would escape the documented degrade-to-keyword path.
+    log.error("embedding model load loop exited without return or raise -- this is a bug")  # pragma: no cover
+    raise EmbeddingServiceError(  # pragma: no cover
+        "embedding model load loop exited without return/raise",
+        details={"model": model_name},
+    )
 
 @lru_cache(maxsize=8)
 def _embeddings_cfg(config_path: str) -> tuple:
