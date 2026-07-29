@@ -52,9 +52,9 @@ def _check_skill_entry(name: str, skill: dict) -> None:
     assert _NAME_RE.match(name), name
     assert set(skill) == SKILL_KEYS
     assert skill["name"] == name
-    assert all(skill[field].strip() for field in ("description", "body", "reason"))  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
+    assert all(skill[field].strip() for field in ("description", "body", "reason"))  # DevSkim: ignore DS106863
     # apply_skill stores sha256 of the canonical "name\ndescription\nbody".
-    canonical = f"{skill['name']}\n{skill['description']}\n{skill['body']}"  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
+    canonical = f"{skill['name']}\n{skill['description']}\n{skill['body']}"  # DevSkim: ignore DS106863
     assert skill["sha256"] == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -122,15 +122,20 @@ def test_committed_registry_loads_through_the_real_registry_class() -> None:
 # that the contract describes what the writer actually emits rather than what
 # this file assumes it emits.
 
+# A minimal valid skill spec for apply_skill.
+#
+# DS106863 is a bare case-insensitive STRING rule for a legacy block cipher; the
+# three letters it looks for also sit inside the spec's summary-field name, so it
+# fires on ordinary schema code with no crypto anywhere near it. Routing every
+# literal spec through this one builder keeps the suppression to a single line
+# instead of one per test.
+#
+# These are # comments rather than a docstring for two reasons: CLAUDE.md forbids
+# docstrings as multi-line comments outside the top of a file, and DevSkim scans
+# docstrings under its `code` scope while exempting # comments -- so the previous
+# docstring here was itself flagged by the very rule it was explaining.
 def _spec(body: str, name: str = "demo-skill") -> dict:
-    """A minimal valid skill spec for apply_skill.
-
-    The trailing suppression is DevSkim's DS106863, a bare case-insensitive
-    string match for the DES cipher that fires on the "des" inside
-    "description". Confining every literal spec to this one builder keeps that
-    suppression to a single line instead of one per test.
-    """
-    return {"name": name, "description": "a demo skill", "body": body}  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
+    return {"name": name, "description": "a demo skill", "body": body}  # DevSkim: ignore DS106863
 
 
 @pytest.fixture
