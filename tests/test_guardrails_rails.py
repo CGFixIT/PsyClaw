@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from guardrails.config import DEFAULT_SOUL_TOPICS
@@ -146,6 +148,18 @@ def test_register_actions_noop_without_nemo():
         assert count == 0
     else:
         assert count == 0
+
+
+def test_jailbreak_flow_uses_nemo_allow_polarity() -> None:
+    rails = (
+        Path(__file__).resolve().parent.parent / "guardrails" / "config" / "rails.co"
+    ).read_text(encoding="utf-8")
+    expected = """define flow check jailbreak
+  $allowed = execute self_check_input
+  if not $allowed
+    bot refuse prompt extraction
+    stop"""
+    assert expected in rails
 
 
 def test_is_ungrounded_uses_configured_threshold() -> None:
