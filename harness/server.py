@@ -14,33 +14,48 @@ harness home directory.
 
 from __future__ import annotations
 
-import logging
-import os
-import sys
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from pathlib import Path
+# This process never imports gate.py, so without this it would inherit
+# whatever telemetry env the operator's shell/container/observability agent
+# happens to carry. Its current imports (fastapi/starlette/llm.client) pull in
+# no telemetry-emitting library today -- llm.client itself imports no
+# chromadb/retrieval module -- so this is prophylactic, not incident response.
+# Every other CyClaw entry point applies the same block unconditionally rather
+# than betting on what a future edit here (or to llm.client) ends up importing.
+from utils.telemetry_kill import apply_telemetry_kill
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from starlette.middleware.trustedhost import TrustedHostMiddleware
+apply_telemetry_kill()
 
-from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
-from harness.ollama import HarnessChatClient, HarnessLLMError
-from harness.prompts import compose_system_prompt
-from harness.registry_view import full_registry
-from harness.schemas import (
+import logging  # noqa: E402 - must follow the telemetry kill above
+import os  # noqa: E402 - must follow the telemetry kill above
+import sys  # noqa: E402 - must follow the telemetry kill above
+from collections.abc import AsyncIterator  # noqa: E402 - must follow the telemetry kill above
+from contextlib import asynccontextmanager  # noqa: E402 - must follow the telemetry kill above
+from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
+
+from fastapi import FastAPI, HTTPException  # noqa: E402 - must follow the telemetry kill above
+from fastapi.responses import FileResponse  # noqa: E402 - must follow the telemetry kill above
+from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402 - must follow the telemetry kill above
+
+from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig  # noqa: E402 - must follow the telemetry kill above
+from harness.ollama import HarnessChatClient, HarnessLLMError  # noqa: E402 - must follow the telemetry kill above
+from harness.prompts import compose_system_prompt  # noqa: E402 - must follow the telemetry kill above
+from harness.registry_view import full_registry  # noqa: E402 - must follow the telemetry kill above
+from harness.schemas import (  # noqa: E402 - must follow the telemetry kill above
     ChatRequest,
     ModelSelectRequest,
     RenameRequest,
     SessionCreateRequest,
     SoulToggleRequest,
 )
-from harness.sessions import SessionStore, SessionStoreError, TokenTally
-from llm.client import ResolvedLocalBackend, resolve_local_backend
-from utils.errors import AgenticError
-from utils.logger import _get_config
-from utils.ops_runner import OpsError, run_agentic_op
+from harness.sessions import (  # noqa: E402 - must follow the telemetry kill above
+    SessionStore,
+    SessionStoreError,
+    TokenTally,
+)
+from llm.client import ResolvedLocalBackend, resolve_local_backend  # noqa: E402 - must follow the telemetry kill above
+from utils.errors import AgenticError  # noqa: E402 - must follow the telemetry kill above
+from utils.logger import _get_config  # noqa: E402 - must follow the telemetry kill above
+from utils.ops_runner import OpsError, run_agentic_op  # noqa: E402 - must follow the telemetry kill above
 
 logger = logging.getLogger("cyclaw.harness.server")
 
@@ -258,7 +273,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             reply = client.chat(
                 system_prompt=system_prompt,
                 messages=history,
-                model=req.model or None,
+                # req.model (a genuine per-request override) wins; otherwise
+                # fall back to the operator's persisted /model selection, not
+                # straight to the backend default -- omitting cfg.selected_model
+                # here meant /api/status and the session record could report a
+                # model the chat call never actually used.
+                model=req.model or _current_model(),
                 # _llm_settings() is lru-cached upstream, so the per-request
                 # inline reads cost a dict lookup, not a config re-parse
                 max_tokens=int(_llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)),
