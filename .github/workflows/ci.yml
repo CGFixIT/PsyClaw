@@ -250,6 +250,7 @@ jobs:
             --cov=utils.health \
             --cov=utils.ops_runner \
             --cov=utils.guardrail_bridge \
+            --cov=utils.selftest \
             --cov=llm.client \
             --cov=graph \
             --cov=retrieval.embeddings \
