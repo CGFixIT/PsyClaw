@@ -37,6 +37,12 @@ _SID_KEY = "session_id"
 # _session_from_dict on JSON that parses but isn't session-shaped (non-dict
 # payload, missing session_id, unexpected message keys).
 _CORRUPT_SESSION_ERRORS = (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError)
+_MSGS_KEY = "messages"
+# Message's field names, split by whether the dataclass gives them a default.
+# The listing path uses these to reproduce Message(**msg)'s accept/reject
+# decision without paying for the construction.
+_MSG_FIELDS = frozenset(("role", "text", "ts"))
+_MSG_REQUIRED = frozenset(("role", "text"))
 
 
 class SessionStoreError(AgenticError):
@@ -65,6 +71,19 @@ class Message:
     text: str
     ts: float = field(default_factory=time.time)
 
+    @classmethod
+    def check_all(cls, raw: list) -> list:
+        """Validate stored messages against this signature; return them unchanged.
+
+        The listing path skips ``Message(**msg)`` for every turn but must keep
+        get()'s corrupt-file verdict, so this reproduces exactly what the
+        constructor would accept: both required keys present, no extras.
+        """
+        for msg in raw:
+            if not isinstance(msg, dict) or not _MSG_REQUIRED <= msg.keys() <= _MSG_FIELDS:
+                raise TypeError("message is not Message-shaped")
+        return raw
+
 
 @dataclass
 class Session:
@@ -89,6 +108,20 @@ class Session:
             "tokens": asdict(self.tally) | {"total": self.tally.total},
         }
 
+    @classmethod
+    def summarize_json(cls, parsed: dict) -> dict:
+        """Summary for the listing path, without a Message per stored turn.
+
+        summary() needs the turn count and an excerpt of the final turn, so
+        only that one message is constructed and the real count is restored
+        afterwards. Routing through summary() rather than rebuilding the dict
+        keeps the two listing paths from drifting apart.
+        """
+        raw = Message.check_all(parsed.get(_MSGS_KEY) or [])
+        summary = _session_from_dict({**parsed, _MSGS_KEY: raw[-1:]}).summary()
+        summary["message_count"] = len(raw)
+        return summary
+
 
 def _session_path(sessions_dir: Path, session_id: str) -> Path:
     if not _ID_RE.match(session_id):
@@ -99,9 +132,7 @@ def _session_path(sessions_dir: Path, session_id: str) -> Path:
 
 def _session_from_dict(parsed: dict) -> Session:
     tally = parsed.get("tally", {})
-    messages = []
-    for msg in parsed.get("messages", []):
-        messages.append(Message(**msg))
+    messages = [Message(**msg) for msg in parsed.get(_MSGS_KEY, [])]
     return Session(
         session_id=parsed[_SID_KEY],
         title=parsed.get("title", ""),
@@ -152,10 +183,15 @@ class SessionStore:
         with suppress(OSError):
             paths.sort(key=getmtime, reverse=True)
         for path in paths:
+            # _ID_RE is still the gate: a stray non-session file in the
+            # directory is skipped here exactly as get() used to reject it.
+            if not _ID_RE.match(path.stem):
+                continue
             try:
-                summaries.append(self.get(path.stem).summary())
-            except SessionStoreError:
-                ...  # skip corrupt files rather than break the listing
+                summary = Session.summarize_json(json.loads(path.read_text(encoding=_UTF8)))
+            except _CORRUPT_SESSION_ERRORS:
+                continue  # skip corrupt files rather than break the listing
+            summaries.append(summary)
         return summaries
 
     def record_exchange(
@@ -193,7 +229,7 @@ class SessionStore:
             "title": session.title,
             "created_ts": session.created_ts,
             "model": session.model,
-            "messages": [asdict(msg) for msg in session.messages],
+            _MSGS_KEY: [asdict(msg) for msg in session.messages],
             "tally": asdict(session.tally),
         }
         try:
