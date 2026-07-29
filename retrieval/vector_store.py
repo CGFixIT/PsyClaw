@@ -26,6 +26,21 @@ from pathlib import Path
 from typing import Any
 
 from utils.errors import IndexNotFoundError
+from utils.telemetry_kill import apply_telemetry_kill
+
+# Applied at import, not at client construction, because this module is the ONLY
+# production path that reaches ChromaDB -- both `import chromadb` statements below
+# are lazy (inside _ChromaWriter.reset and _ChromaReader.__init__), so a module-level
+# apply is guaranteed to run first. That covers every entry point in one place:
+# gate.py (which also applies it directly), mcp_hybrid_server.py, and
+# `python -m retrieval.indexer`, which reaches ChromaDB only through here.
+#
+# ChromaDB reads its OTel settings from the process environment via
+# pydantic-settings, so an ambient CHROMA_OTEL_GRANULARITY would otherwise be
+# honored on the two paths that never import gate. Settings(anonymized_telemetry=
+# False) at the call sites below does not cover this -- that flag governs the
+# separate PostHog product-telemetry path.
+apply_telemetry_kill()
 
 logger = logging.getLogger(__name__)
 

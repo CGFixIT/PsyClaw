@@ -1,0 +1,80 @@
+"""Canonical telemetry-kill environment block, shared by every CyClaw entry point.
+
+CyClaw's threat model (docs/THREAT_MODEL.md) forbids telemetry outright: nothing
+in this stack may phone home. The mechanism is a fixed set of environment
+variables that must be in place BEFORE the libraries that read them are
+imported -- LangChain/LangSmith, LangGraph, NeMo Guardrails, ChromaDB's PostHog
+client, and the OpenTelemetry SDK all latch their config at import or
+construction time, so setting these afterwards is too late.
+
+This module exists because that block used to live only in ``gate.py``. Every
+other process that reaches ChromaDB -- ``python -m retrieval.indexer``
+(``cyclaw-index``) and ``mcp_hybrid_server.py`` -- never imports ``gate``, so
+none of them applied it. They were relying entirely on the upstream defaults
+staying benign, which is not a guarantee CyClaw controls: any of these names
+present in the ambient environment (an operator's shell profile, a container
+base image, a site-wide observability agent) would be honored.
+
+Deliberately stdlib-only (``os``). It is imported at the very top of entry
+points, ahead of anything heavy, so it must never pull in a third-party package
+of its own.
+
+Applying this is an intentional process-wide side effect: it mutates
+``os.environ`` for the whole interpreter. That is the point -- the libraries
+read the process environment, not a config object.
+"""
+
+from __future__ import annotations
+
+import os
+
+# Names and values are contractual: tests/test_telemetry_kill.py asserts each
+# one, and treats a failure as P0 (live telemetry leakage).
+TELEMETRY_KILL: dict[str, str] = {
+    "LANGCHAIN_TRACING_V2": "false",
+    "LANGSMITH_TRACING": "false",
+    "LANGGRAPH_CLI_NO_ANALYTICS": "1",
+    "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
+    "ANONYMIZED_TELEMETRY": "False",
+    # ChromaDB OpenTelemetry. `chroma_otel_granularity` is the actual on/off
+    # switch: chromadb's otel_init() returns immediately when it is "none", and
+    # only builds a TracerProvider + BatchSpanProcessor + OTLPSpanExporter when
+    # it is anything else (chromadb/telemetry/opentelemetry/__init__.py).
+    # Blanking the endpoint/service name alone does NOT stop that construction,
+    # and note that Settings(anonymized_telemetry=False) governs the separate
+    # PostHog product-telemetry path, not this one. Verified 2026-07-29 against
+    # chromadb 1.5.9: with granularity left unset and an ambient
+    # CHROMA_OTEL_GRANULARITY=all, the OTLP exporter IS constructed and only
+    # OTEL_SDK_DISABLED downgrades the tracer to a NoOp; pinning granularity to
+    # "none" makes the early return fire and nothing is built at all.
+    "CHROMA_OTEL_GRANULARITY": "none",
+    "CHROMA_OTEL_COLLECTION_ENDPOINT": "",
+    "CHROMA_OTEL_SERVICE_NAME": "",
+    # Global OTel SDK kill. Retained as the outer layer even with granularity
+    # pinned above: it also covers any other OTel-instrumented dependency.
+    "OTEL_SDK_DISABLED": "true",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+}
+
+# Credentials that, if present, would let a tracing SDK authenticate to a remote
+# collector. Removed rather than blanked so no SDK can read an empty-but-present
+# value and treat it as configured.
+_TRACING_CREDENTIALS = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT")
+
+
+def apply_telemetry_kill() -> dict[str, str]:
+    """Set every kill var and drop tracing credentials; return the mapping applied.
+
+    Overwrites unconditionally -- an ambient value is exactly the case this
+    defends against, so an existing setting is never preserved.
+
+    Returns the mapping so a caller can report what it enforced (``gate.py``
+    prints a verification table at startup) without re-importing the constant.
+    """
+    for key, value in TELEMETRY_KILL.items():
+        os.environ[key] = value
+    for key in _TRACING_CREDENTIALS:
+        os.environ.pop(key, None)
+    return TELEMETRY_KILL

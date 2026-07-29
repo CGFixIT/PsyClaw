@@ -8,9 +8,19 @@ User gate handled entirely in FastAPI HTTP layer.
 import json
 import sys
 
-from retrieval.hybrid_search import HybridRetriever
-from utils.errors import RAGError
-from utils.logger import audit_log, redact_sensitive
+# BEFORE the retrieval import below: this process never imports gate.py, so it
+# would otherwise inherit whatever telemetry env the operator's shell, container
+# image, or a site-wide observability agent happens to carry. retrieval.vector_store
+# applies the same block when it loads, but stating it at the entry point keeps the
+# guarantee local -- it survives a future refactor that stops routing through
+# vector_store, and it is the same pattern gate.py uses. Applying twice is a no-op.
+from utils.telemetry_kill import apply_telemetry_kill
+
+apply_telemetry_kill()
+
+from retrieval.hybrid_search import HybridRetriever  # noqa: E402 - must follow the telemetry kill above
+from utils.errors import RAGError  # noqa: E402 - must follow the telemetry kill above
+from utils.logger import audit_log, redact_sensitive  # noqa: E402 - must follow the telemetry kill above
 
 # Bounds for the client-supplied top_k. The retriever fuses at most
 # top_k_semantic + top_k_keyword distinct chunks, so an unbounded value buys
