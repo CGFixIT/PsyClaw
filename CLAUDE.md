@@ -105,6 +105,7 @@ subsystems.
 | Path | Role |
 |---|---|
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
+| `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
 | `graph.py` | 9-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
@@ -172,7 +173,10 @@ statically; run it after any change to the core files.
 | I6 | **Module isolation** — `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`, and those never import the core three | import graph | `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core three to "reuse" something |
 
 Supporting guards (also checked by `invariant-guard`): telemetry-kill precedes
-heavy imports in `gate.py`; unset `CYCLAW_API_KEY` fails auth **closed** (401);
+heavy imports in `gate.py` (the block itself is shared from
+`utils/telemetry_kill.py` and applied by the MCP server and the ChromaDB
+chokepoint too, so no entry point inherits an ambient telemetry env);
+unset `CYCLAW_API_KEY` fails auth **closed** (401);
 the sanitizer contract phrases stay caught; BM25 stays JSON (pickle = RCE); MCP
 declares `sampling: None`.
 
@@ -219,7 +223,39 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** reordering imports in `gate.py` "to tidy them."
   **Rule:** the `_TELEMETRY_KILL` env block MUST stay above the heavy imports
   (`graph`, `retrieval`, `langchain`, `chromadb`). Setting the env after they
-  load lets telemetry escape. `test_telemetry_kill` locks this.
+  load lets telemetry escape. `test_telemetry_kill` locks this. The same rule
+  applies to `mcp_hybrid_server.py`'s `apply_telemetry_kill()` call — the
+  `# noqa: E402` on the imports below it is load-bearing, not clutter.
+- **Trap:** "simplifying" `gate.py` to `apply_telemetry_kill()` without keeping
+  the `_TELEMETRY_KILL = ...` assignment. **Rule:** `invariant-guard`'s G1 check
+  finds that name by **AST** and compares its line number to the first heavy
+  import; drop the binding and G1 reports `kill at None` and fails.
+- **Trap:** assuming `Settings(anonymized_telemetry=False)` covers ChromaDB
+  telemetry. **Rule:** it governs only the PostHog product-telemetry path. OTel
+  is separate and driven by `CHROMA_OTEL_GRANULARITY` — chromadb's `otel_init()`
+  early-returns only when that is `"none"`, otherwise it builds a
+  TracerProvider + BatchSpanProcessor + OTLPSpanExporter. Both defenses are in
+  `utils/telemetry_kill.py`; neither is redundant.
+- **Trap:** "completing" `utils/telemetry_kill.py`'s `TELEMETRY_KILL` dict by
+  adding `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — they're documented in
+  `docs/security-philosophy/cyclaw_telemetry_kill.env` and look like an
+  omission. **Rule:** they are excluded on purpose. `huggingface_hub` latches
+  `HF_HUB_OFFLINE` at its own import time, so forcing it unconditionally would
+  turn `retrieval/embeddings.py`'s documented cache-miss bootstrap fetch into a
+  guaranteed failure on any machine that has never run CyClaw before.
+  `_load_model` sets both, but only after `_model_offline_eligible` confirms
+  the model is already on disk via `huggingface_hub.try_to_load_from_cache`
+  (network-free) — never unconditionally, and never by clearing an operator's
+  own stricter choice if they sourced the `.env` file by hand.
+- **Trap:** treating ONNX Runtime's `ORT_TELEMETRY_OPT_OUT` env var as a real
+  kill switch. **Rule:** it isn't read by onnxruntime at all (verified by
+  grepping the installed package — zero references). ORT's actual telemetry
+  exists only in official Windows builds via ETW/TraceLogging and is entirely
+  absent on Linux/macOS by construction (see the package's own `Privacy.md`);
+  the real opt-out is the runtime API `onnxruntime.disable_telemetry_events()`,
+  which nothing in this repo currently calls. The env var is kept in
+  `TELEMETRY_KILL` as documented, harmless (unread) parity with the reference
+  `.env` file — don't mistake its presence for an active mitigation.
 
 ### Retrieval & config
 - **Trap:** "fixing" `min_score: 0.028` upward toward a cosine-like 0.5.

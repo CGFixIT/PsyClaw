@@ -241,6 +241,7 @@ jobs:
             --cov=gate \
             --cov=gate_ops \
             --cov=utils.sanitizer \
+            --cov=utils.telemetry_kill \
             --cov=utils.config_validation \
             --cov=utils.errors \
             --cov=utils.logger \

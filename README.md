@@ -63,7 +63,8 @@ User Query (HTTP POST /query or MCP tool call)
     │  • Rate limit (60 req/min per IP — RUNS FIRST)      │
     │  • Injection filter (sanitizer.py, config-driven)   │
     │  • Soul init (PersonalityManager closure)           │
-    │  • Telemetry kill block (before any SDK import)     │
+    │  • Telemetry kill block (before any SDK import;     │
+    │    shared — MCP + indexer apply the same block)     │
     └──────────────────┬──────────────────────────────────┘
                        │
                        ▼
@@ -727,7 +728,7 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Network | Binds `127.0.0.1:8787` — no external exposure by design |
 | Input | Config-driven injection filter (`policy.prompt_filter`) |
 | Rate limit | 60 req/min per IP |
-| Telemetry | Kill block runs before any SDK import in `gate.py` |
+| Telemetry | Shared kill block (`utils/telemetry_kill.py`) runs before any SDK import in every entry point — gateway, MCP server, and indexer CLI; HF Hub network calls are also cut off once the embedding model is confirmed cached (`retrieval/embeddings.py`) |
 | Audit | All paths log SHA-256 query hash + PII-redacted metadata |
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
 | Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |

@@ -55,7 +55,7 @@ multi-tenant workloads.
 | **DNS-rebinding → state-changing POST** | `TrustedHostMiddleware` Host allow-list (outermost middleware) | `gate.py`, `config.yaml` |
 | **Unauthorized cross-origin reads** | CORS allow-list | `gate.py`, `config.yaml` |
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
-| **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import; raw query text never persisted (hashes only) | `gate.py`, `utils/logger.py` |
+| **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import, by **every** entry point (gateway, MCP server, indexer CLI) from one shared mapping — an ambient value in the operator's environment is overwritten, not inherited; HF Hub network calls are additionally cut off (`HF_HUB_OFFLINE`) once the embedding model is confirmed cached on disk; raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
 | **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; seccomp profile; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
 
