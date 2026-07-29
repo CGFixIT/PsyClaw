@@ -98,6 +98,31 @@ def test_safe_child_rejects_escape_shapes(tmp_path: Path) -> None:
             _safe_child(root, bad)
 
 
+def test_safe_child_rejects_root_relative_shapes_on_every_host(tmp_path: Path) -> None:
+    # Regression for a HOST-DEPENDENT hole in the guard. `Path(...)` takes the
+    # running platform's flavour, so each of these slipped through on exactly
+    # one OS and was then re-split into a path *inside* the root:
+    #   "/etc/passwd"           -> passed on Windows  (WindowsPath and
+    #                              PureWindowsPath both call a drive-less root
+    #                              relative), landing as root/etc/passwd
+    #   "\\Windows\\system.ini" -> passed on POSIX    (one filename to
+    #                              PurePosixPath, driveless to PureWindowsPath),
+    #                              landing as root/Windows/system.ini
+    # Asserting both on every platform is the point: a one-OS check is what let
+    # this survive, and the CI matrix only runs the Windows leg on one lane.
+    root = tmp_path / "root"
+    root.mkdir()
+    for bad in (
+        "/etc/passwd",              # POSIX root
+        "/",                        # bare root
+        "\\Windows\\system.ini",    # Windows drive-relative root
+        "\\\\server\\share\\x",     # UNC
+        "C:/Windows/system.ini",    # drive with forward slashes
+    ):
+        with pytest.raises(AgenticError):
+            _safe_child(root, bad)
+
+
 def test_safe_child_allows_nested_relative_paths(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "docs").mkdir(parents=True)
