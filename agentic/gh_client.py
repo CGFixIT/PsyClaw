@@ -117,7 +117,19 @@ def check_gh_version(
             details={"binary": binary, "attempts": attempts},
         ) from last_timeout_exc
 
-    output = (result.stdout or "") + (result.stderr or "")  # type: ignore[union-attr]
+    if result is None:
+        # Unreachable today: every loop exit either assigns result and breaks,
+        # or raises (OSError -> GhNotInstalledError, timeout -> the check
+        # above). Narrowed explicitly instead of suppressing the checker,
+        # because that invariant lives in the loop rather than here -- an edit
+        # that adds a `continue` would otherwise reintroduce an AttributeError
+        # on None with the type error still silenced.
+        raise GhVersionError(  # pragma: no cover
+            "gh version check produced no result",
+            details={"binary": binary, "attempts": attempts},
+        )
+
+    output = (result.stdout or "") + (result.stderr or "")
     match = _GH_VERSION_RE.search(output)
     if not match:
         raise GhVersionError(
