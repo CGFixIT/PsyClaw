@@ -254,3 +254,55 @@ def test_multiple_roots_require_selection(tmp_path):
         assert sr.read_bytes("f.txt", root=str(a), max_bytes=16) == b"A"
         with pytest.raises(FsPathError):
             sr.pick_root("/not/a/configured/root")
+
+
+# -- partial-construction fd cleanup ------------------------------------------
+
+
+def _open_fd_count() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc fd introspection")
+@pytest.mark.parametrize("failing_second_root", ["overlap", "missing", "not_a_dir"])
+def test_failed_construction_releases_already_opened_root_fds(tmp_path, failing_second_root):
+    """A root that fails validation must not strand the fds of earlier roots.
+
+    Regression: ScopedRoots.__init__ opened an O_DIRECTORY fd per root and
+    appended it to self._roots as it went. If a LATER root raised, __init__
+    never returned, so the caller had no object on which to call close() or
+    __exit__ -- and every fd opened before the failure leaked for the life of
+    the process. FsIndexer builds a ScopedRoots twice per run, so a
+    misconfigured overlapping root leaked on every retry.
+    """
+    good = tmp_path / "good"
+    good.mkdir()
+    (good / "sub").mkdir()
+    not_a_dir = tmp_path / "file.txt"
+    not_a_dir.write_text("x", encoding="utf-8")
+    second = {
+        "overlap": good / "sub",       # contained by the first root
+        "missing": tmp_path / "nope",  # does not exist
+        "not_a_dir": not_a_dir,        # exists but is a file
+    }[failing_second_root]
+
+    before = _open_fd_count()
+    for _ in range(10):
+        with pytest.raises(FsPathError):
+            ScopedRoots([str(good), str(second)])
+    assert _open_fd_count() == before
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc fd introspection")
+def test_successful_construction_still_holds_and_releases_fds(tmp_path):
+    """The cleanup path must not disturb the normal hold-then-release contract."""
+    first, second = tmp_path / "a", tmp_path / "b"
+    for path in (first, second):
+        path.mkdir()
+
+    before = _open_fd_count()
+    with ScopedRoots([str(first), str(second)]) as roots:
+        assert len(roots._roots) == 2
+        if os.name != "nt":
+            assert _open_fd_count() == before + 2
+    assert _open_fd_count() == before
