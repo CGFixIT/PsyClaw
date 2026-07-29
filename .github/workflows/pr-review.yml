@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout trusted base
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 1
@@ -58,7 +58,7 @@ jobs:
           path: trusted
 
       - name: Checkout candidate as review data
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -66,7 +66,7 @@ jobs:
           path: candidate
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
 
@@ -104,7 +104,7 @@ jobs:
         # guard skips cleanly (no comment is posted); normal reviews resume
         # automatically once Codex is reachable again.
         continue-on-error: true
-        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6  # v1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56  # v1
         with:
           openai-api-key: ${{ secrets.CODEX }}
           codex-version: '0.144.6'
