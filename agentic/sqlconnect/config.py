@@ -78,6 +78,12 @@ def load_sqlconnect_config(config_path: str = "config.yaml") -> SqlConnectConfig
         raise SqlConnectConfigError(
             f"sqlconnect: block must be a mapping, got {type(block).__name__}",
         )
+    for name in ("enabled", "read_only", "allow_write"):
+        if name in block and not isinstance(block[name], bool):
+            raise SqlConnectConfigError(
+                f"sqlconnect.{name} must be a boolean true/false, got: {block[name]!r}",
+                details={"field": name, "received": repr(block[name])},
+            )
     known = set(SqlConnectConfig.__dataclass_fields__)
     unknown = set(block.keys()) - known
     unknown.discard("enabled")
@@ -88,6 +94,6 @@ def load_sqlconnect_config(config_path: str = "config.yaml") -> SqlConnectConfig
         raise SqlConnectConfigError(
             f"sqlconnect: block invalid: {exc}", details={"unknown_keys": sorted(unknown)}
         ) from exc
-    sc.enabled = bool(block.get("enabled", False))  # type: ignore[attr-defined]
+    sc.enabled = block.get("enabled", False)  # type: ignore[attr-defined]
     sc._unknown_keys = sorted(unknown)  # type: ignore[attr-defined]
     return sc
