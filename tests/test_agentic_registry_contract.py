@@ -52,9 +52,9 @@ def _check_skill_entry(name: str, skill: dict) -> None:
     assert _NAME_RE.match(name), name
     assert set(skill) == SKILL_KEYS
     assert skill["name"] == name
-    assert all(skill[field].strip() for field in ("description", "body", "reason"))
+    assert all(skill[field].strip() for field in ("description", "body", "reason"))  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
     # apply_skill stores sha256 of the canonical "name\ndescription\nbody".
-    canonical = f"{skill['name']}\n{skill['description']}\n{skill['body']}"
+    canonical = f"{skill['name']}\n{skill['description']}\n{skill['body']}"  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
     assert skill["sha256"] == hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -122,6 +122,17 @@ def test_committed_registry_loads_through_the_real_registry_class() -> None:
 # that the contract describes what the writer actually emits rather than what
 # this file assumes it emits.
 
+def _spec(body: str, name: str = "demo-skill") -> dict:
+    """A minimal valid skill spec for apply_skill.
+
+    The trailing suppression is DevSkim's DS106863, a bare case-insensitive
+    string match for the DES cipher that fires on the "des" inside
+    "description". Confining every literal spec to this one builder keeps that
+    suppression to a single line instead of one per test.
+    """
+    return {"name": name, "description": "a demo skill", "body": body}  # DevSkim: ignore DS106863 - "des" inside "description", not the DES cipher
+
+
 @pytest.fixture
 def governed_registry(tmp_path: Path):
     rel = f"data/agentic/_pytest_contract_{uuid.uuid4().hex}.json"
@@ -149,15 +160,15 @@ def governed_registry(tmp_path: Path):
 def test_governed_writes_satisfy_the_committed_artifact_contract(governed_registry) -> None:
     registry, target = governed_registry
     registry.apply_skill(
-        {"name": "demo-skill", "description": "a demo skill", "body": "Do the safe thing."},
+        _spec("Do the safe thing."),
         reason="add the demo skill",
     )
     registry.apply_skill(
-        {"name": "demo-skill", "description": "a demo skill", "body": "Do the safe thing, twice."},
+        _spec("Do the safe thing, twice."),
         reason="revise the demo body",
     )
     registry.apply_skill(
-        {"name": "second.skill-2", "description": "another", "body": "More safe text."},
+        _spec("More safe text.", name="second.skill-2"),
         reason="add a second skill",
     )
 
@@ -182,7 +193,7 @@ def test_sha256_rule_detects_a_hand_edited_body(governed_registry) -> None:
     # through apply_skill (a governance bypass) must not still validate.
     registry, target = governed_registry
     registry.apply_skill(
-        {"name": "demo-skill", "description": "a demo skill", "body": "Original body."},
+        _spec("Original body."),
         reason="add the demo skill",
     )
     data = json.loads(target.read_text(encoding="utf-8"))
@@ -196,7 +207,7 @@ def test_sha256_rule_detects_a_hand_edited_body(governed_registry) -> None:
 def test_history_rule_detects_a_row_with_no_surviving_skill(governed_registry) -> None:
     registry, target = governed_registry
     registry.apply_skill(
-        {"name": "demo-skill", "description": "a demo skill", "body": "Original body."},
+        _spec("Original body."),
         reason="add the demo skill",
     )
     data = json.loads(target.read_text(encoding="utf-8"))
@@ -210,7 +221,7 @@ def test_history_rule_detects_a_row_with_no_surviving_skill(governed_registry) -
 def test_version_pairing_rule_detects_a_dropped_history_row(governed_registry) -> None:
     registry, target = governed_registry
     registry.apply_skill(
-        {"name": "demo-skill", "description": "a demo skill", "body": "Original body."},
+        _spec("Original body."),
         reason="add the demo skill",
     )
     data = json.loads(target.read_text(encoding="utf-8"))
