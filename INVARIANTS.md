@@ -70,9 +70,9 @@ an `if` mentioning both `hybrid` and `enabled`), and the tripwire
 
 ## Rule 3 — every path converges at `audit_logger` before END
 
-**Must never change:** all six upstream nodes (`retrieve`, `route_by_score`,
-`local_llm`, `user_gate`, `grok_fallback`, `offline_best_effort`) reach
-`audit_logger`, and `audit_logger`'s only outgoing edge is `END`
+**Must never change:** all eight upstream nodes (`retrieve`, `route_by_score`,
+`guardrail_input`, `local_llm`, `user_gate`, `grok_fallback`, `claude_fallback`,
+`offline_best_effort`) reach `audit_logger`, and `audit_logger`'s only outgoing edge is `END`
 (`add_edge("audit_logger", END)`). Do not add an edge out of `audit_logger`; do not
 add a node with a path to `END` that skips it. Every query — including the
 `user_gate` pause — must emit an audit event.
@@ -199,11 +199,8 @@ and `tests/test_agentic_isolation.py` (AST, both directions). Also invariant-gua
 - **`/health` `embeddings_local: healthy`** is a hardcoded literal, not a probe — a
   broken embedding model still reports healthy. Use `index_ready`/`graph_ready` for
   retrieval readiness. (`TestHealthEmbeddingsSignalIsStatic`.)
-- **Rate-limit 429 bodies say "60/min"** as a literal string even if
-  `api.rate_limit.max_requests` is changed. The enforced limit is correct; the
-  message is not authoritative.
 - **`security.require_env`** is decorative — no code reads it; the server boots
   without `GROK_API_KEY` (Grok just reports unavailable).
-- **`banned_patterns`** is best-effort regex over raw text (33 patterns in the
+- **`banned_patterns`** is best-effort regex over raw text (40 patterns in the
   shipped config). It is defense-in-depth, not a completeness guarantee; homoglyph /
   zero-width evasion is out of scope per the threat model.
