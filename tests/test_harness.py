@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -441,10 +442,10 @@ def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
     assert resp.json()["detail"]["code"] == "RATE_LIMIT"
 
 
-def test_rate_limit_scoped_to_chat_route_only(cfg, monkeypatch):
-    """The limiter throttles /api/chat specifically, not the whole app --
-    other routes (status, sessions, etc.) stay unaffected by the same
-    per-app RateLimiter instance."""
+def test_rate_limit_scoped_to_expensive_routes_only(cfg, monkeypatch):
+    """The limiter throttles the routes that cost real resources per call, not
+    the whole app -- the cheap read-only routes (status, sessions, etc.) stay
+    unaffected by the same per-app RateLimiter instance."""
     monkeypatch.setattr(
         harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60}
     )
@@ -454,6 +455,33 @@ def test_rate_limit_scoped_to_chat_route_only(cfg, monkeypatch):
     assert limited_client.post("/api/chat", json={"message": "two"}).status_code == 429
     assert limited_client.get("/api/status").status_code == 200
     assert limited_client.get("/api/sessions").status_code == 200
+
+
+def test_github_status_is_rate_limited(cfg, monkeypatch):
+    """GET /api/github/status shares the per-IP budget.
+
+    It is the only GET on this app that spawns a subprocess (up to 120s each),
+    so an unthrottled loop against it is a local process-table/CPU DoS. The
+    ops_runner call is stubbed out -- this asserts the throttle, not the shim.
+    """
+    monkeypatch.setattr(
+        harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60}
+    )
+    calls: list[str] = []
+
+    def _fake_run_agentic_op(action: str, **_kwargs):
+        calls.append(action)
+        return SimpleNamespace(to_dict=lambda: {"ok": True, "action": action})
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _fake_run_agentic_op)
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+
+    assert limited_client.get("/api/github/status").status_code == 200
+    second = limited_client.get("/api/github/status")
+    assert second.status_code == 429
+    assert second.json()["detail"]["code"] == "RATE_LIMIT"
+    # The throttled request never reached the subprocess shim.
+    assert calls == ["status"]
 
 
 def test_chat_creates_session_and_tallies_tokens(client):
