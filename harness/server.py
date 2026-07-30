@@ -14,6 +14,24 @@ harness home directory.
 
 from __future__ import annotations
 
+# This process never imports gate.py, so without this it would inherit
+# whatever telemetry env the operator's shell/container/observability agent
+# happens to carry. Its current imports (fastapi/starlette/llm.client) pull in
+# no telemetry-emitting library today -- llm.client itself imports no
+# chromadb/retrieval module -- so this is prophylactic, not incident response.
+# Every other CyClaw entry point applies the same block unconditionally rather
+# than betting on what a future edit here (or to llm.client) ends up importing.
+from utils.telemetry_kill import apply_telemetry_kill
+
+apply_telemetry_kill()
+
+# E402 (module-level import not at top of file) is expected and intentional
+# below -- these imports must follow apply_telemetry_kill() above. Rather than
+# an inline per-import suppression comment on every one of the 19 lines
+# (wemake-python-styleguide's WPS402 flags that many as noqa-comment
+# overuse), this file carries a blanket E402 grant in pyproject.toml's
+# [tool.ruff.lint] per-file-ignores and setup.cfg's flake8 per-file-ignores,
+# matching gate.py's identical pattern for the identical reason.
 import logging
 import os
 import sys
@@ -258,7 +276,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             reply = client.chat(
                 system_prompt=system_prompt,
                 messages=history,
-                model=req.model or None,
+                # req.model (a genuine per-request override) wins; otherwise
+                # fall back to the operator's persisted /model selection, not
+                # straight to the backend default -- omitting cfg.selected_model
+                # here meant /api/status and the session record could report a
+                # model the chat call never actually used.
+                model=req.model or _current_model(),
                 # _llm_settings() is lru-cached upstream, so the per-request
                 # inline reads cost a dict lookup, not a config re-parse
                 max_tokens=int(_llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)),

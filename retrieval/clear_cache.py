@@ -26,15 +26,25 @@ Exit codes::
 
 from __future__ import annotations
 
-import argparse
-import shutil
-import sys
-from pathlib import Path
+# This process never imports gate.py, so without this it would inherit
+# whatever telemetry env the operator's shell/container/observability agent
+# happens to carry. resolve_cache_dir (the one retrieval.embeddings symbol
+# this file uses) pulls in no telemetry-emitting library today, so this is
+# prophylactic -- but every other CyClaw entry point applies the same block
+# unconditionally rather than betting on what a future edit here imports.
+from utils.telemetry_kill import apply_telemetry_kill
 
-import yaml
+apply_telemetry_kill()
 
-from retrieval.embeddings import resolve_cache_dir
-from utils.errors import ConfigError
+import argparse  # noqa: E402 - must follow the telemetry kill above
+import shutil  # noqa: E402 - must follow the telemetry kill above
+import sys  # noqa: E402 - must follow the telemetry kill above
+from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
+
+import yaml  # noqa: E402 - must follow the telemetry kill above
+
+from retrieval.embeddings import resolve_cache_dir  # noqa: E402 - must follow the telemetry kill above
+from utils.errors import ConfigError  # noqa: E402 - must follow the telemetry kill above
 
 EXIT_OK = 0
 EXIT_FAIL = 2

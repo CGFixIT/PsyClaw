@@ -242,6 +242,9 @@ _ASSERT_KILLED = (
         "import mcp_hybrid_server",
         "import retrieval.indexer",
         "import retrieval.vector_store",
+        "import harness.server",
+        "import metrics",
+        "import retrieval.clear_cache",
     ],
 )
 def test_kill_switch_applied_without_importing_gate(entry_import: str) -> None:
