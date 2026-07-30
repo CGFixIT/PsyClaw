@@ -115,6 +115,41 @@ def str_arg(node: ast.expr) -> str | None:
     return None
 
 
+def first_other_import_line(tree: ast.Module, skip_dotted_module: str) -> int | None:
+    """Line of the first module-body-level import, excluding one specific
+    ``from X import Y`` module path (the telemetry-kill import itself).
+
+    Walks ``tree.body`` directly rather than the full ``ast.walk`` used by
+    ``top_level_import_names`` -- exactly what matters for a small
+    ``__init__.py`` where every import lives at module level, not nested
+    inside a function.
+    """
+    lines: list[int] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            lines.extend(node.lineno for a in node.names if a.name != skip_dotted_module)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module != skip_dotted_module:
+            lines.append(node.lineno)
+    return min(lines, default=None)
+
+
+def kill_call_line(tree: ast.Module) -> int | None:
+    """Line of the telemetry-kill invocation, in either shape CyClaw uses.
+
+    gate.py needs the returned dict for its startup verification table, so it
+    assigns: ``_TELEMETRY_KILL = apply_telemetry_kill()``. Every other entry
+    point (mcp_hybrid_server.py, agentic/__init__.py, guardrails/__init__.py)
+    doesn't need the return value and calls it bare: ``apply_telemetry_kill()``.
+    Both must count for the ordering check below.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and call_name(node.value) == "apply_telemetry_kill":
+            return node.lineno
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and call_name(node.value) == "apply_telemetry_kill":
+            return node.lineno
+    return None
+
+
 def graph_wiring(tree: ast.Module) -> tuple[str | None, list[tuple[str, str]], dict[str, list[str]]]:
     """Extract (entry_point, unconditional_edges, conditional_sources->router-name)."""
     entry: str | None = None
@@ -225,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
         gate_ops_tree = parse(root / "gate_ops.py")
         graph_tree = parse(root / "graph.py")
         mcp_tree = parse(root / "mcp_hybrid_server.py")
+        agentic_init_tree = parse(root / "agentic" / "__init__.py")
+        guardrails_init_tree = parse(root / "guardrails" / "__init__.py")
     except (OSError, SyntaxError) as exc:
         print(f"env error: cannot parse core file: {exc}", file=sys.stderr)
         return 3
@@ -438,6 +475,23 @@ def main(argv: list[str] | None = None) -> int:
         fail("_TELEMETRY_KILL precedes heavy imports",
              f"kill at {kill_line}, first heavy import at {heavy_first} — env vars must be "
              "set before langchain/chromadb load or telemetry escapes")
+    # agentic/__init__.py and guardrails/__init__.py never import gate.py, so each
+    # calls apply_telemetry_kill() itself (bare, not assigned -- neither needs the
+    # returned dict). Unlike gate.py's curated "heavy" allowlist, a thin __init__.py
+    # has no legitimate early import to allow-list around: everything it imports
+    # besides the kill itself is a submodule that could transitively reach a
+    # telemetry-capable library (agentic.registry -> guardrails.rails is one such
+    # path today), so the bar here is stricter -- precede EVERY other import, not
+    # just a known-heavy subset.
+    for label, tree in (("agentic/__init__.py", agentic_init_tree), ("guardrails/__init__.py", guardrails_init_tree)):
+        pkg_kill_line = kill_call_line(tree)
+        first_import = first_other_import_line(tree, skip_dotted_module="utils.telemetry_kill")
+        if pkg_kill_line is not None and first_import is not None and pkg_kill_line < first_import:
+            ok(f"{label}: telemetry kill (line {pkg_kill_line}) precedes first other import (line {first_import})")
+        else:
+            fail(f"{label}: telemetry kill precedes first other import",
+                 f"kill at {pkg_kill_line}, first other import at {first_import} — env vars must be "
+                 "set before any submodule import or telemetry escapes")
 
     # ── G2 Auth fail-closed ─────────────────────────────────────────────────
     print("G2 Auth fail-closed")

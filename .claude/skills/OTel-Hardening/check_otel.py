@@ -61,7 +61,8 @@ from pathlib import Path
 # dict but absent here is new and expected -- T2 reports it as INFO so this
 # list gets updated, not because it is dangerous by itself.
 BASELINE_KEYS = frozenset({
-    "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGGRAPH_CLI_NO_ANALYTICS",
+    "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGSMITH_OTEL_ENABLED",
+    "LANGGRAPH_CLI_NO_ANALYTICS",
     "NEMO_GUARDRAILS_NO_USAGE_STATS", "ANONYMIZED_TELEMETRY",
     "HF_HUB_DISABLE_TELEMETRY", "DO_NOT_TRACK", "ORT_TELEMETRY_OPT_OUT",
     "CHROMA_OTEL_GRANULARITY", "CHROMA_OTEL_COLLECTION_ENDPOINT",
