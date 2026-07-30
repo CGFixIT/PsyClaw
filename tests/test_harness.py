@@ -21,6 +21,7 @@ from harness.registry_view import full_registry, list_governed_skills, list_mcp_
 from harness import server as harness_server
 from harness.server import create_app
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
+from utils.ops_runner import OpsError
 
 # -- fixtures -------------------------------------------------------------------
 
@@ -482,6 +483,24 @@ def test_github_status_is_rate_limited(cfg, monkeypatch):
     assert second.json()["detail"]["code"] == "RATE_LIMIT"
     # The throttled request never reached the subprocess shim.
     assert calls == ["status"]
+
+
+def test_github_status_error_path_is_redacted(cfg, monkeypatch):
+    """An OpsError message goes through the same redaction as a successful
+    result's stdout/stderr/parsed (OpsResult.to_dict's _redact_ops_value) --
+    the two response shapes for the same route must not diverge on privacy.
+    """
+    def _raising_run_agentic_op(action: str, **_kwargs):
+        raise OpsError("upstream said: contact admin@example.com from 10.1.2.3")
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _raising_run_agentic_op)
+    test_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+
+    resp = test_client.get("/api/github/status")
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]["message"]
+    assert "admin@example.com" not in detail
+    assert "10.1.2.3" not in detail
 
 
 def test_chat_creates_session_and_tallies_tokens(client):

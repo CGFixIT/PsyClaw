@@ -57,7 +57,7 @@ from harness.schemas import (
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.errors import AgenticError
-from utils.logger import _get_config
+from utils.logger import _get_config, redact_sensitive
 from utils.ops_runner import OpsError, run_agentic_op
 from utils.ratelimit import RateLimiter
 
@@ -382,7 +382,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         try:
             gh_result = run_agentic_op("status")
         except OpsError as exc:
-            raise _err(_HTTP_BAD_REQUEST, AgenticError(str(exc))) from exc
+            # Mirror gh_result.to_dict()'s redaction of stdout/stderr/parsed on
+            # the success path -- "status" is a hardcoded literal in
+            # _AGENTIC_ACTIONS so this OpsError is unreachable today, but the
+            # redaction should not depend on that staying true if this route
+            # is ever parameterized.
+            raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         return gh_result.to_dict()
 
     # -- harness optimizer runs ------------------------------------------
