@@ -63,6 +63,13 @@ import os
 TELEMETRY_KILL: dict[str, str] = {
     "LANGCHAIN_TRACING_V2": "false",
     "LANGSMITH_TRACING": "false",
+    # LangSmith's newer OTel-based trace route (langsmith[otel] +
+    # LANGSMITH_OTEL_ENABLED=true), separate from the LANGSMITH_TRACING flag
+    # above. OTEL_SDK_DISABLED below already neuters the OTel SDK generally,
+    # so this is belt-and-suspenders for that specific route, not a distinct
+    # mechanism -- kept explicit so a future OTel_SDK_DISABLED removal doesn't
+    # silently re-open this one too.
+    "LANGSMITH_OTEL_ENABLED": "false",
     "LANGGRAPH_CLI_NO_ANALYTICS": "1",
     "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
     "ANONYMIZED_TELEMETRY": "False",
