@@ -284,15 +284,23 @@ class TestShippedAgenticConfigContract:
         assert cfg.require_human_confirm_for_accept is True
 
 
-def test_cli_exposes_no_harness_or_deepagent_subcommands() -> None:
-    """Tripwire: the harness_optimizer/deepagent_github packages must stay
-    unreachable from the agentic CLI until a later phase deliberately wires
-    a subcommand for them. If this test needs updating, that wiring was
-    added on purpose -- update it deliberately, not by accident."""
+def test_cli_subcommand_surface_is_pinned() -> None:
+    """Tripwire on what the agentic CLI exposes.
+
+    Was "exposes no harness/deepagent subcommands". `deepagent-plan` was added
+    deliberately: a read-only probe that asserts the six-condition cloud chain,
+    fetches injection-scanned GitHub context, and reports the harness build's gate
+    state. It invokes nothing and writes nothing -- there is still no CLI route to
+    harness_optimizer, and none to any deepagent path that runs a model.
+
+    If this needs updating again, that wiring was added on purpose. Update it
+    deliberately, not by accident."""
     import argparse
 
     from agentic.cli import build_parser
 
     parser = build_parser()
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
-    assert set(sub_action.choices.keys()) == {"status", "context", "propose-skill", "apply-skill", "test"}
+    assert set(sub_action.choices.keys()) == {
+        "status", "context", "propose-skill", "apply-skill", "deepagent-plan", "test",
+    }

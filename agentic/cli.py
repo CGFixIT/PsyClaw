@@ -6,6 +6,8 @@ Subcommands:
     context        Fetch read-only GitHub context (--pr N | --issue N | --repo).
     propose-skill  Preview a skills-registry change (never writes).
     apply-skill    Apply a skills-registry change (governed; needs --reason).
+    deepagent-plan Probe the Deep Agents harness (read-only; --provider needs
+                   --confirm-online before any cloud egress).
     test           Run the pre-flight self-test.
 
 Exit codes:
@@ -22,17 +24,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import asdict
 
 from agentic.config import AgenticConfig, load_agentic_config
 from utils.errors import (
     AgenticConfigError,
     AgenticError,
+    AgenticWriteRefused,
     GhNotInstalledError,
     GhVersionError,
     PromptInjectionError,
     SkillRegistryError,
 )
-from utils.logger import _get_config
+from utils.logger import _get_config, audit_log
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -140,6 +144,108 @@ def _read_body(args: argparse.Namespace) -> str:
     return args.body or ""
 
 
+def cmd_deepagent_plan(args: argparse.Namespace) -> int:
+    """Live-fire probe for the Deep Agents harness. Read-only, writes nothing.
+
+    Three things happen, in order: the six-condition cloud chain is asserted when
+    a provider is named, GitHub context is fetched through the injection-scanned
+    path, and the harness build is probed so its real gate state is reported.
+
+    Deliberately does NOT invoke the agent. Invocation needs a scoped
+    ProposerWorkspaceTools instance, and the real-repo workspace surface does not
+    exist yet -- so a --invoke flag here would either fake a workspace or fail. It
+    lands with that surface instead.
+    """
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+
+    from agentic import context
+    from agentic.deepagent_github.builder import build_deepagent_github
+    from agentic.deepagent_github.core import DeepAgentGitHubTask
+    from agentic.deepagent_github.model_adapter import cloud_key_available
+    from agentic.deepagent_github.runners import draft_plan
+
+    app_cfg = _get_config(args.config)
+    provider: str | None = args.provider
+    if provider:
+        # Gates 3 and 4. cloud_provider() returns None unless BOTH
+        # allow_cloud_providers and the provider's own enabled flag are true.
+        if cfg.deepagent_github.cloud_provider(provider) is None:
+            _err(f"cloud provider {provider!r} is not enabled (gates 3/4)")
+            return EXIT_ENV
+        # Gate 5: key presence only, no network probe.
+        if not cloud_key_available(provider):
+            _err(f"cloud provider {provider!r} has no API key set (gate 5)")
+            return EXIT_ENV
+        # Gate 6: per-run human confirmation, the agentic analog of
+        # user_confirmed_online. Same shape as apply-skill's --confirm.
+        if not args.confirm_online:
+            _err(f"--confirm-online is required to drive the loop with {provider!r} (gate 6)")
+            return EXIT_REFUSED
+        audit_log({"event": "agentic_deepagent_cloud_confirmed", "provider": provider}, cfg=app_cfg)
+
+    try:
+        if args.pr is not None:
+            bundle = context.fetch_pr_context(cfg, args.pr, app_cfg=app_cfg)
+        elif args.issue is not None:
+            bundle = context.fetch_issue_context(cfg, args.issue, app_cfg=app_cfg)
+        else:
+            bundle = context.fetch_repo_context(cfg, app_cfg=app_cfg)
+    except (GhNotInstalledError, GhVersionError) as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    # A critical finding means GitHub-sourced text carries an injection shape. The
+    # inbound scan is advisory (a PR may legitimately DISCUSS injection), but a
+    # planner is exactly the consumer that must not act on one.
+    findings = bundle.get("governance_findings") or []
+    critical = [f for f in findings if f.get("severity") == "critical"]
+    if critical:
+        _err(f"refusing to plan: {len(critical)} critical governance finding(s) in the fetched context")
+        return EXIT_FAIL
+
+    task = DeepAgentGitHubTask(
+        task_id=args.task_id,
+        repo=cfg.repo,
+        instruction=args.instruction,
+        issue_number=args.issue,
+        pr_number=args.pr,
+    )
+    try:
+        plan = draft_plan(task)
+        # No workspace_tools: the probe reports the real gate state rather than
+        # constructing an agent. "workspace_required" is the expected best case.
+        build = build_deepagent_github(cfg, cloud_provider=provider, config_path=args.config, cfg=app_cfg)
+    except AgenticWriteRefused as exc:
+        _err(exc.message)
+        return EXIT_REFUSED
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    print(json.dumps({
+        "task_id": task.task_id,
+        "repo": task.repo,
+        "provider": provider or cfg.deepagent_github.provider,
+        "governance_findings": findings,
+        "plan": asdict(plan),
+        "build": {
+            "created": build.created,
+            "status": build.status,
+            "reason": build.reason,
+            "subagents": list(build.subagent_names),
+            "interrupt_on": sorted(build.interrupt_on),
+        },
+    }, indent=2, default=str))
+    return EXIT_OK
+
+
 def cmd_propose_skill(args: argparse.Namespace) -> int:
     cfg = _load(args)
     if cfg is None:
@@ -235,6 +341,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_apply.add_argument("--reason", required=True, help="Human reason string (required).")
     p_apply.add_argument("--confirm", action="store_true", help="Required to actually write.")
     p_apply.set_defaults(func=cmd_apply_skill)
+
+    p_plan = sub.add_parser("deepagent-plan", help="Probe the Deep Agents harness (read-only, no writes).")
+    g_plan = p_plan.add_mutually_exclusive_group()
+    g_plan.add_argument("--pr", type=int, help="Plan against a PR's metadata + diff.")
+    g_plan.add_argument("--issue", type=int, help="Plan against an issue.")
+    g_plan.add_argument("--repo", action="store_true", help="Plan against a repo overview (default).")
+    p_plan.add_argument("--instruction", required=True, help="What the agent is being asked to do.")
+    p_plan.add_argument("--task-id", default="deepagent-plan", help="Correlation id (default: %(default)s).")
+    p_plan.add_argument("--provider", choices=("grok", "claude"), help="Drive the loop with a cloud provider.")
+    p_plan.add_argument("--confirm-online", action="store_true",
+                        help="Required with --provider: per-run confirmation before any cloud egress.")
+    p_plan.set_defaults(func=cmd_deepagent_plan)
 
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")
     p_test.set_defaults(func=cmd_test)
