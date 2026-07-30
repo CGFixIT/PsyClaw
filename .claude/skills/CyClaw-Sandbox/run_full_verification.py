@@ -14,9 +14,15 @@ Verifies:
   5. All 5 terminal console REST endpoints (soul, sync, agentic, fs, sql)
   6. Due-diligence invariants (unwired require_user_confirm, module isolation)
   7. Terminal HTML contract (5 panels, explicit provider buttons)
+  8. Harness console REST API (status, registry, sessions, soul/model
+     toggles, chat, GitHub status, harness runs) via a real FastAPI
+     TestClient -- plus rate-limit, auto-docs-disabled, and DNS-rebinding
+     checks against the live app object
+  9. Harness HTML contract (panes, API endpoints, slash commands, and an
+     XSS-safety check that the console never uses innerHTML)
 
 Usage:
-    python3 scripts/run_full_verification.py
+    python3 .claude/skills/CyClaw-Sandbox/run_full_verification.py
 
 Env:
     CYCLAW_REPO=/path/to/CyClaw  -- use existing clone instead of fresh
@@ -1064,6 +1070,221 @@ def phase_terminal_html() -> PhaseResult:
 
 
 # ---------------------------------------------------------------------------
+# Phase 10: Harness Console REST API Verification
+# ---------------------------------------------------------------------------
+def _harness_mock_transport(reply: str = "mock harness reply", prompt_tokens: int = 5, completion_tokens: int = 8):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "model": "qwen2.5:7b",
+            "choices": [{"message": {"role": "assistant", "content": reply}}],
+            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
+        })
+
+    return httpx.MockTransport(handler)
+
+
+def phase_harness_console() -> PhaseResult:
+    banner("Phase 10: Harness Console REST API Verification")
+    phase = PhaseResult("Harness Console")
+
+    # Real FastAPI TestClient, not source-text grepping like the terminal
+    # phases above -- harness/server.py has none of gate.py's heavy retrieval/
+    # graph dependencies, so building and hitting the real app is cheap and
+    # strictly more thorough than checking for endpoint string literals.
+    try:
+        from fastapi.testclient import TestClient
+        from harness.config import HarnessConfig
+        from harness.ollama import HarnessChatClient
+        from harness.server import create_app
+    except ImportError as exc:
+        log(f"  Harness console phase skipped (import error): {exc}", Y)
+        phase.checks.append(Check("harness_console_importable", False, str(exc)))
+        return phase
+
+    # Isolate the harness home so this phase never touches the operator's
+    # real ~/.CyClaw / %USERPROFILE%\.CyClaw.
+    home = Path(tempfile.mkdtemp(prefix="cyclaw-harness-sandbox-"))
+    os.environ["CYCLAW_HOME"] = str(home)
+
+    cfg = HarnessConfig.load()
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_harness_mock_transport(),
+    )
+    client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1")
+
+    log("\n  --- Status / Registry ---")
+    r = client.get("/api/status")
+    phase.checks.append(Check("harness_status_200", r.status_code == 200))
+    status_fields = ("version", "model", "provider", "base_url", "soul_enabled",
+                      "home", "repo_root", "sessions", "total_tokens", "layout")
+    phase.checks.append(Check("harness_status_fields", all(k in r.json() for k in status_fields)))
+
+    r = client.get("/api/registry")
+    reg = r.json()
+    phase.checks.append(Check("harness_registry_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_registry_shape",
+        all(isinstance(reg.get(k), list) for k in ("skills", "tools", "connectors")),
+    ))
+
+    log("  --- Sessions CRUD ---")
+    r = client.post("/api/sessions", json={"title": "sandbox check"})
+    phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
+    sid = r.json().get("session_id")
+    phase.checks.append(Check("harness_session_create_has_id", bool(sid)))
+
+    r = client.get(f"/api/sessions/{sid}")
+    phase.checks.append(Check("harness_session_get", r.status_code == 200 and r.json().get("session_id") == sid))
+
+    r = client.post(f"/api/sessions/{sid}/rename", json={"title": "renamed"})
+    phase.checks.append(Check("harness_session_rename", r.status_code == 200 and r.json().get("title") == "renamed"))
+
+    r = client.get("/api/sessions/000000000000")
+    phase.checks.append(Check("harness_session_unknown_404", r.status_code == 404))
+
+    log("  --- Soul / Model toggles ---")
+    before = client.get("/api/soul").json().get("enabled")
+    flipped = client.post("/api/soul", json={"enabled": not before}).json().get("enabled")
+    phase.checks.append(Check("harness_soul_toggle_flips", flipped == (not before)))
+    client.post("/api/soul", json={"enabled": before})  # restore
+
+    r = client.post("/api/model", json={"model": "llama3.1:8b"})
+    phase.checks.append(Check("harness_model_select", r.json().get("model") == "llama3.1:8b"))
+
+    log("  --- Chat (mocked backend) ---")
+    r = client.post("/api/chat", json={"message": "hi", "session_id": sid})
+    phase.checks.append(Check("harness_chat_200", r.status_code == 200))
+    cd = r.json()
+    phase.checks.append(Check(
+        "harness_chat_fields", all(k in cd for k in ("session_id", "reply", "model", "usage", "tally")),
+    ))
+    phase.checks.append(Check("harness_chat_reply_matches_mock", cd.get("reply") == "mock harness reply"))
+
+    log("  --- GitHub status / harness runs ---")
+    r = client.get("/api/github/status")
+    phase.checks.append(Check("harness_github_status_well_formed", isinstance(r.json(), dict)))
+
+    r = client.get("/api/harness/runs")
+    rd = r.json()
+    phase.checks.append(Check("harness_runs_shape", "runs" in rd and "count" in rd))
+
+    log("  --- Security: rate limit, auto-docs, host rebinding ---")
+    # /api/chat rate limit (per-IP, reusing utils.ratelimit.RateLimiter and
+    # config.yaml's api.rate_limit block -- same mechanism gate.py's /query
+    # uses). Read the configured ceiling rather than hardcoding it, matching
+    # this repo's "config.yaml is the single source of truth" convention.
+    try:
+        import yaml
+        rl_cfg = (yaml.safe_load(Path("config.yaml").read_text()) or {}).get("api", {}).get("rate_limit", {})
+        max_requests = int(rl_cfg.get("max_requests", 60))
+    except (OSError, ValueError):
+        max_requests = 60
+    saw_429 = False
+    for _ in range(max_requests + 5):
+        resp = client.post("/api/chat", json={"message": "spam", "session_id": sid})
+        if resp.status_code == 429:
+            saw_429 = True
+            break
+    phase.checks.append(Check(
+        "harness_chat_rate_limit_engages", saw_429,
+        f"no 429 within {max_requests + 5} requests (configured limit={max_requests})",
+    ))
+
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        r = client.get(path)
+        phase.checks.append(Check(f"harness_auto_docs_disabled_{path.strip('/').replace('.', '_')}",
+                                   r.status_code == 404))
+
+    # DNS-rebinding defense: TrustedHostMiddleware reads the Host header off
+    # base_url, so this needs its own client rather than an overridden header
+    # on the loopback one above -- mirrors tests/test_harness.py's own
+    # test_rejects_non_loopback_host_header technique exactly.
+    rebind_client = TestClient(create_app(cfg, chat), base_url="http://attacker.example")
+    r = rebind_client.get("/api/status")
+    phase.checks.append(Check("harness_trusted_host_rejects_rebinding", r.status_code == 400))
+
+    return phase
+
+
+# ---------------------------------------------------------------------------
+# Phase 11: Harness HTML Console Contract
+# ---------------------------------------------------------------------------
+def phase_harness_html() -> PhaseResult:
+    banner("Phase 11: Harness HTML Console Contract")
+    phase = PhaseResult("Harness HTML Contract")
+
+    html_path = Path("static/harness.html")
+    if not html_path.exists():
+        log("  static/harness.html not found", R)
+        phase.checks.append(Check("harness_html_exists", False))
+        return phase
+    html = html_path.read_text()
+
+    log("\n  --- Console Panes ---")
+    for name, pane_id, tab_marker in [
+        ("Commands pane", "pane-commands", "data-pane=\"commands\""),
+        ("Sessions pane", "pane-sessions", "data-pane=\"sessions\""),
+        ("Registry pane", "pane-registry", "data-pane=\"registry\""),
+    ]:
+        passed = pane_id in html and tab_marker in html
+        status = f"{G}PASS{N}" if passed else f"{R}FAIL{N}"
+        log(f"    [{status}] {name}")
+        phase.checks.append(Check(f"harness_pane_{pane_id.replace('-', '_')}", passed))
+
+    log("\n  --- Console API Endpoints ---")
+    for name, endpoint in [
+        ("status", "/api/status"),
+        ("registry", "/api/registry"),
+        ("sessions_list", "/api/sessions"),
+        ("soul", "/api/soul"),
+        ("model", "/api/model"),
+        ("chat", "/api/chat"),
+        ("github_status", "/api/github/status"),
+        ("harness_runs", "/api/harness/runs"),
+    ]:
+        found = endpoint in html
+        status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
+        log(f"    [{status}] {name} -> {endpoint}")
+        phase.checks.append(Check(f"harness_html_api_{name}", found))
+
+    log("\n  --- Slash Commands ---")
+    for cmd in ("/session", "/soul", "/model", "/skills", "/github", "/harness", "/tokens", "/status"):
+        found = f"'{cmd}" in html or f'"{cmd}' in html or f"case '{cmd.lstrip('/')}" in html
+        status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
+        log(f"    [{status}] {cmd}")
+        phase.checks.append(Check(f"harness_html_cmd_{cmd.lstrip('/')}", found))
+
+    log("\n  --- XSS Safety (untrusted model/registry output) ---")
+    # harness.html's own comment documents this invariant explicitly: model
+    # output and registry data are DATA, never HTML. innerHTML would let a
+    # skill description, a chat reply, or a session title inject markup/script
+    # into the console DOM (fable-protocol's CATEGORY-ERROR RULE: this lens
+    # applies to every generated artifact, not just "protected" surfaces).
+    no_inner_html = "innerHTML" not in html
+    log(f"    [{'PASS' if no_inner_html else 'FAIL'}] no innerHTML usage (textContent/createElement only)")
+    phase.checks.append(Check("harness_html_no_inner_html", no_inner_html))
+
+    has_text_content = "textContent" in html
+    log(f"    [{'PASS' if has_text_content else 'FAIL'}] renders via textContent")
+    phase.checks.append(Check("harness_html_uses_text_content", has_text_content))
+
+    log("\n  --- No API-Key Gating (documented threat model) ---")
+    # Unlike terminal.html, harness.html has no authHeaders()/apiKeyInput --
+    # loopback-only bind + TrustedHostMiddleware is its whole boundary
+    # (harness/server.py's own docstring). Confirming the ABSENCE of an auth
+    # affordance here checks that this is the documented posture, not a
+    # forgotten gap: a stray Authorization-header helper appearing later
+    # would mean the threat-model doc and the UI have silently diverged.
+    no_auth_affordance = "authHeaders" not in html and "apiKeyInput" not in html
+    log(f"    [{'PASS' if no_auth_affordance else 'FAIL'}] no API-key affordance (matches loopback-only threat model)")
+    phase.checks.append(Check("harness_html_no_auth_affordance", no_auth_affordance))
+
+    return phase
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -1075,6 +1296,13 @@ def main():
 
     _install_stubs()
     _ensure_repo()
+    # _ensure_repo() chdirs into the target checkout, but launching this
+    # script by path (as documented below) sets sys.path[0] to this skill's
+    # own directory, not the repo root -- every phase that imports a
+    # repo-root module (retrieval, graph, gate, agentic, harness, ...) would
+    # otherwise fail with ModuleNotFoundError regardless of cwd. Mirrors
+    # gate_runtime_check.py's identical fix for the identical reason.
+    sys.path.insert(0, os.getcwd())
     full_deps = _install_deps()
     if full_deps:
         log("Full dependencies installed successfully", G)
@@ -1092,6 +1320,8 @@ def main():
         phase_metrics_and_invariants,
         phase_terminal_consoles,
         phase_terminal_html,
+        phase_harness_console,
+        phase_harness_html,
     ]
 
     for fn in phases:
@@ -1144,6 +1374,8 @@ def main():
     print(f"Due-Diligence Invariants: {'PASS' if results[6].passed else 'FAIL'}")
     print(f"REST API surface: {'PASS' if results[7].passed else 'FAIL'}")
     print(f"Terminal HTML contract: {'PASS' if results[8].passed else 'FAIL'}")
+    print(f"Harness Console REST API: {'PASS' if results[9].passed else 'FAIL'}")
+    print(f"Harness HTML contract: {'PASS' if results[10].passed else 'FAIL'}")
     print(f"Security Invariants: {results[0].passed_count}/{len(results[0].checks)} passed")
     print(f"{'='*60}")
 

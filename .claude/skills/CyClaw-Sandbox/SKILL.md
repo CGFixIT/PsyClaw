@@ -5,20 +5,22 @@ description: >
   offline-first RAG project (github.com/CGFixIT/CyClaw). Verifies LangGraph
   routing (5 queries), triple-gated online API fallback (Grok + Claude) with
   connection-only tests (no API cost), API key redaction, due-diligence
-  invariants, and ALL terminal.html REST endpoints: /soul, /ops/sync,
-  /ops/agentic, /ops/fsconnect, /ops/sqlconnect. Use when asked to verify,
+  invariants, ALL terminal.html REST endpoints (/soul, /ops/sync,
+  /ops/agentic, /ops/fsconnect, /ops/sqlconnect), and the full harness.html
+  console REST API (status, registry, sessions, soul/model toggles, chat +
+  rate limit, GitHub status, harness runs). Use when asked to verify,
   smoke-test, validate, or test CyClaw; mentions CyClaw swarm, terminal
-  consoles, triple-gate API, Grok/Claude fallback, key redaction, due
-  diligence invariants, or running the test suite.
+  consoles, the harness console, triple-gate API, Grok/Claude fallback, key
+  redaction, due diligence invariants, or running the test suite.
 ---
 
 # CyClaw Swarm Verification
 
 Comprehensive test harness for CyClaw. Verifies the core LangGraph pipeline,
 triple-gated online API fallback (Grok + Claude), all terminal console REST
-endpoints, due-diligence invariants, API key redaction, and security
-invariants. Supports both sandbox (stub/mock) mode and full-dependency mode
-with real package installation.
+endpoints, the harness console's REST API and HTML contract, due-diligence
+invariants, API key redaction, and security invariants. Supports both sandbox
+(stub/mock) mode and full-dependency mode with real package installation.
 
 ## Core Workflow
 
@@ -33,7 +35,10 @@ Inspect: `gate.py`, `graph.py`, `config.yaml`, `pyproject.toml`,
 `llm/client.py`, `retrieval/hybrid_search.py`, `utils/personality.py`,
 `utils/ops_runner.py`, `utils/metrics.py`, `static/terminal.html`,
 `agentic/fsconnect/client.py`, `agentic/sqlconnect/client.py`,
-`schemas/api.py`, `tests/test_due_diligence_invariants.py`.
+`schemas/api.py`, `tests/test_due_diligence_invariants.py`,
+`harness/server.py`, `harness/config.py`, `harness/sessions.py`,
+`harness/schemas.py`, `harness/registry_view.py`, `static/harness.html`,
+`tests/test_harness.py`.
 
 Verify config invariants:
 - `app.mode`: "offline"
@@ -388,19 +393,90 @@ Verify `static/terminal.html` contracts:
 - `authHeaders()` + `apiKeyInput` for API key gating
 - `/health` polling for status
 
-### Phase 11 -- Unit & Integration Test Suite
+### Phase 11 -- Harness Console REST API Full Verification
+
+Verify that `harness/server.py` exposes ALL routes required by
+`static/harness.html`, on its own port (8790 by default) separate from
+`gate.py`'s :8787 -- the harness has no `chromadb`/`sentence-transformers`/
+`langgraph` dependency, so this phase builds a real FastAPI `TestClient`
+against the live app rather than grepping source text.
+
+| Endpoint | Method | Verify |
+|----------|--------|--------|
+| `/` | GET | Serves `static/harness.html`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY` |
+| `/api/status` | GET | Returns `version`, `model`, `provider`, `base_url`, `soul_enabled`, `home`, `repo_root`, `sessions`, `total_tokens`, `layout` |
+| `/api/registry` | GET | Returns `skills`, `tools`, `connectors` lists (merged repo + governed-registry + MCP + connector catalog) |
+| `/api/sessions` | GET / POST | List sessions; create returns HTTP 201 with `session_id` |
+| `/api/sessions/{id}` | GET | Session summary + `messages` (`content`/`role`/`ts`); unknown id -> 404 |
+| `/api/sessions/{id}/rename` | POST | Applies a new title; unknown id -> 404 |
+| `/api/soul` | GET / POST | Harness-local soul/memory toggle (`soul.md` itself untouched -- distinct from `gate.py`'s `/soul/*`) |
+| `/api/model` | POST | Selects and persists the active model |
+| `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend |
+| `/api/github/status` | GET | Subprocess-backed via `utils.ops_runner.run_agentic_op` (read-only, mirrors `/ops/agentic`'s delegation pattern) |
+| `/api/harness/runs` | GET | Harness-optimizer run listing, `runs` + `count` |
+
+Also verify:
+- `/docs`, `/redoc`, `/openapi.json` all return 404 (`create_app` sets
+  `docs_url`/`redoc_url`/`openapi_url=None` -- a single-operator console has
+  no reason to expose its schema)
+- `TrustedHostMiddleware` rejects a non-loopback `Host` header (DNS-rebinding
+  defense, same threat model as `gate.py`'s own protection) -- construct a
+  second `TestClient` with a non-loopback `base_url` rather than overriding a
+  header on the loopback client, matching `tests/test_harness.py`'s own
+  `test_rejects_non_loopback_host_header` technique
+- `/api/chat`'s rate limiter actually engages: hammer past the configured
+  `api.rate_limit.max_requests` ceiling (read from `config.yaml`, never
+  hardcoded) and confirm a `429` appears
+
+Isolate `CYCLAW_HOME` to a fresh temp directory before building the app so
+this phase never touches the operator's real `~/.CyClaw` /
+`%USERPROFILE%\.CyClaw`, and inject a `HarnessChatClient` backed by an
+`httpx.MockTransport` (mirroring `tests/test_harness.py`'s `_mock_transport`)
+so `/api/chat` succeeds deterministically without a live Ollama.
+
+### Phase 12 -- Harness HTML Console Contract
+
+Verify `static/harness.html` contracts:
+- All 3 sidebar panes exist (commands, sessions, registry) with their tab
+  markers (`data-pane="commands"` etc.)
+- All `/api/*` endpoints the console calls are present: `/api/status`,
+  `/api/registry`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
+  `/api/github/status`, `/api/harness/runs`
+- All documented slash commands are wired: `/session`, `/soul`, `/model`,
+  `/skills`, `/github`, `/harness`, `/tokens`, `/status`
+- **XSS safety**: no `innerHTML` usage anywhere -- the console's own comment
+  documents this invariant explicitly ("Model output and registry data are
+  DATA, never HTML"); rendering goes through `textContent` and
+  `createElement` only, since chat replies, skill descriptions, and session
+  titles are all untrusted-origin strings that must never be interpreted as
+  markup
+- **No API-key affordance**: unlike `terminal.html`'s `authHeaders()` +
+  `apiKeyInput`, `harness.html` has neither -- confirming their absence
+  checks that the loopback-only + `TrustedHostMiddleware` threat model
+  (`harness/server.py`'s own docstring) is the documented posture, not a
+  forgotten gap; a stray `Authorization`-header helper appearing later would
+  mean the UI and the threat-model doc had silently diverged
+
+### Phase 13 -- Unit & Integration Test Suite
 
 **Run order:**
 ```bash
 # 1. Built-in pytest suite (if dependencies available)
 python -m pytest tests/ -v --tb=short 2>/dev/null || echo "pytest deps missing"
 
-# 2. Smoke test (always works)
-python scripts/run_full_verification.py
+# 2. Smoke test (always works; covers gate.py's + harness's REST surfaces)
+python .claude/skills/CyClaw-Sandbox/run_full_verification.py
 
-# 3. Full integration (requires gate.py running)
+# 3. Independent runtime checks (no live server; import-time only)
+python .claude/skills/CyClaw-Sandbox/gate_runtime_check.py
+python .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
+
+# 4. Full integration (requires the respective server running)
 # CYCLAW_API_KEY=test-key python gate.py &
-# python scripts/test_terminal_consoles.py
+# python .claude/skills/CyClaw-Sandbox/test_terminal_consoles.py
+#
+# python -m harness.server &
+# python .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
 ```
 
 **Unit test patterns to verify:**
@@ -422,8 +498,9 @@ python scripts/run_full_verification.py
 | `test_telemetry_kill.py` | 10 env vars set at import time |
 | `test_due_diligence_invariants.py` | **12 invariant classes**: RAG-first, external call gates, audit convergence, soul governance, soul injection, audit privacy, sanitizer CWD, MCP no-LLM, module isolation, health embeddings, **unwired require_user_confirm** |
 | `test_terminal_contract.py` | Console endpoint existence, **explicit provider buttons** |
+| `test_harness.py` | Full harness endpoint suite over `TestClient`: config/home layout, session CRUD + corrupt-file tolerance, soul/model toggles, chat + backend fallback resolution, GitHub status delegation, harness-runs listing, console framing headers, auto-docs absence, non-loopback rebinding rejection, shutdown client-close handling |
 
-### Phase 12 -- Report
+### Phase 14 -- Report
 
 End with:
 ```
@@ -441,17 +518,23 @@ Triple-Gate Online API (Grok): [PASS/FAIL]
 Triple-Gate Online API (Claude): [PASS/FAIL]
 API Key Redaction (Grok + Claude): [PASS/FAIL]
 Due-Diligence Invariants: [X/12 passed]
+Harness Console REST API: [PASS/FAIL]
+Harness HTML Contract: [PASS/FAIL]
 Security Invariants: [X/17 passed]
 Recommendations: ...
 ```
 
 ## Bundled Resources
 
-### `scripts/run_full_verification.py`
+All scripts below live flat in this skill directory
+(`.claude/skills/CyClaw-Sandbox/`), not under a `scripts/`/`references/`
+subdirectory -- invoke them by that path.
+
+### `run_full_verification.py`
 
 Self-contained comprehensive test script with **5 queries**. Run directly:
 ```bash
-python3 scripts/run_full_verification.py
+python3 .claude/skills/CyClaw-Sandbox/run_full_verification.py
 ```
 
 What it does:
@@ -480,8 +563,37 @@ What it does:
 18. Verifies security headers middleware + TrustedHostMiddleware
 19. Verifies rate limiter is initialized with config values
 20. Verifies terminal.html contract (5 panels, 2 provider buttons)
+21. **Exercises the real harness console app** over a FastAPI `TestClient`
+    (status, registry, session CRUD, soul/model toggles, mocked chat, GitHub
+    status, harness runs) plus its rate-limit, auto-docs-disabled, and
+    DNS-rebinding checks
+22. Verifies harness.html contract (panes, API endpoints, slash commands,
+    no-innerHTML / textContent-only rendering, no API-key affordance)
 
-### `scripts/test_terminal_consoles.py`
+### `gate_runtime_check.py` / `harness_runtime_check.py`
+
+Independent, import-time-only runtime checks -- no live server, no live
+Ollama/LM Studio. Each asserts its app builds, telemetry-kill is active, the
+expected endpoints register, and the entry point is callable. Run directly:
+```bash
+python .claude/skills/CyClaw-Sandbox/gate_runtime_check.py
+python .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
+```
+
+### `terminal_emulation.py` / `harness_emulation.py`
+
+Exercise the exact HTTP fetch lifecycle each console's own JS performs,
+against an already-running server. Wired into `verify.sh` (stages 7 and 9);
+also runnable standalone:
+```bash
+python .claude/skills/CyClaw-Sandbox/terminal_emulation.py http://127.0.0.1:8787
+python .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
+```
+Pair `harness_emulation.py` with `mock_ollama.py` (below) running on
+`127.0.0.1:11434` for a deterministic `/api/chat` 200 instead of the
+documented 502 no-backend fallback.
+
+### `test_terminal_consoles.py`
 
 Integration test for terminal console REST endpoints. Requires `gate.py`
 running with `CYCLAW_API_KEY` set.
@@ -489,10 +601,35 @@ running with `CYCLAW_API_KEY` set.
 ```bash
 CYCLAW_API_KEY=test-key python gate.py &
 sleep 3
-python scripts/test_terminal_consoles.py
+python .claude/skills/CyClaw-Sandbox/test_terminal_consoles.py
 ```
 
-### `references/test-specifications.md`
+### `mock_ollama.py`
+
+Stdlib-only mock Ollama server (`/api/tags`, `/api/chat`, `/v1/models`,
+`/v1/chat/completions`) for deterministic, offline chat testing against
+either `gate.py` or the harness console -- both read
+`models.local_llm.base_url` from `config.yaml`, which defaults to this
+mock's own default bind (`127.0.0.1:11434`).
+```bash
+python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen2.5:7b
+```
+
+### `verify.sh` / `smoke.sh` / `windows-smoke.ps1`
+
+`verify.sh` is the CI-wired, full-lifecycle check (Linux): Python 3.12
+provisioning, the pytest suite, an emulated RAG query, both independent
+runtime checks, then both consoles launched live (gate.py on :8787, the
+harness on :8790, pairing `mock_ollama.py` on :11434 automatically) and
+emulated end to end. `smoke.sh` covers the broader out-of-band subsystems
+(fsconnect, sqlconnect, guardrails, Postgres backends). `windows-smoke.ps1`
+is the Windows-parity smoke bomb -- notably where the harness (Windows-first:
+`%USERPROFILE%\.CyClaw` home, PowerShell launcher) gets its own platform
+coverage; run manually against already-running servers (`-Port`/
+`-HarnessPort` params), not wired into CI (the `verify-skills` CI matrix only
+discovers `verify.sh`/`smoke.sh`, not `.ps1` files).
+
+### `test-specifications.md`
 
 Detailed test case inventory with expected inputs, outputs, and assertion
 criteria. Read when implementing new tests or debugging failures.
@@ -530,3 +667,7 @@ criteria. Read when implementing new tests or debugging failures.
 | 15 | API Key Gate | All mutations require `CYCLAW_API_KEY` (fail-closed) |
 | 16 | Rate Limit | All endpoints share per-IP rate limiter |
 | 17 | Key Redaction Parity | `ANTHROPIC_API_KEY` redacted same as `GROK_API_KEY`; `sk-ant-*` pattern in both gate.py and config.yaml |
+| 18 | Harness Loopback Only | `harness/server.py` binds only `127.0.0.1`/`localhost`/`::1`; `main()` refuses any other host |
+| 19 | Harness Module Isolation | `harness/` never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py`, and vice versa (I6; `harness` is in `OUT_OF_BAND_PKGS`) |
+| 20 | Harness Chat Rate Limit | `/api/chat` shares the same `utils.ratelimit.RateLimiter` + `config.yaml`'s `api.rate_limit` block as `gate.py`'s `/query` |
+| 21 | Harness Console XSS Safety | `static/harness.html` renders all model/registry output via `textContent`/`createElement`; no `innerHTML` |
