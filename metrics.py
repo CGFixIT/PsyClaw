@@ -4,12 +4,37 @@ Usage:
    python metrics.py
 """
 
-import json
-import math
-from collections import Counter
-from pathlib import Path
+# This process never imports gate.py, so without this it would inherit
+# whatever telemetry env the operator's shell/container/observability agent
+# happens to carry. Today's imports below (json/math/collections/pathlib/yaml)
+# pull in no telemetry-emitting library, so this is prophylactic -- but every
+# other CyClaw entry point applies the same block unconditionally rather than
+# betting on what a future edit here does or doesn't import.
+from utils.telemetry_kill import apply_telemetry_kill
 
-import yaml
+apply_telemetry_kill()
+
+import json  # noqa: E402 - must follow the telemetry kill above
+import math  # noqa: E402 - must follow the telemetry kill above
+from collections import Counter  # noqa: E402 - must follow the telemetry kill above
+from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
+
+import yaml  # noqa: E402 - must follow the telemetry kill above
+
+# Anchor config.yaml to the repo root, not the process's cwd. print_metrics's
+# default config_path="config.yaml" is a bare relative name; `cyclaw-metrics`
+# run from any directory other than the repo root previously crashed with
+# FileNotFoundError instead of finding the real config. Mirrors
+# retrieval/indexer.py::_resolve_config_path exactly -- metrics.py lives at
+# the repo root itself, so parent (not parents[1]) is the anchor.
+_REPO_ROOT = Path(__file__).resolve().parent
+
+
+def _resolve_config_path(config_path: str = "config.yaml") -> Path:
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
 
 
 def iter_events(audit_file: str):
@@ -181,7 +206,7 @@ def summarize_audit(audit_file: str) -> dict:
 
 
 def print_metrics(config_path: str = "config.yaml"):
-    with open(config_path, encoding="utf-8") as f:
+    with open(_resolve_config_path(config_path), encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     audit_file = cfg["logging"]["audit_file"]
     summary = summarize_audit(audit_file)

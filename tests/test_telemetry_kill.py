@@ -245,6 +245,9 @@ _ASSERT_KILLED = (
         "import retrieval.vector_store",
         "import agentic",
         "import guardrails",
+        "import harness.server",
+        "import metrics",
+        "import retrieval.clear_cache",
     ],
 )
 def test_kill_switch_applied_without_importing_gate(entry_import: str) -> None:
