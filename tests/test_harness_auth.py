@@ -14,10 +14,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+# Module-object import only (not `from harness.server import create_app` as well):
+# monkeypatching _rate_limit_settings needs the module, and importing the same
+# module both ways trips CodeQL's py/import-and-import-from.
 import harness.server as harness_server
 from harness.config import HarnessConfig
 from harness.ollama import HarnessChatClient
-from harness.server import create_app
 
 _KEY = "harness-auth-test-key"
 _AUTH = {"Authorization": f"Bearer {_KEY}"}
@@ -60,7 +62,7 @@ def cfg(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(cfg, monkeypatch):
     monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
-    return TestClient(create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
 
 def _call(client, method, path, body, **kwargs):
@@ -109,7 +111,7 @@ def test_open_route_needs_no_key(client, path):
 def test_unset_env_var_refuses_rather_than_opens(cfg, monkeypatch):
     """The regression this exists for: an unset key must not mean "no auth required"."""
     monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
-    c = TestClient(create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
     resp = c.post("/api/soul", json={"enabled": True}, headers=_AUTH)
     assert resp.status_code == 401
     assert resp.json()["detail"]["details"]["reason"] == "key_not_configured"
@@ -117,7 +119,7 @@ def test_unset_env_var_refuses_rather_than_opens(cfg, monkeypatch):
 
 def test_empty_env_var_is_treated_as_unset(cfg, monkeypatch):
     monkeypatch.setenv("CYCLAW_API_KEY", "")
-    c = TestClient(create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
     assert c.post("/api/soul", json={"enabled": True}).status_code == 401
 
 
@@ -155,7 +157,7 @@ def test_rate_limit_runs_before_auth(cfg, monkeypatch):
     """
     monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
     monkeypatch.setattr(harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60})
-    c = TestClient(create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
     assert c.post("/api/chat", json={"message": "one"}, headers=_AUTH).status_code == 200
     assert c.post("/api/chat", json={"message": "two"}, headers={"Authorization": "Bearer wrong"}).status_code == 429
@@ -165,7 +167,7 @@ def test_rate_limit_body_is_renderable_by_the_console(cfg, monkeypatch):
     """The 429 detail used key "error"; the console's fetch helper reads "message"."""
     monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
     monkeypatch.setattr(harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60})
-    c = TestClient(create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
     c.post("/api/chat", json={"message": "one"}, headers=_AUTH)
     detail = c.post("/api/chat", json={"message": "two"}, headers=_AUTH).json()["detail"]
@@ -231,13 +233,14 @@ def test_matches_gate_auth_semantics():
     gate.py itself. This asserts the two cannot drift on the properties that
     matter: same env var, constant-time comparison, fail-closed on unset.
     """
-    import inspect
     import pathlib
 
-    import utils.auth
-
-    src = inspect.getsource(utils.auth)
-    gate_src = (pathlib.Path(__file__).resolve().parents[1] / "gate.py").read_text(encoding="utf-8")
+    root = pathlib.Path(__file__).resolve().parents[1]
+    # Read both as TEXT rather than importing utils.auth: the file is already
+    # imported via `from utils.auth import require_api_key` elsewhere in this
+    # module, and importing it a second way trips CodeQL's py/import-and-import-from.
+    src = (root / "utils" / "auth.py").read_text(encoding="utf-8")
+    gate_src = (root / "gate.py").read_text(encoding="utf-8")
 
     for module_src in (src, gate_src):
         assert "CYCLAW_API_KEY" in module_src
