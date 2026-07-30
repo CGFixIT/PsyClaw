@@ -80,6 +80,60 @@ def test_atomic_write_closes_fd_when_fdopen_fails(tmp_path, monkeypatch):
     assert _staged(tmp_path) == []
 
 
+def test_atomic_write_closes_fd_exactly_once_on_success(tmp_path):
+    """The descriptor is closed once by the finally, never by the file object.
+
+    _write_and_replace opens with closefd=False so ownership of mkstemp's raw
+    descriptor stays in one place for every exit path. Two owners is the actual
+    hazard: if os.fdopen fails *after* building the underlying FileIO, CPython's
+    unwinding closes the fd itself, and a compensating close in an except block
+    then either raises EBADF over the original exception or -- in this threaded
+    process -- closes a descriptor another thread has since been handed at the
+    same number. This pins the success path; the double-close path is unreachable
+    from Python because io.open instantiates the C TextIOWrapper type directly and
+    cannot be monkeypatched.
+    """
+    closed: list[int] = []
+    real_close = os.close
+
+    def _spy(fd):
+        closed.append(fd)
+        return real_close(fd)
+
+    target = tmp_path / "config.json"
+    original = os.close
+    os.close = _spy
+    try:
+        _atomic_write_json(target, {"soul_enabled": True})
+    finally:
+        os.close = original
+
+    assert len(closed) == 1, f"descriptor closed {len(closed)} times, expected exactly 1"
+    assert json.loads(target.read_text(encoding="utf-8")) == {"soul_enabled": True}
+    assert _staged(tmp_path) == []
+
+
+def test_atomic_write_closes_fd_exactly_once_when_json_fails(tmp_path):
+    """Same single-close guarantee when the write itself raises."""
+    closed: list[int] = []
+    real_close = os.close
+
+    def _spy(fd):
+        closed.append(fd)
+        return real_close(fd)
+
+    original = os.close
+    os.close = _spy
+    try:
+        with pytest.raises(TypeError):
+            _atomic_write_json(tmp_path / "config.json", {"bad": object()})
+    finally:
+        os.close = original
+
+    assert len(closed) == 1, f"descriptor closed {len(closed)} times, expected exactly 1"
+    assert _staged(tmp_path) == []
+
+
 def test_session_write_maps_serialization_failure_to_typed_error(tmp_path, monkeypatch):
     """SessionStore._write must surface a persist failure as SessionStoreError.
 

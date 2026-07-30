@@ -76,18 +76,28 @@ def _load_json(path: Path) -> dict:
 
 
 def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
-    # mkstemp hands back a RAW descriptor. os.fdopen is what transfers ownership
-    # of it to a file object that will close it; if fdopen itself raises -- EMFILE
-    # / ENFILE, i.e. exactly the fd-exhaustion case where leaking one more is
-    # worst -- nothing else ever closes fd. Close it here before re-raising.
+    # mkstemp hands back a RAW descriptor, and ownership of it has to be
+    # unambiguous. The obvious shape -- let os.fdopen take it, and compensate with
+    # os.close in an except -- is wrong in both directions:
+    #
+    #   * If fdopen fails EARLY (EMFILE/ENFILE, the fd-exhaustion case where
+    #     leaking one more descriptor hurts most) it never took ownership, so
+    #     without a close the fd leaks.
+    #   * If fdopen fails LATE -- it built the FileIO, then raised constructing the
+    #     buffering/text wrapper (MemoryError, an interrupt) -- CPython's own
+    #     unwinding has already closed the fd. A compensating close then raises
+    #     EBADF, masking the original exception; worse, in this threaded process
+    #     another thread may already have been handed that same descriptor number,
+    #     so the second close would land on ITS file.
+    #
+    # closefd=False keeps ownership here for every path, so the descriptor is
+    # closed exactly once, in the finally, and never by the file object.
     try:
-        stream = os.fdopen(fd, "w", encoding=_UTF8)
-    except BaseException:
+        with os.fdopen(fd, "w", encoding=_UTF8, closefd=False) as stream:
+            json.dump(payload, stream, indent=2)
+        os.replace(staged, path)
+    finally:
         os.close(fd)
-        raise
-    with stream:
-        json.dump(payload, stream, indent=2)
-    os.replace(staged, path)
 
 
 def _discard_staged(staged: str) -> None:
