@@ -104,6 +104,24 @@ class TestAuditIntegrity:
         assert "query" not in summary
 
 
+class TestResolveConfigPath:
+    """cwd-independence for print_metrics's default config_path="config.yaml".
+
+    Regression: print_metrics previously did open(config_path, ...) directly,
+    resolving a relative path against the process cwd -- ``cyclaw-metrics`` run
+    from anywhere but the repo root crashed with FileNotFoundError instead of
+    finding the real config. Mirrors retrieval/indexer.py::_resolve_config_path
+    (same anchoring) and tests/test_logger.py::TestAnchor (same test shape).
+    """
+
+    def test_relative_path_anchored_to_repo_root(self):
+        assert metrics._resolve_config_path("config.yaml") == (metrics._REPO_ROOT / "config.yaml").resolve()
+
+    def test_absolute_path_passed_through(self, tmp_path):
+        absolute = tmp_path / "config.yaml"
+        assert metrics._resolve_config_path(str(absolute)) == absolute.resolve()
+
+
 class TestPrintMetrics:
     def test_no_events_message(self, tmp_path, capsys):
         audit_file = _write_audit(tmp_path, [])
@@ -303,14 +321,22 @@ class TestMain:
         assert len(calls) == 1
 
     def test_main_runs_end_to_end_with_default_config(self, tmp_path, monkeypatch, capsys):
-        """``main()`` takes no args and reads ``config.yaml`` from the CWD;
-        run it for real against a temp corpus to prove the wiring holds."""
+        """``main()`` takes no args and reads ``config.yaml`` anchored to the repo
+        root, not the process cwd; run it for real against a temp corpus to prove
+        the wiring holds. ``_REPO_ROOT`` is monkeypatched to ``tmp_path`` (mirroring
+        ``tests/test_logger.py``'s identical pattern) so this stays isolated from
+        the real repo config instead of coupling the test to its contents."""
         audit_file = _write_audit(
             tmp_path, [{"event": "rag_query", "top_score": 0.42, "retrieval_mode": "hybrid"}]
         )
         with open(tmp_path / "config.yaml", "w", encoding="utf-8") as f:
             yaml.dump({"logging": {"audit_file": audit_file}}, f)
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(metrics, "_REPO_ROOT", tmp_path)
+        # A foreign cwd (not tmp_path/_REPO_ROOT) proves resolution is genuinely
+        # cwd-independent, not just accidentally correct because cwd == _REPO_ROOT.
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
         metrics.main()
         out = capsys.readouterr().out
         assert "Total events: 1" in out
