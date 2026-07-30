@@ -48,9 +48,41 @@ jobs:
         path: |
           /home/runner/miniconda3/envs/cyclaw
           /home/runner/miniconda3/pkgs
-        key: conda-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
+        # The -v2 segment is a cache GENERATION marker, present in both the key
+        # and the restore-keys prefix. On 2026-07-30 every PR in the repo started
+        # failing here with:
+        #
+        #   ImportError: cannot import name 'get_runnable_pip'
+        #       from 'pip._internal.utils.misc'
+        #
+        # i.e. a site-packages whose pip/_internal/build_env/installer.py and
+        # pip/_internal/utils/misc.py came from DIFFERENT pip versions (pip 26.2
+        # landed that morning). Because restore-keys matched on the bare
+        # conda-<os>-<py>- prefix, every subsequent run -- on every branch, and on
+        # main -- restored that same broken env, so re-running never recovered.
+        # Bumping the generation is what actually evicts it: the poisoned entries
+        # only match the old prefix, so they can never be selected again.
+        key: conda-${{ runner.os }}-${{ matrix.python-version }}-v2-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
         restore-keys: |
-          conda-${{ runner.os }}-${{ matrix.python-version }}-
+          conda-${{ runner.os }}-${{ matrix.python-version }}-v2-
+
+    - name: Pin pip in the conda env (matches ci.yml's exact pin)
+      shell: bash -l {0}
+      run: |
+        # Root cause of the cache poisoning above: this workflow was the only one
+        # that never pinned pip, so the env drifted onto whatever pip PyPI shipped
+        # next and a partial upgrade could leave it unimportable. ci.yml pins
+        # pip==26.1.2 in every job for exactly this reproducibility reason; match it.
+        #
+        # ensurepip runs first as a self-heal: if a restored env ever does carry a
+        # half-upgraded pip, `python -m pip` itself raises on import, so pip cannot
+        # be used to repair pip. ensurepip reinstalls a coherent one from the
+        # stdlib bundle without importing the broken copy. It is a no-op on a
+        # healthy env, and '|| true' keeps a conda python that ships without the
+        # ensurepip bundle from failing the job before the pin below gets its turn.
+        python -m ensurepip --upgrade || true
+        python -m pip install --upgrade "pip==26.1.2"
+        python -m pip --version
 
     - name: Install CyClaw in editable mode + test extras
       shell: bash -l {0}
