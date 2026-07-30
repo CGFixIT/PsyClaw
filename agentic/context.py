@@ -6,16 +6,121 @@ are pure reads -- nothing here mutates GitHub state, and the module is never
 imported by the request path.
 
 Each underlying ``run_read`` call already emits its own audit event, so these
-wrappers do not double-log; they only shape the returned data.
+wrappers do not re-log the read itself; they shape the returned data and add one
+further event per injection finding (see ``_injection_findings``).
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from agentic.config import AgenticConfig
 from agentic.gh_client import DEFAULT_MIN_GH, run_read
+from guardrails.rails import (
+    build_injection_pattern_sources,
+    compile_injection_patterns,
+    scan_injection_patterns,
+)
 from utils.errors import AgenticError
+from utils.logger import _get_config, audit_log
 
 _DEFAULT_LIST_LIMIT = 10
+
+# Codes for the findings attached to every context bundle. Stable strings: a
+# downstream consumer keys on them, and metrics.py aggregates by event+code.
+INJECTION_FINDING_CODE = "github_content_injection_pattern"
+SCANNER_UNAVAILABLE_CODE = "github_content_scanner_unavailable"
+
+
+def _injection_findings(
+    app_cfg: dict | None,
+    repo: str,
+    number: int | None,
+    fields: Sequence[tuple[str, object]],
+) -> list[dict]:
+    """Scan GitHub-sourced text for injection shapes. Advisory: never raises, never blocks.
+
+    Everything ``gh`` returns is third-party text -- a PR body, an issue comment, a
+    diff -- authored by anyone who can open one. Until now it crossed into CyClaw
+    unscanned, because the only injection scanners in this package run over
+    *locally authored* text (``agentic.registry``, ``agentic.harness_optimizer
+    .governance``). That is fine while a human reads the JSON, and stops being fine
+    the moment a planner consumes it.
+
+    Findings are metadata, not a gate. Severity is always ``"warning"``, never the
+    ``"critical"`` string the harness optimizer's acceptance gate hard-rejects on:
+    this is text CyClaw is *reading*, so a PR that merely discusses prompt
+    injection must still be fetchable. The layer that feeds a bundle to a model is
+    the one that decides to refuse -- and after this it cannot claim it was not
+    told.
+
+    The pattern union is the shared ``guardrails.rails`` one, so this scanner
+    cannot drift from the registry, fsconnect, and harness-optimizer scanners.
+    ``app_cfg`` defaults to the on-disk config (``lru_cache``-backed) rather than
+    ``{}`` so an omitted argument does not silently narrow the set to the OWASP
+    baseline and drop every operator-configured ``banned_patterns`` entry.
+    """
+    cfg = app_cfg if app_cfg is not None else _get_config()
+    compiled = compile_injection_patterns(tuple(build_injection_pattern_sources(cfg)))
+
+    findings: list[dict] = []
+    if not compiled:
+        # The registry refuses to construct on an empty pattern set because its
+        # scan is an enforced write gate. This one is a read path, and refusing to
+        # show a PR because an operator's regex has a typo is worse than showing
+        # it. So reads stay available -- but an empty set makes the scan a silent
+        # no-op, which is precisely the failure that would go unnoticed, so the
+        # bundle says so out loud instead.
+        findings.append({"severity": "warning", "code": SCANNER_UNAVAILABLE_CODE, "field": None, "patterns": []})
+
+    for field, value in fields:
+        if not isinstance(value, str) or not value:
+            continue
+        matched = scan_injection_patterns(value, compiled)
+        if matched:
+            # scan_injection_patterns returns the pattern SOURCES, not match
+            # objects, so a finding names which rule fired without echoing the
+            # attacker-controlled text that fired it.
+            findings.append(
+                {"severity": "warning", "code": INJECTION_FINDING_CODE, "field": field, "patterns": matched}
+            )
+
+    for finding in findings:
+        audit_log(
+            {
+                "event": "agentic_context_injection_finding",
+                "repo": repo,
+                "number": number,
+                "field": finding["field"],
+                "code": finding["code"],
+                "patterns": finding["patterns"],
+            },
+            cfg=cfg,
+        )
+    return findings
+
+
+def _text_fields(obj: object, prefix: str, keys: Sequence[str]) -> list[tuple[str, object]]:
+    """Pull ``keys`` off a gh JSON object as ``(dotted_field_name, value)`` pairs.
+
+    Tolerant by design: ``gh`` returns ``null`` for an absent body and this must
+    never turn a successful read into an exception.
+    """
+    if not isinstance(obj, dict):
+        return []
+    return [(f"{prefix}.{key}", obj.get(key)) for key in keys]
+
+
+def _shortlist_title_fields(shortlist: dict, prefix: str) -> list[tuple[str, object]]:
+    """Pull the titles out of a ``_list_with_more`` shortlist for scanning.
+
+    Only titles: the list ``--json`` field sets carry no bodies (see ``_PR_LIST_FIELDS``
+    in gh_client), and a title is attacker-controlled the same as a body is.
+    """
+    fields: list[tuple[str, object]] = []
+    for i, item in enumerate(shortlist.get("items") or []):
+        fields.extend(_text_fields(item, f"{prefix}[{i}]", ("title",)))
+    return fields
 
 
 def _guard_read_op(cfg: AgenticConfig, op: str) -> None:
@@ -59,24 +164,43 @@ def _list_with_more(cfg: AgenticConfig, op: str, limit: int = _DEFAULT_LIST_LIMI
     return {"items": trimmed, "count": len(trimmed), "has_more": has_more}
 
 
-def fetch_pr_context(cfg: AgenticConfig, number: int, *, include_diff: bool = True) -> dict:
-    """Return a PR's metadata and (optionally) its diff as one bundle."""
+def fetch_pr_context(
+    cfg: AgenticConfig, number: int, *, include_diff: bool = True, app_cfg: dict | None = None
+) -> dict:
+    """Return a PR's metadata and (optionally) its diff as one bundle.
+
+    *app_cfg* is the full application config dict (the ``banned_patterns`` source
+    for the injection scan); it defaults to the on-disk config.
+    """
     _guard_read_op(cfg, "pr_view")
     bundle: dict = {"repo": cfg.repo, "number": number}
-    bundle["pr"] = _read(cfg, "pr_view", number=number)["data"]
+    pr = _read(cfg, "pr_view", number=number)["data"]
+    bundle["pr"] = pr
+    fields = _text_fields(pr, "pr", ("title", "body"))
     if include_diff:
         _guard_read_op(cfg, "pr_diff")
-        bundle["diff"] = _read(cfg, "pr_diff", number=number)["diff"]
+        diff = _read(cfg, "pr_diff", number=number)["diff"]
+        bundle["diff"] = diff
+        fields.append(("diff", diff))
+    bundle["governance_findings"] = _injection_findings(app_cfg, cfg.repo, number, fields)
     return bundle
 
 
-def fetch_issue_context(cfg: AgenticConfig, number: int) -> dict:
-    """Return an issue's metadata bundle."""
+def fetch_issue_context(cfg: AgenticConfig, number: int, *, app_cfg: dict | None = None) -> dict:
+    """Return an issue's metadata bundle. See :func:`fetch_pr_context` for *app_cfg*."""
     _guard_read_op(cfg, "issue_view")
+    issue = _read(cfg, "issue_view", number=number)["data"]
+    fields = _text_fields(issue, "issue", ("title", "body"))
+    # issue_view requests a `comments` field, so comment bodies arrive in the same
+    # payload and are just as attacker-authored as the issue body itself.
+    if isinstance(issue, dict):
+        for i, comment in enumerate(issue.get("comments") or []):
+            fields.extend(_text_fields(comment, f"issue.comments[{i}]", ("body",)))
     return {
         "repo": cfg.repo,
         "number": number,
-        "issue": _read(cfg, "issue_view", number=number)["data"],
+        "issue": issue,
+        "governance_findings": _injection_findings(app_cfg, cfg.repo, number, fields),
     }
 
 
@@ -104,6 +228,7 @@ def fetch_repo_context(
     *,
     max_prs: int = _DEFAULT_LIST_LIMIT,
     max_issues: int = _DEFAULT_LIST_LIMIT,
+    app_cfg: dict | None = None,
 ) -> dict:
     """Return a repo overview plus a shortlist of open PRs and issues.
 
@@ -114,16 +239,23 @@ def fetch_repo_context(
     """
     _guard_read_op(cfg, "repo_view")
     bundle: dict = {"repo": cfg.repo}
-    bundle["overview"] = _read(cfg, "repo_view")["data"]
+    overview = _read(cfg, "repo_view")["data"]
+    bundle["overview"] = overview
+    fields = _text_fields(overview, "overview", ("description",))
     if "pr_list" in cfg.allowed_read_ops:
         bundle["open_prs"] = _list_with_more(cfg, "pr_list", limit=max_prs)
+        fields.extend(_shortlist_title_fields(bundle["open_prs"], "open_prs"))
     if "issue_list" in cfg.allowed_read_ops:
         bundle["open_issues"] = _list_with_more(cfg, "issue_list", limit=max_issues)
+        fields.extend(_shortlist_title_fields(bundle["open_issues"], "open_issues"))
+    bundle["governance_findings"] = _injection_findings(app_cfg, cfg.repo, None, fields)
     return bundle
 
 
 __all__ = [
     "DEFAULT_MIN_GH",
+    "INJECTION_FINDING_CODE",
+    "SCANNER_UNAVAILABLE_CODE",
     "fetch_issue_context",
     "fetch_issue_list",
     "fetch_pr_context",

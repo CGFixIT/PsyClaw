@@ -112,13 +112,16 @@ def cmd_context(args: argparse.Namespace) -> int:
         return _disabled_noop()
 
     from agentic import context
+    # Pass the full config so the injection scan over GitHub-sourced text sees the
+    # operator's banned_patterns, not just the OWASP baseline.
+    app_cfg = _get_config(args.config)
     try:
         if args.pr is not None:
-            bundle = context.fetch_pr_context(cfg, args.pr, include_diff=not args.no_diff)
+            bundle = context.fetch_pr_context(cfg, args.pr, include_diff=not args.no_diff, app_cfg=app_cfg)
         elif args.issue is not None:
-            bundle = context.fetch_issue_context(cfg, args.issue)
+            bundle = context.fetch_issue_context(cfg, args.issue, app_cfg=app_cfg)
         else:
-            bundle = context.fetch_repo_context(cfg)
+            bundle = context.fetch_repo_context(cfg, app_cfg=app_cfg)
     except (GhNotInstalledError, GhVersionError) as exc:
         _err(exc.message)
         return EXIT_ENV
