@@ -22,6 +22,7 @@
 - [Architecture](#architecture)
 - [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
 - [Quick Start](#quick-start)
+- [Full Setup Guide](setup-guide.md)
 - [Project Structure](#project-structure)
 - [Dropbox Corpus Sync](#dropbox-corpus-sync)
 - [Agentic Layer](#agentic-layer-v160)
@@ -343,10 +344,14 @@ pip install -r requirements.txt -c constraints.txt
 ### Required local prep
 
 ```bash
-mkdir -p data/personality index logs
-printf '# Soul\n' > data/personality/soul.md
+mkdir -p index logs   # optional — gate.py/the retriever/logger self-create these on first run
 export GROK_API_KEY=dummy
 ```
+
+`data/personality/soul.md` ships committed to git with CyClaw's real
+personality already in place — do not recreate it from a placeholder on a
+fresh clone. If it's ever deleted, `PersonalityManager` self-heals with a
+generic default, but that's a recovery path, not the normal first-run state.
 
 ### Run
 
@@ -437,7 +442,8 @@ CyClaw/
 │   ├── logger.py
 │   ├── personality.py
 │   ├── health.py
-│   └── ratelimit.py
+│   ├── ratelimit.py
+│   └── telemetry_kill.py       # shared kill block — applied by gate.py, mcp_hybrid_server.py, retrieval/vector_store.py
 ├── tests/
 ├── docs/
 ├── static/
@@ -576,7 +582,7 @@ fsconnect:
 
 ### `agentic/sqlconnect/` — read-only SQL connector (v0.1 scaffold)
 
-A disabled-by-default scaffold for read-only on-prem SQL (Postgres / MSSQL). Read-only is enforced three ways: a **SELECT/WITH-only query guard** (rejects DDL/DML, stacked statements, and comment-hidden keywords by scanning a quote-stripped copy), a **session-level read-only** transaction, and a hard `allow_write: false`. The DSN is read from an **environment variable only** (`CYCLAW_SQL_DSN`), never hardcoded; drivers (`psycopg` / `pyodbc`) are imported lazily.
+A disabled-by-default scaffold for read-only on-prem SQL (Postgres / MSSQL). Read-only is enforced three ways: a **SELECT/WITH-only query guard** (rejects DDL/DML, stacked statements, and comment-hidden keywords by scanning a quote-stripped copy), a **session-level read-only** transaction, and a hard `allow_write: false`. The DSN is read from an **environment variable only** (`CYCLAW_SQL_DSN`), never hardcoded; drivers (`psycopg` / `pyodbc`) are imported lazily. The quote-stripping scan (layer 1) is a single left-to-right pass that gives `'...'`, `"..."`, `[...]`, and Postgres `$tag$...$tag$` quoting the same precedence the database itself gives them — an earlier regex-alternation version could be fooled by a quote character nested inside a different quoting form (e.g. `$$'$$`) into treating a stacked `DROP` as part of one `SELECT`; layers 2 and 3 were never affected.
 
 ```bash
 python -m agentic.sqlconnect.cli status
@@ -693,9 +699,12 @@ shipped as the strictly out-of-band `harness/` package (merged 2026-07-22). Like
   token counts; sessions persist as human-inspectable JSON with atomic writes.
 - **Reuse, not duplication:** GitHub actions go through the same
   `utils.ops_runner` subprocess shim as `/ops/agentic` (read mode by default);
-  the skills/tools/connectors panes are read-only registry views; the system
-  prompt is composed from the repo's own `ponytail` + `karpathy-guidelines`
-  skills, with the governed soul appended read-only when enabled.
+  the skills/tools/connectors panes are read-only registry views — including
+  the governed `data/agentic/skills_registry.json` catalog alongside the
+  repo's own filesystem skills — composed by `harness/registry_view.py`; the
+  system prompt is composed from the repo's own `ponytail` +
+  `karpathy-guidelines` skills, with the governed soul appended read-only when
+  enabled.
 
 Full setup, slash-command reference, home layout, and security posture:
 [`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md).

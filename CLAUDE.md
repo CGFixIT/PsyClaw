@@ -246,7 +246,10 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   `_load_model` sets both, but only after `_model_offline_eligible` confirms
   the model is already on disk via `huggingface_hub.try_to_load_from_cache`
   (network-free) — never unconditionally, and never by clearing an operator's
-  own stricter choice if they sourced the `.env` file by hand.
+  own stricter choice if they sourced the `.env` file by hand. The env vars
+  alone do NOT enforce this in-process (the probe's own `huggingface_hub`
+  import latches the offline constant before the vars are set) — the actual
+  gate is `local_files_only=eligible` passed to `SentenceTransformer(...)`.
 - **Trap:** treating ONNX Runtime's `ORT_TELEMETRY_OPT_OUT` env var as a real
   kill switch. **Rule:** it isn't read by onnxruntime at all (verified by
   grepping the installed package — zero references). ORT's actual telemetry
@@ -580,6 +583,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |
+| `/OTel-Hardening` | check + task | Re-verify telemetry-kill switches (`utils/telemetry_kill.py`, the conditional HF Hub wiring) against a static baseline plus a live vendor-doc sweep; propose/apply additive fixes when a vendor's telemetry contract drifted | Yes (stdlib) for the static half; live sweep needs network |
 
 ### Operational & workflow skills
 

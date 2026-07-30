@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
-OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails")
+OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness")
 # The full documented graph shape (CLAUDE.md's "9-node LangGraph topology").
 # I1/I2 previously checked only that specific expected edges/sources were
 # PRESENT (membership), never that the graph declares nothing else -- an
