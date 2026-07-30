@@ -95,6 +95,35 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: zizmor --gh-token "$GH_TOKEN" --min-severity=high .github/workflows/
 
+  invariant-guard:
+    name: invariant-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Run invariant-guard (blocking)
+        # Static AST check over gate.py/gate_ops.py/graph.py/mcp_hybrid_server.py
+        # -- stdlib-only, no torch/chromadb install needed (PyYAML is optional;
+        # the script degrades to a text scan for G3 when it's absent), so this
+        # is a fast, non-flaky gate that belongs beside workflow-lint above,
+        # not inside the verify-skills matrix below. That matrix also runs
+        # invariant-guard's verify.sh, but the whole matrix job carries
+        # `continue-on-error: true` for genuinely flaky app-runtime e2e smokes
+        # (index build + live uvicorn) -- invariant-guard shared that
+        # non-blocking umbrella by accident, not by design, and was never a
+        # real gate on the six invariants it exists to enforce.
+        run: python3 .claude/skills/invariant-guard/check_invariants.py
+
   dependency-review:
     name: dependency-review
     if: github.event_name == 'pull_request'

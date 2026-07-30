@@ -109,12 +109,19 @@ scan**:
   newest `soul_versions` row, the on-disk content is adopted verbatim (a
   `DRIFT_RECOVERY` version row + `soul_drift_detected` audit event are recorded).
 - **`reload()`** (`POST /soul/reload`): re-reads and adopts `soul.md` verbatim.
+- **`harness/prompts.py::compose_system_prompt`**: reads `data/personality/soul.md`
+  directly from disk, bypassing `PersonalityManager` entirely — no scan, no
+  `_bounded_soul` truncation logic, no drift row, no `soul_drift_detected` audit
+  event, and it does not go through `get_system_prompt_additive()` at all (the
+  sentence below predates this consumer). It injects the raw text into the
+  harness console's system prompt for every chat turn when soul mode is enabled.
 
 The adopted text is prepended to every local-LLM and offline prompt via
-`get_system_prompt_additive()`. So a soul edited out-of-band (editor, restore, drift)
-is trusted with no scan. Under the single-operator threat model this is acceptable —
-but do not describe the soul as "always guarded by the query-path banned list"; that
-is true only for `POST /soul/apply`.
+`get_system_prompt_additive()` — except the harness path above, which reads the
+file directly. So a soul edited out-of-band (editor, restore, drift) is trusted
+with no scan, by any of the three consumers. Under the single-operator threat
+model this is acceptable — but do not describe the soul as "always guarded by
+the query-path banned list"; that is true only for `POST /soul/apply`.
 
 **If you intend to add scanning to the reload/drift path** (a legitimate hardening):
 update `test_reload_adopts_soul_without_scanning__scan_is_write_path_only` and this
