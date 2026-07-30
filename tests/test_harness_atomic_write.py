@@ -134,6 +134,43 @@ def test_atomic_write_closes_fd_exactly_once_when_json_fails(tmp_path):
     assert _staged(tmp_path) == []
 
 
+def test_fd_is_closed_before_the_rename(tmp_path, monkeypatch):
+    """The descriptor must not still be open when os.replace runs.
+
+    Windows refuses to rename a file that has an open handle
+    (PermissionError WinError 32), so an ordering regression here breaks every
+    harness config write on that platform while passing silently on POSIX. This
+    asserts the ordering directly -- via os.fstat on the captured descriptor at
+    replace time -- so the Linux leg catches it too, rather than leaving it to
+    the Windows matrix leg to discover.
+    """
+    import tempfile as tempfile_mod
+
+    captured: list[int] = []
+    real_mkstemp = tempfile_mod.mkstemp
+    real_replace = os.replace
+    still_open: list[bool] = []
+
+    def _spy_mkstemp(*args, **kwargs):
+        fd, name = real_mkstemp(*args, **kwargs)
+        captured.append(fd)
+        return fd, name
+
+    def _spy_replace(src, dst):
+        try:
+            os.fstat(captured[0])
+            still_open.append(True)
+        except OSError:
+            still_open.append(False)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(tempfile_mod, "mkstemp", _spy_mkstemp)
+    monkeypatch.setattr(os, "replace", _spy_replace)
+    _atomic_write_json(tmp_path / "config.json", {"soul_enabled": True})
+
+    assert still_open == [False], "fd was still open at os.replace -- breaks on Windows"
+
+
 def test_session_write_maps_serialization_failure_to_typed_error(tmp_path, monkeypatch):
     """SessionStore._write must surface a persist failure as SessionStoreError.
 

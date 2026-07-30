@@ -97,7 +97,12 @@ def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
         fd_owner.callback(os.close, fd)
         with os.fdopen(fd, "w", encoding=_UTF8, closefd=False) as stream:
             json.dump(payload, stream, indent=2)
-        os.replace(staged, path)
+    # ORDER IS LOAD-BEARING: os.replace sits OUTSIDE the ExitStack, so the
+    # descriptor is already closed by the time it runs. Windows refuses to rename
+    # a file that still has an open handle (PermissionError WinError 32), so
+    # holding the fd across the replace breaks every harness config write on that
+    # platform -- it does not merely leak a descriptor.
+    os.replace(staged, path)
 
 
 def _discard_staged(staged: str) -> None:
