@@ -41,10 +41,57 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # (UPDLOCK)``). On a connector whose contract is read-only that is an
 # availability risk (blocking other writers/readers), so the hints are
 # forbidden even though the statement itself only reads.
+#
+# The ``pg_``/``lo_``/``dblink`` group extends that same reasoning one step. Every
+# name there is read-only *from the database's point of view*, so none of the
+# gates above stop it: the statement is a single SELECT, starts with SELECT, has
+# no stacked separator, and the read-only session happily executes it. What they
+# reach is OUTSIDE the database:
+#
+#   * ``pg_read_*`` (``pg_read_file``, ``pg_read_binary_file``), ``pg_ls_*``
+#     (``pg_ls_dir``, ``pg_ls_waldir``, ...), ``pg_stat_file``, and the
+#     large-object ``lo_import`` / ``lo_export`` read (or write) the DB HOST's
+#     filesystem -- a file-disclosure primitive dressed as a SELECT. The
+#     prefixes are wildcarded because the family keeps growing; ``pg_stat_file``
+#     is spelled out rather than ``pg_stat_\w+`` so the harmless catalog views
+#     (``pg_stat_activity`` and friends) stay readable. ``lo_get``/``lo_put`` are
+#     likewise left alone -- they move bytes within the database, not to disk.
+#   * ``dblink*`` opens an outbound connection from the DB host: SSRF plus a
+#     second session this connector's read-only enforcement never touches.
+#   * ``pg_sleep`` (and the ``pg_terminate_backend``/``pg_cancel_backend`` pair)
+#     is the availability argument the MSSQL lock hints above are already
+#     blocked for, one line over.
+#
+# All of these need superuser or an installed extension, so on a correctly
+# provisioned read-only role they fail anyway -- this is defense in depth for the
+# case where the DSN points at an over-privileged account, which is exactly the
+# case a read-only connector exists to contain. ``\w*`` on the prefixes catches
+# the family members (``dblink_connect``, ``dblink_send_query``) that a bare
+# ``\b`` would let through, since ``_`` is a word character.
 _FORBIDDEN_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|"
     r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback|"
     r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable)\b",
+    re.IGNORECASE,
+)
+
+# The side-effect FUNCTION names are scanned separately, against a copy that keeps
+# quoted-identifier text (see _strip_quoted's keep_identifiers). They cannot share
+# _FORBIDDEN_RE's scan: that one reads a copy with every quoted region blanked, so
+# `SELECT "pg_sleep"(600)` and `SELECT pg_catalog."pg_read_file"('/etc/passwd')`
+# slipped straight through -- Postgres folds unquoted identifiers to lower case, so
+# a lower-case quoted identifier resolves to the very same built-in.
+#
+# The split is the point, not an implementation detail. _FORBIDDEN_RE's members are
+# STATEMENT keywords, and a quoted identifier can never be one: `SELECT "delete"
+# FROM t` is a column named delete, which is exactly why quoted regions are blanked
+# for that scan. The names below are FUNCTIONS, and a function name written as a
+# quoted identifier is still a call. Same text, opposite meaning, so they need
+# opposite treatment.
+_FORBIDDEN_FN_RE = re.compile(
+    r"\b(pg_read_\w+|pg_ls_\w+|pg_stat_file|"
+    r"lo_import|lo_export|dblink\w*|pg_sleep|"
+    r"pg_terminate_backend|pg_cancel_backend)\b",
     re.IGNORECASE,
 )
 
@@ -132,7 +179,7 @@ def _is_escape_string_prefix(emitted: list[str]) -> bool:
     return len(emitted) < 2 or emitted[-2] not in _IDENT_CHARS
 
 
-def _strip_quoted(sql: str) -> str:
+def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
     """Blank out every quoted region so the structural guards scan only real SQL.
 
     Each region collapses to a single space, preserving token boundaries.
@@ -140,6 +187,14 @@ def _strip_quoted(sql: str) -> str:
     identifiers and Postgres dollar-quoting in one left-to-right pass, so no
     quoting form can hide a statement separator or a forbidden keyword inside
     another. Unterminated regions raise rather than swallow the remainder.
+
+    ``keep_identifiers`` emits the *contents* of identifier quoting (``"..."``,
+    ``[...]``) instead of blanking it, while STRING literals (``'...'``,
+    ``$tag$...$tag$``) are still blanked. Only ``_FORBIDDEN_FN_RE`` reads that
+    variant -- see its comment for why a quoted function name must stay visible
+    while a quoted column name must not. The structural checks (``;``, comments)
+    and ``_FORBIDDEN_RE`` keep reading the fully-blanked copy, so none of the
+    stacked-statement / comment-hiding defenses are weakened by this.
     """
     out: list[str] = []
     cursor = 0
@@ -151,8 +206,16 @@ def _strip_quoted(sql: str) -> str:
                     "escape-string literals (E'...') are not allowed in read-only queries",
                     code="SQLCONNECT_BAD_QUERY",
                 )
-            cursor = _skip_simple_quote(sql, cursor, char)
-            out.append(" ")
+            end = _skip_simple_quote(sql, cursor, char)
+            if keep_identifiers and char != "'":
+                # Padded with spaces on BOTH sides so the emitted text can never
+                # fuse with an adjacent token, and so _is_escape_string_prefix
+                # never sees an identifier's last character as out[-1] (a column
+                # named "gradeE" must not turn the next literal into an E'...').
+                out.append(f" {sql[cursor + 1:end - 1]} ")
+            else:
+                out.append(" ")
+            cursor = end
             continue
         dollar_end = _skip_dollar_quote(sql, cursor) if char == "$" else None
         if dollar_end is None:
@@ -191,6 +254,18 @@ def assert_read_only_sql(sql: str) -> str:
             f"forbidden keyword in read-only query: {hit.group(0)!r}",
             code="SQLCONNECT_BAD_QUERY",
             details={"keyword": hit.group(0)},
+        )
+    # Second pass for the side-effect FUNCTIONS, against a copy that keeps
+    # quoted-identifier text. Quoting a function name does not change which
+    # function Postgres calls, so this scan must see through `"pg_sleep"` and
+    # `pg_catalog."pg_read_file"` -- while string literals stay blanked, so a
+    # query that merely mentions one of these names as data is still fine.
+    fn_hit = _FORBIDDEN_FN_RE.search(_strip_quoted(cleaned, keep_identifiers=True))
+    if fn_hit:
+        raise SqlConnectError(
+            f"forbidden keyword in read-only query: {fn_hit.group(0)!r}",
+            code="SQLCONNECT_BAD_QUERY",
+            details={"keyword": fn_hit.group(0)},
         )
     return cleaned
 
