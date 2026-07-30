@@ -41,10 +41,40 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # (UPDLOCK)``). On a connector whose contract is read-only that is an
 # availability risk (blocking other writers/readers), so the hints are
 # forbidden even though the statement itself only reads.
+#
+# The ``pg_``/``lo_``/``dblink`` group extends that same reasoning one step. Every
+# name there is read-only *from the database's point of view*, so none of the
+# gates above stop it: the statement is a single SELECT, starts with SELECT, has
+# no stacked separator, and the read-only session happily executes it. What they
+# reach is OUTSIDE the database:
+#
+#   * ``pg_read_*`` (``pg_read_file``, ``pg_read_binary_file``), ``pg_ls_*``
+#     (``pg_ls_dir``, ``pg_ls_waldir``, ...), ``pg_stat_file``, and the
+#     large-object ``lo_import`` / ``lo_export`` read (or write) the DB HOST's
+#     filesystem -- a file-disclosure primitive dressed as a SELECT. The
+#     prefixes are wildcarded because the family keeps growing; ``pg_stat_file``
+#     is spelled out rather than ``pg_stat_\w+`` so the harmless catalog views
+#     (``pg_stat_activity`` and friends) stay readable. ``lo_get``/``lo_put`` are
+#     likewise left alone -- they move bytes within the database, not to disk.
+#   * ``dblink*`` opens an outbound connection from the DB host: SSRF plus a
+#     second session this connector's read-only enforcement never touches.
+#   * ``pg_sleep`` (and the ``pg_terminate_backend``/``pg_cancel_backend`` pair)
+#     is the availability argument the MSSQL lock hints above are already
+#     blocked for, one line over.
+#
+# All of these need superuser or an installed extension, so on a correctly
+# provisioned read-only role they fail anyway -- this is defense in depth for the
+# case where the DSN points at an over-privileged account, which is exactly the
+# case a read-only connector exists to contain. ``\w*`` on the prefixes catches
+# the family members (``dblink_connect``, ``dblink_send_query``) that a bare
+# ``\b`` would let through, since ``_`` is a word character.
 _FORBIDDEN_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|"
     r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback|"
-    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable)\b",
+    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable|"
+    r"pg_read_\w+|pg_ls_\w+|pg_stat_file|"
+    r"lo_import|lo_export|dblink\w*|pg_sleep|"
+    r"pg_terminate_backend|pg_cancel_backend)\b",
     re.IGNORECASE,
 )
 
