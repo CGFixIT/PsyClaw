@@ -131,7 +131,11 @@ def require_api_key(
 # api.rate_limit.persist_path (e.g. "data/rate_limits.db") to make counters
 # survive restarts; leaving it null preserves the original in-memory behavior.
 from fastapi import Request
-from utils.config_validation import validate_personality_config, validate_retrieval_config
+from utils.config_validation import (
+    validate_boot_timeout_config,
+    validate_personality_config,
+    validate_retrieval_config,
+)
 from utils.ratelimit import RateLimiter
 
 # Load config.yaml ONCE here, anchored to _BASE_DIR rather than the cwd. The
@@ -277,15 +281,12 @@ if not os.environ.get("CYCLAW_API_KEY", ""):
         "(fail-closed). Set CYCLAW_API_KEY to enable them."
     )
 
-_llm_timeout = cfg.get("models", {}).get("local_llm", {}).get("timeout_sec", 300)
-_graph_timeout = cfg.get("api", {}).get("graph_timeout_sec", 330)
-if _llm_timeout >= _graph_timeout:
-    logger.warning(
-        "local_llm.timeout_sec (%s) >= api.graph_timeout_sec (%s) — the graph "
-        "deadline will always fire first, making the per-call LLM timeout unreachable. "
-        "Lower timeout_sec or raise graph_timeout_sec.",
-        _llm_timeout, _graph_timeout,
-    )
+# Was a boot-time warning only; every OTHER relational config invariant in
+# this module (min_score range, soul_max_chars) already fails closed via
+# ConfigError, so a misconfigured timeout pair silently degraded in
+# production (orphaned graph invocations under load) instead of failing at
+# start like its siblings. See utils.config_validation.validate_boot_timeout_config.
+validate_boot_timeout_config(cfg)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

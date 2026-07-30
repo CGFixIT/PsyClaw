@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from utils.config_validation import validate_personality_config, validate_retrieval_config
+from utils.config_validation import (
+    validate_boot_timeout_config,
+    validate_personality_config,
+    validate_retrieval_config,
+)
 from utils.errors import ConfigError
 
 
@@ -103,3 +107,61 @@ def test_personality_error_message_names_field():
     with pytest.raises(ConfigError) as exc:
         validate_personality_config(cfg)
     assert "soul_max_chars" in str(exc.value)
+
+
+# ── validate_boot_timeout_config ─────────────────────────────────────────
+
+
+def _valid_timeouts() -> dict:
+    """The shipped config.yaml defaults -- must always validate."""
+    return {"api": {"graph_timeout_sec": 330}, "models": {"local_llm": {"timeout_sec": 300}}}
+
+
+def test_shipped_timeout_defaults_pass():
+    validate_boot_timeout_config(_valid_timeouts())  # must not raise
+
+
+def test_llm_timeout_equal_to_graph_timeout_rejected():
+    cfg = _valid_timeouts()
+    cfg["models"]["local_llm"]["timeout_sec"] = 330
+    with pytest.raises(ConfigError):
+        validate_boot_timeout_config(cfg)
+
+
+def test_llm_timeout_greater_than_graph_timeout_rejected():
+    cfg = _valid_timeouts()
+    cfg["models"]["local_llm"]["timeout_sec"] = 400
+    with pytest.raises(ConfigError):
+        validate_boot_timeout_config(cfg)
+
+
+def test_timeout_error_message_names_both_values():
+    cfg = _valid_timeouts()
+    cfg["models"]["local_llm"]["timeout_sec"] = 330
+    with pytest.raises(ConfigError) as exc:
+        validate_boot_timeout_config(cfg)
+    assert "330" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda cfg: cfg.pop("api"),
+        lambda cfg: cfg.pop("models"),
+        lambda cfg: cfg["api"].__setitem__("graph_timeout_sec", None),
+        lambda cfg: cfg["models"]["local_llm"].__setitem__("timeout_sec", "300"),
+        lambda cfg: cfg["models"].__setitem__("local_llm", None),
+        lambda cfg: cfg.__setitem__("api", "not-a-mapping"),
+    ],
+)
+def test_missing_or_non_numeric_values_are_a_no_op(mutate):
+    """Absent/non-numeric values fall through to gate.py's own cfg.get(...,
+    default) handling -- this validator only tightens the case both values
+    are explicitly present and already violate the relationship."""
+    cfg = _valid_timeouts()
+    mutate(cfg)
+    validate_boot_timeout_config(cfg)  # must not raise
+
+
+def test_empty_config_is_a_no_op():
+    validate_boot_timeout_config({})
