@@ -21,6 +21,16 @@ Usage from the CLI:
     python -m agentic.cli test
 """
 
+# This process never imports gate.py, so without this it inherits whatever
+# telemetry env the operator's shell/container/observability agent happens to
+# carry. Nothing here reaches deepagent_github's langchain-based imports today
+# (no CLI subcommand wires it up -- see agentic/deepagent_github/builder.py),
+# but applying the kill at package-import time means it is already in place
+# the moment a future caller does. Same rationale as mcp_hybrid_server.py.
+from utils.telemetry_kill import apply_telemetry_kill
+
+apply_telemetry_kill()
+
 from agentic.config import AgenticConfig, load_agentic_config
 from agentic.registry import SkillRegistry
 from utils.errors import (

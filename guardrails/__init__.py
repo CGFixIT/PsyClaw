@@ -25,22 +25,27 @@ Usage from the CLI:
     python -m guardrails.cli test
 """
 
-import os
+# NeMo (and, if its optional retrieval deps are installed, the langchain-core
+# provider layer underneath it) reads these while its package is imported and
+# otherwise starts anonymous startup/heartbeat reporting or LangSmith tracing.
+# Set them before importing any CyClaw guardrails submodule: those modules may
+# soft-import NeMo, and the standalone ``python -m guardrails.cli`` path never
+# passes through gate.py's kill switch. Previously this hand-set only
+# NEMO_GUARDRAILS_NO_USAGE_STATS; the shared kill covers the full set (OTel,
+# ChromaDB, LangChain/LangSmith) the same way gate.py and mcp_hybrid_server.py
+# already do.
+from utils.telemetry_kill import apply_telemetry_kill
 
-# NeMo reads this opt-out while its package is imported and otherwise starts
-# anonymous startup/heartbeat reporting. Set it before importing any CyClaw
-# guardrails submodule: those modules may soft-import NeMo, and the standalone
-# ``python -m guardrails.cli`` path never passes through gate.py's kill switch.
-os.environ["NEMO_GUARDRAILS_NO_USAGE_STATS"] = "1"
+apply_telemetry_kill()
 
-from guardrails.config import GuardrailsConfig, load_guardrails_config  # noqa: E402
-from guardrails.errors import (  # noqa: E402
+from guardrails.config import GuardrailsConfig, load_guardrails_config
+from guardrails.errors import (
     GuardrailsConfigError,
     GuardrailsDependencyError,
     GuardrailsError,
     RailsLoadError,
 )
-from guardrails.metrics import GuardrailMetrics, compute_guardrail_metrics  # noqa: E402
+from guardrails.metrics import GuardrailMetrics, compute_guardrail_metrics
 
 __all__ = [
     "GuardrailsConfig",

@@ -219,6 +219,7 @@ _HOSTILE_ENV = {
     "OTEL_TRACES_EXPORTER": "otlp",
     "ANONYMIZED_TELEMETRY": "True",
     "LANGCHAIN_TRACING_V2": "true",
+    "LANGSMITH_OTEL_ENABLED": "true",
     "LANGCHAIN_API_KEY": "leaked-key-should-be-removed",
     "LANGSMITH_API_KEY": "leaked-key-should-be-removed",
     "HF_HUB_DISABLE_TELEMETRY": "0",
@@ -242,6 +243,8 @@ _ASSERT_KILLED = (
         "import mcp_hybrid_server",
         "import retrieval.indexer",
         "import retrieval.vector_store",
+        "import agentic",
+        "import guardrails",
     ],
 )
 def test_kill_switch_applied_without_importing_gate(entry_import: str) -> None:
