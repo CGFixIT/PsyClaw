@@ -76,7 +76,16 @@ def _load_json(path: Path) -> dict:
 
 
 def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
-    with os.fdopen(fd, "w", encoding=_UTF8) as stream:
+    # mkstemp hands back a RAW descriptor. os.fdopen is what transfers ownership
+    # of it to a file object that will close it; if fdopen itself raises -- EMFILE
+    # / ENFILE, i.e. exactly the fd-exhaustion case where leaking one more is
+    # worst -- nothing else ever closes fd. Close it here before re-raising.
+    try:
+        stream = os.fdopen(fd, "w", encoding=_UTF8)
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
         json.dump(payload, stream, indent=2)
     os.replace(staged, path)
 
@@ -93,9 +102,18 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     """Atomic JSON write (staged file + os.replace), the soul/registry pattern."""
     staged_dir = str(path.parent)
     fd, staged = tempfile.mkstemp(dir=staged_dir, prefix=".staged.", suffix=".tmp")
+    # The staged file exists on disk the moment mkstemp returns, so EVERY failure
+    # path between here and the os.replace has to remove it or it is orphaned in
+    # ~/.CyClaw/ (or ~/.CyClaw/sessions/) forever. OSError was the only case
+    # handled before, which missed json.dump's own failure modes: TypeError on a
+    # non-serializable value, ValueError on a circular reference, RecursionError
+    # on a deeply nested payload. Catching BaseException (the same idiom
+    # agentic/fsconnect/pathsafe.py uses for its staged writes) also covers
+    # KeyboardInterrupt landing mid-write. The original exception propagates
+    # untouched -- this only cleans up.
     try:
         _write_and_replace(fd, staged, path, payload)
-    except OSError:
+    except BaseException:
         _discard_staged(staged)
         raise
 
