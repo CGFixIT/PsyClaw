@@ -50,6 +50,9 @@ def test_real_deepagents_builder_uses_state_backend_and_hitl(tmp_path: Path) -> 
 
     assert result.created is True
     assert result.agent is not None
+    # Local provider: only the two SENSITIVE tools are interrupt-gated. Under a
+    # cloud provider this set widens to every allowed tool -- asserted without the
+    # optional dependency in tests/test_agentic_cloud_providers.py.
     assert set(result.interrupt_on) == {"proposal_workspace_write_current", "finish_proposal"}
     assert "local_shell" not in result.tool_names
     assert "github_write" not in result.tool_names

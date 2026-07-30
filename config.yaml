@@ -491,6 +491,19 @@ agentic:
     allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
     allow_github_writes: false                   # writer.py remains the write-policy boundary
     workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
+    # Cloud coding-loop providers. The agentic analog of app.mode: "hybrid" --
+    # gate 3 of the six-condition chain (agentic.enabled, deepagent_github.enabled,
+    # allow_cloud_providers, providers.<name>.enabled, the provider's API key env
+    # var, and a per-run --confirm-online). Setting a provider enabled: true while
+    # allow_cloud_providers is false is a CONFIG ERROR, not a silent no-op.
+    allow_cloud_providers: false
+    providers:
+      grok:
+        enabled: false
+        model: "grok-4.5"                        # cite models.grok.model; re-verify at enable time
+      claude:
+        enabled: false
+        model: "claude-sonnet-5"                 # cite models.claude.model; same drift warning
   # Governed harness optimizer. Candidate application records only a versioned local
   # artifact after all deterministic gates plus an explicit human reason/confirmation;
   # it never mutates source, soul.md, or GitHub.
