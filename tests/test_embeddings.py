@@ -293,3 +293,47 @@ class TestOfflineEligibility:
         )
         embeddings._load_model("some-model", "")
         assert os.environ.get("HF_HUB_OFFLINE") == "1"
+
+    def test_load_model_passes_local_files_only_true_when_cached(self, monkeypatch):
+        # This is what actually enforces offline behavior IN this process --
+        # the env vars alone do not, because _model_offline_eligible's own
+        # `from huggingface_hub import try_to_load_from_cache` has already
+        # forced huggingface_hub's import (latching its HF_HUB_OFFLINE
+        # constant to whatever the environment said BEFORE this call), so
+        # setting os.environ two lines later is too late for that constant.
+        # local_files_only is passed straight through to huggingface_hub's
+        # download path, which gates independently of that already-latched
+        # global. Regression test for the bug this fixes: asserting the env
+        # var is set (the tests above) is not enough -- it must be asserted
+        # that the thing which actually takes effect receives the right value.
+        captured = {}
+
+        def _fake_ctor(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakeModel()
+
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: True)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": _fake_ctor})(),
+        )
+        embeddings._load_model("cached-model", "")
+        assert captured.get("local_files_only") is True
+
+    def test_load_model_passes_local_files_only_false_when_not_cached(self, monkeypatch):
+        # A cold cache must still be allowed to fetch -- local_files_only=True
+        # here would turn the documented first-run bootstrap fetch into a
+        # guaranteed LocalEntryNotFoundError.
+        captured = {}
+
+        def _fake_ctor(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakeModel()
+
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": _fake_ctor})(),
+        )
+        embeddings._load_model("fresh-model", "")
+        assert captured.get("local_files_only") is False
