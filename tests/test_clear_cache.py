@@ -57,6 +57,38 @@ def test_read_cache_dir_missing_file_raises(tmp_path):
         clear_cache.read_cache_dir(str(tmp_path / "nope.yaml"))
 
 
+class TestResolveConfigPath:
+    """cwd-independence for read_cache_dir's default --config="config.yaml".
+
+    Regression: read_cache_dir previously did open(config_path, ...) directly,
+    resolving a relative path against the process cwd -- ``cyclaw-clear-cache``
+    run from anywhere but the repo root crashed with ConfigError instead of
+    finding the real config. Mirrors metrics.py::TestResolveConfigPath and
+    retrieval/indexer.py::_resolve_config_path (same anchoring, same shape).
+    """
+
+    def test_relative_path_anchored_to_repo_root(self):
+        assert clear_cache._resolve_config_path("config.yaml") == (
+            clear_cache._REPO_ROOT / "config.yaml"
+        ).resolve()
+
+    def test_absolute_path_passed_through(self, tmp_path):
+        absolute = tmp_path / "config.yaml"
+        assert clear_cache._resolve_config_path(str(absolute)) == absolute.resolve()
+
+    def test_read_cache_dir_finds_real_config_from_foreign_cwd(self, tmp_path, monkeypatch):
+        # A foreign cwd (not tmp_path/_REPO_ROOT) proves resolution is
+        # genuinely cwd-independent, not just accidentally correct because
+        # cwd happens to already be the repo root. Before the fix, this
+        # raised ConfigError (bare open("config.yaml") against the foreign cwd).
+        monkeypatch.chdir(tmp_path)
+        cache_dir = clear_cache.read_cache_dir("config.yaml")
+        # The real repo config.yaml's models.embeddings.cache_dir (a relative
+        # path, ".emb_cache", by default) must resolve against _REPO_ROOT --
+        # not against tmp_path, the foreign cwd this test just chdir'd into.
+        assert cache_dir == str((clear_cache._REPO_ROOT / ".emb_cache").resolve())
+
+
 def test_dry_run_is_default_and_keeps_files(tmp_path):
     cache = _make_cache(tmp_path)
     cfg = _write_cfg(tmp_path, str(cache))

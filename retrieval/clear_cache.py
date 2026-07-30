@@ -50,6 +50,23 @@ EXIT_OK = 0
 EXIT_FAIL = 2
 EXIT_ENV = 3
 
+# Anchor config.yaml to the repo root, not the process's cwd. build_parser's
+# default --config="config.yaml" is a bare relative name; `cyclaw-clear-cache`
+# run from any directory other than the repo root previously crashed with
+# ConfigError instead of finding the real config. Mirrors
+# retrieval/indexer.py::_resolve_config_path and metrics.py's identical fix
+# for the identical reason -- this file lives one level below the repo root,
+# same as indexer.py, so parents[1] is the anchor.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_config_path(config_path: str) -> Path:
+    """Resolve ``config_path`` against the repo root when it is not absolute."""
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
+
 
 def read_cache_dir(config_path: str) -> str:
     """Return ``models.embeddings.cache_dir`` from config, or "" if unset.
@@ -57,8 +74,9 @@ def read_cache_dir(config_path: str) -> str:
     Raises ``ConfigError`` when the file cannot be read/parsed or the
     ``models.embeddings`` section is missing -- callers map this to exit 3.
     """
+    resolved_config_path = _resolve_config_path(config_path)
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(resolved_config_path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
     except OSError as exc:
         raise ConfigError(f"Could not read config '{config_path}': {exc}") from exc
@@ -70,7 +88,12 @@ def read_cache_dir(config_path: str) -> str:
         raise ConfigError(
             f"config '{config_path}' missing models.embeddings section"
         ) from exc
-    return resolve_cache_dir(config_path, cache_dir)
+    # resolve_cache_dir anchors a RELATIVE cache_dir against config_path's own
+    # parent directory -- pass the already-repo-root-anchored path, not the
+    # raw (possibly bare-relative, CWD-dependent) argument, or a relative
+    # cache_dir would still resolve against the wrong directory even though
+    # the config file itself was found correctly above.
+    return resolve_cache_dir(str(resolved_config_path), cache_dir)
 
 
 def dir_stats(path: Path) -> tuple[int, int]:
