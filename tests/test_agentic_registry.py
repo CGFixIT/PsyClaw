@@ -360,3 +360,21 @@ def test_uncompilable_pattern_is_audited(tmp_path):
         assert "agentic_skill_pattern_compile_failed" in audit
     finally:
         reset_config_cache()
+
+
+def test_atomic_write_cleans_up_staged_file_on_non_oserror_failure(reg, monkeypatch):
+    # json.dumps can raise TypeError (non-serializable value) or RecursionError
+    # (pathologically deep nesting) -- neither is OSError/ValueError, so the
+    # narrower except clause used to skip cleanup and orphan the staged .tmp
+    # file. The original exception type must still propagate unchanged (this
+    # is a caller bug, not a registry I/O failure), but the .tmp file must not
+    # be left behind.
+    tmp_path = Path(reg.registry_path).with_suffix(".json.tmp")
+
+    def _boom(self, *a, **kw):
+        raise TypeError("not JSON-serializable")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    with pytest.raises(TypeError):
+        reg._atomic_write({"version": 1, "updated": None, "skills": {}, "history": []})
+    assert not tmp_path.exists()
