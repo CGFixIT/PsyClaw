@@ -32,6 +32,23 @@ disk, by ``retrieval/embeddings.py::_load_model`` (see
 here -- that reintroduces the first-run breakage this split was written to
 avoid.
 
+``HF_HUB_DISABLE_TELEMETRY`` / ``DO_NOT_TRACK`` are different from the pair
+above and ARE included below, unconditionally. Verified 2026-07-29 by reading
+huggingface_hub's own ``utils/_telemetry.py``: ``send_telemetry()`` only queues
+a background HEAD request to ``{ENDPOINT}/api/telemetry/{topic}`` reporting
+library/version metadata -- a separate code path from any file download or
+cache lookup. ``HF_HUB_DISABLE_TELEMETRY=1`` is checked directly in that
+function and suppresses only that ping; it does not touch
+``is_offline_mode()``, so it carries none of ``HF_HUB_OFFLINE``'s first-run
+bootstrap risk and is safe to set for every process from the start.
+``DO_NOT_TRACK=1`` is confirmed (NVIDIA's own NeMo Guardrails docs) to be an
+equivalent opt-out for that library specifically; whether huggingface_hub's
+current release also honors it is unconfirmed and sources disagree -- one
+huggingface.co doc page claims parity with ``HF_HUB_DISABLE_TELEMETRY``, but
+the installed ``_telemetry.py`` source read for this note did not reference it.
+Set anyway as a harmless, standard opt-out convention belt-and-suspenders; do
+not treat it as a substitute for the explicit HF var above.
+
 Applying this is an intentional process-wide side effect: it mutates
 ``os.environ`` for the whole interpreter. That is the point -- the libraries
 read the process environment, not a config object.
@@ -49,6 +66,14 @@ TELEMETRY_KILL: dict[str, str] = {
     "LANGGRAPH_CLI_NO_ANALYTICS": "1",
     "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
     "ANONYMIZED_TELEMETRY": "False",
+    # Suppresses only huggingface_hub's background telemetry HEAD request (see
+    # module docstring) -- unlike HF_HUB_OFFLINE, this never blocks a real
+    # download or cache-miss fetch, so it is safe unconditionally.
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    # Cross-ecosystem opt-out convention; confirmed effective for NeMo
+    # Guardrails, unconfirmed (sources disagree) for huggingface_hub -- see
+    # module docstring. Harmless where unread.
+    "DO_NOT_TRACK": "1",
     # ONNX Runtime, a transitive dependency of chromadb (and of nemoguardrails's
     # fastembed base, when guardrails is enabled) -- see constraints.txt. Kept
     # for parity with docs/security-philosophy/cyclaw_telemetry_kill.env, which
