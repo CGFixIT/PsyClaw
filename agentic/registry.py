@@ -141,15 +141,24 @@ class SkillRegistry:
     def _atomic_write(self, data: dict) -> None:
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.registry_path.with_suffix(self.registry_path.suffix + ".tmp")
+        # Catch BaseException, not just (OSError, ValueError): json.dumps can also
+        # raise TypeError (a non-serializable value reached this far) or
+        # RecursionError (pathologically deep nesting), and KeyboardInterrupt can
+        # land mid-write -- none of those are OSError/ValueError, so they used to
+        # skip the cleanup below and leave tmp_path orphaned. Same fix applied to
+        # harness/config.py's _atomic_write_json for the identical staged-write
+        # pattern; the original exception always propagates unchanged.
         try:
             tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
             os.replace(tmp_path, self.registry_path)
-        except (OSError, ValueError) as exc:
+        except BaseException as exc:
             tmp_path.unlink(missing_ok=True)
-            raise SkillRegistryError(
-                f"Failed to write skills registry: {exc}",
-                details={"path": str(self.registry_path)},
-            ) from exc
+            if isinstance(exc, (OSError, ValueError)):
+                raise SkillRegistryError(
+                    f"Failed to write skills registry: {exc}",
+                    details={"path": str(self.registry_path)},
+                ) from exc
+            raise
 
     # --- scanning (mirrors PersonalityManager) ----------------------------
 
