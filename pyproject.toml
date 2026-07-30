@@ -58,6 +58,18 @@ agentic-deepagents = [
     "deepagents==0.6.12",
     "langchain==1.3.11",
     "langchain-openai==1.3.3",
+    # langchain-anthropic is a MANDATORY (non-extra) dependency of deepagents
+    # 0.6.12, so installing this extra already pulls it. Pinned explicitly rather
+    # than left floating in deepagents' own >=1.4.7,<2 range, because an unpinned
+    # transitive defeats the exact-pin reproducibility constraints.txt exists for
+    # -- and because the Claude cloud provider imports it directly.
+    "langchain-anthropic==1.4.8",
+]
+# Grok only. Deliberately a SEPARATE extra from agentic-deepagents so a local-only
+# install never pulls a cloud SDK it will not use, and deliberately NOT part of
+# `full` below, which is what CI and dev boxes install.
+agentic-deepagents-cloud = [
+    "langchain-xai==1.2.2",
 ]
 full = [
     "cyclaw[postgres]",

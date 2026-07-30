@@ -52,6 +52,11 @@ _VALID_MODES = ("read", "write")
 # (default) or "openai_compatible" for any other OpenAI-shaped local server
 # (including LM Studio's compatibility endpoint if an operator still runs it).
 _VALID_DEEPAGENT_PROVIDERS = ("ollama", "openai_compatible")
+# Cloud coding-loop providers, keyed by the env var holding their API key. Keys
+# live in the environment ONLY -- never in config.yaml, never in a dataclass
+# field -- mirroring llm/client.py's discipline for the core graph's fallback.
+CLOUD_KEY_ENVS = {"grok": "GROK_API_KEY", "claude": "ANTHROPIC_API_KEY"}
+_VALID_CLOUD_PROVIDERS = tuple(CLOUD_KEY_ENVS)
 # owner/name -- GitHub slugs allow alphanumerics, hyphen, underscore, dot, but the
 # FIRST character of each segment must be alphanumeric. Anchoring it (rather than
 # the looser ``[A-Za-z0-9_.-]+``) closes a flag-injection gap: a slug like
@@ -109,6 +114,20 @@ def _resolve_data_path(raw_path: str, field_name: str) -> str:
 
 
 @dataclass
+class DeepAgentCloudProviderConfig:
+    """Per-provider cloud enable + model name. No key material, ever."""
+
+    enabled: bool = False
+    model: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_bool(self.enabled, "agentic.deepagent_github.providers.*.enabled")
+        if not isinstance(self.model, str):
+            raise AgenticConfigError("agentic.deepagent_github.providers.*.model must be a string")
+        _validate_no_shell_metachars(self.model, "agentic.deepagent_github.providers.*.model")
+
+
+@dataclass
 class DeepAgentGitHubConfig:
     """Optional Deep Agents GitHub harness config. Disabled by default."""
 
@@ -121,6 +140,22 @@ class DeepAgentGitHubConfig:
     allow_shell_execution: bool = False
     allow_github_writes: bool = False
     workspace_root: str = DEFAULT_DEEPAGENT_WORKSPACE_ROOT
+    allow_cloud_providers: bool = False
+    providers: dict = field(default_factory=dict)
+
+    def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
+        """Return a provider's config, or None when it is not configured/enabled.
+
+        Returns None unless BOTH allow_cloud_providers and the provider's own
+        enabled flag are true, so a caller cannot accidentally treat a configured
+        but un-gated provider as usable.
+        """
+        if not self.allow_cloud_providers:
+            return None
+        provider = self.providers.get(name)
+        if isinstance(provider, DeepAgentCloudProviderConfig) and provider.enabled:
+            return provider
+        return None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -129,14 +164,18 @@ class DeepAgentGitHubConfig:
             "agentic.deepagent_github.allow_filesystem_write_tools",
             "agentic.deepagent_github.allow_shell_execution",
             "agentic.deepagent_github.allow_github_writes",
+            "agentic.deepagent_github.allow_cloud_providers",
         ):
             attr = field_name.rsplit(".", 1)[-1]
             _validate_bool(getattr(self, attr), field_name)
         if self.provider not in _VALID_DEEPAGENT_PROVIDERS:
             raise AgenticConfigError(
-                "agentic.deepagent_github.provider must be 'ollama' or 'openai_compatible'",
+                # The prose and the tuple must be edited together; the tuple is the
+                # source of truth and the message is what an operator actually reads.
+                f"agentic.deepagent_github.provider must be one of {list(_VALID_DEEPAGENT_PROVIDERS)}",
                 details={"received": self.provider, "valid": list(_VALID_DEEPAGENT_PROVIDERS)},
             )
+        self._coerce_providers()
         if not isinstance(self.base_url, str) or not self.base_url:
             raise AgenticConfigError("agentic.deepagent_github.base_url must be a non-empty string")
         if not isinstance(self.model, str):
@@ -147,6 +186,51 @@ class DeepAgentGitHubConfig:
             self.workspace_root,
             "agentic.deepagent_github.workspace_root",
         )
+
+    def _coerce_providers(self) -> None:
+        # Nested blocks arrive as plain dicts from yaml. Unlike the top-level
+        # agentic: block, unknown keys here are NOT filtered upstream, so an
+        # unrecognised provider name would silently become dead config -- reject it
+        # loudly instead.
+        if not isinstance(self.providers, dict):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.providers must be a mapping",
+                details={"received": type(self.providers).__name__},
+            )
+        coerced: dict[str, DeepAgentCloudProviderConfig] = {}
+        for name, block in self.providers.items():
+            if name not in _VALID_CLOUD_PROVIDERS:
+                raise AgenticConfigError(
+                    f"unknown agentic.deepagent_github.providers entry {name!r}",
+                    details={"received": name, "valid": list(_VALID_CLOUD_PROVIDERS)},
+                )
+            if isinstance(block, DeepAgentCloudProviderConfig):
+                coerced[name] = block
+                continue
+            if not isinstance(block, dict):
+                raise AgenticConfigError(
+                    f"agentic.deepagent_github.providers.{name} must be a mapping",
+                    details={"received": type(block).__name__},
+                )
+            try:
+                coerced[name] = DeepAgentCloudProviderConfig(**block)
+            except TypeError as exc:
+                raise AgenticConfigError(
+                    f"agentic.deepagent_github.providers.{name} invalid: {exc}",
+                    details={"provider": name},
+                ) from exc
+        # Fail LOUD, not silently inert: a provider marked enabled while the master
+        # cloud gate is off almost certainly means the operator believes cloud is
+        # on. Refusing to boot is the honest response; quietly running local-only
+        # would look identical to a working cloud setup.
+        if not self.allow_cloud_providers:
+            live = sorted(name for name, provider in coerced.items() if provider.enabled)
+            if live:
+                raise AgenticConfigError(
+                    "agentic.deepagent_github.providers enabled while allow_cloud_providers is false",
+                    details={"enabled": live},
+                )
+        self.providers = coerced
 
 
 @dataclass

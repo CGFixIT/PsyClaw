@@ -33,6 +33,7 @@ consolidates the threat-model assumptions previously scattered across
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
 | LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider, off by default). |
+| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. Harness egress is recorded as egress by `agentic/deepagent_github/handoff.py` — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count — never the prompt text. |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -108,6 +109,9 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
 - **Confidentiality against a compromised Ollama / Grok / Claude endpoint.** Prompt and
   retrieved context are sent to the configured model; trust in that endpoint is
   assumed.
+- **Provider-side retention of anything sent to Grok or Claude.** Once bytes reach
+  a provider, retention and processing are governed by that provider's agreement,
+  not by CyClaw. This is why every egress path ends in a per-use human confirmation.
 
 ---
 

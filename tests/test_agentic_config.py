@@ -262,6 +262,14 @@ class TestShippedAgenticConfigContract:
         assert cfg.allow_filesystem_write_tools is False
         assert cfg.allow_shell_execution is False
         assert cfg.allow_github_writes is False
+        # Gate 3 of the cloud chain -- the agentic analog of app.mode: "hybrid".
+        assert cfg.allow_cloud_providers is False
+        # Gate 4, per provider. Both must ship false, and cloud_provider() must
+        # refuse to hand either back while gate 3 is off.
+        assert set(cfg.providers) == {"grok", "claude"}
+        for name, provider in cfg.providers.items():
+            assert provider.enabled is False, name
+            assert cfg.cloud_provider(name) is None, name
 
     def test_harness_optimizer_shipped_gates_disabled(self) -> None:
         cfg = self._load().harness_optimizer
