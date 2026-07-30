@@ -9,13 +9,22 @@ import pytest
 pytest.importorskip("deepagents")
 pytest.importorskip("langchain_openai")
 
-from deepagents.backends import StateBackend
-from deepagents.backends.protocol import SandboxBackendProtocol
+# E402 is intentional and load-bearing: these imports MUST follow the
+# importorskip calls above, or collecting this file in a lane without the
+# optional dependency raises ImportError instead of skipping cleanly.
+from deepagents.backends import StateBackend  # noqa: E402
+from deepagents.backends.protocol import SandboxBackendProtocol  # noqa: E402
 
-from agentic.config import AgenticConfig
-from agentic.deepagent_github.builder import build_deepagent_github
-from agentic.harness_optimizer import Experiment, ProposerWorkspaceTools, Surface, SurfaceType, build_proposer_workspace
-from utils.logger import close_audit_handles
+from agentic.config import AgenticConfig  # noqa: E402
+from agentic.deepagent_github.builder import build_deepagent_github  # noqa: E402
+from agentic.harness_optimizer import (  # noqa: E402
+    Experiment,
+    ProposerWorkspaceTools,
+    Surface,
+    SurfaceType,
+    build_proposer_workspace,
+)
+from utils.logger import close_audit_handles  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

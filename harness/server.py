@@ -82,6 +82,14 @@ _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
 _MODEL_KEY = "model"
+# Keys of the error envelope static/harness.html's fetch helper reads. Named
+# rather than repeated inline for the same reason _MODEL_KEY above is: every
+# endpoint must emit the SAME shape, and the helper reads detail.message -- an
+# endpoint that invents its own key renders as a bare "HTTP <status>" with no
+# explanation, which is exactly what the 429 did while it emitted "error".
+_CODE_KEY = "code"
+_MESSAGE_KEY = "message"
+_DETAILS_KEY = "details"
 # Loopback allow-list, enforced at BOTH the bind (main) and the Host header
 # (TrustedHostMiddleware). Deliberately loopback-only — tighter than gate.py's
 # LAN-inclusive CORS list — because the harness is a single-operator console
@@ -147,7 +155,7 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
 
 
 def _err(status: int, exc: AgenticError) -> HTTPException:
-    detail = {"code": exc.code, "message": exc.message, "details": exc.details}
+    detail = {_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: exc.details}
     return HTTPException(status_code=status, detail=detail)
 
 
@@ -191,12 +199,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise HTTPException(
                 status_code=_HTTP_TOO_MANY_REQUESTS,
                 detail={
-                    # "message", not "error": static/harness.html's api() helper
-                    # reads detail.message, so the previous "error" key rendered a
-                    # throttled request as a bare "HTTP 429" with no explanation.
-                    "message": f"Rate limit exceeded ({rate_limiter.max_requests} req / "
+                    _CODE_KEY: "RATE_LIMIT",
+                    _MESSAGE_KEY: f"Rate limit exceeded ({rate_limiter.max_requests} req / "
                     f"{rate_limiter.window_seconds}s)",
-                    "code": "RATE_LIMIT",
+                    _DETAILS_KEY: {},
                 },
             )
 
@@ -224,9 +230,9 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
-                    "code": "CROSS_SITE_BLOCKED",
-                    "message": "Cross-site request rejected",
-                    "details": {"sec_fetch_site": site},
+                    _CODE_KEY: "CROSS_SITE_BLOCKED",
+                    _MESSAGE_KEY: "Cross-site request rejected",
+                    _DETAILS_KEY: {"sec_fetch_site": site},
                 },
             )
         origin = request.headers.get("origin")
@@ -234,16 +240,16 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
-                    "code": "CROSS_ORIGIN_BLOCKED",
-                    "message": "Cross-origin request rejected",
-                    "details": {"origin_host": urlparse(origin).hostname},
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {"origin_host": urlparse(origin).hostname},
                 },
             )
 
     # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
     # then origin, then auth. A wrong key against a spent budget must return 429,
     # not 401, or the limiter stops bounding key-guessing.
-    _GUARDED = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin), Depends(require_api_key)]
+    guarded = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin), Depends(require_api_key)]
 
     # Same shutdown contract gate.py's lifespan already implements: close the
     # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
@@ -320,7 +326,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def list_sessions() -> dict:
         return {"sessions": store.list()}
 
-    @app.post("/api/sessions", status_code=_HTTP_CREATED, dependencies=_GUARDED)
+    @app.post("/api/sessions", status_code=_HTTP_CREATED, dependencies=guarded)
     def create_session(req: SessionCreateRequest) -> dict:
         session = store.create(model=_current_model(), title=req.title)
         return session.summary()
@@ -337,7 +343,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         ]
         return session.summary() | {"messages": messages}
 
-    @app.post("/api/sessions/{session_id}/rename", dependencies=_GUARDED)
+    @app.post("/api/sessions/{session_id}/rename", dependencies=guarded)
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
@@ -349,20 +355,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def soul_state() -> dict:
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/soul", dependencies=_GUARDED)
+    @app.post("/api/soul", dependencies=guarded)
     def soul_toggle(req: SoulToggleRequest) -> dict:
         cfg.soul_enabled = req.enabled
         cfg.save()
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/model", dependencies=_GUARDED)
+    @app.post("/api/model", dependencies=guarded)
     def model_select(req: ModelSelectRequest) -> dict:
         cfg.selected_model = req.model.strip()
         cfg.save()
         return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
-    @app.post("/api/chat", dependencies=_GUARDED)
+    @app.post("/api/chat", dependencies=guarded)
     def chat(req: ChatRequest) -> dict:
         try:
             if req.session_id:
@@ -428,7 +434,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # the operator's box regardless. gate.py's equivalent surface (POST
     # /ops/agentic, gate_ops.py) carries both a rate limit and an API key; the
     # harness is single-operator so it keeps no key, but the throttle applies.
-    @app.get("/api/github/status", dependencies=_GUARDED)
+    @app.get("/api/github/status", dependencies=guarded)
     def github_status() -> dict:
         try:
             gh_result = run_agentic_op("status")
