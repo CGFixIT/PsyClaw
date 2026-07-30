@@ -425,6 +425,37 @@ def test_chat_honors_persisted_model_selection(client, cfg):
     assert sent_model["value"] == "llama3.1:8b"
 
 
+def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
+    """Regression: /api/chat had no rate limit at all -- unlike gate.py's
+    /query, a misbehaving local process could hammer it without bound.
+    Mirrors gate.py's _enforce_rate_limit 429 contract (error + code)."""
+    monkeypatch.setattr(
+        harness_server, "_rate_limit_settings", lambda: {"max_requests": 2, "window_seconds": 60}
+    )
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+
+    assert limited_client.post("/api/chat", json={"message": "one"}).status_code == 200
+    assert limited_client.post("/api/chat", json={"message": "two"}).status_code == 200
+    resp = limited_client.post("/api/chat", json={"message": "three"})
+    assert resp.status_code == 429
+    assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+
+
+def test_rate_limit_scoped_to_chat_route_only(cfg, monkeypatch):
+    """The limiter throttles /api/chat specifically, not the whole app --
+    other routes (status, sessions, etc.) stay unaffected by the same
+    per-app RateLimiter instance."""
+    monkeypatch.setattr(
+        harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60}
+    )
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+
+    assert limited_client.post("/api/chat", json={"message": "one"}).status_code == 200
+    assert limited_client.post("/api/chat", json={"message": "two"}).status_code == 429
+    assert limited_client.get("/api/status").status_code == 200
+    assert limited_client.get("/api/sessions").status_code == 200
+
+
 def test_chat_creates_session_and_tallies_tokens(client):
     resp = client.post("/api/chat", json={"message": "hello there"})
     assert resp.status_code == 200

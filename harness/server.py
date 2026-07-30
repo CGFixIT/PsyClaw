@@ -39,7 +39,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -59,6 +59,7 @@ from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.errors import AgenticError
 from utils.logger import _get_config
 from utils.ops_runner import OpsError, run_agentic_op
+from utils.ratelimit import RateLimiter
 
 logger = logging.getLogger("cyclaw.harness.server")
 
@@ -93,6 +94,22 @@ def _llm_settings() -> dict:
         return {}
     models = parsed.get("models", {})
     return models.get("local_llm", {}) if isinstance(models, dict) else {}
+
+
+def _rate_limit_settings() -> dict:
+    """Read-only view of the repo config's ``api.rate_limit`` block.
+
+    Reuses gate.py's existing tunables (same defaults: 60 req / 60s) rather
+    than inventing a harness-specific config surface. In-memory only -- no
+    persist_path/database_url reuse -- the harness is a single-operator,
+    single-process console with no restart-persistence requirement gate.py's
+    multi-worker deployments have.
+    """
+    parsed = _get_config(str(_CONFIG_PATH))
+    if not isinstance(parsed, dict):
+        return {}
+    api = parsed.get("api", {})
+    return api.get("rate_limit", {}) if isinstance(api, dict) else {}
 
 
 def _resolve_backend() -> ResolvedLocalBackend:
@@ -137,6 +154,36 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
+
+    # Per-instance, not module-level: create_app() is the harness's test
+    # boundary (mirrors store/client/backend above) -- a module-level
+    # singleton would leak rate-limit state across separately-configured
+    # create_app() calls in tests.
+    rl_cfg = _rate_limit_settings()
+    _rate_limiter = RateLimiter(
+        max_requests=rl_cfg.get("max_requests", 60),
+        window_seconds=rl_cfg.get("window_seconds", 60),
+    )
+
+    def _enforce_chat_rate_limit(request: Request) -> None:
+        """Per-IP throttle for /api/chat, mirroring gate.py's _enforce_rate_limit.
+
+        Closes a local-DoS / runaway-token-burn vector: harness routes are
+        loopback-only and unauthenticated (single-operator console), so a
+        misbehaving local process could otherwise hammer /api/chat with no
+        limit at all -- every other CyClaw entry point rate-limits its
+        request-generating endpoint (/query), this one didn't.
+        """
+        client_ip = request.client.host if request.client else "unknown"
+        if not _rate_limiter.allow(client_ip):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": f"Rate limit exceeded ({_rate_limiter.max_requests} req / "
+                    f"{_rate_limiter.window_seconds}s)",
+                    "code": "RATE_LIMIT",
+                },
+            )
 
     # Same shutdown contract gate.py's lifespan already implements: close the
     # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
@@ -255,7 +302,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
-    @app.post("/api/chat")
+    @app.post("/api/chat", dependencies=[Depends(_enforce_chat_rate_limit)])
     def chat(req: ChatRequest) -> dict:
         try:
             if req.session_id:
