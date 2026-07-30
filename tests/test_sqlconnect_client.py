@@ -246,6 +246,27 @@ def test_assert_rejects_lock_taking_hints(bad):
         assert_read_only_sql(bad)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        # OPENROWSET/OPENQUERY/OPENDATASOURCE are single, valid, read-only
+        # SELECTs from the database's point of view, but they reach OUTSIDE
+        # it -- an ad-hoc connection string or linked-server target that can
+        # point at an internal address (SSRF), or OPENROWSET(BULK ...) reading
+        # an arbitrary file off the DB host filesystem.
+        "SELECT * FROM OPENROWSET('SQLNCLI', 'Server=169.254.169.254;', 'SELECT 1')",
+        "SELECT * FROM OPENROWSET(BULK 'C:\\Windows\\win.ini', SINGLE_CLOB) AS x",
+        "SELECT * FROM OPENQUERY(linked_srv, 'select 1')",
+        "SELECT * FROM OPENDATASOURCE('SQLNCLI', 'Server=evil;').db.dbo.t",
+        "select * from openrowset('sqlncli', 'server=x;', 'select 1')",
+    ],
+)
+def test_assert_rejects_mssql_adhoc_query_functions(bad):
+    """OPENROWSET/OPENQUERY/OPENDATASOURCE are forbidden -- see _FORBIDDEN_RE."""
+    with pytest.raises(SqlConnectError):
+        assert_read_only_sql(bad)
+
+
 def test_execute_sets_read_only_for_psycopg_style_driver(monkeypatch):
     sc = SqlConnectConfig(driver="postgres")
     monkeypatch.setenv(sc.dsn_env, "postgresql://x")
