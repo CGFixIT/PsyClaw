@@ -68,10 +68,24 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # case a read-only connector exists to contain. ``\w*`` on the prefixes catches
 # the family members (``dblink_connect``, ``dblink_send_query``) that a bare
 # ``\b`` would let through, since ``_`` is a word character.
+#
+# ``openrowset``/``openquery``/``opendatasource`` are the MSSQL analogue of the
+# same problem: each is a single, valid, read-only ``SELECT ... FROM
+# OPENROWSET(...)`` that reaches OUTSIDE the database -- OPENROWSET(BULK ...)
+# reads an arbitrary file off the DB host, and both OPENROWSET's ad-hoc
+# connection string and OPENQUERY's linked-server target can point at an
+# internal address (SSRF), same shape as ``dblink`` above. They belong in this
+# regex rather than _FORBIDDEN_FN_RE below because they are T-SQL keyword
+# syntax, not schema-qualified callable identifiers: unlike a Postgres function
+# name, bracket-quoting one (``FROM [OPENROWSET](...)``) makes SQL Server parse
+# it as an object reference and fails, it does not invoke the row-set function
+# -- so there is no quoted-identifier bypass to guard against here, the same
+# reasoning already applied to the ``updlock``/``holdlock`` MSSQL hints above.
 _FORBIDDEN_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|call|"
     r"exec|execute|into|copy|vacuum|attach|begin|commit|rollback|"
-    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable)\b",
+    r"updlock|holdlock|xlock|tablockx|tablock|paglock|serializable|"
+    r"openrowset|openquery|opendatasource)\b",
     re.IGNORECASE,
 )
 
@@ -88,10 +102,16 @@ _FORBIDDEN_RE = re.compile(
 # for that scan. The names below are FUNCTIONS, and a function name written as a
 # quoted identifier is still a call. Same text, opposite meaning, so they need
 # opposite treatment.
+#
+# ``pg_file_write``/``pg_file_rename``/``pg_file_unlink``/``pg_logdir_ls`` are the
+# adminpack extension's write/list side of the same pg_read_*/pg_ls_* family
+# above -- historically bundled with pgAdmin-managed Postgres installs, same
+# over-privileged-role threat model, so they get the same defense-in-depth entry.
 _FORBIDDEN_FN_RE = re.compile(
     r"\b(pg_read_\w+|pg_ls_\w+|pg_stat_file|"
     r"lo_import|lo_export|dblink\w*|pg_sleep|"
-    r"pg_terminate_backend|pg_cancel_backend)\b",
+    r"pg_terminate_backend|pg_cancel_backend|"
+    r"pg_file_write|pg_file_rename|pg_file_unlink|pg_logdir_ls)\b",
     re.IGNORECASE,
 )
 

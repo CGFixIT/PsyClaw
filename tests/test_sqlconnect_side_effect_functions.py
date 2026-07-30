@@ -36,6 +36,10 @@ from utils.errors import SqlConnectError
         ("SELECT pg_cancel_backend(123)", "cancels another session"),
         ("WITH x AS (SELECT pg_read_file('/etc/passwd') AS c) SELECT * FROM x", "hidden in a CTE"),
         ("SELECT PG_READ_FILE('/etc/passwd')", "case-insensitive"),
+        ("SELECT pg_file_write('out.txt', 'data', false)", "adminpack: writes the DB host filesystem"),
+        ("SELECT pg_file_rename('a.txt', 'b.txt')", "adminpack: renames on the DB host filesystem"),
+        ("SELECT pg_file_unlink('a.txt')", "adminpack: deletes on the DB host filesystem"),
+        ("SELECT * FROM pg_logdir_ls()", "adminpack: lists the DB host log directory"),
     ],
 )
 def test_guard_rejects_side_effect_functions(bad, why):
@@ -78,6 +82,7 @@ def test_guard_still_allows_ordinary_reads(good):
         'SELECT "dblink"(\'dbname=x\', \'select 1\')',
         'SELECT "lo_export"(16384, \'/tmp/out\')',
         'SELECT * FROM "pg_ls_dir"(\'/var/lib/postgresql\')',
+        'SELECT "pg_file_write"(\'out.txt\', \'data\', false)',
         # MSSQL bracket identifiers are the same trick in the other dialect.
         "SELECT [pg_sleep](600)",
         # And hidden one level down inside a CTE.
