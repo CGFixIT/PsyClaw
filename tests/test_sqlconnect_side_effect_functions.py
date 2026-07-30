@@ -65,6 +65,50 @@ def test_guard_still_allows_ordinary_reads(good):
     assert assert_read_only_sql(good).lower().startswith(("select", "with"))
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        # Postgres folds unquoted identifiers to lower case, so a lower-case
+        # QUOTED identifier resolves to the very same built-in. _strip_quoted
+        # blanks quoted regions before the keyword scan, so every one of these
+        # walked straight past the guard until the scan was split.
+        'SELECT "pg_sleep"(600)',
+        'SELECT pg_catalog."pg_read_file"(\'/etc/passwd\')',
+        'SELECT "pg_read_file"(\'/etc/passwd\')',
+        'SELECT "dblink"(\'dbname=x\', \'select 1\')',
+        'SELECT "lo_export"(16384, \'/tmp/out\')',
+        'SELECT * FROM "pg_ls_dir"(\'/var/lib/postgresql\')',
+        # MSSQL bracket identifiers are the same trick in the other dialect.
+        "SELECT [pg_sleep](600)",
+        # And hidden one level down inside a CTE.
+        'WITH x AS (SELECT "pg_read_file"(\'/etc/passwd\') AS c) SELECT * FROM x',
+    ],
+)
+def test_quoted_identifier_cannot_smuggle_a_side_effect_function(bad):
+    with pytest.raises(SqlConnectError) as excinfo:
+        assert_read_only_sql(bad)
+    assert excinfo.value.code == "SQLCONNECT_BAD_QUERY"
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        # A quoted identifier that merely collides with a STATEMENT keyword is a
+        # column name, not a statement -- the original reason quoted regions are
+        # blanked for _FORBIDDEN_RE. Splitting the scan must not regress this.
+        'SELECT "delete" FROM t',
+        'SELECT "select", "update" FROM t',
+        'SELECT t."insert" AS i FROM t',
+        "SELECT [delete] FROM t",
+        # A quoted identifier ending in E must not turn the next literal into an
+        # E'...' escape string once identifier text is emitted into the scan.
+        "SELECT \"gradeE\", 'plain' FROM t",
+    ],
+)
+def test_quoted_statement_keywords_are_still_ordinary_column_names(good):
+    assert assert_read_only_sql(good).lower().startswith("select")
+
+
 def test_blocked_name_inside_a_string_literal_is_data_not_sql():
     """Quoted regions are blanked before the keyword scan -- a literal that
     merely mentions a blocked function is not an attempt to call it."""
