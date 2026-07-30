@@ -38,6 +38,7 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -56,6 +57,7 @@ from harness.schemas import (
 )
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
+from utils.auth import require_api_key
 from utils.errors import AgenticError
 from utils.logger import _get_config, redact_sensitive
 from utils.ops_runner import OpsError, run_agentic_op
@@ -72,6 +74,7 @@ _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
 _MAX_RUNS = 50
 _HTTP_CREATED = 201
 _HTTP_BAD_REQUEST = 400
+_HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_BAD_GATEWAY = 502
@@ -188,11 +191,59 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise HTTPException(
                 status_code=_HTTP_TOO_MANY_REQUESTS,
                 detail={
-                    "error": f"Rate limit exceeded ({rate_limiter.max_requests} req / "
+                    # "message", not "error": static/harness.html's api() helper
+                    # reads detail.message, so the previous "error" key rendered a
+                    # throttled request as a bare "HTTP 429" with no explanation.
+                    "message": f"Rate limit exceeded ({rate_limiter.max_requests} req / "
                     f"{rate_limiter.window_seconds}s)",
                     "code": "RATE_LIMIT",
                 },
             )
+
+    def _enforce_same_origin(request: Request) -> None:
+        """Reject browser-initiated cross-site requests to a state-changing route.
+
+        TrustedHostMiddleware already blocks classic DNS rebinding (the rebound
+        page's Host header is the attacker's name, not a loopback one). The gap it
+        leaves is a page on any origin doing
+
+            fetch('http://127.0.0.1:8790/api/soul', {method: 'POST',
+                  headers: {'Content-Type': 'text/plain'}, body: ...})
+
+        -- a CORS "simple request", so no preflight is sent, and the Host header is
+        a legitimate 127.0.0.1. The browser does stamp Origin and Sec-Fetch-Site on
+        it, which is what this checks.
+
+        Absent headers are ALLOWED on purpose: curl, PowerShell, and the sandbox
+        verifier send neither, and a non-browser client is not a CSRF vector. Every
+        browser that can mount this attack sends at least Origin on a cross-origin
+        POST.
+        """
+        site = request.headers.get("sec-fetch-site")
+        if site is not None and site not in ("same-origin", "none"):
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    "code": "CROSS_SITE_BLOCKED",
+                    "message": "Cross-site request rejected",
+                    "details": {"sec_fetch_site": site},
+                },
+            )
+        origin = request.headers.get("origin")
+        if origin is not None and urlparse(origin).hostname not in _LOOPBACK_HOSTS:
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    "code": "CROSS_ORIGIN_BLOCKED",
+                    "message": "Cross-origin request rejected",
+                    "details": {"origin_host": urlparse(origin).hostname},
+                },
+            )
+
+    # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
+    # then origin, then auth. A wrong key against a spent budget must return 429,
+    # not 401, or the limiter stops bounding key-guessing.
+    _GUARDED = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin), Depends(require_api_key)]
 
     # Same shutdown contract gate.py's lifespan already implements: close the
     # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
@@ -269,7 +320,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def list_sessions() -> dict:
         return {"sessions": store.list()}
 
-    @app.post("/api/sessions", status_code=_HTTP_CREATED)
+    @app.post("/api/sessions", status_code=_HTTP_CREATED, dependencies=_GUARDED)
     def create_session(req: SessionCreateRequest) -> dict:
         session = store.create(model=_current_model(), title=req.title)
         return session.summary()
@@ -286,7 +337,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         ]
         return session.summary() | {"messages": messages}
 
-    @app.post("/api/sessions/{session_id}/rename")
+    @app.post("/api/sessions/{session_id}/rename", dependencies=_GUARDED)
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
@@ -298,20 +349,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def soul_state() -> dict:
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/soul")
+    @app.post("/api/soul", dependencies=_GUARDED)
     def soul_toggle(req: SoulToggleRequest) -> dict:
         cfg.soul_enabled = req.enabled
         cfg.save()
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/model")
+    @app.post("/api/model", dependencies=_GUARDED)
     def model_select(req: ModelSelectRequest) -> dict:
         cfg.selected_model = req.model.strip()
         cfg.save()
         return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
-    @app.post("/api/chat", dependencies=[Depends(_enforce_rate_limit)])
+    @app.post("/api/chat", dependencies=_GUARDED)
     def chat(req: ChatRequest) -> dict:
         try:
             if req.session_id:
@@ -377,7 +428,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # the operator's box regardless. gate.py's equivalent surface (POST
     # /ops/agentic, gate_ops.py) carries both a rate limit and an API key; the
     # harness is single-operator so it keeps no key, but the throttle applies.
-    @app.get("/api/github/status", dependencies=[Depends(_enforce_rate_limit)])
+    @app.get("/api/github/status", dependencies=_GUARDED)
     def github_status() -> dict:
         try:
             gh_result = run_agentic_op("status")

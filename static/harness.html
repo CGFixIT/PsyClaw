@@ -145,6 +145,10 @@
   .toggle { cursor: pointer; background: none; border: none; font: inherit; color: inherit; padding: 0; }
   .toggle .v.on { color: var(--accent-green); }
   .toggle .v.off { color: var(--accent-red); }
+  .apikey {
+    font: inherit; color: var(--text-primary); background: none; width: 130px;
+    border: none; border-bottom: 1px solid var(--text-muted); padding: 0 2px; outline: none;
+  }
 </style>
 </head>
 <body>
@@ -186,6 +190,8 @@
           <span class="k">soul </span><span class="v" id="sSoulV">…</span>
         </button>
         <span class="spacer"></span>
+        <span><span class="k">key </span><input class="apikey" id="apiKey" type="password" autocomplete="off"
+          spellcheck="false" placeholder="CYCLAW_API_KEY" title="operator API key; held in memory only"></span>
         <span class="k" id="sHome" title="harness home"></span>
       </div>
     </div>
@@ -196,7 +202,7 @@
 /* Model output and registry data are DATA, never HTML: everything rendered
    through textContent or the table() builder (createElement + textContent). */
 const $ = id => document.getElementById(id);
-const stream = $('stream'), input = $('input'), sendBtn = $('send');
+const stream = $('stream'), input = $('input'), sendBtn = $('send'), apiKeyInput = $('apiKey');
 
 let currentSession = null;   // session_id string or null
 let soulEnabled = true;
@@ -234,8 +240,24 @@ function table(rows, headers) {
 }
 
 /* ── API ── */
+/* The Authorization header is attached HERE, in the helper body, never at a call
+   site. tests/test_harness_console_contract.py hand-parses this file: it locates
+   every invocation of this helper, reads the path from argument 0 and the method
+   from argument 1, and cross-checks both against the live app's routes. Adding a
+   header argument at the 17 call sites -- or switching to an options object --
+   would break that parser (an options object in argument 1 fails its method
+   regex, so every call would silently record as GET). Changing only this body is
+   invisible to it. The parser also has no comment handling, so this comment must
+   avoid writing the helper's name followed by an open paren. */
 async function api(path, method, body) {
   const opts = { method: method || 'GET', headers: {} };
+  const key = apiKeyInput ? apiKeyInput.value.trim() : '';
+  /* Sent on every request, not just the guarded ones: the open read routes
+     ignore it, and branching per-path here would drift from the server's guard
+     list. Held in the input element only -- never localStorage, never a cookie
+     (a cookie would be sent automatically by a cross-site page, which is exactly
+     the CSRF shape the server's origin check exists to stop). */
+  if (key) opts.headers['Authorization'] = 'Bearer ' + key;
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const resp = await fetch(path, opts);
   let data = null;

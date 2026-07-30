@@ -60,7 +60,9 @@ Uninstall (keeps data by default):
 | `bin/` | `cyclaw.cmd` + `Invoke-CyClaw.ps1` |
 
 `CYCLAW_HOME` overrides the home location; `CYCLAW_REPO` overrides the repo
-path; `CYCLAW_HARNESS_PORT` overrides the port.
+path; `CYCLAW_HARNESS_PORT` overrides the port. `CYCLAW_API_KEY` authenticates
+the state-changing routes — passed through from the caller's environment, never
+generated or written to disk by the launcher.
 
 ## The console
 
@@ -93,6 +95,17 @@ read-only.
 ## Security posture
 
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
+- The five state-changing routes (`POST /api/sessions`, `.../rename`,
+  `/api/soul`, `/api/model`, `/api/chat`) plus `GET /api/github/status` require a
+  Bearer `CYCLAW_API_KEY` — the same variable the gateway's `/soul` and `/ops/*`
+  endpoints use. **Fail-closed:** an unset key means those routes return 401, not
+  "no auth required". Paste the key into the console's `key` field, or export it
+  before launching. The read-only routes stay open so the console can boot and
+  report that a key is needed. The key is held in the browser page only — never
+  `localStorage`, never a cookie.
+- Those same routes reject browser cross-site requests via `Origin` /
+  `Sec-Fetch-Site`. Requests carrying neither header (curl, PowerShell, the
+  sandbox verifier) are allowed — a non-browser client is not a CSRF vector.
 - The chat client refuses non-loopback model endpoints.
 - Session IDs are server-generated hex; path traversal is rejected.
 - No shell execution from the console; GitHub actions go through the

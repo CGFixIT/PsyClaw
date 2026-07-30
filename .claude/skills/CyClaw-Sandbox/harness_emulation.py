@@ -3,10 +3,12 @@
 static/harness.html performs in the browser, using httpx from the venv.
 
 Mirrors terminal_emulation.py's approach for the harness console (port 8790
-by default) instead of the RAG gateway (port 8787). The harness has no API
-key gate (loopback-only + TrustedHostMiddleware is the whole threat-model
-boundary, per harness/server.py's own docstring), so unlike terminal.html's
-emulation there is no auth_headers() dance here.
+by default) instead of the RAG gateway (port 8787). The harness's five
+state-changing POSTs and GET /api/github/status are gated on a Bearer
+CYCLAW_API_KEY (utils/auth.py), so this script reads that env var and sends the
+header on every request; the open read routes ignore it. Loopback bind plus
+TrustedHostMiddleware plus an Origin/Sec-Fetch-Site check remain the rest of the
+boundary, per harness/server.py's own docstring.
 
 Verifies, in the same order harness.html's own on-load + first-use calls fire:
   1. GET  /api/status     (header pills: model, tokens, provider)
@@ -29,6 +31,7 @@ Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
 """
 
+import os
 import sys
 
 
@@ -53,7 +56,15 @@ def main() -> int:
     print(f"=== harness.html API emulation → {base} ===")
     print()
 
-    with httpx.Client(base_url=base, timeout=10.0) as client:
+    # The five state-changing POSTs and GET /api/github/status require a Bearer
+    # CYCLAW_API_KEY (utils/auth.py). Sent on every request here: the open read
+    # routes ignore it, and a per-path branch would drift from the server's guard
+    # list. An unset key means those routes correctly 401 and the emulation fails
+    # loudly rather than silently skipping them.
+    api_key = os.environ.get("CYCLAW_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    with httpx.Client(base_url=base, timeout=10.0, headers=headers) as client:
 
         # ── 1. GET /api/status (header pills) ─────────────────────────────
         print("[1] GET /api/status  (harness.html header pills)")

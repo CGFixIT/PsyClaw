@@ -269,6 +269,7 @@ jobs:
             -q --tb=short \
             --cov=gate \
             --cov=gate_ops \
+            --cov=utils.auth \
             --cov=utils.sanitizer \
             --cov=utils.telemetry_kill \
             --cov=utils.config_validation \

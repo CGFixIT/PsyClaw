@@ -1112,7 +1112,12 @@ def phase_harness_console() -> PhaseResult:
     chat = HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_harness_mock_transport(),
     )
-    client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1")
+    # The five state-changing POSTs and GET /api/github/status are Bearer-gated
+    # (utils/auth.py). verify.sh exports CYCLAW_API_KEY; fall back to a literal so
+    # a standalone run still exercises the guarded routes instead of 401ing.
+    _key = os.environ.setdefault("CYCLAW_API_KEY", "sandbox-harness-key")
+    _auth = {"Authorization": f"Bearer {_key}"}
+    client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_auth)
 
     log("\n  --- Status / Registry ---")
     r = client.get("/api/status")
@@ -1201,7 +1206,7 @@ def phase_harness_console() -> PhaseResult:
     # base_url, so this needs its own client rather than an overridden header
     # on the loopback one above -- mirrors tests/test_harness.py's own
     # test_rejects_non_loopback_host_header technique exactly.
-    rebind_client = TestClient(create_app(cfg, chat), base_url="http://attacker.example")
+    rebind_client = TestClient(create_app(cfg, chat), base_url="http://attacker.example", headers=_auth)
     r = rebind_client.get("/api/status")
     phase.checks.append(Check("harness_trusted_host_rejects_rebinding", r.status_code == 400))
 
