@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import tempfile
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,8 +76,32 @@ def _load_json(path: Path) -> dict:
 
 
 def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
-    with os.fdopen(fd, "w", encoding=_UTF8) as stream:
-        json.dump(payload, stream, indent=2)
+    # mkstemp hands back a RAW descriptor, and ownership of it has to be
+    # unambiguous. The obvious shape -- let os.fdopen take it, and compensate with
+    # os.close in an except -- is wrong in both directions:
+    #
+    #   * If fdopen fails EARLY (EMFILE/ENFILE, the fd-exhaustion case where
+    #     leaking one more descriptor hurts most) it never took ownership, so
+    #     without a close the fd leaks.
+    #   * If fdopen fails LATE -- it built the FileIO, then raised constructing the
+    #     buffering/text wrapper (MemoryError, an interrupt) -- CPython's own
+    #     unwinding has already closed the fd. A compensating close then raises
+    #     EBADF, masking the original exception; worse, in this threaded process
+    #     another thread may already have been handed that same descriptor number,
+    #     so the second close would land on ITS file.
+    #
+    # closefd=False keeps ownership here for every path, and ExitStack's callback
+    # closes the descriptor exactly once on the way out -- success or exception --
+    # so the file object never closes it and nothing closes it twice.
+    with ExitStack() as fd_owner:
+        fd_owner.callback(os.close, fd)
+        with os.fdopen(fd, "w", encoding=_UTF8, closefd=False) as stream:
+            json.dump(payload, stream, indent=2)
+    # ORDER IS LOAD-BEARING: os.replace sits OUTSIDE the ExitStack, so the
+    # descriptor is already closed by the time it runs. Windows refuses to rename
+    # a file that still has an open handle (PermissionError WinError 32), so
+    # holding the fd across the replace breaks every harness config write on that
+    # platform -- it does not merely leak a descriptor.
     os.replace(staged, path)
 
 
@@ -93,9 +117,18 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     """Atomic JSON write (staged file + os.replace), the soul/registry pattern."""
     staged_dir = str(path.parent)
     fd, staged = tempfile.mkstemp(dir=staged_dir, prefix=".staged.", suffix=".tmp")
+    # The staged file exists on disk the moment mkstemp returns, so EVERY failure
+    # path between here and the os.replace has to remove it or it is orphaned in
+    # ~/.CyClaw/ (or ~/.CyClaw/sessions/) forever. OSError was the only case
+    # handled before, which missed json.dump's own failure modes: TypeError on a
+    # non-serializable value, ValueError on a circular reference, RecursionError
+    # on a deeply nested payload. Catching BaseException (the same idiom
+    # agentic/fsconnect/pathsafe.py uses for its staged writes) also covers
+    # KeyboardInterrupt landing mid-write. The original exception propagates
+    # untouched -- this only cleans up.
     try:
         _write_and_replace(fd, staged, path, payload)
-    except OSError:
+    except BaseException:
         _discard_staged(staged)
         raise
 
