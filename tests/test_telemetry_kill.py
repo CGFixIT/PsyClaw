@@ -221,6 +221,8 @@ _HOSTILE_ENV = {
     "LANGCHAIN_TRACING_V2": "true",
     "LANGCHAIN_API_KEY": "leaked-key-should-be-removed",
     "LANGSMITH_API_KEY": "leaked-key-should-be-removed",
+    "HF_HUB_DISABLE_TELEMETRY": "0",
+    "DO_NOT_TRACK": "0",
 }
 
 _ASSERT_KILLED = (
@@ -266,6 +268,22 @@ def test_chroma_otel_granularity_is_pinned_none() -> None:
     from utils.telemetry_kill import TELEMETRY_KILL
 
     assert TELEMETRY_KILL["CHROMA_OTEL_GRANULARITY"] == "none"
+
+
+def test_hf_hub_and_do_not_track_disabled():
+    """HF_HUB_DISABLE_TELEMETRY and DO_NOT_TRACK must be '1' after import.
+
+    Distinct from HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE (which stay conditional,
+    see retrieval/embeddings.py): these two only suppress telemetry pings, not
+    downloads, so they are unconditional in the shared kill dict.
+    """
+    snippet = (
+        "import gate, os\n"
+        "assert os.environ['HF_HUB_DISABLE_TELEMETRY'] == '1'\n"
+        "assert os.environ['DO_NOT_TRACK'] == '1'\n"
+    )
+    result = _run_in_subprocess(snippet, extra_env={"HF_HUB_DISABLE_TELEMETRY": "0", "DO_NOT_TRACK": "0"})
+    _assert_subprocess_ok(result, "hf_hub_and_do_not_track_disabled")
 
 
 def test_gate_and_shared_module_agree() -> None:

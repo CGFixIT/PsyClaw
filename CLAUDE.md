@@ -580,6 +580,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |
+| `/OTel-Hardening` | check + task | Re-verify telemetry-kill switches (`utils/telemetry_kill.py`, the conditional HF Hub wiring) against a static baseline plus a live vendor-doc sweep; propose/apply additive fixes when a vendor's telemetry contract drifted | Yes (stdlib) for the static half; live sweep needs network |
 
 ### Operational & workflow skills
 
