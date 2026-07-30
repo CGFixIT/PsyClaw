@@ -232,7 +232,13 @@ class SessionStore:
             _MSGS_KEY: [asdict(msg) for msg in session.messages],
             "tally": asdict(session.tally),
         }
+        # TypeError/ValueError cover json.dump refusing the payload (a
+        # non-serializable field, a circular reference). Today every field above
+        # is a str/int/float, so only OSError is reachable -- but the store's
+        # contract is that a persist failure surfaces as SessionStoreError, and
+        # without these two a future field that is not JSON-safe would escape as
+        # an unhandled 500 from POST /api/chat instead.
         try:
             _atomic_write_json(_session_path(self._dir, session.session_id), payload)
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
             raise SessionStoreError("could not persist session") from exc
