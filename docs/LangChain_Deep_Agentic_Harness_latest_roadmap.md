@@ -176,7 +176,20 @@ Based on the code audit of phases 0-5 (now hardened in this session's PRs
 | **Phase 4** | Local LM Studio proposer invocation + scoped tools | `ProposerWorkspaceTools`, MCP tool specs, `invoke_workspace_proposer()` ✓ |
 | **Phase 5** | Optional deepagent_github skeleton + no writes | `builder.py`, `SubagentSpec` (8 subagents defined), `DeepAgentPermissionPolicy` ✓ |
 
-### Phases 6–9: NOT STARTED (Planned, Not Yet Implemented)
+### Phases 6–9: NOT STARTED (Planned, Not Yet Implemented) — SUPERSEDED
+
+> **[Correction 2026-07-30].** This heading and the blockers table below it are
+> stale, and are preserved only for provenance. Phases 6-9 merged to `main` via
+> PR #515 on 2026-07-13. Every "Current Blocker" in the table is resolved:
+> `agentic/harness_optimizer/runners/github_coding_runner.py` and
+> `agentic/harness_optimizer/patching.py` both exist on `main`, and
+> `draft_plan()` returns a templated plan rather than raising
+> `NotImplementedError`. Read the two dated notes that follow the table, not the
+> table itself. Implemented-controls record:
+> `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. Note also that phase 9 is a
+> pre-executor *security review checklist*, not a shipped capability — "phases
+> 0-9 are on main" means the documents and regression tests are, not that nine
+> phases of runtime capability are.
 
 | Phase | Planned | Current Blocker |
 |---|---|---|
@@ -735,6 +748,23 @@ agentic:
     # allow_filesystem_write_tools, allow_shell_execution,
     # allow_github_writes, workspace_root
 ```
+
+**[Correction 2026-07-30].** The skeleton above is preserved as written on
+2026-07-11 and has since drifted from `main`. Three values are stale, and the
+first is not merely out of date but now **invalid**:
+
+- `provider: "lmstudio"` — retired by the Ollama migration. `agentic/config.py`
+  accepts only `"ollama"` (the default) or `"openai_compatible"`, and rejects
+  anything else with an `AgenticConfigError`. Copying the block verbatim would
+  fail config validation at boot.
+- `base_url: "http://localhost:1234/v1"` — shipped value is
+  `http://127.0.0.1:11434/v1`.
+- `grok-4.3` — `CLAUDE.md` names `grok-4.5`.
+
+The six-gate chain and the per-provider `enabled` design above are unaffected;
+only the illustrative defaults drifted. Per this document's own rule, the code
+wins and `config.yaml` owns the numbers — re-read both when implementing rather
+than copying this block.
 
 Validation additions in `agentic/config.py`: booleans real, model strings
 shell-metachar-free (reuse `_validate_no_shell_metachars`), unknown provider
