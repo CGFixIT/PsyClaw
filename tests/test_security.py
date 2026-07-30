@@ -15,6 +15,30 @@ from tests.conftest import TEST_CONFIG
 
 
 # ---------------------------------------------------------------------------
+# Docker runtime-state isolation
+# ---------------------------------------------------------------------------
+
+def test_generated_index_is_not_baked_into_the_image_and_is_writable_at_runtime():
+    repo_root = Path(__file__).resolve().parent.parent
+    cfg = yaml.safe_load((repo_root / "config.yaml").read_text(encoding="utf-8"))
+    index_roots = {
+        Path(cfg["indexing"][key]).parts[0]
+        for key in ("chroma_path", "bm25_path")
+    }
+    ignored = {
+        line.strip()
+        for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    volumes = yaml.safe_load(
+        (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    )["services"]["cyclaw"]["volumes"]
+
+    assert all(f"{root}/" in ignored for root in index_roots)
+    assert all(f"./{root}:/app/{root}:rw" in volumes for root in index_roots)
+
+
+# ---------------------------------------------------------------------------
 # Task 1: BM25 pickle RCE rejection
 # ---------------------------------------------------------------------------
 

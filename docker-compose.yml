@@ -17,6 +17,9 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./data:/app/data:rw
+      # Generated ChromaDB + BM25 state. Keep it out of image layers and
+      # available under the read-only root filesystem.
+      - ./index:/app/index:rw
       - ./checkpoints:/app/checkpoints:rw
       - ./logs:/app/logs:rw
       - ./config.yaml:/app/config.yaml:ro

@@ -33,6 +33,7 @@ env/
 # Local runtime state — provided via bind mounts at runtime, not baked in
 logs/
 checkpoints/
+index/
 data/chroma/
 data/bm25/
 
