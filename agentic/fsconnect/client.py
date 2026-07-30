@@ -28,6 +28,16 @@ from utils.logger import audit_log
 
 _MAX_GREP_MATCHES = 200
 _MAX_GLOB_MATCHES = 1000
+# Ceiling on how many directory levels fs_glob will descend. _MAX_GLOB_MATCHES
+# caps RESULTS, not TRAVERSAL, so it never bounded the recursion: _walk recursed
+# once per level, and a tree deeper than the interpreter's frame limit raised
+# RecursionError -- which is not an FsConnectError, so agentic/fsconnect/cli.py
+# never caught it and the CLI exited 1, outside the documented 0/2/3/4 contract
+# (utils/ops_runner._FSCONNECT_LABELS has no entry for 1, so /ops/fsconnect
+# reported label "unknown"). A tree that deep needs no symlink to build, so
+# pathsafe's O_NOFOLLOW containment does not apply. 64 is far beyond any real
+# corpus layout and leaves the frame budget untouched.
+_MAX_GLOB_DEPTH = 64
 
 
 def build_injection_patterns(cfg: dict) -> list[tuple[str, re.Pattern[str]]]:
@@ -172,16 +182,19 @@ class FsClient:
         resolve paths outside the security core. The pattern is matched (via
         ``fnmatch``) against each entry's path RELATIVE to *target*; ``*`` spans
         ``/``, so ``*.md`` finds matches at any depth when ``recursive`` is true.
-        Results are capped at ``_MAX_GLOB_MATCHES`` (``truncated`` flags the cap).
+        Results are capped at ``_MAX_GLOB_MATCHES`` and traversal at
+        ``_MAX_GLOB_DEPTH`` levels; ``truncated`` flags either cap.
         """
         self._guard_op("fs_glob")
         if not pattern:
             raise FsConnectError("fs_glob requires a non-empty pattern", code="FSCONNECT_BAD_ARG")
         matches: list[dict] = []
         prefix = f"{target}/" if target else ""
+        depth_capped = False
 
-        def _walk(rel: str) -> bool:
+        def _walk(rel: str, depth: int) -> bool:
             """Enumerate *rel*; return False once the match cap is hit (stop)."""
+            nonlocal depth_capped
             for entry in self._roots.list_dir(rel, root=root):
                 name = entry["name"]
                 child = f"{rel}/{name}" if rel else name
@@ -191,11 +204,20 @@ class FsClient:
                         return False
                     matches.append({"path": child, "type": entry["type"],
                                     "size": entry.get("size", 0)})
-                if recursive and entry["type"] == "dir" and not _walk(child):
-                    return False
+                if recursive and entry["type"] == "dir":
+                    # Stop descending rather than raise: an over-deep subtree is
+                    # an incomplete RESULT, which is exactly what `truncated`
+                    # already reports for the match cap. Siblings at this level
+                    # are still enumerated, so one pathological branch does not
+                    # discard the rest of the walk.
+                    if depth >= _MAX_GLOB_DEPTH:
+                        depth_capped = True
+                        continue
+                    if not _walk(child, depth + 1):
+                        return False
             return True
 
-        truncated = not _walk(target)
+        truncated = not _walk(target, 0) or depth_capped
         self._audit({"event": "fsconnect_read", "op": "fs_glob", "path": target or ".",
                      "match_count": len(matches)})
         return {"op": "fs_glob", "path": target or ".", "pattern": pattern,
