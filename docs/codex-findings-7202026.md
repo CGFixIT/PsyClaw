@@ -3,6 +3,104 @@
 Review date: 2026-07-20
 Current reviewed snapshot: [origin/main at 56fa237](https://github.com/CGFixIT/CyClaw/commit/56fa2377d1447e9b325b5c0edb6875a2f3e9db61)
 
+## Resolution status (as of 2026-07-30)
+
+This section is a status addendum, not a rewrite of the original findings below
+-- it records what a 2026-07-30 `/CyClaw-Optimize` pass confirmed by reading the
+CURRENT code on `main` (per `CLAUDE.md`'s authority order, code wins over docs),
+not by trusting this document's age or any PR title. Every RESOLVED line cites
+the exact function and an in-code comment confirming the fix is intentional
+(most reference "codex P1"/"codex P2"/"codex #593"/"codex #594" directly).
+
+**All four P1s are resolved:**
+
+- Windows fsconnect writes escape root -> **RESOLVED**. `agentic/fsconnect/writer.py`'s
+  `_writes_refused_platform()` now hard-refuses writes on Windows, enforced in
+  both `FsWriter.__init__` and `_executable` (comment cites "codex #593 P1").
+  Construction on Windows, and a POSIX-constructed writer later invoked on
+  Windows, are both covered.
+- Fsconnect indexing retains deleted files -> **RESOLVED**. `agentic/fsconnect/indexer.py`'s
+  `FsIndexer.apply()` now calls `_prune_staging()` after building the current
+  manifest (comment cites "codex P1"), removing staged copies whose source
+  disappeared. Pruning is ownership-bounded to the prior run's own manifest
+  cache, so a file CyClaw never staged is never touched.
+- Sync retries can hide corpus changes / lose the terminal audit event ->
+  **RESOLVED** (both halves). `sync/runner.py`'s `_run_sync_locked()` now
+  accumulates `events_by_path` across retry attempts, keyed by path with the
+  final attempt's operation winning (comment cites "codex #594 P2"), so a
+  transient copy-then-fail attempt is not lost by a clean retry. The
+  audit-convergence gap is closed too: the `except` path now emits a
+  schema-aligned `sync_failed` event preserving the harvested change evidence
+  before re-raising (comment cites "codex #594 P1").
+- Enabled live NeMo rails ignore advertised config -> **RESOLVED**.
+  `guardrails/integration.py`'s `_apply_guardrails_config()` now overrides the
+  static NeMo directory's engine/model/base_url from `GuardrailsConfig`
+  (comment cites "codex P1" and names the exact LM-Studio-vs-Ollama mismatch
+  this closes). The static `guardrails/config/config.yml` template itself was
+  also updated to the current Ollama endpoint (`127.0.0.1:11434`) as its
+  fallback default.
+
+**Six of the eight P2 findings are resolved:**
+
+- `/ops/sync` wall-clock budget omits the post-sync check -> **RESOLVED**.
+  `utils/ops_runner.py`'s `_sync_timeout_sec()` now doubles the shim's budget
+  (`multiplier = 2 if post_sync_check else 1`) to cover the full lock-held
+  lifecycle.
+- Sync master gate fails open for quoted booleans -> **RESOLVED**.
+  `sync/config.py`'s `load_sync_config()` now raises `SyncConfigError` if any
+  safety-boolean field is not a real YAML `bool`.
+- Scheduler derives the wrong repo root for nested `local_path` values ->
+  **RESOLVED**. `sync/scheduler.py`'s `_repo_root()` now prefers the canonical
+  `cfg.repo_root` carried on the config object, falling back to the old
+  depth-based derivation only when it is unavailable (comment cites "codex
+  finding").
+- Fsconnect safety booleans are not type-validated -> **RESOLVED**.
+  `agentic/fsconnect/config.py` now validates every entry in `_BOOL_FIELDS`
+  (`writes_enabled`, `allow_hard_delete`, etc.) is an actual `bool` in
+  `__post_init__`, raising `FsConnectConfigError` otherwise.
+- Trash deletion is not recoverably atomic -> **RESOLVED**.
+  `agentic/fsconnect/writer.py`'s `_to_trash()` now writes the sidecar
+  metadata BEFORE moving the payload, and rolls the sidecar back if the move
+  fails -- the ordering the original finding asked for.
+- MSSQL does not receive an enforced read-only session -> **RESOLVED**.
+  `agentic/sqlconnect/client.py`'s `_enforce_read_only()` now fails closed:
+  it tries psycopg's `read_only` property, falls back to pyodbc's
+  `SQL_ATTR_ACCESS_MODE` / `SQL_MODE_READ_ONLY`, and raises
+  `SqlConnectRuntimeError` if neither mechanism is available. (The
+  lock-escalation hints -- `updlock`/`holdlock`/etc. -- were already blocked by
+  `_FORBIDDEN_RE` at the time of the original review.)
+
+Two P2s were not re-verified with the same rigor in this pass (spot-checked
+via docstring/comment only, not full call-path tracing) -- treat as **likely
+resolved, not confirmed**:
+
+- `safe_generate` does not fully degrade on live-provider failure -- a
+  catch-all `except Exception` around `generate_async` now exists in
+  `guardrails/integration.py::safe_generate` and its comment cites "codex P2",
+  redacting to the exception type name before degrading.
+- `guardrails.cli check` is advertised as offline but calls `safe_generate` --
+  `guardrails/cli.py`'s module docstring now explicitly documents that `check`
+  performs a live generation when guardrails+NeMo are both enabled, otherwise
+  falling back to the offline heuristic floor. This resolves it via honest
+  documentation (one of the two directions the original finding suggested),
+  not by renaming the subcommand.
+
+**The three P3 items were NOT re-checked in this pass** (`sync.include_soul`
+dead/misleading opt-in, `--config` partial propagation, trash entry name
+collision) -- their status as of 2026-07-30 is unknown; do not assume either
+way without checking the current code first.
+
+**New finding surfaced by the same 2026-07-30 pass, adjacent to but distinct
+from the MSSQL read-only fix above:** as of this addendum,
+`agentic/sqlconnect/client.py`'s `_FORBIDDEN_RE`/`_FORBIDDEN_FN_RE` do not yet
+guard the ad-hoc-query surface (`OPENROWSET`/`OPENQUERY`/`OPENDATASOURCE`) that
+MSSQL exposes independently of the read-only-session fix above -- a single
+valid read-only `SELECT` can still reach the DB host's filesystem or an
+internal network address through these T-SQL row-set functions. This is
+tracked as a separate, freshly opened fix rather than folded into this status
+update; check `agentic/sqlconnect/client.py`'s `_FORBIDDEN_RE` directly for its
+current state rather than assuming this note is still accurate.
+
 ## Scope and method
 
 This was a source-and-test review of:
