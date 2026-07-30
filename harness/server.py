@@ -25,37 +25,40 @@ from utils.telemetry_kill import apply_telemetry_kill
 
 apply_telemetry_kill()
 
-import logging  # noqa: E402 - must follow the telemetry kill above
-import os  # noqa: E402 - must follow the telemetry kill above
-import sys  # noqa: E402 - must follow the telemetry kill above
-from collections.abc import AsyncIterator  # noqa: E402 - must follow the telemetry kill above
-from contextlib import asynccontextmanager  # noqa: E402 - must follow the telemetry kill above
-from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
+# E402 (module-level import not at top of file) is expected and intentional
+# below -- these imports must follow apply_telemetry_kill() above. Rather than
+# an inline per-import suppression comment on every one of the 19 lines
+# (wemake-python-styleguide's WPS402 flags that many as noqa-comment
+# overuse), this file carries a blanket E402 grant in pyproject.toml's
+# [tool.ruff.lint] per-file-ignores and setup.cfg's flake8 per-file-ignores,
+# matching gate.py's identical pattern for the identical reason.
+import logging
+import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, HTTPException  # noqa: E402 - must follow the telemetry kill above
-from fastapi.responses import FileResponse  # noqa: E402 - must follow the telemetry kill above
-from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402 - must follow the telemetry kill above
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig  # noqa: E402 - must follow the telemetry kill above
-from harness.ollama import HarnessChatClient, HarnessLLMError  # noqa: E402 - must follow the telemetry kill above
-from harness.prompts import compose_system_prompt  # noqa: E402 - must follow the telemetry kill above
-from harness.registry_view import full_registry  # noqa: E402 - must follow the telemetry kill above
-from harness.schemas import (  # noqa: E402 - must follow the telemetry kill above
+from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
+from harness.ollama import HarnessChatClient, HarnessLLMError
+from harness.prompts import compose_system_prompt
+from harness.registry_view import full_registry
+from harness.schemas import (
     ChatRequest,
     ModelSelectRequest,
     RenameRequest,
     SessionCreateRequest,
     SoulToggleRequest,
 )
-from harness.sessions import (  # noqa: E402 - must follow the telemetry kill above
-    SessionStore,
-    SessionStoreError,
-    TokenTally,
-)
-from llm.client import ResolvedLocalBackend, resolve_local_backend  # noqa: E402 - must follow the telemetry kill above
-from utils.errors import AgenticError  # noqa: E402 - must follow the telemetry kill above
-from utils.logger import _get_config  # noqa: E402 - must follow the telemetry kill above
-from utils.ops_runner import OpsError, run_agentic_op  # noqa: E402 - must follow the telemetry kill above
+from harness.sessions import SessionStore, SessionStoreError, TokenTally
+from llm.client import ResolvedLocalBackend, resolve_local_backend
+from utils.errors import AgenticError
+from utils.logger import _get_config
+from utils.ops_runner import OpsError, run_agentic_op
 
 logger = logging.getLogger("cyclaw.harness.server")
 
