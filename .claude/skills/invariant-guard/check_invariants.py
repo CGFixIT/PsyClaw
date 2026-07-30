@@ -32,6 +32,24 @@ from pathlib import Path
 
 CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
 OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails")
+# The full documented graph shape (CLAUDE.md's "9-node LangGraph topology").
+# I1/I2 previously checked only that specific expected edges/sources were
+# PRESENT (membership), never that the graph declares nothing else -- an
+# extra graph.add_edge("retrieve", "local_llm") alongside the real edge, or
+# a stray add_node, passed every prior check untouched. These two sets close
+# that gap by asserting exact equality against the full node/edge shape.
+EXPECTED_NODES = frozenset({
+    "retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
+    "grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger",
+})
+EXPECTED_UNCONDITIONAL_EDGES = frozenset({
+    ("retrieve", "route_by_score"),
+    ("local_llm", "audit_logger"),
+    ("grok_fallback", "audit_logger"),
+    ("claude_fallback", "audit_logger"),
+    ("offline_best_effort", "audit_logger"),
+    ("audit_logger", "END"),
+})
 # Conditional-edge sources and their router function names. Single source of
 # truth for I2 (topology=policy) and I4 (audit convergence), which both need
 # to agree on which nodes route conditionally and via which router -- I4's
@@ -120,6 +138,17 @@ def graph_wiring(tree: ast.Module) -> tuple[str | None, list[tuple[str, str]], d
     return entry, edges, cond
 
 
+def node_names(tree: ast.Module) -> set[str]:
+    """String literals passed as the first arg of every graph.add_node(...) call."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and call_name(node) == "add_node" and node.args:
+            val = str_arg(node.args[0])
+            if val:
+                names.add(val)
+    return names
+
+
 def router_returns(tree: ast.Module, func_name: str) -> set[str]:
     """String literals returned by a router function (its full routing range)."""
     returns: set[str] = set()
@@ -169,6 +198,14 @@ def main(argv: list[str] | None = None) -> int:
         ok("unconditional edge retrieve -> route_by_score")
     else:
         fail("unconditional edge retrieve -> route_by_score", f"edges: {edges}")
+    retrieve_edges = {(s, d) for s, d in edges if s == "retrieve"}
+    if retrieve_edges == {("retrieve", "route_by_score")}:
+        ok("retrieve has exactly one outgoing edge, and it is unconditional")
+    else:
+        fail("retrieve has exactly one outgoing edge, and it is unconditional",
+             f"retrieve's unconditional edges: {sorted(retrieve_edges)} "
+             "(an extra add_edge('retrieve', ...) would let something answer before "
+             "retrieval without failing the membership check above)")
 
     # ── I2 Topology = policy ────────────────────────────────────────────────
     print("I2 Topology = policy")
@@ -196,6 +233,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         fail("user_gate_router returns the documented provider/offline/audit targets",
              f"returns: {sorted(gate_targets)}")
+    actual_nodes = node_names(graph_tree)
+    if actual_nodes == EXPECTED_NODES:
+        ok(f"graph declares exactly the {len(EXPECTED_NODES)} documented nodes")
+    else:
+        fail(f"graph declares exactly the {len(EXPECTED_NODES)} documented nodes",
+             f"extra: {sorted(actual_nodes - EXPECTED_NODES)}, missing: {sorted(EXPECTED_NODES - actual_nodes)}")
+    actual_edges = set(edges)
+    if actual_edges == EXPECTED_UNCONDITIONAL_EDGES:
+        ok(f"graph declares exactly the {len(EXPECTED_UNCONDITIONAL_EDGES)} documented unconditional edges")
+    else:
+        fail(f"graph declares exactly the {len(EXPECTED_UNCONDITIONAL_EDGES)} documented unconditional edges",
+             f"extra: {sorted(actual_edges - EXPECTED_UNCONDITIONAL_EDGES)}, "
+             f"missing: {sorted(EXPECTED_UNCONDITIONAL_EDGES - actual_edges)}")
 
     # ── I3 Triple-gated external providers ─────────────────────────────────
     print("I3 Triple-gated external providers")
