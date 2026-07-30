@@ -30,6 +30,13 @@ cp -r "$repo_root"/utils "$repo_root"/agentic "$repo_root"/sync \
 sed -i.bak 's/^import hmac/import hmac\nimport agentic/' "$tmp/gate.py"
 # Violation B: sever the grok_fallback -> audit_logger edge (breaks I4).
 sed -i.bak 's/graph.add_edge("grok_fallback", "audit_logger")/pass  # severed/' "$tmp/graph.py"
+# Violation C: an EXTRA unconditional edge out of retrieve, alongside the real
+# one — a stray graph.add_edge("retrieve", "local_llm") would let something
+# answer before retrieval finishes routing, but a membership-only check
+# (`("retrieve", "route_by_score") in edges`) can't see it since the real
+# edge is still present. Only the exclusivity checks (I1's retrieve-edge-count
+# assertion, I2's exact node/edge-set equality) catch this.
+sed -i.bak 's/graph.add_edge("retrieve", "route_by_score")/graph.add_edge("retrieve", "route_by_score")\n    graph.add_edge("retrieve", "local_llm")  # planted: extra unconditional edge/' "$tmp/graph.py"
 
 out="$(python3 "$checker" --repo-root "$tmp" 2>&1)"
 rc=$?
@@ -40,6 +47,7 @@ if [ "$rc" -ne 2 ]; then
 fi
 echo "$out" | grep -q "gate.py imports none" || { echo "mutation test: import violation not detected" >&2; exit 1; }
 echo "$out" | grep -q "reach audit_logger"   || { echo "mutation test: severed edge not detected" >&2; exit 1; }
-echo "mutation test: PASS (both injected violations detected, exit 2)"
+echo "$out" | grep -q "retrieve has exactly one outgoing edge" || { echo "mutation test: extra retrieve edge not detected" >&2; exit 1; }
+echo "mutation test: PASS (all three injected violations detected, exit 2)"
 
 echo "== invariant-guard verify: OK =="
