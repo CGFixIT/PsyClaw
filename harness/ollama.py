@@ -14,12 +14,15 @@ rather than quietly sending prompts to a remote host.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 
 from utils.errors import AgenticError
+
+logger = logging.getLogger("cyclaw.harness.ollama")
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 _HTTP_OK = 200
@@ -120,13 +123,30 @@ class HarnessChatClient:
         try:
             resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=auth)
         except httpx.HTTPError as exc:
+            # str(exc) on an httpx error embeds the full request URL and, for
+            # some transport errors, the underlying OS message. The exception
+            # TYPE is what an operator actually acts on (ConnectError vs
+            # ReadTimeout), so send that and keep the rest out of the browser.
+            # Same call guardrails/integration.py makes for provider errors.
+            logger.debug("harness chat transport failure", exc_info=True)
             raise HarnessLLMError(
                 "model server unreachable — is Ollama running?",
-                details={"base_url": self.base_url, "error": str(exc)},
+                details={"base_url": self.base_url, "error": type(exc).__name__},
             ) from exc
         if resp.status_code != _HTTP_OK:
-            raise HarnessLLMError(
-                f"model server returned HTTP {resp.status_code}",
-                details={"body": resp.text[:_ERROR_BODY_PREVIEW]},
+            # The response body is upstream-controlled bytes. base_url is
+            # loopback-only, but "loopback" routinely means an OpenAI-compatible
+            # proxy the operator points at a remote provider (backend.api_key
+            # exists for exactly that), and a 401/403 body from such a proxy can
+            # echo the presented Authorization header or an internal upstream
+            # URL. harness/server.py:_err puts details straight into the
+            # HTTPException the console renders, and there is no sanitize_error
+            # on this side the way gate.py injects one into gate_ops.py.
+            # Keep the body for the operator's own terminal, not the browser.
+            logger.debug(
+                "harness chat upstream HTTP %s: %s",
+                resp.status_code,
+                resp.text[:_ERROR_BODY_PREVIEW],
             )
+            raise HarnessLLMError(f"model server returned HTTP {resp.status_code}")
         return _parse_chat_response(resp, use_model)
