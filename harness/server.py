@@ -166,14 +166,22 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         window_seconds=rl_cfg.get("window_seconds", 60),
     )
 
-    def _enforce_chat_rate_limit(request: Request) -> None:
-        """Per-IP throttle for /api/chat, mirroring gate.py's _enforce_rate_limit.
+    def _enforce_rate_limit(request: Request) -> None:
+        """Per-IP throttle for the expensive routes, mirroring gate.py's _enforce_rate_limit.
 
         Closes a local-DoS / runaway-token-burn vector: harness routes are
         loopback-only and unauthenticated (single-operator console), so a
-        misbehaving local process could otherwise hammer /api/chat with no
+        misbehaving local process could otherwise hammer them with no
         limit at all -- every other CyClaw entry point rate-limits its
         request-generating endpoint (/query), this one didn't.
+
+        Applied to the two routes that cost real resources per call:
+        /api/chat (a model round-trip) and /api/github/status (a Python
+        subprocess via utils.ops_runner, up to _TIMEOUT_SEC=120s each). The
+        cheap read-only routes (/api/status, /api/sessions, ...) stay exempt
+        so a console refresh loop never eats the budget the expensive routes
+        need. The budget is shared across the limited routes on purpose: it
+        is a per-IP ceiling on the app, not a per-route quota.
         """
         client_ip = request.client.host if request.client else "unknown"
         if not rate_limiter.allow(client_ip):
@@ -303,7 +311,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
-    @app.post("/api/chat", dependencies=[Depends(_enforce_chat_rate_limit)])
+    @app.post("/api/chat", dependencies=[Depends(_enforce_rate_limit)])
     def chat(req: ChatRequest) -> dict:
         try:
             if req.session_id:
@@ -360,7 +368,16 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         }
 
     # -- GitHub (agentic) ------------------------------------------------
-    @app.get("/api/github/status")
+    # Rate-limited: unlike every other GET here, this one spawns a Python
+    # subprocess (utils.ops_runner -> `python -m agentic.cli status`) that can
+    # hold a slot for up to ops_runner._TIMEOUT_SEC (120s). A plain cross-origin
+    # GET needs no CORS preflight and TrustedHostMiddleware only checks the Host
+    # name, so a page the operator happens to visit can drive this route in a
+    # loop -- unreadable to the attacker, but the process-table/CPU cost lands on
+    # the operator's box regardless. gate.py's equivalent surface (POST
+    # /ops/agentic, gate_ops.py) carries both a rate limit and an API key; the
+    # harness is single-operator so it keeps no key, but the throttle applies.
+    @app.get("/api/github/status", dependencies=[Depends(_enforce_rate_limit)])
     def github_status() -> dict:
         try:
             gh_result = run_agentic_op("status")
