@@ -162,6 +162,53 @@ def router_returns(tree: ast.Module, func_name: str) -> set[str]:
     return returns
 
 
+def dict_literal(node: ast.expr) -> dict[str, str]:
+    """A literal ``{"a": "b", ...}`` dict as a plain str->str mapping."""
+    # Non-string keys/values are dropped defensively; every real path_map in
+    # graph.py is str->str. Returns {} for anything that isn't a dict literal
+    # (e.g. a name reference), which callers treat as "no path_map" (identity).
+    if not isinstance(node, ast.Dict):
+        return {}
+    result: dict[str, str] = {}
+    for k, v in zip(node.keys, node.values):
+        key = str_arg(k) if k is not None else None
+        val = str_arg(v)
+        if key is not None and val is not None:
+            result[key] = val
+    return result
+
+
+def conditional_path_maps(tree: ast.Module) -> dict[str, dict[str, str]]:
+    """source -> {router-return-value: real-target-node} for every add_conditional_edges(...) call."""
+    # This is the piece I1/I2 were missing entirely: LangGraph resolves a
+    # router's return value through this dict to get the actual target node --
+    # the router's own returned string is often an internal label, not the
+    # real node name. route_by_score's score_router returns "local_llm" for a
+    # high-confidence score, but the path_map remaps that to the real target
+    # "guardrail_input"; checking score_router's raw return values (as the
+    # code did before this fix) verifies the router's own naming convention,
+    # not the graph's actual wiring. A source absent here was wired without an
+    # explicit path_map (or the map isn't a literal) -- callers fall back to
+    # treating the router's return value as the target directly (identity).
+    maps: dict[str, dict[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and call_name(node) == "add_conditional_edges" and len(node.args) >= 3:
+            src = str_arg(node.args[0])
+            if src:
+                maps[src] = dict_literal(node.args[2])
+    return maps
+
+
+def conditional_edge_targets(tree: ast.Module, source: str, router_func_name: str) -> set[str]:
+    """Real graph targets for a conditional source, resolved through its path_map."""
+    # The router's own returned strings, mapped through its add_conditional_edges
+    # path_map when one exists (falls back to the raw string per key when the
+    # map doesn't cover it, i.e. an identity mapping).
+    returns = router_returns(tree, router_func_name)
+    path_map = conditional_path_maps(tree).get(source, {})
+    return {path_map.get(r, r) for r in returns}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None,
@@ -215,24 +262,34 @@ def main(argv: list[str] | None = None) -> int:
     else:
         fail("conditional routing only at route_by_score, guardrail_input, and user_gate",
              f"conditional sources: {sorted(cond)}")
-    score_targets = router_returns(graph_tree, "score_router")
-    if score_targets == {"local_llm", "user_gate"}:
-        ok("score_router returns exactly {local_llm, user_gate}")
+    # Real targets, not raw router-return strings: score_router returns the
+    # string "local_llm" for a high-confidence score, but route_by_score's
+    # add_conditional_edges path_map remaps that to the real node
+    # "guardrail_input" -- checking the raw return value (as this used to)
+    # verifies the router's own internal naming, not the graph's actual
+    # wiring, and would not notice a path_map edit that reroutes around
+    # guardrail_input/user_gate entirely while score_router's code is
+    # untouched. conditional_edge_targets resolves through the path_map.
+    score_targets = conditional_edge_targets(graph_tree, "route_by_score", "score_router")
+    if score_targets == {"guardrail_input", "user_gate"}:
+        ok("route_by_score's real targets are exactly {guardrail_input, user_gate}")
     else:
-        fail("score_router returns exactly {local_llm, user_gate}", f"returns: {sorted(score_targets)}")
-    guardrail_targets = router_returns(graph_tree, "guardrail_router")
+        fail("route_by_score's real targets are exactly {guardrail_input, user_gate}",
+             f"real targets: {sorted(score_targets)} -- a path_map value change can reroute around "
+             "guardrail_input/user_gate without score_router's own code changing at all")
+    guardrail_targets = conditional_edge_targets(graph_tree, "guardrail_input", "guardrail_router")
     if guardrail_targets == {"local_llm", "audit_logger"}:
-        ok("guardrail_router returns exactly {local_llm, audit_logger}")
+        ok("guardrail_input's real targets are exactly {local_llm, audit_logger}")
     else:
-        fail("guardrail_router returns exactly {local_llm, audit_logger}",
-             f"returns: {sorted(guardrail_targets)}")
-    gate_targets = router_returns(graph_tree, "user_gate_router")
+        fail("guardrail_input's real targets are exactly {local_llm, audit_logger}",
+             f"real targets: {sorted(guardrail_targets)}")
+    gate_targets = conditional_edge_targets(graph_tree, "user_gate", "user_gate_router")
     expected_gate_targets = {"grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"}
     if gate_targets == expected_gate_targets:
-        ok("user_gate_router returns exactly the documented provider/offline/audit targets")
+        ok("user_gate's real targets are exactly the documented provider/offline/audit targets")
     else:
-        fail("user_gate_router returns the documented provider/offline/audit targets",
-             f"returns: {sorted(gate_targets)}")
+        fail("user_gate's real targets are the documented provider/offline/audit targets",
+             f"real targets: {sorted(gate_targets)}")
     actual_nodes = node_names(graph_tree)
     if actual_nodes == EXPECTED_NODES:
         ok(f"graph declares exactly the {len(EXPECTED_NODES)} documented nodes")
@@ -289,7 +346,11 @@ def main(argv: list[str] | None = None) -> int:
     for src, dst in edges:
         adj.setdefault(src, set()).add(dst)
     for src, router in COND_SOURCE_ROUTERS.items():
-        adj.setdefault(src, set()).update(router_returns(graph_tree, router))
+        # Real targets (through the path_map), not raw router-return strings
+        # -- same reasoning as I2 above: route_by_score's reachability edge
+        # must point at guardrail_input (the real node), not the literal
+        # string "local_llm" score_router happens to return internally.
+        adj.setdefault(src, set()).update(conditional_edge_targets(graph_tree, src, router))
     nodes = {"retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
              "grok_fallback", "claude_fallback", "offline_best_effort"}
 
