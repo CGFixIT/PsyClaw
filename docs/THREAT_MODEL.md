@@ -126,6 +126,15 @@ threat that the architecture has already removed:
 - **Filesystem writes are triple-gated and off by default.** `writes_enabled`
   defaults `False`; writes additionally require a non-empty `reason` and `confirm`,
   and are confined to an allow-list of writable roots via zero-TOCTOU path checks.
+- **Local governed writes exist and are not the same thing as GitHub writes.**
+  Two agentic write paths are shipped, working, and default-off:
+  `agentic/fsconnect/writer.py` (the filesystem writer above, which carries its
+  own `FS_WRITE_HARD_DISABLE` module constant alongside the config gates) and
+  `agentic/harness_optimizer/patching.py::apply_candidate_artifact`, which
+  writes a SHA-256-versioned JSON record under `data/agentic/harness_optimizer/`
+  after eight sequential gates including an independent injection re-check. Read
+  "GitHub writes are hard-killed" above as scoped to GitHub — not as "the
+  agentic layer never writes anything."
 - **The skills registry never auto-writes.** `propose_skill` is advisory-only;
   `apply_skill` enforces the injection gate + `reason` and writes atomically to a
   single confined JSON path. All registry operations (`propose-skill` /
