@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import tempfile
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,14 +90,14 @@ def _write_and_replace(fd: int, staged: str, path: Path, payload: dict) -> None:
     #     another thread may already have been handed that same descriptor number,
     #     so the second close would land on ITS file.
     #
-    # closefd=False keeps ownership here for every path, so the descriptor is
-    # closed exactly once, in the finally, and never by the file object.
-    try:
+    # closefd=False keeps ownership here for every path, and ExitStack's callback
+    # closes the descriptor exactly once on the way out -- success or exception --
+    # so the file object never closes it and nothing closes it twice.
+    with ExitStack() as fd_owner:
+        fd_owner.callback(os.close, fd)
         with os.fdopen(fd, "w", encoding=_UTF8, closefd=False) as stream:
             json.dump(payload, stream, indent=2)
         os.replace(staged, path)
-    finally:
-        os.close(fd)
 
 
 def _discard_staged(staged: str) -> None:
