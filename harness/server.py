@@ -73,6 +73,7 @@ _MAX_RUNS = 50
 _HTTP_CREATED = 201
 _HTTP_BAD_REQUEST = 400
 _HTTP_NOT_FOUND = 404
+_HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_BAD_GATEWAY = 502
 _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
@@ -160,7 +161,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # singleton would leak rate-limit state across separately-configured
     # create_app() calls in tests.
     rl_cfg = _rate_limit_settings()
-    _rate_limiter = RateLimiter(
+    rate_limiter = RateLimiter(
         max_requests=rl_cfg.get("max_requests", 60),
         window_seconds=rl_cfg.get("window_seconds", 60),
     )
@@ -175,12 +176,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         request-generating endpoint (/query), this one didn't.
         """
         client_ip = request.client.host if request.client else "unknown"
-        if not _rate_limiter.allow(client_ip):
+        if not rate_limiter.allow(client_ip):
             raise HTTPException(
-                status_code=429,
+                status_code=_HTTP_TOO_MANY_REQUESTS,
                 detail={
-                    "error": f"Rate limit exceeded ({_rate_limiter.max_requests} req / "
-                    f"{_rate_limiter.window_seconds}s)",
+                    "error": f"Rate limit exceeded ({rate_limiter.max_requests} req / "
+                    f"{rate_limiter.window_seconds}s)",
                     "code": "RATE_LIMIT",
                 },
             )
