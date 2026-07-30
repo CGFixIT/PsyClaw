@@ -58,6 +58,42 @@ def validate_retrieval_config(cfg: dict[str, Any]) -> None:
             )
 
 
+def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
+    """Validate ``api.graph_timeout_sec`` exceeds ``models.local_llm.timeout_sec``.
+
+    ``config.yaml``'s own comment documents this as a required relationship
+    (``Formula: graph_timeout >= llm_timeout + 30``): if the per-call LLM
+    timeout can fire at or after the graph's own deadline, the LLM timeout is
+    unreachable and a hung call is instead cut off by the outer graph
+    deadline, orphaning whatever work was in flight rather than failing
+    cleanly at the layer meant to catch it.
+
+    No-op when either value is absent or not a real number -- gate.py's own
+    ``cfg.get(..., default)`` calls already treat those cases as "use the
+    default," and this validator only tightens the case both values are
+    explicitly present and already violate the relationship (previously a
+    boot-time warning only, unlike every other check in this module).
+    """
+    api = cfg.get("api")
+    models = cfg.get("models")
+    if not isinstance(api, dict) or not isinstance(models, dict):
+        return
+    local_llm = models.get("local_llm")
+    if not isinstance(local_llm, dict):
+        return
+    graph_timeout = api.get("graph_timeout_sec")
+    llm_timeout = local_llm.get("timeout_sec")
+    if not _is_real_number(graph_timeout) or not _is_real_number(llm_timeout):
+        return
+    if llm_timeout >= graph_timeout:
+        raise ConfigError(
+            f"models.local_llm.timeout_sec ({llm_timeout}) must be less than "
+            f"api.graph_timeout_sec ({graph_timeout}) -- otherwise the graph "
+            "deadline fires first and the per-call LLM timeout is unreachable",
+            details={"llm_timeout_sec": llm_timeout, "graph_timeout_sec": graph_timeout},
+        )
+
+
 def validate_personality_config(cfg: dict[str, Any]) -> None:
     """Validate ``cfg['personality']`` when the subsystem is enabled.
 
