@@ -127,19 +127,23 @@ path that can, and remains disarmed). Reachable via `agentic.cli`'s
 authenticated, via the harness's `POST /api/agent/run` /
 `GET /api/agent/runs/{id}` / `POST /api/agent/runs/{id}/decision` routes.
 
-**The still-probe-only DeepAgents-graph path**
+**The DeepAgents-graph path, retired (owner decision, 2026-07-31)**
 (`agentic/deepagent_github/builder.py`'s `create_deep_agent` integration,
 plus the harness optimizer's fixture-based evaluation loop): this is the
 subsystem the now-superseded "fixture-only evaluation... does not write the
-real repo" description below used to describe accurately. It remains
-disabled by default, out-of-band, and -- unlike the pipeline above -- has
-never been live-fired against a real model: `agentic.cli`'s `deepagent-plan`
+real repo" description below used to describe accurately. It was never
+live-fired against a real model -- `agentic.cli`'s `deepagent-plan`
 subcommand deliberately probes the build's gate state without ever calling
-`.invoke()` on the constructed agent. Its canonical plan is
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`; the implemented
-phase 6-9 controls and operator boundaries are in
-`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. It uses scoped
-proposer-workspace tools, a virtual in-state Deep Agents backend,
+`.invoke()` on the constructed agent -- and no further development is
+planned on it: the pipeline above is the one live real-repo coding path
+going forward. The code, its tests, and its `deepagents-harness` CI lane
+remain in the repository unmodified (this is a documentation-only decision,
+not a deletion), so the rest of this description stays accurate for anyone
+reading it: it remains disabled by default and out-of-band. Its canonical
+plan is `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (see its
+own retirement note); the implemented phase 6-9 controls and operator
+boundaries are in `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. It uses
+scoped proposer-workspace tools, a virtual in-state Deep Agents backend,
 local-only memory/skills, fixture-only evaluation, and human-gated local
 candidate artifacts, and does not execute shell commands, write the real
 repo, write GitHub, expose unrestricted filesystem tools, or import from the

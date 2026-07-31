@@ -3,6 +3,13 @@
 Status: implemented as an experimental, out-of-band surface. All feature flags
 remain disabled in `config.yaml` by default.
 
+**Retired (owner decision, 2026-07-31): superseded by `agentic/real_repo_loop.py`
+as the live real-repo coding path.** See
+`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s own retirement
+note for the full context. This record of what phases 6-9 implemented stays
+accurate and unmodified; it is simply no longer the subsystem future agentic
+coding work should build on.
+
 ## Scope
 
 This record covers the implementation after the phase-5 scaffold described in

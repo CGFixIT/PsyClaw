@@ -6,8 +6,9 @@ Subcommands:
     context        Fetch read-only GitHub context (--pr N | --issue N | --repo).
     propose-skill  Preview a skills-registry change (never writes).
     apply-skill    Apply a skills-registry change (governed; needs --reason).
-    deepagent-plan Probe the Deep Agents harness (read-only; --provider needs
-                   --confirm-online before any cloud egress).
+    deepagent-plan Probe the (retired, no further dev planned) Deep Agents
+                   harness (read-only; --provider needs --confirm-online
+                   before any cloud egress).
     real-repo-run        Clone a real repo and run plan/patch/verify against it
                           (governed by --reason/--confirm; never commits). Local
                           model by default; --provider needs --confirm-online
@@ -170,16 +171,18 @@ def _read_body(args: argparse.Namespace) -> str:
 
 
 def cmd_deepagent_plan(args: argparse.Namespace) -> int:
-    """Live-fire probe for the Deep Agents harness. Read-only, writes nothing.
+    """Read-only probe for the (retired) Deep Agents harness. Writes nothing.
 
     Three things happen, in order: the six-condition cloud chain is asserted when
     a provider is named, GitHub context is fetched through the injection-scanned
     path, and the harness build is probed so its real gate state is reported.
 
-    Deliberately does NOT invoke the agent. Invocation needs a scoped
-    ProposerWorkspaceTools instance, and the real-repo workspace surface does not
-    exist yet -- so a --invoke flag here would either fake a workspace or fail. It
-    lands with that surface instead.
+    Deliberately does NOT invoke the agent, and no longer plans to: retired
+    (owner decision, 2026-07-31, see agentic.deepagent_github.builder's module
+    docstring) in favor of agentic.real_repo_loop.run_real_repo_loop, which
+    IS live-fired via the real-repo-run subcommand below. This command's own
+    read-only, gate-reporting behavior is unaffected by that decision and
+    stays as-is.
     """
     cfg = _load(args)
     if cfg is None:

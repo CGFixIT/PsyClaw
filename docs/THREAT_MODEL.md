@@ -407,10 +407,16 @@ not attacker-chosen at the command level.
 - **What still does not exist.** The `builder.py`/DeepAgents-graph path
   (`create_deep_agent`) remains probe-only — `agentic/cli.py`'s
   `deepagent-plan` subcommand deliberately never calls `.invoke()` on it, by
-  its own docstring. `push_branch`/`execute_write` (fourth amendment) are
-  still not called from `run_real_repo_loop` or reachable from any harness
-  route — GitHub writes remain un-triggerable over the network, unchanged by
-  this amendment.
+  its own docstring. **Retired (owner decision, 2026-07-31): no further
+  development is planned on this path** — `run_real_repo_loop` is the one
+  live real-repo coding pipeline going forward; see
+  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s own
+  retirement note. `push_branch`/`execute_write` (fourth amendment) are, as
+  of a later commit, callable from `agentic.cli`'s `real-repo-run-decide
+  --push`/`--publish` — still gated the same way (`allow_git_write_tools`;
+  `EXECUTION_ENABLED`, a hardcoded `False`) and still not forwarded through
+  any harness HTTP route, which only passes `decision` today. GitHub writes
+  remain un-triggerable over the network either way.
 
 ---
 
