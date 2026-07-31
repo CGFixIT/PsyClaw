@@ -92,6 +92,13 @@ def _disabled_noop() -> int:
     return EXIT_OK
 
 
+def _deepagent_github_disabled_noop() -> int:
+    _heading("Deep Agents / real-repo coding subsystem disabled")
+    print("  agentic.deepagent_github.enabled is false in config.yaml; nothing to do.")
+    print("  Set agentic.deepagent_github.enabled: true to use this subsystem.")
+    return EXIT_OK
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     cfg = _load(args)
     if cfg is None:
@@ -407,6 +414,35 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         return EXIT_ENV
     if not getattr(cfg, "enabled", False):
         return _disabled_noop()
+    # Checked here, before any network I/O, not only inside
+    # run_real_repo_loop's own _require_run_gates (which only ever checks
+    # allow_git_write_tools/reason/confirm -- it has no view of this switch).
+    # Without this, a config with agentic.enabled: true and
+    # deepagent_github.enabled: false still performed a live GitHub context
+    # fetch and a full network `gh repo clone` before failing -- the switch
+    # was dead config on this, the subsystem's own newest entry point, while
+    # build_deepagent_github (the other consumer) correctly composes both:
+    # `bool(getattr(agentic_config, "enabled", False) and deep_cfg.enabled)`.
+    # This check is deliberately NOT mirrored in real-repo-run-status/-decide/
+    # -discard: those resolve or inspect work THIS command already started,
+    # and gating them the same way would strand a pending_decision run with no
+    # path forward the moment the switch flips off (see cmd_real_repo_run_decide's
+    # own comment for why that's actively harmful, not just inconsistent).
+    if not cfg.deepagent_github.enabled:
+        return _deepagent_github_disabled_noop()
+    # Checked eagerly, before the context fetch or the clone -- both real
+    # network I/O -- matching the existing eager validation of --checks-file
+    # below. cfg.deepagent_github.model ships "" (config.yaml), which passes
+    # config validation (an empty string is still a valid string), so the only
+    # place this used to surface was LocalProposerClient.invoke() raising
+    # AgenticError -- reached only AFTER a full GitHub context fetch and a
+    # full network `gh repo clone` had already run. An operator following
+    # GITHUB_WRITE_ENABLEMENT.md's enablement steps, which never mention
+    # setting this value, got zero successful runs and paid for a clone every
+    # single time before finding out why.
+    if not cfg.deepagent_github.model.strip():
+        _err("agentic.deepagent_github.model must be configured before real-repo-run")
+        return EXIT_ENV
 
     from agentic import context
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
@@ -566,7 +602,19 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
         return EXIT_ENV
     if not getattr(cfg, "enabled", False):
         return _disabled_noop()
-
+    # deepagent_github.enabled is deliberately NOT checked here (or in
+    # real-repo-run-status/-discard). cmd_real_repo_run checks it because
+    # that command STARTS new work and would otherwise waste a real GitHub
+    # fetch and clone before finding out the subsystem is off. This command
+    # RESOLVES work a prior run already started: a pending_decision run has
+    # exactly one legitimate next action (approve or reject via this command)
+    # and no other path forward -- gating it on the master switch would strand
+    # that run with no way to even reject it (real-repo-run-discard correctly
+    # refuses a pending_decision run, on the theory a human still needs to
+    # decide it) the moment an operator flips the switch off for an unrelated
+    # reason. The low-level gate that DOES still apply here,
+    # allow_git_write_tools, is checked independently by checkout_branch/add/
+    # commit themselves on the approve path.
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
     from agentic.real_repo_loop import finalize_real_repo_change
     from agentic.real_repo_run_store import load_run, require_pending_decision, save_run

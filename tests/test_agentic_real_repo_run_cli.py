@@ -45,8 +45,13 @@ def cfg_path(tmp_path, monkeypatch):
     src = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
     src["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
     src["agentic"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
     src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    # Ships "" in config.yaml; a real armed deployment must set this or every
+    # run fails inside the first planner call, after a full context fetch and
+    # clone already ran (see the eager check in cmd_real_repo_run).
+    src["agentic"]["deepagent_github"]["model"] = "local-test-model"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
     reset_config_cache()
@@ -544,8 +549,10 @@ def test_decide_refuses_when_git_write_tools_are_off(tmp_path, checks_file, monk
     monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
     src = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
     src["agentic"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
     src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    src["agentic"]["deepagent_github"]["model"] = "local-test-model"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
     reset_config_cache()
@@ -681,3 +688,127 @@ def test_discard_reclaims_an_orphaned_running_record(cfg_path, checks_file, monk
     assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", "a" * 32]) == EXIT_OK
     assert json.loads(capsys.readouterr().out)["status"] == "discarded"
     assert not dest.parent.exists()
+
+
+# --- deepagent_github.enabled composed into real-repo-run (DEF-10) ----------
+
+
+def test_run_noops_when_deepagent_github_is_disabled_and_does_no_network_io(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    """agentic.enabled: true alone must not be sufficient: the subsystem's own
+    switch (deepagent_github.enabled) was dead config on this, its newest entry
+    point -- build_deepagent_github (the other consumer) correctly composes
+    both. Also asserts NO network I/O happens: a disabled subsystem must not
+    perform a live GitHub context fetch or clone before finding out it's off."""
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["enabled"] = False
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg when disabled")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    assert _run_start(cfg_path, checks_file) == EXIT_OK
+    assert "disabled" in capsys.readouterr().out.lower()
+
+
+def test_decide_still_resolves_a_pending_run_when_deepagent_github_is_disabled(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    """Deliberately NOT gated, unlike real-repo-run itself.
+
+    A pending_decision run has exactly one legitimate next action -- approve
+    or reject via this command -- and real-repo-run-discard correctly refuses
+    to touch a run still awaiting a decision. Gating decide the same way
+    real-repo-run is gated would strand that run with no path forward at all
+    the moment an operator flips the subsystem off for an unrelated reason.
+    """
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["enabled"] = False
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+
+    code = main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"])
+    assert code == EXIT_OK
+    decided = json.loads(capsys.readouterr().out)
+    assert decided["status"] == "approved"
+
+    log = subprocess.run(
+        [__import__("shutil").which("git"), "log", "-1", "--format=%s"],
+        cwd=dest, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert log == "add target.txt"
+
+
+def test_status_and_discard_still_work_when_deepagent_github_is_disabled(cfg_path, checks_file, monkeypatch, capsys):
+    """Deliberately exempt, same reasoning as decide: these resolve or reclaim
+    state a run already produced, not start new work."""
+    from utils.logger import reset_config_cache
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"])
+    capsys.readouterr()
+
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["enabled"] = False
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "discarded"
+
+
+# --- deepagent_github.model must be set before real-repo-run (DEF-11) -------
+
+
+def test_run_env_errors_when_the_model_is_not_configured_before_any_network_io(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    """config.yaml ships deepagent_github.model: "", which passes config
+    validation (an empty string is still a string) -- the failure used to
+    surface only inside the first LocalProposerClient.invoke() call, AFTER a
+    full GitHub context fetch and a full network clone had already run.
+    Asserts EXIT_ENV, no network I/O, and no run record persisted."""
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["model"] = ""
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg before validating the model")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    code = main([
+        "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
+        "--checks-file", checks_file, "--branch", "claude/x", "--commit-message", "x",
+        "--reason", "test", "--confirm",
+    ])
+    assert code == EXIT_ENV
+    assert "model" in capsys.readouterr().err.lower()
