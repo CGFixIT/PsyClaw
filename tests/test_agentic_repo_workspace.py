@@ -13,6 +13,8 @@ No optional dependency is needed: this module imports nothing from
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +24,7 @@ from agentic import deepagent_github
 from agentic.config import AgenticConfig
 from agentic.deepagent_github import repo_workspace
 from agentic.deepagent_github.repo_workspace import DEFAULT_MAX_READ_BYTES, RepoWorkspaceTools
-from utils.errors import AgenticError
+from utils.errors import AgenticError, AgenticWriteRefused
 
 
 def _cfg(tmp_path: Path, monkeypatch, **overrides) -> AgenticConfig:
@@ -288,6 +290,208 @@ def test_denied_reads_are_audited(tmp_path, monkeypatch):
 
 
 # --- no optional dependency required -----------------------------------------
+
+
+# --- git writes ---------------------------------------------------------
+
+
+def _fake_clone_populating_git_repo(*, files: dict[str, str]):
+    """Like ``_fake_clone_populating``, but also ``git init``s the destination.
+
+    RepoWorkspaceTools' git-write methods need a real git repository to act
+    on; the read-only tests above never needed one since they only exercise
+    ScopedRoots. Uses real ``git`` subprocesses (not a mock) to build that
+    repo and give it an initial commit -- the same "real subprocess, not a
+    double" discipline ``tests/test_agentic_executor.py`` uses, since the
+    point of these tests is the actual git argv/cwd/gate plumbing.
+    """
+
+    base = _fake_clone_populating(files=files)
+
+    def fake(op, repo, **kwargs):
+        result = base(op, repo, **kwargs)
+        dest = result["dest"]
+
+        def run(*argv: str) -> None:
+            subprocess.run(argv, cwd=dest, check=True, capture_output=True, text=True)
+
+        run("git", "init", "-q")
+        run("git", "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "add", "-A")
+        run("git", "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "commit", "-q", "-m", "initial")
+        return result
+
+    return fake
+
+
+def _cfg_with_git_writes(tmp_path: Path, monkeypatch) -> AgenticConfig:
+    return _cfg(
+        tmp_path,
+        monkeypatch,
+        deepagent_github={
+            "workspace_root": str(tmp_path / "data" / "workspaces"),
+            "allow_git_write_tools": True,
+        },
+    )
+
+
+def test_git_writes_are_refused_by_default(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticWriteRefused):
+                tools.checkout_branch("claude/topic")
+            with pytest.raises(AgenticWriteRefused):
+                tools.add(["a.txt"])
+            with pytest.raises(AgenticWriteRefused):
+                tools.commit("message")
+            with pytest.raises(AgenticWriteRefused):
+                tools.diff()
+
+
+def test_checkout_add_commit_and_diff_happy_path(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            assert tools.checkout_branch("claude/fixture-topic") == {"branch": "claude/fixture-topic"}
+            (dest / "a.txt").write_text("hello world\n", encoding="utf-8")
+            tools.add(["a.txt"])
+            assert "hello world" in tools.diff(cached=True)
+            assert tools.diff() == ""  # nothing unstaged once added
+            tools.commit("update a.txt")
+            assert tools.diff(cached=True) == ""  # nothing left staged after commit
+
+
+def test_checkout_branch_rejects_names_without_the_claude_prefix(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.checkout_branch("feature/not-allowed")
+            with pytest.raises(AgenticError):
+                tools.checkout_branch("-x")
+            with pytest.raises(AgenticError):
+                tools.checkout_branch("claude/has a space")
+
+
+def test_add_rejects_paths_outside_the_clone(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.add(["../escape.txt"])
+            with pytest.raises(AgenticError):
+                tools.add(["/etc/passwd"])
+            with pytest.raises(AgenticError):
+                tools.add(["-x"])
+            with pytest.raises(AgenticError):
+                tools.add(["nonexistent.txt"])
+
+
+def test_add_rejects_empty_or_nul_paths(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.add([""])
+            with pytest.raises(AgenticError):
+                tools.add(["a.\x00txt"])
+
+
+def test_add_rejects_a_symlink_escape(tmp_path, monkeypatch):
+    """The final containment check, not just the literal '..' rejection.
+
+    A symlink inside the clone pointing outside it carries no ".." component
+    once normalized, so it must be caught by resolving the real path and
+    checking containment -- mirrors test_read_file_rejects_a_symlink_escape's
+    reasoning for the read side.
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            outside = dest.parent / "outside-secret.txt"
+            outside.write_text("do not add me", encoding="utf-8")
+            (dest / "escape-link").symlink_to(outside)
+            with pytest.raises(AgenticError, match="escaped the clone root"):
+                tools.add(["escape-link"])
+
+
+def test_add_requires_at_least_one_path(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.add([])
+
+
+def test_commit_rejects_empty_message(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.commit("   ")
+
+
+def test_commit_forces_the_configured_committer_identity(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            tools.checkout_branch("claude/identity-check")
+            (dest / "a.txt").write_text("changed\n", encoding="utf-8")
+            tools.add(["a.txt"])
+            tools.commit("test commit")
+            log = subprocess.run(
+                [shutil.which("git"), "log", "-1", "--format=%an <%ae>"],
+                cwd=str(dest), capture_output=True, text=True, check=True,
+            ).stdout.strip()
+    assert log == "Claude <noreply@anthropic.com>"
+
+
+def test_commit_message_is_hashed_not_logged_raw(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            tools.checkout_branch("claude/secret-check")
+            (dest / "a.txt").write_text("changed\n", encoding="utf-8")
+            tools.add(["a.txt"])
+            with patch.object(repo_workspace, "audit_log") as maudit:
+                tools.commit("super secret message text")
+    calls = [c.args[0] for c in maudit.call_args_list]
+    assert not any("super secret" in str(call) for call in calls)
+    commit_events = [c for c in calls if c["event"] == "agentic_repo_workspace_git_op" and c.get("op") == "commit"]
+    assert commit_events and "message_sha256" in commit_events[0]
+
+
+def test_run_git_raises_a_typed_error_when_the_binary_is_missing(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with patch.object(repo_workspace.shutil, "which", return_value=None):
+                with pytest.raises(AgenticError, match="git binary not found"):
+                    tools.diff()
+
+
+def test_run_git_times_out_without_hanging(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            timeout_exc = subprocess.TimeoutExpired(cmd=["git", "diff"], timeout=1)
+            with patch.object(repo_workspace.subprocess, "run", side_effect=timeout_exc):
+                with pytest.raises(AgenticError, match="timed out"):
+                    tools.diff()
+
+
+def test_git_op_failure_surfaces_stderr_in_the_error_details(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.checkout_branch("claude/no-changes")
+            # Nothing staged -- git commit fails deterministically, no extra setup.
+            with pytest.raises(AgenticError, match="git commit failed"):
+                tools.commit("nothing to see here")
 
 
 def test_module_imports_without_deepagents_or_langchain():

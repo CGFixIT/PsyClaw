@@ -1,42 +1,62 @@
-"""Read-only real-repo workspace surface for the Deep Agents GitHub harness.
+"""Real-repo workspace surface for the Deep Agents GitHub harness.
 
 Closes the gap the audit found: containment-by-copy already existed
 (``harness_optimizer``'s fixture runner), but nothing in the codebase could
-clone a REAL repository. This module does exactly that, and nothing more --
-clone, jail, read. It does not write, does not touch GitHub state, and is not
-wired into ``build_deepagent_github`` in this change: that wiring needs a
+clone a REAL repository. This module clones, jails, and reads -- and, as of the
+git-write addition below, can also make local commits inside that same jailed
+clone. It still never touches GitHub state (no push, no PR, no API call) and is
+not wired into ``build_deepagent_github`` in this change: that wiring needs a
 second tool-source parameter threaded through ``builder.py``/``tools.py``
 (today's ``workspace_tools`` is hard-typed to a single ``ProposerWorkspaceTools``
 instance), and there is no live caller yet to wire it FOR -- the planner/loop
-driver that would consume a real-repo read surface doesn't exist until a later
-phase. Shipping the capability now, fully tested and independently usable, and
-deferring the wiring, mirrors how the injection scanner and the deepagent-plan
-CLI probe were each shipped ahead of their eventual consumers earlier in this
-same effort.
+driver that would consume a real-repo read-and-write surface doesn't exist
+until a later phase. Shipping the capability now, fully tested and
+independently usable, and deferring the wiring, mirrors how the injection
+scanner and the deepagent-plan CLI probe were each shipped ahead of their
+eventual consumers earlier in this same effort.
 
 No optional dependency: unlike the rest of ``deepagent_github/``, this module
-needs nothing beyond ``gh`` (already required for every other agentic read) and
-the stdlib. It is fully testable without ``deepagents``/``langchain`` installed.
+needs nothing beyond ``gh``/``git`` (already required for every other agentic
+read, and for the local ``git clone`` machinery generally) and the stdlib. It
+is fully testable without ``deepagents``/``langchain`` installed.
 
-Containment: :class:`agentic.fsconnect.pathsafe.ScopedRoots` -- the strongest
-primitive in the repo (POSIX ``openat``/``O_NOFOLLOW``/held ``dir_fd``, zero
-TOCTOU window) -- jails every read to the exact directory the clone populated.
-The clone itself runs entirely through ``agentic.gh_client``'s existing
-chokepoint: same binary resolution, version floor, and transient-retry policy
-every other read op gets, via the ``repo_clone`` op this change adds there.
+Containment for READS: :class:`agentic.fsconnect.pathsafe.ScopedRoots` -- the
+strongest primitive in the repo (POSIX ``openat``/``O_NOFOLLOW``/held
+``dir_fd``, zero TOCTOU window) -- jails every read to the exact directory the
+clone populated. The clone itself runs entirely through ``agentic.gh_client``'s
+existing chokepoint: same binary resolution, version floor, and
+transient-retry policy every other read op gets, via the ``repo_clone`` op this
+change adds there.
+
+Containment for git WRITES: ``ScopedRoots`` is a read-only file-descriptor
+primitive, not a subprocess sandbox, so it isn't the mechanism here. Each git
+write method instead runs ``git`` as an argv-list subprocess with ``cwd``
+pinned to the exact clone directory the ``repo_clone`` op populated, a scrubbed
+environment allowlist, and a wall-clock timeout -- the same house pattern
+``agentic/executor/runner.py`` and ``agentic/fsconnect/indexer.py::_run_reindex``
+already established. Every write method is additionally gated on
+``deepagent_github.allow_git_write_tools`` (default ``False``), a config field
+of its own -- see the field's docstring in ``agentic/config.py`` for why this
+is deliberately NOT a reuse of ``allow_shell_execution``.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import shutil
+import subprocess  # nosec B404 - argv-list only, no shell, fixed binary + fixed subcommands
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from typing import NoReturn
 
 from agentic.config import AgenticConfig, DeepAgentGitHubConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
 from agentic.gh_client import DEFAULT_CLONE_TIMEOUT_SEC, run_read
-from utils.errors import AgenticError, FsConnectError
+from utils.errors import AgenticError, AgenticWriteRefused, FsConnectError
 from utils.logger import audit_log
 
 # Matches harness_optimizer/mcp/tools.py's ProposerWorkspaceTools ceiling --
@@ -44,6 +64,44 @@ from utils.logger import audit_log
 # operator sees one consistent per-file cap across both tool surfaces rather
 # than two unexplained different limits.
 DEFAULT_MAX_READ_BYTES = 256_000
+
+# Local git plumbing only -- no network, so this is generous headroom, not a
+# tuned ceiling like DEFAULT_CLONE_TIMEOUT_SEC.
+DEFAULT_GIT_WRITE_TIMEOUT_SEC = 30
+
+# CLAUDE.md Section 10's exact committer identity strings. Forced via `-c` on
+# every commit invocation (scoped to that one subprocess, never written to the
+# clone's or the operator's git config), so a commit made through this surface
+# is always attributable to this layer, never to whatever `user.*` the clone
+# happened to inherit (a fresh clone has none).
+_COMMIT_EMAIL = "noreply@anthropic.com"
+_COMMIT_NAME = "Claude"
+
+# Mirrors CLAUDE.md's own branch convention ("short-lived claude/<topic>").
+# Anchoring the required prefix is also the argv-injection defense: `git
+# checkout -b <name>` would let a name starting with "-" be parsed as a `git`
+# option instead of a branch name, and no string starting with "claude/" can
+# start with "-".
+_BRANCH_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
+
+# Same allowlist discipline as agentic/executor/runner.py's _scrubbed_env, kept
+# as an independent (smaller) copy rather than an import: these four git
+# subcommands are local-only and never touch the network, so this module has
+# no need for that module's proxy/PIP_NO_INDEX handling, and importing across
+# sibling capability modules before either needs the other would be exactly
+# the premature coupling this effort has avoided everywhere else.
+_GIT_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL")
+
+
+def _git_env() -> dict[str, str]:
+    return {name: os.environ[name] for name in _GIT_ENV_ALLOWLIST if name in os.environ}
+
+
+def _resolve_git_binary() -> str:
+    binary = shutil.which("git")
+    if not binary:
+        raise AgenticError("git binary not found on PATH", details={"looked_for": "git"})
+    return binary
 
 
 def _clone(cfg: AgenticConfig, deep_cfg: DeepAgentGitHubConfig, *, config_path: str, app_cfg: dict | None) -> Path:
@@ -102,6 +160,7 @@ class RepoWorkspaceTools:
     config_path: str = "config.yaml"
     cfg: dict | None = None
     max_read_bytes: int = DEFAULT_MAX_READ_BYTES
+    allow_git_write_tools: bool = False
 
     @classmethod
     def clone(
@@ -135,10 +194,79 @@ class RepoWorkspaceTools:
                 "failed to jail the cloned repository",
                 details={"repo": agentic_cfg.repo, "error": str(exc)},
             ) from exc
-        return cls(_scoped=scoped, _dest=dest, config_path=config_path, cfg=cfg)
+        return cls(
+            _scoped=scoped,
+            _dest=dest,
+            config_path=config_path,
+            cfg=cfg,
+            allow_git_write_tools=deep_cfg.allow_git_write_tools,
+        )
 
     def _audit(self, event: str, **fields: object) -> None:
         audit_log({"event": event, **fields}, config_path=self.config_path, cfg=self.cfg)
+
+    def _deny_git(self, tool: str, message: str, **extra: object) -> NoReturn:
+        self._audit("agentic_repo_workspace_denied", op=tool, reason=message, **extra)
+        raise AgenticError(message, details={"tool": tool, **extra})
+
+    def _require_git_writes_enabled(self, tool: str) -> None:
+        if not self.allow_git_write_tools:
+            self._audit("agentic_repo_workspace_denied", op=tool, reason="git write tools disabled")
+            raise AgenticWriteRefused(
+                "git write operations are disabled (deepagent_github.allow_git_write_tools is False)",
+                details={"tool": tool},
+            )
+
+    def _validate_write_path(self, tool: str, target: str) -> str:
+        """Validate one ``git add`` path: relative, safe, and inside the clone.
+
+        Mirrors ``harness_optimizer/runners/github_coding_runner.py::_safe_child``'s
+        cross-platform reasoning (a driveless-but-rooted Windows path like
+        ``\\Windows\\system.ini`` must be rejected on POSIX too, and vice
+        versa), plus a leading-dash rejection so a path can never be parsed as
+        a ``git`` option instead of a pathspec.
+        """
+        if not isinstance(target, str) or not target or "\x00" in target:
+            self._deny_git(tool, "git path must be a non-empty string", target=target)
+        normalized = target.replace("\\", "/")
+        if normalized.startswith(("/", "-")) or PureWindowsPath(target).is_absolute():
+            self._deny_git(tool, "git path must be a safe relative path", target=target)
+        parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
+        if not parts or any(part == ".." or ":" in part for part in parts):
+            self._deny_git(tool, "git path escaped the clone root", target=target)
+        dest_resolved = self._dest.resolve()
+        candidate = dest_resolved.joinpath(*parts)
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError as exc:
+            self._deny_git(tool, "git path does not exist in the clone", target=target, error_type=type(exc).__name__)
+        if resolved != dest_resolved and dest_resolved not in resolved.parents:
+            self._deny_git(tool, "git path escaped the clone root", target=target)
+        return "/".join(parts)
+
+    def _run_git(self, tool: str, argv: list[str], *, timeout_sec: int = DEFAULT_GIT_WRITE_TIMEOUT_SEC) -> str:
+        binary = _resolve_git_binary()
+        try:
+            completed = subprocess.run(  # noqa: S603 -- argv list, no shell, fixed binary
+                [binary, *argv],
+                cwd=str(self._dest),
+                env=_git_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._audit("agentic_repo_workspace_git_failed", op=tool, reason="timeout")
+            raise AgenticError(f"git {tool} timed out after {timeout_sec}s", details={"tool": tool}) from exc
+        if completed.returncode != 0:
+            self._audit("agentic_repo_workspace_git_failed", op=tool, exit_code=completed.returncode)
+            raise AgenticError(
+                f"git {tool} failed with exit code {completed.returncode}",
+                details={"tool": tool, "exit_code": completed.returncode, "stderr": completed.stderr[-2000:]},
+            )
+        self._audit("agentic_repo_workspace_git_ok", op=tool, exit_code=completed.returncode)
+        return completed.stdout
 
     def read_file(self, target: str) -> str:
         """Read one text file from the clone, decoded as UTF-8."""
@@ -182,6 +310,70 @@ class RepoWorkspaceTools:
         self._audit("agentic_repo_workspace_read", op="stat_file", target=target)
         return info
 
+    # --- git writes: local only, scoped to this clone, never pushed ---------
+
+    def checkout_branch(self, name: str) -> dict:
+        """Create and switch to a new branch. ``name`` must be ``claude/<topic>``."""
+        tool = "checkout_branch"
+        self._require_git_writes_enabled(tool)
+        if not isinstance(name, str) or not _BRANCH_RE.match(name):
+            self._deny_git(
+                tool,
+                "branch name must start with 'claude/' and use only [A-Za-z0-9._/-]",
+                target=name,
+            )
+        self._run_git(tool, ["checkout", "-b", name])
+        self._audit("agentic_repo_workspace_git_op", op=tool, branch=name)
+        return {"branch": name}
+
+    def add(self, paths: Sequence[str]) -> dict:
+        """Stage one or more existing paths in the clone (``git add --``)."""
+        tool = "add"
+        self._require_git_writes_enabled(tool)
+        if not paths:
+            self._deny_git(tool, "git add requires at least one path")
+        validated = [self._validate_write_path(tool, path) for path in paths]
+        self._run_git(tool, ["add", "--", *validated])
+        self._audit("agentic_repo_workspace_git_op", op=tool, paths=validated)
+        return {"paths": validated}
+
+    def commit(self, message: str) -> dict:
+        """Commit staged changes, identity forced to CyClaw's committer convention.
+
+        ``-c user.email=...``/``-c user.name=...`` scope the identity override to
+        this one subprocess invocation -- never written to the clone's
+        ``.git/config`` or any global git config -- and set both author and
+        committer, since a fresh clone carries no ``user.*`` of its own.
+        """
+        tool = "commit"
+        self._require_git_writes_enabled(tool)
+        if not isinstance(message, str) or not message.strip():
+            self._deny_git(tool, "commit message must be a non-empty string")
+        self._run_git(
+            tool,
+            [
+                "-c", f"user.email={_COMMIT_EMAIL}",
+                "-c", f"user.name={_COMMIT_NAME}",
+                "commit", "-m", message,
+            ],
+        )
+        # Never audit the raw message -- same "hash, don't persist" discipline
+        # utils/logger.py applies to query text. A local hexdigest avoids
+        # importing utils.logger.hash_query (a query-shaped helper) for a
+        # plain string.
+        message_sha256 = hashlib.sha256(message.encode("utf-8")).hexdigest()
+        self._audit("agentic_repo_workspace_git_op", op=tool, message_sha256=message_sha256)
+        return {}
+
+    def diff(self, *, cached: bool = False) -> str:
+        """Return the worktree (or, with ``cached=True``, staged) diff as text."""
+        tool = "diff"
+        self._require_git_writes_enabled(tool)
+        argv = ["diff", "--cached"] if cached else ["diff"]
+        output = self._run_git(tool, argv)
+        self._audit("agentic_repo_workspace_git_op", op=tool, cached=cached, bytes=len(output))
+        return output
+
     def close(self) -> None:
         """Release the held directory fd and delete the clone from disk.
 
@@ -203,4 +395,4 @@ class RepoWorkspaceTools:
         self.close()
 
 
-__all__ = ["DEFAULT_MAX_READ_BYTES", "RepoWorkspaceTools"]
+__all__ = ["DEFAULT_GIT_WRITE_TIMEOUT_SEC", "DEFAULT_MAX_READ_BYTES", "RepoWorkspaceTools"]

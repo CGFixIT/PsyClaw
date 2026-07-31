@@ -142,6 +142,17 @@ class DeepAgentGitHubConfig:
     workspace_root: str = DEFAULT_DEEPAGENT_WORKSPACE_ROOT
     allow_cloud_providers: bool = False
     providers: dict = field(default_factory=dict)
+    # Deliberately its OWN flag, not a reuse of allow_shell_execution: that flag
+    # already means something different and stricter -- it gates whether the
+    # deep-agent gets a generic host-shell TOOL it can invoke with any command
+    # (agentic/deepagent_github/permissions.py::refuse_unsupported_write_policy
+    # hard-refuses the whole build when it's true, since that tool remains
+    # unimplemented). RepoWorkspaceTools' git methods run four fixed,
+    # non-attacker-chosen subcommands (checkout -b/add/commit/diff) against a
+    # clone this layer made itself, never pushed -- a materially narrower
+    # capability that deserves its own default-off gate rather than colliding
+    # with a flag whose current meaning is "give the model a shell."
+    allow_git_write_tools: bool = False
 
     def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
         """Return a provider's config, or None when it is not configured/enabled.
@@ -165,6 +176,7 @@ class DeepAgentGitHubConfig:
             "agentic.deepagent_github.allow_shell_execution",
             "agentic.deepagent_github.allow_github_writes",
             "agentic.deepagent_github.allow_cloud_providers",
+            "agentic.deepagent_github.allow_git_write_tools",
         ):
             attr = field_name.rsplit(".", 1)[-1]
             _validate_bool(getattr(self, attr), field_name)
