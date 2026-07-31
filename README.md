@@ -115,7 +115,7 @@ flowchart TD
     subgraph GATEWAY ["gate.py — FastAPI 127.0.0.1:8787"]
         B["TrustedHostMiddleware\nHost header allowlist"]
         B --> C["Rate Limiter\n60 req/min per IP"]
-        C --> D["Prompt Injection Filter\n32 patterns · config-driven · lru_cache"]
+        C --> D["Prompt Injection Filter\n40 patterns · config-driven · lru_cache"]
         D --> E["Build GraphState\nquery + user_confirmed_online"]
     end
 
@@ -379,7 +379,7 @@ CyClaw/
 │   ├── context.py
 │   ├── gh_client.py
 │   ├── registry.py
-│   ├── writer.py               # stubbed write scaffold, non-executing
+│   ├── writer.py               # gh pr create --draft, implemented but shipped disarmed
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
 │   │   ├── client.py           # scoped reads (fs_list/stat/read/grep)
@@ -499,7 +499,10 @@ CyClaw now includes a **concise, governed agentic layer** for local operator wor
 - reads only in normal operation
 - no GitHub token is stored or forwarded by CyClaw
 - `gh` is invoked as an argv list, not via shell execution
-- write behavior remains scaffolded and non-executing in the current release
+- the GitHub write path (`gh pr create --draft`) is IMPLEMENTED but shipped
+  DISARMED: `EXECUTION_ENABLED` is a hardcoded `False` in `agentic/writer.py`
+  that no config file can flip, plus four config/per-call gates. Arming it is a
+  filed-checklist operator procedure (`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`)
 - all agentic reads, refusals, and registry changes are audit logged
 
 ### Enable it
@@ -742,7 +745,7 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
 | Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |
 | Soul writes | Explicit human reason string + enforced write-boundary scan + atomic write |
-| Agentic writes | Stubbed / non-executing in current release |
+| Agentic writes | `pr_create` implemented, shipped disarmed behind six gates (one of them a source constant); `pr_comment`/`issue_comment` remain plan-only |
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |

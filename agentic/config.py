@@ -23,6 +23,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from utils.errors import AgenticConfigError
 from utils.logger import _get_config
@@ -97,6 +98,22 @@ def _validate_bool(value: object, field_name: str) -> None:
             f"{field_name} must be a boolean, got: {value!r}",
             details={"field": field_name, "received": value},
         )
+
+
+# Mirrors harness/ollama.py's own list. Duplicated rather than imported because
+# I6 forbids agentic/ and harness/ importing each other at all; the values are
+# a closed set (the three spellings of localhost), not a tunable.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback_url(url: str) -> bool:
+    """True when ``url``'s host is loopback. Malformed input is NOT loopback."""
+    try:
+        return (urlparse(url).hostname or "") in _LOOPBACK_HOSTS
+    except ValueError:
+        # urlparse raises on some malformed IPv6 literals -- fail closed rather
+        # than letting an unparseable URL through as "not obviously remote".
+        return False
 
 
 def _validate_no_shell_metachars(value: str, field_name: str) -> None:
@@ -214,6 +231,26 @@ class DeepAgentGitHubConfig:
             raise AgenticConfigError("agentic.deepagent_github.model must be a string")
         _validate_no_shell_metachars(self.base_url, "agentic.deepagent_github.base_url")
         _validate_no_shell_metachars(self.model, "agentic.deepagent_github.model")
+        # This field addresses the LOCAL model only -- the cloud path never uses
+        # it (DeepAgentModelSettings.from_config deliberately returns base_url=""
+        # for a cloud provider, because "letting config point a cloud client at
+        # an arbitrary host would turn a provider toggle into an arbitrary-egress
+        # control"). Without this check the same sentence was true of the LOCAL
+        # path and worse: LocalProposerClient POSTs the entire planner prompt --
+        # operator instruction, quoted GitHub PR/issue/diff, and every
+        # --read-file body -- to base_url with no sanitize_handoff, no redaction
+        # and no egress audit event, so a single non-loopback URL routes around
+        # the whole six-condition cloud chain while allow_cloud_providers,
+        # providers.<name>.enabled, the API key and --confirm-online all stay
+        # false and are never consulted. harness/ollama.py already refuses a
+        # non-loopback base_url for exactly this reason; this is the same
+        # decision for the planner's own client.
+        if not _is_loopback_url(self.base_url):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.base_url must be a loopback URL "
+                f"(one of {list(_LOOPBACK_HOSTS)}); it addresses the local model only",
+                details={"received": self.base_url},
+            )
         self.workspace_root = _resolve_data_path(
             self.workspace_root,
             "agentic.deepagent_github.workspace_root",

@@ -82,6 +82,41 @@ def test_provider_model_rejects_shell_metacharacters():
         DeepAgentCloudProviderConfig(enabled=False, model="grok; rm -rf /")
 
 
+# --- base_url is a local-only field, enforced (not merely documented) --------
+
+
+@pytest.mark.parametrize("url", [
+    "https://attacker.example/v1",
+    "http://192.168.1.5:11434/v1",
+    "http://model.internal:8080/v1",
+])
+def test_local_base_url_must_be_loopback(url):
+    """The six-gate cloud chain is routed around entirely without this.
+
+    LocalProposerClient POSTs the whole planner prompt -- operator instruction,
+    quoted GitHub PR/issue/diff, every --read-file body -- to base_url with no
+    sanitize_handoff, no redaction and no egress audit event. So a single
+    non-loopback URL sends everything off-box while allow_cloud_providers,
+    providers.<name>.enabled, the API key and --confirm-online all stay false
+    and are never consulted. harness/ollama.py already refuses a non-loopback
+    endpoint for this exact reason; this is the same call for the planner.
+    """
+    with pytest.raises(AgenticConfigError) as excinfo:
+        DeepAgentGitHubConfig(base_url=url)
+    assert "loopback" in excinfo.value.message
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:11434/v1",
+    # userinfo is not the host: this really does address localhost, and
+    # urlparse().hostname reports it correctly rather than being fooled.
+    "http://evil.example@localhost:11434/v1",
+])
+def test_loopback_base_urls_are_accepted(url):
+    assert DeepAgentGitHubConfig(base_url=url).base_url == url
+
+
 def test_cloud_provider_returns_the_block_when_both_gates_pass():
     provider = _deep_cfg().cloud_provider("grok")
     assert provider is not None

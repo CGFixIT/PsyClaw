@@ -481,16 +481,24 @@ agentic:
     - issue_view
     - issue_list
     - repo_view
-  # Future optional LangChain Deep Agents-backed GitHub coding harness.
-  # Phase 1 config only: disabled, not imported by the core request path, and
-  # not used unless a future reviewed command explicitly invokes it.
+  # Config for the real-repo coding pipeline (agentic/real_repo_loop.py) and,
+  # separately, the now-retired Deep Agents graph. Still never imported by the
+  # core request path. NOT "phase 1 config only" any more: every key below is
+  # read on the shipped `real-repo-run` path -- workspace_root, enabled, model,
+  # base_url, protected_write_paths and max_write_budget_bytes by agentic/cli.py,
+  # allow_git_write_tools inside repo_workspace.py. It is disabled by default,
+  # not unused.
   deepagent_github:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
     model: ""
     allow_deepagents_dependency: false           # extras must be installed explicitly
-    allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
+    # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
+    # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
+    # all gate on allow_git_write_tools below. Setting this false does not stop
+    # a real-repo filesystem write; that is what allow_git_write_tools is for.
+    allow_filesystem_write_tools: false
     allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
     allow_github_writes: false                   # writer.py remains the write-policy boundary
     # Git plumbing (checkout -b/add/commit/diff/push) inside a clone this

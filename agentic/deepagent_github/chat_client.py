@@ -11,9 +11,13 @@ provider-gated construction the (still-dormant) deepagents harness already
 uses, so the same six-gate cloud-provider chain (see ``docs/THREAT_MODEL.md``)
 can cover a real git-commit loop, not only that unexercised graph.
 
-Gating (``mode == "hybrid"``, ``providers.<name>.enabled``,
-``allow_cloud_providers``, the per-run online confirmation, and the API key)
-is entirely the CALLER's responsibility -- exactly like ``LocalProposerClient``,
+Gating (``agentic.enabled``, ``deepagent_github.enabled``,
+``allow_cloud_providers``, ``providers.<name>.enabled``, the provider's API
+key, and the per-run ``--confirm-online``) is entirely the CALLER's
+responsibility. Note those first two: an earlier version of this docstring
+said ``mode == "hybrid"``, which is the CORE GRAPH's I3 gate and is read by
+nothing under ``agentic/`` -- an operator treating ``app.mode: offline`` as a
+global egress kill switch would have been wrong for this plane -- exactly like ``LocalProposerClient``,
 this class only egresses; it never decides whether it is allowed to. Callers
 construct it from an already-gated ``DeepAgentModelSettings`` (see
 ``DeepAgentModelSettings.from_config``'s own gate-3/4 assertion, and

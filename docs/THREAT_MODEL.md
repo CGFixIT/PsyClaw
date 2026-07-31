@@ -48,7 +48,7 @@ multi-tenant workloads.
 
 | Threat | Primary control | Where |
 |---|---|---|
-| **Prompt injection** (direct) | 32-pattern sanitizer at `/query` and at index time | `utils/sanitizer.py`, `config.yaml` |
+| **Prompt injection** (direct) | 40-pattern sanitizer at `/query` and at index time | `utils/sanitizer.py`, `config.yaml` |
 | **Indirect / RAG injection** (poisoned retrieved doc) | Retrieved context tagged untrusted in-prompt; topology never lets a doc redirect routing | `graph.py` (`UNTRUSTED_NOTE`, topology=policy) |
 | **Corpus / memory poisoning** | Injection scan on ingestion; chunk sanitization | `retrieval/indexer.py`, `utils/sanitizer.py` |
 | **Soul poisoning** (persisted identity hijack) | Soul writes require human `reason`; injection gate enforced at the write boundary; atomic `os.replace`; SHA-256 drift detection | `utils/personality.py`, `gate.py` |
@@ -363,10 +363,13 @@ narrower and more precise reason than "nothing executes":
   argv can already run `git push` inside the clone, bypassing the `claude/*`
   scoping. The second is pre-existing, operator-supplied rather than
   model-supplied, and is called out as item H of the enablement checklist.
-- **What still does not exist:** `pr_comment` and `issue_comment` execution, any
-  `/ops/*` or harness route reaching a write, any CLI write subcommand, and any
-  wiring of the write path into the real-repo loop's approve step. A GitHub
-  mutation remains un-triggerable over the network.
+- **What still does not exist:** `pr_comment` and `issue_comment` execution,
+  and any `/ops/*` route reaching a write. **Superseded in part by the sixth
+  amendment below:** the other three items this bullet used to claim — a
+  harness route reaching a write, a CLI write subcommand, and wiring into the
+  real-repo loop's approve step — all now exist, and a GitHub mutation is
+  network-triggerable once the flag is flipped. Only the `pr_comment`/
+  `issue_comment` and `/ops/*` clauses still hold.
 
 MicroVM containment would still add operational weight and privileged host
 requirements most single-operator deployments of CyClaw cannot assume. It
@@ -411,12 +414,35 @@ not attacker-chosen at the command level.
   development is planned on this path** — `run_real_repo_loop` is the one
   live real-repo coding pipeline going forward; see
   `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s own
-  retirement note. `push_branch`/`execute_write` (fourth amendment) are, as
-  of a later commit, callable from `agentic.cli`'s `real-repo-run-decide
-  --push`/`--publish` — still gated the same way (`allow_git_write_tools`;
-  `EXECUTION_ENABLED`, a hardcoded `False`) and still not forwarded through
-  any harness HTTP route, which only passes `decision` today. GitHub writes
-  remain un-triggerable over the network either way.
+  retirement note.
+
+### Sixth amendment — the write path is now network-reachable (still disarmed)
+
+- **What changed.** The fifth amendment above said `push_branch`/`execute_write`
+  were "still not forwarded through any harness HTTP route, which only passes
+  `decision` today." That was true when written and is no longer. Both are now
+  reachable three ways: `agentic.cli`'s `real-repo-run-decide --push/--publish`
+  (one-shot), the standalone `real-repo-run-push`/`real-repo-run-publish`
+  subcommands, and — the material change — `POST /api/agent/runs/{id}/push`
+  and `POST /api/agent/runs/{id}/publish` on the harness. A third route,
+  `POST .../discard`, reclaims a clone and reaches no write.
+- **So "GitHub writes are un-triggerable over the network" is retired as a
+  claim.** Once `EXECUTION_ENABLED` is flipped, an authenticated, same-origin
+  caller on loopback can open a draft PR against an approved-and-pushed run.
+  What still bounds it: `CYCLAW_API_KEY` (fail-closed) plus an
+  `Origin`/`Sec-Fetch-Site` check on every one of those routes, the run-state
+  guards (`require_approved_for_push`, `require_pushed_for_publish`), and the
+  six write gates themselves. The per-invocation blast radius is unchanged —
+  one `claude/*` branch, one draft PR, no force-push, no delete.
+- **What did NOT change: the shipped posture.** `EXECUTION_ENABLED` is still a
+  hardcoded `False` that no config file can flip, and
+  `allow_git_write_tools`/`agentic.enabled`/`mode`/`writes_enabled` all still
+  ship closed. Nothing here arms anything.
+- **This is the checklist's own trigger, and it fired.**
+  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` item A said that if reachability
+  ever changed the checklist was void and had to be re-run. It was re-run on
+  2026-07-31; that document, not this one, is authoritative on the gate chain
+  and carries the open operator decisions.
 
 ---
 
