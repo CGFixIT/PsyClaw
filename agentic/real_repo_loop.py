@@ -70,12 +70,18 @@ Wired to ``agentic.cli``'s ``real-repo-run``/``real-repo-run-status``/
 ``real-repo-run-decide`` subcommands, and from there to the harness's
 authenticated agent-run routes (``harness/server.py``, via
 ``utils.ops_runner``'s CLI-subprocess shim -- never a direct import, per I6).
-GitHub writes (push, PR creation) remain unreachable from either surface: the
-run/decide flow stops at a local commit, and nothing calls
-``RepoWorkspaceTools.push_branch`` or ``agentic.writer.execute_write`` from
-here. That is deliberate, documented future work gated on a separate signed
-security review -- see ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``, not a gap
-this docstring should be read as implying is merely unwired.
+``cmd_real_repo_run_decide``'s own ``--push``/``--publish`` flags now call
+``RepoWorkspaceTools.push_branch``/``agentic.writer.execute_write`` (this
+module itself still does not -- that orchestration lives in ``agentic.cli``,
+not here, since it is a decide-time escalation the CLI layer chooses, not
+part of the loop's own plan/patch/verify/commit contract). Both remain
+disarmed on a shipped checkout: push needs
+``deepagent_github.allow_git_write_tools`` (ships ``false``), and publish
+needs ``agentic.writer.EXECUTION_ENABLED`` (a hardcoded ``False`` in source,
+not a config value) in addition to its own four gates. Arming either is a
+separate, deliberate operator act -- see
+``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` -- not a side effect of this
+wiring existing.
 """
 
 from __future__ import annotations
