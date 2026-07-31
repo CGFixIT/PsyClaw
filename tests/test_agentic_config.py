@@ -95,6 +95,7 @@ def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) ->
     assert cfg.deepagent_github.allow_shell_execution is False
     assert cfg.deepagent_github.allow_filesystem_write_tools is False
     assert cfg.deepagent_github.allow_github_writes is False
+    assert cfg.deepagent_github.allow_git_write_tools is False
     assert cfg.deepagent_github.workspace_root == str(DATA_ROOT / "agentic" / "workspaces")
 
 
@@ -262,6 +263,7 @@ class TestShippedAgenticConfigContract:
         assert cfg.allow_filesystem_write_tools is False
         assert cfg.allow_shell_execution is False
         assert cfg.allow_github_writes is False
+        assert cfg.allow_git_write_tools is False
         # Gate 3 of the cloud chain -- the agentic analog of app.mode: "hybrid".
         assert cfg.allow_cloud_providers is False
         # Gate 4, per provider. Both must ship false, and cloud_provider() must

