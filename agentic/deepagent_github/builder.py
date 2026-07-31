@@ -1,4 +1,14 @@
-"""Lazy builder seam for optional LangChain Deep Agents integration."""
+"""Lazy builder seam for optional LangChain Deep Agents integration.
+
+Retired (owner decision, 2026-07-31): no further development is planned on
+this subsystem. ``agentic/real_repo_loop.py`` -- a separate, simpler
+plan-patch-verify-commit pipeline not built on ``deepagents`` -- has
+superseded it as the one live real-repo coding path; see
+``docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md``'s retirement
+note for the full context. This module, its tests, and the
+``deepagents-harness`` CI lane remain in the repository unmodified -- a
+documentation-only decision, not a deletion.
+"""
 
 from __future__ import annotations
 
