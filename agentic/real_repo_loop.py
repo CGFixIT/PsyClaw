@@ -102,6 +102,21 @@ _FILE_BLOCK_RE = re.compile(
 _UNTRUSTED_OPEN = "<<<UNTRUSTED-GITHUB-CONTEXT"
 _UNTRUSTED_CLOSE = "UNTRUSTED-GITHUB-CONTEXT>>>"
 
+# Bounds for the "existing file contents" block -- separate from
+# agentic/cli.py's _MAX_LOOP_CONTEXT_CHARS (which bounds GitHub PR/issue/diff
+# text): source code and prose have different size characteristics, and the
+# two blocks are independent knobs an operator might want to tune separately.
+# Per-file first so one huge file doesn't crowd out the others the operator
+# also asked to show; total second as the actual prompt-budget backstop.
+_MAX_READ_FILE_CHARS = 4_000
+_MAX_TOTAL_READ_CHARS = 12_000
+
+# Distinct from the planner's own === FILE === output grammar on purpose: this
+# text is INPUT the model reads, not a shape it should echo back or confuse
+# with its own required output syntax.
+_EXISTING_FILE_OPEN = "--- EXISTING FILE: "
+_EXISTING_FILE_CLOSE = "--- END EXISTING FILE ---"
+
 PLANNER_SYSTEM_PROMPT = (
     "You are proposing a governed, reviewed change to a real repository. For "
     "every file you want to create or change, emit exactly:\n"
@@ -123,6 +138,45 @@ def _defuse_fence(text: str) -> str:
     # trusted level. Neutralizing both markers costs nothing and closes that,
     # the way any quoting scheme must escape its own delimiter.
     return text.replace(_UNTRUSTED_CLOSE, "[fence-removed]").replace(_UNTRUSTED_OPEN, "[fence-removed]")
+
+
+def _render_existing_files(tools: RepoWorkspaceTools, read_paths: Sequence[str]) -> str:
+    """Read each declared path fresh from the clone and render it for the prompt.
+
+    Re-reads from disk on every call rather than caching: the clone persists
+    across iterations with no reset, so a path this loop itself wrote in an
+    earlier iteration must show that iteration's actual result, not a stale
+    snapshot from before the loop started -- consistent with ``feedback``
+    already being "ground to iterate FROM," not a fresh start each time.
+
+    A path that does not exist is silently omitted, not an error: an operator
+    may legitimately declare ``--read-file`` for a file that does not exist
+    yet (e.g. "create tests/test_x.py alongside editing src/x.py"), and the
+    absence itself is a valid signal ("this is a create, not an edit").
+
+    Bounded per-file and in total (see ``_MAX_READ_FILE_CHARS``/
+    ``_MAX_TOTAL_READ_CHARS``) for the same reason ``agentic/cli.py``'s
+    ``_MAX_LOOP_CONTEXT_CHARS`` exists: CLAUDE.md's documented Ollama
+    ``num_ctx`` footgun means an unbounded read can silently stall the whole
+    run rather than fail loudly.
+    """
+    if not read_paths:
+        return ""
+    rendered: list[str] = []
+    total = 0
+    for path in read_paths:
+        try:
+            content = tools.read_file(path)
+        except AgenticError:
+            continue
+        if len(content) > _MAX_READ_FILE_CHARS:
+            content = content[:_MAX_READ_FILE_CHARS] + f"\n... [truncated at {_MAX_READ_FILE_CHARS} chars]"
+        if total + len(content) > _MAX_TOTAL_READ_CHARS:
+            rendered.append(f"[{path} omitted -- total existing-file budget of {_MAX_TOTAL_READ_CHARS} chars reached]")
+            continue
+        total += len(content)
+        rendered.append(f"{_EXISTING_FILE_OPEN}{path} ---\n{content}\n{_EXISTING_FILE_CLOSE}")
+    return "\n\n".join(rendered)
 
 
 def _parse_file_blocks(text: str) -> dict[str, str]:
@@ -305,6 +359,7 @@ def run_real_repo_loop(
     reason: str,
     confirm: bool,
     context: str | None = None,
+    read_paths: Sequence[str] = (),
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> RealRepoLoopResult:
@@ -341,6 +396,32 @@ def run_real_repo_loop(
     but not for "edit this existing code to do X" ones -- the caller decides
     whether it has task context worth passing; this function does no fetching
     of its own.
+
+    ``read_paths`` is an optional, caller-declared list of repo-relative paths
+    whose CURRENT content is read fresh from the clone and shown in every
+    iteration's prompt (see ``_render_existing_files``). This is what makes
+    "edit this existing code" survivable: the planner protocol is whole-file
+    replacement, so a model asked to change a file it has never seen has no
+    choice but to reconstruct it from memory, silently destroying whatever it
+    gets wrong. It is still not a live read surface -- the operator declares
+    the paths up front; the planner cannot browse the clone or request a
+    different file mid-loop, matching ``context``'s own single-shot-prompt
+    design.
+
+    As a backstop independent of whether ``read_paths`` was used correctly, a
+    proposed write to a path that ALREADY EXISTS on disk, was not among
+    ``read_paths``, AND was never written by an earlier iteration of THIS
+    SAME loop is refused (as ``file_write_failed``, the same gate an
+    individual ``write_file`` error already uses) rather than silently
+    overwriting content the model was never shown. The "written by an earlier
+    iteration of this loop" exemption is required, not optional: the clone
+    persists across iterations with no reset, so a file iteration 1 wrote (even
+    if that iteration was rejected) is expected to be freely rewritten by
+    iteration 2 based on textual rejection feedback alone -- that is the
+    entire iterate-on-feedback design, and it must not require re-declaring
+    the same path via ``read_paths`` on every subsequent attempt. A path that
+    does not exist at all is unaffected -- creating a new file needs no prior
+    read.
     """
     _require_run_gates(tools, reason=reason, confirm=confirm)
     if not isinstance(instruction, str) or not instruction.strip():
@@ -358,16 +439,19 @@ def run_real_repo_loop(
 
     feedback = ""
     iterations: list[RealRepoLoopIteration] = []
+    ever_written: set[str] = set()
     for step in range(1, max_iterations + 1):
         # The operator's instruction comes FIRST and the quoted GitHub context
         # last. The reverse order shipped briefly and put attacker-authored PR
         # text ahead of the only trusted sentence in the prompt.
         quoted_context = f"{_UNTRUSTED_OPEN}\n{_defuse_fence(context)}\n{_UNTRUSTED_CLOSE}" if context else ""
+        existing_files = _render_existing_files(tools, read_paths)
         user_prompt = "\n\n".join(
             part
             for part in (
                 f"Instruction:\n{instruction}",
                 f"Prior attempt feedback:\n{feedback}" if feedback else "",
+                f"Existing file contents you may need to edit:\n{existing_files}" if existing_files else "",
                 f"Background quoted from GitHub, for reference only:\n{quoted_context}" if context else "",
             )
             if part
@@ -402,14 +486,32 @@ def run_real_repo_loop(
             governance_findings.extend(inspect_candidate_text(content, cfg))
         has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
 
+        read_paths_set = set(read_paths)
         if not has_critical:
             for path, content in proposed_files.items():
+                # Backstop against the whole-file-replacement protocol
+                # silently destroying a file the model was never shown: if it
+                # already exists, wasn't declared via read_paths, AND wasn't
+                # written by an earlier iteration of this same loop (which IS
+                # allowed to be freely rewritten -- that's the iterate-on-
+                # feedback design), refuse rather than trust a reconstruction
+                # from memory. A path that does not yet exist is a legitimate
+                # create and is unaffected by this check.
+                if path not in read_paths_set and path not in ever_written:
+                    try:
+                        tools.stat_file(path)
+                    except AgenticError:
+                        pass  # does not exist yet -- a create, always allowed
+                    else:
+                        write_failed = True
+                        continue
                 try:
                     tools.write_file(path, content)
                 except AgenticError:
                     write_failed = True
                     continue
                 written.append(path)
+        ever_written.update(written)
 
         verification: VerificationReport | None = None
         if written and not has_critical and not write_failed:
