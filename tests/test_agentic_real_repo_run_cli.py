@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from agentic.cli import EXIT_ENV, EXIT_FAIL, EXIT_OK, EXIT_REFUSED, _bundle_context_text, main
+from agentic.deepagent_github.chat_client import ChatModelProposerClient, ChatModelProposerResponse
 from agentic.harness_optimizer.model_adapter import LocalProposerClient, LocalProposerResponse
 
 _RIGHT_BLOCK = "=== FILE target.txt ===\nexpected marker\n=== END FILE ===\nfix"
@@ -52,6 +53,35 @@ def cfg_path(tmp_path, monkeypatch):
     # run fails inside the first planner call, after a full context fetch and
     # clone already ran (see the eager check in cmd_real_repo_run).
     src["agentic"]["deepagent_github"]["model"] = "local-test-model"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+    yield str(path)
+    reset_config_cache()
+
+
+@pytest.fixture()
+def cloud_cfg_path(tmp_path, monkeypatch):
+    """Same as cfg_path, plus a fully gated grok provider (gates 3/4 already open).
+
+    deepagent_github.model is deliberately left "" (the shipped default), not
+    set the way cfg_path sets it -- a cloud-only operator who never intends to
+    configure a local model must not be blocked by that check; see
+    test_run_uses_the_cloud_client_with_no_local_model_configured below.
+    """
+    from agentic import config as agentic_config_module
+    from utils.logger import reset_config_cache
+
+    monkeypatch.setattr(agentic_config_module, "_repo_root", lambda: tmp_path)
+    src = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    src["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
+    src["agentic"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
+    src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    src["agentic"]["deepagent_github"]["allow_cloud_providers"] = True
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["model"] = "grok-test-model"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
     reset_config_cache()
@@ -114,6 +144,14 @@ def _fake_model(block: str):
     def fake_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0, config_path="config.yaml",
                      cfg=None):
         return LocalProposerResponse(content=block, model=self.model)
+
+    return fake_invoke
+
+
+def _fake_cloud_model(block: str):
+    def fake_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0, config_path="config.yaml",
+                     cfg=None):
+        return ChatModelProposerResponse(content=block, model=self.settings.model, provider=self.settings.provider)
 
     return fake_invoke
 
@@ -812,6 +850,136 @@ def test_run_env_errors_when_the_model_is_not_configured_before_any_network_io(
     ])
     assert code == EXIT_ENV
     assert "model" in capsys.readouterr().err.lower()
+
+
+# --- --provider drives real-repo-run with a gated cloud client (Tier 3) ------
+
+
+def _run_start_cloud(cfg_path, checks_file, *, confirm_online=True, provider="grok", extra=()):
+    args = [
+        "--config", cfg_path, "real-repo-run",
+        "--repo", "--instruction", "add the marker",
+        "--checks-file", checks_file,
+        "--branch", "claude/fixture-topic", "--commit-message", "add target.txt",
+        "--reason", "test run", "--confirm", "--provider", provider,
+    ]
+    if confirm_online:
+        args.append("--confirm-online")
+    return main([*args, *extra])
+
+
+def test_run_refuses_a_cloud_provider_that_is_not_gated_open(cfg_path, checks_file, monkeypatch, capsys):
+    """cfg_path's provider block ships disabled -- gates 3/4 must refuse before
+    any network I/O, exactly like the model-not-configured check above."""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg before gates 3/4")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    code = _run_start_cloud(cfg_path, checks_file)
+    assert code == EXIT_ENV
+    assert "gates 3/4" in capsys.readouterr().err
+
+
+def test_run_refuses_a_cloud_provider_without_confirm_online(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    """Gates 3/4/5 all open; --confirm-online is the one thing withheld."""
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg before gate 6")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    code = _run_start_cloud(cloud_cfg_path, checks_file, confirm_online=False)
+    assert code == EXIT_REFUSED
+    assert "confirm-online" in capsys.readouterr().err
+
+
+def test_run_refuses_a_cloud_provider_with_no_api_key(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    """Gates 3/4/6 all open; the provider's key is the one thing missing."""
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg before gate 5")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    code = _run_start_cloud(cloud_cfg_path, checks_file)
+    assert code == EXIT_ENV
+    assert "gate 5" in capsys.readouterr().err
+
+
+def test_run_uses_the_cloud_client_when_fully_gated_and_confirmed(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(ChatModelProposerClient, "invoke", _fake_cloud_model(_RIGHT_BLOCK))
+
+    code = _run_start_cloud(cloud_cfg_path, checks_file)
+
+    assert code == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "pending_decision"
+    assert record["provider"] == "grok"
+    assert record["changed_files"] == ["target.txt"]
+
+    audit_file = Path(cloud_cfg_path).parent / "audit.jsonl"  # matches cloud_cfg_path's own construction
+    audit_lines = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    confirmed = [e for e in audit_lines if e.get("event") == "agentic_deepagent_cloud_confirmed"]
+    assert len(confirmed) == 1
+    assert confirmed[0]["provider"] == "grok"
+
+
+def test_run_uses_the_cloud_client_with_no_local_model_configured(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    """The regression this wiring specifically had to avoid: a cloud-only
+    operator who never sets deepagent_github.model (it ships "") must not be
+    blocked by the local-model check -- that check only applies without
+    --provider. cloud_cfg_path already leaves deepagent_github.model unset."""
+    monkeypatch.setattr(ChatModelProposerClient, "invoke", _fake_cloud_model(_RIGHT_BLOCK))
+
+    assert _run_start_cloud(cloud_cfg_path, checks_file) == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "pending_decision"
+
+
+def test_run_without_provider_still_uses_the_local_client(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    """cloud_cfg_path has a fully gated provider available -- confirms omitting
+    --provider does not accidentally route through it anyway."""
+    local_invoked: list[str] = []
+    cloud_invoked: list[str] = []
+
+    def local_invoke(self, **kwargs):
+        local_invoked.append(self.model)
+        return LocalProposerResponse(content=_RIGHT_BLOCK, model=self.model)
+
+    def cloud_invoke(self, **kwargs):
+        cloud_invoked.append(self.settings.provider)
+        return ChatModelProposerResponse(content=_RIGHT_BLOCK, model=self.settings.model, provider=self.settings.provider)
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", local_invoke)
+    monkeypatch.setattr(ChatModelProposerClient, "invoke", cloud_invoke)
+    src = yaml.safe_load(Path(cloud_cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["model"] = "local-test-model"
+    Path(cloud_cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    from utils.logger import reset_config_cache
+
+    reset_config_cache()
+
+    code = _run_start(cloud_cfg_path, checks_file)
+    assert code == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["provider"] is None
+    assert local_invoked == ["local-test-model"]
+    assert not cloud_invoked
 
 
 # --- diff rendered at the decision point (Tier 1) ---------------------------
