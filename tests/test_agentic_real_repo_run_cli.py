@@ -325,7 +325,7 @@ def test_run_pr_context_reaches_the_planner_prompt(cfg_path, checks_file, monkey
     assert len(seen_prompts) == 1
     # From _fake_context_reads's pr_view/pr_diff stubs: title/body ("clean" /
     # "a normal description") and the diff body ("+x").
-    assert "Repository context" in seen_prompts[0]
+    assert "UNTRUSTED-GITHUB-CONTEXT" in seen_prompts[0]
     assert "clean" in seen_prompts[0]
     assert "a normal description" in seen_prompts[0]
     assert "diff --git" in seen_prompts[0]
@@ -334,7 +334,7 @@ def test_run_pr_context_reaches_the_planner_prompt(cfg_path, checks_file, monkey
 def test_run_repo_mode_has_no_context_section(cfg_path, checks_file, monkeypatch):
     """--repo mode's bundle is an overview + shortlists, no single target --
     _bundle_context_text returns None for it rather than manufacture
-    marginal-value context, so no "Repository context" section is added."""
+    marginal-value context, so no quoted-GitHub section is added."""
     seen_prompts: list[str] = []
 
     def capturing_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
@@ -344,7 +344,7 @@ def test_run_repo_mode_has_no_context_section(cfg_path, checks_file, monkeypatch
 
     monkeypatch.setattr(LocalProposerClient, "invoke", capturing_invoke)
     assert _run_start(cfg_path, checks_file) == EXIT_OK
-    assert "Repository context" not in seen_prompts[0]
+    assert "UNTRUSTED-GITHUB-CONTEXT" not in seen_prompts[0]
 
 
 # --- _bundle_context_text (unit) --------------------------------------------

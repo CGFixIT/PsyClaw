@@ -512,8 +512,25 @@ class RepoWorkspaceTools:
             self._deny_git(tool, "write content exceeds max_write_bytes", target=target, bytes=len(encoded))
         relative = self._validate_write_path(tool, target, must_exist=False)
         path = self._dest / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        # Path validation proves the target is INSIDE the clone; it does not
+        # prove the filesystem will accept a write there. Two planner-reachable
+        # shapes pass validation and then raise out of the stdlib: a target
+        # whose parent is an existing FILE ("README.md/x.txt" -- the ancestor
+        # walk stops at README.md, which resolves inside the clone) makes mkdir
+        # raise FileExistsError, and a target that IS an existing directory
+        # makes write_text raise IsADirectoryError. Neither is an AgenticError,
+        # so both used to escape run_real_repo_loop's `except AgenticError`
+        # entirely -- crashing the run, leaking the clone, and persisting no run
+        # record, all from model output alone. Converting here (rather than
+        # widening the loop's handler) keeps the contract _parse_file_blocks'
+        # docstring already states: a malformed path is a rejected iteration,
+        # not a crash.
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            self._deny_git(tool, "git path is not writable in the clone", target=target,
+                           error_type=type(exc).__name__)
         self._audit(
             "agentic_repo_workspace_write",
             target=relative,
