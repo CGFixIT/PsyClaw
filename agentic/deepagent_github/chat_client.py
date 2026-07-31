@@ -24,20 +24,23 @@ Every outbound user prompt is scanned and redacted via
 process -- that call itself records the ``agentic_deepagent_cloud_handoff``
 audit event, so this module does not duplicate it.
 
-Speculating (flagged per this repo's own confabulation-risk discipline):
-neither ``langchain-xai`` nor ``langchain-anthropic`` is installed in the
-sandbox this was written in, so the exact request/response shape each
-provider's ``BaseChatModel`` subclass builds from ``max_tokens``/``temperature``
-invoke-time kwargs could not be exercised end-to-end here. What IS verified by
-direct import in this same sandbox (``langchain-core==1.4.8``, a mandatory
-base dependency already used by ``graph.py`` -- not an optional extra):
-``BaseChatModel.invoke(input, config=None, *, stop=None, **kwargs) -> AIMessage``,
-where ``input`` accepts a plain ``Sequence[BaseMessage]`` and ``**kwargs``
-forward to the provider's own ``_generate``; and ``BaseMessage.content: str |
-list[str | dict[Any, Any]]``, which is why ``_coerce_text_content`` below does
-not assume a plain string. Treat the provider-specific translation of
-``max_tokens``/``temperature`` as unverified until a live-fire test runs
-against real ``ChatXAI``/``ChatAnthropic`` instances.
+Verified (not merely read from source): the exact pinned versions
+(``langchain-xai==1.2.2``, ``langchain-anthropic==1.4.8``) were installed into
+an isolated venv and driven end-to-end with an injected transport/fake client
+-- no network, no provider account. Both confirm ``max_tokens``/``temperature``
+passed as ``.invoke()`` kwargs reach the real outbound payload: ``ChatXAI``
+inherits ``langchain_openai.BaseChatOpenAI._get_request_payload``, which does
+``payload = {**self._default_params, **kwargs}`` (invoke-time kwargs win);
+``ChatAnthropic._get_request_payload`` builds its payload the same way and
+passes it to ``self._client.messages.create(**payload)``. Also confirmed: a
+single-block Claude reply's ``AIMessage.content`` is a plain ``str``, but a
+multi-block reply's is a real ``list[dict]`` shaped
+``[{"type": "text", "text": ...}, ...]`` -- exactly what
+``_coerce_text_content`` below is written to handle, not a hypothetical. See
+``tests/test_agentic_cloud_chat_model_wire_format.py``, which runs this same
+check as a permanent regression test in the ``deepagents-harness`` CI lane
+(the only one with both optional SDKs installed) rather than a one-off manual
+verification that would otherwise evaporate.
 """
 
 from __future__ import annotations
