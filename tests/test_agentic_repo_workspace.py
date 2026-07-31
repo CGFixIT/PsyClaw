@@ -494,6 +494,93 @@ def test_git_op_failure_surfaces_stderr_in_the_error_details(tmp_path, monkeypat
                 tools.commit("nothing to see here")
 
 
+# --- write_file ----------------------------------------------------------
+
+
+def test_write_file_creates_a_new_file(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            assert tools.write_file("new.txt", "brand new content\n") == {"target": "new.txt", "bytes": 18}
+            assert (dest / "new.txt").read_text(encoding="utf-8") == "brand new content\n"
+
+
+def test_write_file_overwrites_an_existing_file(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            tools.write_file("a.txt", "replaced\n")
+            assert (dest / "a.txt").read_text(encoding="utf-8") == "replaced\n"
+
+
+def test_write_file_creates_parent_directories(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            tools.write_file("nested/dir/new.txt", "deep\n")
+            assert (dest / "nested" / "dir" / "new.txt").read_text(encoding="utf-8") == "deep\n"
+
+
+def test_write_file_refused_by_default(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticWriteRefused):
+                tools.write_file("new.txt", "content\n")
+
+
+def test_write_file_rejects_paths_outside_the_clone(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.write_file("../escape.txt", "x")
+            with pytest.raises(AgenticError):
+                tools.write_file("/etc/passwd", "x")
+            with pytest.raises(AgenticError):
+                tools.write_file("-x", "x")
+            with pytest.raises(AgenticError):
+                tools.write_file("nested/../../escape.txt", "x")
+
+
+def test_write_file_rejects_content_exceeding_max_write_bytes(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.max_write_bytes = 10
+            with pytest.raises(AgenticError, match="max_write_bytes"):
+                tools.write_file("new.txt", "x" * 11)
+
+
+def test_write_file_rejects_non_string_content(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.write_file("new.txt", b"not a string")  # type: ignore[arg-type]
+
+
+def test_write_file_rejects_a_symlink_escape_via_existing_ancestor(tmp_path, monkeypatch):
+    """A new file whose PARENT directory is a symlink escaping the clone.
+
+    The leaf itself doesn't exist yet, so must_exist=False's ancestor walk is
+    what has to catch this -- the nearest existing ancestor (the symlinked
+    directory) resolves outside dest_resolved.
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            dest = Path(mrun.call_args.kwargs["dest"])
+            outside = dest.parent / "outside-dir"
+            outside.mkdir()
+            (dest / "escape-link").symlink_to(outside, target_is_directory=True)
+            with pytest.raises(AgenticError, match="escaped the clone root"):
+                tools.write_file("escape-link/new.txt", "x")
+
+
 def test_module_imports_without_deepagents_or_langchain():
     # Confirms the module docstring's claim: no deepagents/langchain import at
     # module scope. If this ever changed it would silently require

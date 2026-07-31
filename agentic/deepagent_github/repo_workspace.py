@@ -38,6 +38,14 @@ already established. Every write method is additionally gated on
 ``deepagent_github.allow_git_write_tools`` (default ``False``), a config field
 of its own -- see the field's docstring in ``agentic/config.py`` for why this
 is deliberately NOT a reuse of ``allow_shell_execution``.
+
+``write_file`` is not a git operation at all -- it is a plain, path-validated
+filesystem write (create or overwrite) inside the clone, the step that
+actually puts candidate content on disk before ``add``/``commit`` stage and
+record it. It shares the same ``allow_git_write_tools`` gate and the same
+path-safety validation ``add`` uses, extended to tolerate a target that does
+not exist yet (a new file), by walking up to the nearest existing ancestor
+the same way ``harness_optimizer/mcp/tools.py``'s write-target check does.
 """
 
 from __future__ import annotations
@@ -65,6 +73,10 @@ from utils.logger import audit_log
 # than two unexplained different limits.
 DEFAULT_MAX_READ_BYTES = 256_000
 
+# Same ceiling as reads, applied to write_file: no evidence either direction
+# needs a different number, and one cap is one thing to explain to an operator.
+DEFAULT_MAX_WRITE_BYTES = 256_000
+
 # Local git plumbing only -- no network, so this is generous headroom, not a
 # tuned ceiling like DEFAULT_CLONE_TIMEOUT_SEC.
 DEFAULT_GIT_WRITE_TIMEOUT_SEC = 30
@@ -82,7 +94,7 @@ _COMMIT_NAME = "Claude"
 # checkout -b <name>` would let a name starting with "-" be parsed as a `git`
 # option instead of a branch name, and no string starting with "claude/" can
 # start with "-".
-_BRANCH_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
+BRANCH_NAME_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
 
 # Same allowlist discipline as agentic/executor/runner.py's _scrubbed_env, kept
 # as an independent (smaller) copy rather than an import: these four git
@@ -160,6 +172,7 @@ class RepoWorkspaceTools:
     config_path: str = "config.yaml"
     cfg: dict | None = None
     max_read_bytes: int = DEFAULT_MAX_READ_BYTES
+    max_write_bytes: int = DEFAULT_MAX_WRITE_BYTES
     allow_git_write_tools: bool = False
 
     @classmethod
@@ -217,14 +230,23 @@ class RepoWorkspaceTools:
                 details={"tool": tool},
             )
 
-    def _validate_write_path(self, tool: str, target: str) -> str:
-        """Validate one ``git add`` path: relative, safe, and inside the clone.
+    def _validate_write_path(self, tool: str, target: str, *, must_exist: bool = True) -> str:
+        """Validate one repo-relative path: relative, safe, and inside the clone.
 
         Mirrors ``harness_optimizer/runners/github_coding_runner.py::_safe_child``'s
         cross-platform reasoning (a driveless-but-rooted Windows path like
         ``\\Windows\\system.ini`` must be rejected on POSIX too, and vice
         versa), plus a leading-dash rejection so a path can never be parsed as
         a ``git`` option instead of a pathspec.
+
+        ``must_exist=True`` (``add``'s case) resolves the target directly, since
+        staging a nonexistent path is already a user error. ``must_exist=False``
+        (``write_file``'s case, which may create a brand-new file) instead walks
+        up to the nearest ancestor that DOES exist and resolves that one --
+        mirroring ``harness_optimizer/mcp/tools.py::_contains_write_target``'s
+        reasoning: a not-yet-existing leaf can't itself be a symlink, but an
+        existing ancestor directory on the way there still could be, so that is
+        the one that must be checked.
         """
         if not isinstance(target, str) or not target or "\x00" in target:
             self._deny_git(tool, "git path must be a non-empty string", target=target)
@@ -236,10 +258,23 @@ class RepoWorkspaceTools:
             self._deny_git(tool, "git path escaped the clone root", target=target)
         dest_resolved = self._dest.resolve()
         candidate = dest_resolved.joinpath(*parts)
-        try:
-            resolved = candidate.resolve(strict=True)
-        except OSError as exc:
-            self._deny_git(tool, "git path does not exist in the clone", target=target, error_type=type(exc).__name__)
+        if must_exist:
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError as exc:
+                self._deny_git(
+                    tool, "git path does not exist in the clone", target=target, error_type=type(exc).__name__,
+                )
+        else:
+            ancestor = candidate
+            while True:
+                try:
+                    resolved = ancestor.resolve(strict=True)
+                    break
+                except OSError:
+                    if ancestor.parent == ancestor:  # pragma: no cover - dest_resolved always exists first
+                        self._deny_git(tool, "git path escaped the clone root", target=target)
+                    ancestor = ancestor.parent
         if resolved != dest_resolved and dest_resolved not in resolved.parents:
             self._deny_git(tool, "git path escaped the clone root", target=target)
         return "/".join(parts)
@@ -310,13 +345,26 @@ class RepoWorkspaceTools:
         self._audit("agentic_repo_workspace_read", op="stat_file", target=target)
         return info
 
+    @property
+    def worktree(self) -> Path:
+        """The real filesystem path of the jailed clone.
+
+        The read/write tool methods above are the intended boundary for
+        reading or mutating individual files; this exists only for a caller
+        that needs an actual ``cwd`` to hand a subprocess it runs itself --
+        namely ``agentic.executor.run_verification``, which pins its checks'
+        working directory to a worktree it does not otherwise have a way to
+        obtain from this class.
+        """
+        return self._dest
+
     # --- git writes: local only, scoped to this clone, never pushed ---------
 
     def checkout_branch(self, name: str) -> dict:
         """Create and switch to a new branch. ``name`` must be ``claude/<topic>``."""
         tool = "checkout_branch"
         self._require_git_writes_enabled(tool)
-        if not isinstance(name, str) or not _BRANCH_RE.match(name):
+        if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
             self._deny_git(
                 tool,
                 "branch name must start with 'claude/' and use only [A-Za-z0-9._/-]",
@@ -325,6 +373,34 @@ class RepoWorkspaceTools:
         self._run_git(tool, ["checkout", "-b", name])
         self._audit("agentic_repo_workspace_git_op", op=tool, branch=name)
         return {"branch": name}
+
+    def write_file(self, target: str, content: str) -> dict:
+        """Write (create or overwrite) one text file's full content in the clone.
+
+        Unlike ``add``, ``target`` need not already exist -- a candidate patch
+        may introduce a brand-new file. This is a plain filesystem write, not a
+        git operation, but it shares ``add``/``commit``'s gate: it is the step
+        that puts model-authored bytes on disk inside the clone, so it is
+        exactly the risk ``allow_git_write_tools`` exists to gate.
+        """
+        tool = "write_file"
+        self._require_git_writes_enabled(tool)
+        if not isinstance(content, str):
+            self._deny_git(tool, "write content must be a string", target=target)
+        encoded = content.encode("utf-8")
+        if len(encoded) > self.max_write_bytes:
+            self._deny_git(tool, "write content exceeds max_write_bytes", target=target, bytes=len(encoded))
+        relative = self._validate_write_path(tool, target, must_exist=False)
+        path = self._dest / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        self._audit(
+            "agentic_repo_workspace_write",
+            target=relative,
+            bytes=len(encoded),
+            sha256=hashlib.sha256(encoded).hexdigest(),
+        )
+        return {"target": relative, "bytes": len(encoded)}
 
     def add(self, paths: Sequence[str]) -> dict:
         """Stage one or more existing paths in the clone (``git add --``)."""
@@ -395,4 +471,10 @@ class RepoWorkspaceTools:
         self.close()
 
 
-__all__ = ["DEFAULT_GIT_WRITE_TIMEOUT_SEC", "DEFAULT_MAX_READ_BYTES", "RepoWorkspaceTools"]
+__all__ = [
+    "BRANCH_NAME_RE",
+    "DEFAULT_GIT_WRITE_TIMEOUT_SEC",
+    "DEFAULT_MAX_READ_BYTES",
+    "DEFAULT_MAX_WRITE_BYTES",
+    "RepoWorkspaceTools",
+]
