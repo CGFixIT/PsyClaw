@@ -722,6 +722,27 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             ),
         )
 
+    @app.post("/api/agent/runs/{run_id}/discard", dependencies=guarded)
+    def agent_run_discard(run_id: str) -> dict:
+        """Reclaim a decided run's clone from disk. The only route that frees disk.
+
+        Not redundant with ``reject``: reject applies only to a run still
+        awaiting a decision, and an APPROVED run's clone is deliberately
+        retained past its decision because push/publish still need it. Without
+        this route a console-driven operator accumulates one full repository
+        clone per approved run under ``workspace_root`` with no way to free
+        any of them -- the CLI had the reclamation step, the console had no
+        path to it.
+
+        The refusal for a still-pending run lives in ``agentic/`` (discarding
+        then would destroy a live candidate with no decision ever recorded),
+        not here.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-discard", lambda: run_agentic_op("real-repo-run-discard", run_id=checked)
+        )
+
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")
     def harness_runs() -> dict:
