@@ -10,8 +10,9 @@ Subcommands:
                    --confirm-online before any cloud egress).
     real-repo-run        Clone a real repo and run plan/patch/verify against it
                           (governed by --reason/--confirm; never commits).
-    real-repo-run-status Report a real-repo run's persisted status.
-    real-repo-run-decide Approve (commit) or reject (discard) a pending run.
+    real-repo-run-status  Report a real-repo run's persisted status.
+    real-repo-run-decide  Approve (commit) or reject (discard) a pending run.
+    real-repo-run-discard Reclaim a decided (or orphaned) run's clone from disk.
     test           Run the pre-flight self-test.
 
 Exit codes:
@@ -459,6 +460,21 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         _err(exc.message)
         return EXIT_FAIL
 
+    # Persisted BEFORE the loop runs, not only after it finishes. This command
+    # runs under a hard wall-clock budget (see utils/ops_runner.py's
+    # real-repo-run action timeout); a kill on overrun previously left this
+    # process with no chance to reach any save_run call below, so the clone
+    # under workspace_root had NOTHING on disk pointing at it -- unreachable
+    # by real-repo-run-status, and indistinguishable from garbage by anything
+    # that might reclaim it later (see real-repo-run-discard). This also makes
+    # the "running" state agentic/real_repo_run_store.py's own docstring
+    # already documents an actual, observable state rather than one nothing
+    # ever writes.
+    save_run(
+        runs_dir,
+        RealRepoRunRecord(run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="running"),
+    )
+
     client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
     try:
         result = run_real_repo_loop(
@@ -605,6 +621,65 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_real_repo_run_discard(args: argparse.Namespace) -> int:
+    """Reclaim a run's clone from disk once its outcome no longer needs it.
+
+    Every accepted run's clone survives past ``real-repo-run-decide --decision
+    approve`` on purpose (see ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` --
+    a future push step would need the same clone, and closing it eagerly would
+    foreclose that before it exists), but nothing wired anywhere calls
+    ``RepoWorkspaceTools.close()`` on that path -- so it was retained forever,
+    not merely "for a while." This is the missing explicit reclamation step,
+    not a change to when approve/reject themselves clean up.
+
+    Refuses a run still ``pending_decision``: that status means a human has
+    not yet approved or rejected a live candidate, and discarding then would
+    destroy it with no decision ever recorded. Every other status is eligible
+    -- including ``running``, which only survives past its own command's exit
+    if the owning process was killed before finishing (e.g. by the wall-clock
+    timeout wrapping this action -- see ``utils/ops_runner.py``), leaving a
+    clone with nothing else pointing at it.
+
+    Idempotent: the clone directory may already be gone (an already-rejected
+    run closes its own clone; discarding twice is harmless), in which case
+    this only updates the record.
+    """
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.real_repo_run_store import PENDING_DECISION, load_run, save_run
+
+    app_cfg = _get_config(args.config)
+    runs_dir = _real_repo_runs_dir(cfg)
+    try:
+        record = load_run(runs_dir, args.run_id)
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    if record.status == PENDING_DECISION:
+        _err(f"run {args.run_id} is still pending a decision -- run real-repo-run-decide first")
+        return EXIT_FAIL
+
+    dest = Path(record.dest)
+    if dest.is_dir():
+        try:
+            tools = RepoWorkspaceTools.attach(cfg, dest, config_path=args.config, cfg=app_cfg)
+        except AgenticError as exc:
+            _err(exc.message)
+            return EXIT_FAIL
+        tools.close()
+
+    record.status = "discarded"
+    save_run(runs_dir, record)
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
+
+
 def cmd_propose_skill(args: argparse.Namespace) -> int:
     cfg = _load(args)
     if cfg is None:
@@ -740,6 +815,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run_decide.add_argument("--run-id", required=True)
     p_run_decide.add_argument("--decision", required=True, choices=("approve", "reject"))
     p_run_decide.set_defaults(func=cmd_real_repo_run_decide)
+
+    p_run_discard = sub.add_parser(
+        "real-repo-run-discard", help="Reclaim a decided (or orphaned) run's clone from disk.",
+    )
+    p_run_discard.add_argument("--run-id", required=True)
+    p_run_discard.set_defaults(func=cmd_real_repo_run_discard)
 
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")
     p_test.set_defaults(func=cmd_test)

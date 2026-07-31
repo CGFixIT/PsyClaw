@@ -301,6 +301,13 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     GitHub API call. See `agentic/real_repo_loop.py`'s module docstring for the
     full gate chain.
 
+    `real-repo-run-discard` was added deliberately too: `real-repo-run-decide`
+    retains an approved (or rejected) run's clone on disk rather than deleting
+    it, and nothing else in this codebase ever reclaims it -- an adversarial
+    review found every approved run leaking a full repo clone under
+    `workspace_root` forever. This is the explicit reclamation step, not a
+    change to when approve/reject themselves clean up.
+
     If this needs updating again, that wiring was added on purpose. Update it
     deliberately, not by accident."""
     import argparse
@@ -311,5 +318,6 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
     assert set(sub_action.choices.keys()) == {
         "status", "context", "propose-skill", "apply-skill", "deepagent-plan",
-        "real-repo-run", "real-repo-run-status", "real-repo-run-decide", "test",
+        "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+        "real-repo-run-discard", "test",
     }
