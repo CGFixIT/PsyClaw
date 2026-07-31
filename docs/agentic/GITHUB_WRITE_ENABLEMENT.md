@@ -29,24 +29,36 @@ with a filed checklist — not for the change that builds the machinery.
 
 ## The gate chain, in the order it is evaluated
 
-A write requires **all five** of these. Four are config; one is code.
+A write requires **all six** of these. Five are config or per-call; one is code.
 
 | # | Gate | Where | Ships as | Fails closed? |
 |---|---|---|---|---|
-| 0 | `EXECUTION_ENABLED` | `agentic/writer.py` | `False` | yes |
-| 1 | `agentic.mode == "write"` | `config.yaml` | `"read"` | yes |
-| 2 | `agentic.writes_enabled` | `config.yaml` | `false` | yes |
-| 3 | a non-empty human `reason` | per call | — | yes |
-| 4 | `confirm is True` | per call | — | yes |
+| 0 | `agentic.enabled` (the layer's master switch) | `config.yaml` | `false` | yes |
+| 1 | `EXECUTION_ENABLED` | `agentic/writer.py` | `False` | yes |
+| 2 | `agentic.mode == "write"` | `config.yaml` | `"read"` | yes |
+| 3 | `agentic.writes_enabled` | `config.yaml` | `false` | yes |
+| 4 | a non-empty human `reason` | per call | — | yes |
+| 5 | `confirm is True` | per call | — | yes |
 
-`agentic.enabled: false` sits in front of all of it, so the CLI no-ops entirely
-on a shipped checkout.
+Gate 0 was, until an external review of this document's own claim caught it,
+enforced only by the CLI's own `_disabled_noop()` short-circuit — the prose
+here said "the CLI no-ops entirely," which was true for the CLI but silently
+NOT true for a direct call into `plan_write()`/`execute_write()`, a
+programmatic boundary the CLI does not gate on anyone's behalf. It is now
+enforced inside `_require_gates()` itself, ahead of gates 2–5, so it holds
+regardless of caller.
 
-Both `plan_write()` and `execute_write()` run gates 1–4 through the same
-`_require_gates()` implementation. That matters: before P10 the gates lived
-only in the planner, so once the flag flipped, *holding a plan dict* would have
-become the authority to write. A plan is data — hand-buildable, JSON
-round-trippable, able to cross a process boundary. It is no longer authority.
+`plan_write()` runs gates 0, 2, 3, 4, 5 (everything but the code-level
+`EXECUTION_ENABLED`, which only `execute_write()` checks, first, before even
+looking at the plan). `execute_write()` runs all six, including a FRESH
+`confirm` its own caller must supply -- `plan_write()`'s `confirm` does not
+carry forward via the plan dict, deliberately: a boolean baked into
+hand-buildable, JSON round-trippable data would be exactly as forgeable as
+manufacturing it internally, which is what an earlier version of this function
+did. That matters: before P10 the numbered gates lived only in the planner, so
+once the flag flipped, *holding a plan dict* would have become the authority to
+write. A plan is data — hand-buildable, JSON round-trippable, able to cross a
+process boundary. It is no longer authority.
 
 ---
 
@@ -67,12 +79,13 @@ reversible by editing one line back.
    not widened, because that environment is shared with the executor that runs
    model-proposed check commands, and a GitHub token there is an exfiltration
    path.
-3. **Dry-run first.** With gates 1–2 still closed, call `plan_write(...)` and
+3. **Dry-run first.** With gates 2–3 still closed, call `plan_write(...)` and
    read the `would_run` argv. Confirm `--draft` is present, `--repo` is your
    repo, and `--head` is the `claude/` branch you expect.
 4. **File the checklist below.** Signed, dated, kept with the repo.
-5. **Open the config gates** (`mode: "write"`, `writes_enabled: true`). Still
-   nothing executes — gate 0 is code.
+5. **Open the config gates** (`agentic.enabled: true` is presumably already on
+   if you got this far; `mode: "write"`, `writes_enabled: true`). Still nothing
+   executes — gate 1 (`EXECUTION_ENABLED`) is code, not config.
 6. **Flip `EXECUTION_ENABLED` to `True`.** This is the last step and the only
    irreversible-in-effect one.
 7. **Rehearse the rollback before you rely on it:** set it back to `False` and
@@ -114,10 +127,19 @@ an unauthorized change.*
       `claude/*` scoping and the `allow_git_write_tools` gate entirely. The
       mitigating fact is that those argv are operator-supplied, not
       model-supplied. Decide explicitly: accept, or close before enabling.
-- [ ] **I. Blast radius understood.** With the flag on and gates 1–2 open, this
+- [ ] **I. Blast radius understood.** With the flag on and gates 2–3 open, this
       code can push a `claude/*` branch and open a draft PR against the
       configured repo, as the authenticated `gh` identity. It cannot push to
       `main`, cannot force-push, and cannot delete anything.
+- [ ] **J. Master switch enforced in code, not just the CLI.**
+      `_require_gates()` checks `agentic.enabled` first, ahead of every other
+      gate. A direct call into `plan_write()`/`execute_write()` — bypassing the
+      CLI's own `_disabled_noop()` — cannot skip it. (This was NOT true before
+      an external review caught the gap; see the gate-chain section above.)
+- [ ] **K. Confirm is never inherited from a plan.** `execute_write()` requires
+      its own caller to supply a fresh `confirm=True`; it neither reads a
+      `confirm` field off the plan (none exists) nor manufactures one
+      internally. (Also not true before the same review.)
 
 **Sign-off:** ______________________  **Date:** ____________
 

@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentic.cli import EXIT_ENV, EXIT_FAIL, EXIT_OK, EXIT_REFUSED, main
+from agentic.cli import EXIT_ENV, EXIT_FAIL, EXIT_OK, EXIT_REFUSED, _bundle_context_text, main
 from agentic.harness_optimizer.model_adapter import LocalProposerClient, LocalProposerResponse
 
 _RIGHT_BLOCK = "=== FILE target.txt ===\nexpected marker\n=== END FILE ===\nfix"
@@ -244,6 +244,85 @@ def test_run_pr_and_issue_targets_are_accepted(cfg_path, checks_file, monkeypatc
         "--checks-file", checks_file, "--branch", "claude/issue-topic", "--commit-message", "x",
         "--reason", "test", "--confirm",
     ]) == EXIT_OK
+
+
+def test_run_pr_context_reaches_the_planner_prompt(cfg_path, checks_file, monkeypatch, capsys):
+    """A codex review finding: cmd_real_repo_run fetched and injection-scanned
+    the PR's title/body/diff into `bundle`, then discarded all of it before
+    calling run_real_repo_loop -- only bundle["governance_findings"] was ever
+    read back out. The planner had to guess complete replacement files
+    without seeing the task that motivated them. Context is now threaded
+    through; this asserts it actually reaches the model call, not just that
+    the plumbing compiles.
+    """
+    seen_prompts: list[str] = []
+
+    def capturing_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
+                          config_path="config.yaml", cfg=None):
+        seen_prompts.append(user_prompt)
+        return LocalProposerResponse(content=_RIGHT_BLOCK, model=self.model)
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", capturing_invoke)
+    assert main([
+        "--config", cfg_path, "real-repo-run", "--pr", "1", "--instruction", "add the marker",
+        "--checks-file", checks_file, "--branch", "claude/pr-topic", "--commit-message", "x",
+        "--reason", "test", "--confirm",
+    ]) == EXIT_OK
+    assert len(seen_prompts) == 1
+    # From _fake_context_reads's pr_view/pr_diff stubs: title/body ("clean" /
+    # "a normal description") and the diff body ("+x").
+    assert "Repository context" in seen_prompts[0]
+    assert "clean" in seen_prompts[0]
+    assert "a normal description" in seen_prompts[0]
+    assert "diff --git" in seen_prompts[0]
+
+
+def test_run_repo_mode_has_no_context_section(cfg_path, checks_file, monkeypatch):
+    """--repo mode's bundle is an overview + shortlists, no single target --
+    _bundle_context_text returns None for it rather than manufacture
+    marginal-value context, so no "Repository context" section is added."""
+    seen_prompts: list[str] = []
+
+    def capturing_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
+                          config_path="config.yaml", cfg=None):
+        seen_prompts.append(user_prompt)
+        return LocalProposerResponse(content=_RIGHT_BLOCK, model=self.model)
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", capturing_invoke)
+    assert _run_start(cfg_path, checks_file) == EXIT_OK
+    assert "Repository context" not in seen_prompts[0]
+
+
+# --- _bundle_context_text (unit) --------------------------------------------
+
+
+def test_bundle_context_text_extracts_pr_fields():
+    text = _bundle_context_text({"pr": {"title": "Fix X", "body": "does Y"}, "diff": "diff --git a b\n+z"})
+    assert "PR title: Fix X" in text
+    assert "PR body:\ndoes Y" in text
+    assert "Diff:\ndiff --git a b\n+z" in text
+
+
+def test_bundle_context_text_extracts_issue_fields():
+    text = _bundle_context_text({"issue": {"title": "Bug report", "body": "steps to reproduce"}})
+    assert "Issue title: Bug report" in text
+    assert "Issue body:\nsteps to reproduce" in text
+
+
+def test_bundle_context_text_is_none_for_a_repo_overview_bundle():
+    """--repo mode's bundle: overview + shortlists, no pr/issue/diff key at all."""
+    assert _bundle_context_text({"repo": "o/r", "overview": {"description": "a repo"}}) is None
+
+
+def test_bundle_context_text_is_none_when_fields_are_empty():
+    assert _bundle_context_text({"pr": {"title": "", "body": ""}}) is None
+
+
+def test_bundle_context_text_is_truncated():
+    huge_diff = "x" * 50_000
+    text = _bundle_context_text({"pr": {"title": "t"}, "diff": huge_diff})
+    assert len(text) < len(huge_diff)
+    assert "truncated" in text
 
 
 def test_run_env_errors_when_the_clone_fails(cfg_path, checks_file, monkeypatch):

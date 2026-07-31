@@ -14,17 +14,19 @@ it is a documented operator procedure, not a code change:
 ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``.
 
 The gate is the out-of-band analogue of CyClaw's "Triple-Gated External Access"
-invariant for the Grok path. A write is permitted only when ALL of:
+invariant for the Grok path. A write is permitted only when the master switch
+and all four numbered gates hold:
 
-    1. cfg.mode == "write"            (operator put the layer in write mode)
-    2. cfg.writes_enabled is True     (explicit second flag, defaults False)
-    3. a non-empty human ``reason``   (governance: no anonymous mutations)
-    4. confirm is True                (explicit per-call confirmation)
+    0. cfg.enabled is True             (the agentic layer's own master switch)
+    1. cfg.mode == "write"              (operator put the layer in write mode)
+    2. cfg.writes_enabled is True       (explicit second flag, defaults False)
+    3. a non-empty human ``reason``     (governance: no anonymous mutations)
+    4. confirm is True                  (explicit per-call confirmation)
 
-are satisfied simultaneously. The shipped ``config.yaml`` fails 1 and 2
-independently (``mode: "read"``, ``writes_enabled: false``) and the whole layer
-is off besides (``agentic.enabled: false``), so enabling a write is three
-deliberate operator edits, not one.
+are satisfied simultaneously. The shipped ``config.yaml`` fails 0, 1, and 2
+independently (``agentic.enabled: false``, ``mode: "read"``,
+``writes_enabled: false``), so enabling a write is three deliberate operator
+edits, not one.
 
 WHY :func:`execute_write` RE-RUNS THE GATE. Before P10 the gate lived only in
 :func:`plan_write`, and :func:`execute_write` took a plain ``dict`` and checked
@@ -32,9 +34,12 @@ nothing but ``EXECUTION_ENABLED``. That was sound only while the flag was a
 hard ``False`` -- with it flipped, "holding a plan dict" would have BECOME the
 authority to write, and a plan is just data: it can be built by hand, come back
 from JSON, or cross a process boundary. So the executor now takes the config
-and re-runs all four gates itself, and rebuilds the argv from the plan's
-semantic fields rather than executing the ``would_run`` list it was handed. A
-tampered ``would_run`` is inert.
+AND a fresh ``confirm`` and re-runs the master switch plus all four gates
+itself, and rebuilds the argv from the plan's semantic fields rather than
+executing the ``would_run`` list it was handed. A tampered ``would_run`` is
+inert, and a plan that merely *claims* it was confirmed is not treated as
+confirmed -- the caller of ``execute_write`` must confirm again, at execution
+time, in its own right.
 
 Any gate failure raises ``AgenticWriteRefused`` and is audited.
 """
@@ -66,7 +71,9 @@ from utils.logger import audit_log
 # Flipping this to True is now genuinely sufficient to arm the capability --
 # but not to perform a write. Three shipped config gates still fail closed
 # (agentic.enabled, agentic.mode, agentic.writes_enabled), and execute_write()
-# re-checks all four on every call. See the module docstring.
+# re-checks the master switch plus all four numbered gates on every call --
+# including confirm, which its caller must supply fresh, not read off the
+# plan. See the module docstring.
 EXECUTION_ENABLED = False
 
 # Write ops the planner knows how to *describe*.
@@ -180,13 +187,30 @@ def _require_gates(
     confirm: bool,
     config_path: str,
 ) -> None:
-    """The four-gate chain, in order. Raises ``AgenticWriteRefused`` on the first failure.
+    """The master switch plus the four-gate chain, in order.
 
-    Extracted so :func:`plan_write` and :func:`execute_write` enforce ONE
-    implementation rather than two that can drift. Before P10 only the planner
-    ran it, which was survivable while the executor was a hard-disabled stub;
-    it stops being survivable the moment the executor works.
+    Raises ``AgenticWriteRefused`` on the first failure. Extracted so
+    :func:`plan_write` and :func:`execute_write` enforce ONE implementation
+    rather than two that can drift. Before P10 only the planner ran it, which
+    was survivable while the executor was a hard-disabled stub; it stops being
+    survivable the moment the executor works.
+
+    The master switch (``agentic.enabled``) is checked here, ahead of the four
+    numbered gates, even though every other consumer of this config
+    (``agentic/cli.py``, ``build_deepagent_github``) already checks it before
+    calling in. This module's own docstring already claimed "the whole layer is
+    off besides (agentic.enabled: false)" as one of the three independent
+    barriers on a shipped checkout -- that claim was true only for the CLI
+    entry point, not for a direct call into this module, until this check
+    existed. ``cfg.enabled`` is attached dynamically by
+    ``load_agentic_config`` (never a dataclass field, so it never leaks into
+    ``to_dict``/argv), so a hand-constructed ``AgenticConfig()`` has none
+    unless its caller set it -- ``getattr(..., False)`` is the fail-closed
+    default for that case, matching the same pattern ``build_deepagent_github``
+    already uses for the identical reason.
     """
+    if not getattr(cfg, "enabled", False):
+        raise _refuse("agentic.enabled is False", op=op, gate="enabled", reason=reason, config_path=config_path)
     if op not in _WRITE_OPS:
         raise AgenticError(
             f"Unknown write op: {op!r}",
@@ -270,6 +294,7 @@ def execute_write(
     plan: dict,
     *,
     cfg: AgenticConfig,
+    confirm: bool,
     config_path: str = "config.yaml",
     gh_bin: str = "gh",
     timeout_sec: int = DEFAULT_WRITE_TIMEOUT_SEC,
@@ -283,6 +308,18 @@ def execute_write(
     round-trippable, capable of crossing a process boundary -- and before P10
     the only thing standing between such a dict and a real mutation was
     ``EXECUTION_ENABLED`` being a hard ``False``.
+
+    ``confirm`` is likewise REQUIRED, keyword-only, and NOT read from the plan.
+    An earlier version of this function manufactured ``confirm=True``
+    internally when re-running the gate, which made gate 4 -- "explicit
+    per-call confirmation" -- unconditionally satisfied and therefore not a
+    real gate at the execution boundary at all. Nor is ``plan["confirm"]`` an
+    acceptable substitute: ``plan_write`` never stores a ``confirm`` field on
+    the plan for exactly the same reason it must not be trusted here -- a
+    boolean baked into hand-buildable, JSON round-trippable data would be at
+    least as forgeable as the manufactured constant it would replace. The
+    caller of ``execute_write`` -- the actual human-facing decision point --
+    must supply a fresh ``True`` of its own.
 
     The argv is REBUILT here from the plan's ``op``/``params`` via the same
     builder the planner used; ``plan["would_run"]`` is never executed. It is
@@ -309,7 +346,7 @@ def execute_write(
         raise AgenticError("execute_write requires a plan dict carrying an 'op'", details={"op": op})
 
     reason = plan.get("reason")
-    _require_gates(cfg, op, reason if isinstance(reason, str) else "", confirm=True, config_path=config_path)
+    _require_gates(cfg, op, reason if isinstance(reason, str) else "", confirm=confirm, config_path=config_path)
 
     if op not in _EXECUTABLE_WRITE_OPS:
         audit_log({"event": "agentic_write_execution_blocked", "op": op, "gate": "executable_op"}, config_path)

