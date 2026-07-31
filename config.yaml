@@ -460,8 +460,11 @@ sync:
 # Absence of this block, or enabled: false, disables the agentic layer entirely.
 # It runs strictly via `python -m agentic.cli` — never imported by gate.py,
 # graph.py, or the MCP server. Reads use the `gh` CLI (argv-list, no shell, no
-# token forwarded by CyClaw). Writes are a DISABLED, STUBBED scaffold: even in
-# write mode v0.1 only produces dry-run plans and never mutates GitHub.
+# token forwarded by CyClaw). The GitHub write path is IMPLEMENTED but shipped
+# DISARMED: agentic/writer.py's EXECUTION_ENABLED is False, and the mode /
+# writes_enabled gates below fail closed independently, so nothing here can open
+# a pull request as shipped. Arming it is a filed-checklist operator procedure —
+# see docs/agentic/GITHUB_WRITE_ENABLEMENT.md.
 agentic:
   enabled: false                 # off by default; CLI no-ops (exit 0) while false
   repo: "CGFixIT/CyClaw"         # validated: owner/name, no shell metacharacters

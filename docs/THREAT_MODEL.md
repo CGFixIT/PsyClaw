@@ -134,10 +134,14 @@ A 2026 review may reflexively call for gVisor/Firecracker microVMs around
 "agentic code that can touch fs/sql." For CyClaw that recommendation targets a
 threat that the architecture has already removed:
 
-- **GitHub writes are hard-killed.** `agentic/writer.py` ships
-  `EXECUTION_ENABLED = False`; `execute_write()` raises before doing anything and
-  is `NotImplementedError` even if the flag were flipped. `plan_write()` only ever
-  returns a dry-run plan.
+- **GitHub writes are implemented but disarmed** (amended by P10 — see the
+  fourth amendment in §5). `agentic/writer.py` ships `EXECUTION_ENABLED = False`,
+  and `execute_write()` refuses on that flag before anything else. It is no
+  longer `NotImplementedError` behind the flag: the `pr_create` path is
+  implemented. What holds the line on a shipped checkout is the flag plus three
+  independent `config.yaml` gates (`agentic.enabled`, `agentic.mode`,
+  `agentic.writes_enabled`), all failing closed, and `execute_write()` re-runs
+  the full gate on every call rather than trusting the plan it is handed.
 - **SQL is read-only-guarded.** `agentic/sqlconnect/client.py` rejects every
   non-`SELECT` statement (and comments, and multi-statements) before execution.
 - **Filesystem writes are triple-gated and off by default.** `writes_enabled`
@@ -282,11 +286,48 @@ narrower and more precise reason than "nothing executes":
   hard per-check wall-clock timeout, `check=False` so a non-zero exit is data
   rather than an exception, and no inherited secrets (API keys are not in the
   allowlisted environment). None of these is a kernel-level boundary.
-- **What this does NOT change:** GitHub writes are still hard-killed (the
-  bullet above is unaffected), SQL is still read-only-guarded, filesystem
-  writes are still triple-gated, and the executor itself performs no writes of
-  any kind — it reads a worktree and runs fixed, non-attacker-chosen commands
-  against it.
+- **What this does NOT change:** GitHub writes remain unreachable on a shipped
+  checkout (see the fourth amendment below, which supersedes the phrase
+  "hard-killed" without changing the shipped posture), SQL is still
+  read-only-guarded, filesystem writes are still triple-gated, and the executor
+  itself performs no writes of any kind — it reads a worktree and runs fixed,
+  non-attacker-chosen commands against it.
+
+### Fourth amendment — the GitHub write path is implemented (P10)
+
+- **What changed.** `execute_write()` was a stub that raised
+  `NotImplementedError`. It now performs `gh pr create --draft` for real, and
+  `RepoWorkspaceTools.push_branch()` can push one `claude/` branch to origin.
+  The sentence "GitHub writes are hard-killed" was true of the code and is no
+  longer; the §5 bullet above has been rewritten rather than left standing.
+- **What did NOT change: the shipped posture.** `EXECUTION_ENABLED` is still
+  `False`, and `agentic.enabled` / `agentic.mode` / `agentic.writes_enabled`
+  still ship closed. Four independent gates, any one of which refuses. P10
+  deliberately did not flip the flag — arming it is a filed-checklist operator
+  procedure (`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`), matching how the
+  analogous fsconnect write enablement was handled.
+- **What is gated, exactly.** `execute_write()` re-runs all four gates against
+  the live config on every call, so possessing a plan dict is not authority to
+  write. It rebuilds the argv from the plan's own params and refuses on
+  mismatch, so a tampered `would_run` is inert. It refuses a plan naming a repo
+  other than the configured one. It refuses any op outside `{pr_create}` even
+  though three are describable. It never retries: both of `run_read`'s retry
+  branches fire after the request has left the machine, so a retry could
+  duplicate an accepted mutation; a timeout is reported as INDETERMINATE.
+- **The residual risk, named.** With the flag armed and the config gates opened,
+  this code can push a `claude/*` branch and open a draft PR against the
+  configured repo as the authenticated `gh` identity. It cannot push to `main`,
+  force-push, or delete. Two honest gaps: `push_branch` inherits the operator's
+  ambient git credential helper (CyClaw passes no token of its own, deliberately
+  — the environment it would live in is shared with the executor that runs
+  model-proposed commands), and `agentic/executor`'s operator-supplied check
+  argv can already run `git push` inside the clone, bypassing the `claude/*`
+  scoping. The second is pre-existing, operator-supplied rather than
+  model-supplied, and is called out as item H of the enablement checklist.
+- **What still does not exist:** `pr_comment` and `issue_comment` execution, any
+  `/ops/*` or harness route reaching a write, any CLI write subcommand, and any
+  wiring of the write path into the real-repo loop's approve step. A GitHub
+  mutation remains un-triggerable over the network.
 
 MicroVM containment would still add operational weight and privileged host
 requirements most single-operator deployments of CyClaw cannot assume. It
