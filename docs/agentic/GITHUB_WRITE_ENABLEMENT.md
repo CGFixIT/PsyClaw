@@ -5,6 +5,15 @@ and `config.yaml` ships three further gates closed. Nothing in this repository
 can open a pull request today. This document is the procedure for changing
 that, and the checklist that must be filed first.
 
+> **Checklist re-run in progress (2026-07-31).** Item A's void-and-re-run
+> clause fired: `execute_write` is now reachable from two CLI subcommands and
+> one authenticated HTTP route, which it was not when this document was
+> written. Items A and I are rewritten accordingly and a dated verification
+> record sits below the checklist. **Two decisions are open and are the
+> operator's alone** — item A (accept HTTP reachability, or drop the
+> `/publish` route) and item H (accept the executor-argv scope, or close it).
+> The status above is unchanged and stays unchanged until a signature exists.
+
 It is the GitHub analogue of `FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md` +
 `FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`, and exists for the same reason: the
 code half of an enablement is reviewable in a diff, and the operational half is
@@ -98,11 +107,40 @@ reversible by editing one line back.
 *Flipping the write flag without a completed, filed copy of this checklist is
 an unauthorized change.*
 
-- [ ] **A. Reachability.** No `/ops/*` endpoint, no harness route, and no CLI
-      subcommand reaches `execute_write`. Verified: `utils/ops_runner.py`'s
-      `_AGENTIC_ACTIONS` carries no write action, and `agentic/cli.py` exposes
-      no write subcommand. If either changes, this checklist is void and must be
-      re-run — that would make a GitHub mutation network-triggerable.
+- [ ] **A. Reachability — CHANGED 2026-07-31, read this before signing.**
+      This item previously read "No `/ops/*` endpoint, no harness route, and no
+      CLI subcommand reaches `execute_write`," and said that if that ever
+      changed the checklist was void and had to be re-run. **It changed.** That
+      clause did its job: this is the re-run, and the item below is what it is
+      now, not what anyone wishes it still were.
+
+      `execute_write` is reachable from three places today:
+
+      | Caller | Path | Additional gates on that path |
+      |---|---|---|
+      | CLI | `real-repo-run-decide --push --publish` | `--decision approve`, `--reason`, `--confirm-publish` |
+      | CLI | `real-repo-run-publish` | run must be `approved` AND `pushed`, `--reason`, `--confirm` |
+      | HTTP | `POST /api/agent/runs/{id}/publish` | same run-state gates, plus `CYCLAW_API_KEY` + `Origin`/`Sec-Fetch-Site` |
+
+      **A GitHub mutation is therefore network-triggerable once the flag is
+      flipped** — by an authenticated, same-origin caller on loopback, against
+      a run that already reached `approved` and `pushed`. That is a real
+      widening of this document's original premise and the single most
+      important thing to weigh before signing. It is not hidden by a config
+      default: the HTTP route exists and is reachable *now*; only
+      `EXECUTION_ENABLED` stops the write.
+
+      What has NOT changed: `utils/ops_runner.py` still forwards no raw argv,
+      the harness still sends check-profile NAMES against a fixed allow-list,
+      and every gate in the chain above still applies per call. The exposure is
+      "an authenticated local operator can trigger it from the console instead
+      of only from a terminal," not "an unauthenticated caller can."
+
+      Sign this item only if you accept that. If you want the flag armed for
+      CLI use but NOT reachable over HTTP, the narrow change is to drop
+      `real-repo-run-publish` from `_AGENTIC_ACTIONS` in `utils/ops_runner.py`
+      and delete the `/publish` route — push and every other agent route are
+      unaffected.
 - [ ] **B. Draft-only.** `_build_write_argv`'s `pr_create` branch still ends in
       `--draft`, and `tests/test_agentic_writer.py` still asserts the argv as an
       exact list. That assertion is the only thing pinning draft-ness.
@@ -139,6 +177,13 @@ an unauthorized change.*
       code can push a `claude/*` branch and open a draft PR against the
       configured repo, as the authenticated `gh` identity. It cannot push to
       `main`, cannot force-push, and cannot delete anything.
+
+      **Amended 2026-07-31 alongside item A:** the trigger surface is now wider
+      than "a terminal." An authenticated same-origin request to
+      `POST /api/agent/runs/{id}/publish` reaches the same write. The blast
+      radius per invocation is unchanged (one draft PR, one `claude/*` branch);
+      what changed is who can invoke it and from where. Rate-limiting applies
+      to the route, but a rate limit bounds frequency, not authority.
 - [ ] **J. Master switch enforced in code, not just the CLI.**
       `_require_gates()` checks `agentic.enabled` first, ahead of every other
       gate. A direct call into `plan_write()`/`execute_write()` — bypassing the
@@ -149,9 +194,39 @@ an unauthorized change.*
       `confirm` field off the plan (none exists) nor manufactures one
       internally. (Also not true before the same review.)
 
+### Verification record — 2026-07-31 (agent-performed, not a sign-off)
+
+Every item above was re-checked against the code as it stands at this date,
+because item A's own void-and-re-run clause had fired. Method and result:
+
+| Item | Method | Result |
+|---|---|---|
+| A | `grep` for `execute_write` callers across `agentic/`, `utils/`, `harness/` | **Changed** — three callers, tabulated above |
+| B | Read `_build_write_argv`; confirmed `tests/test_agentic_writer.py` still asserts the argv as an exact list ending `--draft` | Holds |
+| C | Read `_require_head_branch` / `_HEAD_BRANCH_RE` | Holds — required, `claude/*`-anchored |
+| D | Located the `plan.get("repo") != cfg.repo` refusal in `execute_write` | Holds |
+| E | Located the rebuild + `declared[1:] != argv[1:]` mismatch refusal | Holds |
+| F | Located the timeout → INDETERMINATE path; no retry branch | Holds |
+| G | `tests/test_agentic_repo_workspace.py` parametrizes `main`, `feature/x`, `--force`, `claude/has space`, `""`, `HEAD` | Holds |
+| H | Confirmed no `/ops/*` or harness route accepts raw argv (`checks: list[str]` of profile names → `resolve_check_profiles`) | Holds; **still needs an explicit accept/close** |
+| I | Re-derived from A | **Amended** above |
+| J | Confirmed `_require_gates` checks `agentic.enabled` first | Holds |
+| K | Confirmed `execute_write(confirm=...)` is keyword-required and `plan_write` stores no `confirm` key | Holds |
+
+Runtime state at verification: `EXECUTION_ENABLED is False`,
+`_EXECUTABLE_WRITE_OPS == {"pr_create"}`.
+
+Steps 1, 2, 3, 5, 6 and 7 of the enablement procedure are **not** performed
+here and cannot be: steps 1–2 read the operator's own `gh`/git credential
+state on their machine, and steps 5–7 are the arming itself. This record
+covers step 4's evidence only. Two decisions remain open and are the
+operator's alone: item A (accept HTTP reachability, or drop the `/publish`
+route) and item H (accept the executor-argv scope, or close it).
+
 **Sign-off:** ______________________  **Date:** ____________
 
-*(no sign-off, no flag flip)*
+*(no sign-off, no flag flip — this verification record is evidence for a
+signature, never a substitute for one)*
 
 ---
 
