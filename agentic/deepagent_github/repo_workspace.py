@@ -62,6 +62,7 @@ import shutil
 import stat
 import subprocess  # nosec B404 - argv-list only, no shell, fixed binary + fixed subcommands
 import tempfile
+import unicodedata
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -87,6 +88,40 @@ DEFAULT_MAX_WRITE_BYTES = 256_000
 # Local git plumbing only -- no network, so this is generous headroom, not a
 # tuned ceiling like DEFAULT_CLONE_TIMEOUT_SEC.
 DEFAULT_GIT_WRITE_TIMEOUT_SEC = 30
+
+# The NTFS 8.3 short name for ".git" (the leading dot is dropped, and the index
+# rises on collision). Windows resolves it to the same directory, which is the
+# CVE-2019-1352/1353 class git itself guards with is_ntfs_dotgit().
+_NTFS_DOTGIT_RE = re.compile(r"\.?git~[0-9]+\Z", re.IGNORECASE)
+
+
+def _is_dotgit_name(part: str) -> bool:
+    """True when a filesystem could resolve ``part`` to the ``.git`` directory.
+
+    A literal ``part == ".git"`` compare is only correct on Linux. Every other
+    platform CyClaw runs on has name-equivalence rules that make a DIFFERENT
+    string open the SAME directory, and this jail must hold on all of them --
+    `harness/` is explicitly a Windows/PowerShell operator surface:
+
+    * Windows strips trailing dots and spaces from a path component, so
+      ``.git.`` and ``.git `` both open ``.git``.
+    * NTFS keeps 8.3 short names, so ``git~1`` opens ``.git``.
+    * HFS+/APFS ignore a set of formatting codepoints when comparing names, so
+      ``.gi<U+200C>t`` opens ``.git``. Every codepoint in git's own
+      is_hfs_dotgit() list is Unicode category Cf, which is what is stripped
+      here (a superset, also covering U+200B and the bidi overrides).
+    * Windows and macOS are both case-insensitive by default, so ``.GIT`` opens
+      ``.git`` -- handled by casefold rather than lower() so non-ASCII case
+      folding is right too.
+
+    Deliberately platform-INDEPENDENT: the same refusal applies everywhere
+    rather than keying off sys.platform, because a jail that is weaker on the
+    developer's machine than in production is a jail whose tests lie.
+    """
+    trimmed = part.rstrip(". ")
+    cleaned = "".join(ch for ch in trimmed if unicodedata.category(ch) != "Cf")
+    folded = cleaned.casefold()
+    return folded == ".git" or _NTFS_DOTGIT_RE.fullmatch(folded) is not None
 
 # push_branch is the one method here that reaches the network, so the
 # local-only reasoning above does not apply to it. Sized like
@@ -357,11 +392,12 @@ class RepoWorkspaceTools:
         # it. The resolve() check below does not help: `.git/config` legitimately
         # resolves to a path inside the clone.
         #
-        # Matched case-insensitively and on EVERY segment, not just the first: a
-        # case-insensitive filesystem resolves `.GIT` to the same directory, and
-        # a nested `submodule/.git` is a gitdir too. `.gitattributes`/`.gitignore`
-        # are unaffected -- this compares whole segments, not prefixes.
-        if any(part.casefold() == ".git" for part in parts):
+        # Matched on EVERY segment, not just the first (a nested `submodule/.git`
+        # is a gitdir too), and through _is_dotgit_name so that the filesystem's
+        # own name-equivalence rules cannot smuggle one past a literal compare.
+        # `.gitattributes`/`.gitignore` are unaffected -- whole segments are
+        # compared, never prefixes.
+        if any(_is_dotgit_name(part) for part in parts):
             self._deny_git(tool, "git path may not touch the clone's .git directory", target=target)
         dest_resolved = self._dest.resolve()
         candidate = dest_resolved.joinpath(*parts)
@@ -384,6 +420,19 @@ class RepoWorkspaceTools:
                     ancestor = ancestor.parent
         if resolved != dest_resolved and dest_resolved not in resolved.parents:
             self._deny_git(tool, "git path escaped the clone root", target=target)
+        # The segment check above inspects the REQUESTED name; this inspects
+        # where the filesystem actually lands. They are not the same question,
+        # and the gap between them was a complete bypass: a repository can
+        # legitimately contain a symlink named anything at all pointing at
+        # `.git` (git refuses to check out a path NAMED `.git`, but not one
+        # POINTING at it), so `write_file("docs/config", ...)` with `docs` ->
+        # `.git` resolved cleanly inside the clone, passed every check, and
+        # wrote `.git/config` -- verified by execution. The ancestor walk above
+        # was built to catch symlinks escaping OUTSIDE the clone, so a symlink
+        # to a directory INSIDE it never tripped it.
+        git_dir = (dest_resolved / ".git").resolve()
+        if resolved == git_dir or git_dir in resolved.parents:
+            self._deny_git(tool, "git path may not touch the clone's .git directory", target=target)
         return "/".join(parts)
 
     def _run_git(
