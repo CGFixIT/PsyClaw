@@ -850,3 +850,49 @@ def test_context_cannot_break_out_of_its_own_fence(tmp_path, monkeypatch):
     assert prompt.count("UNTRUSTED-GITHUB-CONTEXT>>>") == 1
     assert prompt.count("<<<UNTRUSTED-GITHUB-CONTEXT") == 1
     assert "[fence-removed]" in prompt
+
+
+# --- audit routing (DEF-7) ---------------------------------------------------
+
+
+def test_verification_audit_events_use_the_loops_own_config_not_the_default(tmp_path, monkeypatch):
+    """run_verification's audit events must land in the CALLER's config's audit
+    file, not config.yaml's, when the caller passed one explicitly.
+
+    Every other audit_log call in run_real_repo_loop already threaded
+    config_path/cfg through; the run_verification call was the one exception,
+    so a run invoked against a non-default config had its
+    agentic_executor_check_result events -- the only record of what the
+    acceptance decision actually observed -- land in a DIFFERENT audit file
+    than the rest of that same run's events.
+    """
+    import json as jsonlib
+
+    from utils.logger import reset_config_cache
+
+    audit_file = tmp_path / "custom-audit.jsonl"
+    cfg = {"logging": {"audit_file": str(audit_file), "audit_fields": {}}, "policy": {"privacy": {}}}
+    reset_config_cache()
+    try:
+        with _cloned_tools(tmp_path, monkeypatch) as tools:
+            client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+            try:
+                run_real_repo_loop(
+                    tools, client,
+                    instruction="add the marker",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/audit-routing",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    cfg=cfg,
+                )
+            finally:
+                client.close()
+    finally:
+        reset_config_cache()
+
+    assert audit_file.exists(), "run_verification's audit events did not use the caller's cfg"
+    events = [jsonlib.loads(line)["event"] for line in audit_file.read_text().splitlines()]
+    assert "agentic_executor_check_result" in events

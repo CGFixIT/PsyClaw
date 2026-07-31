@@ -85,6 +85,28 @@ def _truncate(text: str) -> str:
     return text[:MAX_OUTPUT_CHARS] + f"\n... [output truncated at {MAX_OUTPUT_CHARS} chars]"
 
 
+def _stream_to_str(stream: str | bytes | None) -> str:
+    """Normalize a captured stream that may be ``str``, ``bytes``, or ``None``.
+
+    ``subprocess.run(..., text=True)`` populates ``TimeoutExpired.stdout``/
+    ``.stderr`` differently by platform: CPython's non-Windows branch only
+    calls ``process.wait()`` after ``kill()``, leaving whatever partial output
+    ``_communicate`` already collected as raw ``bytes`` on the exception; the
+    ``_mswindows`` branch instead calls ``process.communicate()`` AFTER kill,
+    and in text mode that returns ``str``. Calling ``.decode()`` unconditionally
+    (correct on POSIX) raised ``AttributeError: 'str' object has no attribute
+    'decode'`` on Windows -- turning the exact case this module exists to
+    contain (a hung check) into an uncaught crash instead of a timed-out
+    ``CheckResult``, on the one platform ``harness/`` is a primary operator
+    surface for.
+    """
+    if stream is None:
+        return ""
+    if isinstance(stream, str):
+        return stream
+    return stream.decode("utf-8", errors="replace")
+
+
 @dataclass(frozen=True)
 class Check:
     """One verification command. ``argv`` is the command only -- no cwd/env/shell."""
@@ -141,9 +163,25 @@ def _run_one(check: Check, *, cwd: Path, env: dict[str, str]) -> CheckResult:
             name=check.name,
             exit_code=-1,
             ok=False,
-            stdout=_truncate((exc.stdout or b"").decode("utf-8", errors="replace") if exc.stdout else ""),
+            stdout=_truncate(_stream_to_str(exc.stdout)),
             stderr=f"timed out after {check.timeout_sec}s",
             timed_out=True,
+        )
+    except OSError as exc:
+        # A check whose argv[0] does not resolve on PATH (FileNotFoundError)
+        # or is not executable (PermissionError) must not crash the run either
+        # -- this module's own docstring promises "the exit code is data, not
+        # an exception," and that promise did not hold for this class of
+        # failure: it escaped run_verification, run_real_repo_loop, and
+        # cmd_real_repo_run's AgenticError-only handler as a bare traceback,
+        # leaving no run record and a leaked clone. A caller-authored checks
+        # file naming a typo'd or missing tool is the realistic trigger, not
+        # anything model-controlled -- checks are operator-supplied by design.
+        return CheckResult(
+            name=check.name,
+            exit_code=-2,
+            ok=False,
+            stderr=f"could not execute {check.argv[0]!r}: {exc}",
         )
     return CheckResult(
         name=check.name,

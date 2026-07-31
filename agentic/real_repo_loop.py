@@ -380,7 +380,15 @@ def run_real_repo_loop(
 
         verification: VerificationReport | None = None
         if written and not has_critical and not write_failed:
-            verification = run_verification(tools.worktree, checks)
+            # config_path/cfg threaded through -- every OTHER audit_log call in
+            # this loop already gets them (the started/iteration/accepted
+            # events above and below). Without them, run_verification's own
+            # agentic_executor_check_result events -- the only record of what
+            # the acceptance decision actually observed -- resolved the
+            # AUDIT FILE from config.yaml regardless of what config this run
+            # was invoked with, splitting a non-default-config run's evidence
+            # across two files.
+            verification = run_verification(tools.worktree, checks, config_path=config_path, cfg=cfg)
 
         decision = decide_real_repo_candidate(
             changed_files=tuple(written),
