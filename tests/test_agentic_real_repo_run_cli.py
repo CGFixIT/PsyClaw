@@ -561,3 +561,123 @@ def test_decide_refuses_when_git_write_tools_are_off(tmp_path, checks_file, monk
         assert code == EXIT_REFUSED
     finally:
         reset_config_cache()
+
+
+# --- real-repo-run: the "running" record (DEF-9) -----------------------------
+
+
+def test_run_persists_a_running_record_before_the_loop_starts(cfg_path, checks_file, monkeypatch):
+    """The 'running' status is now a real, observable state, not documented-but-dead.
+
+    A run killed by an external wall-clock timeout (utils/ops_runner.py wraps
+    this action in one) previously reached no save_run call at all -- no run_id
+    ever existed, and the clone under workspace_root had nothing on disk
+    pointing at it. Persisting a running-status record BEFORE the loop starts
+    gives such a clone a discoverable trail (real-repo-run-status finds it;
+    real-repo-run-discard can reclaim it) even if this process is killed before
+    finishing.
+    """
+    from agentic.real_repo_run_store import RUN_ID_RE
+
+    seen_run_ids: list[str] = []
+
+    def capturing_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
+                          config_path="config.yaml", cfg=None):
+        # By the time the model is invoked, a running record must already be
+        # on disk -- prove it from inside the call the loop makes.
+        from agentic.cli import _real_repo_runs_dir
+        from agentic.config import load_agentic_config
+        from agentic.real_repo_run_store import load_run
+
+        real_cfg = load_agentic_config(cfg_path)
+        for candidate in _real_repo_runs_dir(real_cfg).glob("*.json"):
+            run_id = candidate.stem
+            if RUN_ID_RE.match(run_id):
+                record = load_run(_real_repo_runs_dir(real_cfg), run_id)
+                if record.status == "running":
+                    seen_run_ids.append(run_id)
+        return LocalProposerResponse(content=_RIGHT_BLOCK, model=self.model)
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", capturing_invoke)
+    assert _run_start(cfg_path, checks_file) == EXIT_OK
+    assert seen_run_ids, "no running-status record existed while the loop was executing"
+
+
+# --- real-repo-run-discard ---------------------------------------------------
+
+
+def test_discard_removes_an_approved_runs_clone(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    assert main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"]) == EXIT_OK
+    capsys.readouterr()
+    assert Path(dest).is_dir(), "approve must still retain the clone -- discard is the only thing that reclaims it"
+
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_OK
+    discarded = json.loads(capsys.readouterr().out)
+    assert discarded["status"] == "discarded"
+    assert not Path(dest).exists()
+
+
+def test_discard_refuses_a_run_still_pending_decision(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+
+    code = main(["--config", cfg_path, "real-repo-run-discard", "--run-id", record["run_id"]])
+    assert code == EXIT_FAIL
+    assert "pending" in capsys.readouterr().err.lower()
+    assert Path(record["dest"]).is_dir(), "a refused discard must not touch the clone"
+
+
+def test_discard_is_idempotent_after_reject_already_closed_the_clone(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    assert main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "reject"]) == EXIT_OK
+    capsys.readouterr()
+    assert not Path(dest).exists()
+
+    # The clone is already gone; discard must still succeed, not error.
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "discarded"
+
+
+def test_discard_is_idempotent_when_called_twice(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"])
+    capsys.readouterr()
+
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "discarded"
+
+
+def test_discard_reclaims_an_orphaned_running_record(cfg_path, checks_file, monkeypatch, capsys):
+    """Simulates the timeout-orphan case: a 'running' record whose owning
+    process died before reaching pending_decision. Nothing else will ever
+    transition it, so discard must accept it (unlike pending_decision)."""
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+
+    from agentic import config as agentic_config_module
+    from agentic.real_repo_run_store import RealRepoRunRecord, save_run
+
+    real_cfg = agentic_config_module.load_agentic_config(cfg_path)
+    dest = Path(real_cfg.deepagent_github.workspace_root) / "orphan-clone" / "repo"
+    dest.mkdir(parents=True)
+    (dest / ".git").mkdir()  # enough for ScopedRoots to jail; no real git needed for discard
+    runs_dir = Path(real_cfg.deepagent_github.workspace_root) / "runs"
+    record = RealRepoRunRecord(run_id="a" * 32, repo=real_cfg.repo, dest=str(dest), status="running")
+    save_run(runs_dir, record)
+
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", "a" * 32]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["status"] == "discarded"
+    assert not dest.parent.exists()

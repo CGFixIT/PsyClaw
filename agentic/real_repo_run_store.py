@@ -15,9 +15,17 @@ Not a general-purpose job queue. A run's lifecycle is exactly these states,
 and a config-off/no-real-workload console (the shipped default) never creates
 one at all::
 
-    running -> pending_decision -> approved | rejected
-            -> exhausted
-            -> failed
+    running -> pending_decision -> approved | rejected -> discarded
+            -> exhausted -> discarded
+            -> failed -> discarded
+            -> discarded  (the process died before reaching pending_decision)
+
+``discarded`` is reached only through the explicit, separate
+``real-repo-run-discard`` CLI action -- never automatically. ``approved`` and
+``rejected`` clones are retained past their own decision on purpose (a future
+push step would need the same clone still on disk), so nothing here assumes
+"decided" implies "reclaimed"; an operator (or a future sweep) discards a run
+once it genuinely no longer needs its clone.
 
 Concurrency: a real git commit already provides natural mutual exclusion for
 a double "approve" (the second ``git commit`` call fails outright -- nothing
@@ -70,7 +78,7 @@ class RealRepoRunRecord:
     run_id: str
     repo: str
     dest: str
-    status: str  # "running" | "pending_decision" | "approved" | "rejected" | "exhausted" | "failed"
+    status: str  # "running"|"pending_decision"|"approved"|"rejected"|"exhausted"|"failed"|"discarded"
     branch_name: str | None = None
     commit_message: str | None = None
     changed_files: list[str] = field(default_factory=list)
@@ -102,15 +110,25 @@ def save_run(runs_dir: Path, record: RealRepoRunRecord) -> None:
 
 
 def load_run(runs_dir: Path, run_id: str) -> RealRepoRunRecord:
-    """Read back a run record. Raises ``AgenticError`` if it does not exist."""
+    """Read back a run record. Raises ``AgenticError`` if it does not exist or is malformed."""
     path = _run_path(runs_dir, run_id)
     if not path.is_file():
         raise AgenticError("run not found", details={"run_id": run_id})
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        return RealRepoRunRecord(**data)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        # This file crosses a real process boundary -- written by the run
+        # subprocess, read back by a later status/decide subprocess -- so a
+        # truncated write, a hand-edited record, or a future field rename all
+        # need to land here rather than escape as a bare traceback.
+        # RealRepoRunRecord(**data) raises TypeError for every one of those
+        # shapes (a non-dict `data`, an unexpected key, a missing required
+        # one), and it used to run OUTSIDE this try: the error skipped past
+        # every caller's `except AgenticError`, reached main() uncaught, and
+        # exited 1 -- a code outside the documented 0/2/3/4 API, which
+        # utils/ops_runner.py maps to an unclassifiable "unknown" result.
         raise AgenticError("run record is unreadable or corrupt", details={"run_id": run_id}) from exc
-    return RealRepoRunRecord(**data)
 
 
 def require_pending_decision(record: RealRepoRunRecord) -> None:

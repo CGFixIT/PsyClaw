@@ -83,6 +83,33 @@ def test_load_raises_for_a_corrupt_record(tmp_path: Path):
         load_run(runs_dir, run_id)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "[]",  # valid JSON, but not a mapping -- **data raises TypeError
+        '"a string"',
+        '{"run_id": "x"}',  # valid JSON object, but missing required fields
+        '{"run_id": "x", "repo": "r", "dest": "d", "status": "s", "unexpected_field": 1}',
+    ],
+)
+def test_load_raises_agentic_error_not_typeerror_for_a_structurally_wrong_record(tmp_path: Path, payload):
+    """The record crosses a real process boundary (written by one subprocess,
+    read by a later one), so a schema-drifted or hand-edited-but-valid-JSON
+    file must land here as AgenticError, not escape as a bare TypeError.
+
+    RealRepoRunRecord(**data) used to run OUTSIDE the try/except, so every one
+    of these shapes escaped both callers' `except AgenticError` handlers,
+    reached main() uncaught, and exited 1 -- a code outside the documented
+    0/2/3/4 API.
+    """
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir(parents=True)
+    run_id = new_run_id()
+    (runs_dir / f"{run_id}.json").write_text(payload, encoding="utf-8")
+    with pytest.raises(AgenticError, match="unreadable or corrupt"):
+        load_run(runs_dir, run_id)
+
+
 @pytest.mark.parametrize("bad_id", ["../escape", "not-hex-at-all!!", "", "a" * 31, "A" * 32])
 def test_run_id_validation_rejects_unsafe_or_malformed_ids(tmp_path: Path, bad_id: str):
     with pytest.raises(AgenticError, match="invalid run_id"):
