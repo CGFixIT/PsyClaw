@@ -886,6 +886,32 @@ def test_run_refuses_a_cloud_provider_that_is_not_gated_open(cfg_path, checks_fi
     assert "gates 3/4" in capsys.readouterr().err
 
 
+def test_run_refuses_when_the_provider_itself_is_not_enabled(cloud_cfg_path, checks_file, monkeypatch, capsys):
+    """Isolates gate 4 from gate 3: allow_cloud_providers is open (cloud_cfg_path
+    sets it), but this specific provider's own enabled flag is not -- the two
+    conditions cloud_provider() ANDs together must both be required, not just
+    whichever one a future refactor happened to keep checking."""
+    src = yaml.safe_load(Path(cloud_cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = False
+    Path(cloud_cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    from utils.logger import reset_config_cache
+
+    reset_config_cache()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg before gates 3/4")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    code = _run_start_cloud(cloud_cfg_path, checks_file)
+    assert code == EXIT_ENV
+    assert "gates 3/4" in capsys.readouterr().err
+
+
 def test_run_refuses_a_cloud_provider_without_confirm_online(cloud_cfg_path, checks_file, monkeypatch, capsys):
     """Gates 3/4/5 all open; --confirm-online is the one thing withheld."""
 

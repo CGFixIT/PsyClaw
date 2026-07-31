@@ -186,6 +186,16 @@ def cmd_deepagent_plan(args: argparse.Namespace) -> int:
         return EXIT_ENV
     if not getattr(cfg, "enabled", False):
         return _disabled_noop()
+    # Gate 2, checked eagerly for the same reason cmd_real_repo_run checks it
+    # before any network I/O: build_deepagent_github (below) already composes
+    # agentic.enabled AND deepagent_github.enabled correctly and would report
+    # "disabled" on its own, but only after this command had already performed
+    # a full GitHub context fetch to get there. Caught by an adversarial review
+    # of cmd_real_repo_run's own newly-added copy of this check, which this
+    # function's docstring has claimed to assert ("the six-condition cloud
+    # chain") since before that check existed here.
+    if not cfg.deepagent_github.enabled:
+        return _deepagent_github_disabled_noop()
 
     from agentic import context
     from agentic.deepagent_github.builder import build_deepagent_github

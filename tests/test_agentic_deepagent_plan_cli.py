@@ -95,6 +95,39 @@ def test_disabled_layer_is_a_clean_noop(tmp_path, capsys):
         reset_config_cache()
 
 
+def test_disabled_subsystem_is_a_clean_noop_before_any_network_io(cfg_path, monkeypatch, capsys):
+    """Gate 2 (deepagent_github.enabled), checked eagerly.
+
+    build_deepagent_github (called later in this command) already composes
+    agentic.enabled AND deepagent_github.enabled correctly and would report a
+    "disabled" build status on its own -- but only after a full GitHub context
+    fetch had already run to get there. This module's own docstring has
+    claimed to assert "the six-condition cloud chain" since before this
+    specific condition was actually checked; asserting no network I/O here is
+    what makes that claim true rather than merely exit-code-compatible with
+    being true.
+    """
+    import yaml
+
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(open(cfg_path, encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["enabled"] = False
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(src, f)
+    reset_config_cache()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("deepagent-plan must not reach the context-fetch leg before gate 2")
+
+    from agentic import context
+
+    monkeypatch.setattr(context, "run_read", explode)
+
+    assert _run(cfg_path, "--repo", "--instruction", "x") == EXIT_OK
+    assert "disabled" in capsys.readouterr().out.lower()
+
+
 # --- the cloud chain -------------------------------------------------------
 
 
