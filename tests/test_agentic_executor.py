@@ -124,6 +124,50 @@ def test_a_hung_check_times_out_without_crashing_the_run(tmp_path):
     assert report.results[1].ok is True
 
 
+def test_timeout_stdout_that_is_already_str_does_not_crash(tmp_path, monkeypatch):
+    """DEF-4: the Windows branch of subprocess.run's TimeoutExpired handling.
+
+    CPython's non-Windows branch leaves TimeoutExpired.stdout as raw bytes (the
+    case the prior unconditional .decode() call was written for); its
+    _mswindows branch instead calls process.communicate() in text mode, which
+    returns str. Calling .decode() on that raised AttributeError, turning a
+    hung check -- the exact case this module exists to contain -- into an
+    uncaught crash on the one platform harness/ is a primary operator surface
+    for. This test breaks this module's own "real subprocess, not a mock"
+    convention deliberately: _mswindows's code path cannot be produced on the
+    Linux CI runner these tests execute on, so subprocess.run is monkeypatched
+    to raise the exact shape CPython's Windows branch produces (str output,
+    not bytes) -- the only way to exercise it without a Windows runner.
+    """
+    import subprocess
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["x"], timeout=1, output="partial output\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    report = run_verification(tmp_path, [_py("pass", timeout_sec=1)])
+    assert report.ok is False
+    assert report.results[0].timed_out is True
+    assert report.results[0].stdout == "partial output\n"
+
+
+def test_a_missing_check_binary_fails_the_check_without_crashing(tmp_path):
+    """DEF-5: FileNotFoundError/PermissionError are OSError, not TimeoutExpired.
+
+    A checks-file naming a typo'd or absent tool must produce a failed
+    CheckResult like any other bad check -- not escape run_verification (and
+    everything above it: run_real_repo_loop, cmd_real_repo_run's
+    AgenticError-only handler) as a bare traceback, which left no run record
+    and a leaked clone.
+    """
+    checks = [Check("missing-tool", ("definitely-not-a-real-binary-xyz",))]
+    report = run_verification(tmp_path, checks)
+    assert report.ok is False
+    assert report.results[0].ok is False
+    assert report.results[0].timed_out is False
+    assert "definitely-not-a-real-binary-xyz" in report.results[0].stderr
+
+
 # --- environment scrubbing ---------------------------------------------------
 
 
