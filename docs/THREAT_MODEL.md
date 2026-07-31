@@ -182,7 +182,8 @@ narrower and more precise reason than "nothing executes":
 - **The code is not untrusted third-party code.** It is either nothing yet (as
   of this amendment, no live caller produces a worktree with a model-authored
   diff in it — see the module's own docstring for exactly what's wired and what
-  isn't), or, once a future phase wires a real planner and git-write flow, a
+  isn't; **superseded by the third amendment below, where that caller now
+  exists**), or, once a future phase wires a real planner and git-write flow, a
   patch the operator's own configured model proposed against the operator's own
   repository, already passed through the injection scan (§2), running through
   the operator's own pinned dev toolchain (`pytest`/`ruff`/the invariant guard —
@@ -217,6 +218,9 @@ narrower and more precise reason than "nothing executes":
   exist yet — three independently-shipped, independently-tested, independently
   gated pieces do, each smaller than the pipeline the first amendment
   described, and none of them wired to either of the others.
+  **Superseded by the third amendment below: that pipeline now exists, and
+  the loop driver referenced here is a distinct, still-unwired module — see
+  its own entry for what remains unconnected.**
 
   **[Third amendment: that pipeline now exists.]** `agentic/real_repo_loop.py::
   run_real_repo_loop` is the fusion the second amendment said didn't exist yet,
@@ -310,9 +314,14 @@ narrower and more precise reason than "nothing executes":
 - **What this does NOT change:** GitHub writes remain unreachable on a shipped
   checkout (see the fourth amendment below, which supersedes the phrase
   "hard-killed" without changing the shipped posture), SQL is still
-  read-only-guarded, filesystem writes are still triple-gated, and the executor
-  itself performs no writes of any kind — it reads a worktree and runs fixed,
-  non-attacker-chosen commands against it.
+  read-only-guarded, and filesystem writes are still triple-gated. The executor
+  itself never chooses WHAT to run — the argv is fixed, non-attacker-chosen,
+  operator- or config-supplied — but correcting an earlier overclaim: it does
+  not follow that nothing it runs can write. Its `cwd` is the same worktree
+  `run_real_repo_loop` just wrote model-authored content into, so the shipped
+  default check (`pytest`) can and does write there in the ordinary course of
+  test collection and execution — a hostile `conftest.py` reaching disk is
+  exactly the residual risk named in the bullet above, not a separate one.
 
 ### Fourth amendment — the GitHub write path is implemented (P10)
 

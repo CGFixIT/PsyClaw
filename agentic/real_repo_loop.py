@@ -60,11 +60,16 @@ The planner model is local-only for now (``LocalProposerClient``, whatever
 names -- Ollama by default). Cloud-provider wiring (the six-gate chain from an
 earlier phase) is explicit future work, not attempted here.
 
-Not wired to any CLI subcommand, HTTP route, or background caller in this
-change -- matching the deferred-wiring precedent set by every prior phase in
-this effort: shipped fully tested and standalone, deferring live wiring to
-whichever future phase adds a real consumer (a CLI probe, or the harness
-run-trigger surface).
+Wired to ``agentic.cli``'s ``real-repo-run``/``real-repo-run-status``/
+``real-repo-run-decide`` subcommands, and from there to the harness's
+authenticated agent-run routes (``harness/server.py``, via
+``utils.ops_runner``'s CLI-subprocess shim -- never a direct import, per I6).
+GitHub writes (push, PR creation) remain unreachable from either surface: the
+run/decide flow stops at a local commit, and nothing calls
+``RepoWorkspaceTools.push_branch`` or ``agentic.writer.execute_write`` from
+here. That is deliberate, documented future work gated on a separate signed
+security review -- see ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``, not a gap
+this docstring should be read as implying is merely unwired.
 """
 
 from __future__ import annotations

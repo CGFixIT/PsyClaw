@@ -125,6 +125,7 @@ subsystems.
 | `utils/config_validation.py` | Boot-time config validation; fails fast |
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |
 | `utils/guardrail_bridge.py` | Inversion shim: builds the `guardrail_input` node's callable, or `None` when disabled; the only module through which `graph.py` reaches `guardrails/` (never a direct import) |
+| `utils/auth.py` | Harness-only API-key auth: fail-closed on unset `CYCLAW_API_KEY`, `hmac.compare_digest` on UTF-8 bytes. `gate.py` keeps its own separate copy (see §4's mypy/CI trap) — never refactored onto this module |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
 | `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`) |
 | `mcp_hybrid_server.py` | MCP server: `hybrid_search` only, no LLM, `sampling: None` |
@@ -132,6 +133,9 @@ subsystems.
 | `agentic/` | Out-of-band GitHub context + governed skills registry (`python -m agentic.cli`) |
 | `agentic/fsconnect/` | Out-of-band local/SMB filesystem connector; POSIX-only security core |
 | `agentic/sqlconnect/` | Out-of-band SQL connector; SELECT/WITH-only guard |
+| `agentic/real_repo_loop.py` | Plan → patch → verify → (human decides) → commit against a real jailed clone; the first live caller of `agentic/executor`. GitHub writes (push, PR) unreachable from it — see `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` |
+| `agentic/executor/` | Sandboxed verification: runs caller-declared checks (pytest/ruff/etc.) as argv-list subprocesses against a jailed worktree, scrubbed env, per-check timeout. Soft sandbox, not a kernel boundary — see `docs/THREAT_MODEL.md`'s executor amendments |
+| `agentic/deepagent_github/` | Real-repo git write surface (`RepoWorkspaceTools`: clone/read/write_file/commit, jailed via `agentic/fsconnect/pathsafe.ScopedRoots`), the DeepAgents subgraph builder (unwired on any shipped path), and cloud-provider model adapter — each gated `false`/disarmed by default |
 | `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`, via `utils/guardrail_bridge.py` — still opt-in, still never imported directly by `gate.py`/`graph.py` |
 | `harness/` | Out-of-band PowerShell coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home, reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. See `docs/HARNESS_POWERSHELL.md` |
 
@@ -560,9 +564,9 @@ python3 .claude/skills/injection-redteam/redteam.py
 
 CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
 `gate`, `gate_ops`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
-`utils`, `sync`, `agentic`, `guardrails`. `tests/conftest.py` mocks all external
-deps — no live services required. The full test-file list is discoverable in
-`tests/` (~72 files, auto-collected by pytest).
+`utils`, `sync`, `agentic`, `guardrails`, `harness`. `tests/conftest.py` mocks
+all external deps — no live services required. The full test-file list is
+discoverable in `tests/` (~100 files, auto-collected by pytest).
 
 ---
 
