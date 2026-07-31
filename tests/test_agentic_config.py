@@ -340,6 +340,16 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     `workspace_root` forever. This is the explicit reclamation step, not a
     change to when approve/reject themselves clean up.
 
+    `real-repo-run-push`/`real-repo-run-publish` were added deliberately too:
+    each escalation past an approved run is its own decision point, and they
+    are separate SUBCOMMANDS rather than flags on `real-repo-run-decide`
+    because `require_pending_decision` correctly treats an approved run as
+    terminal -- an approve-then-push sequence through the decide command could
+    never reach the push. Both ship unable to succeed: push needs
+    `deepagent_github.allow_git_write_tools` (false) and publish needs
+    `agentic/writer.py`'s `EXECUTION_ENABLED`, a hardcoded False no config can
+    flip. See `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
+
     If this needs updating again, that wiring was added on purpose. Update it
     deliberately, not by accident."""
     import argparse
@@ -351,5 +361,6 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     assert set(sub_action.choices.keys()) == {
         "status", "context", "propose-skill", "apply-skill", "deepagent-plan",
         "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+        "real-repo-run-push", "real-repo-run-publish",
         "real-repo-run-discard", "test",
     }

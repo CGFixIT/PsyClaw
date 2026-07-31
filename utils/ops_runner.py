@@ -55,11 +55,13 @@ _SYNC_ACTIONS = frozenset({"status", "test", "sync", "schedule", "unschedule"})
 _AGENTIC_ACTIONS = frozenset({
     "status", "test", "context", "propose-skill", "apply-skill",
     "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+    "real-repo-run-push", "real-repo-run-publish",
 })
 # agentic subcommands that emit JSON on stdout (vs. human text).
 _AGENTIC_JSON_ACTIONS = frozenset({
     "context", "propose-skill", "apply-skill",
     "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+    "real-repo-run-push", "real-repo-run-publish",
 })
 # real-repo-run clones a real repo, calls a model, and runs the caller's own
 # verification checks across up to several iterations -- the shared
@@ -299,6 +301,16 @@ def run_agentic_op(
     before the subprocess launch even though the CLI's own ``argparse``
     ``choices=`` would also catch a bad value.
 
+    ``real-repo-run-push`` and ``real-repo-run-publish`` are the two escalation
+    steps past an approved run, each its own decision (see the CLI's own
+    docstrings for why they are separate subcommands rather than flags on
+    ``decide``). Both require ``run_id``; ``publish`` additionally requires a
+    non-empty ``reason`` and only appends ``--confirm`` when the caller set it,
+    reaching the CLI's own refusal path (exit 4) otherwise -- the same
+    "no anonymous mutations" shape as ``apply-skill``. Neither can succeed on a
+    shipped checkout: push needs ``allow_git_write_tools`` and publish needs
+    ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded ``False``.
+
     Validation raises happen before the subprocess launch. All ``proc`` usage
     lives INSIDE the try so there is no post-``finally`` reference to an unbound
     name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
@@ -320,10 +332,17 @@ def run_agentic_op(
             raise OpsError("real-repo-run requires both branch and commit_message")
         if not (reason and reason.strip()):
             raise OpsError("real-repo-run requires a non-empty reason")
-    if action in {"real-repo-run-status", "real-repo-run-decide"} and not run_id:
+    if action in {
+        "real-repo-run-status", "real-repo-run-decide", "real-repo-run-push", "real-repo-run-publish",
+    } and not run_id:
         raise OpsError(f"{action} requires run_id")
     if action == "real-repo-run-decide" and decision not in {"approve", "reject"}:
         raise OpsError("real-repo-run-decide requires decision to be 'approve' or 'reject'")
+    # publish reaches agentic/writer.py's own gate chain, whose reason/confirm
+    # gates it enforces independently -- validated here too so a malformed call
+    # fails before the subprocess launch, matching apply-skill/real-repo-run.
+    if action == "real-repo-run-publish" and not (reason and reason.strip()):
+        raise OpsError("real-repo-run-publish requires a non-empty reason")
 
     argv = [sys.executable, "-m", "agentic.cli", "--config", str(_CONFIG_PATH), action]
     body_file: str | None = None
@@ -380,6 +399,15 @@ def run_agentic_op(
             # str | None -> str for mypy rather than silencing the check.
             assert decision is not None  # noqa: S101
             argv += [f"--run-id={run_id}", "--decision", decision]
+        elif action == "real-repo-run-push":
+            argv += [f"--run-id={run_id}"]
+        elif action == "real-repo-run-publish":
+            # --reason= single-argv form (not two elements) so a reason that
+            # begins with '-' binds to its option instead of being reparsed as
+            # a flag by the child argparse -- same discipline as apply-skill.
+            argv += [f"--run-id={run_id}", f"--reason={reason}"]
+            if confirm:
+                argv.append("--confirm")
 
         # Only real-repo-run needs a non-default timeout (a model + verification
         # loop routinely outlasts _TIMEOUT_SEC); every other action keeps the

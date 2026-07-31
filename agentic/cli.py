@@ -15,6 +15,10 @@ Subcommands:
                           before any cloud egress.
     real-repo-run-status  Report a real-repo run's persisted status.
     real-repo-run-decide  Approve (commit) or reject (discard) a pending run.
+    real-repo-run-push    Push an approved run's branch to origin (its own
+                          decision; gated on allow_git_write_tools).
+    real-repo-run-publish Open a draft PR for a pushed run (its own decision;
+                          ships permanently disarmed by EXECUTION_ENABLED).
     real-repo-run-discard Reclaim a decided (or orphaned) run's clone from disk.
     test           Run the pre-flight self-test.
 
@@ -50,12 +54,15 @@ from utils.errors import (
 from utils.logger import _get_config, audit_log
 
 if TYPE_CHECKING:
-    # Only agentic.executor's Check TYPE is needed at module scope, for
-    # _load_checks_file's return annotation -- the actual import stays
-    # lazy, inside the function, matching every other agentic.* import in
-    # this file (each subcommand's own imports load only when that
-    # subcommand runs, not at --help time).
+    # Types needed only for annotations -- the actual imports stay lazy,
+    # inside each function, matching every other agentic.* import in this
+    # file (each subcommand's own imports load only when that subcommand
+    # runs, not at --help time). Annotating them here rather than widening
+    # the signatures to `object` keeps the push/publish helpers below
+    # type-checked instead of silenced.
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
     from agentic.executor import Check
+    from agentic.real_repo_run_store import RealRepoRunRecord
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -707,6 +714,79 @@ def cmd_real_repo_run_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _push_record(tools: RepoWorkspaceTools, record: RealRepoRunRecord, runs_dir: Path) -> int:
+    """Push an approved run's branch, recording the outcome on ``record``.
+
+    ONE implementation behind three entry points: ``real-repo-run-decide
+    --push`` (the one-shot approve+escalate path) and the standalone
+    ``real-repo-run-push`` subcommand (which the harness's own separate route
+    reaches). Two copies of an escalation this close to a network write would
+    be two places for the gate handling to drift, which is the same reasoning
+    ``agentic/writer.py::_require_gates`` gives for existing at all.
+
+    On failure the record is persisted BEFORE returning: the commit (and, for
+    publish, the push) already happened, and losing that fact would leave an
+    operator unable to tell what state the run reached.
+    """
+    from agentic.real_repo_run_store import save_run
+
+    if record.branch_name is None:
+        raise AgenticError("run record has no branch_name to push", details={"run_id": record.run_id})
+    try:
+        tools.push_branch(record.branch_name)
+    except AgenticWriteRefused as exc:
+        save_run(runs_dir, record)
+        _err(f"push refused: {exc.message}")
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_REFUSED
+    except AgenticError as exc:
+        save_run(runs_dir, record)
+        _err(f"push failed: {exc.message}")
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_FAIL
+    record.pushed = True
+    return EXIT_OK
+
+
+def _publish_record(
+    cfg: AgenticConfig, record: RealRepoRunRecord, runs_dir: Path,
+    *, reason: str, confirm: bool, config_path: str,
+) -> int:
+    """Open a draft PR for an already-pushed run, recording the URL on ``record``.
+
+    Companion to :func:`_push_record`; see that docstring for why this is one
+    implementation rather than two. ``confirm`` is threaded to BOTH
+    ``plan_write`` and ``execute_write`` rather than being manufactured for the
+    second call -- ``execute_write`` requires a fresh confirmation from its own
+    caller by design (an earlier version fabricated one internally, which an
+    external review caught as making gate 5 unconditional).
+    """
+    from agentic.real_repo_run_store import save_run
+    from agentic.writer import execute_write, plan_write
+
+    try:
+        plan = plan_write(
+            cfg, "pr_create", reason, confirm=confirm,
+            head=record.branch_name,
+            title=record.commit_message,
+            body=f"Automated real-repo-run candidate (run_id={record.run_id}).",
+            config_path=config_path,
+        )
+        result = execute_write(plan, cfg=cfg, confirm=confirm, config_path=config_path)
+    except AgenticWriteRefused as exc:
+        save_run(runs_dir, record)
+        _err(f"publish refused: {exc.message}")
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_REFUSED
+    except AgenticError as exc:
+        save_run(runs_dir, record)
+        _err(f"publish failed: {exc.message}")
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_FAIL
+    record.pr_url = result.get("stdout") or None
+    return EXIT_OK
+
+
 def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     """Approve (commit) or reject (discard) a pending real-repo run.
 
@@ -807,43 +887,127 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     record.status = outcome["status"]
 
     if outcome["status"] == "approved" and args.push:
-        try:
-            tools.push_branch(record.branch_name)
-        except AgenticWriteRefused as exc:
-            save_run(runs_dir, record)  # the commit already happened -- persist that much
-            _err(f"push refused: {exc.message}")
-            print(json.dumps(record.to_dict(), indent=2))
-            return EXIT_REFUSED
-        except AgenticError as exc:
-            save_run(runs_dir, record)
-            _err(f"push failed: {exc.message}")
-            print(json.dumps(record.to_dict(), indent=2))
-            return EXIT_FAIL
-        record.pushed = True
-
+        code = _push_record(tools, record, runs_dir)
+        if code != EXIT_OK:
+            return code
         if args.publish:
-            from agentic.writer import execute_write, plan_write
+            code = _publish_record(
+                cfg, record, runs_dir,
+                reason=args.reason, confirm=args.confirm_publish, config_path=args.config,
+            )
+            if code != EXIT_OK:
+                return code
 
-            try:
-                plan = plan_write(
-                    cfg, "pr_create", args.reason, confirm=args.confirm_publish,
-                    head=record.branch_name, title=record.commit_message,
-                    body=f"Automated real-repo-run candidate (run_id={record.run_id}).",
-                    config_path=args.config,
-                )
-                result = execute_write(plan, cfg=cfg, confirm=args.confirm_publish, config_path=args.config)
-            except AgenticWriteRefused as exc:
-                save_run(runs_dir, record)  # commit + push already happened
-                _err(f"publish refused: {exc.message}")
-                print(json.dumps(record.to_dict(), indent=2))
-                return EXIT_REFUSED
-            except AgenticError as exc:
-                save_run(runs_dir, record)
-                _err(f"publish failed: {exc.message}")
-                print(json.dumps(record.to_dict(), indent=2))
-                return EXIT_FAIL
-            record.pr_url = result.get("stdout") or None
+    save_run(runs_dir, record)
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
 
+
+def _attach_approved_run(args: argparse.Namespace, *, require: str) -> tuple:
+    """Shared preamble for the standalone push/publish subcommands.
+
+    Returns ``(exit_code, None, None, None, None)`` on any refusal, or
+    ``(EXIT_OK, cfg, record, tools, runs_dir)`` on success. ``require`` selects
+    which state guard runs (``"push"`` or ``"publish"``).
+
+    Like ``real-repo-run-decide``, this deliberately does NOT check
+    ``deepagent_github.enabled``: these commands RESOLVE work an earlier run
+    already started, and gating them on the master switch would strand an
+    approved-but-unpushed run with no path forward the moment an operator
+    flipped the switch off for an unrelated reason. The gate that does still
+    apply -- ``allow_git_write_tools`` -- is enforced by ``push_branch``
+    itself, and ``execute_write`` runs its own six independently.
+    """
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.real_repo_run_store import load_run, require_approved_for_push, require_pushed_for_publish
+
+    cfg = _load(args)
+    if cfg is None:
+        return (EXIT_ENV, None, None, None, None)
+    if not getattr(cfg, "enabled", False):
+        return (_disabled_noop(), None, None, None, None)
+
+    app_cfg = _get_config(args.config)
+    runs_dir = _real_repo_runs_dir(cfg)
+    try:
+        record = load_run(runs_dir, args.run_id)
+        if require == "push":
+            require_approved_for_push(record)
+        else:
+            require_pushed_for_publish(record)
+        if record.branch_name is None:
+            raise AgenticError(
+                "run record is approved but missing branch_name", details={"run_id": args.run_id},
+            )
+    except AgenticError as exc:
+        _err(exc.message)
+        return (EXIT_FAIL, None, None, None, None)
+
+    try:
+        tools = RepoWorkspaceTools.attach(cfg, Path(record.dest), config_path=args.config, cfg=app_cfg)
+    except AgenticError as exc:
+        _err(exc.message)
+        return (EXIT_FAIL, None, None, None, None)
+    return (EXIT_OK, cfg, record, tools, runs_dir)
+
+
+def cmd_real_repo_run_push(args: argparse.Namespace) -> int:
+    """Push an already-approved run's branch to origin. Its own decision point.
+
+    Separate from ``real-repo-run-decide --push`` on purpose: that flag is the
+    one-shot "approve and escalate in a single command" path, while this
+    subcommand lets an operator approve now, review the landed commit, and
+    decide to push later. It is also the only shape the harness can expose as
+    its own HTTP route -- ``real-repo-run-decide`` refuses a second call on an
+    already-decided run (``require_pending_decision``), so a route that ran
+    approve first and push second could never reach the push.
+
+    Still gated on ``deepagent_github.allow_git_write_tools`` (ships
+    ``false``), enforced inside ``push_branch`` rather than re-checked here.
+    """
+    code, cfg, record, tools, runs_dir = _attach_approved_run(args, require="push")
+    if code != EXIT_OK or record is None:
+        return code
+
+    from agentic.real_repo_run_store import save_run
+
+    code = _push_record(tools, record, runs_dir)
+    if code != EXIT_OK:
+        return code
+    save_run(runs_dir, record)
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
+
+
+def cmd_real_repo_run_publish(args: argparse.Namespace) -> int:
+    """Open a draft PR for an already-pushed run. Its own decision point.
+
+    The most gated command in this CLI: it reaches ``agentic.writer``'s own
+    six-gate chain, whose first gate (``EXECUTION_ENABLED``) is a hardcoded
+    ``False`` in source that no config file can flip. On a shipped checkout
+    this command always refuses, by design -- arming it is the filed-checklist
+    operator procedure in ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``.
+
+    ``--reason`` and ``--confirm`` are this command's own, not inherited from
+    the run's earlier ``--reason``/``--confirm``: opening a pull request under
+    the operator's ``gh`` identity is a materially different act from running
+    a coding loop, and ``execute_write`` requires a fresh confirmation from its
+    immediate caller regardless.
+    """
+    if not args.confirm:
+        _err("--confirm is required to open a pull request")
+        return EXIT_REFUSED
+    code, cfg, record, tools, runs_dir = _attach_approved_run(args, require="publish")
+    if code != EXIT_OK or record is None or cfg is None:
+        return code
+
+    from agentic.real_repo_run_store import save_run
+
+    code = _publish_record(
+        cfg, record, runs_dir, reason=args.reason, confirm=args.confirm, config_path=args.config,
+    )
+    if code != EXIT_OK:
+        return code
     save_run(runs_dir, record)
     print(json.dumps(record.to_dict(), indent=2))
     return EXIT_OK
@@ -1068,6 +1232,22 @@ def build_parser() -> argparse.ArgumentParser:
              "distinct from --decision approve.",
     )
     p_run_decide.set_defaults(func=cmd_real_repo_run_decide)
+
+    p_run_push = sub.add_parser(
+        "real-repo-run-push",
+        help="Push an already-approved run's branch to origin (gated on allow_git_write_tools).",
+    )
+    p_run_push.add_argument("--run-id", required=True)
+    p_run_push.set_defaults(func=cmd_real_repo_run_push)
+
+    p_run_publish = sub.add_parser(
+        "real-repo-run-publish",
+        help="Open a draft PR for an already-pushed run (ships permanently disarmed).",
+    )
+    p_run_publish.add_argument("--run-id", required=True)
+    p_run_publish.add_argument("--reason", required=True, help="Human reason string (required).")
+    p_run_publish.add_argument("--confirm", action="store_true", help="Required to actually open the PR.")
+    p_run_publish.set_defaults(func=cmd_real_repo_run_publish)
 
     p_run_discard = sub.add_parser(
         "real-repo-run-discard", help="Reclaim a decided (or orphaned) run's clone from disk.",

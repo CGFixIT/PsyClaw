@@ -43,6 +43,12 @@ GUARDED = [
     }),
     ("get", "/api/agent/runs/" + "0" * 32, None),
     ("post", "/api/agent/runs/" + "0" * 32 + "/decision", {"decision": "reject"}),
+    # The two escalation routes past approve. Both are gated disarmed inside
+    # agentic/ as well, but that is not why they are guarded here: an
+    # unauthenticated caller must not be able to probe run state or spend a
+    # subprocess, regardless of whether the underlying capability is armed.
+    ("post", "/api/agent/runs/" + "0" * 32 + "/push", {}),
+    ("post", "/api/agent/runs/" + "0" * 32 + "/publish", {"reason": "r", "confirm": True}),
 ]
 
 # Left open on purpose: the console must be able to boot and tell the operator it

@@ -756,6 +756,114 @@ def test_decide_publish_is_still_refused_by_the_hardcoded_execution_flag(
     assert "publish refused" in captured.err
 
 
+# --- standalone push/publish subcommands (their own decision points) ---------
+
+
+def _approve(cfg_path, run_id):
+    return main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"])
+
+
+def test_push_subcommand_pushes_an_already_approved_run(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    """The whole reason these are subcommands rather than flags on decide:
+    approve first (terminal status), THEN push as a separate decision."""
+    remote = _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    assert _approve(cfg_path, run_id) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["pushed"] is False
+
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_OK
+    pushed = json.loads(capsys.readouterr().out)
+    assert pushed["pushed"] is True
+    assert pushed["status"] == "approved"  # push does not change the decision
+
+    git_bin = __import__("shutil").which("git")
+    branches = subprocess.run(
+        [git_bin, "--git-dir", str(remote), "branch", "--list"], capture_output=True, text=True, check=True,
+    ).stdout
+    assert "claude/fixture-topic" in branches
+
+
+def test_push_subcommand_refuses_a_run_that_is_not_approved(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    """A pending_decision run has no commit to push yet."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_FAIL
+    assert "not approved" in capsys.readouterr().err
+
+
+def test_push_subcommand_refuses_a_second_push(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    """A re-push is a git no-op that would report success while doing nothing."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_FAIL
+    assert "already pushed" in capsys.readouterr().err
+
+
+def test_publish_subcommand_refuses_an_unpushed_run(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    """gh pr create --head names a branch GitHub must already be able to see."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-publish", "--run-id", run_id, "--reason", "x", "--confirm",
+    ])
+    assert code == EXIT_FAIL
+    assert "has not been pushed" in capsys.readouterr().err
+
+
+def test_publish_subcommand_requires_confirm(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main(["--config", cfg_path, "real-repo-run-publish", "--run-id", run_id, "--reason", "x"])
+    assert code == EXIT_REFUSED
+    assert "--confirm" in capsys.readouterr().err
+
+
+def test_publish_subcommand_is_still_refused_by_the_hardcoded_execution_flag(
+    tmp_path, cfg_path, checks_file, monkeypatch, capsys,
+):
+    """Same disarmed guarantee as the decide --publish path, reached the other
+    way: fully approved, really pushed, correct reason and confirm -- and still
+    refused, because EXECUTION_ENABLED is source, not config."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-publish", "--run-id", run_id,
+        "--reason", "ship the fix", "--confirm",
+    ])
+    assert code == EXIT_REFUSED
+    captured = capsys.readouterr()
+    assert "publish refused" in captured.err
+    assert json.loads(captured.out)["pr_url"] is None
+
+
 # --- real-repo-run: the "running" record (DEF-9) -----------------------------
 
 

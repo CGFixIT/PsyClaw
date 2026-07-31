@@ -408,10 +408,20 @@ function showAgentRecord(rec) {
     ['commit message', rec.commit_message || '—'],
     ['files', (rec.changed_files || []).join(', ') || '—'],
     ['iterations', String(rec.iterations)],
+    ['pushed', rec.pushed ? 'yes' : 'no'],
+    ['pull request', rec.pr_url || '—'],
     ['error', rec.error || '—'],
   ], ['field', 'value']));
   if (rec.status === 'pending_decision')
     sys('awaiting your decision — /agent approve ' + rec.run_id + '   or   /agent reject ' + rec.run_id);
+  // Each escalation past approve is its own decision, so the console offers
+  // the next one rather than performing it. Both are disarmed on a shipped
+  // checkout (allow_git_write_tools / EXECUTION_ENABLED) — the prompt is the
+  // honest next step, not a promise it will succeed.
+  else if (rec.status === 'approved' && !rec.pushed)
+    sys('committed locally — push it to origin with:  /agent push ' + rec.run_id);
+  else if (rec.status === 'approved' && rec.pushed && !rec.pr_url)
+    sys('pushed — open a draft PR with:  /agent publish ' + rec.run_id + ' <why>');
 }
 
 /* ── slash commands ── */
@@ -556,6 +566,19 @@ async function runSlash(line) {
           }
           const rec = agentRecord(r);
           if (rec) showAgentRecord(rec);
+        } else if (sub === 'push') {
+          const id = (rest[1] || '').trim();
+          if (!id) { sys('usage: /agent push <run id>'); break; }
+          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/push', 'POST', {}));
+          if (rec) showAgentRecord(rec);
+        } else if (sub === 'publish') {
+          const id = (rest[1] || '').trim();
+          const why = rest.slice(2).join(' ').trim();
+          if (!id || !why) { sys('usage: /agent publish <run id> <why you are opening this PR>'); break; }
+          const rec = agentRecord(await api(
+            '/api/agent/runs/' + encodeURIComponent(id) + '/publish', 'POST', { reason: why, confirm: true },
+          ));
+          if (rec) showAgentRecord(rec);
         } else {
           sys(table([
             ['/agent run claude/<topic> <task>', 'stage a run (sends nothing)'],
@@ -564,6 +587,8 @@ async function runSlash(line) {
             ['/agent status <run id>', 'read a run record'],
             ['/agent approve <run id>', 'commit the pending change'],
             ['/agent reject <run id>', 'discard the pending change'],
+            ['/agent push <run id>', 'push an approved branch to origin (disarmed by default)'],
+            ['/agent publish <run id> <why>', 'open a draft PR for a pushed run (disarmed by default)'],
             ['/agent checks', 'list verification profiles'],
           ], ['command', 'action']));
         }

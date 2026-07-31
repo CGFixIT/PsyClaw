@@ -112,6 +112,14 @@ worth knowing before you treat either as an off switch:
 3. On success the run stops *before committing* and reports
    `status: pending_decision`. `/agent approve <id>` is what actually commits;
    `/agent reject <id>` discards the clone. Neither pushes.
+4. Escalating past the local commit is two further, separate decisions —
+   deliberately not folded into approve, and each its own route:
+   `/agent push <id>` puts the branch on origin, and
+   `/agent publish <id> <why>` opens a draft PR. **Both refuse on a shipped
+   checkout:** push needs `deepagent_github.allow_git_write_tools` (ships
+   `false`) and publish needs `agentic/writer.py`'s `EXECUTION_ENABLED`, a
+   hardcoded `False` no config file can flip. Arming either is the filed
+   checklist in `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, not a toggle.
 
 `checks` names a profile from `/agent checks`, never a command. The console
 cannot send an argv to execute: profile names are resolved against the
@@ -132,7 +140,8 @@ read-only.
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - The five state-changing routes (`POST /api/sessions`, `.../rename`,
   `/api/soul`, `/api/model`, `/api/chat`), `GET /api/github/status`, and all
-  three `/api/agent/*` run routes require a
+  five `/api/agent/*` run routes (`run`, `runs/{id}`, `runs/{id}/decision`,
+  `runs/{id}/push`, `runs/{id}/publish`) require a
   Bearer `CYCLAW_API_KEY` — the same variable the gateway's `/soul` and `/ops/*`
   endpoints use. **Fail-closed:** an unset key means those routes return 401, not
   "no auth required". Paste the key into the console's `key` field, or export it
