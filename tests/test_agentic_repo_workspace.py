@@ -649,17 +649,32 @@ def test_write_file_rejects_paths_outside_the_clone(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "target",
-    [".git/config", ".git/hooks/pre-commit", ".git/info/attributes", ".GIT/config", ".Git/config",
-     "nested/.git/config", "./.git/config"],
+    [
+        ".git/config", ".git/hooks/pre-commit", ".git/info/attributes",
+        ".GIT/config", ".Git/config", "nested/.git/config", "./.git/config",
+        # Windows strips trailing dots and spaces from a path component.
+        ".git./config", ".git /config", ".git.../config", ".GIT. /config",
+        # NTFS 8.3 short name for .git, and its collision-index variants.
+        "git~1/config", "GIT~1/config", "git~2/hooks/pre-commit", ".git~1/config",
+        # HFS+/APFS ignore these codepoints when comparing names (git's own
+        # is_hfs_dotgit list); all are Unicode category Cf.
+        ".gi‌t/config", ".git‍/config", "‎.git/config",
+        ".gi​t/config", ".git﻿/config", ".g‮it/config",
+    ],
 )
 def test_write_file_refuses_the_clones_git_directory(tmp_path, monkeypatch, target):
     """The clone's own git metadata is never a writable target.
 
     Writing `.git/` is not merely out of scope -- see
     test_git_filter_injection_through_dotgit_config_is_refused for why it is
-    arbitrary command execution. Case variants are covered because a
-    case-insensitive filesystem resolves `.GIT` to the same directory, and a
-    nested segment because a submodule's `.git` is a gitdir too.
+    arbitrary command execution.
+
+    A literal `== ".git"` compare is correct only on Linux. These cases are the
+    name-equivalence rules of the other platforms CyClaw runs on -- `harness/`
+    is a Windows/PowerShell operator surface, and macOS is a plausible
+    developer box -- each of which makes a DIFFERENT string open the SAME
+    directory. The refusal is platform-independent on purpose: a jail that is
+    weaker on the machine the tests run on is a jail whose tests lie.
     """
     fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
@@ -674,6 +689,42 @@ def test_add_refuses_the_clones_git_directory(tmp_path, monkeypatch):
         with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
             with pytest.raises(AgenticError, match="\\.git directory"):
                 tools.add([".git/config"])
+
+
+def test_write_file_refuses_a_symlink_that_points_at_the_git_directory(tmp_path, monkeypatch):
+    """The requested NAME and the resolved LOCATION are different questions.
+
+    A repository can legitimately contain a symlink named anything at all
+    pointing at `.git`: git refuses to check out a path NAMED `.git`, but not
+    one POINTING at it. So `write_file("docs/config", ...)` with `docs` -> `.git`
+    carries no `.git` segment for the name check to catch, resolves cleanly
+    inside the clone so the escape check passes, and writes `.git/config`.
+    Verified by execution before the resolved-path guard existed.
+
+    The pre-existing ancestor walk does not help: it was built to catch symlinks
+    escaping OUTSIDE the clone, and this one points INSIDE it.
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            worktree = Path(tools.worktree)
+            (worktree / "docs").symlink_to(".git")
+            original = (worktree / ".git" / "config").read_text(encoding="utf-8")
+            with pytest.raises(AgenticError, match="\\.git directory"):
+                tools.write_file("docs/config", "[filter \"pwn\"]\n")
+            with pytest.raises(AgenticError, match="\\.git directory"):
+                tools.write_file("docs/hooks/pre-commit", "#!/bin/sh\n")
+            assert (worktree / ".git" / "config").read_text(encoding="utf-8") == original
+
+
+def test_write_file_allows_a_symlink_to_an_ordinary_directory(tmp_path, monkeypatch):
+    # The resolved-path guard must reject .git specifically, not every symlink:
+    # an in-repo symlink to a normal directory is ordinary and stays writable.
+    fake = _fake_clone_populating_git_repo(files={"real/keep.txt": "x\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            (Path(tools.worktree) / "link").symlink_to("real")
+            assert tools.write_file("link/new.txt", "ok\n")["target"] == "link/new.txt"
 
 
 @pytest.mark.parametrize("target", [".gitattributes", ".gitignore", ".gitmodules", "docs/.gitkeep"])
