@@ -33,7 +33,7 @@ consolidates the threat-model assumptions previously scattered across
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
 | LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider, off by default). |
-| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` designed to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text — but as of this writing `builder.py`'s `_load_runtime_model` passes the constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through it; `sanitize_handoff` is exercised only by its own tests. A prompt sent to a cloud provider through this path today is not recorded as egress. Wiring the two together needs the tool-calling loop to route through an envelope rather than a bare `BaseChatModel`, which is out-of-scope follow-on work, not yet implemented. |
+| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **This chain now has two consumers, not one, with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation — egress IS recorded there. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through `sanitize_handoff`; that path's egress is NOT recorded, and remains out-of-scope follow-on work. |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -275,12 +275,13 @@ narrower and more precise reason than "nothing executes":
   the human `reason` and `confirm` gates exist so that reading is a deliberate
   choice, not an assumption baked into the tooling.
 
-  **What still does not exist:** no CLI subcommand, HTTP route, or background
-  caller invokes `run_real_repo_loop` — it ships fully tested and standalone,
-  the same deferred-wiring call made for every prior capability in this
-  effort. No cloud-provider planner is wired here either (still local-only,
-  `LocalProposerClient`). Those remain explicit future work, not silently
-  implied to already exist.
+  **What still does not exist, as of this amendment:** no CLI subcommand, HTTP
+  route, or background caller invokes `run_real_repo_loop` — it ships fully
+  tested and standalone, the same deferred-wiring call made for every prior
+  capability in this effort. No cloud-provider planner is wired here either
+  (still local-only, `LocalProposerClient`). Those remain explicit future
+  work, not silently implied to already exist.
+  **Superseded by the fifth amendment below: both now exist.**
 
   **Two correctness gaps an external review caught, both fixed.** First: the
   planner received only the operator's free-text instruction and prior
@@ -375,6 +376,41 @@ were ever pointed at a repo, or dev-toolchain command, the operator did not
 themselves configure. Until that widening happens, stage 5 stays conditional,
 not because nothing executes, but because what executes is scoped, known, and
 not attacker-chosen at the command level.
+
+### Fifth amendment — `run_real_repo_loop` now has real callers, including one with a cloud-provider planner
+
+- **What changed.** The third amendment's "what still does not exist" bullet
+  is stale: `agentic/cli.py`'s `real-repo-run` subcommand calls
+  `run_real_repo_loop` directly, and `harness/server.py`'s `POST
+  /api/agent/run` reaches the same loop through the `utils.ops_runner`
+  subprocess shim — a real CLI subcommand and a real HTTP route both exist
+  now, not merely a tested-but-standalone module.
+- **The HTTP route is not a new unauthenticated surface.** It is one of the
+  harness's P9 routes: `require_api_key` (fail-closed on an unset
+  `CYCLAW_API_KEY`) plus an `Origin`/`Sec-Fetch-Site` same-origin check guard
+  it, alongside the paired `GET /api/agent/runs/{id}` status read and `POST
+  /api/agent/runs/{id}/decision` human approve/reject endpoint — the same
+  decision point `real-repo-run-decide` already required at the CLI layer.
+- **A cloud-provider planner is wired, and unlike the DeepAgents-graph path
+  the egress table row above describes, this one records egress.**
+  `agentic/cli.py`'s `--provider {grok,claude}` flag (paired with
+  `--confirm-online`) constructs `agentic.deepagent_github.chat_client.
+  ChatModelProposerClient` behind the same six-condition chain named in the
+  egress table row (`allow_cloud_providers`, `providers.<name>.enabled`, the
+  provider's API key, `--confirm-online`), gates checked eagerly before any
+  network I/O. `ChatModelProposerClient.invoke` calls `sanitize_handoff` on
+  every real invocation before the model call — the egress table row's
+  caveat ("not recorded as egress") describes ONLY the separate, still-unwired
+  `builder.py`/`create_deep_agent` path; it was never true of this path and
+  should not be read as a blanket statement about all cloud egress in the
+  agentic layer.
+- **What still does not exist.** The `builder.py`/DeepAgents-graph path
+  (`create_deep_agent`) remains probe-only — `agentic/cli.py`'s
+  `deepagent-plan` subcommand deliberately never calls `.invoke()` on it, by
+  its own docstring. `push_branch`/`execute_write` (fourth amendment) are
+  still not called from `run_real_repo_loop` or reachable from any harness
+  route — GitHub writes remain un-triggerable over the network, unchanged by
+  this amendment.
 
 ---
 

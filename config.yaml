@@ -493,10 +493,14 @@ agentic:
     allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
     allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
     allow_github_writes: false                   # writer.py remains the write-policy boundary
-    # Local git plumbing only (checkout -b/add/commit/diff) inside a clone this
-    # layer made itself under workspace_root -- never push, never a GitHub API
-    # call. A separate gate from allow_shell_execution above, which means "give
-    # the model a generic shell tool" (still hard-refused/unimplemented).
+    # Git plumbing (checkout -b/add/commit/diff/push) inside a clone this
+    # layer made itself under workspace_root. RepoWorkspaceTools.push_branch
+    # gates on this same flag and DOES reach a real remote (origin) when
+    # armed -- it is not local-only. It still never calls the GitHub API
+    # (opening/commenting on a PR is agentic/writer.py's job, gated
+    # separately). A separate gate from allow_shell_execution above, which
+    # means "give the model a generic shell tool" (still hard-refused/
+    # unimplemented).
     allow_git_write_tools: false
     # Real-repo loop diff-scope gate: a candidate that writes into any of these
     # (path-prefix match) is refused outright, because these are exactly the

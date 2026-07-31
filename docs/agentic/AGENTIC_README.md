@@ -6,8 +6,16 @@ governed local skills registry. It runs strictly as `python -m agentic.cli` and 
 retrieval, routing, or the MCP surface. **Disabled by default.**
 
 > Security posture in one line: reads are local metadata via the `gh` CLI
-> (argv-list, no shell, audited, no token forwarded by CyClaw); **writes are a
-> disabled, stubbed scaffold that never executes in v0.1.**
+> (argv-list, no shell, audited, no token forwarded by CyClaw); **GitHub writes
+> are implemented (`gh pr create --draft`) but shipped disarmed** by
+> `EXECUTION_ENABLED = False` plus config gates (§5) — this replaced an
+> earlier "stub, never executes" description once P10 landed real execution
+> behind the flag. A separate, real plan → patch → verify → commit pipeline
+> (`agentic/real_repo_loop.py`, wired to `real-repo-run`/the harness's
+> `/api/agent/run`) DOES commit to a locally-cloned repo when governed and
+> confirmed — see `docs/THREAT_MODEL.md`'s third/fifth amendments for the
+> full, current picture; this doc's §5/§9 below are being kept in sync with
+> it but may lag a landed change briefly.
 
 ## 1. Prerequisites
 - The GitHub CLI `gh` ≥ the configured floor (default `2.40.0`), authenticated
@@ -42,6 +50,15 @@ python -m agentic.cli test                   # pre-flight self-test (tolerates m
 # Governed skills registry (local, human-gated):
 python -m agentic.cli propose-skill --name deploy --desc "..." --body-file s.md --reason "draft"
 python -m agentic.cli apply-skill   --name deploy --desc "..." --body-file s.md --reason "add deploy runbook" --confirm
+
+# Real-repo coding pipeline -- clone, plan/patch/verify, human-gated commit (see §9):
+python -m agentic.cli real-repo-run --repo --instruction "..." --checks-file checks.json \
+    --branch claude/topic --commit-message "..." --reason "..." --confirm
+python -m agentic.cli real-repo-run-status --run-id <id>
+python -m agentic.cli real-repo-run-decide --run-id <id> --decision approve   # or reject
+
+# DeepAgents-graph probe -- read-only, never invokes the agent (see §9):
+python -m agentic.cli deepagent-plan --repo --instruction "..."
 ```
 
 ## 4. Exit codes
@@ -52,12 +69,23 @@ python -m agentic.cli apply-skill   --name deploy --desc "..." --body-file s.md 
 | 3 | config / environment problem (gh missing or too old, config invalid) |
 | 4 | a write/apply was refused by the gate (e.g. missing `--confirm`) |
 
-## 5. The write gate (why nothing is published)
-`agentic/writer.py` requires **all** of: `mode == "write"`, `writes_enabled: true`,
-a non-empty human `reason`, and per-call `confirm`. Even with all four satisfied,
-v0.1 returns a **dry-run plan** (the `gh` argv it *would* run) and executes nothing
-— `EXECUTION_ENABLED` is hard-`False` and the executor raises `NotImplementedError`.
-Enabling real writes is a deliberate future change with its own review and tests.
+## 5. The write gate (why nothing is published on a shipped checkout)
+`agentic/writer.py` requires **all** of: `agentic.enabled`, `mode == "write"`,
+`writes_enabled: true`, a non-empty human `reason`, and per-call `confirm` --
+five gates, re-checked on every call against the live config (an earlier
+version was caught manufacturing `confirm=True` internally on a re-check;
+fixed). A sixth, `EXECUTION_ENABLED` (code, not config, `agentic/writer.py`),
+is checked first and ships `False`.
+
+With any gate closed, `execute_write()` refuses via a typed
+`AgenticWriteRefused` -- it does NOT raise `NotImplementedError` and it is not
+a stub: `pr_create` is a real, tested implementation (`gh pr create --repo …
+--draft`, run via `subprocess.run`). Even with the six gates armed, only
+`pr_create` executes; `pr_comment`/`issue_comment` remain describable via
+`plan_write` but refuse at execution. Arming `EXECUTION_ENABLED` is a
+filed-checklist operator procedure, not a code change --
+`docs/agentic/GITHUB_WRITE_ENABLEMENT.md` is the enablement doc, and its
+status banner is the current source of truth for whether it's armed.
 
 ## 6. Auditing
 Every read, refusal, and registry change emits a JSONL event via the same
@@ -82,14 +110,41 @@ python -m agentic.cli test
 
 ## 9. Governed GitHub coding harness
 
-The optional harness optimizer and LangChain Deep Agents-backed GitHub coding
-harness remains disabled by default and out-of-band. Its canonical plan is
+Two distinct subsystems share this directory tree; do not conflate them.
+
+**The real, live pipeline** (`agentic/real_repo_loop.py`): clones a real
+repository (`agentic.deepagent_github.repo_workspace.RepoWorkspaceTools`,
+gated on `deepagent_github.allow_git_write_tools`, ships `false`), asks a
+configured model (local by default, or a gated cloud provider via
+`--provider`/`--confirm-online`) for a patch, writes it into the clone, and
+verifies it with `agentic/executor/`'s real `pytest`/`ruff`/invariant-guard
+subprocesses against that worktree -- an accepted candidate is a real git
+commit, gated behind a separate human decision
+(`real-repo-run-decide`/the harness's approve-reject endpoint). It never
+pushes or opens a GitHub PR on its own (`agentic/writer.py`, §5, is the only
+path that can, and remains disarmed). Reachable via `agentic.cli`'s
+`real-repo-run`/`real-repo-run-status`/`real-repo-run-decide` subcommands and,
+authenticated, via the harness's `POST /api/agent/run` /
+`GET /api/agent/runs/{id}` / `POST /api/agent/runs/{id}/decision` routes.
+
+**The still-probe-only DeepAgents-graph path**
+(`agentic/deepagent_github/builder.py`'s `create_deep_agent` integration,
+plus the harness optimizer's fixture-based evaluation loop): this is the
+subsystem the now-superseded "fixture-only evaluation... does not write the
+real repo" description below used to describe accurately. It remains
+disabled by default, out-of-band, and -- unlike the pipeline above -- has
+never been live-fired against a real model: `agentic.cli`'s `deepagent-plan`
+subcommand deliberately probes the build's gate state without ever calling
+`.invoke()` on the constructed agent. Its canonical plan is
 `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`; the implemented
 phase 6-9 controls and operator boundaries are in
-`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`.
+`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. It uses scoped
+proposer-workspace tools, a virtual in-state Deep Agents backend,
+local-only memory/skills, fixture-only evaluation, and human-gated local
+candidate artifacts, and does not execute shell commands, write the real
+repo, write GitHub, expose unrestricted filesystem tools, or import from the
+core request path -- all still true of THIS subsystem specifically, not of
+the agentic layer as a whole now that the pipeline above exists.
 
-The harness uses scoped proposer-workspace tools, a virtual in-state Deep Agents
-backend, local-only memory/skills, fixture-only evaluation, and human-gated local
-candidate artifacts. It does not execute shell commands, write the real repo,
-write GitHub, expose unrestricted filesystem tools, or import from the core
-request path.
+See `docs/THREAT_MODEL.md`'s third and fifth amendments for the fuller,
+dated account of what changed and when.
