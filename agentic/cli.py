@@ -9,7 +9,9 @@ Subcommands:
     deepagent-plan Probe the Deep Agents harness (read-only; --provider needs
                    --confirm-online before any cloud egress).
     real-repo-run        Clone a real repo and run plan/patch/verify against it
-                          (governed by --reason/--confirm; never commits).
+                          (governed by --reason/--confirm; never commits). Local
+                          model by default; --provider needs --confirm-online
+                          before any cloud egress.
     real-repo-run-status  Report a real-repo run's persisted status.
     real-repo-run-decide  Approve (commit) or reject (discard) a pending run.
     real-repo-run-discard Reclaim a decided (or orphaned) run's clone from disk.
@@ -409,6 +411,12 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     field for that (``pending_decision`` vs ``exhausted``). A candidate that
     passes still waits for ``real-repo-run-decide`` before anything is
     committed; see ``agentic.real_repo_loop``'s module docstring for why.
+
+    Local model by default. ``--provider`` drives the loop with a gated cloud
+    provider instead (``ChatModelProposerClient``) -- same six-condition chain
+    ``cmd_deepagent_plan`` already asserts for the (still-dormant) deepagents
+    graph, checked here in the same order and against the same eager-before-
+    network-I/O placement as the local-model check below.
     """
     cfg = _load(args)
     if cfg is None:
@@ -431,27 +439,52 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     # own comment for why that's actively harmful, not just inconsistent).
     if not cfg.deepagent_github.enabled:
         return _deepagent_github_disabled_noop()
-    # Checked eagerly, before the context fetch or the clone -- both real
-    # network I/O -- matching the existing eager validation of --checks-file
-    # below. cfg.deepagent_github.model ships "" (config.yaml), which passes
-    # config validation (an empty string is still a valid string), so the only
-    # place this used to surface was LocalProposerClient.invoke() raising
-    # AgenticError -- reached only AFTER a full GitHub context fetch and a
-    # full network `gh repo clone` had already run. An operator following
-    # GITHUB_WRITE_ENABLEMENT.md's enablement steps, which never mention
-    # setting this value, got zero successful runs and paid for a clone every
-    # single time before finding out why.
-    if not cfg.deepagent_github.model.strip():
-        _err("agentic.deepagent_github.model must be configured before real-repo-run")
-        return EXIT_ENV
+
+    app_cfg = _get_config(args.config)
+    provider: str | None = args.provider
+    if provider:
+        from agentic.deepagent_github.model_adapter import cloud_key_available
+
+        # Gates 3 and 4, exactly as cmd_deepagent_plan asserts them: cloud_provider()
+        # returns None unless BOTH allow_cloud_providers and this provider's own
+        # enabled flag are true.
+        if cfg.deepagent_github.cloud_provider(provider) is None:
+            _err(f"cloud provider {provider!r} is not enabled (gates 3/4)")
+            return EXIT_ENV
+        # Gate 5: key presence only, no network probe.
+        if not cloud_key_available(provider):
+            _err(f"cloud provider {provider!r} has no API key set (gate 5)")
+            return EXIT_ENV
+        # Gate 6: per-run human confirmation, the agentic analog of
+        # user_confirmed_online. Same shape as apply-skill's --confirm.
+        if not args.confirm_online:
+            _err(f"--confirm-online is required to drive the loop with {provider!r} (gate 6)")
+            return EXIT_REFUSED
+        audit_log({"event": "agentic_deepagent_cloud_confirmed", "provider": provider}, cfg=app_cfg)
+    else:
+        # Checked eagerly, before the context fetch or the clone -- both real
+        # network I/O -- matching the existing eager validation of --checks-file
+        # below. cfg.deepagent_github.model ships "" (config.yaml), which passes
+        # config validation (an empty string is still a valid string), so the only
+        # place this used to surface was LocalProposerClient.invoke() raising
+        # AgenticError -- reached only AFTER a full GitHub context fetch and a
+        # full network `gh repo clone` had already run. An operator following
+        # GITHUB_WRITE_ENABLEMENT.md's enablement steps, which never mention
+        # setting this value, got zero successful runs and paid for a clone every
+        # single time before finding out why.
+        #
+        # Only checked in the no-provider branch: a cloud-only operator who never
+        # intends to configure a local model must not be blocked by this -- the
+        # cloud path resolves its own model from providers.<name>.model instead.
+        if not cfg.deepagent_github.model.strip():
+            _err("agentic.deepagent_github.model must be configured before real-repo-run")
+            return EXIT_ENV
 
     from agentic import context
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
-    from agentic.harness_optimizer.model_adapter import LocalProposerClient
     from agentic.real_repo_loop import run_real_repo_loop
     from agentic.real_repo_run_store import RealRepoRunRecord, new_run_id, save_run
 
-    app_cfg = _get_config(args.config)
     try:
         if args.pr is not None:
             bundle = context.fetch_pr_context(cfg, args.pr, app_cfg=app_cfg)
@@ -509,10 +542,19 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     # ever writes.
     save_run(
         runs_dir,
-        RealRepoRunRecord(run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="running"),
+        RealRepoRunRecord(run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="running", provider=provider),
     )
 
-    client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
+    if provider:
+        from agentic.deepagent_github.chat_client import ChatModelProposerClient
+        from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
+
+        settings = DeepAgentModelSettings.from_config(cfg.deepagent_github, cloud_provider=provider)
+        client = ChatModelProposerClient(settings=settings)
+    else:
+        from agentic.harness_optimizer.model_adapter import LocalProposerClient
+
+        client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
     try:
         result = run_real_repo_loop(
             tools,
@@ -538,6 +580,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     except AgenticError as exc:
         record = RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="failed", error=exc.message,
+            provider=provider,
         )
         save_run(runs_dir, record)
         tools.close()
@@ -552,6 +595,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             repo=cfg.repo,
             dest=str(tools.worktree),
             status="pending_decision",
+            provider=provider,
             branch_name=result.branch_name,
             commit_message=result.commit_message,
             # The cumulative set across every iteration, not just the accepted
@@ -566,7 +610,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     else:
         record = RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="exhausted",
-            iterations=len(result.iterations),
+            iterations=len(result.iterations), provider=provider,
         )
         tools.close()  # nothing accepted -- nothing worth keeping the clone for
     save_run(runs_dir, record)
@@ -917,6 +961,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--max-iterations", type=int, default=3, help="Planner attempts before giving up.")
     p_run.add_argument("--reason", required=True, help="Human reason string (required).")
     p_run.add_argument("--confirm", action="store_true", help="Required to actually run.")
+    p_run.add_argument("--provider", choices=("grok", "claude"), help="Drive the loop with a cloud provider.")
+    p_run.add_argument("--confirm-online", action="store_true",
+                        help="Required with --provider: per-run confirmation before any cloud egress.")
     p_run.set_defaults(func=cmd_real_repo_run)
 
     p_run_status = sub.add_parser("real-repo-run-status", help="Report a real-repo run's persisted status.")

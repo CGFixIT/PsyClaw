@@ -79,6 +79,7 @@ class RealRepoRunRecord:
     repo: str
     dest: str
     status: str  # "running"|"pending_decision"|"approved"|"rejected"|"exhausted"|"failed"|"discarded"
+    provider: str | None = None  # None => LocalProposerClient; "grok"/"claude" => the cloud provider that drove it
     branch_name: str | None = None
     commit_message: str | None = None
     changed_files: list[str] = field(default_factory=list)
