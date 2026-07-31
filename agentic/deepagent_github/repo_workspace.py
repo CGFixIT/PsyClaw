@@ -95,6 +95,41 @@ DEFAULT_GIT_WRITE_TIMEOUT_SEC = 30
 _NTFS_DOTGIT_RE = re.compile(r"\.?git~[0-9]+\Z", re.IGNORECASE)
 
 
+def canonical_repo_path(target: str) -> str | None:
+    """Return ``target``'s canonical repo-relative form, or ``None`` if unsafe.
+
+    The single source of truth for "what path will this actually write to."
+    :meth:`RepoWorkspaceTools._validate_write_path` normalizes a proposed path
+    (``\\`` to ``/``, dropping empty and ``.`` segments) before writing, so
+    ``.\\conftest.py``, ``./conftest.py`` and ``conftest.py`` are three spellings
+    of ONE destination. Any caller that inspects a proposed path -- a scope
+    gate, a duplicate check, a changed-file list -- must compare the same
+    canonical form the writer will use, or the two disagree and the comparison
+    is bypassable by respelling.
+
+    That is not hypothetical: ``agentic.real_repo_loop``'s protected-path gate
+    compared raw planner-supplied strings while the writer normalized them, so
+    a candidate could write ``.\\conftest.py`` past a gate configured to block
+    ``conftest.py`` and land a file that makes its own verification pass.
+
+    Returns ``None`` -- never a "cleaned up" string -- for anything
+    ``_validate_write_path`` would refuse (absolute, leading dash, traversal,
+    drive-qualified, empty). Callers must treat ``None`` as "leave the original
+    alone and let the writer refuse it", so normalization can never launder a
+    rejectable path into an acceptable one (``/etc/passwd`` must not become
+    ``etc/passwd``).
+    """
+    if not isinstance(target, str) or not target or "\x00" in target:
+        return None
+    normalized = target.replace("\\", "/")
+    if normalized.startswith(("/", "-")) or PureWindowsPath(target).is_absolute():
+        return None
+    parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
+    if not parts or any(part == ".." or ":" in part for part in parts):
+        return None
+    return "/".join(parts)
+
+
 def _is_dotgit_name(part: str) -> bool:
     """True when a filesystem could resolve ``part`` to the ``.git`` directory.
 
@@ -375,12 +410,15 @@ class RepoWorkspaceTools:
         """
         if not isinstance(target, str) or not target or "\x00" in target:
             self._deny_git(tool, "git path must be a non-empty string", target=target)
-        normalized = target.replace("\\", "/")
-        if normalized.startswith(("/", "-")) or PureWindowsPath(target).is_absolute():
-            self._deny_git(tool, "git path must be a safe relative path", target=target)
-        parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
-        if not parts or any(part == ".." or ":" in part for part in parts):
-            self._deny_git(tool, "git path escaped the clone root", target=target)
+        # canonical_repo_path applies exactly the checks this method used to
+        # inline, and is shared with every caller that must reason about the
+        # path this write will LAND on rather than the string it was spelled
+        # with (see that function's docstring). It returns None rather than a
+        # sanitized string precisely so refusal stays here, in the writer.
+        canonical = canonical_repo_path(target)
+        if canonical is None:
+            self._deny_git(tool, "git path must be a safe relative path inside the clone", target=target)
+        parts = tuple(canonical.split("/"))
         # The clone's own git metadata is never a legitimate write target, and
         # writing it is not merely out of scope -- it is arbitrary command
         # execution. A model-authored `.git/config` carrying a filter definition

@@ -91,7 +91,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools, canonical_repo_path
 from agentic.executor import Check, VerificationReport, run_verification
 from agentic.harness_optimizer.governance import CRITICAL_SEVERITY, GovernanceFinding, inspect_candidate_text
 from utils.errors import AgenticError, AgenticWriteRefused
@@ -346,7 +346,22 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
     normalized = text.replace("\r\n", "\n")
     blocks: dict[str, str] = {}
     for match in _FILE_BLOCK_RE.finditer(normalized):
-        path = match.group("path").strip()
+        raw = match.group("path").strip()
+        # Canonicalize HERE, once, so every consumer downstream compares the
+        # path this write will LAND on rather than the string the planner
+        # happened to spell it with. write_file normalizes `\` to `/` and drops
+        # `.` segments, so ".\conftest.py" and "conftest.py" are one
+        # destination -- but the protected-path gate, the duplicate check, the
+        # --read-file comparison and changed_files all used the raw string.
+        # A planner could therefore write ".\conftest.py" past a gate blocking
+        # "conftest.py" and land a file that makes its own verification pass,
+        # and a new file spelled "./x.py" never matched untracked_files()'s
+        # git-canonical "x.py", so the human review diff rendered nothing while
+        # the file was still committed. canonical_repo_path returns None for
+        # anything write_file would refuse (absolute, traversal, leading dash);
+        # keeping the raw string in that case preserves the refusal instead of
+        # laundering "/etc/passwd" into "etc/passwd".
+        path = canonical_repo_path(raw) or raw
         if path in blocks:
             raise AgenticError(
                 "planner response proposed the same file path in two different blocks",
@@ -668,7 +683,10 @@ def run_real_repo_loop(
             max_write_budget_bytes is not None and total_write_bytes > max_write_budget_bytes
         )
 
-        read_paths_set = set(read_paths)
+        # Canonicalized to match _parse_file_blocks' keys: an operator who
+        # declares "./src/x.py" (or a Windows-style "src\x.py") must not be
+        # told to declare a file they already declared.
+        read_paths_set = {canonical_repo_path(p) or p for p in read_paths}
         if not has_critical and not out_of_scope_files and not write_budget_exceeded:
             for path, content in proposed_files.items():
                 # Backstop against the whole-file-replacement protocol

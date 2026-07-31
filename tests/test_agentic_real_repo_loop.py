@@ -1364,6 +1364,86 @@ def test_loop_quarantines_a_write_into_a_protected_path(tmp_path, monkeypatch):
     mverify.assert_not_called()
 
 
+@pytest.mark.parametrize("spelling", [
+    "./tests/test_evil.py",     # a leading "." segment write_file drops
+    r"tests\test_evil.py",      # Windows separators write_file rewrites to "/"
+    r".\tests\test_evil.py",    # both at once
+    "tests//test_evil.py",      # an empty segment write_file drops
+])
+def test_protected_path_gate_cannot_be_bypassed_by_respelling_the_path(tmp_path, monkeypatch, spelling):
+    """The reward-hacking bypass: the gate compared the RAW planner string
+    while write_file normalized it, so three spellings of one destination got
+    three different verdicts.
+
+    Concretely, a planner could emit ".\\conftest.py" past a gate configured to
+    block "conftest.py", land a root conftest that no-ops pytest, and have the
+    candidate 'pass' its own verification. Every spelling below normalizes to
+    a path under the protected "tests/" prefix and must be quarantined
+    identically -- and nothing may reach disk, since the clone persists across
+    iterations with no reset.
+    """
+    block = f"=== FILE {spelling} ===\ndef test_x(): assert True\n=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="add a test",
+                    checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                    branch_name="claude/scope",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    protected_write_paths=["tests/"],
+                )
+        finally:
+            client.close()
+
+        # Inside the with-block: close() deletes the whole clone, which would
+        # make this assertion unfalsifiable outside it.
+        assert not (Path(tools.worktree) / "tests" / "test_evil.py").exists()
+
+    assert result.accepted is False
+    assert "out_of_scope_write" in result.iterations[0].decision.rejected_gates
+    mverify.assert_not_called()
+
+
+def test_changed_files_are_canonical_so_the_review_diff_can_match_them(tmp_path, monkeypatch):
+    """The other half of the same bug, and the more dangerous half.
+
+    agentic/cli.py renders a pending candidate's new files via
+    `set(tools.untracked_files()) & set(changed_files)`. untracked_files()
+    returns git-canonical paths, so a changed_files entry of "./new_file.py"
+    intersected to nothing: the human gate showed "no diff to show" while the
+    file was still staged and committed on approve -- exactly what
+    _render_pending_diff exists to prevent.
+    """
+    block = "=== FILE ./new_file.py ===\nvalue = 1\n=== END FILE ===\nadd it"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification", return_value=_report(CheckResult("x", 0, True))):
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="add a file",
+                    checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                    branch_name="claude/canon",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                )
+        finally:
+            client.close()
+
+        assert result.accepted is True
+        assert result.changed_files == ("new_file.py",)  # NOT "./new_file.py"
+        # The real intersection cli.py performs, against real git output.
+        assert set(tools.untracked_files()) & set(result.changed_files) == {"new_file.py"}
+
+
 def test_loop_quarantines_an_over_budget_write(tmp_path, monkeypatch):
     huge_content = "x = 1\n" * 200
     block = f"=== FILE big.py ===\n{huge_content}=== END FILE ===\nfix"
