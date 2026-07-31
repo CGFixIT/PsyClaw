@@ -389,7 +389,8 @@ jobs:
 
       - name: Verify Deep Agents HITL and fixture runner
         run: |
-          pytest tests/test_agentic_harness_phase679.py tests/test_agentic_deepagent_optional.py -q --tb=short
+          pytest tests/test_agentic_harness_phase679.py tests/test_agentic_deepagent_optional.py \
+            tests/test_agentic_cloud_chat_model_wire_format.py -q --tb=short
 
       - name: Audit optional Deep Agents dependencies (freeze, not hand-written)
         # Captures the versions actually resolved/installed above rather than a
