@@ -1,4 +1,4 @@
-"""Real-repo coding loop: plan -> patch -> verify -> commit, gated end to end.
+"""Real-repo coding loop: plan -> patch -> verify -> (human decides) -> commit.
 
 Fuses three pieces that, until now, existed independently and never called
 each other (see ``docs/THREAT_MODEL.md``'s executor amendments): the
@@ -10,6 +10,19 @@ This module is the first live caller of ``run_verification``, and the first
 thing in this codebase that can turn a model's proposal into an actual git
 commit against a real repository -- still local only: no push, no PR, no
 GitHub API call of any kind.
+
+``run_real_repo_loop`` stops the moment a candidate passes its own gates --
+it does NOT commit. Committing is a separate, later call to
+:func:`finalize_real_repo_change`, driven by an explicit human
+``approve``/``reject`` decision. This is deliberate: every other write path
+in this codebase (``agentic/writer.py``, ``apply_skill``) puts a human
+confirmation between "this passed its checks" and "this is now written," and
+a real git commit against a real repository is exactly the write this
+discipline should apply to least of all skip. The split also happens to be
+what makes this pipeline usable from a stateless CLI-subprocess-per-call
+caller (see ``RepoWorkspaceTools.attach``): the process that ran the loop can
+exit after persisting where the clone lives, and a LATER process can
+reattach to it once a human decides.
 
 Deliberately a TOP-LEVEL ``agentic`` module, not nested inside either
 ``agentic.harness_optimizer`` or ``agentic.deepagent_github``: it imports from
@@ -59,6 +72,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
 from agentic.executor import Check, VerificationReport, run_verification
@@ -147,15 +161,25 @@ class RealRepoLoopIteration:
 
 @dataclass(frozen=True)
 class RealRepoLoopResult:
-    """Full outcome of a real-repo coding loop run."""
+    """Full outcome of a real-repo coding loop run.
+
+    An ``accepted`` result is NOT yet committed -- ``branch_name``/
+    ``commit_message`` are carried forward so a separate, later call to
+    :func:`finalize_real_repo_change` can materialize (or discard) it once a
+    human decides. See that function's docstring for why the commit is a
+    distinct step rather than something this function does itself.
+    """
 
     accepted: bool
-    branch: str | None
+    branch_name: str | None
+    commit_message: str | None
     iterations: tuple[RealRepoLoopIteration, ...]
 
     def __post_init__(self) -> None:
         if not self.iterations:
             raise AgenticError("RealRepoLoopResult requires at least one iteration")
+        if self.accepted and (self.branch_name is None or self.commit_message is None):
+            raise AgenticError("an accepted RealRepoLoopResult must carry branch_name and commit_message")
 
 
 def _require_run_gates(tools: RepoWorkspaceTools, *, reason: str, confirm: bool) -> None:
@@ -290,15 +314,17 @@ def run_real_repo_loop(
         )
 
         if decision.accepted:
-            tools.checkout_branch(branch_name)
-            tools.add(written)
-            tools.commit(commit_message)
             audit_log(
-                {"event": "agentic_real_repo_loop_accepted", "step": step, "branch": branch_name},
+                {"event": "agentic_real_repo_loop_accepted_pending_decision", "step": step, "branch": branch_name},
                 config_path=config_path,
                 cfg=cfg,
             )
-            return RealRepoLoopResult(accepted=True, branch=branch_name, iterations=tuple(iterations))
+            return RealRepoLoopResult(
+                accepted=True,
+                branch_name=branch_name,
+                commit_message=commit_message,
+                iterations=tuple(iterations),
+            )
         feedback = decision.reason
 
     audit_log(
@@ -306,7 +332,63 @@ def run_real_repo_loop(
         config_path=config_path,
         cfg=cfg,
     )
-    return RealRepoLoopResult(accepted=False, branch=None, iterations=tuple(iterations))
+    return RealRepoLoopResult(accepted=False, branch_name=None, commit_message=None, iterations=tuple(iterations))
+
+
+def finalize_real_repo_change(
+    tools: RepoWorkspaceTools,
+    result: RealRepoLoopResult,
+    *,
+    decision: Literal["approve", "reject"],
+    config_path: str = "config.yaml",
+    cfg: dict | None = None,
+) -> dict:
+    """Materialize or discard an already-accepted real-repo candidate.
+
+    This is the human gate: ``run_real_repo_loop`` already ran the caller's
+    own verification checks and decided the candidate passes, but it stops
+    short of committing so a human can review the diff first (``tools.diff()``)
+    -- exactly the same shape every other write path in this codebase uses
+    (``agentic/writer.py``'s reason+confirm gate, ``apply_skill``'s
+    ``--confirm``): the model's own proposal is never enough on its own,
+    regardless of what tests it passed.
+
+    Only call this with a ``result`` where ``result.accepted`` is ``True`` --
+    calling it on an exhausted (never-accepted) result is a caller error, not
+    something to silently no-op.
+
+    ``decision="reject"`` is an audited no-op: it does not touch git at all.
+    The caller is responsible for eventually discarding the clone (e.g.
+    ``tools.close()``); this function only records the human's decision.
+    """
+    if not result.accepted:
+        raise AgenticError("cannot finalize a real-repo loop result that was never accepted")
+    if decision not in {"approve", "reject"}:
+        raise AgenticError("decision must be 'approve' or 'reject'", details={"received": decision})
+    # RealRepoLoopResult.__post_init__ already guarantees both are set whenever
+    # accepted is True; asserting it here (rather than just trusting that) is
+    # what lets mypy narrow str | None -> str for the calls below.
+    assert result.branch_name is not None  # noqa: S101 - narrows for mypy, guaranteed by __post_init__
+    assert result.commit_message is not None  # noqa: S101
+
+    audit_log(
+        {"event": "agentic_real_repo_change_decided", "decision": decision, "branch": result.branch_name},
+        config_path=config_path,
+        cfg=cfg,
+    )
+    if decision == "reject":
+        return {"status": "rejected", "branch": result.branch_name}
+
+    changed_files = list(result.iterations[-1].changed_files)
+    tools.checkout_branch(result.branch_name)
+    tools.add(changed_files)
+    tools.commit(result.commit_message)
+    audit_log(
+        {"event": "agentic_real_repo_change_approved", "branch": result.branch_name},
+        config_path=config_path,
+        cfg=cfg,
+    )
+    return {"status": "approved", "branch": result.branch_name}
 
 
 __all__ = [
@@ -315,5 +397,6 @@ __all__ = [
     "RealRepoLoopIteration",
     "RealRepoLoopResult",
     "decide_real_repo_candidate",
+    "finalize_real_repo_change",
     "run_real_repo_loop",
 ]

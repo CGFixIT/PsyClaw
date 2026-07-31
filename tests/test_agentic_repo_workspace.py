@@ -581,6 +581,55 @@ def test_write_file_rejects_a_symlink_escape_via_existing_ancestor(tmp_path, mon
                 tools.write_file("escape-link/new.txt", "x")
 
 
+# --- attach ----------------------------------------------------------------
+
+
+def test_attach_reopens_an_existing_clone_and_can_read_and_write(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        original = RepoWorkspaceTools.clone(cfg)
+        dest = Path(mrun.call_args.kwargs["dest"])
+        assert original.worktree == dest
+        original._scoped.close()  # simulate the process that cloned it having exited
+
+    reattached = RepoWorkspaceTools.attach(cfg, dest)
+    try:
+        assert reattached.read_file("a.txt") == "hello\n"
+        assert reattached.allow_git_write_tools is True
+        reattached.write_file("new.txt", "attached write\n")
+        assert (dest / "new.txt").read_text(encoding="utf-8") == "attached write\n"
+    finally:
+        reattached.close()
+
+
+def test_attach_rejects_a_destination_outside_the_workspace_root(tmp_path, monkeypatch):
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    with pytest.raises(AgenticError, match="outside the configured workspace root"):
+        RepoWorkspaceTools.attach(cfg, outside)
+
+
+def test_attach_rejects_a_missing_directory(tmp_path, monkeypatch):
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    workspace_root = Path(cfg.deepagent_github.workspace_root)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    missing = workspace_root / "does-not-exist"
+    with pytest.raises(AgenticError, match="does not exist"):
+        RepoWorkspaceTools.attach(cfg, missing)
+
+
+def test_attach_wraps_a_jail_failure_as_agentic_error(tmp_path, monkeypatch):
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    workspace_root = Path(cfg.deepagent_github.workspace_root)
+    existing = workspace_root / "already-here"
+    existing.mkdir(parents=True)
+    with patch.object(repo_workspace, "ScopedRoots", side_effect=OSError("boom")):
+        with pytest.raises(AgenticError, match="failed to jail"):
+            RepoWorkspaceTools.attach(cfg, existing)
+
+
 def test_module_imports_without_deepagents_or_langchain():
     # Confirms the module docstring's claim: no deepagents/langchain import at
     # module scope. If this ever changed it would silently require

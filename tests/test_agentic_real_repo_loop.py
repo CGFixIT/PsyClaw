@@ -28,6 +28,7 @@ from agentic.harness_optimizer.model_adapter import LocalProposerClient
 from agentic.real_repo_loop import (
     RealRepoLoopResult,
     decide_real_repo_candidate,
+    finalize_real_repo_change,
     run_real_repo_loop,
 )
 from utils.errors import AgenticError, AgenticWriteRefused
@@ -117,7 +118,7 @@ def _cloned_tools(tmp_path, monkeypatch, *, files=None, allow_writes=True):
 # --- happy path / loop mechanics --------------------------------------------
 
 
-def test_loop_accepts_and_commits_on_the_first_correct_proposal(tmp_path, monkeypatch):
+def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
     tools, patcher = _cloned_tools(tmp_path, monkeypatch)
     client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
     try:
@@ -132,25 +133,100 @@ def test_loop_accepts_and_commits_on_the_first_correct_proposal(tmp_path, monkey
             reason="test run",
             confirm=True,
         )
+        # Accepted but NOT yet committed -- no branch created, nothing staged.
+        assert result.accepted is True
+        assert result.branch_name == "claude/fixture-topic"
+        assert result.commit_message == "add target.txt"
+        assert len(result.iterations) == 1
+        assert result.iterations[0].decision.accepted is True
+        git_bin = shutil.which("git")
+        branch_before = subprocess.run(
+            [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert branch_before != "claude/fixture-topic"
+
+        outcome = finalize_real_repo_change(tools, result, decision="approve")
+        assert outcome == {"status": "approved", "branch": "claude/fixture-topic"}
+
+        log = subprocess.run(
+            [git_bin, "log", "-1", "--format=%an <%ae> %s"],
+            cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert log == "Claude <noreply@anthropic.com> add target.txt"
+        branch_after = subprocess.run(
+            [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert branch_after == "claude/fixture-topic"
     finally:
         client.close()
         patcher.stop()
+        tools.close()
 
-    assert result.accepted is True
-    assert result.branch == "claude/fixture-topic"
-    assert len(result.iterations) == 1
-    assert result.iterations[0].decision.accepted is True
-    git_bin = shutil.which("git")
-    log = subprocess.run(
-        [git_bin, "log", "-1", "--format=%an <%ae> %s"],
-        cwd=str(tools.worktree), capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    assert log == "Claude <noreply@anthropic.com> add target.txt"
-    branches = subprocess.run(
-        [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    assert branches == "claude/fixture-topic"
-    tools.close()
+
+def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
+    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        result = run_real_repo_loop(
+            tools,
+            client,
+            instruction="Add target.txt with the expected marker",
+            checks=[_MARKER_CHECK],
+            branch_name="claude/fixture-topic",
+            commit_message="add target.txt",
+            max_iterations=1,
+            reason="test run",
+            confirm=True,
+        )
+        outcome = finalize_real_repo_change(tools, result, decision="reject")
+        assert outcome == {"status": "rejected", "branch": "claude/fixture-topic"}
+
+        git_bin = shutil.which("git")
+        branches = subprocess.run(
+            [git_bin, "branch", "--list"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout
+        assert "claude/fixture-topic" not in branches
+        log_count = subprocess.run(
+            [git_bin, "log", "--oneline"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout.strip().splitlines()
+        assert len(log_count) == 1  # only the fixture's own initial commit
+    finally:
+        client.close()
+        patcher.stop()
+        tools.close()
+
+
+def test_finalize_refuses_a_non_accepted_result(tmp_path, monkeypatch):
+    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
+    client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
+    try:
+        result = run_real_repo_loop(
+            tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+            commit_message="x", max_iterations=1, reason="test", confirm=True,
+        )
+        assert result.accepted is False
+        with pytest.raises(AgenticError, match="never accepted"):
+            finalize_real_repo_change(tools, result, decision="approve")
+    finally:
+        client.close()
+        patcher.stop()
+        tools.close()
+
+
+def test_finalize_rejects_an_invalid_decision_value(tmp_path, monkeypatch):
+    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        result = run_real_repo_loop(
+            tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+            commit_message="x", max_iterations=1, reason="test", confirm=True,
+        )
+        with pytest.raises(AgenticError, match="approve.*reject"):
+            finalize_real_repo_change(tools, result, decision="maybe")  # type: ignore[arg-type]
+    finally:
+        client.close()
+        patcher.stop()
+        tools.close()
 
 
 def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypatch):
@@ -209,7 +285,8 @@ def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path, monkeypatch)
         tools.close()
 
     assert result.accepted is False
-    assert result.branch is None
+    assert result.branch_name is None
+    assert result.commit_message is None
     assert len(result.iterations) == 2
 
 
@@ -427,4 +504,14 @@ def test_decide_rejects_write_failed_independent_of_other_gates():
 
 def test_real_repo_loop_result_requires_at_least_one_iteration():
     with pytest.raises(AgenticError):
-        RealRepoLoopResult(accepted=False, branch=None, iterations=())
+        RealRepoLoopResult(accepted=False, branch_name=None, commit_message=None, iterations=())
+
+
+def test_real_repo_loop_result_requires_branch_and_message_when_accepted():
+    from agentic.real_repo_loop import RealRepoDecision, RealRepoLoopIteration
+
+    iteration = RealRepoLoopIteration(
+        step=1, changed_files=("a.txt",), decision=RealRepoDecision(accepted=True, reason="accepted"),
+    )
+    with pytest.raises(AgenticError, match="must carry branch_name and commit_message"):
+        RealRepoLoopResult(accepted=True, branch_name=None, commit_message=None, iterations=(iteration,))

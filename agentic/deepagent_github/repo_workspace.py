@@ -215,6 +215,53 @@ class RepoWorkspaceTools:
             allow_git_write_tools=deep_cfg.allow_git_write_tools,
         )
 
+    @classmethod
+    def attach(
+        cls,
+        agentic_cfg: AgenticConfig,
+        dest: Path,
+        *,
+        config_path: str = "config.yaml",
+        cfg: dict | None = None,
+    ) -> RepoWorkspaceTools:
+        """Re-open an EXISTING clone directory a prior ``clone()`` call populated.
+
+        Does not clone anything new. A CLI-subprocess-per-call model (the only
+        way ``harness/server.py`` may reach ``agentic/`` at all -- see I6) can't
+        hold a live ``RepoWorkspaceTools`` object in memory between a "start a
+        run" call and a later "decide" call; the clone directory's path,
+        persisted on disk by whatever started the run, is the only thing that
+        survives between them. This is how a later call reattaches to it.
+
+        ``dest`` must resolve under ``agentic_cfg.deepagent_github.workspace_root``
+        -- defense in depth against a corrupted/tampered persisted path, even
+        though in practice this module is always the one that wrote it.
+        """
+        deep_cfg = agentic_cfg.deepagent_github
+        workspace_root = Path(deep_cfg.workspace_root).resolve()
+        dest_resolved = dest.resolve()
+        if dest_resolved != workspace_root and workspace_root not in dest_resolved.parents:
+            raise AgenticError(
+                "attach target is outside the configured workspace root",
+                details={"dest": str(dest), "workspace_root": str(workspace_root)},
+            )
+        if not dest_resolved.is_dir():
+            raise AgenticError("cannot attach: clone directory does not exist", details={"dest": str(dest)})
+        try:
+            scoped = ScopedRoots([str(dest_resolved)])
+        except Exception as exc:
+            raise AgenticError(
+                "failed to jail the existing cloned repository",
+                details={"dest": str(dest), "error": str(exc)},
+            ) from exc
+        return cls(
+            _scoped=scoped,
+            _dest=dest_resolved,
+            config_path=config_path,
+            cfg=cfg,
+            allow_git_write_tools=deep_cfg.allow_git_write_tools,
+        )
+
     def _audit(self, event: str, **fields: object) -> None:
         audit_log({"event": event, **fields}, config_path=self.config_path, cfg=self.cfg)
 
