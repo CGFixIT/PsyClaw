@@ -53,6 +53,7 @@ from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
     AgentDecisionRequest,
+    AgentPublishRequest,
     AgentRunRequest,
     ChatRequest,
     ModelSelectRequest,
@@ -679,6 +680,46 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return _agentic_call(
             "real-repo-run-decide",
             lambda: run_agentic_op("real-repo-run-decide", run_id=checked, decision=req.decision),
+        )
+
+    @app.post("/api/agent/runs/{run_id}/push", dependencies=guarded)
+    def agent_run_push(run_id: str) -> dict:
+        """Push an approved run's branch to origin. The first request here that leaves the box.
+
+        Its own route rather than a field on the decision body because it is
+        its own decision, taken AFTER approve: the backend's
+        ``real-repo-run-decide`` refuses a second call on an already-decided
+        run, so an approve-then-push sequence through one endpoint could never
+        reach the push. It carries no body -- invoking it IS the confirmation,
+        the same shape ``decision: "approve"`` already has.
+
+        Gating stays in ``agentic/`` (``allow_git_write_tools``, ships
+        ``false``, enforced inside ``push_branch``; plus the run-state guard
+        ``require_approved_for_push``). Re-implementing either here would give
+        them a second place to drift.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-push", lambda: run_agentic_op("real-repo-run-push", run_id=checked)
+        )
+
+    @app.post("/api/agent/runs/{run_id}/publish", dependencies=guarded)
+    def agent_run_publish(run_id: str, req: AgentPublishRequest) -> dict:
+        """Open a draft PR for an already-pushed run. The most gated route in this app.
+
+        Reaches ``agentic/writer.py``'s six-gate chain, whose first gate
+        (``EXECUTION_ENABLED``) is a hardcoded ``False`` in source that no
+        config file and no request body can flip -- so on a shipped checkout
+        this route always refuses, by design. Arming it is the filed-checklist
+        operator procedure in ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``, not
+        a runtime toggle.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-publish",
+            lambda: run_agentic_op(
+                "real-repo-run-publish", run_id=checked, reason=req.reason, confirm=req.confirm,
+            ),
         )
 
     # -- harness optimizer runs ------------------------------------------

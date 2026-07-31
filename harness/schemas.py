@@ -110,3 +110,23 @@ class AgentDecisionRequest(_ForbidModel):
     """
 
     decision: Literal["approve", "reject"]
+
+
+class AgentPublishRequest(_ForbidModel):
+    """Open a draft PR for an already-pushed run.
+
+    ``reason`` and ``confirm`` are this request's own, deliberately NOT
+    inherited from the run's earlier approve step: opening a pull request
+    under the operator's ``gh`` identity is a materially different act from
+    committing inside a local clone, and ``agentic/writer.py``'s
+    ``execute_write`` requires a fresh confirmation from its immediate caller
+    regardless (an earlier version manufactured one internally, which an
+    external review caught as making that gate unconditional).
+
+    ``confirm`` is not defaulted to True and is not silently forwarded when
+    absent -- same shape as ``AgentRunRequest.confirm``: omitting it reaches
+    the CLI's own refusal path (exit 4) rather than a silent default.
+    """
+
+    reason: str = Field(min_length=1, max_length=_MAX_REASON_LEN)
+    confirm: bool = False

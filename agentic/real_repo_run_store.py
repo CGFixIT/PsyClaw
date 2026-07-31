@@ -57,6 +57,7 @@ from utils.errors import AgenticError
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 PENDING_DECISION = "pending_decision"
+APPROVED = "approved"
 _TERMINAL_STATUSES = frozenset({"approved", "rejected", "exhausted", "failed"})
 
 
@@ -154,12 +155,65 @@ def require_pending_decision(record: RealRepoRunRecord) -> None:
         )
 
 
+def require_approved_for_push(record: RealRepoRunRecord) -> None:
+    """Raise unless ``record`` is an approved run that has not been pushed yet.
+
+    Push is a SEPARATE decision from approve, taken on an already-approved run
+    -- which is why it cannot reuse :func:`require_pending_decision`: by the
+    time a commit exists to push, the run's status is ``approved``, which that
+    function correctly treats as terminal. An un-approved run has no commit to
+    push, and a re-push of an already-pushed branch is a git no-op that would
+    report success while doing nothing, so both are refused by name rather than
+    left to produce a confusing result.
+    """
+    if record.status != APPROVED:
+        raise AgenticError(
+            f"run {record.run_id} is not approved (status: {record.status}); nothing to push",
+            details={"run_id": record.run_id, "status": record.status},
+        )
+    if record.pushed:
+        raise AgenticError(
+            f"run {record.run_id} was already pushed",
+            details={"run_id": record.run_id, "status": record.status},
+        )
+
+
+def require_pushed_for_publish(record: RealRepoRunRecord) -> None:
+    """Raise unless ``record`` is an approved, pushed run with no PR yet.
+
+    A draft PR needs its head branch on origin first (``gh pr create --head``
+    names a branch GitHub must already be able to see), so publish is gated on
+    ``pushed`` rather than merely on ``approved``. Refusing a second publish is
+    not just tidiness: ``execute_write`` deliberately never retries precisely
+    because a duplicate mutation is the failure mode it cannot undo, and a
+    second call here would open a second PR for the same branch.
+    """
+    if record.status != APPROVED:
+        raise AgenticError(
+            f"run {record.run_id} is not approved (status: {record.status}); nothing to publish",
+            details={"run_id": record.run_id, "status": record.status},
+        )
+    if not record.pushed:
+        raise AgenticError(
+            f"run {record.run_id} has not been pushed; a draft PR needs its head branch on origin first",
+            details={"run_id": record.run_id, "status": record.status},
+        )
+    if record.pr_url:
+        raise AgenticError(
+            f"run {record.run_id} already has a pull request",
+            details={"run_id": record.run_id, "pr_url": record.pr_url},
+        )
+
+
 __all__ = [
+    "APPROVED",
     "PENDING_DECISION",
     "RUN_ID_RE",
     "RealRepoRunRecord",
     "load_run",
     "new_run_id",
+    "require_approved_for_push",
     "require_pending_decision",
+    "require_pushed_for_publish",
     "save_run",
 ]

@@ -40,7 +40,7 @@ from harness.agent_policy import (
 )
 from harness.config import HarnessConfig
 from harness.ollama import HarnessChatClient
-from utils.ops_runner import OpsError
+from utils.ops_runner import OpsError, run_agentic_op
 
 _KEY = "harness-agent-test-key"
 _AUTH = {"Authorization": f"Bearer {_KEY}"}
@@ -48,6 +48,8 @@ _RUN_ID = "a" * 32
 _RUN = "/api/agent/run"
 _STATUS = f"/api/agent/runs/{_RUN_ID}"
 _DECIDE = f"/api/agent/runs/{_RUN_ID}/decision"
+_PUSH = f"/api/agent/runs/{_RUN_ID}/push"
+_PUBLISH = f"/api/agent/runs/{_RUN_ID}/publish"
 
 _VALID_BODY = {
     "instruction": "fix the typo in README.md",
@@ -556,6 +558,76 @@ def test_the_route_adds_no_gate_of_its_own(client, calls):
     """
     client.post(_DECIDE, json={"decision": "approve"})
     assert set(calls[0][1]) == {"run_id", "decision"}
+
+
+# --- push / publish plumbing -------------------------------------------------
+
+
+def test_push_route_passes_only_the_run_id(client, calls):
+    """Its own route rather than a decision-body field: real-repo-run-decide
+    refuses a second call on an already-decided run, so an approve-then-push
+    sequence through one endpoint could never reach the push."""
+    resp = client.post(_PUSH, json={})
+    assert resp.status_code == 200
+    assert calls[0] == ("real-repo-run-push", {"run_id": _RUN_ID})
+
+
+def test_publish_route_passes_reason_and_confirm_through(client, calls):
+    resp = client.post(_PUBLISH, json={"reason": "ship it", "confirm": True})
+    assert resp.status_code == 200
+    assert calls[0] == ("real-repo-run-publish", {"run_id": _RUN_ID, "reason": "ship it", "confirm": True})
+
+
+def test_publish_does_not_default_confirm_to_true(client, calls):
+    """Omitting confirm must reach the CLI's own refusal path, not be silently
+    supplied -- the same shape AgentRunRequest.confirm already has."""
+    resp = client.post(_PUBLISH, json={"reason": "ship it"})
+    assert resp.status_code == 200
+    assert calls[0][1]["confirm"] is False
+
+
+@pytest.mark.parametrize("body", [{}, {"confirm": True}, {"reason": ""}])
+def test_publish_requires_a_reason_at_the_schema_layer(client, calls, body):
+    """422 before any subprocess: a PR opened under the operator's gh identity
+    without a stated reason is the anonymous mutation this repo refuses."""
+    resp = client.post(_PUBLISH, json=body)
+    assert resp.status_code == 422
+    assert not calls
+
+
+@pytest.mark.parametrize("reason", ["  ", "\t\n", ""])
+def test_publish_whitespace_only_reason_is_refused_by_the_shim(reason):
+    """The layer that actually catches whitespace, tested against the REAL
+    shim rather than the route's mock.
+
+    ``Field(min_length=1)`` does not strip, so "  " satisfies the schema --
+    matching ``AgentRunRequest.reason``'s own long-standing shape rather than
+    making this one route uniquely stricter. It is not a hole: the shim
+    refuses it here (surfacing as a 400), and ``agentic/writer.py``'s gate 3
+    refuses it again independently. This test pins the middle layer so a
+    future "simplify the validation" pass cannot quietly remove the only one
+    that fires for whitespace.
+    """
+    with pytest.raises(OpsError, match="non-empty reason"):
+        run_agentic_op("real-repo-run-publish", run_id=_RUN_ID, reason=reason, confirm=True)
+
+
+def test_publish_rejects_unknown_body_fields(client, calls):
+    """extra='forbid': a body carrying e.g. {"run_id": ...} must not silently
+    look like it retargeted the run."""
+    resp = client.post(_PUBLISH, json={"reason": "r", "confirm": True, "run_id": "b" * 32})
+    assert resp.status_code == 422
+    assert not calls
+
+
+@pytest.mark.parametrize("path", ["/api/agent/runs/not-a-run-id/push", "/api/agent/runs/not-a-run-id/publish"])
+def test_push_and_publish_reject_a_malformed_run_id_before_the_shim(client, calls, path):
+    """Same 400/INVALID_RUN_ID contract the decision route already has -- these
+    routes interpolate run_id into a `--run-id=` argv element identically."""
+    resp = client.post(path, json={"reason": "r", "confirm": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "INVALID_RUN_ID"
+    assert not calls
 
 
 def test_invariant_guard_and_config_guard_profiles_actually_run_correctly(tmp_path):

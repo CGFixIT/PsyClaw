@@ -56,6 +56,9 @@ python -m agentic.cli real-repo-run --repo --instruction "..." --checks-file che
     --branch claude/topic --commit-message "..." --reason "..." --confirm
 python -m agentic.cli real-repo-run-status --run-id <id>
 python -m agentic.cli real-repo-run-decide --run-id <id> --decision approve   # or reject
+# Escalations past the local commit -- each its own decision, both disarmed by default:
+python -m agentic.cli real-repo-run-push    --run-id <id>                       # needs allow_git_write_tools
+python -m agentic.cli real-repo-run-publish --run-id <id> --reason "..." --confirm  # needs EXECUTION_ENABLED
 
 # DeepAgents-graph probe -- read-only, never invokes the agent (see §9):
 python -m agentic.cli deepagent-plan --repo --instruction "..."
