@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import re
 import sys
+from types import MappingProxyType
+from typing import NamedTuple
 
 # Mirrors agentic/real_repo_run_store.py's RUN_ID_RE. A run_id arrives as an
 # HTTP path parameter and is interpolated into a `--run-id=<value>` argv
@@ -61,13 +63,24 @@ DEFAULT_CHECK_PROFILE = "pytest"
 # sys.executable (not a bare "python") for the same reason every other
 # subprocess in this repo uses it: the harness may be running from a venv whose
 # interpreter is not the one a bare name would resolve to on PATH.
-_CHECK_PROFILES: dict[str, tuple[str, tuple[str, ...]]] = {
-    "pytest": ("run the test suite", (sys.executable, "-m", "pytest", "-q", "--tb=short")),
-    "ruff": (
+class CheckProfile(NamedTuple):
+    """One selectable verification command, named so a caller never sends argv."""
+
+    description: str
+    argv: tuple[str, ...]
+
+
+# MappingProxyType, not a bare dict: this is the allow-list standing between an
+# HTTP body and subprocess.run, so it should not be mutable at runtime by
+# anything that imports it. A read-only view makes that structural rather than
+# a convention.
+_CHECK_PROFILES: MappingProxyType[str, CheckProfile] = MappingProxyType({
+    "pytest": CheckProfile("run the test suite", (sys.executable, "-m", "pytest", "-q", "--tb=short")),
+    "ruff": CheckProfile(
         "lint with the repo's ruff selection",
         (sys.executable, "-m", "ruff", "check", "--select", "E,F,I,B,C4,UP,S", "."),
     ),
-}
+})
 
 
 class CheckProfileError(ValueError):
@@ -76,7 +89,7 @@ class CheckProfileError(ValueError):
 
 def available_profiles() -> list[tuple[str, str]]:
     """``(name, description)`` for every selectable profile, for the console."""
-    return [(name, description) for name, (description, _argv) in sorted(_CHECK_PROFILES.items())]
+    return [(name, _CHECK_PROFILES[name].description) for name in sorted(_CHECK_PROFILES)]
 
 
 def resolve_check_profiles(names: list[str]) -> list[dict[str, object]]:
@@ -93,13 +106,11 @@ def resolve_check_profiles(names: list[str]) -> list[dict[str, object]]:
         raise CheckProfileError("at least one check profile is required")
     resolved: list[dict[str, object]] = []
     for name in names:
-        entry = _CHECK_PROFILES.get(name)
-        if entry is None:
-            raise CheckProfileError(
-                f"unknown check profile {name!r}; available: {', '.join(sorted(_CHECK_PROFILES))}"
-            )
-        _description, argv = entry
-        resolved.append({"name": name, "argv": list(argv)})
+        profile = _CHECK_PROFILES.get(name)
+        if profile is None:
+            known = ", ".join(sorted(_CHECK_PROFILES))
+            raise CheckProfileError(f"unknown check profile {name!r}; available: {known}")
+        resolved.append({"name": name, "argv": list(profile.argv)})
     return resolved
 
 
