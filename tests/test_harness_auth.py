@@ -33,11 +33,24 @@ GUARDED = [
     ("post", "/api/model", {"model": "qwen2.5:7b"}),
     ("post", "/api/chat", {"message": "hi"}),
     ("get", "/api/github/status", None),
+    # The agentic coding routes. The decision route is guarded like the rest --
+    # the limiter runs first in the chain precisely so it bounds key guessing,
+    # and the route that can commit is the last one to exempt from that.
+    ("post", "/api/agent/run", {
+        "instruction": "do a thing", "branch": "claude/x", "commit_message": "m", "reason": "r",
+    }),
+    ("get", "/api/agent/runs/" + "0" * 32, None),
+    ("post", "/api/agent/runs/" + "0" * 32 + "/decision", {"decision": "reject"}),
 ]
 
 # Left open on purpose: the console must be able to boot and tell the operator it
 # needs a key. None of these changes state or spends a subprocess.
-OPEN = ["/", "/api/status", "/api/registry", "/api/sessions", "/api/harness/runs"]
+# /api/agent/checks joins them: it lists the names of an allow-list this repo
+# hardcodes, spawns nothing, and the console needs it to populate help before a
+# key has been entered.
+OPEN = [
+    "/", "/api/status", "/api/registry", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+]
 
 
 def _chat() -> HarnessChatClient:

@@ -75,6 +75,9 @@ Slash commands (type `/help` in the console):
 | `/model [use <name>]` | show / select the local model |
 | `/skills`, `/tools`, `/connectors` | merged registry views |
 | `/github` | agentic GitHub status (read-only subprocess) |
+| `/agent run\|confirm\|cancel` | stage, authorize, or discard a real-repo coding run |
+| `/agent status\|approve\|reject <id>` | read a run record, or decide a pending one |
+| `/agent checks` | list the selectable verification profiles |
 | `/harness` | harness optimizer runs |
 | `/tokens` | per-session token tally |
 | `/status` | server status |
@@ -82,6 +85,29 @@ Slash commands (type `/help` in the console):
 
 Every chat reply shows the model name and the prompt/completion token counts
 reported by Ollama; the header bar keeps a running tally across sessions.
+
+### Agentic coding runs
+
+`/agent` drives `agentic/real_repo_loop.py`'s two-step gate from the console.
+It is off unless `agentic.enabled` and `deepagent_github.allow_git_write_tools`
+are both true in `config.yaml`; with either false the console reports that the
+layer is disabled and nothing runs.
+
+1. `/agent run claude/<topic> <what the agent should do>` stages a proposal and
+   prints it. Nothing is sent.
+2. `/agent confirm <reason>` authorizes it. This is the request that clones the
+   repo, asks the local model for a patch, and runs the selected verification
+   profile against the result. **It blocks for up to 15 minutes** — the run
+   record is written only when the run ends, so there is no intermediate
+   progress to poll for, and the run id first exists in that response.
+3. On success the run stops *before committing* and reports
+   `status: pending_decision`. `/agent approve <id>` is what actually commits;
+   `/agent reject <id>` discards the clone. Neither pushes.
+
+`checks` names a profile from `/agent checks`, never a command. The console
+cannot send an argv to execute: profile names are resolved against the
+allow-list in `harness/agent_policy.py`, because the executor runs each check
+as a real subprocess with the parent `PATH`.
 
 ## Agent system prompt
 
@@ -96,7 +122,8 @@ read-only.
 
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - The five state-changing routes (`POST /api/sessions`, `.../rename`,
-  `/api/soul`, `/api/model`, `/api/chat`) plus `GET /api/github/status` require a
+  `/api/soul`, `/api/model`, `/api/chat`), `GET /api/github/status`, and all
+  three `/api/agent/*` run routes require a
   Bearer `CYCLAW_API_KEY` — the same variable the gateway's `/soul` and `/ops/*`
   endpoints use. **Fail-closed:** an unset key means those routes return 401, not
   "no auth required". Paste the key into the console's `key` field, or export it
@@ -110,4 +137,12 @@ read-only.
 - Session IDs are server-generated hex; path traversal is rejected.
 - No shell execution from the console; GitHub actions go through the
   whitelisted `utils.ops_runner` subprocess shim.
+- A coding run's verification commands are **never** taken from the request.
+  The console sends a profile name; `harness/agent_policy.py` maps it to a
+  fixed argv. `agentic/executor` runs each check as a real subprocess inheriting
+  the parent `PATH`, and nothing downstream inspects `argv[0]`, so accepting a
+  caller-supplied command would make an authenticated route a remote shell.
+- `run_id` is validated as anchored 32-char lowercase hex at the HTTP boundary,
+  before it can become a `--run-id=` argv element, and branch names must be in
+  the `claude/` namespace.
 - The console renders all model output via `textContent` (no HTML injection).
