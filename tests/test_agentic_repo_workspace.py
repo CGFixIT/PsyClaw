@@ -593,14 +593,11 @@ def test_attach_reopens_an_existing_clone_and_can_read_and_write(tmp_path, monke
         assert original.worktree == dest
         original._scoped.close()  # simulate the process that cloned it having exited
 
-    reattached = RepoWorkspaceTools.attach(cfg, dest)
-    try:
+    with RepoWorkspaceTools.attach(cfg, dest) as reattached:
         assert reattached.read_file("a.txt") == "hello\n"
         assert reattached.allow_git_write_tools is True
         reattached.write_file("new.txt", "attached write\n")
         assert (dest / "new.txt").read_text(encoding="utf-8") == "attached write\n"
-    finally:
-        reattached.close()
 
 
 def test_attach_rejects_a_destination_outside_the_workspace_root(tmp_path, monkeypatch):
