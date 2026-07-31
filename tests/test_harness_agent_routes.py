@@ -127,17 +127,35 @@ def test_duplicated_constants_match_their_agentic_originals():
 
 
 def test_check_profile_argv_matches_the_executors_own_commands():
-    """Each profile is a verbatim copy of one of agentic.executor's defaults.
+    """pytest/ruff are a verbatim copy of two of agentic.executor's defaults.
 
-    Same asymmetry as above. The invariant-guard default is deliberately NOT
-    mirrored -- it interpolates an absolute path into the worktree under test,
-    which this module cannot compute without importing agentic.
+    Same asymmetry as above for those two. invariant-guard is a DELIBERATE
+    divergence, not an oversight to fix: default_checks()'s own
+    "invariant_guard" entry interpolates an absolute path computed relative
+    to THIS PROCESS's own checkout (via a repo_root parameter this module has
+    no way to supply without importing agentic), which would check the wrong
+    tree if reused here. This module's own "invariant-guard" profile
+    (hyphenated -- matching the skill directory's own name, not
+    default_checks()'s Python-identifier-style key) uses a REPO-RELATIVE argv
+    instead: agentic.executor.run_verification pins subprocess cwd to the
+    worktree being checked, and check_invariants.py self-anchors its own repo
+    root from `__file__`, so the relative path resolves against the
+    worktree's OWN copy of the script -- correctly checking the candidate,
+    not this process. config-guard has no default_checks() counterpart at
+    all (that function ships exactly three checks: pytest, ruff,
+    invariant_guard) and needs no comparison.
     """
     from agentic.executor import default_checks
 
     upstream = {check.name: list(check.argv) for check in default_checks()}
-    for entry in resolve_check_profiles([name for name, _desc in available_profiles()]):
-        assert entry["argv"] == upstream[entry["name"]], entry["name"]
+    entries = resolve_check_profiles([name for name, _desc in available_profiles()])
+    profiles = {entry["name"]: entry["argv"] for entry in entries}
+    assert profiles["pytest"] == upstream["pytest"]
+    assert profiles["ruff"] == upstream["ruff"]
+    # Deliberately divergent, not a drift to catch: relative here, absolute upstream.
+    assert profiles["invariant-guard"] != upstream["invariant_guard"]
+    assert profiles["invariant-guard"][-1] == ".claude/skills/invariant-guard/check_invariants.py"
+    assert "config-guard" not in upstream
 
 
 def test_the_request_model_default_profile_is_a_real_profile():
@@ -538,3 +556,28 @@ def test_the_route_adds_no_gate_of_its_own(client, calls):
     """
     client.post(_DECIDE, json={"decision": "approve"})
     assert set(calls[0][1]) == {"run_id", "decision"}
+
+
+def test_invariant_guard_and_config_guard_profiles_actually_run_correctly(tmp_path):
+    """Proves the self-anchoring reasoning in agent_policy.py's own comment by
+    EXECUTION, not just a static claim about argv shape.
+
+    Runs the real profile argv through the real agentic.executor.run_verification,
+    with cwd pinned to THIS repository's own root -- a stand-in "worktree" that
+    genuinely has the files these scripts expect, exactly like a real cloned
+    candidate would if the configured target is CyClaw itself. If the
+    repo-relative-path + self-anchoring story in the comment above were wrong,
+    this would fail with a missing-script or wrong-repo-root error, not pass.
+    """
+    from pathlib import Path
+
+    from agentic.executor import Check, run_verification
+
+    repo_root = Path(__file__).resolve().parents[1]
+    entries = resolve_check_profiles(["invariant-guard", "config-guard"])
+    checks = [Check(name=e["name"], argv=tuple(e["argv"])) for e in entries]
+
+    audit_cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}, "policy": {"privacy": {}}}
+    report = run_verification(repo_root, checks, cfg=audit_cfg)
+
+    assert report.ok is True, [(r.name, r.exit_code, r.stderr[-500:]) for r in report.results if not r.ok]

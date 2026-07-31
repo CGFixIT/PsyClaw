@@ -55,10 +55,37 @@ BRANCH_NAME_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
 DEFAULT_CHECK_PROFILE = "pytest"
 
 # name -> (human description, argv). Mirrors agentic.executor.default_checks()'s
-# three commands, minus its invariant-guard entry: that one interpolates an
-# absolute path into the worktree being verified, which this module has no way
-# to compute without importing agentic. An operator who wants it can still run
-# it through the CLI directly.
+# pytest/ruff pair; invariant-guard and config-guard are added below with a
+# REPO-RELATIVE argv, not an absolute one.
+#
+# An earlier version of this comment excluded invariant-guard on the theory
+# that its script "interpolates an absolute path into the worktree being
+# verified, which this module has no way to compute without importing
+# agentic." That premise was checked against the actual scripts and does not
+# hold for either one: both .claude/skills/invariant-guard/check_invariants.py
+# and .claude/skills/config-guard/check_config.py self-anchor their own repo
+# root via `Path(__file__).resolve().parents[3]` (with an optional
+# --repo-root override neither profile below needs). agentic.executor.
+# run_verification pins subprocess `cwd` to the worktree being checked, so a
+# repo-relative argv like ".claude/skills/invariant-guard/check_invariants.py"
+# resolves against THAT worktree's own copy of the script -- which is exactly
+# what default_checks() already documents wanting ("it must be the SAME
+# worktree run_verification runs against, not this process's own checkout").
+# No absolute path, no `agentic` import, needed.
+#
+# Both are meaningful only when the configured target IS this repository (or
+# a fork sharing its layout) -- config.yaml's shipped agentic.repo default is
+# "CGFixIT/CyClaw", so that is the common case, not an edge case. Against any
+# OTHER target, the script simply is not there and the check fails closed
+# (non-zero exit -> a rejected candidate), never silently passing.
+#
+# A WPS/flake8 profile is deliberately NOT added here: CLAUDE.md's own §4
+# documents that the full tree does not pass wemake-python-styleguide clean
+# end-to-end today (CI's own lint lane runs it only against a diff of changed
+# files, not the whole tree). A profile running it over an entire cloned
+# worktree would fail even a candidate that touched nothing WPS-relevant,
+# on pre-existing findings the candidate never introduced -- an operator who
+# wants it can compute the diff-scoped invocation manually via --checks-file.
 #
 # sys.executable (not a bare "python") for the same reason every other
 # subprocess in this repo uses it: the harness may be running from a venv whose
@@ -79,6 +106,14 @@ _CHECK_PROFILES: MappingProxyType[str, CheckProfile] = MappingProxyType({
     "ruff": CheckProfile(
         "lint with the repo's ruff selection",
         (sys.executable, "-m", "ruff", "check", "--select", "E,F,I,B,C4,UP,S", "."),
+    ),
+    "invariant-guard": CheckProfile(
+        "static-assert the six security invariants (meaningful only when the target is CyClaw itself)",
+        (sys.executable, ".claude/skills/invariant-guard/check_invariants.py"),
+    ),
+    "config-guard": CheckProfile(
+        "validate config.yaml's relational/value contract (meaningful only when the target is CyClaw itself)",
+        (sys.executable, ".claude/skills/config-guard/check_config.py"),
     ),
 })
 
