@@ -34,6 +34,7 @@ apply_telemetry_kill()
 # matching gate.py's identical pattern for the identical reason.
 import logging
 import os
+import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -41,14 +42,18 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
+    AgentDecisionRequest,
+    AgentRunRequest,
     ChatRequest,
     ModelSelectRequest,
     RenameRequest,
@@ -77,7 +82,9 @@ _HTTP_BAD_REQUEST = 400
 _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_UNPROCESSABLE = 422
 _HTTP_BAD_GATEWAY = 502
+_HTTP_GATEWAY_TIMEOUT = 504
 _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
@@ -157,6 +164,55 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
 def _err(status: int, exc: AgenticError) -> HTTPException:
     detail = {_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: exc.details}
     return HTTPException(status_code=status, detail=detail)
+
+
+def _validation_error_response(exc: RequestValidationError) -> JSONResponse:
+    """Re-emit FastAPI's 422 in the envelope static/harness.html can read.
+
+    FastAPI's default body puts a LIST of error objects under ``detail``, but
+    the console's fetch helper reads ``data.detail.message`` -- on a list that
+    is undefined, so every malformed request rendered as a bare "HTTP 422"
+    with no hint about which field was wrong. That was already true of the
+    five original POSTs; the agent-run body (six fields, a branch pattern, and
+    a decision Literal) makes a validation failure the single most likely way
+    this app says no, so it is fixed here rather than worked around per-route.
+
+    gate.py solves the same class of problem by hand-raising an HTTPException
+    per case (see its /soul/apply INVALID_REASON path); one handler is the
+    equivalent for a whole app whose every model already forbids extra keys.
+    The field locations are included but the offending INPUT is not -- an
+    invalid body can carry operator text, and this response is rendered
+    straight into the console.
+    """
+    fields = [".".join(str(part) for part in err.get("loc", ())) for err in exc.errors()]
+    detail = {
+        _CODE_KEY: "VALIDATION_ERROR",
+        _MESSAGE_KEY: "request body failed validation: " + (", ".join(fields) or "unknown field"),
+        _DETAILS_KEY: {"fields": fields},
+    }
+    return JSONResponse(status_code=_HTTP_UNPROCESSABLE, content={"detail": detail})
+
+
+def _timeout_err(action: str, exc: subprocess.TimeoutExpired) -> HTTPException:
+    """Map a shim timeout to the same envelope every other failure uses.
+
+    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, NOT an ``OpsError``
+    (which subclasses ``ValueError``), so the ``except OpsError`` that guards
+    every other shim call does not catch it and it escaped as an unhandled
+    500 with a text/plain body -- which ``api()`` cannot parse at all, making
+    the longest-running route produce the least informative failure.
+
+    ``exc.cmd`` is deliberately not echoed: the argv carries
+    ``--instruction=``, ``--commit-message=`` and ``--reason=`` values.
+    """
+    return _err(
+        _HTTP_GATEWAY_TIMEOUT,
+        AgenticError(
+            f"agentic {action} exceeded its {int(exc.timeout)}s budget",
+            code="AGENTIC_TIMEOUT",
+            details={"action": action, "timeout_sec": int(exc.timeout)},
+        ),
+    )
 
 
 def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
@@ -276,6 +332,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         lifespan=lifespan,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        return _validation_error_response(exc)
 
     def _current_model() -> str:
         return cfg.selected_model or backend.model
@@ -446,6 +506,121 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             # is ever parameterized.
             raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         return gh_result.to_dict()
+
+    # -- agentic coding runs ---------------------------------------------
+    # The operator surface for agentic/real_repo_loop.py's two-step gate: run
+    # (clone, plan, patch, verify -- but never commit), then a separate human
+    # approve/reject that is what actually commits. Each route is one shim
+    # call; harness/ holds no run state of its own, because it cannot: every
+    # call is a fresh `python -m agentic.cli` subprocess (I6), so the only
+    # thing that survives between "start a run" and "decide on it" is the run
+    # record agentic/real_repo_run_store.py writes to disk.
+    #
+    # All three carry the full `guarded` chain, decision included. The plan
+    # this implements argued that throttling an approval is hostile; the
+    # limiter runs FIRST in that chain specifically so it bounds API-key
+    # guessing, and dropping it from the highest-privilege route would remove
+    # that bound exactly where it matters most. At 60 req/60s a decision costs
+    # one of sixty.
+    def _validated_run_id(run_id: str) -> str:
+        """Reject a malformed run_id before it becomes a `--run-id=` argv element."""
+        if not RUN_ID_RE.match(run_id):
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(
+                    "run_id must be 32 lowercase hex characters",
+                    code="INVALID_RUN_ID",
+                    details={"run_id": run_id[:64]},
+                ),
+            )
+        return run_id
+
+    def _agentic_call(action: str, **kwargs: object) -> dict:
+        """One shim call, with every failure mapped into the console's envelope.
+
+        Note what is NOT translated: a non-zero CLI exit is a successful shim
+        call, so it returns HTTP 200 carrying ok=false plus the CLI's own
+        stderr. That is the same contract GET /api/github/status already has,
+        and it is what lets the console distinguish "the run was refused"
+        (exit 4) from "the request was malformed" (400) without parsing prose.
+        """
+        try:
+            return run_agentic_op(action, **kwargs).to_dict()  # type: ignore[arg-type]
+        except OpsError as exc:
+            raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise _timeout_err(action, exc) from exc
+
+    @app.get("/api/agent/checks")
+    def agent_checks() -> dict:
+        """The selectable verification profiles. Open: a static allow-list listing.
+
+        Read-only, spawns nothing, and reveals only the names of commands this
+        module already hardcodes -- so it stays outside `guarded` for the same
+        reason /api/registry does: the console must be able to populate its
+        help before the operator has entered a key.
+        """
+        return {"profiles": [{"name": name, "description": desc} for name, desc in available_profiles()]}
+
+    @app.post("/api/agent/run", dependencies=guarded)
+    def agent_run(req: AgentRunRequest) -> dict:
+        """Start one real-repo run. BLOCKS until the run finishes (up to 900s).
+
+        Deliberately synchronous, and deliberately not a poll-a-background-job
+        design, for two reasons found in the backend rather than chosen here:
+        agentic/cli.py writes the run record only when the run ENDS, so a
+        status poll returns "not found" for the whole run and there is no
+        progress to report; and the run_id is minted inside that subprocess and
+        first appears in its stdout, so a route that returned early would hand
+        the operator no handle to approve with. GET /api/github/status already
+        blocks on a 120s subprocess in this same app -- this is that shape with
+        a longer budget, not a new one.
+        """
+        try:
+            checks = resolve_check_profiles(req.checks)
+        except CheckProfileError as exc:
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(str(exc), code="UNKNOWN_CHECK_PROFILE", details={"requested": req.checks}),
+            ) from exc
+        return _agentic_call(
+            "real-repo-run",
+            instruction=req.instruction,
+            checks=checks,
+            branch=req.branch,
+            commit_message=req.commit_message,
+            reason=req.reason,
+            confirm=req.confirm,
+            max_iterations=req.max_iterations,
+            pr=req.pr,
+            issue=req.issue,
+        )
+
+    @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
+    def agent_run_status(run_id: str) -> dict:
+        """Read one run's persisted record.
+
+        Guarded despite being a read: the record names a branch, the changed
+        file paths, and the clone's absolute location, and serving it spawns a
+        subprocess like /api/github/status does.
+        """
+        return _agentic_call("real-repo-run-status", run_id=_validated_run_id(run_id))
+
+    @app.post("/api/agent/runs/{run_id}/decision", dependencies=guarded)
+    def agent_run_decision(run_id: str, req: AgentDecisionRequest) -> dict:
+        """Approve (commit) or reject (discard) a pending run.
+
+        This is the request that can actually put a commit in the clone --
+        the only one in this app that reaches a git write. It performs no
+        gating of its own on purpose: the four conditions
+        (allow_git_write_tools, a pending record, a non-terminal status, git's
+        own refusal of an empty second commit) all live in agentic/, where
+        they are tested, and re-implementing any of them here would create a
+        second place for them to drift.
+        """
+        return _agentic_call(
+            "real-repo-run-decide", run_id=_validated_run_id(run_id), decision=req.decision
+        )
 
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")

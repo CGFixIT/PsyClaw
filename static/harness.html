@@ -206,6 +206,11 @@ const stream = $('stream'), input = $('input'), sendBtn = $('send'), apiKeyInput
 
 let currentSession = null;   // session_id string or null
 let soulEnabled = true;
+/* A staged (not yet sent) agent run. The server's own gate needs an explicit
+   reason plus confirm, so the console stages first and shows the operator
+   exactly what they are about to authorize; /agent confirm is what sends it.
+   Cleared on send, on /agent cancel, and on /clear. */
+let pendingAgentRun = null;
 
 /* ── stream rendering ── */
 function addMsg(kind, who, body, meta) {
@@ -350,6 +355,9 @@ const COMMANDS = [
   ['/tools', 'tool registry'],
   ['/connectors', 'connector catalog'],
   ['/github', 'agentic GitHub status'],
+  ['/agent run|confirm|cancel', 'stage and start a real-repo coding run'],
+  ['/agent status|approve|reject <id>', 'inspect or decide a pending run'],
+  ['/agent checks', 'available verification profiles'],
   ['/harness', 'harness optimizer runs'],
   ['/tokens', 'token tally'],
   ['/status', 'server status'],
@@ -366,6 +374,44 @@ function buildCommands() {
     b.addEventListener('click', () => { input.value = c.split(' ')[0] + ' '; input.focus(); });
     pane.appendChild(b);
   });
+}
+
+/* ── agentic coding runs ── */
+/* Every agent route answers with the ops-shim envelope
+   {ok, label, exit_code, stdout, stderr, parsed}. A FAILED run is still an
+   HTTP 200 -- the shim succeeded, the subprocess it ran did not -- so the
+   fetch helper above never throws for one, and the shared catch in runSlash
+   would silently render nothing. Three cases have to be told apart here
+   rather than there:
+     ok=false            -> the CLI refused or failed; its message is in stderr
+     ok=true,  parsed=null -> agentic.enabled is false, which is the SHIPPED
+                              default; the human banner is in stdout, and
+                              reaching for parsed.run_id would be a TypeError
+     ok=true,  parsed     -> a real run record */
+function agentRecord(r) {
+  if (!r.ok) {
+    sys('agent run failed (' + r.label + ', exit ' + r.exit_code + ')\n' + (r.stderr || r.stdout || ''));
+    return null;
+  }
+  if (!r.parsed || typeof r.parsed !== 'object') {
+    sys('the agentic layer is disabled in config.yaml — nothing ran.\n' + (r.stdout || ''));
+    return null;
+  }
+  return r.parsed;
+}
+function showAgentRecord(rec) {
+  sys(table([
+    ['run id', rec.run_id],
+    ['status', rec.status],
+    ['repo', rec.repo],
+    ['branch', rec.branch_name || '—'],
+    ['commit message', rec.commit_message || '—'],
+    ['files', (rec.changed_files || []).join(', ') || '—'],
+    ['iterations', String(rec.iterations)],
+    ['error', rec.error || '—'],
+  ], ['field', 'value']));
+  if (rec.status === 'pending_decision')
+    sys('awaiting your decision — /agent approve ' + rec.run_id + '   or   /agent reject ' + rec.run_id);
 }
 
 /* ── slash commands ── */
@@ -457,6 +503,73 @@ async function runSlash(line) {
         break;
       }
 
+      case 'agent': {
+        const sub = rest[0] || 'help';
+        if (sub === 'checks') {
+          const r = await api('/api/agent/checks');
+          sys(table(r.profiles.map(p => [p.name, p.description]), ['profile', 'what it runs']));
+        } else if (sub === 'run') {
+          const branch = rest[1] || '';
+          const instruction = rest.slice(2).join(' ').trim();
+          if (!branch || !instruction) {
+            sys('usage: /agent run claude/<topic> <what the agent should do>');
+            break;
+          }
+          pendingAgentRun = {
+            branch: branch,
+            instruction: instruction,
+            commit_message: instruction.slice(0, 72),
+            checks: ['pytest'],
+          };
+          sys(table([
+            ['branch', pendingAgentRun.branch],
+            ['instruction', pendingAgentRun.instruction],
+            ['commit message', pendingAgentRun.commit_message],
+            ['checks', pendingAgentRun.checks.join(', ')],
+          ], ['field', 'value']));
+          sys('nothing has run yet. Authorize with:  /agent confirm <why you are doing this>');
+        } else if (sub === 'cancel') {
+          pendingAgentRun = null;
+          sys('staged run discarded');
+        } else if (sub === 'confirm') {
+          if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
+          const why = rest.slice(1).join(' ').trim();
+          if (!why) { sys('a reason is required: /agent confirm <why you are doing this>'); break; }
+          const body = Object.assign({}, pendingAgentRun, { reason: why, confirm: true });
+          pendingAgentRun = null;
+          sendBtn.disabled = true;
+          sys('cloning, planning, patching and verifying — this blocks for up to 15 minutes…');
+          try {
+            const rec = agentRecord(await api('/api/agent/run', 'POST', body));
+            if (rec) showAgentRecord(rec);
+          } finally {
+            sendBtn.disabled = false;
+          }
+        } else if (sub === 'status' || sub === 'approve' || sub === 'reject') {
+          const id = (rest[1] || '').trim();
+          if (!id) { sys('usage: /agent ' + sub + ' <run id>'); break; }
+          let r;
+          if (sub === 'status') {
+            r = await api('/api/agent/runs/' + encodeURIComponent(id));
+          } else {
+            r = await api('/api/agent/runs/' + encodeURIComponent(id) + '/decision', 'POST', { decision: sub });
+          }
+          const rec = agentRecord(r);
+          if (rec) showAgentRecord(rec);
+        } else {
+          sys(table([
+            ['/agent run claude/<topic> <task>', 'stage a run (sends nothing)'],
+            ['/agent confirm <reason>', 'authorize and start the staged run'],
+            ['/agent cancel', 'discard the staged run'],
+            ['/agent status <run id>', 'read a run record'],
+            ['/agent approve <run id>', 'commit the pending change'],
+            ['/agent reject <run id>', 'discard the pending change'],
+            ['/agent checks', 'list verification profiles'],
+          ], ['command', 'action']));
+        }
+        break;
+      }
+
       case 'harness': {
         const r = await api('/api/harness/runs');
         if (!r.count) { sys('no harness optimizer runs yet'); break; }
@@ -484,6 +597,10 @@ async function runSlash(line) {
 
       case 'clear':
         stream.textContent = '';
+        /* the staged proposal was only ever visible in the stream it just
+           wiped, so leaving it armed would let a later /agent confirm
+           authorize a run the operator can no longer see */
+        pendingAgentRun = null;
         break;
 
       default:
