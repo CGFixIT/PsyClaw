@@ -738,8 +738,10 @@ def finalize_real_repo_change(
 
     This is the human gate: ``run_real_repo_loop`` already ran the caller's
     own verification checks and decided the candidate passes, but it stops
-    short of committing so a human can review the diff first (``tools.diff()``)
-    -- exactly the same shape every other write path in this codebase uses
+    short of committing so a human can review the diff first
+    (``tools.diff()``, surfaced by ``agentic.cli``'s
+    ``real-repo-run-status`` for exactly this purpose) -- exactly the same
+    shape every other write path in this codebase uses
     (``agentic/writer.py``'s reason+confirm gate, ``apply_skill``'s
     ``--confirm``): the model's own proposal is never enough on its own,
     regardless of what tests it passed.
