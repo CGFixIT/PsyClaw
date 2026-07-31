@@ -136,11 +136,16 @@ def decide_real_repo_candidate(
     flat booleans rather than re-deriving them here.
     """
     rejected: list[str] = []
-    if not changed_files:
+    has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
+    # A quarantined iteration wrote nothing BECAUSE it was critical, so reporting
+    # "no_files_changed" alongside would tell the planner it proposed no files at
+    # all -- steering the next attempt at the wrong problem, since this reason
+    # string is the only feedback it receives.
+    if not changed_files and not has_critical:
         rejected.append("no_files_changed")
     if write_failed:
         rejected.append("file_write_failed")
-    if any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings):
+    if has_critical:
         rejected.append("critical_governance_finding")
     if verification is not None and not verification.ok:
         rejected.append("verification_failed")
@@ -195,9 +200,18 @@ class RealRepoLoopResult:
         iteration's own list (what this property replaces as the caller-facing
         source of truth) could silently drop a file the accepted checks
         actually depended on from the approved commit.
+
+        Iterations quarantined for a critical governance finding are excluded.
+        ``run_real_repo_loop`` now scans every proposed file before writing any
+        of them, so such an iteration writes nothing and contributes nothing
+        here anyway -- this filter is the belt to that fix's braces, so that a
+        future change which reintroduces a partial write cannot silently promote
+        critical-flagged content into the staged commit set.
         """
         seen: dict[str, None] = {}
         for iteration in self.iterations:
+            if "critical_governance_finding" in iteration.decision.rejected_gates:
+                continue
             for path in iteration.changed_files:
                 seen[path] = None
         return tuple(seen)
@@ -307,16 +321,29 @@ def run_real_repo_loop(
         governance_findings: list[GovernanceFinding] = []
         written: list[str] = []
         write_failed = False
-        for path, content in proposed_files.items():
+        # Scan EVERY proposed file before writing ANY of them. The write used to
+        # run inside the same pass that accumulated findings, with has_critical
+        # computed only afterwards -- so a critical-flagged file was already on
+        # disk by the time the gate rejected the iteration. Since the clone
+        # persists across iterations with no reset (see RealRepoLoopResult
+        # .changed_files), that file stayed there: a later iteration's
+        # verification ran against it (pytest auto-collects a conftest.py it
+        # never approved), and the changed_files union staged it into the
+        # approved commit. Scanning first makes the critical gate a quarantine
+        # rather than a verification-skip.
+        for content in proposed_files.values():
             governance_findings.extend(inspect_candidate_text(content, cfg))
-            try:
-                tools.write_file(path, content)
-            except AgenticError:
-                write_failed = True
-                continue
-            written.append(path)
-
         has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
+
+        if not has_critical:
+            for path, content in proposed_files.items():
+                try:
+                    tools.write_file(path, content)
+                except AgenticError:
+                    write_failed = True
+                    continue
+                written.append(path)
+
         verification: VerificationReport | None = None
         if written and not has_critical and not write_failed:
             verification = run_verification(tools.worktree, checks)

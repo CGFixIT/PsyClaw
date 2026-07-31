@@ -215,13 +215,16 @@ def cmd_deepagent_plan(args: argparse.Namespace) -> int:
         _err(exc.message)
         return EXIT_FAIL
 
-    # A critical finding means GitHub-sourced text carries an injection shape. The
-    # inbound scan is advisory (a PR may legitimately DISCUSS injection), but a
-    # planner is exactly the consumer that must not act on one.
+    # An injection finding means GitHub-sourced text carries an injection shape.
+    # The inbound scan is advisory (a PR may legitimately DISCUSS injection), but
+    # a planner is exactly the consumer that must not act on one.
     findings = bundle.get("governance_findings") or []
-    critical = [f for f in findings if f.get("severity") == "critical"]
-    if critical:
-        _err(f"refusing to plan: {len(critical)} critical governance finding(s) in the fetched context")
+    blocking = _blocking_context_findings(bundle)
+    if blocking:
+        _err(
+            f"refusing to plan: {len(blocking)} injection finding(s) in the fetched context "
+            f"({_describe_findings(blocking)})"
+        )
         return EXIT_FAIL
 
     task = DeepAgentGitHubTask(
@@ -280,8 +283,8 @@ def _bundle_context_text(bundle: dict[str, object]) -> str | None:
     propose complete replacement files without seeing the task that motivated
     them. Every field pulled here already went through
     ``bundle["governance_findings"]`` at fetch time, and ``cmd_real_repo_run``
-    has already refused to proceed if any of them carried a CRITICAL finding
-    by the time this is called.
+    has already refused to proceed if any of them carried an injection finding
+    by the time this is called (see ``_blocking_context_findings``).
 
     Returns ``None`` for a ``--repo``-mode bundle (repo overview + shortlists,
     no single target) rather than manufacture marginal-value context from it;
@@ -312,6 +315,42 @@ def _bundle_context_text(bundle: dict[str, object]) -> str | None:
     if len(text) > _MAX_LOOP_CONTEXT_CHARS:
         text = text[:_MAX_LOOP_CONTEXT_CHARS] + f"\n... [context truncated at {_MAX_LOOP_CONTEXT_CHARS} chars]"
     return text
+
+
+def _blocking_context_findings(bundle: dict[str, object]) -> list[dict]:
+    """The fetched-context findings that must stop a run before a model sees it.
+
+    Selects on the finding CODE, never on a severity string.
+    ``agentic.context._injection_findings`` documents that it emits
+    ``"warning"`` and never ``"critical"`` -- deliberately, because it is a READ
+    path and a PR that merely discusses injection must stay fetchable, so it
+    reports and leaves the refusal to whichever layer feeds a model. Both
+    planner entry points nonetheless filtered for ``severity == "critical"``,
+    which no producer ever sets, so the refusal could not fire for any input and
+    attacker-authored PR text reached the planner prompt ahead of the operator's
+    own instruction. Gating on the code is what makes that documented division
+    of labour real.
+
+    ``SCANNER_UNAVAILABLE_CODE`` blocks as well, fail-closed: it means the
+    pattern set compiled empty, so the text was never actually scanned, and
+    forwarding unscanned third-party text into a planner is the exact outcome
+    the scan exists to prevent. Reads stay permissive (``cmd_context`` does not
+    call this); only the model-feeding paths refuse.
+    """
+    from agentic.context import INJECTION_FINDING_CODE, SCANNER_UNAVAILABLE_CODE
+
+    blocking = {INJECTION_FINDING_CODE, SCANNER_UNAVAILABLE_CODE}
+    findings = bundle.get("governance_findings") or []
+    if not isinstance(findings, list):
+        return []
+    return [f for f in findings if isinstance(f, dict) and f.get("code") in blocking]
+
+
+def _describe_findings(findings: list[dict]) -> str:
+    # Names the rule and the field that fired, never the text that fired it --
+    # the same discipline agentic/context.py:81-86 applies when it records
+    # pattern SOURCES rather than match objects.
+    return ", ".join(f"{f.get('code')}:{f.get('field') or 'bundle'}" for f in findings)
 
 
 def _load_checks_file(path: str) -> tuple[Check, ...]:
@@ -389,14 +428,17 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         _err(exc.message)
         return EXIT_FAIL
 
-    findings = bundle.get("governance_findings") or []
-    critical = [f for f in findings if f.get("severity") == "critical"]
-    if critical:
-        _err(f"refusing to run: {len(critical)} critical governance finding(s) in the fetched context")
+    blocking = _blocking_context_findings(bundle)
+    if blocking:
+        _err(
+            f"refusing to run: {len(blocking)} injection finding(s) in the fetched context "
+            f"({_describe_findings(blocking)})"
+        )
         return EXIT_FAIL
-    # Safe to forward from here on: the critical-finding refusal above already
-    # covers every field this pulls from (title/body/diff), so nothing
-    # reaching the planner's prompt has an unreviewed critical finding.
+    # Safe to forward from here on: the refusal above covers every field this
+    # pulls from (title/body/diff), and it gates on the finding CODE the scanner
+    # actually emits rather than a severity string it documents it never sets --
+    # so unlike the check this replaced, it can fire.
     context_text = _bundle_context_text(bundle)
 
     try:
