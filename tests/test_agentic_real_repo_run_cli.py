@@ -531,6 +531,33 @@ def test_status_disabled_layer_is_a_clean_noop(tmp_path, capsys):
         reset_config_cache()
 
 
+@pytest.mark.parametrize("argv", [
+    ["real-repo-run-push", "--run-id", "a" * 32],
+    ["real-repo-run-publish", "--run-id", "a" * 32, "--reason", "r", "--confirm"],
+    ["real-repo-run-discard", "--run-id", "a" * 32],
+])
+def test_escalation_subcommands_are_clean_noops_when_the_layer_is_disabled(tmp_path, capsys, argv):
+    """Exit 0, not a crash, for a run id that does not exist either.
+
+    ``_attach_approved_run`` returns ``(_disabled_noop(), None, None, None,
+    None)`` -- an EXIT_OK code paired with a None record -- so each caller has
+    to notice the None rather than trusting the code alone. Without that check
+    the very next line would raise AttributeError on None.
+    """
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    src["agentic"]["enabled"] = False
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+    try:
+        assert main(["--config", str(path), *argv]) == EXIT_OK
+        assert "disabled" in capsys.readouterr().out.lower()
+    finally:
+        reset_config_cache()
+
+
 # --- decide ---------------------------------------------------------------
 
 
