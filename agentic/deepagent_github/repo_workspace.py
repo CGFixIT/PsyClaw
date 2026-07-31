@@ -346,6 +346,23 @@ class RepoWorkspaceTools:
         parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
         if not parts or any(part == ".." or ":" in part for part in parts):
             self._deny_git(tool, "git path escaped the clone root", target=target)
+        # The clone's own git metadata is never a legitimate write target, and
+        # writing it is not merely out of scope -- it is arbitrary command
+        # execution. A model-authored `.git/config` carrying a filter definition
+        # plus a `.gitattributes` assigning that filter runs its command during
+        # the plain `git add` that finalize_real_repo_change performs, in THIS
+        # process, at human-approval time, with the operator's own PATH and HOME
+        # (the executor's scrubbed env does not apply to _run_git). `git diff`
+        # cannot render `.git/config`, so no diff-based human review can catch
+        # it. The resolve() check below does not help: `.git/config` legitimately
+        # resolves to a path inside the clone.
+        #
+        # Matched case-insensitively and on EVERY segment, not just the first: a
+        # case-insensitive filesystem resolves `.GIT` to the same directory, and
+        # a nested `submodule/.git` is a gitdir too. `.gitattributes`/`.gitignore`
+        # are unaffected -- this compares whole segments, not prefixes.
+        if any(part.casefold() == ".git" for part in parts):
+            self._deny_git(tool, "git path may not touch the clone's .git directory", target=target)
         dest_resolved = self._dest.resolve()
         candidate = dest_resolved.joinpath(*parts)
         if must_exist:
@@ -523,6 +540,12 @@ class RepoWorkspaceTools:
         this one subprocess invocation -- never written to the clone's
         ``.git/config`` or any global git config -- and set both author and
         committer, since a fresh clone carries no ``user.*`` of its own.
+
+        ``--no-verify`` is defense in depth, not the primary control: the clone's
+        ``.git/`` is unwritable through ``write_file`` (see
+        ``_validate_write_path``), so no model-authored hook should exist to run.
+        This makes a hook that arrived some other way -- a future code path, or a
+        remote that shipped one -- fail to execute at commit time as well.
         """
         tool = "commit"
         self._require_git_writes_enabled(tool)
@@ -533,7 +556,7 @@ class RepoWorkspaceTools:
             [
                 "-c", f"user.email={_COMMIT_EMAIL}",
                 "-c", f"user.name={_COMMIT_NAME}",
-                "commit", "-m", message,
+                "commit", "--no-verify", "-m", message,
             ],
         )
         # Never audit the raw message -- same "hash, don't persist" discipline
