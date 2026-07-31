@@ -963,10 +963,16 @@ def test_loop_rejects_an_iteration_that_proposes_a_duplicate_path(tmp_path, monk
                 )
         finally:
             client.close()
+
+        # MUST stay inside the with-block: _cloned_tools' __exit__ rmtree's the
+        # whole worktree, so this assertion is unfalsifiable once dedented past
+        # `client.close()`'s finally -- every path under a deleted directory
+        # reports exists() == False regardless of what the loop did.
+        assert not (Path(tools.worktree) / "target.txt").exists()
+
     assert result.accepted is False
     assert "file_write_failed" in result.iterations[0].decision.rejected_gates
     mverify.assert_not_called()
-    assert not (Path(tools.worktree) / "target.txt").exists()
 
 
 # --- read_paths: bounded existing-file context (Tier 1) ----------------------
@@ -1260,4 +1266,185 @@ def test_undeclared_overwrite_message_reaches_the_next_prompt(tmp_path, monkeypa
     assert len(seen_prompts) == 2
     assert "existing.py" in seen_prompts[1]
     assert "not shown to you" in seen_prompts[1]
+    assert result.accepted is True
+
+
+# --- diff-scope gate (Tier 1) -------------------------------------------------
+
+
+def test_matches_protected_path_directory_prefix():
+    from agentic.real_repo_loop import _matches_protected_path
+
+    prefixes = ("tests/", ".git/", ".github/")
+    assert _matches_protected_path("tests/unit/test_x.py", prefixes) is True
+    assert _matches_protected_path(".github/workflows/ci.yml", prefixes) is True
+    assert _matches_protected_path("src/x.py", prefixes) is False
+
+
+def test_matches_protected_path_bare_filename_matches_root_and_nested():
+    from agentic.real_repo_loop import _matches_protected_path
+
+    prefixes = ("conftest.py", "pyproject.toml")
+    assert _matches_protected_path("conftest.py", prefixes) is True
+    assert _matches_protected_path("src/sub/conftest.py", prefixes) is True
+    assert _matches_protected_path("pyproject.toml", prefixes) is True
+    assert _matches_protected_path("myconftest.py", prefixes) is False  # not a path-segment match
+
+
+def test_decide_rejects_an_out_of_scope_write():
+    decision = decide_real_repo_candidate(
+        changed_files=(), verification=None, governance_findings=(), out_of_scope=True,
+    )
+    assert decision.accepted is False
+    assert "out_of_scope_write" in decision.rejected_gates
+    assert "no_files_changed" not in decision.rejected_gates  # quarantined, not "proposed nothing"
+
+
+def test_decide_rejects_an_over_budget_write():
+    decision = decide_real_repo_candidate(
+        changed_files=(), verification=None, governance_findings=(), write_budget_exceeded=True,
+    )
+    assert decision.accepted is False
+    assert "write_budget_exceeded" in decision.rejected_gates
+    assert "no_files_changed" not in decision.rejected_gates
+
+
+def test_changed_files_excludes_out_of_scope_and_budget_quarantined_iterations():
+    """Direct unit test, not routed through the loop: DEF-3 taught this exact
+    lesson (the earlier critical-governance union filter had ZERO test
+    coverage because the write-quarantine barrier meant the loop could never
+    reach it). Constructing the state directly is what actually pins this
+    filter rather than merely exercising the primary gate again."""
+    scope_violation = RealRepoLoopIteration(
+        step=1, changed_files=("tests/test_x.py",),
+        decision=RealRepoDecision(accepted=False, reason="rejected: out_of_scope_write",
+                                   rejected_gates=("out_of_scope_write",)),
+    )
+    budget_violation = RealRepoLoopIteration(
+        step=2, changed_files=("huge.py",),
+        decision=RealRepoDecision(accepted=False, reason="rejected: write_budget_exceeded",
+                                   rejected_gates=("write_budget_exceeded",)),
+    )
+    clean = RealRepoLoopIteration(
+        step=3, changed_files=("good.py",), decision=RealRepoDecision(accepted=True, reason="accepted"),
+    )
+    result = RealRepoLoopResult(
+        accepted=True, branch_name="claude/x", commit_message="x",
+        iterations=(scope_violation, budget_violation, clean),
+    )
+    assert result.changed_files == ("good.py",)
+
+
+def test_loop_quarantines_a_write_into_a_protected_path(tmp_path, monkeypatch):
+    block = "=== FILE tests/test_evil.py ===\ndef test_x(): assert True\n=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="add a test",
+                    checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                    branch_name="claude/scope",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    protected_write_paths=["tests/"],
+                )
+        finally:
+            client.close()
+
+        # MUST stay inside the with-block -- see the identical note on
+        # test_loop_rejects_an_iteration_that_proposes_a_duplicate_path.
+        assert not (Path(tools.worktree) / "tests" / "test_evil.py").exists()
+
+    assert result.accepted is False
+    assert "out_of_scope_write" in result.iterations[0].decision.rejected_gates
+    mverify.assert_not_called()
+
+
+def test_loop_quarantines_an_over_budget_write(tmp_path, monkeypatch):
+    huge_content = "x = 1\n" * 200
+    block = f"=== FILE big.py ===\n{huge_content}=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="add a big file",
+                    checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                    branch_name="claude/budget",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    max_write_budget_bytes=100,
+                )
+        finally:
+            client.close()
+
+        # MUST stay inside the with-block -- see the identical note on
+        # test_loop_rejects_an_iteration_that_proposes_a_duplicate_path.
+        assert not (Path(tools.worktree) / "big.py").exists()
+
+    assert result.accepted is False
+    assert "write_budget_exceeded" in result.iterations[0].decision.rejected_gates
+    mverify.assert_not_called()
+
+
+def test_loop_feeds_scope_and_budget_violations_into_the_next_prompt(tmp_path, monkeypatch):
+    seen_prompts: list[str] = []
+    calls: list[str] = []
+
+    def handler(request):
+        seen_prompts.append(json.loads(request.content.decode())["messages"][1]["content"])
+        calls.append("x")
+        if len(calls) == 1:
+            return _chat_response("=== FILE tests/test_evil.py ===\nbad\n=== END FILE ===\nfix")
+        return _chat_response("=== FILE ok.py ===\ngood\n=== END FILE ===\nfix")
+
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools, client,
+                instruction="add a test",
+                checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                branch_name="claude/scope-feedback",
+                commit_message="x",
+                max_iterations=2,
+                reason="test run",
+                confirm=True,
+                protected_write_paths=["tests/"],
+            )
+        finally:
+            client.close()
+
+    assert len(seen_prompts) == 2
+    assert "tests/test_evil.py" in seen_prompts[1]
+    assert "protected" in seen_prompts[1]
+
+
+def test_no_protected_paths_or_budget_configured_disables_the_gate(tmp_path, monkeypatch):
+    # Empty/None (the function defaults) must not quarantine anything -- the
+    # caller supplies these from config; an un-configured caller gets no gate,
+    # not a surprise rejection.
+    block = "=== FILE tests/test_whatever.py ===\nx = 1\n=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            result = run_real_repo_loop(
+                tools, client,
+                instruction="add a test",
+                checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                branch_name="claude/no-gate",
+                commit_message="x",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
     assert result.accepted is True

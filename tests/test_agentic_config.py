@@ -97,6 +97,38 @@ def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) ->
     assert cfg.deepagent_github.allow_github_writes is False
     assert cfg.deepagent_github.allow_git_write_tools is False
     assert cfg.deepagent_github.workspace_root == str(DATA_ROOT / "agentic" / "workspaces")
+    from agentic.config import DEFAULT_MAX_WRITE_BUDGET_BYTES, DEFAULT_PROTECTED_WRITE_PATH_PREFIXES
+
+    assert cfg.deepagent_github.protected_write_paths == list(DEFAULT_PROTECTED_WRITE_PATH_PREFIXES)
+    assert cfg.deepagent_github.max_write_budget_bytes == DEFAULT_MAX_WRITE_BUDGET_BYTES
+    assert "tests/" in cfg.deepagent_github.protected_write_paths
+    assert ".git/" in cfg.deepagent_github.protected_write_paths
+
+
+def test_deepagent_config_rejects_non_list_protected_write_paths(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": "tests/"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_rejects_empty_string_in_protected_write_paths(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": ["tests/", ""]})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+@pytest.mark.parametrize("bad", [0, -1, "100000", 1.5, True])
+def test_deepagent_config_rejects_invalid_max_write_budget_bytes(tmp_path: Path, bad) -> None:
+    block = _base_block(deepagent_github={"max_write_budget_bytes": bad})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_a_custom_protected_write_paths_and_budget(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": ["custom/"], "max_write_budget_bytes": 5000})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.protected_write_paths == ["custom/"]
+    assert cfg.deepagent_github.max_write_budget_bytes == 5000
 
 
 def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:

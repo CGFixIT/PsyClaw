@@ -44,6 +44,22 @@ DEFAULT_ALLOWED_READ_OPS = (
     "repo_view",
 )
 DEFAULT_DEEPAGENT_WORKSPACE_ROOT = "data/agentic/workspaces"
+# Prefixes a real-repo candidate must not write into: files that judge the
+# candidate's own acceptance. A candidate that rewrites the tests/lints
+# grading it would otherwise be "accepted" by construction -- the single most
+# common reward-hacking failure mode of a make-the-checks-pass loop. Matched
+# as a path-PREFIX (see decide_real_repo_candidate's use), so "tests/" also
+# covers "tests/unit/test_x.py".
+DEFAULT_PROTECTED_WRITE_PATH_PREFIXES = (
+    "tests/", "conftest.py", ".github/", ".git/",
+    "pyproject.toml", "setup.cfg", "pytest.ini", ".claude/skills/",
+)
+# A whole ITERATION's total proposed-write size, not per-file (that's
+# RepoWorkspaceTools.max_write_bytes). The planner's own system prompt already
+# asks for "the smallest change that satisfies the instruction" -- an
+# iteration blowing past this budget is a signal something went wrong, not a
+# legitimately large legitimate change.
+DEFAULT_MAX_WRITE_BUDGET_BYTES = 100_000
 DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
 DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 
@@ -153,6 +169,10 @@ class DeepAgentGitHubConfig:
     # capability that deserves its own default-off gate rather than colliding
     # with a flag whose current meaning is "give the model a shell."
     allow_git_write_tools: bool = False
+    protected_write_paths: list[str] = field(
+        default_factory=lambda: list(DEFAULT_PROTECTED_WRITE_PATH_PREFIXES)
+    )
+    max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
 
     def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
         """Return a provider's config, or None when it is not configured/enabled.
@@ -198,6 +218,20 @@ class DeepAgentGitHubConfig:
             self.workspace_root,
             "agentic.deepagent_github.workspace_root",
         )
+        if not isinstance(self.protected_write_paths, list) or not all(
+            isinstance(p, str) and p for p in self.protected_write_paths
+        ):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.protected_write_paths must be a list of non-empty strings",
+                details={"received": self.protected_write_paths},
+            )
+        if not isinstance(self.max_write_budget_bytes, int) or isinstance(
+            self.max_write_budget_bytes, bool
+        ) or self.max_write_budget_bytes <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.max_write_budget_bytes must be a positive integer",
+                details={"received": self.max_write_budget_bytes},
+            )
 
     def _coerce_providers(self) -> None:
         # Nested blocks arrive as plain dicts from yaml. Unlike the top-level
