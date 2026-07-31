@@ -221,9 +221,17 @@ narrower and more precise reason than "nothing executes":
   ask the configured local model for a patch, write each proposed file through
   `RepoWorkspaceTools.write_file` (new in this change — the write-side
   counterpart to its existing reads, same path-safety validation as the git
-  ops), run the CALLER'S declared verification checks against the real
-  worktree, and — only on acceptance — `checkout_branch`/`add`/`commit` inside
-  the same clone. Still local only: no `push`, no PR, no GitHub API call.
+  ops), and run the CALLER'S declared verification checks against the real
+  worktree. It stops there — accepting a candidate does NOT commit it.
+  Committing is a deliberate, separate later call, `finalize_real_repo_change`,
+  driven by an explicit human `approve`/`reject` decision (a `reject` never
+  touches git at all). Still local only: no `push`, no PR, no GitHub API call,
+  regardless of the decision. `RepoWorkspaceTools.attach` exists so that
+  decision can come from a LATER, separate process re-opening the same clone
+  by path — the CLI-subprocess-per-call model I6 requires (see
+  `utils/ops_runner.py`) can't hold a live Python object across two HTTP
+  requests, so the clone's path on disk, not an in-memory handle, is what
+  survives between "this passed its checks" and "a human said yes."
 
   What is gated, and how, stated exactly rather than "it's gated":
 
