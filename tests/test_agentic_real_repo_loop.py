@@ -31,6 +31,7 @@ from agentic.real_repo_loop import (
     RealRepoDecision,
     RealRepoLoopIteration,
     RealRepoLoopResult,
+    _parse_file_blocks,
     decide_real_repo_candidate,
     finalize_real_repo_change,
     run_real_repo_loop,
@@ -896,3 +897,72 @@ def test_verification_audit_events_use_the_loops_own_config_not_the_default(tmp_
     assert audit_file.exists(), "run_verification's audit events did not use the caller's cfg"
     events = [jsonlib.loads(line)["event"] for line in audit_file.read_text().splitlines()]
     assert "agentic_executor_check_result" in events
+
+
+# --- _parse_file_blocks CRLF / duplicate-path handling (DEF-8) ---------------
+
+
+def test_parse_file_blocks_handles_crlf_line_endings():
+    """_FILE_BLOCK_RE hardcodes bare \\n, so a CRLF response previously matched
+    NOTHING -- silently reporting no_files_changed for every iteration
+    regardless of what the model proposed. Matters specifically because the
+    operator surface is Windows-hosted (harness/)."""
+    crlf = "=== FILE target.txt ===\r\nexpected marker\r\n=== END FILE ===\r\nfix"
+    assert _parse_file_blocks(crlf) == {"target.txt": "expected marker"}
+
+
+def test_parse_file_blocks_rejects_a_duplicate_path():
+    dup = (
+        "=== FILE target.txt ===\nfirst\n=== END FILE ===\n"
+        "=== FILE target.txt ===\nsecond\n=== END FILE ===\n"
+    )
+    with pytest.raises(AgenticError, match="same file path"):
+        _parse_file_blocks(dup)
+
+
+def test_loop_writes_a_file_from_a_crlf_planner_response(tmp_path, monkeypatch):
+    crlf_block = "=== FILE target.txt ===\r\nexpected marker\r\n=== END FILE ===\r\nfix"
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(crlf_block))
+        try:
+            result = run_real_repo_loop(
+                tools, client,
+                instruction="add the marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/crlf",
+                commit_message="x",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
+    assert result.accepted is True
+    assert result.iterations[0].changed_files == ("target.txt",)
+
+
+def test_loop_rejects_an_iteration_that_proposes_a_duplicate_path(tmp_path, monkeypatch):
+    dup_block = (
+        "=== FILE target.txt ===\nwrong\n=== END FILE ===\n"
+        "=== FILE target.txt ===\nexpected marker\n=== END FILE ===\n"
+    )
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(dup_block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="add the marker",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/dup",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                )
+        finally:
+            client.close()
+    assert result.accepted is False
+    assert "file_write_failed" in result.iterations[0].decision.rejected_gates
+    mverify.assert_not_called()
+    assert not (Path(tools.worktree) / "target.txt").exists()

@@ -132,8 +132,36 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
     through ``RepoWorkspaceTools.write_file``'s own validation before
     anything touches disk, so a malformed/malicious path surfaces as a
     rejected iteration (``file_write_failed``), not a crash here.
+
+    CRLF is normalized to LF first: ``_FILE_BLOCK_RE`` hardcodes a bare
+    ``\\n`` both after the header and before the end marker, so a response
+    using ``\\r\\n`` line endings previously matched NOTHING at all --
+    silently reporting ``no_files_changed`` every iteration regardless of
+    what the model actually proposed, burning ``max_iterations`` on a
+    line-ending mismatch rather than the content the operator is trying to
+    debug. This matters here specifically because the operator surface is
+    Windows-hosted (``harness/``).
+
+    Raises :class:`AgenticError` if the same path appears in two different
+    blocks: a planner has no legitimate reason to propose two different
+    bodies for one file in a single response, and silently keeping whichever
+    block a dict comprehension happened to see last would hide the other
+    from both ``inspect_candidate_text`` and ``write_file`` entirely. The
+    caller treats this the same as an individual ``write_file`` failure --
+    rejecting the whole iteration via the existing ``file_write_failed``
+    gate, not a new one.
     """
-    return {match.group("path").strip(): match.group("body") for match in _FILE_BLOCK_RE.finditer(text)}
+    normalized = text.replace("\r\n", "\n")
+    blocks: dict[str, str] = {}
+    for match in _FILE_BLOCK_RE.finditer(normalized):
+        path = match.group("path").strip()
+        if path in blocks:
+            raise AgenticError(
+                "planner response proposed the same file path in two different blocks",
+                details={"path": path},
+            )
+        blocks[path] = match.group("body")
+    return blocks
 
 
 @dataclass(frozen=True)
@@ -350,11 +378,16 @@ def run_real_repo_loop(
             config_path=config_path,
             cfg=cfg,
         )
-        proposed_files = _parse_file_blocks(response.content)
+        try:
+            proposed_files = _parse_file_blocks(response.content)
+            duplicate_path_detected = False
+        except AgenticError:
+            proposed_files = {}
+            duplicate_path_detected = True
 
         governance_findings: list[GovernanceFinding] = []
         written: list[str] = []
-        write_failed = False
+        write_failed = duplicate_path_detected
         # Scan EVERY proposed file before writing ANY of them. The write used to
         # run inside the same pass that accumulated findings, with has_critical
         # computed only afterwards -- so a critical-flagged file was already on
