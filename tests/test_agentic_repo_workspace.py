@@ -59,7 +59,15 @@ def _fake_clone_populating(*, files: dict[str, str]):
         for rel, content in files.items():
             path = dest / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            # newline="" writes `content` byte-for-byte: without it, Path.write_text's
+            # universal-newlines default silently turns \n into \r\n on Windows, so a
+            # fixture declared as "print(1)\n" lands on disk as "print(1)\r\n" -- then
+            # read_file() (which reads real bytes, no text-mode translation, matching
+            # what a real git clone would hand back) correctly returns THAT, and an
+            # assertion comparing it to the original "\n" string fails. Caught by the
+            # windows-latest CI job; a real clone's line endings depend on the
+            # repository's own content, not the OS running the clone.
+            path.write_text(content, encoding="utf-8", newline="")
         return {"op": op, "repo": repo, "dest": str(dest)}
 
     return fake
@@ -238,11 +246,19 @@ def test_close_is_safe_to_call_twice(tmp_path, monkeypatch):
 
 
 def test_context_manager_cleans_up_on_exception(tmp_path, monkeypatch):
+    # Plain try/except, not pytest.raises, around the with-block whose body
+    # unconditionally raises: CodeQL can prove a bare `raise` always raises,
+    # but doesn't model pytest.raises.__exit__ as suppressing it, so it flagged
+    # the two lines after the pytest.raises block as unreachable (false
+    # positive -- the test passes; pytest.raises does suppress a matching
+    # exception). A standard try/except is unambiguous to any static analyzer.
     fake = _fake_clone_populating(files={"a.txt": "x"})
     with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
-        with pytest.raises(ValueError):
+        try:
             with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)):
                 raise ValueError("boom")
+        except ValueError:
+            pass
         dest = Path(mrun.call_args.kwargs["dest"])
     assert not dest.exists()
 
