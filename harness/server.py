@@ -36,7 +36,7 @@ import logging
 import os
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -65,7 +65,7 @@ from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
 from utils.logger import _get_config, redact_sensitive
-from utils.ops_runner import OpsError, run_agentic_op
+from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
 
 logger = logging.getLogger("cyclaw.harness.server")
@@ -535,8 +535,15 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             )
         return run_id
 
-    def _agentic_call(action: str, **kwargs: object) -> dict:
-        """One shim call, with every failure mapped into the console's envelope.
+    def _agentic_call(action: str, call: Callable[[], OpsResult]) -> dict:
+        """Run one shim call, mapping every failure into the console's envelope.
+
+        Takes a thunk rather than ``**kwargs`` on purpose: forwarding kwargs
+        through this helper would have to type them as ``object`` and silence
+        the resulting mismatch, which would stop mypy checking the ONE thing
+        worth checking here -- that each route passes ``run_agentic_op`` the
+        kwargs that action actually takes. With a thunk the call is written at
+        its route, fully typed, and this only owns the exception mapping.
 
         Note what is NOT translated: a non-zero CLI exit is a successful shim
         call, so it returns HTTP 200 carrying ok=false plus the CLI's own
@@ -545,7 +552,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         (exit 4) from "the request was malformed" (400) without parsing prose.
         """
         try:
-            return run_agentic_op(action, **kwargs).to_dict()  # type: ignore[arg-type]
+            return call().to_dict()
         except OpsError as exc:
             raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         except subprocess.TimeoutExpired as exc:
@@ -585,15 +592,18 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             ) from exc
         return _agentic_call(
             "real-repo-run",
-            instruction=req.instruction,
-            checks=checks,
-            branch=req.branch,
-            commit_message=req.commit_message,
-            reason=req.reason,
-            confirm=req.confirm,
-            max_iterations=req.max_iterations,
-            pr=req.pr,
-            issue=req.issue,
+            lambda: run_agentic_op(
+                "real-repo-run",
+                instruction=req.instruction,
+                checks=checks,
+                branch=req.branch,
+                commit_message=req.commit_message,
+                reason=req.reason,
+                confirm=req.confirm,
+                max_iterations=req.max_iterations,
+                pr=req.pr,
+                issue=req.issue,
+            ),
         )
 
     @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
@@ -604,7 +614,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         file paths, and the clone's absolute location, and serving it spawns a
         subprocess like /api/github/status does.
         """
-        return _agentic_call("real-repo-run-status", run_id=_validated_run_id(run_id))
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-status", lambda: run_agentic_op("real-repo-run-status", run_id=checked)
+        )
 
     @app.post("/api/agent/runs/{run_id}/decision", dependencies=guarded)
     def agent_run_decision(run_id: str, req: AgentDecisionRequest) -> dict:
@@ -618,8 +631,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         they are tested, and re-implementing any of them here would create a
         second place for them to drift.
         """
+        checked = _validated_run_id(run_id)
         return _agentic_call(
-            "real-repo-run-decide", run_id=_validated_run_id(run_id), decision=req.decision
+            "real-repo-run-decide",
+            lambda: run_agentic_op("real-repo-run-decide", run_id=checked, decision=req.decision),
         )
 
     # -- harness optimizer runs ------------------------------------------
