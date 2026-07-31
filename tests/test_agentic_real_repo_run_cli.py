@@ -812,3 +812,78 @@ def test_run_env_errors_when_the_model_is_not_configured_before_any_network_io(
     ])
     assert code == EXIT_ENV
     assert "model" in capsys.readouterr().err.lower()
+
+
+# --- diff rendered at the decision point (Tier 1) ---------------------------
+
+
+def test_status_renders_the_diff_when_pending_decision(cfg_path, checks_file, monkeypatch, capsys):
+    """The ONLY point a human decides approve/reject -- finalize_real_repo_change's
+    own docstring claims a human reviews the diff first, and until now nothing
+    anywhere actually rendered one."""
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", run_id]) == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "pending_decision"
+    assert "target.txt" in record["diff"]
+    assert "expected marker" in record["diff"]
+
+
+def test_status_omits_the_diff_for_a_decided_run(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve"])
+    capsys.readouterr()
+
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", run_id]) == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "approved"
+    assert "diff" not in record
+
+
+def test_status_omits_the_diff_for_an_exhausted_run(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_WRONG_BLOCK))
+    _run_start(cfg_path, checks_file, extra=("--max-iterations", "1"))
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "exhausted"
+    assert "diff" not in record
+
+
+def test_status_reports_diff_unavailable_rather_than_crashing_when_the_clone_is_gone(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    __import__("shutil").rmtree(dest)  # simulate the clone becoming unreachable between run and status
+
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", run_id]) == EXIT_OK
+    status = json.loads(capsys.readouterr().out)
+    assert status["status"] == "pending_decision"
+    assert "diff unavailable" in status["diff"]
+
+
+def test_status_diff_is_truncated_past_the_budget(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic.cli import _MAX_STATUS_DIFF_CHARS
+
+    padding = "x = 1\n" * (_MAX_STATUS_DIFF_CHARS // 6 + 200)
+    huge = f"=== FILE target.txt ===\n{padding}expected marker\n=== END FILE ===\nfix"
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(huge))
+    code = main([
+        "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "add a big marker file",
+        "--checks-file", checks_file, "--branch", "claude/big", "--commit-message", "x",
+        "--reason", "test", "--confirm", "--max-iterations", "1",
+    ])
+    assert code == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+    assert record["status"] == "pending_decision"
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", record["run_id"]]) == EXIT_OK
+    status = json.loads(capsys.readouterr().out)
+    assert len(status["diff"]) < _MAX_STATUS_DIFF_CHARS + 200
+    assert "truncated" in status["diff"]

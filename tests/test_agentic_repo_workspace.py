@@ -903,3 +903,30 @@ def test_module_imports_without_deepagents_or_langchain():
             names.add(node.module.split(".")[0])
     assert "deepagents" not in names
     assert "langchain" not in names
+
+
+# --- untracked_files ----------------------------------------------------
+
+
+def test_untracked_files_lists_new_paths_not_tracked_content(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"tracked.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.write_file("new_file.txt", "brand new\n")
+            tools.write_file("tracked.txt", "modified\n")  # modified, not untracked
+            assert tools.untracked_files() == ["new_file.txt"]
+
+
+def test_untracked_files_empty_when_nothing_new(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"tracked.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            assert tools.untracked_files() == []
+
+
+def test_untracked_files_refused_when_git_writes_are_disabled(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "x\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticWriteRefused):
+                tools.untracked_files()

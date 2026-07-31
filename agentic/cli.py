@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -573,6 +574,56 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_MAX_STATUS_DIFF_CHARS = 20_000
+
+
+def _render_pending_diff(cfg: AgenticConfig, dest: str, config_path: str, changed_files: Sequence[str]) -> str:
+    """Render a pending candidate's worktree diff, or say plainly why not.
+
+    This is the ONLY point a human decides approve/reject -- real-repo-run-decide
+    itself claimed all along that this review happens ("a human can review the
+    diff first (tools.diff())"), but nothing anywhere actually called it. A
+    status check must never crash just because the clone became unreachable
+    (an operator deleted it by hand, a permission changed) between the run
+    and this query -- it explains why the diff is unavailable instead.
+
+    ``git diff`` alone shows nothing for a brand-new untracked file (see
+    ``RepoWorkspaceTools.diff``'s own docstring) -- a create-only candidate
+    would otherwise render an empty diff, which is actively misleading
+    alongside a non-empty ``changed_files`` list: it reads as "nothing to
+    review" when a new file is in fact about to be committed unseen. New
+    files among ``changed_files`` (restricted to exactly that list, not
+    every untracked path in the clone, in case unrelated cruft exists there)
+    are appended as their full current content.
+
+    Deliberately does NOT call ``tools.close()`` on the reattached instance:
+    that method always removes the clone from disk regardless of whether it
+    came from ``clone()`` or ``attach()``, and this is a read-only peek, not
+    ownership of the clone's lifecycle. The unreleased directory descriptor
+    is reclaimed by the OS when this short-lived CLI-subprocess-per-call
+    process exits (see I6) -- not a leak in the way it would be in a
+    long-running process.
+    """
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+
+    try:
+        tools = RepoWorkspaceTools.attach(cfg, Path(dest), config_path=config_path)
+        tracked_diff = tools.diff()
+        parts = [tracked_diff] if tracked_diff else []
+        untracked = set(tools.untracked_files()) & set(changed_files)
+        for path in sorted(untracked):
+            content = tools.read_file(path)
+            parts.append(f"--- new file: {path} ---\n{content}")
+    except AgenticError as exc:
+        return f"[diff unavailable: {exc.message}]"
+    diff_text = "\n\n".join(parts)
+    if not diff_text:
+        return "[no diff to show -- the candidate reported changed files, but none were tracked or new]"
+    if len(diff_text) > _MAX_STATUS_DIFF_CHARS:
+        return diff_text[:_MAX_STATUS_DIFF_CHARS] + f"\n... [diff truncated at {_MAX_STATUS_DIFF_CHARS} chars]"
+    return diff_text
+
+
 def cmd_real_repo_run_status(args: argparse.Namespace) -> int:
     """Report a real-repo run's persisted status. Read-only, no side effects."""
     cfg = _load(args)
@@ -581,14 +632,21 @@ def cmd_real_repo_run_status(args: argparse.Namespace) -> int:
     if not getattr(cfg, "enabled", False):
         return _disabled_noop()
 
-    from agentic.real_repo_run_store import load_run
+    from agentic.real_repo_run_store import PENDING_DECISION, load_run
 
     try:
         record = load_run(_real_repo_runs_dir(cfg), args.run_id)
     except AgenticError as exc:
         _err(exc.message)
         return EXIT_FAIL
-    print(json.dumps(record.to_dict(), indent=2))
+    payload = record.to_dict()
+    # Only rendered when a decision is actually open: every other status
+    # (running/approved/rejected/exhausted/failed/discarded) would show
+    # something stale or meaningless -- omitted outright rather than a
+    # confusing placeholder.
+    if record.status == PENDING_DECISION:
+        payload["diff"] = _render_pending_diff(cfg, record.dest, args.config, record.changed_files)
+    print(json.dumps(payload, indent=2))
     return EXIT_OK
 
 

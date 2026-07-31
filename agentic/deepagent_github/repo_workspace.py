@@ -675,13 +675,42 @@ class RepoWorkspaceTools:
         return {"pushed": name}
 
     def diff(self, *, cached: bool = False) -> str:
-        """Return the worktree (or, with ``cached=True``, staged) diff as text."""
+        """Return the worktree (or, with ``cached=True``, staged) diff as text.
+
+        ``git diff`` shows nothing for a brand-new file that has never been
+        staged -- it isn't in the index or the committed tree to diff
+        against, so a candidate that only CREATES files renders an empty
+        string here despite having genuinely changed something. Callers
+        reviewing a candidate before approval (``agentic.cli``'s
+        ``real-repo-run-status``) must pair this with :meth:`untracked_files`
+        to see new-file content, or an empty diff can be misread as "nothing
+        to review" when a new file is in fact about to be committed unseen.
+        """
         tool = "diff"
         self._require_git_writes_enabled(tool)
         argv = ["diff", "--cached"] if cached else ["diff"]
         output = self._run_git(tool, argv)
         self._audit("agentic_repo_workspace_git_op", op=tool, cached=cached, bytes=len(output))
         return output
+
+    def untracked_files(self) -> list[str]:
+        """List paths in the clone that git does not yet track.
+
+        Read-only: ``git status`` mutates nothing (unlike ``git add -N``,
+        which would also make an untracked path visible to ``git diff`` but
+        by writing a placeholder entry into the index -- a real mutation this
+        method deliberately avoids so it stays safe to call from a pure
+        status check).
+        """
+        tool = "status"
+        self._require_git_writes_enabled(tool)
+        output = self._run_git(tool, ["status", "--porcelain=v1", "--untracked-files=all"])
+        paths = []
+        for line in output.splitlines():
+            if line.startswith("??"):
+                paths.append(line[3:].strip())
+        self._audit("agentic_repo_workspace_git_op", op=tool, count=len(paths))
+        return paths
 
     def close(self) -> None:
         """Release the held directory fd and delete the clone from disk.
