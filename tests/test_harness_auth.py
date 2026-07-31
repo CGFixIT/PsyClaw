@@ -49,6 +49,7 @@ GUARDED = [
     # subprocess, regardless of whether the underlying capability is armed.
     ("post", "/api/agent/runs/" + "0" * 32 + "/push", {}),
     ("post", "/api/agent/runs/" + "0" * 32 + "/publish", {"reason": "r", "confirm": True}),
+    ("post", "/api/agent/runs/" + "0" * 32 + "/discard", {}),
 ]
 
 # Left open on purpose: the console must be able to boot and tell the operator it

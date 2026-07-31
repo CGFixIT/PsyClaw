@@ -120,6 +120,10 @@ worth knowing before you treat either as an off switch:
    `false`) and publish needs `agentic/writer.py`'s `EXECUTION_ENABLED`, a
    hardcoded `False` no config file can flip. Arming either is the filed
    checklist in `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, not a toggle.
+5. `/agent discard <id>` reclaims the clone. It is the only step that frees
+   disk: an approved run keeps its clone on purpose (push and publish still
+   need it) and nothing reclaims it automatically, so a console session that
+   only ever approves accumulates one full repository clone per run.
 
 `checks` names a profile from `/agent checks`, never a command. The console
 cannot send an argv to execute: profile names are resolved against the
@@ -140,8 +144,8 @@ read-only.
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - The five state-changing routes (`POST /api/sessions`, `.../rename`,
   `/api/soul`, `/api/model`, `/api/chat`), `GET /api/github/status`, and all
-  five `/api/agent/*` run routes (`run`, `runs/{id}`, `runs/{id}/decision`,
-  `runs/{id}/push`, `runs/{id}/publish`) require a
+  six `/api/agent/*` run routes (`run`, `runs/{id}`, `runs/{id}/decision`,
+  `runs/{id}/push`, `runs/{id}/publish`, `runs/{id}/discard`) require a
   Bearer `CYCLAW_API_KEY` — the same variable the gateway's `/soul` and `/ops/*`
   endpoints use. **Fail-closed:** an unset key means those routes return 401, not
   "no auth required". Paste the key into the console's `key` field, or export it

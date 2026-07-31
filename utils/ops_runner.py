@@ -52,16 +52,20 @@ _TIMEOUT_SEC = 120
 
 # action whitelists — the ONLY subcommands a caller may reach.
 _SYNC_ACTIONS = frozenset({"status", "test", "sync", "schedule", "unschedule"})
+# `deepagent-plan` is deliberately absent and should stay absent: that
+# subsystem is retired (see agentic/deepagent_github/builder.py's module
+# docstring), so exposing it over HTTP would widen the surface of something
+# nobody is developing. Its omission is a decision, not an oversight.
 _AGENTIC_ACTIONS = frozenset({
     "status", "test", "context", "propose-skill", "apply-skill",
     "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
-    "real-repo-run-push", "real-repo-run-publish",
+    "real-repo-run-push", "real-repo-run-publish", "real-repo-run-discard",
 })
 # agentic subcommands that emit JSON on stdout (vs. human text).
 _AGENTIC_JSON_ACTIONS = frozenset({
     "context", "propose-skill", "apply-skill",
     "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
-    "real-repo-run-push", "real-repo-run-publish",
+    "real-repo-run-push", "real-repo-run-publish", "real-repo-run-discard",
 })
 # real-repo-run clones a real repo, calls a model, and runs the caller's own
 # verification checks across up to several iterations -- the shared
@@ -311,6 +315,13 @@ def run_agentic_op(
     shipped checkout: push needs ``allow_git_write_tools`` and publish needs
     ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded ``False``.
 
+    ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided run's
+    clone from disk. It is the ONLY reclamation path: an approved run's clone
+    is deliberately retained past its decision (push/publish need it), so
+    without this action a console-driven operator accumulates one full repo
+    clone per approved run with no way to free any of them. The CLI refuses a
+    still-``pending_decision`` run itself.
+
     Validation raises happen before the subprocess launch. All ``proc`` usage
     lives INSIDE the try so there is no post-``finally`` reference to an unbound
     name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
@@ -334,6 +345,7 @@ def run_agentic_op(
             raise OpsError("real-repo-run requires a non-empty reason")
     if action in {
         "real-repo-run-status", "real-repo-run-decide", "real-repo-run-push", "real-repo-run-publish",
+        "real-repo-run-discard",
     } and not run_id:
         raise OpsError(f"{action} requires run_id")
     if action == "real-repo-run-decide" and decision not in {"approve", "reject"}:
@@ -399,7 +411,7 @@ def run_agentic_op(
             # str | None -> str for mypy rather than silencing the check.
             assert decision is not None  # noqa: S101
             argv += [f"--run-id={run_id}", "--decision", decision]
-        elif action == "real-repo-run-push":
+        elif action in {"real-repo-run-push", "real-repo-run-discard"}:
             argv += [f"--run-id={run_id}"]
         elif action == "real-repo-run-publish":
             # --reason= single-argv form (not two elements) so a reason that

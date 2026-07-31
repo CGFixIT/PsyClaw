@@ -50,6 +50,7 @@ _STATUS = f"/api/agent/runs/{_RUN_ID}"
 _DECIDE = f"/api/agent/runs/{_RUN_ID}/decision"
 _PUSH = f"/api/agent/runs/{_RUN_ID}/push"
 _PUBLISH = f"/api/agent/runs/{_RUN_ID}/publish"
+_DISCARD = f"/api/agent/runs/{_RUN_ID}/discard"
 
 _VALID_BODY = {
     "instruction": "fix the typo in README.md",
@@ -620,14 +621,49 @@ def test_publish_rejects_unknown_body_fields(client, calls):
     assert not calls
 
 
-@pytest.mark.parametrize("path", ["/api/agent/runs/not-a-run-id/push", "/api/agent/runs/not-a-run-id/publish"])
-def test_push_and_publish_reject_a_malformed_run_id_before_the_shim(client, calls, path):
+@pytest.mark.parametrize("path", [
+    "/api/agent/runs/not-a-run-id/push",
+    "/api/agent/runs/not-a-run-id/publish",
+    "/api/agent/runs/not-a-run-id/discard",
+])
+def test_escalation_routes_reject_a_malformed_run_id_before_the_shim(client, calls, path):
     """Same 400/INVALID_RUN_ID contract the decision route already has -- these
     routes interpolate run_id into a `--run-id=` argv element identically."""
     resp = client.post(path, json={"reason": "r", "confirm": True})
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "INVALID_RUN_ID"
     assert not calls
+
+
+def test_discard_route_passes_only_the_run_id(client, calls):
+    """The only route that frees disk. Not redundant with reject: reject
+    applies only to a still-pending run, while an APPROVED run's clone is
+    deliberately retained past its decision because push/publish need it --
+    so without this the console accumulates one clone per approved run."""
+    resp = client.post(_DISCARD, json={})
+    assert resp.status_code == 200
+    assert calls[0] == ("real-repo-run-discard", {"run_id": _RUN_ID})
+
+
+def test_discard_adds_no_gate_of_its_own(client, calls):
+    """The pending-decision refusal lives in agentic/, where it is tested."""
+    client.post(_DISCARD, json={})
+    assert set(calls[0][1]) == {"run_id"}
+
+
+def test_deepagent_plan_is_deliberately_not_reachable_over_http():
+    """Its absence from the shim allow-list is a decision, not an oversight.
+
+    That subsystem is retired (see agentic/deepagent_github/builder.py's
+    module docstring): exposing it over HTTP would widen the surface of
+    something nobody is developing. Pinned as a test so a future "the CLI has
+    a subcommand the harness cannot reach" tidy-up has to read this first.
+    """
+    from utils.ops_runner import _AGENTIC_ACTIONS  # noqa: PLC0415
+
+    assert "deepagent-plan" not in _AGENTIC_ACTIONS
+    with pytest.raises(OpsError, match="Unknown agentic action"):
+        run_agentic_op("deepagent-plan")
 
 
 def test_invariant_guard_and_config_guard_profiles_actually_run_correctly(tmp_path):

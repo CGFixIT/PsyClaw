@@ -422,6 +422,11 @@ function showAgentRecord(rec) {
     sys('committed locally — push it to origin with:  /agent push ' + rec.run_id);
   else if (rec.status === 'approved' && rec.pushed && !rec.pr_url)
     sys('pushed — open a draft PR with:  /agent publish ' + rec.run_id + ' <why>');
+  // An approved run keeps its clone on disk on purpose (push/publish need
+  // it), and nothing reclaims it automatically -- so say so once the run has
+  // nowhere left to go, rather than leaking a clone per run silently.
+  else if (rec.status === 'exhausted' || rec.status === 'failed' || rec.pr_url)
+    sys('done with this run? reclaim its clone with:  /agent discard ' + rec.run_id);
 }
 
 /* ── slash commands ── */
@@ -571,6 +576,11 @@ async function runSlash(line) {
           if (!id) { sys('usage: /agent push <run id>'); break; }
           const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/push', 'POST', {}));
           if (rec) showAgentRecord(rec);
+        } else if (sub === 'discard') {
+          const id = (rest[1] || '').trim();
+          if (!id) { sys('usage: /agent discard <run id>'); break; }
+          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/discard', 'POST', {}));
+          if (rec) showAgentRecord(rec);
         } else if (sub === 'publish') {
           const id = (rest[1] || '').trim();
           const why = rest.slice(2).join(' ').trim();
@@ -589,6 +599,7 @@ async function runSlash(line) {
             ['/agent reject <run id>', 'discard the pending change'],
             ['/agent push <run id>', 'push an approved branch to origin (disarmed by default)'],
             ['/agent publish <run id> <why>', 'open a draft PR for a pushed run (disarmed by default)'],
+            ['/agent discard <run id>', 'reclaim the clone of a decided run from disk'],
             ['/agent checks', 'list verification profiles'],
           ], ['command', 'action']));
         }
