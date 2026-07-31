@@ -59,7 +59,8 @@ def test_client_and_response_satisfy_the_proposer_client_protocol():
 
 def test_close_is_a_no_op():
     client = ChatModelProposerClient(settings=_settings())
-    assert client.close() is None
+    result = client.close()
+    assert result is None
 
 
 # --- content coercion --------------------------------------------------------
