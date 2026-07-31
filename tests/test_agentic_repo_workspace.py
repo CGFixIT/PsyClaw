@@ -704,10 +704,14 @@ def test_git_filter_injection_through_dotgit_config_is_refused(tmp_path, monkeyp
         with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
             tools.write_file(".gitattributes", "* filter=pwn\n")
             with pytest.raises(AgenticError, match="\\.git directory"):
-                tools.write_file(
-                    ".git/config",
-                    f'[filter "pwn"]\n\tclean = sh -c "touch {sentinel}; cat"\n',
-                )
+                # The payload must survive git-config's own quote stripping, or
+                # this assertion is unfalsifiable. A `clean = sh -c "touch X;
+                # cat"` value loses its double quotes, so git's shell runs
+                # `sh -c touch` with X as $0 -- touch gets no operand, the
+                # sentinel is never created, and the test would pass even with
+                # the gate removed. A bare `touch X` runs as written. Verified
+                # both ways against a real repository.
+                tools.write_file(".git/config", f'[filter "pwn"]\n\tclean = touch {sentinel}\n')
             tools.add([".gitattributes", "a.txt"])
     assert not sentinel.exists(), "a repo-local git filter executed during git add"
 
@@ -731,6 +735,24 @@ def test_commit_does_not_run_repo_hooks(tmp_path, monkeypatch):
             tools.add(["a.txt"])
             tools.commit("test: hooks must not run")
     assert not sentinel.exists(), "a repo-local pre-commit hook executed during commit"
+
+
+@pytest.mark.parametrize("target", ["a.txt/nested.txt", "sub"])
+def test_write_file_converts_unwritable_paths_into_agentic_errors(tmp_path, monkeypatch, target):
+    """A path that validates but the filesystem refuses must not escape as OSError.
+
+    "a.txt/nested.txt" has an existing FILE as its parent, so mkdir raises
+    FileExistsError; "sub" IS an existing directory, so write_text raises
+    IsADirectoryError. Both pass _validate_write_path (they resolve inside the
+    clone). Neither is an AgenticError, so both used to propagate out of
+    run_real_repo_loop's `except AgenticError`, crash the run, leak the clone,
+    and persist no run record -- reachable from planner output alone.
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n", "sub/keep.txt": "x\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError, match="not writable"):
+                tools.write_file(target, "x")
 
 
 def test_write_file_rejects_content_exceeding_max_write_bytes(tmp_path, monkeypatch):

@@ -12,6 +12,7 @@ further event per injection finding (see ``_injection_findings``).
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Sequence
 
 from agentic.config import AgenticConfig
@@ -30,6 +31,40 @@ _DEFAULT_LIST_LIMIT = 10
 # downstream consumer keys on them, and metrics.py aggregates by event+code.
 INJECTION_FINDING_CODE = "github_content_injection_pattern"
 SCANNER_UNAVAILABLE_CODE = "github_content_scanner_unavailable"
+
+# Unicode general categories stripped before the second scan pass: Cf (format --
+# zero-width space/joiner, soft hyphen, BOM, bidi overrides) and Mn (non-spacing
+# combining marks). Both are invisible or near-invisible in a rendered PR body
+# and neither changes how a model reads the text, so both are free ways to break
+# a literal pattern like "ignore previous instructions".
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Mn"})
+
+# Homoglyphs that render as ASCII in the fonts GitHub uses. Deliberately a short
+# hand-audited list rather than a full confusables table: an over-broad mapping
+# would fold legitimate non-English text into false positives on a path that
+# also feeds `agentic.cli context`, which a human reads.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+    "х": "x", "у": "y", "і": "i", "ј": "j", "һ": "h",
+    "ο": "o", "α": "a", "ρ": "p", "Α": "A", "Ο": "O",
+})
+
+
+def _normalize_for_scan(text: str) -> str:
+    """Fold away the cheapest ways to defeat a literal injection pattern.
+
+    NFKD first, not NFKC: decomposition splits a precomposed accent into base +
+    combining mark so the strip below can remove the mark, where composition
+    would leave "ignóre" as a single Ll codepoint that no strip can reach.
+    Compatibility decomposition also collapses fullwidth and other lookalike
+    forms to ASCII. Then drop invisible formatting/combining characters, then
+    map a small set of audited homoglyphs. Advisory only, and never a substitute
+    for the raw scan: this exists so a one-codepoint edit does not silently
+    pass, not because it makes the denylist complete. It cannot.
+    """
+    folded = unicodedata.normalize("NFKD", text)
+    stripped = "".join(ch for ch in folded if unicodedata.category(ch) not in _INVISIBLE_CATEGORIES)
+    return stripped.translate(_CONFUSABLES)
 
 
 def _injection_findings(
@@ -76,7 +111,22 @@ def _injection_findings(
     for field, value in fields:
         if not isinstance(value, str) or not value:
             continue
-        matched = scan_injection_patterns(value, compiled)
+        # Scan the raw text AND a normalized copy. scan_injection_patterns
+        # applies only re.IGNORECASE to the bytes it is given, so a single
+        # zero-width space, soft hyphen, or Cyrillic homoglyph inside a phrase
+        # defeats every pattern while reading identically to a human on
+        # github.com and identically to an LLM. Normalizing HERE rather than in
+        # guardrails/rails.py keeps the shared primitive -- also used by the
+        # registry write gate, fsconnect, and the harness optimizer -- byte
+        # identical; widening a shared sanitizer is a High-tier change and this
+        # is a read-path finding producer. Both are scanned because
+        # normalization can only ever be approximate: a hit on either counts.
+        # list, not tuple: `patterns` is part of the bundle's JSON shape and of
+        # the audit event, and dict.fromkeys keeps first-seen order so a phrase
+        # matching in both passes is reported once.
+        matched = list(dict.fromkeys(
+            scan_injection_patterns(value, compiled) + scan_injection_patterns(_normalize_for_scan(value), compiled)
+        ))
         if matched:
             # scan_injection_patterns returns the pattern SOURCES, not match
             # objects, so a finding names which rule fired without echoing the
