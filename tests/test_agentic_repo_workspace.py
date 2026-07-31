@@ -323,6 +323,44 @@ def _fake_clone_populating_git_repo(*, files: dict[str, str]):
     return fake
 
 
+def _git(*argv: str, cwd: str | Path | None = None) -> str:
+    """Run one real git command for test setup/inspection.
+
+    argv is passed as a variable rather than a literal list for the same reason
+    the ``run()`` closure in _fake_clone_populating_git_repo above does: a
+    literal ["git", ...] trips ruff's S607 (partial executable path), and
+    suppressing it per-call would be noise on four lines that are all doing the
+    same benign thing.
+    """
+    completed = subprocess.run(
+        list(argv), cwd=None if cwd is None else str(cwd),
+        check=True, capture_output=True, text=True,
+    )
+    return completed.stdout
+
+
+def _fake_clone_with_local_origin(*, files: dict[str, str], remote: Path):
+    """A git-initialised clone whose ``origin`` is a local bare repo.
+
+    push_branch cannot be exercised against the shipped fixture: it does
+    ``git init`` with no remote at all, so a push would fail with "No
+    configured push destination" and prove nothing about the argv, the gate,
+    or the branch scoping. A ``file://`` bare remote makes the push REAL --
+    real git, real refs, verifiable afterwards -- while touching no network
+    and needing no credential, which is exactly the part of a live push that
+    cannot be tested here (see push_branch's own docstring).
+    """
+    base = _fake_clone_populating_git_repo(files=files)
+
+    def fake(op, repo, **kwargs):
+        result = base(op, repo, **kwargs)
+        _git("git", "init", "--bare", "-q", str(remote))
+        _git("git", "remote", "add", "origin", str(remote), cwd=result["dest"])
+        return result
+
+    return fake
+
+
 def _cfg_with_git_writes(tmp_path: Path, monkeypatch) -> AgenticConfig:
     return _cfg(
         tmp_path,
@@ -332,6 +370,69 @@ def _cfg_with_git_writes(tmp_path: Path, monkeypatch) -> AgenticConfig:
             "allow_git_write_tools": True,
         },
     )
+
+
+def test_push_branch_pushes_a_real_ref_to_origin(tmp_path, monkeypatch):
+    """The one method here that leaves the box. Verified against a real remote."""
+    remote = tmp_path / "origin.git"
+    fake = _fake_clone_with_local_origin(files={"a.txt": "hello\n"}, remote=remote)
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.checkout_branch("claude/pushed")
+            assert tools.push_branch("claude/pushed") == {"pushed": "claude/pushed"}
+    assert "claude/pushed" in _git("git", "--git-dir", str(remote), "branch", "--list")
+
+
+def test_push_branch_is_refused_when_git_writes_are_disabled(tmp_path, monkeypatch):
+    """Same allow_git_write_tools gate as every other write here -- the network
+    one is not an exception to it."""
+    remote = tmp_path / "origin.git"
+    fake = _fake_clone_with_local_origin(files={"a.txt": "hello\n"}, remote=remote)
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticWriteRefused):
+                tools.push_branch("claude/pushed")
+
+
+@pytest.mark.parametrize("bad", ["main", "feature/x", "--force", "claude/has space", "", "HEAD"])
+def test_push_branch_refuses_anything_outside_the_claude_namespace(tmp_path, monkeypatch, bad):
+    """Scoping is enforced here, not by convention.
+
+    Nothing else in the repo statically prevents a push to an arbitrary branch,
+    so this parametrize IS the enforcement of the claude/* claim.
+    """
+    remote = tmp_path / "origin.git"
+    fake = _fake_clone_with_local_origin(files={"a.txt": "hello\n"}, remote=remote)
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError):
+                tools.push_branch(bad)
+    assert "claude" not in _git("git", "--git-dir", str(remote), "branch", "--list")
+
+
+def test_push_branch_disables_the_terminal_credential_prompt(tmp_path, monkeypatch):
+    """Without GIT_TERMINAL_PROMPT=0 a missing credential makes git block on an
+    interactive prompt until the timeout, turning a clean auth failure into a
+    hang. Asserted on the env actually handed to the subprocess."""
+    seen: dict = {}
+    real_run = repo_workspace.subprocess.run
+
+    def _capture(argv, **kwargs):
+        if "push" in argv:
+            seen.update(kwargs.get("env") or {})
+        return real_run(argv, **kwargs)
+
+    remote = tmp_path / "origin.git"
+    fake = _fake_clone_with_local_origin(files={"a.txt": "hello\n"}, remote=remote)
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.checkout_branch("claude/pushed")
+            with patch.object(repo_workspace.subprocess, "run", side_effect=_capture):
+                tools.push_branch("claude/pushed")
+    assert seen.get("GIT_TERMINAL_PROMPT") == "0"
+    # and the allowlist itself was not widened to carry a GitHub credential
+    assert "GH_TOKEN" not in seen
+    assert "GITHUB_TOKEN" not in seen
 
 
 def test_git_writes_are_refused_by_default(tmp_path, monkeypatch):

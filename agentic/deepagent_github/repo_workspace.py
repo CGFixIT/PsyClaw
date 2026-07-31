@@ -4,8 +4,13 @@ Closes the gap the audit found: containment-by-copy already existed
 (``harness_optimizer``'s fixture runner), but nothing in the codebase could
 clone a REAL repository. This module clones, jails, and reads -- and, as of the
 git-write addition below, can also make local commits inside that same jailed
-clone. It still never touches GitHub state (no push, no PR, no API call) and is
-not wired into ``build_deepagent_github`` in this change: that wiring needs a
+clone. As of P10 it can also PUSH one ``claude/`` branch to origin
+(:meth:`RepoWorkspaceTools.push_branch`) -- the single method here that reaches
+the network, gated on the same ``allow_git_write_tools`` flag (default
+``False``) as every other write, and passing no credential of its own. It still
+opens no pull request and makes no GitHub API call; that is
+``agentic/writer.py``'s gate. It is not wired into
+``build_deepagent_github`` in this change: that wiring needs a
 second tool-source parameter threaded through ``builder.py``/``tools.py``
 (today's ``workspace_tools`` is hard-typed to a single ``ProposerWorkspaceTools``
 instance), and there is no live caller yet to wire it FOR -- the planner/loop
@@ -82,6 +87,11 @@ DEFAULT_MAX_WRITE_BYTES = 256_000
 # Local git plumbing only -- no network, so this is generous headroom, not a
 # tuned ceiling like DEFAULT_CLONE_TIMEOUT_SEC.
 DEFAULT_GIT_WRITE_TIMEOUT_SEC = 30
+
+# push_branch is the one method here that reaches the network, so the
+# local-only reasoning above does not apply to it. Sized like
+# DEFAULT_CLONE_TIMEOUT_SEC rather than the local-plumbing budget.
+DEFAULT_PUSH_TIMEOUT_SEC = 120
 
 # CLAUDE.md Section 10's exact committer identity strings. Forced via `-c` on
 # every commit invocation (scoped to that one subprocess, never written to the
@@ -359,13 +369,26 @@ class RepoWorkspaceTools:
             self._deny_git(tool, "git path escaped the clone root", target=target)
         return "/".join(parts)
 
-    def _run_git(self, tool: str, argv: list[str], *, timeout_sec: int = DEFAULT_GIT_WRITE_TIMEOUT_SEC) -> str:
+    def _run_git(
+        self,
+        tool: str,
+        argv: list[str],
+        *,
+        timeout_sec: int = DEFAULT_GIT_WRITE_TIMEOUT_SEC,
+        extra_env: dict[str, str] | None = None,
+    ) -> str:
         binary = _resolve_git_binary()
+        env = _git_env()
+        if extra_env:
+            # Additive, and only from this module's own fixed literals -- never
+            # from caller data. push_branch uses it for GIT_TERMINAL_PROMPT=0;
+            # nothing here widens _GIT_ENV_ALLOWLIST itself.
+            env.update(extra_env)
         try:
             completed = subprocess.run(  # noqa: S603 -- argv list, no shell, fixed binary
                 [binary, *argv],
                 cwd=str(self._dest),
-                env=_git_env(),
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=timeout_sec,
@@ -438,7 +461,7 @@ class RepoWorkspaceTools:
         """
         return self._dest
 
-    # --- git writes: local only, scoped to this clone, never pushed ---------
+    # --- git writes: scoped to this clone; only push_branch leaves the box ---
 
     def checkout_branch(self, name: str) -> dict:
         """Create and switch to a new branch. ``name`` must be ``claude/<topic>``."""
@@ -521,6 +544,47 @@ class RepoWorkspaceTools:
         self._audit("agentic_repo_workspace_git_op", op=tool, message_sha256=message_sha256)
         return {}
 
+    def push_branch(self, name: str) -> dict:
+        """Push one ``claude/`` branch to origin. The only network write here.
+
+        Separate from the local git methods above in three ways that matter:
+
+        * Its own timeout. ``DEFAULT_GIT_WRITE_TIMEOUT_SEC``'s comment justifies
+          30s on "local git plumbing only -- no network"; that reasoning does
+          not survive a push, so this uses the clone-sized budget instead.
+        * ``GIT_TERMINAL_PROMPT=0``. Without it a missing credential makes git
+          block on an interactive username prompt until the timeout, turning a
+          clean auth failure into a hang.
+        * A re-validated branch name, and ``--`` before it, so the value can
+          never be reparsed as an option or a refspec with extra parts.
+
+        CREDENTIALS: this passes none. ``_GIT_ENV_ALLOWLIST`` deliberately does
+        not carry ``GH_TOKEN``/``GITHUB_TOKEN``, and adding one here would put a
+        GitHub credential into an environment that ``agentic.executor`` runs
+        model-proposed check commands under -- a credential-exfiltration path in
+        exchange for convenience. A push therefore authenticates only via the
+        operator's own HOME-resident git credential helper (what ``gh auth
+        setup-git`` configures), or it fails. A token-only environment with no
+        helper is the expected first failure on a fresh machine, and that is the
+        documented, intended behavior rather than a bug to patch around.
+        """
+        tool = "push_branch"
+        self._require_git_writes_enabled(tool)
+        if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
+            self._deny_git(
+                tool,
+                "push branch must start with 'claude/' and use only [A-Za-z0-9._/-]",
+                target=name,
+            )
+        self._run_git(
+            tool,
+            ["push", "--set-upstream", "origin", "--", name],
+            timeout_sec=DEFAULT_PUSH_TIMEOUT_SEC,
+            extra_env={"GIT_TERMINAL_PROMPT": "0"},
+        )
+        self._audit("agentic_repo_workspace_git_op", op=tool, branch=name)
+        return {"pushed": name}
+
     def diff(self, *, cached: bool = False) -> str:
         """Return the worktree (or, with ``cached=True``, staged) diff as text."""
         tool = "diff"
@@ -557,5 +621,6 @@ __all__ = [
     "DEFAULT_GIT_WRITE_TIMEOUT_SEC",
     "DEFAULT_MAX_READ_BYTES",
     "DEFAULT_MAX_WRITE_BYTES",
+    "DEFAULT_PUSH_TIMEOUT_SEC",
     "RepoWorkspaceTools",
 ]
