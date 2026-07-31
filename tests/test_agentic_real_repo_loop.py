@@ -1448,3 +1448,29 @@ def test_no_protected_paths_or_budget_configured_disables_the_gate(tmp_path, mon
         finally:
             client.close()
     assert result.accepted is True
+
+
+# --- ProposerClient protocol (Tier 2 prerequisite) ---------------------------
+
+
+def test_local_proposer_client_satisfies_the_proposer_client_protocol():
+    """The Protocol is a pure typing change over an already-duck-typed contract
+    -- this proves LocalProposerClient (the existing default) actually
+    satisfies it, not just that nothing crashed when the annotation changed."""
+    from agentic.real_repo_loop import ProposerClient
+
+    client = LocalProposerClient(base_url="http://localhost:1234/v1", model="local-test-model")
+    try:
+        assert isinstance(client, ProposerClient)
+    finally:
+        client.close()
+
+
+def test_proposer_response_protocol_only_requires_content():
+    from agentic.real_repo_loop import ProposerResponse
+
+    class _Minimal:
+        content = "x"
+
+    assert isinstance(_Minimal(), ProposerResponse)
+    assert not isinstance(object(), ProposerResponse)

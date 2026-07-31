@@ -2,10 +2,13 @@
 
 Fuses three pieces that, until now, existed independently and never called
 each other (see ``docs/THREAT_MODEL.md``'s executor amendments): the
-planner's model call (``agentic.harness_optimizer.model_adapter.LocalProposerClient``,
-already proven via the fixture-based loop driver), a real jailed clone with
-local git write ops (``agentic.deepagent_github.repo_workspace.RepoWorkspaceTools``),
-and the sandboxed verification executor (``agentic.executor.run_verification``).
+planner's model call (behind the ``ProposerClient`` protocol below --
+``agentic.harness_optimizer.model_adapter.LocalProposerClient`` for the local,
+default path, already proven via the fixture-based loop driver, or
+``agentic.deepagent_github.chat_client.ChatModelProposerClient`` for a
+triple-gated cloud provider), a real jailed clone with local git write ops
+(``agentic.deepagent_github.repo_workspace.RepoWorkspaceTools``), and the
+sandboxed verification executor (``agentic.executor.run_verification``).
 This module is the first live caller of ``run_verification``, and the first
 thing in this codebase that can turn a model's proposal into an actual git
 commit against a real repository -- still local only: no push, no PR, no
@@ -55,10 +58,13 @@ too, redundantly, at every ``write_file``/``add``/``commit`` call):
     2. a non-empty human ``reason`` string
     3. explicit ``confirm=True``
 
-The planner model is local-only for now (``LocalProposerClient``, whatever
+The planner defaults to a local model (``LocalProposerClient``, whatever
 ``agentic.deepagent_github``'s ``provider``/``base_url``/``model`` config
-names -- Ollama by default). Cloud-provider wiring (the six-gate chain from an
-earlier phase) is explicit future work, not attempted here.
+names -- Ollama by default). A caller MAY instead supply a
+``ChatModelProposerClient`` wrapping a gated cloud provider (Grok or Claude,
+behind the same six-condition chain the deepagents harness uses) -- this
+function itself does not choose or gate the provider; it accepts anything
+satisfying ``ProposerClient`` and calls only ``invoke``/``close`` on it.
 
 Wired to ``agentic.cli``'s ``real-repo-run``/``real-repo-run-status``/
 ``real-repo-run-decide`` subcommands, and from there to the harness's
@@ -77,14 +83,59 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
 from agentic.executor import Check, VerificationReport, run_verification
 from agentic.harness_optimizer.governance import CRITICAL_SEVERITY, GovernanceFinding, inspect_candidate_text
-from agentic.harness_optimizer.model_adapter import LocalProposerClient
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
+
+
+@runtime_checkable
+class ProposerResponse(Protocol):
+    """What this loop reads off a planner response: only ``content``.
+
+    ``LocalProposerResponse`` also carries ``model``/``provider`` (used by ITS
+    OWN audit events, before the response ever reaches this module), but
+    nothing in this loop reads them -- so the contract this loop actually
+    depends on is exactly one attribute, not the whole dataclass.
+    """
+
+    content: str
+
+
+@runtime_checkable
+class ProposerClient(Protocol):
+    """The planner-model contract this loop actually depends on.
+
+    Was a hardcoded ``LocalProposerClient`` type annotation with no
+    ``isinstance`` check anywhere -- the runtime contract was already
+    duck-typed (only ``.invoke(...)`` and ``.close()`` are ever called), the
+    annotation just didn't say so. Making it a ``Protocol`` is a pure typing
+    change with no runtime behavior difference: it exists so a cloud-backed
+    client (see ``agentic.deepagent_github.chat_client``) can be substituted
+    without lying about what type it claims to be, and so mypy can check the
+    substitution rather than only trusting a duck-typed hope.
+
+    Keyword-only, matching every real call site in this loop -- ``max_tokens``/
+    ``temperature`` are declared with defaults because this loop never passes
+    them explicitly, so a conforming implementation must supply its own
+    sensible values, not rely on the loop to.
+    """
+
+    def invoke(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+        config_path: str = "config.yaml",
+        cfg: dict | None = None,
+    ) -> ProposerResponse: ...
+
+    def close(self) -> None: ...
 
 _FILE_BLOCK_RE = re.compile(
     r"=== FILE (?P<path>[^\n]+?) ===\n(?P<body>.*?)\n=== END FILE ===",
@@ -441,7 +492,7 @@ def _require_run_gates(tools: RepoWorkspaceTools, *, reason: str, confirm: bool)
 
 def run_real_repo_loop(
     tools: RepoWorkspaceTools,
-    client: LocalProposerClient,
+    client: ProposerClient,
     *,
     instruction: str,
     checks: Sequence[Check],
@@ -782,6 +833,8 @@ def finalize_real_repo_change(
 
 __all__ = [
     "PLANNER_SYSTEM_PROMPT",
+    "ProposerClient",
+    "ProposerResponse",
     "RealRepoDecision",
     "RealRepoLoopIteration",
     "RealRepoLoopResult",
