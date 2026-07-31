@@ -8,6 +8,10 @@ Subcommands:
     apply-skill    Apply a skills-registry change (governed; needs --reason).
     deepagent-plan Probe the Deep Agents harness (read-only; --provider needs
                    --confirm-online before any cloud egress).
+    real-repo-run        Clone a real repo and run plan/patch/verify against it
+                          (governed by --reason/--confirm; never commits).
+    real-repo-run-status Report a real-repo run's persisted status.
+    real-repo-run-decide Approve (commit) or reject (discard) a pending run.
     test           Run the pre-flight self-test.
 
 Exit codes:
@@ -25,6 +29,8 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agentic.config import AgenticConfig, load_agentic_config
 from utils.errors import (
@@ -37,6 +43,14 @@ from utils.errors import (
     SkillRegistryError,
 )
 from utils.logger import _get_config, audit_log
+
+if TYPE_CHECKING:
+    # Only agentic.executor's Check TYPE is needed at module scope, for
+    # _load_checks_file's return annotation -- the actual import stays
+    # lazy, inside the function, matching every other agentic.* import in
+    # this file (each subcommand's own imports load only when that
+    # subcommand runs, not at --help time).
+    from agentic.executor import Check
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -246,6 +260,244 @@ def cmd_deepagent_plan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _load_checks_file(path: str) -> tuple[Check, ...]:
+    """Parse a JSON manifest of verification checks into `Check` objects.
+
+    Format: a non-empty JSON list of ``{"name": str, "argv": [str, ...],
+    "timeout_sec": int (optional)}``. Required, not optional, and never
+    defaulted to ``agentic.executor.default_checks()`` -- that function
+    assumes THIS repository's own toolchain (a CyClaw-specific invariant-guard
+    path); guessing a test/lint command for an arbitrary configured repo would
+    be exactly the kind of invented default this codebase avoids. ``argv`` is
+    already a JSON list of literal strings, never a single command string --
+    there is no shell-splitting anywhere in this path.
+    """
+    from agentic.executor import Check
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AgenticError(f"cannot read checks file: {exc}", details={"path": path}) from exc
+    if not isinstance(data, list) or not data:
+        raise AgenticError("checks file must contain a non-empty JSON list", details={"path": path})
+    checks: list[Check] = []
+    for entry in data:
+        if not isinstance(entry, dict) or "name" not in entry or "argv" not in entry:
+            raise AgenticError("each check entry needs 'name' and 'argv'", details={"path": path, "entry": entry})
+        argv = entry["argv"]
+        if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
+            raise AgenticError("check 'argv' must be a non-empty list of strings", details={"path": path})
+        kwargs: dict[str, int] = {}
+        if "timeout_sec" in entry:
+            kwargs["timeout_sec"] = int(entry["timeout_sec"])
+        checks.append(Check(entry["name"], tuple(argv), **kwargs))
+    return tuple(checks)
+
+
+def _real_repo_runs_dir(cfg: AgenticConfig) -> Path:
+    return Path(cfg.deepagent_github.workspace_root) / "runs"
+
+
+def cmd_real_repo_run(args: argparse.Namespace) -> int:
+    """Start a real-repo coding run: clone, plan/patch/verify, but never commit.
+
+    This command's own exit code reflects whether the RUN completed, not
+    whether a candidate was accepted -- check the printed record's "status"
+    field for that (``pending_decision`` vs ``exhausted``). A candidate that
+    passes still waits for ``real-repo-run-decide`` before anything is
+    committed; see ``agentic.real_repo_loop``'s module docstring for why.
+    """
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+
+    from agentic import context
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.harness_optimizer.model_adapter import LocalProposerClient
+    from agentic.real_repo_loop import run_real_repo_loop
+    from agentic.real_repo_run_store import RealRepoRunRecord, new_run_id, save_run
+
+    app_cfg = _get_config(args.config)
+    try:
+        if args.pr is not None:
+            bundle = context.fetch_pr_context(cfg, args.pr, app_cfg=app_cfg)
+        elif args.issue is not None:
+            bundle = context.fetch_issue_context(cfg, args.issue, app_cfg=app_cfg)
+        else:
+            bundle = context.fetch_repo_context(cfg, app_cfg=app_cfg)
+    except (GhNotInstalledError, GhVersionError) as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    findings = bundle.get("governance_findings") or []
+    critical = [f for f in findings if f.get("severity") == "critical"]
+    if critical:
+        _err(f"refusing to run: {len(critical)} critical governance finding(s) in the fetched context")
+        return EXIT_FAIL
+
+    try:
+        checks = _load_checks_file(args.checks_file)
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_ENV
+
+    runs_dir = _real_repo_runs_dir(cfg)
+    run_id = new_run_id()
+
+    try:
+        tools = RepoWorkspaceTools.clone(cfg, config_path=args.config, cfg=app_cfg)
+    except (GhNotInstalledError, GhVersionError) as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
+    try:
+        result = run_real_repo_loop(
+            tools,
+            client,
+            instruction=args.instruction,
+            checks=checks,
+            branch_name=args.branch,
+            commit_message=args.commit_message,
+            max_iterations=args.max_iterations,
+            reason=args.reason,
+            confirm=args.confirm,
+            config_path=args.config,
+            cfg=app_cfg,
+        )
+    except AgenticWriteRefused as exc:
+        tools.close()
+        _err(exc.message)
+        return EXIT_REFUSED
+    except AgenticError as exc:
+        record = RealRepoRunRecord(
+            run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="failed", error=exc.message,
+        )
+        save_run(runs_dir, record)
+        tools.close()
+        _err(exc.message)
+        return EXIT_FAIL
+    finally:
+        client.close()
+
+    if result.accepted:
+        record = RealRepoRunRecord(
+            run_id=run_id,
+            repo=cfg.repo,
+            dest=str(tools.worktree),
+            status="pending_decision",
+            branch_name=result.branch_name,
+            commit_message=result.commit_message,
+            changed_files=list(result.iterations[-1].changed_files),
+            iterations=len(result.iterations),
+        )
+    else:
+        record = RealRepoRunRecord(
+            run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="exhausted",
+            iterations=len(result.iterations),
+        )
+        tools.close()  # nothing accepted -- nothing worth keeping the clone for
+    save_run(runs_dir, record)
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
+
+
+def cmd_real_repo_run_status(args: argparse.Namespace) -> int:
+    """Report a real-repo run's persisted status. Read-only, no side effects."""
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+
+    from agentic.real_repo_run_store import load_run
+
+    try:
+        record = load_run(_real_repo_runs_dir(cfg), args.run_id)
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
+
+
+def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
+    """Approve (commit) or reject (discard) a pending real-repo run.
+
+    This IS the human gate agentic.real_repo_loop.finalize_real_repo_change
+    exists for -- see that function's docstring. Reattaches the clone by the
+    path the run record persisted (RepoWorkspaceTools.attach), since this is
+    necessarily a separate process from the one that ran the loop.
+    """
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.real_repo_loop import finalize_real_repo_change
+    from agentic.real_repo_run_store import load_run, require_pending_decision, save_run
+
+    app_cfg = _get_config(args.config)
+    runs_dir = _real_repo_runs_dir(cfg)
+    try:
+        record = load_run(runs_dir, args.run_id)
+        require_pending_decision(record)
+        # A pending_decision record is only ever written with both set (see
+        # cmd_real_repo_run); a JSON record can in principle be hand-edited
+        # or corrupted in a way an in-memory RealRepoLoopResult cannot, so
+        # this is a real validation, not just a mypy-narrowing assert.
+        if record.branch_name is None or record.commit_message is None:
+            raise AgenticError(
+                "run record is pending decision but missing branch_name/commit_message",
+                details={"run_id": args.run_id},
+            )
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    try:
+        tools = RepoWorkspaceTools.attach(cfg, Path(record.dest), config_path=args.config, cfg=app_cfg)
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    try:
+        outcome = finalize_real_repo_change(
+            tools,
+            branch_name=record.branch_name,
+            commit_message=record.commit_message,
+            changed_files=record.changed_files,
+            decision=args.decision,
+            config_path=args.config,
+            cfg=app_cfg,
+        )
+    except AgenticWriteRefused as exc:
+        _err(exc.message)
+        return EXIT_REFUSED
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+    finally:
+        if args.decision == "reject":
+            tools.close()  # nothing kept -- discard the clone now
+
+    record.status = outcome["status"]
+    save_run(runs_dir, record)
+    print(json.dumps(record.to_dict(), indent=2))
+    return EXIT_OK
+
+
 def cmd_propose_skill(args: argparse.Namespace) -> int:
     cfg = _load(args)
     if cfg is None:
@@ -353,6 +605,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("--confirm-online", action="store_true",
                         help="Required with --provider: per-run confirmation before any cloud egress.")
     p_plan.set_defaults(func=cmd_deepagent_plan)
+
+    p_run = sub.add_parser(
+        "real-repo-run",
+        help="Clone a real repo and run plan/patch/verify (never commits -- see real-repo-run-decide).",
+    )
+    g_run = p_run.add_mutually_exclusive_group()
+    g_run.add_argument("--pr", type=int, help="Fetch a PR's metadata + diff as task context.")
+    g_run.add_argument("--issue", type=int, help="Fetch an issue as task context.")
+    g_run.add_argument("--repo", action="store_true", help="Fetch a repo overview as task context (default).")
+    p_run.add_argument("--instruction", required=True, help="What the planner is being asked to do.")
+    p_run.add_argument("--checks-file", required=True, help="Path to a JSON verification-checks manifest.")
+    p_run.add_argument("--branch", required=True, help="Branch name to use on acceptance (claude/<topic>).")
+    p_run.add_argument("--commit-message", required=True, help="Commit message to use on acceptance.")
+    p_run.add_argument("--max-iterations", type=int, default=3, help="Planner attempts before giving up.")
+    p_run.add_argument("--reason", required=True, help="Human reason string (required).")
+    p_run.add_argument("--confirm", action="store_true", help="Required to actually run.")
+    p_run.set_defaults(func=cmd_real_repo_run)
+
+    p_run_status = sub.add_parser("real-repo-run-status", help="Report a real-repo run's persisted status.")
+    p_run_status.add_argument("--run-id", required=True)
+    p_run_status.set_defaults(func=cmd_real_repo_run_status)
+
+    p_run_decide = sub.add_parser(
+        "real-repo-run-decide", help="Approve (commit) or reject (discard) a pending real-repo run.",
+    )
+    p_run_decide.add_argument("--run-id", required=True)
+    p_run_decide.add_argument("--decision", required=True, choices=("approve", "reject"))
+    p_run_decide.set_defaults(func=cmd_real_repo_run_decide)
 
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")
     p_test.set_defaults(func=cmd_test)

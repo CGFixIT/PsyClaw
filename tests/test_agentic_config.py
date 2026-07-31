@@ -292,8 +292,14 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     Was "exposes no harness/deepagent subcommands". `deepagent-plan` was added
     deliberately: a read-only probe that asserts the six-condition cloud chain,
     fetches injection-scanned GitHub context, and reports the harness build's gate
-    state. It invokes nothing and writes nothing -- there is still no CLI route to
-    harness_optimizer, and none to any deepagent path that runs a model.
+    state. It invokes nothing and writes nothing.
+
+    `real-repo-run`/`real-repo-run-status`/`real-repo-run-decide` were added
+    deliberately too: the first live CLI route that actually clones a real repo,
+    calls a model, and (only after a separate, explicit `real-repo-run-decide
+    --decision approve`) commits inside that clone -- still no push, no PR, no
+    GitHub API call. See `agentic/real_repo_loop.py`'s module docstring for the
+    full gate chain.
 
     If this needs updating again, that wiring was added on purpose. Update it
     deliberately, not by accident."""
@@ -304,5 +310,6 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     parser = build_parser()
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
     assert set(sub_action.choices.keys()) == {
-        "status", "context", "propose-skill", "apply-skill", "deepagent-plan", "test",
+        "status", "context", "propose-skill", "apply-skill", "deepagent-plan",
+        "real-repo-run", "real-repo-run-status", "real-repo-run-decide", "test",
     }
