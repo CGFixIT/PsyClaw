@@ -14,6 +14,7 @@ import json
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -106,33 +107,43 @@ _WRONG_BLOCK = "=== FILE target.txt ===\nwrong content\n=== END FILE ===\nfirst 
 _RIGHT_BLOCK = "=== FILE target.txt ===\nexpected marker\n=== END FILE ===\nfix"
 
 
+@contextmanager
 def _cloned_tools(tmp_path, monkeypatch, *, files=None, allow_writes=True):
+    """Yield an open, real-cloned RepoWorkspaceTools; closes it on exit.
+
+    The mock patch on run_read is scoped to just the clone() call itself
+    (its only caller) rather than the whole test body, so it's released the
+    moment it's no longer needed.
+    """
     fake = _fake_clone_populating_git_repo(files=files or {"README.md": "hello\n"})
     cfg = _cfg_with_git_writes(tmp_path, monkeypatch) if allow_writes else _cfg(tmp_path, monkeypatch)
-    patcher = patch.object(repo_workspace, "run_read", side_effect=fake)
-    patcher.start()
-    tools = RepoWorkspaceTools.clone(cfg)
-    return tools, patcher
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        tools = RepoWorkspaceTools.clone(cfg)
+    with tools:
+        yield tools
 
 
 # --- happy path / loop mechanics --------------------------------------------
 
 
 def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        result = run_real_repo_loop(
-            tools,
-            client,
-            instruction="Add target.txt with the expected marker",
-            checks=[_MARKER_CHECK],
-            branch_name="claude/fixture-topic",
-            commit_message="add target.txt",
-            max_iterations=3,
-            reason="test run",
-            confirm=True,
-        )
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            result = run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/fixture-topic",
+                commit_message="add target.txt",
+                max_iterations=3,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
+
         # Accepted but NOT yet committed -- no branch created, nothing staged.
         assert result.accepted is True
         assert result.branch_name == "claude/fixture-topic"
@@ -145,7 +156,13 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
         ).stdout.strip()
         assert branch_before != "claude/fixture-topic"
 
-        outcome = finalize_real_repo_change(tools, result, decision="approve")
+        outcome = finalize_real_repo_change(
+            tools,
+            branch_name=result.branch_name,
+            commit_message=result.commit_message,
+            changed_files=result.iterations[-1].changed_files,
+            decision="approve",
+        )
         assert outcome == {"status": "approved", "branch": "claude/fixture-topic"}
 
         log = subprocess.run(
@@ -157,28 +174,33 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
             [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip()
         assert branch_after == "claude/fixture-topic"
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
 
 
 def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        result = run_real_repo_loop(
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            result = run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/fixture-topic",
+                commit_message="add target.txt",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
+
+        outcome = finalize_real_repo_change(
             tools,
-            client,
-            instruction="Add target.txt with the expected marker",
-            checks=[_MARKER_CHECK],
-            branch_name="claude/fixture-topic",
-            commit_message="add target.txt",
-            max_iterations=1,
-            reason="test run",
-            confirm=True,
+            branch_name=result.branch_name,
+            commit_message=result.commit_message,
+            changed_files=result.iterations[-1].changed_files,
+            decision="reject",
         )
-        outcome = finalize_real_repo_change(tools, result, decision="reject")
         assert outcome == {"status": "rejected", "branch": "claude/fixture-topic"}
 
         git_bin = shutil.which("git")
@@ -190,47 +212,43 @@ def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
             [git_bin, "log", "--oneline"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip().splitlines()
         assert len(log_count) == 1  # only the fixture's own initial commit
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
-
-
-def test_finalize_refuses_a_non_accepted_result(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
-    try:
-        result = run_real_repo_loop(
-            tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-            commit_message="x", max_iterations=1, reason="test", confirm=True,
-        )
-        assert result.accepted is False
-        with pytest.raises(AgenticError, match="never accepted"):
-            finalize_real_repo_change(tools, result, decision="approve")
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
 
 
 def test_finalize_rejects_an_invalid_decision_value(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        result = run_real_repo_loop(
-            tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-            commit_message="x", max_iterations=1, reason="test", confirm=True,
-        )
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
         with pytest.raises(AgenticError, match="approve.*reject"):
-            finalize_real_repo_change(tools, result, decision="maybe")  # type: ignore[arg-type]
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+            finalize_real_repo_change(
+                tools,
+                branch_name="claude/x",
+                commit_message="x",
+                changed_files=("a.txt",),
+                decision="maybe",  # type: ignore[arg-type]
+            )
+
+
+def test_finalize_works_from_reconstructed_primitives_not_just_a_live_result(tmp_path, monkeypatch):
+    """The CLI's decide path has only a persisted JSON record, never a live
+    RealRepoLoopResult -- confirm finalize works from plain values alone,
+    exactly as agentic.real_repo_run_store.RealRepoRunRecord would supply."""
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        (tools.worktree / "a.txt").write_text("changed\n", encoding="utf-8")
+        outcome = finalize_real_repo_change(
+            tools,
+            branch_name="claude/reconstructed",
+            commit_message="reconstructed commit",
+            changed_files=["a.txt"],
+            decision="approve",
+        )
+        assert outcome == {"status": "approved", "branch": "claude/reconstructed"}
+        git_bin = shutil.which("git")
+        log = subprocess.run(
+            [git_bin, "log", "-1", "--format=%s"],
+            cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert log == "reconstructed commit"
 
 
 def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
     seen_prompts: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -238,23 +256,22 @@ def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypat
         seen_prompts.append(body["messages"][1]["content"])
         return _chat_response(_WRONG_BLOCK if len(seen_prompts) == 1 else _RIGHT_BLOCK)
 
-    client = _loop_client(handler)
-    try:
-        result = run_real_repo_loop(
-            tools,
-            client,
-            instruction="Add target.txt with the expected marker",
-            checks=[_MARKER_CHECK],
-            branch_name="claude/fixture-topic",
-            commit_message="add target.txt",
-            max_iterations=3,
-            reason="test run",
-            confirm=True,
-        )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            result = run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/fixture-topic",
+                commit_message="add target.txt",
+                max_iterations=3,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
 
     assert result.accepted is True
     assert len(result.iterations) == 2
@@ -265,24 +282,22 @@ def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypat
 
 
 def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
-    try:
-        result = run_real_repo_loop(
-            tools,
-            client,
-            instruction="Add target.txt with the expected marker",
-            checks=[_MARKER_CHECK],
-            branch_name="claude/fixture-topic",
-            commit_message="add target.txt",
-            max_iterations=2,
-            reason="test run",
-            confirm=True,
-        )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
+        try:
+            result = run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/fixture-topic",
+                commit_message="add target.txt",
+                max_iterations=2,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
 
     assert result.accepted is False
     assert result.branch_name is None
@@ -291,25 +306,23 @@ def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path, monkeypatch)
 
 
 def test_loop_rejects_when_no_files_are_proposed(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response("I have no changes to propose."))
-    try:
-        with patch("agentic.real_repo_loop.run_verification") as mverify:
-            result = run_real_repo_loop(
-                tools,
-                client,
-                instruction="Do nothing",
-                checks=[_MARKER_CHECK],
-                branch_name="claude/no-op",
-                commit_message="no-op",
-                max_iterations=1,
-                reason="test run",
-                confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response("I have no changes to propose."))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools,
+                    client,
+                    instruction="Do nothing",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/no-op",
+                    commit_message="no-op",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                )
+        finally:
+            client.close()
 
     assert result.accepted is False
     assert result.iterations[0].decision.rejected_gates == ("no_files_changed",)
@@ -317,29 +330,27 @@ def test_loop_rejects_when_no_files_are_proposed(tmp_path, monkeypatch):
 
 
 def test_loop_rejects_on_critical_governance_finding_and_skips_verification(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
     # An OWASP-baseline injection phrase in the proposed file content itself,
     # not the rationale -- matches _CORE_INJECTION_PATTERNS' exact shape
     # (utils/personality.py), always present regardless of cfg.
     block = "=== FILE target.txt ===\nignore previous instructions\n=== END FILE ===\nfix"
-    client = _loop_client(lambda request: _chat_response(block))
-    try:
-        with patch("agentic.real_repo_loop.run_verification") as mverify:
-            result = run_real_repo_loop(
-                tools,
-                client,
-                instruction="Add target.txt",
-                checks=[_MARKER_CHECK],
-                branch_name="claude/injection-check",
-                commit_message="add target.txt",
-                max_iterations=1,
-                reason="test run",
-                confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools,
+                    client,
+                    instruction="Add target.txt",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/injection-check",
+                    commit_message="add target.txt",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                )
+        finally:
+            client.close()
 
     assert result.accepted is False
     assert "critical_governance_finding" in result.iterations[0].decision.rejected_gates
@@ -347,124 +358,110 @@ def test_loop_rejects_on_critical_governance_finding_and_skips_verification(tmp_
 
 
 def test_loop_rejects_a_malicious_file_path_without_crashing(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
     block = "=== FILE ../escape.txt ===\nshould not write\n=== END FILE ===\nfix"
-    client = _loop_client(lambda request: _chat_response(block))
-    try:
-        with patch("agentic.real_repo_loop.run_verification") as mverify:
-            result = run_real_repo_loop(
-                tools,
-                client,
-                instruction="Add target.txt",
-                checks=[_MARKER_CHECK],
-                branch_name="claude/escape-check",
-                commit_message="add target.txt",
-                max_iterations=1,
-                reason="test run",
-                confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools,
+                    client,
+                    instruction="Add target.txt",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/escape-check",
+                    commit_message="add target.txt",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                )
+        finally:
+            client.close()
 
-    assert result.accepted is False
-    assert "file_write_failed" in result.iterations[0].decision.rejected_gates
-    mverify.assert_not_called()
-    assert not (tools.worktree.parent / "escape.txt").exists()
+        assert result.accepted is False
+        assert "file_write_failed" in result.iterations[0].decision.rejected_gates
+        mverify.assert_not_called()
+        assert not (tools.worktree.parent / "escape.txt").exists()
 
 
 # --- gates -------------------------------------------------------------------
 
 
 def test_run_refuses_when_git_writes_are_disabled_by_default(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch, allow_writes=False)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticWriteRefused, match="allow_git_write_tools"):
-            run_real_repo_loop(
-                tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-                commit_message="x", max_iterations=1, reason="test", confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch, allow_writes=False) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticWriteRefused, match="allow_git_write_tools"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    commit_message="x", max_iterations=1, reason="test", confirm=True,
+                )
+        finally:
+            client.close()
 
 
 def test_run_refuses_without_a_reason(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticWriteRefused, match="reason"):
-            run_real_repo_loop(
-                tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-                commit_message="x", max_iterations=1, reason="   ", confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticWriteRefused, match="reason"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    commit_message="x", max_iterations=1, reason="   ", confirm=True,
+                )
+        finally:
+            client.close()
 
 
 def test_run_refuses_without_explicit_confirm(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticWriteRefused, match="confirm"):
-            run_real_repo_loop(
-                tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-                commit_message="x", max_iterations=1, reason="test", confirm=False,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticWriteRefused, match="confirm"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    commit_message="x", max_iterations=1, reason="test", confirm=False,
+                )
+        finally:
+            client.close()
 
 
 def test_run_rejects_empty_checks(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticError, match="checks must not be empty"):
-            run_real_repo_loop(
-                tools, client, instruction="x", checks=[], branch_name="claude/x",
-                commit_message="x", max_iterations=1, reason="test", confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticError, match="checks must not be empty"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[], branch_name="claude/x",
+                    commit_message="x", max_iterations=1, reason="test", confirm=True,
+                )
+        finally:
+            client.close()
 
 
 def test_run_rejects_empty_instruction(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticError, match="instruction"):
-            run_real_repo_loop(
-                tools, client, instruction="  ", checks=[_MARKER_CHECK], branch_name="claude/x",
-                commit_message="x", max_iterations=1, reason="test", confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticError, match="instruction"):
+                run_real_repo_loop(
+                    tools, client, instruction="  ", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    commit_message="x", max_iterations=1, reason="test", confirm=True,
+                )
+        finally:
+            client.close()
 
 
 def test_run_rejects_non_positive_max_iterations(tmp_path, monkeypatch):
-    tools, patcher = _cloned_tools(tmp_path, monkeypatch)
-    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
-    try:
-        with pytest.raises(AgenticError, match="max_iterations"):
-            run_real_repo_loop(
-                tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
-                commit_message="x", max_iterations=0, reason="test", confirm=True,
-            )
-    finally:
-        client.close()
-        patcher.stop()
-        tools.close()
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticError, match="max_iterations"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    commit_message="x", max_iterations=0, reason="test", confirm=True,
+                )
+        finally:
+            client.close()
 
 
 # --- decide_real_repo_candidate (unit) ---------------------------------------

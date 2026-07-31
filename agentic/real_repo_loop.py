@@ -337,8 +337,10 @@ def run_real_repo_loop(
 
 def finalize_real_repo_change(
     tools: RepoWorkspaceTools,
-    result: RealRepoLoopResult,
     *,
+    branch_name: str,
+    commit_message: str,
+    changed_files: Sequence[str],
     decision: Literal["approve", "reject"],
     config_path: str = "config.yaml",
     cfg: dict | None = None,
@@ -353,42 +355,38 @@ def finalize_real_repo_change(
     ``--confirm``): the model's own proposal is never enough on its own,
     regardless of what tests it passed.
 
-    Only call this with a ``result`` where ``result.accepted`` is ``True`` --
-    calling it on an exhausted (never-accepted) result is a caller error, not
-    something to silently no-op.
+    Takes ``branch_name``/``commit_message``/``changed_files`` as plain
+    values rather than a ``RealRepoLoopResult`` on purpose: an in-process
+    caller has one to unpack, but the more realistic caller -- a later CLI
+    invocation that reattached to the clone via ``RepoWorkspaceTools.attach``
+    -- has only a persisted JSON record (``agentic.real_repo_run_store``), not
+    a live dataclass instance. Both shapes hand this function the same three
+    primitives either way.
 
     ``decision="reject"`` is an audited no-op: it does not touch git at all.
     The caller is responsible for eventually discarding the clone (e.g.
     ``tools.close()``); this function only records the human's decision.
     """
-    if not result.accepted:
-        raise AgenticError("cannot finalize a real-repo loop result that was never accepted")
     if decision not in {"approve", "reject"}:
         raise AgenticError("decision must be 'approve' or 'reject'", details={"received": decision})
-    # RealRepoLoopResult.__post_init__ already guarantees both are set whenever
-    # accepted is True; asserting it here (rather than just trusting that) is
-    # what lets mypy narrow str | None -> str for the calls below.
-    assert result.branch_name is not None  # noqa: S101 - narrows for mypy, guaranteed by __post_init__
-    assert result.commit_message is not None  # noqa: S101
 
     audit_log(
-        {"event": "agentic_real_repo_change_decided", "decision": decision, "branch": result.branch_name},
+        {"event": "agentic_real_repo_change_decided", "decision": decision, "branch": branch_name},
         config_path=config_path,
         cfg=cfg,
     )
     if decision == "reject":
-        return {"status": "rejected", "branch": result.branch_name}
+        return {"status": "rejected", "branch": branch_name}
 
-    changed_files = list(result.iterations[-1].changed_files)
-    tools.checkout_branch(result.branch_name)
-    tools.add(changed_files)
-    tools.commit(result.commit_message)
+    tools.checkout_branch(branch_name)
+    tools.add(list(changed_files))
+    tools.commit(commit_message)
     audit_log(
-        {"event": "agentic_real_repo_change_approved", "branch": result.branch_name},
+        {"event": "agentic_real_repo_change_approved", "branch": branch_name},
         config_path=config_path,
         cfg=cfg,
     )
-    return {"status": "approved", "branch": result.branch_name}
+    return {"status": "approved", "branch": branch_name}
 
 
 __all__ = [
