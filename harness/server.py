@@ -36,7 +36,7 @@ import logging
 import os
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -92,6 +92,10 @@ _MAX_ERROR_FIELD_LEN = 120
 # Stands in for an extra="forbid" violation's location, which is the key the
 # caller sent rather than anything this app declared.
 _UNEXPECTED_FIELD = "(unexpected field)"
+# Caps the malformed run_id echoed back in an INVALID_RUN_ID detail. A valid
+# one is 32 chars; this bounds an oversized path segment without hiding a
+# near-miss the operator needs to see to spot their own typo.
+_MAX_ECHOED_RUN_ID_LEN = 64
 _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
@@ -173,6 +177,26 @@ def _err(status: int, exc: AgenticError) -> HTTPException:
     return HTTPException(status_code=status, detail=detail)
 
 
+def _error_location(err: Mapping[str, object]) -> str:
+    """One validation error's reportable field location.
+
+    ``extra_forbidden`` is the only error type whose ``loc`` is caller-supplied
+    (it IS the key that was sent), so that one is replaced outright rather than
+    filtered -- see ``_validation_error_response`` for why redaction alone is
+    not sufficient there. Every other type names a field declared on the model.
+    """
+    if err.get("type") == "extra_forbidden":
+        return _UNEXPECTED_FIELD
+    raw = err.get("loc")
+    # Pydantic always supplies a tuple here, but the error dicts are typed
+    # loosely enough that asserting it would be a silenced cast rather than a
+    # check -- an unexpected shape degrades to "unknown" instead of raising
+    # inside an error handler, where a second exception is the worst outcome.
+    parts = raw if isinstance(raw, (list, tuple)) else ()
+    location = ".".join(str(part) for part in parts)
+    return redact_sensitive(location)[:_MAX_ERROR_FIELD_LEN]
+
+
 def _validation_error_response(exc: RequestValidationError) -> JSONResponse:
     """Re-emit FastAPI's 422 in the envelope static/harness.html can read.
 
@@ -198,15 +222,11 @@ def _validation_error_response(exc: RequestValidationError) -> JSONResponse:
     redaction and the length cap still run over the declared-field names as
     defense in depth.
     """
-    fields = [
-        _UNEXPECTED_FIELD
-        if err.get("type") == "extra_forbidden"
-        else redact_sensitive(".".join(str(part) for part in err.get("loc", ())))[:_MAX_ERROR_FIELD_LEN]
-        for err in exc.errors()
-    ]
+    fields = [_error_location(err) for err in exc.errors()]
+    named = ", ".join(fields) or "unknown field"
     detail = {
         _CODE_KEY: "VALIDATION_ERROR",
-        _MESSAGE_KEY: "request body failed validation: " + (", ".join(fields) or "unknown field"),
+        _MESSAGE_KEY: f"request body failed validation: {named}",
         _DETAILS_KEY: {"fields": fields},
     }
     return JSONResponse(status_code=_HTTP_UNPROCESSABLE, content={"detail": detail})
@@ -554,7 +574,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 AgenticError(
                     "run_id must be 32 lowercase hex characters",
                     code="INVALID_RUN_ID",
-                    details={"run_id": run_id[:64]},
+                    details={"run_id": run_id[:_MAX_ECHOED_RUN_ID_LEN]},
                 ),
             )
         return run_id
