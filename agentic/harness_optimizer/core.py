@@ -187,13 +187,27 @@ def decide_candidate(
     allowed_surface_ids: set[str] | frozenset[str],
     proposal_present: bool,
     visible_case_hardcoding_detected: bool = False,
+    verification_failed: bool = False,
 ) -> CandidateDecision:
     """Apply the phase-2 deterministic acceptance gate.
 
     A future optimizer may add richer scoring, but acceptance still needs these
     hard gates: train+holdout pass, score improves, no critical governance
-    finding, only allowed surfaces changed, a proposal exists, and no visible
-    case hardcoding is detected.
+    finding, only allowed surfaces changed, a proposal exists, no visible case
+    hardcoding is detected, and (when the caller ran one) the candidate passed
+    real verification.
+
+    ``verification_failed`` is a plain bool, not a
+    ``agentic.executor.VerificationReport`` object, on purpose: this module
+    must not import ``agentic.executor`` (or anything else) just to accept a
+    yes/no signal, matching the existing ``visible_case_hardcoding_detected``
+    parameter's own shape. The caller collapses a richer report (per-check
+    exit codes, stdout/stderr) to this one bit before calling in -- exactly
+    the same division of labor ``governance_findings``/
+    ``has_critical_governance_finding`` already establish between the
+    governance module and this one. Defaults to ``False`` so every existing
+    caller is unaffected; nothing in this codebase passes ``True`` yet, since
+    no live caller runs a verification executor before this decision is made.
     """
     rejected: list[str] = []
     if not candidate.train_passed:
@@ -208,6 +222,8 @@ def decide_candidate(
         rejected.append("proposal_missing")
     if visible_case_hardcoding_detected:
         rejected.append("visible_case_hardcoding")
+    if verification_failed:
+        rejected.append("verification_failed")
     unallowed = sorted(set(candidate.changed_surfaces) - set(allowed_surface_ids))
     if unallowed:
         rejected.append("unallowed_surface_changed")
