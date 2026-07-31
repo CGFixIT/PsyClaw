@@ -54,9 +54,11 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import subprocess  # nosec B404 - argv-list only, no shell, fixed binary + fixed subcommands
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import NoReturn
@@ -116,6 +118,37 @@ def _resolve_git_binary() -> str:
     return binary
 
 
+def _clear_readonly_and_retry(func: Callable[[str], object], path: str, exc: BaseException) -> None:
+    """``rmtree`` error hook: clear a Windows read-only bit, then retry once.
+
+    git writes loose objects and pack files read-only by design (they are meant
+    to be immutable) -- on POSIX that never blocks a delete (only the parent
+    directory's write permission matters there), but on Windows the read-only
+    *attribute* itself blocks ``os.unlink``/``os.rmdir``, raising
+    ``PermissionError``. This is the standard recovery for a git-populated tree
+    on Windows: clear the attribute and retry the exact operation that failed.
+    """
+    del exc
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def _rmtree_best_effort(path: str | Path) -> None:
+    """Recursively delete ``path``, best-effort, git-read-only-aware.
+
+    Replaces a bare ``ignore_errors=True``: that swallows a
+    ``PermissionError`` from a git-created read-only file on Windows
+    *silently*, leaving the clone on disk with no exception raised -- exactly
+    the symptom the windows-latest CI leg caught once a real (not mocked) git
+    clone was exercised for the first time. ``onexc`` runs
+    :func:`_clear_readonly_and_retry` on each failure instead, and the outer
+    ``suppress`` preserves the original "never raise, this is cleanup" contract
+    for whatever a retry still can't remove (e.g. a genuinely locked file).
+    """
+    with suppress(OSError):
+        shutil.rmtree(path, onexc=_clear_readonly_and_retry)
+
+
 def _clone(cfg: AgenticConfig, deep_cfg: DeepAgentGitHubConfig, *, config_path: str, app_cfg: dict | None) -> Path:
     """Clone ``cfg.repo`` into a fresh directory under the workspace root.
 
@@ -148,7 +181,7 @@ def _clone(cfg: AgenticConfig, deep_cfg: DeepAgentGitHubConfig, *, config_path: 
             dest=str(dest),
         )
     except AgenticError:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _rmtree_best_effort(tmp)
         audit_log({"event": "agentic_repo_workspace_clone_failed", "repo": cfg.repo},
                    config_path=config_path, cfg=app_cfg)
         raise
@@ -202,7 +235,7 @@ class RepoWorkspaceTools:
             # FsPathError, or a raw OSError from the underlying os.open) must
             # still clean it up, or a successful-but-unjailable clone leaks on
             # disk under workspace_root forever.
-            shutil.rmtree(dest.parent, ignore_errors=True)
+            _rmtree_best_effort(dest.parent)
             raise AgenticError(
                 "failed to jail the cloned repository",
                 details={"repo": agentic_cfg.repo, "error": str(exc)},
@@ -507,9 +540,10 @@ class RepoWorkspaceTools:
         self._scoped.close()
         # ScopedRoots holds a dir_fd on `_dest`, not a lock on its parent, so
         # removing the parent (which also removes `_dest`) after close() is
-        # safe -- ignore_errors handles the case where the clone step itself
-        # failed partway and left nothing, or a caller already cleaned up.
-        shutil.rmtree(self._dest.parent, ignore_errors=True)
+        # safe -- _rmtree_best_effort handles both the case where the clone
+        # step itself failed partway and left nothing (or a caller already
+        # cleaned up) and the case where git left read-only objects behind.
+        _rmtree_best_effort(self._dest.parent)
 
     def __enter__(self) -> RepoWorkspaceTools:
         return self
