@@ -125,8 +125,16 @@ an unauthorized change.*
       checks run operator-supplied argv with cwd pinned to the clone. A
       checks-file entry of `{"argv": ["git", "push", ...]}` bypasses the
       `claude/*` scoping and the `allow_git_write_tools` gate entirely. The
-      mitigating fact is that those argv are operator-supplied, not
-      model-supplied. Decide explicitly: accept, or close before enabling.
+      argv are operator-supplied, but that is not the mitigation it first
+      appears to be: the *code that argv executes* runs against a worktree
+      containing model-authored writes, so `{"argv": ["pytest"]}` — the
+      shipped default profile — already executes model-authored content via
+      normal test collection. The actual mitigation is narrower: the
+      checks-file itself is local-only and operator-authored (no `/ops/*`
+      route or harness API accepts raw argv; the harness sends check-profile
+      **names** against a fixed allow-list — see
+      `docs/THREAT_MODEL.md`'s outbound/execution-surface sections). Decide
+      explicitly: accept that scope, or close before enabling.
 - [ ] **I. Blast radius understood.** With the flag on and gates 2–3 open, this
       code can push a `claude/*` branch and open a draft PR against the
       configured repo, as the authenticated `gh` identity. It cannot push to
