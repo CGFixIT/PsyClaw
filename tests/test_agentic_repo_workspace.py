@@ -647,6 +647,92 @@ def test_write_file_rejects_paths_outside_the_clone(tmp_path, monkeypatch):
                 tools.write_file("nested/../../escape.txt", "x")
 
 
+@pytest.mark.parametrize(
+    "target",
+    [".git/config", ".git/hooks/pre-commit", ".git/info/attributes", ".GIT/config", ".Git/config",
+     "nested/.git/config", "./.git/config"],
+)
+def test_write_file_refuses_the_clones_git_directory(tmp_path, monkeypatch, target):
+    """The clone's own git metadata is never a writable target.
+
+    Writing `.git/` is not merely out of scope -- see
+    test_git_filter_injection_through_dotgit_config_is_refused for why it is
+    arbitrary command execution. Case variants are covered because a
+    case-insensitive filesystem resolves `.GIT` to the same directory, and a
+    nested segment because a submodule's `.git` is a gitdir too.
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError, match="\\.git directory"):
+                tools.write_file(target, "x")
+
+
+def test_add_refuses_the_clones_git_directory(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with pytest.raises(AgenticError, match="\\.git directory"):
+                tools.add([".git/config"])
+
+
+@pytest.mark.parametrize("target", [".gitattributes", ".gitignore", ".gitmodules", "docs/.gitkeep"])
+def test_write_file_still_allows_dotgit_prefixed_filenames(tmp_path, monkeypatch, target):
+    # The refusal compares whole path SEGMENTS, so ordinary dotfiles whose name
+    # merely starts with ".git" stay writable -- they are normal tracked files.
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            assert tools.write_file(target, "x\n")["target"] == target
+
+
+def test_git_filter_injection_through_dotgit_config_is_refused(tmp_path, monkeypatch):
+    """Reproduces the concrete attack the .git refusal exists to stop.
+
+    A repo-local clean filter defined in `.git/config`, plus a `.gitattributes`
+    assigning it, executes its shell command during the plain `git add` that
+    finalize_real_repo_change performs -- in the CLI process, at human-approval
+    time, with the operator's own PATH and HOME, and invisible to `git diff`
+    (which cannot render `.git/config`). This test writes the `.gitattributes`
+    half through the real write_file (it is a legitimate tracked file), proves
+    the `.git/config` half is refused, and then runs a real `git add` to confirm
+    no command executed.
+    """
+    sentinel = tmp_path / "PWNED"
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.write_file(".gitattributes", "* filter=pwn\n")
+            with pytest.raises(AgenticError, match="\\.git directory"):
+                tools.write_file(
+                    ".git/config",
+                    f'[filter "pwn"]\n\tclean = sh -c "touch {sentinel}; cat"\n',
+                )
+            tools.add([".gitattributes", "a.txt"])
+    assert not sentinel.exists(), "a repo-local git filter executed during git add"
+
+
+def test_commit_does_not_run_repo_hooks(tmp_path, monkeypatch):
+    """--no-verify: a hook that arrived by some other path must not execute.
+
+    write_file can no longer create one, so this installs the hook directly on
+    disk -- the point is that commit() itself refuses to run hooks, independent
+    of how one got there.
+    """
+    sentinel = tmp_path / "HOOK_RAN"
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            hook = Path(tools.worktree) / ".git" / "hooks" / "pre-commit"
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            hook.write_text(f"#!/bin/sh\ntouch {sentinel}\n", encoding="utf-8")
+            hook.chmod(0o755)
+            tools.write_file("a.txt", "changed\n")
+            tools.add(["a.txt"])
+            tools.commit("test: hooks must not run")
+    assert not sentinel.exists(), "a repo-local pre-commit hook executed during commit"
+
+
 def test_write_file_rejects_content_exceeding_max_write_bytes(tmp_path, monkeypatch):
     fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
