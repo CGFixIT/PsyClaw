@@ -179,6 +179,67 @@ def _render_existing_files(tools: RepoWorkspaceTools, read_paths: Sequence[str])
     return "\n\n".join(rendered)
 
 
+# Bounds for verification evidence folded into rejection feedback -- separate
+# from agentic/executor/runner.py's MAX_OUTPUT_CHARS (20_000 PER STREAM PER
+# CHECK; three checks x two streams can reach ~120k chars, far past what a
+# local model's prompt budget can absorb). Per-check first so one noisy check
+# doesn't crowd out the others; total second as the actual budget backstop.
+_MAX_FEEDBACK_CHECK_CHARS = 1_500
+_MAX_FEEDBACK_TOTAL_CHARS = 4_000
+
+
+def _verification_feedback(verification: VerificationReport, *, config_path: str, cfg: dict | None) -> str:
+    """Render the failing checks' own output as concrete iteration feedback.
+
+    Previously ``feedback = decision.reason`` reduced every rejection to a
+    bare gate name -- on ``verification_failed`` specifically, that meant the
+    planner learned nothing about WHICH check failed or why, even though
+    ``VerificationReport`` already carries each check's name, exit code, and
+    captured stdout/stderr. This surfaces that evidence instead of just the
+    verdict.
+
+    Tail, not head: pytest and ruff both print their failure summary LAST, and
+    the per-check budget below is a hard cut, not a smart one.
+
+    This is model-authored code's own output re-entering the prompt, so it is
+    scanned with the exact same scanner (:func:`inspect_candidate_text`)
+    proposed file content already goes through before being written -- the
+    check's stdout could itself contain injection-shaped text (e.g. a
+    hostile string the model wrote into a test assertion, echoed back by the
+    test runner's failure output). A match redacts that check's output down
+    to its name and exit code; it does NOT affect this iteration's own
+    accept/reject decision, which is governed separately by the proposed
+    files' own content -- this call only decides what text is safe to forward
+    to the NEXT iteration's prompt.
+    """
+    parts: list[str] = []
+    total = 0
+    for result in verification.results:
+        if result.ok:
+            continue
+        output = (result.stderr or result.stdout or "").strip()
+        if output:
+            if inspect_candidate_text(output, cfg):
+                audit_log(
+                    {"event": "agentic_real_repo_feedback_injection_finding", "check": result.name},
+                    config_path=config_path,
+                    cfg=cfg,
+                )
+                output = "[output redacted -- matched a governed injection pattern]"
+            elif len(output) > _MAX_FEEDBACK_CHECK_CHARS:
+                output = "...[truncated]\n" + output[-_MAX_FEEDBACK_CHECK_CHARS:]
+        timeout_note = ", timed out" if result.timed_out else ""
+        entry = f"{result.name} (exit {result.exit_code}{timeout_note}):\n{output}" if output else (
+            f"{result.name} (exit {result.exit_code}{timeout_note})"
+        )
+        if total + len(entry) > _MAX_FEEDBACK_TOTAL_CHARS:
+            parts.append(f"[{result.name} omitted -- feedback budget reached]")
+            continue
+        total += len(entry)
+        parts.append(entry)
+    return "\n\n".join(parts)
+
+
 def _parse_file_blocks(text: str) -> dict[str, str]:
     """Extract ``{path: content}`` blocks from a planner response.
 
@@ -472,6 +533,9 @@ def run_real_repo_loop(
         governance_findings: list[GovernanceFinding] = []
         written: list[str] = []
         write_failed = duplicate_path_detected
+        write_failure_messages: list[str] = (
+            ["planner response proposed the same file path in two different blocks"] if duplicate_path_detected else []
+        )
         # Scan EVERY proposed file before writing ANY of them. The write used to
         # run inside the same pass that accumulated findings, with has_critical
         # computed only afterwards -- so a critical-flagged file was already on
@@ -504,11 +568,16 @@ def run_real_repo_loop(
                         pass  # does not exist yet -- a create, always allowed
                     else:
                         write_failed = True
+                        write_failure_messages.append(
+                            f"{path!r} already exists and was not shown to you (declare it with --read-file "
+                            f"to edit it) -- refusing to overwrite content you have not seen"
+                        )
                         continue
                 try:
                     tools.write_file(path, content)
-                except AgenticError:
+                except AgenticError as exc:
                     write_failed = True
+                    write_failure_messages.append(f"{path!r}: {exc.message}")
                     continue
                 written.append(path)
         ever_written.update(written)
@@ -564,7 +633,17 @@ def run_real_repo_loop(
                 commit_message=commit_message,
                 iterations=tuple(iterations),
             )
-        feedback = decision.reason
+        # decision.reason is still the primary signal (which gate(s) fired);
+        # verification evidence and write-failure detail are appended when
+        # they exist, so the planner gets more to act on than a gate name.
+        feedback_parts = [decision.reason]
+        if verification is not None and not verification.ok:
+            evidence = _verification_feedback(verification, config_path=config_path, cfg=cfg)
+            if evidence:
+                feedback_parts.append(evidence)
+        if write_failure_messages:
+            feedback_parts.append("\n".join(write_failure_messages))
+        feedback = "\n\n".join(feedback_parts)
 
     audit_log(
         {"event": "agentic_real_repo_loop_exhausted", "max_iterations": max_iterations},
