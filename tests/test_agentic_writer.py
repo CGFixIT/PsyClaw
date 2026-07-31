@@ -32,11 +32,15 @@ def _temp_audit(tmp_path: Path):
 
 
 def _read_cfg() -> AgenticConfig:
-    return AgenticConfig(mode="read", writes_enabled=False)
+    cfg = AgenticConfig(mode="read", writes_enabled=False)
+    cfg.enabled = True  # isolates the gate under test; see test_master_switch_* for gate 0 itself
+    return cfg
 
 
 def _write_cfg() -> AgenticConfig:
-    return AgenticConfig(mode="write", writes_enabled=True)
+    cfg = AgenticConfig(mode="write", writes_enabled=True)
+    cfg.enabled = True  # isolates the gate under test; see test_master_switch_* for gate 0 itself
+    return cfg
 
 
 def _audit_events(tmp_path: Path) -> list[dict]:
@@ -65,6 +69,51 @@ def test_execution_ships_disarmed():
     assert EXECUTION_ENABLED is False
 
 
+def test_master_switch_refuses_plan_write_when_agentic_disabled(tmp_path: Path):
+    """A codex review finding: _require_gates never checked cfg.enabled.
+
+    agentic.enabled is documented repo-wide as the layer's master switch and
+    is enforced by the CLI (_disabled_noop), but plan_write/execute_write are
+    a direct programmatic boundary a caller can reach without going through
+    the CLI at all -- the gate must hold on its own.
+    """
+    cfg = AgenticConfig(mode="write", writes_enabled=True)  # .enabled left unset -> False
+    with pytest.raises(AgenticWriteRefused) as exc:
+        plan_write(cfg, "pr_comment", "valid reason", confirm=True,
+                   config_path=_config_path(tmp_path), number=1, body="hi")
+    assert exc.value.details["failed_gate"] == "enabled"
+
+
+def test_master_switch_refuses_execute_write_when_agentic_disabled(monkeypatch, tmp_path: Path):
+    """Same gate, at the execution boundary: mode=write, writes_enabled=True,
+    and a fresh confirm=True are not enough on their own if agentic.enabled
+    is false -- exactly the scenario the finding described (a direct caller
+    mutating GitHub while the layer is 'nominally disabled')."""
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
+    plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
+                      config_path=_config_path(tmp_path), head="claude/topic", title="t", body="b")
+    disabled = AgenticConfig(mode="write", writes_enabled=True)  # .enabled left unset -> False
+    with pytest.raises(AgenticWriteRefused) as exc:
+        execute_write(plan, cfg=disabled, confirm=True, config_path=_config_path(tmp_path))
+    assert exc.value.details.get("failed_gate") == "enabled"
+
+
+def test_execute_write_does_not_manufacture_confirm(monkeypatch, tmp_path: Path):
+    """A codex review finding: execute_write used to hardcode confirm=True when
+    re-running the gate, making gate 4 unconditionally satisfied -- a caller
+    could execute a fully gate-satisfied plan without ever confirming the
+    mutation itself. confirm is now a required, keyword-only argument that the
+    caller of execute_write must supply fresh; passing False must refuse,
+    exactly like plan_write's own confirm gate does.
+    """
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
+    plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
+                      config_path=_config_path(tmp_path), head="claude/topic", title="t", body="b")
+    with pytest.raises(AgenticWriteRefused) as exc:
+        execute_write(plan, cfg=_write_cfg(), confirm=False, config_path=_config_path(tmp_path))
+    assert exc.value.details.get("failed_gate") == "confirm"
+
+
 def test_refuses_when_not_write_mode(tmp_path: Path):
     with pytest.raises(AgenticWriteRefused) as exc:
         plan_write(
@@ -85,6 +134,7 @@ def test_refuses_when_not_write_mode(tmp_path: Path):
 
 def test_refuses_when_writes_disabled():
     cfg = AgenticConfig(mode="write", writes_enabled=False)
+    cfg.enabled = True  # isolates gate 2 (writes_enabled) from gate 0 (the master switch)
     with pytest.raises(AgenticWriteRefused) as exc:
         plan_write(cfg, "pr_comment", "valid reason", confirm=True, number=1, body="hi")
     assert exc.value.details["failed_gate"] == "writes_enabled"
@@ -177,7 +227,7 @@ def test_executor_refused_by_kill_switch(tmp_path: Path):
         body="note",
     )
     with pytest.raises(AgenticWriteRefused) as exc:
-        execute_write(plan, cfg=_write_cfg(), config_path=_config_path(tmp_path))
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "execution_enabled"
     assert any(
         event.get("event") == "agentic_write_execution_blocked"
@@ -195,15 +245,18 @@ def test_arming_the_flag_is_not_sufficient_without_the_config_gates(monkeypatch,
     four config gates itself. A plan dict is data -- hand-buildable, JSON
     round-trippable -- so holding one must not be authority to write.
 
-    Here the flag is armed AND a fully gate-satisfied plan is supplied, but the
-    config handed to the executor is a SHIPPED-DEFAULT config (mode=read,
-    writes_enabled=False). It refuses at gate 1.
+    Here the flag is armed, a fresh confirm=True is supplied, and a fully
+    gate-satisfied plan is supplied -- but the config handed to the executor
+    is a SHIPPED-DEFAULT config (mode=read, writes_enabled=False) with the
+    master switch on, so this isolates gate 1 specifically. It refuses there.
     """
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
     plan = plan_write(_write_cfg(), "issue_comment", "explain", confirm=True,
                       config_path=_config_path(tmp_path), number=1, body="note")
+    shipped_default = AgenticConfig()
+    shipped_default.enabled = True
     with pytest.raises(AgenticWriteRefused) as exc:
-        execute_write(plan, cfg=AgenticConfig(), config_path=_config_path(tmp_path))
+        execute_write(plan, cfg=shipped_default, confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "mode"
 
 
@@ -217,7 +270,7 @@ def test_a_planned_but_unexecutable_op_is_refused_at_execution(monkeypatch, tmp_
     plan = plan_write(_write_cfg(), "issue_comment", "explain", confirm=True,
                       config_path=_config_path(tmp_path), number=1, body="note")
     with pytest.raises(AgenticWriteRefused) as exc:
-        execute_write(plan, cfg=_write_cfg(), config_path=_config_path(tmp_path))
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "executable_op"
 
 
@@ -234,7 +287,7 @@ def test_a_tampered_would_run_is_never_executed(monkeypatch, tmp_path: Path):
                       head="claude/topic", title="t", body="b")
     plan["would_run"] = ["gh", "repo", "delete", "--yes"]
     with pytest.raises(AgenticWriteRefused) as exc:
-        execute_write(plan, cfg=_write_cfg(), config_path=_config_path(tmp_path))
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "plan_integrity"
 
 
@@ -246,7 +299,7 @@ def test_a_plan_naming_another_repo_is_refused(monkeypatch, tmp_path: Path):
                       head="claude/topic", title="t", body="b")
     plan["repo"] = "attacker/elsewhere"
     with pytest.raises(AgenticWriteRefused) as exc:
-        execute_write(plan, cfg=_write_cfg(), config_path=_config_path(tmp_path))
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "repo_match"
 
 

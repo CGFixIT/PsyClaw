@@ -281,6 +281,139 @@ def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypat
     assert "Prior attempt feedback" in seen_prompts[1]
 
 
+def test_accepted_result_reports_files_from_every_iteration_not_just_the_last(tmp_path, monkeypatch):
+    """A codex review finding: only the accepted iteration's OWN changed_files
+    was surfaced to the caller (RealRepoLoopResult.iterations[-1].changed_files),
+    while write_file mutates the same persistent clone across iterations --
+    there is no reset between attempts, by design, since feedback is meant to
+    build on the prior attempt. So a file an EARLIER, rejected iteration wrote
+    can still be on disk and required for a LATER iteration's checks to pass,
+    yet be silently absent from the file list finalize_real_repo_change stages.
+
+    Scenario: a two-file check. Iteration 1 proposes only a.txt (with the
+    right marker) -- verification fails because b.txt is still missing.
+    Iteration 2 proposes only b.txt -- a.txt is still on disk from iteration 1,
+    so verification now passes with BOTH files present. The accepted result
+    must report both, not just b.txt.
+    """
+    two_file_check = Check(
+        "two_file_check",
+        (sys.executable, "-c",
+         "import pathlib,sys\n"
+         "ok = pathlib.Path('a.txt').exists() and pathlib.Path('b.txt').exists()\n"
+         "sys.exit(0 if ok else 1)\n"),
+    )
+    only_a = "=== FILE a.txt ===\nmarker\n=== END FILE ===\nstep one"
+    only_b = "=== FILE b.txt ===\nmarker\n=== END FILE ===\nstep two"
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.content.decode("utf-8"))
+        return _chat_response(only_a if len(calls) == 1 else only_b)
+
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            result = run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add a.txt then b.txt",
+                checks=[two_file_check],
+                branch_name="claude/two-files",
+                commit_message="add a.txt and b.txt",
+                max_iterations=3,
+                reason="test run",
+                confirm=True,
+            )
+        finally:
+            client.close()
+
+        assert result.accepted is True
+        assert len(result.iterations) == 2
+        # The bug this reproduces: the accepted iteration's OWN list is only b.txt.
+        assert result.iterations[-1].changed_files == ("b.txt",)
+        # The fix: the result's cumulative view carries both.
+        assert set(result.changed_files) == {"a.txt", "b.txt"}
+
+        outcome = finalize_real_repo_change(
+            tools,
+            branch_name=result.branch_name,
+            commit_message=result.commit_message,
+            changed_files=result.changed_files,
+            decision="approve",
+        )
+        assert outcome == {"status": "approved", "branch": "claude/two-files"}
+
+        git_bin = shutil.which("git")
+        committed = subprocess.run(
+            [git_bin, "show", "--stat", "--format=", "HEAD"],
+            cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout
+        assert "a.txt" in committed
+        assert "b.txt" in committed
+
+
+def test_context_is_folded_into_every_iterations_prompt(tmp_path, monkeypatch):
+    """A codex review finding: the planner received only the operator's
+    instruction and prior rejection feedback -- never repository/task context
+    -- so a --pr/--issue run's already-fetched, already-scanned title/body/diff
+    was discarded before the model call. context is now an explicit, optional
+    parameter folded into the prompt; this pins that it actually reaches the
+    model, on every iteration, not just the first.
+    """
+    seen_prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        seen_prompts.append(body["messages"][1]["content"])
+        return _chat_response(_WRONG_BLOCK if len(seen_prompts) == 1 else _RIGHT_BLOCK)
+
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools,
+                client,
+                instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/fixture-topic",
+                commit_message="add target.txt",
+                max_iterations=3,
+                reason="test run",
+                confirm=True,
+                context="PR title: fix the thing\nPR body:\nplease fix it",
+            )
+        finally:
+            client.close()
+
+    assert len(seen_prompts) == 2
+    assert all("Repository context" in p and "fix the thing" in p for p in seen_prompts)
+
+
+def test_context_omitted_when_not_supplied(tmp_path, monkeypatch):
+    """The default stays None -- a --repo-mode run (no single pr/issue target)
+    must not have a 'Repository context' section manufactured for it."""
+    seen_prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        seen_prompts.append(body["messages"][1]["content"])
+        return _chat_response(_RIGHT_BLOCK)
+
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools, client, instruction="Add target.txt with the expected marker",
+                checks=[_MARKER_CHECK], branch_name="claude/fixture-topic",
+                commit_message="add target.txt", max_iterations=1, reason="test run", confirm=True,
+            )
+        finally:
+            client.close()
+
+    assert "Repository context" not in seen_prompts[0]
+
+
 def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path, monkeypatch):
     with _cloned_tools(tmp_path, monkeypatch) as tools:
         client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
