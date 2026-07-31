@@ -85,6 +85,8 @@ class RealRepoRunRecord:
     changed_files: list[str] = field(default_factory=list)
     iterations: int = 0
     error: str | None = None
+    pushed: bool = False  # branch reached origin via RepoWorkspaceTools.push_branch
+    pr_url: str | None = None  # `gh pr create`'s stdout on a successful publish (still disarmed by default)
     created_at: str = ""
     updated_at: str = ""
 

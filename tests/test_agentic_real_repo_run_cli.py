@@ -608,6 +608,154 @@ def test_decide_refuses_when_git_write_tools_are_off(tmp_path, checks_file, monk
         reset_config_cache()
 
 
+# --- decide: --push/--publish (Tier 3, still disarmed by default) -----------
+
+
+def _use_real_origin_remote(tmp_path, monkeypatch):
+    """Override the autouse _fake_clone with one that also wires a real
+    bare-repo remote, so --push has something real to push to.
+
+    Mirrors tests/test_agentic_repo_workspace.py's own
+    _fake_clone_with_local_origin: push_branch cannot be exercised against
+    the default fixture, which does `git init` with no remote at all.
+    """
+    import shutil
+
+    from agentic.deepagent_github import repo_workspace
+
+    git_bin = shutil.which("git")
+    remote = tmp_path / "origin.git"
+    subprocess.run([git_bin, "init", "--bare", "-q", str(remote)], check=True, capture_output=True, text=True)
+
+    def fake(op, repo, **kwargs):
+        assert op == "repo_clone"
+        dest = Path(kwargs["dest"])
+        dest.mkdir(parents=True)
+        (dest / "README.md").write_text("hello\n", encoding="utf-8")
+
+        def run(*argv: str) -> None:
+            subprocess.run(argv, cwd=str(dest), check=True, capture_output=True, text=True)
+
+        run("git", "init", "-q")
+        run("git", "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "add", "-A")
+        run("git", "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "commit", "-q", "-m", "initial")
+        run("git", "remote", "add", "origin", str(remote))
+        return {"dest": str(dest)}
+
+    monkeypatch.setattr(repo_workspace, "run_read", fake)
+    return remote
+
+
+def test_decide_push_requires_decision_approve(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "reject", "--push",
+    ])
+    assert code == EXIT_REFUSED
+    assert "--decision approve" in capsys.readouterr().err
+
+
+def test_decide_publish_requires_push(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve", "--publish",
+    ])
+    assert code == EXIT_REFUSED
+    assert "--publish requires --push" in capsys.readouterr().err
+
+
+def test_decide_publish_requires_reason_and_confirm(cfg_path, checks_file, monkeypatch, capsys):
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id,
+        "--decision", "approve", "--push", "--publish",
+    ])
+    assert code == EXIT_REFUSED
+    assert "--reason" in capsys.readouterr().err
+
+
+def test_decide_push_fails_but_the_commit_still_stands_when_there_is_no_remote(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    """The default fixture clone has no origin configured -- push must fail as
+    a real git error (EXIT_FAIL), not silently, and the already-landed commit
+    must still be reported (status stays "approved", not rolled back)."""
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve", "--push",
+    ])
+    assert code == EXIT_FAIL
+    decided = json.loads(capsys.readouterr().out)
+    assert decided["status"] == "approved"
+    assert decided["pushed"] is False
+
+    git_bin = __import__("shutil").which("git")
+    log = subprocess.run(
+        [git_bin, "log", "-1", "--format=%s"], cwd=dest, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert log == "add target.txt"
+
+
+def test_decide_push_lands_a_real_ref_on_a_real_remote(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    remote = _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve", "--push",
+    ])
+    assert code == EXIT_OK
+    decided = json.loads(capsys.readouterr().out)
+    assert decided["pushed"] is True
+    assert decided["pr_url"] is None  # --publish was never requested
+
+    git_bin = __import__("shutil").which("git")
+    branches = subprocess.run(
+        [git_bin, "--git-dir", str(remote), "branch", "--list"], capture_output=True, text=True, check=True,
+    ).stdout
+    assert "claude/fixture-topic" in branches
+
+
+def test_decide_publish_is_still_refused_by_the_hardcoded_execution_flag(
+    tmp_path, cfg_path, checks_file, monkeypatch, capsys,
+):
+    """The whole point of "wire it, still disarmed": EXECUTION_ENABLED is a
+    Python constant in agentic/writer.py, not a config value -- no combination
+    of config.yaml or CLI flags can make --publish succeed on a shipped
+    checkout. Push (a config-gated, non-GitHub-API action) still lands first,
+    proving the refusal is specific to publish, not a side effect of push
+    having failed."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    code = main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve",
+        "--push", "--publish", "--reason", "test publish", "--confirm-publish",
+    ])
+    assert code == EXIT_REFUSED
+    captured = capsys.readouterr()
+    decided = json.loads(captured.out)
+    assert decided["pushed"] is True  # push itself is not what's disarmed
+    assert decided["pr_url"] is None
+    assert "publish refused" in captured.err
+
+
 # --- real-repo-run: the "running" record (DEF-9) -----------------------------
 
 

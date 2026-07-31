@@ -711,7 +711,30 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     exists for -- see that function's docstring. Reattaches the clone by the
     path the run record persisted (RepoWorkspaceTools.attach), since this is
     necessarily a separate process from the one that ran the loop.
+
+    ``--push``/``--publish`` are additive escalations past the local commit
+    ``finalize_real_repo_change`` already performs, each still disarmed by
+    default: ``--push`` reaches a real remote
+    (``RepoWorkspaceTools.push_branch``, gated on
+    ``deepagent_github.allow_git_write_tools``, ships ``false``); ``--publish``
+    additionally opens a draft PR via ``agentic.writer.execute_write``, which
+    refuses unconditionally today regardless of any config --
+    ``EXECUTION_ENABLED`` is a hardcoded ``False`` in ``agentic/writer.py``,
+    not a value ``config.yaml`` can flip. Wiring the call (this commit) and
+    arming it (a signed, filed-checklist procedure --
+    ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``) are deliberately separate
+    acts.
     """
+    if args.publish and not args.push:
+        _err("--publish requires --push (a PR needs the branch on origin first)")
+        return EXIT_REFUSED
+    if args.publish and not (args.reason and args.reason.strip() and args.confirm_publish):
+        _err("--publish requires --reason and --confirm-publish")
+        return EXIT_REFUSED
+    if (args.push or args.publish) and args.decision != "approve":
+        _err("--push/--publish only apply to --decision approve")
+        return EXIT_REFUSED
+
     cfg = _load(args)
     if cfg is None:
         return EXIT_ENV
@@ -779,6 +802,45 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
             tools.close()  # nothing kept -- discard the clone now
 
     record.status = outcome["status"]
+
+    if outcome["status"] == "approved" and args.push:
+        try:
+            tools.push_branch(record.branch_name)
+        except AgenticWriteRefused as exc:
+            save_run(runs_dir, record)  # the commit already happened -- persist that much
+            _err(f"push refused: {exc.message}")
+            print(json.dumps(record.to_dict(), indent=2))
+            return EXIT_REFUSED
+        except AgenticError as exc:
+            save_run(runs_dir, record)
+            _err(f"push failed: {exc.message}")
+            print(json.dumps(record.to_dict(), indent=2))
+            return EXIT_FAIL
+        record.pushed = True
+
+        if args.publish:
+            from agentic.writer import execute_write, plan_write
+
+            try:
+                plan = plan_write(
+                    cfg, "pr_create", args.reason, confirm=args.confirm_publish,
+                    head=record.branch_name, title=record.commit_message,
+                    body=f"Automated real-repo-run candidate (run_id={record.run_id}).",
+                    config_path=args.config,
+                )
+                result = execute_write(plan, cfg=cfg, confirm=args.confirm_publish, config_path=args.config)
+            except AgenticWriteRefused as exc:
+                save_run(runs_dir, record)  # commit + push already happened
+                _err(f"publish refused: {exc.message}")
+                print(json.dumps(record.to_dict(), indent=2))
+                return EXIT_REFUSED
+            except AgenticError as exc:
+                save_run(runs_dir, record)
+                _err(f"publish failed: {exc.message}")
+                print(json.dumps(record.to_dict(), indent=2))
+                return EXIT_FAIL
+            record.pr_url = result.get("stdout") or None
+
     save_run(runs_dir, record)
     print(json.dumps(record.to_dict(), indent=2))
     return EXIT_OK
@@ -985,6 +1047,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_run_decide.add_argument("--run-id", required=True)
     p_run_decide.add_argument("--decision", required=True, choices=("approve", "reject"))
+    p_run_decide.add_argument(
+        "--push", action="store_true",
+        help="With --decision approve: also push the branch to origin (gated on "
+             "deepagent_github.allow_git_write_tools, ships false).",
+    )
+    p_run_decide.add_argument(
+        "--publish", action="store_true",
+        help="With --push: also open a draft PR (agentic.writer.execute_write). "
+             "Requires --reason and --confirm-publish. Ships permanently disarmed "
+             "(EXECUTION_ENABLED is a hardcoded False, not a config value).",
+    )
+    p_run_decide.add_argument("--reason", help="Human reason string, required with --publish.")
+    p_run_decide.add_argument(
+        "--confirm-publish", action="store_true",
+        help="Required with --publish: a fresh confirmation for agentic.writer's own write gate, "
+             "distinct from --decision approve.",
+    )
     p_run_decide.set_defaults(func=cmd_real_repo_run_decide)
 
     p_run_discard = sub.add_parser(
