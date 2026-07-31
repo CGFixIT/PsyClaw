@@ -524,6 +524,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             reason=args.reason,
             confirm=args.confirm,
             context=context_text,
+            read_paths=args.read_file,
             config_path=args.config,
             cfg=app_cfg,
         )
@@ -845,6 +846,11 @@ def build_parser() -> argparse.ArgumentParser:
     g_run.add_argument("--issue", type=int, help="Fetch an issue as task context.")
     g_run.add_argument("--repo", action="store_true", help="Fetch a repo overview as task context (default).")
     p_run.add_argument("--instruction", required=True, help="What the planner is being asked to do.")
+    p_run.add_argument(
+        "--read-file", action="append", default=[], metavar="PATH",
+        help="Repo-relative path to show the planner before it proposes changes (repeatable). "
+             "Declare every existing file an edit task needs -- the planner cannot browse the clone.",
+    )
     p_run.add_argument("--checks-file", required=True, help="Path to a JSON verification-checks manifest.")
     p_run.add_argument("--branch", required=True, help="Branch name to use on acceptance (claude/<topic>).")
     p_run.add_argument("--commit-message", required=True, help="Commit message to use on acceptance.")

@@ -966,3 +966,168 @@ def test_loop_rejects_an_iteration_that_proposes_a_duplicate_path(tmp_path, monk
     assert "file_write_failed" in result.iterations[0].decision.rejected_gates
     mverify.assert_not_called()
     assert not (Path(tools.worktree) / "target.txt").exists()
+
+
+# --- read_paths: bounded existing-file context (Tier 1) ----------------------
+
+
+def test_read_paths_shows_existing_content_in_the_prompt(tmp_path, monkeypatch):
+    seen_prompts: list[str] = []
+
+    def handler(request):
+        seen_prompts.append(json.loads(request.content.decode())["messages"][1]["content"])
+        return _chat_response("=== FILE existing.py ===\nedited content\n=== END FILE ===\nfix")
+
+    with _cloned_tools(tmp_path, monkeypatch, files={"existing.py": "original content\n"}) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools, client,
+                instruction="edit existing.py",
+                checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                branch_name="claude/edit",
+                commit_message="x",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+                read_paths=["existing.py"],
+            )
+        finally:
+            client.close()
+
+    assert "original content" in seen_prompts[0]
+    assert "EXISTING FILE: existing.py" in seen_prompts[0]
+
+
+def test_read_paths_omits_a_path_that_does_not_exist_yet(tmp_path, monkeypatch):
+    seen_prompts: list[str] = []
+
+    def handler(request):
+        seen_prompts.append(json.loads(request.content.decode())["messages"][1]["content"])
+        return _chat_response(_RIGHT_BLOCK)
+
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools, client,
+                instruction="add the marker",
+                checks=[_MARKER_CHECK],
+                branch_name="claude/create",
+                commit_message="x",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+                read_paths=["target.txt"],  # declared, but does not exist yet -- a create task
+            )
+        finally:
+            client.close()
+
+    assert "EXISTING FILE" not in seen_prompts[0]
+
+
+def test_read_paths_shows_a_prior_iterations_own_write_not_a_stale_snapshot(tmp_path, monkeypatch):
+    """The clone persists across iterations with no reset -- the second
+    iteration's prompt must show what the FIRST iteration actually wrote, not
+    the original pre-run content, matching how ``feedback`` already treats a
+    prior attempt as ground to iterate FROM."""
+    seen_prompts: list[str] = []
+    calls: list[str] = []
+
+    def handler(request):
+        seen_prompts.append(json.loads(request.content.decode())["messages"][1]["content"])
+        calls.append("x")
+        if len(calls) == 1:
+            return _chat_response("=== FILE existing.py ===\nfirst attempt\n=== END FILE ===\nfix")
+        return _chat_response("=== FILE existing.py ===\nexpected marker\n=== END FILE ===\nfix")
+
+    check = Check(
+        "marker_check",
+        (sys.executable, "-c",
+         "import pathlib,sys; sys.exit(0 if 'expected marker' in pathlib.Path('existing.py').read_text() else 1)"),
+    )
+    with _cloned_tools(tmp_path, monkeypatch, files={"existing.py": "original content\n"}) as tools:
+        client = _loop_client(handler)
+        try:
+            run_real_repo_loop(
+                tools, client,
+                instruction="edit existing.py",
+                checks=[check],
+                branch_name="claude/iterate",
+                commit_message="x",
+                max_iterations=2,
+                reason="test run",
+                confirm=True,
+                read_paths=["existing.py"],
+            )
+        finally:
+            client.close()
+
+    assert "original content" in seen_prompts[0]
+    assert "first attempt" in seen_prompts[1]
+    assert "original content" not in seen_prompts[1]
+
+
+def test_overwrite_guard_refuses_an_undeclared_existing_file(tmp_path, monkeypatch):
+    """Backstop independent of whether read_paths was used correctly: a
+    proposed write to a path that already exists and was NOT declared via
+    read_paths is refused, not silently applied -- the model was never shown
+    it, so its whole-file replacement is a reconstruction from memory."""
+    block = "=== FILE existing.py ===\nhallucinated replacement\n=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch, files={"existing.py": "original content\n"}) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="edit existing.py",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/undeclared",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    # read_paths NOT declared for existing.py
+                )
+        finally:
+            client.close()
+
+        assert result.accepted is False
+        assert "file_write_failed" in result.iterations[0].decision.rejected_gates
+        mverify.assert_not_called()
+        assert (Path(tools.worktree) / "existing.py").read_text(encoding="utf-8") == "original content\n"
+
+
+def test_overwrite_guard_allows_a_declared_existing_file(tmp_path, monkeypatch):
+    block = "=== FILE existing.py ===\nreplaced with review\n=== END FILE ===\nfix"
+    with _cloned_tools(tmp_path, monkeypatch, files={"existing.py": "original content\n"}) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            result = run_real_repo_loop(
+                tools, client,
+                instruction="edit existing.py",
+                checks=[Check("noop", (sys.executable, "-c", "pass"))],
+                branch_name="claude/declared",
+                commit_message="x",
+                max_iterations=1,
+                reason="test run",
+                confirm=True,
+                read_paths=["existing.py"],
+            )
+        finally:
+            client.close()
+
+        assert result.accepted is True
+        assert (Path(tools.worktree) / "existing.py").read_text(encoding="utf-8") == "replaced with review"
+
+
+def test_render_existing_files_bounds_per_file_and_total_size():
+    from agentic.real_repo_loop import _MAX_READ_FILE_CHARS, _MAX_TOTAL_READ_CHARS, _render_existing_files
+
+    class _FakeTools:
+        def read_file(self, path):
+            return {"big.txt": "x" * (_MAX_READ_FILE_CHARS + 500), "small.txt": "y" * 10}[path]
+
+    rendered = _render_existing_files(_FakeTools(), ["big.txt", "small.txt"])
+    assert "truncated" in rendered
+    assert len(rendered) < _MAX_TOTAL_READ_CHARS + 2_000  # generous slack for markers/labels
