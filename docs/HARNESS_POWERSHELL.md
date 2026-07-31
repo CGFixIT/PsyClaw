@@ -89,9 +89,18 @@ reported by Ollama; the header bar keeps a running tally across sessions.
 ### Agentic coding runs
 
 `/agent` drives `agentic/real_repo_loop.py`'s two-step gate from the console.
-It is off unless `agentic.enabled` and `deepagent_github.allow_git_write_tools`
-are both true in `config.yaml`; with either false the console reports that the
-layer is disabled and nothing runs.
+Two `config.yaml` flags govern it, and they refuse at **different points** —
+worth knowing before you treat either as an off switch:
+
+- `agentic.enabled: false` (the shipped default) short-circuits immediately.
+  Nothing is fetched, nothing is cloned; the console reports the layer is
+  disabled.
+- `deepagent_github.allow_git_write_tools: false` (also the shipped default)
+  refuses **after** the `gh` context fetch and the full `git clone` have already
+  happened — the gate lives inside the loop, not ahead of it. The run reports
+  `write_refused`, and the clone is discarded, but a network round-trip and a
+  working copy were spent getting there. Leave `agentic.enabled` false if you
+  want the hard off switch.
 
 1. `/agent run claude/<topic> <what the agent should do>` stages a proposal and
    prints it. Nothing is sent.

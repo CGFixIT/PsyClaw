@@ -10,6 +10,8 @@ provide on its own.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -70,6 +72,24 @@ def _chat() -> HarnessChatClient:
 def cfg(tmp_path, monkeypatch):
     monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
     return HarnessConfig.load()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_subprocess(monkeypatch):
+    """Keep the auth tests from actually running `python -m agentic.cli`.
+
+    Four guarded routes reach the ops shim, and test_guarded_route_accepts_the
+    _right_key deliberately lets a request through the whole chain. Unstubbed
+    those spawn real subprocesses -- harmless only because the shipped config
+    has agentic.enabled false, which makes the suite's cost and safety depend
+    on a config value none of these tests are about. Auth runs as a dependency
+    before the route body, so stubbing here removes the subprocess without
+    weakening a single assertion.
+    """
+    monkeypatch.setattr(
+        harness_server, "run_agentic_op",
+        lambda action, **_kwargs: SimpleNamespace(to_dict=lambda: {"ok": True, "action": action}),
+    )
 
 
 @pytest.fixture()
