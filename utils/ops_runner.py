@@ -52,9 +52,21 @@ _TIMEOUT_SEC = 120
 
 # action whitelists — the ONLY subcommands a caller may reach.
 _SYNC_ACTIONS = frozenset({"status", "test", "sync", "schedule", "unschedule"})
-_AGENTIC_ACTIONS = frozenset({"status", "test", "context", "propose-skill", "apply-skill"})
+_AGENTIC_ACTIONS = frozenset({
+    "status", "test", "context", "propose-skill", "apply-skill",
+    "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+})
 # agentic subcommands that emit JSON on stdout (vs. human text).
-_AGENTIC_JSON_ACTIONS = frozenset({"context", "propose-skill", "apply-skill"})
+_AGENTIC_JSON_ACTIONS = frozenset({
+    "context", "propose-skill", "apply-skill",
+    "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+})
+# real-repo-run clones a real repo, calls a model, and runs the caller's own
+# verification checks across up to several iterations -- the shared
+# _TIMEOUT_SEC (120s, sized for status/context/skill ops) would routinely
+# kill a legitimate run partway through. status/decide stay on the short
+# default: a read and a git commit are both fast.
+_REAL_REPO_RUN_TIMEOUT_SEC = 900
 
 # fsconnect read-only CLI subcommands exposed via /ops/fsconnect.
 _FSCONNECT_ACTIONS = frozenset({"status", "test", "list", "read", "stat", "grep", "glob"})
@@ -201,6 +213,27 @@ def _write_body(body: str) -> str:
     return handle.name
 
 
+def _write_checks_file(checks: list[dict]) -> str:
+    """Persist a verification-checks manifest to a temp file for --checks-file.
+
+    Mirrors _write_body's exact shape for the same reason: a caller-supplied
+    structure (here, a JSON-serializable list of check dicts) is written to
+    disk and passed by path, never interpolated into argv.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="cyclaw_checks_", delete=False, encoding="utf-8"
+    )
+    try:
+        json.dump(checks, handle)
+    except (OSError, UnicodeError, TypeError):
+        handle.close()
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+    finally:
+        handle.close()
+    return handle.name
+
+
 def run_sync_op(action: str, *, dry_run: bool = False) -> OpsResult:
     """Invoke ``python -m sync.cli <action>`` and normalize the result.
 
@@ -234,6 +267,13 @@ def run_agentic_op(
     body: str | None = None,
     reason: str | None = None,
     confirm: bool = False,
+    instruction: str | None = None,
+    checks: list[dict] | None = None,
+    branch: str | None = None,
+    commit_message: str | None = None,
+    max_iterations: int | None = None,
+    run_id: str | None = None,
+    decision: str | None = None,
 ) -> OpsResult:
     """Invoke ``python -m agentic.cli <action>`` and normalize the result.
 
@@ -244,11 +284,26 @@ def run_agentic_op(
     apply without confirm reaches the CLI's own refusal path (exit 4), which is
     surfaced verbatim rather than masked.
 
+    ``real-repo-run`` requires ``instruction``/``checks``/``branch``/
+    ``commit_message``/``reason`` and takes the same optional ``--pr``/
+    ``--issue`` selector as ``context``. Like ``apply-skill``, ``confirm`` is
+    only forwarded when the caller set it — omitting it reaches the CLI's own
+    refusal path (exit 4), not a silent default. ``checks`` is a
+    JSON-serializable list of check dicts, written to a temp file and passed
+    via ``--checks-file`` (never interpolated into argv, mirroring
+    ``body``/``--body-file`` above) — never defaulted, since guessing a
+    verification command for an arbitrary configured repo is exactly what
+    this whole path exists to avoid. ``real-repo-run-status``/
+    ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
+    requires ``decision`` (``"approve"`` or ``"reject"``), validated here
+    before the subprocess launch even though the CLI's own ``argparse``
+    ``choices=`` would also catch a bad value.
+
     Validation raises happen before the subprocess launch. All ``proc`` usage
     lives INSIDE the try so there is no post-``finally`` reference to an unbound
     name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
-    cleans up the temp body-file and the exception propagates before any result is
-    read. The body-file is unlinked on every exit path (return or raise).
+    cleans up the temp body-file/checks-file and the exception propagates before
+    any result is read. Both are unlinked on every exit path (return or raise).
     """
     if action not in _AGENTIC_ACTIONS:
         raise OpsError(f"Unknown agentic action: {action!r}")
@@ -256,9 +311,23 @@ def run_agentic_op(
         raise OpsError(f"{action} requires both name and desc")
     if action == "apply-skill" and not (reason and reason.strip()):
         raise OpsError("apply-skill requires a non-empty reason")
+    if action == "real-repo-run":
+        if not (instruction and instruction.strip()):
+            raise OpsError("real-repo-run requires a non-empty instruction")
+        if not checks:
+            raise OpsError("real-repo-run requires a non-empty checks list")
+        if not branch or not commit_message:
+            raise OpsError("real-repo-run requires both branch and commit_message")
+        if not (reason and reason.strip()):
+            raise OpsError("real-repo-run requires a non-empty reason")
+    if action in {"real-repo-run-status", "real-repo-run-decide"} and not run_id:
+        raise OpsError(f"{action} requires run_id")
+    if action == "real-repo-run-decide" and decision not in {"approve", "reject"}:
+        raise OpsError("real-repo-run-decide requires decision to be 'approve' or 'reject'")
 
     argv = [sys.executable, "-m", "agentic.cli", "--config", str(_CONFIG_PATH), action]
     body_file: str | None = None
+    checks_file: str | None = None
     try:
         if action == "context":
             if pr is not None:
@@ -284,14 +353,46 @@ def run_agentic_op(
                 argv += [f"--reason={reason}"]
             if action == "apply-skill" and confirm:
                 argv.append("--confirm")
+        elif action == "real-repo-run":
+            if pr is not None:
+                argv += ["--pr", str(pr)]
+            elif issue is not None:
+                argv += ["--issue", str(issue)]
+            else:
+                argv.append("--repo")
+            checks_file = _write_checks_file(checks)  # type: ignore[arg-type]
+            argv += [
+                f"--instruction={instruction}",
+                "--checks-file", checks_file,
+                f"--branch={branch}",
+                f"--commit-message={commit_message}",
+                f"--reason={reason}",
+            ]
+            if max_iterations:
+                argv += ["--max-iterations", str(max_iterations)]
+            if confirm:
+                argv.append("--confirm")
+        elif action == "real-repo-run-status":
+            argv += [f"--run-id={run_id}"]
+        elif action == "real-repo-run-decide":
+            # Validated above (decision in {"approve", "reject"}, which excludes
+            # None) before the subprocess launch; asserting it here narrows
+            # str | None -> str for mypy rather than silencing the check.
+            assert decision is not None  # noqa: S101
+            argv += [f"--run-id={run_id}", "--decision", decision]
 
-        proc = _run(argv)
+        # Only real-repo-run needs a non-default timeout (a model + verification
+        # loop routinely outlasts _TIMEOUT_SEC); every other action keeps the
+        # original bare _run(argv) call so its own default budget is unchanged.
+        proc = _run(argv, timeout_sec=_REAL_REPO_RUN_TIMEOUT_SEC) if action == "real-repo-run" else _run(argv)
         ok, label = _AGENTIC_LABELS.get(proc.returncode, (False, "unknown"))
         parsed = _maybe_json(proc.stdout) if (ok and action in _AGENTIC_JSON_ACTIONS) else None
         return OpsResult("agentic", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
     finally:
         if body_file:
             Path(body_file).unlink(missing_ok=True)
+        if checks_file:
+            Path(checks_file).unlink(missing_ok=True)
 
 
 def run_fsconnect_op(
