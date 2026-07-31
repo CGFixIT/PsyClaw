@@ -498,6 +498,21 @@ agentic:
     # call. A separate gate from allow_shell_execution above, which means "give
     # the model a generic shell tool" (still hard-refused/unimplemented).
     allow_git_write_tools: false
+    # Real-repo loop diff-scope gate: a candidate that writes into any of these
+    # (path-prefix match) is refused outright, because these are exactly the
+    # files that judge the candidate's own acceptance -- rewriting them would
+    # let a candidate pass its own checks by construction. See
+    # agentic.real_repo_loop.decide_real_repo_candidate.
+    protected_write_paths:
+      - "tests/"
+      - "conftest.py"
+      - ".github/"
+      - ".git/"
+      - "pyproject.toml"
+      - "setup.cfg"
+      - "pytest.ini"
+      - ".claude/skills/"
+    max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
     workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
     # Cloud coding-loop providers. The agentic analog of app.mode: "hybrid" --
     # gate 3 of the six-condition chain (agentic.enabled, deepagent_github.enabled,

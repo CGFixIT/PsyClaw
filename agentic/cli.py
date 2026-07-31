@@ -525,6 +525,8 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             confirm=args.confirm,
             context=context_text,
             read_paths=args.read_file,
+            protected_write_paths=cfg.deepagent_github.protected_write_paths,
+            max_write_budget_bytes=cfg.deepagent_github.max_write_budget_bytes,
             config_path=args.config,
             cfg=app_cfg,
         )

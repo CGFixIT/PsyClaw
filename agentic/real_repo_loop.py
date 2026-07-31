@@ -240,6 +240,24 @@ def _verification_feedback(verification: VerificationReport, *, config_path: str
     return "\n\n".join(parts)
 
 
+def _matches_protected_path(path: str, protected_prefixes: Sequence[str]) -> bool:
+    """True when ``path`` falls under one of ``protected_prefixes``.
+
+    A prefix ending in ``/`` matches by directory prefix (``"tests/"`` also
+    covers ``"tests/unit/test_x.py"``). A bare filename (no trailing ``/``,
+    e.g. ``"conftest.py"``) matches at the repo root OR nested anywhere
+    (``"src/conftest.py"``), since a conftest.py anywhere can affect pytest
+    collection, not only one at the root.
+    """
+    for prefix in protected_prefixes:
+        if prefix.endswith("/"):
+            if path.startswith(prefix):
+                return True
+        elif path == prefix or path.endswith("/" + prefix):
+            return True
+    return False
+
+
 def _parse_file_blocks(text: str) -> dict[str, str]:
     """Extract ``{path: content}`` blocks from a planner response.
 
@@ -294,32 +312,42 @@ def decide_real_repo_candidate(
     verification: VerificationReport | None,
     governance_findings: tuple[GovernanceFinding, ...],
     write_failed: bool = False,
+    out_of_scope: bool = False,
+    write_budget_exceeded: bool = False,
 ) -> RealRepoDecision:
     """Apply the real-repo acceptance gate.
 
     Rejects when no file was actually changed, a write was refused (a bad or
-    malicious path, e.g.), any governance finding is critical, or (when
+    malicious path, e.g.), any governance finding is critical, the candidate
+    touched a protected path or exceeded the write-size budget, or (when
     verification ran) it failed. ``verification`` is ``None`` when a
     candidate was already rejected before verification was worth running (no
-    files changed, or a critical finding already present) -- skipping the
-    executor call in that case, never treating a skipped check as a pass.
-    ``write_failed`` is a plain bool, not derived from ``changed_files``,
-    mirroring ``harness_optimizer.core.decide_candidate``'s own convention of
-    taking out-of-band signals (like ``visible_case_hardcoding_detected``) as
-    flat booleans rather than re-deriving them here.
+    files changed, a critical finding, an out-of-scope write, or an
+    over-budget write already present) -- skipping the executor call in that
+    case, never treating a skipped check as a pass. ``write_failed``,
+    ``out_of_scope``, and ``write_budget_exceeded`` are plain bools, not
+    derived from ``changed_files``, mirroring
+    ``harness_optimizer.core.decide_candidate``'s own convention of taking
+    out-of-band signals (like ``visible_case_hardcoding_detected``) as flat
+    booleans rather than re-deriving them here.
     """
     rejected: list[str] = []
     has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
-    # A quarantined iteration wrote nothing BECAUSE it was critical, so reporting
-    # "no_files_changed" alongside would tell the planner it proposed no files at
-    # all -- steering the next attempt at the wrong problem, since this reason
-    # string is the only feedback it receives.
-    if not changed_files and not has_critical:
+    quarantined = has_critical or out_of_scope or write_budget_exceeded
+    # A quarantined iteration wrote nothing BECAUSE of one of the reasons
+    # below, so reporting "no_files_changed" alongside would tell the planner
+    # it proposed no files at all -- steering the next attempt at the wrong
+    # problem, since this reason string is the only feedback it receives.
+    if not changed_files and not quarantined:
         rejected.append("no_files_changed")
     if write_failed:
         rejected.append("file_write_failed")
     if has_critical:
         rejected.append("critical_governance_finding")
+    if out_of_scope:
+        rejected.append("out_of_scope_write")
+    if write_budget_exceeded:
+        rejected.append("write_budget_exceeded")
     if verification is not None and not verification.ok:
         rejected.append("verification_failed")
     accepted = not rejected
@@ -374,16 +402,19 @@ class RealRepoLoopResult:
         source of truth) could silently drop a file the accepted checks
         actually depended on from the approved commit.
 
-        Iterations quarantined for a critical governance finding are excluded.
-        ``run_real_repo_loop`` now scans every proposed file before writing any
-        of them, so such an iteration writes nothing and contributes nothing
-        here anyway -- this filter is the belt to that fix's braces, so that a
-        future change which reintroduces a partial write cannot silently promote
-        critical-flagged content into the staged commit set.
+        Iterations quarantined for a critical governance finding, an
+        out-of-scope write, or an over-budget write are excluded.
+        ``run_real_repo_loop`` scans/measures every proposed file before
+        writing any of them, so such an iteration writes nothing and
+        contributes nothing here anyway -- this filter is the belt to that
+        fix's braces, so that a future change which reintroduces a partial
+        write cannot silently promote quarantined content into the staged
+        commit set.
         """
+        quarantine_gates = {"critical_governance_finding", "out_of_scope_write", "write_budget_exceeded"}
         seen: dict[str, None] = {}
         for iteration in self.iterations:
-            if "critical_governance_finding" in iteration.decision.rejected_gates:
+            if quarantine_gates & set(iteration.decision.rejected_gates):
                 continue
             for path in iteration.changed_files:
                 seen[path] = None
@@ -421,6 +452,8 @@ def run_real_repo_loop(
     confirm: bool,
     context: str | None = None,
     read_paths: Sequence[str] = (),
+    protected_write_paths: Sequence[str] = (),
+    max_write_budget_bytes: int | None = None,
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> RealRepoLoopResult:
@@ -483,6 +516,18 @@ def run_real_repo_loop(
     the same path via ``read_paths`` on every subsequent attempt. A path that
     does not exist at all is unaffected -- creating a new file needs no prior
     read.
+
+    ``protected_write_paths`` (path prefixes/filenames -- see
+    ``_matches_protected_path``) and ``max_write_budget_bytes`` are the
+    diff-scope gate: a candidate that writes into a protected path, or whose
+    total proposed write size exceeds the budget, is quarantined the same way
+    a critical governance finding is -- nothing is written, verification does
+    not run, and the iteration is rejected. This closes the reward-hacking
+    hazard a make-the-checks-pass loop otherwise has no defense against: with
+    no scope gate, a candidate could rewrite the very tests judging it and be
+    "accepted" by construction. Both empty/``None`` (the defaults) disable the
+    respective check -- the caller supplies them from config, never a hardcoded
+    invented default.
     """
     _require_run_gates(tools, reason=reason, confirm=confirm)
     if not isinstance(instruction, str) or not instruction.strip():
@@ -550,8 +595,22 @@ def run_real_repo_loop(
             governance_findings.extend(inspect_candidate_text(content, cfg))
         has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
 
+        # Diff-scope gate: computed and quarantined BEFORE any write, exactly
+        # like the critical-finding scan above and for the same reason -- a
+        # candidate that rewrites the tests judging it (or blows the write
+        # budget) must not land on disk even for a rejected iteration, since
+        # the clone persists across iterations and a later iteration's
+        # verification would otherwise run against it.
+        out_of_scope_files = tuple(
+            path for path in proposed_files if _matches_protected_path(path, protected_write_paths)
+        )
+        total_write_bytes = sum(len(content.encode("utf-8")) for content in proposed_files.values())
+        write_budget_exceeded = (
+            max_write_budget_bytes is not None and total_write_bytes > max_write_budget_bytes
+        )
+
         read_paths_set = set(read_paths)
-        if not has_critical:
+        if not has_critical and not out_of_scope_files and not write_budget_exceeded:
             for path, content in proposed_files.items():
                 # Backstop against the whole-file-replacement protocol
                 # silently destroying a file the model was never shown: if it
@@ -583,7 +642,7 @@ def run_real_repo_loop(
         ever_written.update(written)
 
         verification: VerificationReport | None = None
-        if written and not has_critical and not write_failed:
+        if written and not has_critical and not write_failed and not out_of_scope_files and not write_budget_exceeded:
             # config_path/cfg threaded through -- every OTHER audit_log call in
             # this loop already gets them (the started/iteration/accepted
             # events above and below). Without them, run_verification's own
@@ -599,6 +658,8 @@ def run_real_repo_loop(
             verification=verification,
             governance_findings=tuple(governance_findings),
             write_failed=write_failed,
+            out_of_scope=bool(out_of_scope_files),
+            write_budget_exceeded=write_budget_exceeded,
         )
 
         iterations.append(
@@ -641,6 +702,16 @@ def run_real_repo_loop(
             evidence = _verification_feedback(verification, config_path=config_path, cfg=cfg)
             if evidence:
                 feedback_parts.append(evidence)
+        if out_of_scope_files:
+            feedback_parts.append(
+                "These paths are protected and cannot be written: " + ", ".join(out_of_scope_files)
+                + ". Propose a change that does not touch them."
+            )
+        if write_budget_exceeded:
+            feedback_parts.append(
+                f"Total proposed write size ({total_write_bytes} bytes) exceeds the "
+                f"{max_write_budget_bytes}-byte budget for one attempt. Propose a smaller, more targeted change."
+            )
         if write_failure_messages:
             feedback_parts.append("\n".join(write_failure_messages))
         feedback = "\n\n".join(feedback_parts)
