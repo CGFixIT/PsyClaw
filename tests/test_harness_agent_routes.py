@@ -358,6 +358,70 @@ def test_validation_errors_do_not_echo_the_submitted_value(client):
     assert secret not in resp.text
 
 
+def test_an_unknown_key_is_redacted_rather_than_echoed(client):
+    """The case the value-only test above misses entirely.
+
+    For an extra="forbid" violation Pydantic's error `loc` IS the caller's own
+    key, so reporting "the field location, not the input" still echoes
+    attacker-controlled text -- verified: an earlier handler answered
+    `body.sk-ant-LEAKED-SECRET` verbatim. Redaction alone does NOT close this
+    (redact_sensitive matches known secret shapes, and an arbitrary key is not
+    one), so the whole location is replaced.
+    """
+    for key in ("sk-ant-LEAKED-SECRET", "sk-ant-" + "a" * 30, "just-a-typo"):
+        resp = client.post(_RUN, json={**_VALID_BODY, key: 1})
+        assert resp.status_code == 422, key
+        assert key not in resp.text, key
+        assert resp.json()["detail"]["code"] == "VALIDATION_ERROR"
+
+
+def test_an_oversized_unknown_key_cannot_flood_the_console(client):
+    """redact_sensitive only catches shapes it knows; the cap bounds the rest."""
+    resp = client.post(_RUN, json={**_VALID_BODY, "z" * 5000: 1})
+    assert resp.status_code == 422
+    assert all(len(f) <= 120 for f in resp.json()["detail"]["details"]["fields"])
+
+
+def test_a_declared_field_name_is_still_reported(client):
+    """The replacement must not blind the operator to real mistakes: for every
+    error type other than extra_forbidden, loc names a field this app declared,
+    which is safe to echo and is the whole point of the envelope."""
+    fields = client.post(_RUN, json={**_VALID_BODY, "branch": "nope"}).json()["detail"]["details"]["fields"]
+    assert any("branch" in f for f in fields)
+
+
+def test_pr_and_issue_together_are_rejected(client, calls):
+    """run_agentic_op's selector is if/elif, so both would send only --pr and
+    drop the issue silently."""
+    resp = client.post(_RUN, json={**_VALID_BODY, "pr": 1, "issue": 2})
+    assert resp.status_code == 422
+    assert calls == []
+
+
+def test_a_run_id_with_a_trailing_newline_is_rejected(client, calls):
+    """Python's `$` also matches just before a trailing newline, so a `match()`
+    against this anchored pattern would accept "<32 hex>\\n". The validator uses
+    fullmatch; the pattern text stays identical to agentic's so the drift test
+    still compares them.
+    """
+    from harness.agent_policy import RUN_ID_RE
+
+    assert RUN_ID_RE.match(_RUN_ID + "\n") is not None  # the trap being avoided
+    assert RUN_ID_RE.fullmatch(_RUN_ID + "\n") is None
+
+
+def test_the_enforced_branch_pattern_is_the_shared_constant(client):
+    """Not a third copy. The drift test compares agent_policy's constant to
+    agentic's; if the request model carried its own literal, that literal would
+    be the one actually enforced and could drift with the test still green.
+    """
+    from harness.schemas import AgentRunRequest
+
+    metadata = AgentRunRequest.model_fields["branch"].metadata
+    patterns = [m.pattern for m in metadata if hasattr(m, "pattern")]
+    assert patterns == [BRANCH_NAME_RE.pattern]
+
+
 def test_an_unknown_field_is_rejected(client, calls):
     """_ForbidModel: a typo'd key must not be silently ignored."""
     assert client.post(_RUN, json={**_VALID_BODY, "instrution": "typo"}).status_code == 422

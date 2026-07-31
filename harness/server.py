@@ -85,6 +85,13 @@ _HTTP_TOO_MANY_REQUESTS = 429
 _HTTP_UNPROCESSABLE = 422
 _HTTP_BAD_GATEWAY = 502
 _HTTP_GATEWAY_TIMEOUT = 504
+# Caps a validation error's echoed field location. An extra="forbid" violation
+# reports the caller's own key as the location, so this bounds what an
+# oversized key can push into the console after redaction.
+_MAX_ERROR_FIELD_LEN = 120
+# Stands in for an extra="forbid" violation's location, which is the key the
+# caller sent rather than anything this app declared.
+_UNEXPECTED_FIELD = "(unexpected field)"
 _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
@@ -180,11 +187,23 @@ def _validation_error_response(exc: RequestValidationError) -> JSONResponse:
     gate.py solves the same class of problem by hand-raising an HTTPException
     per case (see its /soul/apply INVALID_REASON path); one handler is the
     equivalent for a whole app whose every model already forbids extra keys.
-    The field locations are included but the offending INPUT is not -- an
-    invalid body can carry operator text, and this response is rendered
-    straight into the console.
+    The offending VALUE is never included, and neither is a caller-invented
+    field NAME. Those are not the same guarantee: for every other error type
+    ``loc`` names a field declared on the model, but for an ``extra="forbid"``
+    violation ``loc`` IS the key the caller sent, so ``{"sk-ant-<key>": 1}``
+    would echo that key into a response the console renders as text.
+    Redaction alone does not close it -- ``redact_sensitive`` matches known
+    secret SHAPES, so anything outside them still round-trips. The whole
+    location is replaced instead, which is a guarantee rather than a filter;
+    redaction and the length cap still run over the declared-field names as
+    defense in depth.
     """
-    fields = [".".join(str(part) for part in err.get("loc", ())) for err in exc.errors()]
+    fields = [
+        _UNEXPECTED_FIELD
+        if err.get("type") == "extra_forbidden"
+        else redact_sensitive(".".join(str(part) for part in err.get("loc", ())))[:_MAX_ERROR_FIELD_LEN]
+        for err in exc.errors()
+    ]
     detail = {
         _CODE_KEY: "VALIDATION_ERROR",
         _MESSAGE_KEY: "request body failed validation: " + (", ".join(fields) or "unknown field"),
@@ -242,9 +261,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         limit at all -- every other CyClaw entry point rate-limits its
         request-generating endpoint (/query), this one didn't.
 
-        Applied to the two routes that cost real resources per call:
-        /api/chat (a model round-trip) and /api/github/status (a Python
-        subprocess via utils.ops_runner, up to _TIMEOUT_SEC=120s each). The
+        Applied to every route that costs real resources per call: /api/chat
+        (a model round-trip), /api/github/status, and the three /api/agent/*
+        routes (each a Python subprocess via utils.ops_runner -- 120s for a
+        status or a decision, up to 900s for a run). The
         cheap read-only routes (/api/status, /api/sessions, ...) stay exempt
         so a console refresh loop never eats the budget the expensive routes
         need. The budget is shared across the limited routes on purpose: it
@@ -524,7 +544,11 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # one of sixty.
     def _validated_run_id(run_id: str) -> str:
         """Reject a malformed run_id before it becomes a `--run-id=` argv element."""
-        if not RUN_ID_RE.match(run_id):
+        # fullmatch, not match: Python's `$` also matches just before a
+        # trailing newline, so `match()` would accept "<32 hex>\n" -- the
+        # pattern text stays byte-identical to agentic's so the drift test
+        # still compares the two.
+        if not RUN_ID_RE.fullmatch(run_id):
             raise _err(
                 _HTTP_BAD_REQUEST,
                 AgenticError(

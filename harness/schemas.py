@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from harness.agent_policy import DEFAULT_CHECK_PROFILE
+from harness.agent_policy import BRANCH_NAME_RE, DEFAULT_CHECK_PROFILE
 
 _MAX_MESSAGE_LEN = 32768
 _MAX_TITLE_LEN = 200
@@ -67,14 +67,12 @@ class AgentRunRequest(_ForbidModel):
     """
 
     instruction: str = Field(min_length=1, max_length=_MAX_INSTRUCTION_LEN)
-    # Validated against agent_policy.BRANCH_NAME_RE's exact source. Declared as
-    # a pattern here (not a route-body check) so a bad branch is a 422 carrying
-    # the offending value, before any subprocess is spawned.
-    branch: str = Field(
-        min_length=1,
-        max_length=_MAX_BRANCH_LEN,
-        pattern=r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$",
-    )
+    # BRANCH_NAME_RE.pattern, NOT a copy of its text. A third literal here
+    # would be the one actually enforced while the drift test in
+    # tests/test_harness_agent_routes.py compared the other two -- the test
+    # would stay green with the enforcement wrong. Declared as a pattern (not
+    # a route-body check) so a bad branch is a 422 before any subprocess runs.
+    branch: str = Field(min_length=1, max_length=_MAX_BRANCH_LEN, pattern=BRANCH_NAME_RE.pattern)
     commit_message: str = Field(min_length=1, max_length=_MAX_COMMIT_MESSAGE_LEN)
     reason: str = Field(min_length=1, max_length=_MAX_REASON_LEN)
     confirm: bool = False
@@ -89,6 +87,19 @@ class AgentRunRequest(_ForbidModel):
     max_iterations: int | None = Field(default=None, ge=1, le=_MAX_ITERATIONS_CEILING)
     pr: int | None = Field(default=None, ge=1)
     issue: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _one_target_only(self) -> AgentRunRequest:
+        """Reject pr AND issue together rather than silently preferring one.
+
+        ``run_agentic_op`` builds its selector with if/elif, so a body carrying
+        both sends only ``--pr`` and the issue is dropped without a word. An
+        operator who supplied both meant something; guessing which half to
+        honor is the wrong answer either way.
+        """
+        if self.pr is not None and self.issue is not None:
+            raise ValueError("pass at most one of pr / issue")
+        return self
 
 
 class AgentDecisionRequest(_ForbidModel):

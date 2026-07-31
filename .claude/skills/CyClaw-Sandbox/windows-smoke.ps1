@@ -96,7 +96,8 @@ try {
 Write-Host ""
 Write-Host "=== CyClaw Windows Harness API smoke bomb ($HarnessBase) ===" -ForegroundColor Cyan
 
-# The harness's five state-changing POSTs and GET /api/github/status are gated
+# The harness's five state-changing POSTs, GET /api/github/status and the three
+# /api/agent/* run routes are gated
 # on the same Bearer CYCLAW_API_KEY the gateway uses (utils/auth.py). Reuses
 # $ApiKey read above; the open read routes ignore the header.
 $HarnessHeaders = @{ Authorization = "Bearer $ApiKey" }
