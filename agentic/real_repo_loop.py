@@ -133,9 +133,11 @@ class ProposerClient(Protocol):
         temperature: float = 0.0,
         config_path: str = "config.yaml",
         cfg: dict | None = None,
-    ) -> ProposerResponse: ...
+    ) -> ProposerResponse:
+        """Return a response whose ``.content`` is the model's proposed patch text."""
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Release any resources the client holds (e.g. an HTTP client)."""
 
 _FILE_BLOCK_RE = re.compile(
     r"=== FILE (?P<path>[^\n]+?) ===\n(?P<body>.*?)\n=== END FILE ===",
