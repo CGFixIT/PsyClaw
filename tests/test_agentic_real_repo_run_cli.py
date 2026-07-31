@@ -856,12 +856,18 @@ def test_status_omits_the_diff_for_an_exhausted_run(cfg_path, checks_file, monke
 def test_status_reports_diff_unavailable_rather_than_crashing_when_the_clone_is_gone(
     cfg_path, checks_file, monkeypatch, capsys,
 ):
+    from agentic.deepagent_github import repo_workspace
+
     monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
     _run_start(cfg_path, checks_file)
     record = json.loads(capsys.readouterr().out)
     run_id, dest = record["run_id"], record["dest"]
 
-    __import__("shutil").rmtree(dest)  # simulate the clone becoming unreachable between run and status
+    # simulate the clone becoming unreachable between run and status. A plain
+    # shutil.rmtree can't delete git's read-only pack/loose objects on Windows
+    # (PermissionError: WinError 5) -- reuse the repo's own git-read-only-aware
+    # cleanup helper instead of reinventing the onexc-clearing logic here.
+    repo_workspace._rmtree_best_effort(dest)
 
     assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", run_id]) == EXIT_OK
     status = json.loads(capsys.readouterr().out)
