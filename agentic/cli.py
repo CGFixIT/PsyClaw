@@ -500,6 +500,26 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             _err("agentic.deepagent_github.model must be configured before real-repo-run")
             return EXIT_ENV
 
+    # run_real_repo_loop's own _require_run_gates enforces these three, but only
+    # on its FIRST line -- which is reached after a live GitHub context fetch and
+    # a full network `gh repo clone`. allow_git_write_tools ships false, so on a
+    # shipped checkout every single invocation paid for a clone and then refused,
+    # and the "running" record saved just before the loop was never updated
+    # (the AgenticWriteRefused handler below returns without save_run), leaving a
+    # permanent `running` record pointing at an already-deleted directory. Same
+    # eager-before-network-I/O reasoning as the two checks above; the loop still
+    # re-checks all three itself, which is the point -- this is the cheap early
+    # refusal, not a replacement for the authoritative one.
+    if not cfg.deepagent_github.allow_git_write_tools:
+        _err("agentic.deepagent_github.allow_git_write_tools is False; real-repo-run cannot write to a clone")
+        return EXIT_REFUSED
+    if not (args.reason and args.reason.strip()):
+        _err("a non-empty --reason is required")
+        return EXIT_REFUSED
+    if not args.confirm:
+        _err("--confirm is required to actually run")
+        return EXIT_REFUSED
+
     from agentic import context
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
     from agentic.real_repo_loop import run_real_repo_loop
@@ -594,6 +614,17 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             cfg=app_cfg,
         )
     except AgenticWriteRefused as exc:
+        # Persist before returning, like the AgenticError path below already
+        # does. The eager gate check above means this is now hard to reach, but
+        # when it WAS reachable it returned without saving, leaving the
+        # "running" record written moments earlier pointing at the directory
+        # tools.close() is about to delete -- unreachable by
+        # real-repo-run-status and indistinguishable from garbage by anything
+        # that might reclaim it.
+        save_run(runs_dir, RealRepoRunRecord(
+            run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="failed",
+            error=exc.message, provider=provider,
+        ))
         tools.close()
         _err(exc.message)
         return EXIT_REFUSED
@@ -779,6 +810,16 @@ def _publish_record(
         print(json.dumps(record.to_dict(), indent=2))
         return EXIT_REFUSED
     except AgenticError as exc:
+        # A `gh pr create` TIMEOUT is not a failure -- execute_write reports it
+        # as INDETERMINATE precisely because the request already left the
+        # machine and GitHub may well have accepted it. Flattening that to
+        # "failed" with pr_url still None re-armed the exact duplicate the
+        # no-retry rule exists to prevent: require_pushed_for_publish gates a
+        # second publish on `if record.pr_url`, which stays falsy, so the
+        # operator's natural retry opens a SECOND pull request. Record the
+        # ambiguity instead, so the guard fires and a human resolves it.
+        if exc.details.get("indeterminate"):
+            record.pr_url = "INDETERMINATE: gh pr create timed out; verify on GitHub before retrying"
         save_run(runs_dir, record)
         _err(f"publish failed: {exc.message}")
         print(json.dumps(record.to_dict(), indent=2))
@@ -885,6 +926,19 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
             tools.close()  # nothing kept -- discard the clone now
 
     record.status = outcome["status"]
+    # Persisted HERE, before the escalations, not only at the end. The git
+    # commit has already landed by this point, and --push/--publish spend up to
+    # ~3 minutes of network time after it; an interruption anywhere in that
+    # window (Ctrl-C, SIGKILL on the ops_runner wall clock, an OSError out of
+    # subprocess.run) previously left the record at pending_decision on disk
+    # while a real commit -- and possibly a pushed branch and an open PR --
+    # existed. That state was unrecoverable for approve: a retried decide
+    # passes require_pending_decision, reaches finalize_real_repo_change, and
+    # `git checkout -b` fails with "a branch named ... already exists", so the
+    # run could only ever be rejected, recording the wrong outcome for work
+    # that had already shipped. Saving twice is cheap; an unrecoverable record
+    # is not.
+    save_run(runs_dir, record)
 
     if outcome["status"] == "approved" and args.push:
         code = _push_record(tools, record, runs_dir)
