@@ -299,6 +299,108 @@ class TestConfigPathAnchoring:
                 HybridRetriever(str(repo / "config.yaml"))
 
 
+class TestEmbeddingFingerprintCheck:
+    """HybridRetriever.__init__ must warn (never raise) on an absent or
+    mismatched embedding fingerprint, and stay silent when the reader has no
+    .fingerprint() at all -- e.g. pgvector, or any of the SimpleNamespace mocks
+    the rest of this file and TestConfigPathAnchoring above already rely on.
+    """
+
+    @staticmethod
+    def _build_repo(tmp_path, models_cfg=None):
+        repo = tmp_path / "repo"
+        index_dir = repo / "index"
+        index_dir.mkdir(parents=True)
+        (index_dir / "bm25.json").write_text(
+            json.dumps({
+                "tokenized_corpus": [["alpha"]],
+                "chunks": ["alpha"],
+                "metadata": [{"source": "a.md", "chunk_id": 0, "stem_tags": "[]"}],
+            }),
+            encoding="utf-8",
+        )
+        cfg = {
+            "indexing": {
+                "bm25_path": "index/bm25.json",
+                "chroma_path": "index/chroma_db",
+                "collection_name": "test_kb",
+            },
+            "retrieval": {"top_k_semantic": 1, "top_k_keyword": 1, "rrf_k": 60},
+        }
+        if models_cfg is not None:
+            cfg["models"] = models_cfg
+        (repo / "config.yaml").write_text(json.dumps(cfg), encoding="utf-8")
+        return repo / "config.yaml"
+
+    def test_no_fingerprint_method_is_a_silent_noop(self, tmp_path):
+        # No `models:` section either -- the pre-existing config fixtures in
+        # this file omit it, so build_index/HybridRetriever must not KeyError.
+        config_path = self._build_repo(tmp_path)
+        reader = SimpleNamespace(close=lambda: None)
+        with (
+            patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search.audit_log") as audit,
+        ):
+            HybridRetriever(str(config_path))
+        audit.assert_not_called()
+
+    def test_absent_fingerprint_warns_and_audits(self, tmp_path):
+        config_path = self._build_repo(
+            tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
+        )
+        reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: None)
+        with (
+            patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search.audit_log") as audit,
+        ):
+            HybridRetriever(str(config_path))
+        event = audit.call_args.args[0]
+        assert event["event"] == "embedding_fingerprint_absent"
+        assert event["expected"] == {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+
+    def test_matching_fingerprint_is_silent(self, tmp_path):
+        config_path = self._build_repo(
+            tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
+        )
+        matching = {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+        reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: matching)
+        with (
+            patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search.audit_log") as audit,
+        ):
+            HybridRetriever(str(config_path))
+        audit.assert_not_called()
+
+    def test_mismatched_fingerprint_warns_and_audits(self, tmp_path):
+        config_path = self._build_repo(
+            tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
+        )
+        # A pre-EMBED_DEVICE-pin index -- built while sentence-transformers
+        # auto-selected mps, on the exact query that produced PR #734's finding.
+        stale = {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "mps"}
+        reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: stale)
+        with (
+            patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search.audit_log") as audit,
+        ):
+            HybridRetriever(str(config_path))
+        event = audit.call_args.args[0]
+        assert event["event"] == "embedding_fingerprint_mismatch"
+        assert event["index"] == stale
+        assert event["expected"]["device"] == "cpu"
+
+    def test_fingerprint_check_failure_never_blocks_construction(self, tmp_path):
+        config_path = self._build_repo(tmp_path)
+
+        def _boom():
+            raise RuntimeError("reader is misbehaving")
+
+        reader = SimpleNamespace(close=lambda: None, fingerprint=_boom)
+        with patch("retrieval.hybrid_search.get_vector_reader", return_value=reader):
+            # Must not raise -- the fingerprint check is observability only.
+            HybridRetriever(str(config_path))
+
+
 class TestTokenizationForBM25:
     """Ensure tokenization produces useful BM25 input."""
 

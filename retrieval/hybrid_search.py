@@ -7,6 +7,7 @@ Degrades gracefully if one retrieval path fails.
 
 import heapq
 import json
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -17,10 +18,12 @@ from rank_bm25 import BM25Okapi
 from utils.errors import EmbeddingServiceError, IndexNotFoundError
 from utils.logger import audit_log
 
-from .embeddings import get_embedding
+from .embeddings import embedding_fingerprint, get_embedding
 from .indexer import _anchor_index_paths, _resolve_config_path
 from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_reader, parse_stem_tags
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,6 +62,7 @@ class HybridRetriever:
             )
 
         self._vector_reader = get_vector_reader(self.cfg)
+        self._check_embedding_fingerprint()
 
         # Validate path is a regular file before deserializing. The BM25 index is
         # project-generated (retrieval/indexer.py) and read from a config-controlled
@@ -108,6 +112,49 @@ class HybridRetriever:
         # hybrid_search) and returning shared instances across calls would
         # leak one query's fusion state into the next identical query.
         self._bm25_scores = lru_cache(maxsize=256)(self.bm25.get_scores)
+
+    def _check_embedding_fingerprint(self) -> None:
+        """Warn (never raise) if the vector index's embedding fingerprint is
+        absent or mismatched vs. the currently configured model/dim/device.
+
+        ``fingerprint()`` only exists on ``_ChromaReader`` (checked via
+        ``getattr``, not isinstance -- ``_PgVectorReader`` and every test mock
+        that stands in for the reader deliberately have no such method, and
+        that must stay a silent no-op, not an error). Two distinct cases:
+        absent (an index built before this check existed -- most likely the
+        operator's own pre-existing index) vs. present-but-mismatched (a real
+        model/dim/device change since the last build). Both are pure
+        observability -- this must never block or alter retrieval, so any
+        failure here is swallowed after being logged.
+        """
+        fingerprint_fn = getattr(self._vector_reader, "fingerprint", None)
+        if fingerprint_fn is None:
+            return
+        try:
+            actual = fingerprint_fn()
+            embeddings_cfg = (self.cfg.get("models") or {}).get("embeddings") or {}
+            expected = embedding_fingerprint(embeddings_cfg)
+            if actual is None:
+                logger.warning(
+                    "Vector index has no embedding fingerprint recorded (built before "
+                    "this check existed) -- rebuild with `python -m retrieval.indexer` "
+                    "to confirm it matches the configured model/dim/device."
+                )
+                audit_log(
+                    {"event": "embedding_fingerprint_absent", "expected": expected},
+                    config_path=self.config_path,
+                )
+            elif actual != expected:
+                logger.warning(
+                    "Vector index embedding fingerprint mismatch (index=%r, configured=%r) "
+                    "-- rebuild with `python -m retrieval.indexer`.", actual, expected,
+                )
+                audit_log(
+                    {"event": "embedding_fingerprint_mismatch", "index": actual, "expected": expected},
+                    config_path=self.config_path,
+                )
+        except Exception as e:  # noqa: BLE001 -- observability only, must never block retrieval
+            logger.warning("Embedding fingerprint check failed (non-fatal): %s", e)
 
     def close(self) -> None:
         """Close the underlying vector store connection.
