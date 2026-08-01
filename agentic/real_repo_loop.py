@@ -93,7 +93,12 @@ from typing import Literal, Protocol, runtime_checkable
 
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools, canonical_repo_path
 from agentic.executor import Check, VerificationReport, run_verification
-from agentic.harness_optimizer.governance import CRITICAL_SEVERITY, GovernanceFinding, inspect_candidate_text
+from agentic.harness_optimizer.governance import (
+    CRITICAL_SEVERITY,
+    GovernanceFinding,
+    inspect_candidate_text,
+    inspect_code_shape,
+)
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
@@ -530,6 +535,7 @@ def run_real_repo_loop(
     read_paths: Sequence[str] = (),
     protected_write_paths: Sequence[str] = (),
     max_write_budget_bytes: int | None = None,
+    scan_code_shape: bool = True,
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> RealRepoLoopResult:
@@ -669,6 +675,14 @@ def run_real_repo_loop(
         # rather than a verification-skip.
         for content in proposed_files.values():
             governance_findings.extend(inspect_candidate_text(content, cfg))
+            # Two different questions about the same bytes, hence two scanners:
+            # inspect_candidate_text asks "is this trying to talk to a model",
+            # inspect_code_shape asks "is this code trying to exfiltrate a key
+            # or open a shell". The first answered ZERO findings for a real
+            # SSH-key exfiltration payload -- see inspect_code_shape's own
+            # docstring for the demonstration and, importantly, for what it
+            # still does not catch.
+            governance_findings.extend(inspect_code_shape(content, scan_code_shape))
         has_critical = any(finding.severity == CRITICAL_SEVERITY for finding in governance_findings)
 
         # Diff-scope gate: computed and quarantined BEFORE any write, exactly

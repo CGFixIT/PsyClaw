@@ -218,6 +218,13 @@ class DeepAgentGitHubConfig:
     max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
     max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
     planner_timeout_sec: int = DEFAULT_PLANNER_TIMEOUT_SEC
+    # The escape hatch for agentic.harness_optimizer.governance.inspect_code_shape.
+    # Defaults ON (fail safe). It exists because that scanner is a HEURISTIC that
+    # hard-blocks an iteration, and a heuristic gate with no recourse is a broken
+    # gate: some legitimate changes genuinely do combine, say, subprocess with a
+    # path that looks credential-shaped. Turning it off is an explicit operator
+    # act with a config diff behind it, not a silent default.
+    scan_code_shape: bool = True
 
     def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
         """Return a provider's config, or None when it is not configured/enabled.
@@ -242,6 +249,7 @@ class DeepAgentGitHubConfig:
             "agentic.deepagent_github.allow_github_writes",
             "agentic.deepagent_github.allow_cloud_providers",
             "agentic.deepagent_github.allow_git_write_tools",
+            "agentic.deepagent_github.scan_code_shape",
         ):
             attr = field_name.rsplit(".", 1)[-1]
             _validate_bool(getattr(self, attr), field_name)
