@@ -20,12 +20,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy
-import torch
-import yaml
+import numpy  # noqa: E402
+import torch  # noqa: E402
+import yaml  # noqa: E402
 
-from retrieval.hybrid_search import HybridRetriever
-from retrieval.indexer import build_index
+from retrieval.hybrid_search import HybridRetriever  # noqa: E402
+from retrieval.indexer import build_index  # noqa: E402
 
 # The two queries that fail on macos-latest but pass on ubuntu-latest.
 QUERIES = [
