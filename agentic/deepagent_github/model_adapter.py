@@ -34,6 +34,7 @@ class DeepAgentModelSettings:
     model: str
     is_cloud: bool = False
     max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
+    timeout_sec: int = 600
 
     @classmethod
     def from_config(
@@ -51,7 +52,7 @@ class DeepAgentModelSettings:
         if cloud_provider is None:
             return cls(
                 provider=cfg.provider, base_url=cfg.base_url, model=cfg.model,
-                max_handoff_chars=cfg.max_handoff_chars,
+                max_handoff_chars=cfg.max_handoff_chars, timeout_sec=cfg.planner_timeout_sec,
             )
         provider_cfg = cfg.cloud_provider(cloud_provider)
         if provider_cfg is None:
@@ -67,7 +68,7 @@ class DeepAgentModelSettings:
         # toggle into an arbitrary-egress control.
         return cls(
             provider=cloud_provider, base_url="", model=provider_cfg.model, is_cloud=True,
-            max_handoff_chars=cfg.max_handoff_chars,
+            max_handoff_chars=cfg.max_handoff_chars, timeout_sec=cfg.planner_timeout_sec,
         )
 
 
@@ -111,6 +112,7 @@ def build_chat_model(settings: DeepAgentModelSettings) -> object:
             model=settings.model,
             base_url=settings.base_url,
             api_key=os.getenv("DEEPAGENT_API_KEY", "not-needed"),
+            timeout=settings.timeout_sec,
         )
 
     key = _require_cloud_key(settings.provider)
@@ -124,7 +126,7 @@ def build_chat_model(settings: DeepAgentModelSettings) -> object:
                 "optional cloud provider dependencies are not installed",
                 details={"extra": _CLOUD_EXTRA, "provider": settings.provider},
             ) from exc
-        return ChatXAI(model=settings.model, api_key=key)
+        return ChatXAI(model=settings.model, api_key=key, timeout=settings.timeout_sec)
 
     try:
         # langchain-anthropic is a MANDATORY dependency of deepagents itself, not
@@ -136,7 +138,7 @@ def build_chat_model(settings: DeepAgentModelSettings) -> object:
             "optional Deep Agents runtime dependencies are not installed",
             details={"extra": _LOCAL_EXTRA, "provider": settings.provider},
         ) from exc
-    return ChatAnthropic(model=settings.model, api_key=key)
+    return ChatAnthropic(model=settings.model, api_key=key, timeout=settings.timeout_sec)
 
 
 __all__ = ["DeepAgentModelSettings", "build_chat_model", "cloud_key_available"]

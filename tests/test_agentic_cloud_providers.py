@@ -149,6 +149,21 @@ def test_settings_resolve_a_gated_cloud_provider():
     assert settings.base_url == ""
 
 
+def test_settings_thread_planner_timeout_sec_for_both_local_and_cloud():
+    """Regression for the confirmed 2026-08-02 finding: the cloud proposer path
+
+    (ChatModelProposerClient / build_chat_model) had NO request timeout at all
+    before this field existed -- the opposite failure mode from
+    LocalProposerClient's hardcoded 30s (an unbounded hang instead of a fast
+    fail). Both branches of from_config must carry the configured value.
+    """
+    cfg = _deep_cfg(planner_timeout_sec=723)
+    local_settings = DeepAgentModelSettings.from_config(cfg)
+    cloud_settings = DeepAgentModelSettings.from_config(cfg, cloud_provider="grok")
+    assert local_settings.timeout_sec == 723
+    assert cloud_settings.timeout_sec == 723
+
+
 def test_settings_refuse_an_ungated_cloud_provider_rather_than_falling_back():
     cfg = DeepAgentGitHubConfig(enabled=True, model="m", allow_cloud_providers=False)
     with pytest.raises(AgenticError) as excinfo:

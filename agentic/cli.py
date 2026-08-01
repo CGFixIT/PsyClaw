@@ -594,7 +594,11 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     else:
         from agentic.harness_optimizer.model_adapter import LocalProposerClient
 
-        client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
+        client = LocalProposerClient(
+            base_url=cfg.deepagent_github.base_url,
+            model=cfg.deepagent_github.model,
+            timeout_sec=cfg.deepagent_github.planner_timeout_sec,
+        )
     try:
         result = run_real_repo_loop(
             tools,
