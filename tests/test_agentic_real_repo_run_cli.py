@@ -24,6 +24,7 @@ import yaml
 from agentic.cli import EXIT_ENV, EXIT_FAIL, EXIT_OK, EXIT_REFUSED, _bundle_context_text, main
 from agentic.deepagent_github.chat_client import ChatModelProposerClient, ChatModelProposerResponse
 from agentic.harness_optimizer.model_adapter import LocalProposerClient, LocalProposerResponse
+from utils.errors import AgenticError
 
 _RIGHT_BLOCK = "=== FILE target.txt ===\nexpected marker\n=== END FILE ===\nfix"
 _WRONG_BLOCK = "=== FILE target.txt ===\nwrong content\n=== END FILE ===\nattempt"
@@ -781,6 +782,118 @@ def test_decide_publish_is_still_refused_by_the_hardcoded_execution_flag(
     assert decided["pushed"] is True  # push itself is not what's disarmed
     assert decided["pr_url"] is None
     assert "publish refused" in captured.err
+
+
+# --- shipped-default refusals happen before any network I/O ------------------
+
+
+@pytest.mark.parametrize(("mutate", "extra", "needle"), [
+    ({"allow_git_write_tools": False}, (), "allow_git_write_tools"),
+    (None, ("--no-confirm",), "--confirm"),
+])
+def test_run_refuses_before_cloning_when_a_run_gate_is_closed(
+    cfg_path, checks_file, monkeypatch, capsys, mutate, extra, needle,
+):
+    """allow_git_write_tools ships FALSE, so on a shipped checkout this was
+    every invocation: a live context fetch and a full network `gh repo clone`,
+    then a refusal on run_real_repo_loop's very first line -- and the "running"
+    record saved moments earlier was never updated, leaving a permanent
+    `running` record pointing at an already-deleted directory."""
+    from utils.logger import reset_config_cache
+
+    if mutate:
+        src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+        src["agentic"]["deepagent_github"].update(mutate)
+        Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+        reset_config_cache()
+
+    def explode(*args, **kwargs):
+        raise AssertionError("real-repo-run must not reach the context/clone leg when a run gate is closed")
+
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+
+    argv = [
+        "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
+        "--checks-file", checks_file, "--branch", "claude/x", "--commit-message", "x",
+        "--reason", "test",
+    ]
+    if "--no-confirm" not in extra:
+        argv.append("--confirm")
+    assert main(argv) == EXIT_REFUSED
+    assert needle in capsys.readouterr().err
+
+
+def test_decide_persists_approved_before_the_network_push(cfg_path, checks_file, monkeypatch, capsys):
+    """The commit has already landed when push starts, and push+publish spend
+    up to ~3 minutes of network time after it. If the record is only written
+    afterwards, an interruption strands it at pending_decision while a real
+    commit exists -- and a retried approve then dies permanently on
+    `git checkout -b` ("a branch named ... already exists")."""
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+
+    runs_dir = Path(dest).parent.parent / "runs"  # <workspace_root>/runs
+    seen: list[str] = []
+
+    def watching_push(self, name):
+        # Read the record from DISK at the moment the network call would start.
+        seen.append(json.loads((runs_dir / f"{run_id}.json").read_text(encoding="utf-8"))["status"])
+        raise AgenticError("simulated push failure")
+
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+
+    monkeypatch.setattr(RepoWorkspaceTools, "push_branch", watching_push)
+    main(["--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve", "--push"])
+
+    assert seen == ["approved"], "the approved status must be on disk before the push is attempted"
+
+
+def test_publish_records_an_indeterminate_timeout_so_a_retry_cannot_duplicate_the_pr(
+    tmp_path, cfg_path, checks_file, monkeypatch, capsys,
+):
+    """execute_write reports a `gh pr create` timeout as INDETERMINATE because
+    the request already left the machine. Flattening that to "failed" with
+    pr_url still None re-arms the exact duplicate the no-retry rule exists to
+    prevent, since require_pushed_for_publish gates on `if record.pr_url`."""
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+
+    import agentic.writer as writer_mod
+
+    def timing_out(*args, **kwargs):
+        raise AgenticError("gh pr_create timed out", details={"indeterminate": True})
+
+    # plan_write must be stubbed too: on a shipped checkout it refuses first
+    # (agentic.mode is "read"), so execute_write would never be reached and
+    # this would test the mode gate rather than the timeout handling.
+    monkeypatch.setattr(writer_mod, "plan_write", lambda *a, **k: {"op": "pr_create"})
+    monkeypatch.setattr(writer_mod, "execute_write", timing_out)
+    code = main([
+        "--config", cfg_path, "real-repo-run-publish", "--run-id", run_id,
+        "--reason", "ship it", "--confirm",
+    ])
+    assert code == EXIT_FAIL
+    assert "INDETERMINATE" in json.loads(capsys.readouterr().out)["pr_url"]
+
+    # The guard must now refuse a retry rather than opening a second PR.
+    code = main([
+        "--config", cfg_path, "real-repo-run-publish", "--run-id", run_id,
+        "--reason", "ship it", "--confirm",
+    ])
+    assert code == EXIT_FAIL
+    assert "already has a pull request" in capsys.readouterr().err
 
 
 # --- standalone push/publish subcommands (their own decision points) ---------
