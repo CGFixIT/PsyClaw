@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+import builtins
 import json
+import threading
+
+import pytest
 
 from guardrails.metrics import (
     EVENT_BLOCKED,
     EVENT_HALLUCINATION,
     EVENT_TOOL_CALL,
     GuardrailMetrics,
+    close_metrics_handles,
     compute_guardrail_metrics,
     load_events,
 )
+
+
+@pytest.fixture(autouse=True)
+def _close_metrics_handles():
+    # The recorder now keeps one cached append handle per path. Release them
+    # between tests so tmp_path teardown never races an open descriptor (the
+    # same reason tests/conftest-style suites call close_audit_handles()).
+    yield
+    close_metrics_handles()
 
 
 def test_record_persists_jsonl_and_hashes_query(tmp_path):
@@ -131,3 +145,63 @@ def test_load_events_skips_invalid_event_lines(tmp_path):
     events = load_events(path)
     assert len(events) == 1
     assert compute_guardrail_metrics(events)["hallucinations_flagged"] == 1
+
+
+def test_concurrent_records_never_interleave_a_line(tmp_path):
+    # The recorder is called from FastAPI's threadpool once the input rail is
+    # enabled, and it now writes through ONE shared cached handle instead of a
+    # per-call file object. A shared BufferedWriter is not documented as safe
+    # for concurrent writes, and a torn line is invisible in production --
+    # load_events() drops it via its JSONDecodeError handler, so the event is
+    # simply lost with no error anywhere. This asserts the round-trip invariant
+    # every line must satisfy.
+    #
+    # Honest scope note: on CPython/Linux the GIL plus a single buffered write
+    # already makes this hold even without the lock, so this test does NOT fail
+    # on a lock-free variant here -- it fails once a write is split into
+    # multiple syscalls (verified locally by chunking the write: 278/400 lines
+    # survived). It is a guard on the contract, not a reproduction of a Linux
+    # bug: the lock exists because sharing the handle makes it required, the
+    # same pairing utils/logger.py uses for the audit stream.
+    path = tmp_path / "guardrails.jsonl"
+    m = GuardrailMetrics(path)
+    threads = 16
+    per_thread = 25
+    filler = "x" * 8192
+
+    def worker(n: int) -> None:
+        for i in range(per_thread):
+            m.record_tool_call(f"tool-{n}", query=f"q-{n}-{i}", filler=filler)
+
+    workers = [threading.Thread(target=worker, args=(n,)) for n in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join()
+
+    raw_lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(raw_lines) == threads * per_thread
+    # load_events() silently skips malformed lines, so compare against the raw
+    # count rather than trusting its output alone.
+    assert len(load_events(path)) == len(raw_lines)
+
+
+def test_handle_is_reused_across_records(tmp_path, monkeypatch):
+    # One cached handle per path -- not a fresh open() per event. Guards the
+    # hot-path regression this replaced (open+write+close on every query).
+    path = tmp_path / "guardrails.jsonl"
+    m = GuardrailMetrics(path)
+    opened: list[str] = []
+    real_open = builtins.open
+
+    def counting_open(file, *args, **kwargs):
+        opened.append(str(file))
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counting_open)
+    for i in range(10):
+        m.record_allowed(query=f"q{i}")
+    monkeypatch.undo()
+
+    assert opened.count(str(path)) == 1, f"expected one open(), got {opened.count(str(path))}"
+    assert len(load_events(path)) == 10

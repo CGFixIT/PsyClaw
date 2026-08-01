@@ -19,16 +19,75 @@ gate.py, graph.py, or mcp_hybrid_server.py.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+import threading
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from utils.logger import hash_query
 
 logger = logging.getLogger("cyclaw.guardrails.metrics")
+
+# _record() previously opened, wrote, and closed the metrics file on every
+# single event. With guardrails.enabled: true the input rail runs on every
+# query that clears min_score, so that is an open()+close() per query (two or
+# three when a turn also records a soul-topic hit) on the /query hot path --
+# the exact syscall overhead utils/logger.py was refactored to eliminate for
+# the audit stream. Mirror its idiom here: one cached append-mode handle per
+# resolved metrics path, reused across events, flushed after every write so
+# readers still observe each event immediately.
+#
+# The lock matters independently of the speed: FastAPI serves /query from a
+# threadpool, so concurrent _record() calls previously raced on an unlocked
+# append. POSIX O_APPEND makes a single small write atomic, but Python's
+# buffered writer can split one line across two syscalls and Windows offers no
+# such guarantee at all -- and an interleaved line is then silently dropped by
+# load_events()'s JSONDecodeError handler, so the corruption never surfaces.
+_METRICS_WRITE_LOCK = threading.Lock()
+_METRICS_HANDLES: dict[str, TextIO] = {}
+
+
+def _metrics_handle(metrics_path: Path) -> TextIO:
+    """Return the cached append-mode handle for metrics_path, opening it if needed.
+
+    Caller must hold _METRICS_WRITE_LOCK.
+    """
+    key = str(metrics_path)
+    handle = _METRICS_HANDLES.get(key)
+    if handle is None or handle.closed:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        # Intentionally long-lived: cached above and reused by every subsequent
+        # _record() for this path. Registered with atexit right here as well as
+        # in close_metrics_handles() below -- closing an already-closed file
+        # object is a no-op, so the two closers never conflict.
+        handle = open(metrics_path, "a", encoding="utf-8")  # noqa: SIM115
+        atexit.register(handle.close)
+        _METRICS_HANDLES[key] = handle
+    return handle
+
+
+def close_metrics_handles() -> None:
+    """Flush and close all cached metrics handles.
+
+    Called automatically at process exit; also useful for tests that need to
+    release file descriptors before deleting their tmp_path metrics files.
+    """
+    with _METRICS_WRITE_LOCK:
+        for handle in _METRICS_HANDLES.values():
+            try:
+                handle.close()
+            except OSError:
+                # Best-effort at exit/teardown; the clear() below still drops our
+                # reference so a later _record() reopens cleanly.
+                pass
+        _METRICS_HANDLES.clear()
+
+
+atexit.register(close_metrics_handles)
 
 # Canonical event types. Kept as constants so producers and the analyzer agree.
 EVENT_TOOL_CALL = "tool_call"
@@ -66,9 +125,15 @@ class GuardrailMetrics:
         self.counters[event] += 1
         if self.persist:
             try:
-                self.metrics_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self.metrics_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(record) + "\n")
+                line = json.dumps(record) + "\n"
+                # Serialize OUTSIDE the lock is tempting, but a TypeError from an
+                # unserializable field must not leave a half-written line behind,
+                # so json.dumps stays inside the try and the write happens as one
+                # locked append of an already-complete line.
+                with _METRICS_WRITE_LOCK:
+                    handle = _metrics_handle(self.metrics_path)
+                    handle.write(line)
+                    handle.flush()
             except (OSError, TypeError, ValueError, RecursionError) as exc:
                 # Metrics are telemetry, never policy. Letting a disk-full or
                 # serialization failure escape causes graph.guardrail_input_node
