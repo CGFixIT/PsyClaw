@@ -4,6 +4,17 @@ Status: Historical design plan with the phase 6-9 implementation now recorded
 behind disabled-by-default agentic feature gates. The current behavior and
 security boundary are authoritative in `DEEP_AGENT_HARNESS_PHASES_6_9.md`.
 
+**Retired (owner decision, 2026-07-31): no further development is planned on
+this subsystem.** `agentic/real_repo_loop.py` (a separate, simpler
+plan→patch→verify→commit pipeline, not built on `deepagents`) has superseded
+it as the one live real-repo coding path -- see `docs/THREAT_MODEL.md`'s
+fifth amendment and `docs/agentic/AGENTIC_README.md` §9 for the current,
+accurate split between the two. This document's code (`builder.py`,
+`subagents.py`, `tools.py`, `permissions.py`) and its tests/CI lane remain in
+the repository, unmodified and still passing, purely as a documentation-only
+decision -- nothing here was deleted or disabled beyond what already shipped
+disabled. Do not propose completing its live-fire invocation as future work.
+
 Implementation note: Deep Agents remain optional, disabled by default, and free
 of live GitHub writes, shell execution, real-repository writes, and autonomous
 apply. Phase 9 is a security gate, not authorization to add an executor.

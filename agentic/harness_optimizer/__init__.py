@@ -3,6 +3,24 @@
 Phases 2-8: local data models, fixture-only runner/scoring helpers, proposer
 workspace creation, scoped tools, and human-gated candidate artifact records.
 This package does not call GitHub, shell commands, or the CyClaw request path.
+
+``GitHubCodingRunner`` (``runners/github_coding_runner.py``), the loop driver
+(``loop_driver.py``), and their supporting types are deliberately NOT
+re-exported here, even though every other public name in this package is.
+``github_coding_runner.py`` imports ``agentic.deepagent_github.builder``, and
+``agentic.deepagent_github.tools`` imports ``agentic.harness_optimizer.mcp.tools``
+-- so the moment this ``__init__.py`` imports anything from
+``github_coding_runner``/``loop_driver`` at module scope, loading
+``agentic.deepagent_github`` (which many callers, including ``agentic.cli``,
+do routinely) forces this file to run, which in turn tries to finish loading
+``agentic.deepagent_github.builder`` before it has, a genuine circular import
+(confirmed by triggering it: ``ImportError: cannot import name
+'DeepAgentBuildResult' from partially initialized module``). Import both
+directly from their own modules instead --
+``agentic.harness_optimizer.runners.github_coding_runner`` and
+``agentic.harness_optimizer.loop_driver`` -- exactly how
+``tests/test_agentic_harness_phase679.py`` already did before either of
+those modules existed.
 """
 
 from __future__ import annotations

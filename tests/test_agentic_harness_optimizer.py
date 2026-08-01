@@ -117,6 +117,46 @@ def test_candidate_rejects_critical_governance_finding() -> None:
     assert "critical_governance_finding" in decision.rejected_gates
 
 
+def test_candidate_rejects_when_verification_failed() -> None:
+    """The executor's report feeds in as a plain bool, not a rich object.
+
+    decide_candidate accepts verification_failed as a bare bool (never an
+    agentic.executor.VerificationReport) so this module never needs to import
+    agentic.executor -- the caller collapses a richer report to this one bit
+    before calling in, the same division of labor governance_findings /
+    has_critical_governance_finding already establish.
+    """
+    baseline = RunReport("baseline", train_passed=True, holdout_passed=True, score=0.40)
+    candidate = RunReport("candidate", train_passed=True, holdout_passed=True, score=0.90)
+
+    decision = decide_candidate(
+        baseline,
+        candidate,
+        allowed_surface_ids=set(),
+        proposal_present=True,
+        verification_failed=True,
+    )
+
+    assert decision.accepted is False
+    assert "verification_failed" in decision.rejected_gates
+
+
+def test_verification_failed_defaults_false_for_every_existing_caller() -> None:
+    """Backward-compat guard: an omitted verification_failed must not reject."""
+    baseline = RunReport("baseline", train_passed=True, holdout_passed=True, score=0.40)
+    candidate = RunReport("candidate", train_passed=True, holdout_passed=True, score=0.90)
+
+    decision = decide_candidate(
+        baseline,
+        candidate,
+        allowed_surface_ids=set(),
+        proposal_present=True,
+    )
+
+    assert decision.accepted is True
+    assert "verification_failed" not in decision.rejected_gates
+
+
 def test_has_critical_governance_finding_recognizes_real_serialization() -> None:
     # Round-trips through the real GovernanceFinding.as_gate_string() serialization
     # instead of a hand-typed "critical: ..." literal, so a format drift in

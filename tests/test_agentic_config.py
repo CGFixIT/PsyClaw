@@ -95,7 +95,60 @@ def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) ->
     assert cfg.deepagent_github.allow_shell_execution is False
     assert cfg.deepagent_github.allow_filesystem_write_tools is False
     assert cfg.deepagent_github.allow_github_writes is False
+    assert cfg.deepagent_github.allow_git_write_tools is False
     assert cfg.deepagent_github.workspace_root == str(DATA_ROOT / "agentic" / "workspaces")
+    from agentic.config import DEFAULT_MAX_WRITE_BUDGET_BYTES, DEFAULT_PROTECTED_WRITE_PATH_PREFIXES
+
+    assert cfg.deepagent_github.protected_write_paths == list(DEFAULT_PROTECTED_WRITE_PATH_PREFIXES)
+    assert cfg.deepagent_github.max_write_budget_bytes == DEFAULT_MAX_WRITE_BUDGET_BYTES
+    assert "tests/" in cfg.deepagent_github.protected_write_paths
+    assert ".git/" in cfg.deepagent_github.protected_write_paths
+
+
+def test_deepagent_config_rejects_non_list_protected_write_paths(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": "tests/"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_rejects_empty_string_in_protected_write_paths(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": ["tests/", ""]})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+@pytest.mark.parametrize("bad", [0, -1, "100000", 1.5, True])
+def test_deepagent_config_rejects_invalid_max_write_budget_bytes(tmp_path: Path, bad) -> None:
+    block = _base_block(deepagent_github={"max_write_budget_bytes": bad})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_a_custom_protected_write_paths_and_budget(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"protected_write_paths": ["custom/"], "max_write_budget_bytes": 5000})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.protected_write_paths == ["custom/"]
+    assert cfg.deepagent_github.max_write_budget_bytes == 5000
+
+
+def test_deepagent_config_defaults_max_handoff_chars(tmp_path: Path) -> None:
+    from agentic.config import DEFAULT_MAX_HANDOFF_CHARS
+
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+    assert cfg.deepagent_github.max_handoff_chars == DEFAULT_MAX_HANDOFF_CHARS
+
+
+@pytest.mark.parametrize("bad", [0, -1, "200000", 1.5, True])
+def test_deepagent_config_rejects_invalid_max_handoff_chars(tmp_path: Path, bad) -> None:
+    block = _base_block(deepagent_github={"max_handoff_chars": bad})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_a_custom_max_handoff_chars(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"max_handoff_chars": 50_000})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.max_handoff_chars == 50_000
 
 
 def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:
@@ -262,6 +315,15 @@ class TestShippedAgenticConfigContract:
         assert cfg.allow_filesystem_write_tools is False
         assert cfg.allow_shell_execution is False
         assert cfg.allow_github_writes is False
+        assert cfg.allow_git_write_tools is False
+        # Gate 3 of the cloud chain -- the agentic analog of app.mode: "hybrid".
+        assert cfg.allow_cloud_providers is False
+        # Gate 4, per provider. Both must ship false, and cloud_provider() must
+        # refuse to hand either back while gate 3 is off.
+        assert set(cfg.providers) == {"grok", "claude"}
+        for name, provider in cfg.providers.items():
+            assert provider.enabled is False, name
+            assert cfg.cloud_provider(name) is None, name
 
     def test_harness_optimizer_shipped_gates_disabled(self) -> None:
         cfg = self._load().harness_optimizer
@@ -276,15 +338,49 @@ class TestShippedAgenticConfigContract:
         assert cfg.require_human_confirm_for_accept is True
 
 
-def test_cli_exposes_no_harness_or_deepagent_subcommands() -> None:
-    """Tripwire: the harness_optimizer/deepagent_github packages must stay
-    unreachable from the agentic CLI until a later phase deliberately wires
-    a subcommand for them. If this test needs updating, that wiring was
-    added on purpose -- update it deliberately, not by accident."""
+def test_cli_subcommand_surface_is_pinned() -> None:
+    """Tripwire on what the agentic CLI exposes.
+
+    Was "exposes no harness/deepagent subcommands". `deepagent-plan` was added
+    deliberately: a read-only probe that asserts the six-condition cloud chain,
+    fetches injection-scanned GitHub context, and reports the harness build's gate
+    state. It invokes nothing and writes nothing.
+
+    `real-repo-run`/`real-repo-run-status`/`real-repo-run-decide` were added
+    deliberately too: the first live CLI route that actually clones a real repo,
+    calls a model, and (only after a separate, explicit `real-repo-run-decide
+    --decision approve`) commits inside that clone -- still no push, no PR, no
+    GitHub API call. See `agentic/real_repo_loop.py`'s module docstring for the
+    full gate chain.
+
+    `real-repo-run-discard` was added deliberately too: `real-repo-run-decide`
+    retains an approved (or rejected) run's clone on disk rather than deleting
+    it, and nothing else in this codebase ever reclaims it -- an adversarial
+    review found every approved run leaking a full repo clone under
+    `workspace_root` forever. This is the explicit reclamation step, not a
+    change to when approve/reject themselves clean up.
+
+    `real-repo-run-push`/`real-repo-run-publish` were added deliberately too:
+    each escalation past an approved run is its own decision point, and they
+    are separate SUBCOMMANDS rather than flags on `real-repo-run-decide`
+    because `require_pending_decision` correctly treats an approved run as
+    terminal -- an approve-then-push sequence through the decide command could
+    never reach the push. Both ship unable to succeed: push needs
+    `deepagent_github.allow_git_write_tools` (false) and publish needs
+    `agentic/writer.py`'s `EXECUTION_ENABLED`, a hardcoded False no config can
+    flip. See `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
+
+    If this needs updating again, that wiring was added on purpose. Update it
+    deliberately, not by accident."""
     import argparse
 
     from agentic.cli import build_parser
 
     parser = build_parser()
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
-    assert set(sub_action.choices.keys()) == {"status", "context", "propose-skill", "apply-skill", "test"}
+    assert set(sub_action.choices.keys()) == {
+        "status", "context", "propose-skill", "apply-skill", "deepagent-plan",
+        "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+        "real-repo-run-push", "real-repo-run-publish",
+        "real-repo-run-discard", "test",
+    }

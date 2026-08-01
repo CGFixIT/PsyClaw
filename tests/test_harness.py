@@ -36,6 +36,19 @@ def _mock_transport(reply: str = "ok", prompt_tokens: int = 11, completion_token
     return httpx.MockTransport(handler)
 
 
+# The guarded routes (five state-changing POSTs + /api/github/status) now require
+# a Bearer CYCLAW_API_KEY. Every TestClient below carries it by default so these
+# tests keep exercising the behavior they were written for; tests/test_harness_auth.py
+# is where the auth gate itself is asserted.
+_TEST_KEY = "harness-test-key"
+_AUTH = {"Authorization": f"Bearer {_TEST_KEY}"}
+
+
+@pytest.fixture(autouse=True)
+def _api_key(monkeypatch):
+    monkeypatch.setenv("CYCLAW_API_KEY", _TEST_KEY)
+
+
 @pytest.fixture()
 def cfg(tmp_path, monkeypatch):
     monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
@@ -49,7 +62,7 @@ def client(cfg):
     )
     # base_url sets the Host header to an allowed loopback host; the default
     # "testserver" is now rejected by TrustedHostMiddleware (see the rebinding test).
-    return TestClient(create_app(cfg, chat), base_url="http://127.0.0.1")
+    return TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_AUTH)
 
 
 # -- config ---------------------------------------------------------------------
@@ -338,7 +351,7 @@ def test_console_follows_local_backend_fallback(cfg, monkeypatch):
     )
     llm_client.reset_local_backend_cache()
     try:
-        data = TestClient(create_app(cfg), base_url="http://127.0.0.1").get("/api/status").json()
+        data = TestClient(create_app(cfg), base_url="http://127.0.0.1", headers=_AUTH).get("/api/status").json()
     finally:
         llm_client.reset_local_backend_cache()
     assert data["provider"] == "lmstudio"
@@ -369,7 +382,7 @@ def test_rejects_non_loopback_host_header(cfg):
     """DNS-rebinding defense: a request whose Host header is not a loopback host
     is rejected by TrustedHostMiddleware before reaching a state-changing route,
     mirroring gate.py's protection for the same single-operator threat model."""
-    rebind = TestClient(create_app(cfg, _loopback_chat()), base_url="http://attacker.example")
+    rebind = TestClient(create_app(cfg, _loopback_chat()), base_url="http://attacker.example", headers=_AUTH)
     assert rebind.get("/api/status").status_code == 400
     assert rebind.post("/api/soul", json={"enabled": False}).status_code == 400
 
@@ -420,7 +433,7 @@ def test_chat_honors_persisted_model_selection(client, cfg):
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b",
         transport=httpx.MockTransport(handler),
     )
-    selection_client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1")
+    selection_client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_AUTH)
 
     resp = selection_client.post("/api/chat", json={"message": "hi"})
     assert resp.status_code == 200
@@ -434,7 +447,7 @@ def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
     monkeypatch.setattr(
         harness_server, "_rate_limit_settings", lambda: {"max_requests": 2, "window_seconds": 60}
     )
-    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1", headers=_AUTH)
 
     assert limited_client.post("/api/chat", json={"message": "one"}).status_code == 200
     assert limited_client.post("/api/chat", json={"message": "two"}).status_code == 200
@@ -444,13 +457,17 @@ def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
 
 
 def test_rate_limit_scoped_to_expensive_routes_only(cfg, monkeypatch):
-    """The limiter throttles the routes that cost real resources per call, not
-    the whole app -- the cheap read-only routes (status, sessions, etc.) stay
-    unaffected by the same per-app RateLimiter instance."""
+    """The limiter throttles the guarded routes, not the whole app -- the cheap
+    read-only routes (status, sessions, etc.) stay unaffected by the same per-app
+    RateLimiter instance.
+
+    The guarded set is the five state-changing POSTs plus /api/github/status. The
+    limiter runs FIRST in that dependency chain so it also bounds API-key guessing;
+    the open read routes below carry neither dependency."""
     monkeypatch.setattr(
         harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60}
     )
-    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1", headers=_AUTH)
 
     assert limited_client.post("/api/chat", json={"message": "one"}).status_code == 200
     assert limited_client.post("/api/chat", json={"message": "two"}).status_code == 429
@@ -475,7 +492,7 @@ def test_github_status_is_rate_limited(cfg, monkeypatch):
         return SimpleNamespace(to_dict=lambda: {"ok": True, "action": action})
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _fake_run_agentic_op)
-    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+    limited_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1", headers=_AUTH)
 
     assert limited_client.get("/api/github/status").status_code == 200
     second = limited_client.get("/api/github/status")
@@ -494,7 +511,7 @@ def test_github_status_error_path_is_redacted(cfg, monkeypatch):
         raise OpsError("upstream said: contact admin@example.com from 10.1.2.3")
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _raising_run_agentic_op)
-    test_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1")
+    test_client = TestClient(create_app(cfg, _loopback_chat()), base_url="http://127.0.0.1", headers=_AUTH)
 
     resp = test_client.get("/api/github/status")
     assert resp.status_code == 400
@@ -574,7 +591,7 @@ def test_app_shutdown_closes_chat_client(cfg):
     chat = HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
     )
-    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1") as c:
+    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_AUTH) as c:
         assert c.post("/api/chat", json={"message": "hi"}).status_code == 200
         assert chat._client.is_closed is False
     assert chat._client.is_closed is True
@@ -590,5 +607,5 @@ def test_app_shutdown_survives_a_failing_client_close(cfg):
         raise RuntimeError("close failed")
 
     chat.close = boom  # type: ignore[method-assign]
-    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1") as c:
+    with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_AUTH) as c:
         assert c.get("/").status_code == 200

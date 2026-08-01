@@ -1,8 +1,17 @@
-"""Lazy builder seam for optional LangChain Deep Agents integration."""
+"""Lazy builder seam for optional LangChain Deep Agents integration.
+
+Retired (owner decision, 2026-07-31): no further development is planned on
+this subsystem. ``agentic/real_repo_loop.py`` -- a separate, simpler
+plan-patch-verify-commit pipeline not built on ``deepagents`` -- has
+superseded it as the one live real-repo coding path; see
+``docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md``'s retirement
+note for the full context. This module, its tests, and the
+``deepagents-harness`` CI lane remain in the repository unmodified -- a
+documentation-only decision, not a deletion.
+"""
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +19,7 @@ from typing import Any
 
 from agentic.config import AgenticConfig
 from agentic.deepagent_github.memory import load_local_memory_files
-from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
+from agentic.deepagent_github.model_adapter import DeepAgentModelSettings, build_chat_model
 from agentic.deepagent_github.permissions import DeepAgentPermissionPolicy, refuse_unsupported_write_policy
 from agentic.deepagent_github.skills import governed_skill_files
 from agentic.deepagent_github.subagents import build_subagent_specs, default_subagents
@@ -52,34 +61,36 @@ def _load_runtime_model(
     """Load optional Deep Agents integrations only after the feature gates pass."""
 
     try:
+        # Backend imports stay here -- they are Deep Agents plumbing, not provider
+        # choice. The chat model itself comes from model_adapter.build_chat_model,
+        # which owns the local/cloud branch and its own ImportError messages.
         from deepagents import FilesystemPermission
         from deepagents.backends import StateBackend
         from deepagents.backends.utils import create_file_data
-        from langchain_openai import ChatOpenAI
     except ImportError as exc:
         raise AgenticError(
             "optional Deep Agents runtime dependencies are not installed",
             details={"extra": "agentic-deepagents"},
         ) from exc
 
-    # The local endpoint usually ignores this placeholder. An operator may supply
-    # DEEPAGENT_API_KEY for an authenticated OpenAI-compatible endpoint; it is a
-    # credential, not feature configuration, and is never logged.
-    model = ChatOpenAI(
-        model=settings.model,
-        base_url=settings.base_url,
-        api_key=os.getenv("DEEPAGENT_API_KEY", "not-needed"),
-    )
+    model = build_chat_model(settings)
     return model, StateBackend, FilesystemPermission, create_file_data
 
 
-def _interrupt_config(tool_specs: tuple[ToolSpec, ...]) -> dict[str, object]:
-    """Require approve/reject control before either scoped workspace write."""
+def _interrupt_config(tool_specs: tuple[ToolSpec, ...], *, cloud_active: bool = False) -> dict[str, object]:
+    """Require approve/reject control before a sensitive tool runs.
+
+    With a cloud provider driving the loop, EVERY allowed tool is interrupt-gated,
+    not just the two scoped workspace writes. A cloud-driven agent's tool call is
+    the moment context leaves the operator's control -- a read tool's arguments and
+    results are exactly as exposed as a write tool's -- so the human decision point
+    moves in front of all of them.
+    """
 
     return {
         spec.name: {"allowed_decisions": ["approve", "reject"]}
         for spec in tool_specs
-        if spec.allowed and spec.sensitive
+        if spec.allowed and (cloud_active or spec.sensitive)
     }
 
 
@@ -106,6 +117,7 @@ def _validate_wired_tools(
 def build_deepagent_github(
     agentic_config: AgenticConfig,
     *,
+    cloud_provider: str | None = None,
     create_fn: Callable[..., Any] | None = None,
     workspace_tools: ProposerWorkspaceTools | None = None,
     skill_registry: SkillRegistry | None = None,
@@ -162,7 +174,7 @@ def build_deepagent_github(
             (),
             subagent_names,
         )
-    settings = DeepAgentModelSettings.from_config(deep_cfg)
+    settings = DeepAgentModelSettings.from_config(deep_cfg, cloud_provider=cloud_provider)
     if not settings.model.strip():
         return DeepAgentBuildResult(
             False,
@@ -182,7 +194,7 @@ def build_deepagent_github(
 
     tool_callables, tool_names = _validate_wired_tools(workspace_tools, policy)
     tool_specs = default_tool_specs(policy)
-    interrupt_on = _interrupt_config(tool_specs)
+    interrupt_on = _interrupt_config(tool_specs, cloud_active=settings.is_cloud)
     memory_files = load_local_memory_files(repo_root or Path.cwd())
     skill_files = governed_skill_files(skill_registry) if skill_registry else {}
     raw_files = {**memory_files, **skill_files}
