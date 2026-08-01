@@ -94,6 +94,20 @@ def compute_audit_integrity(audit_file: str) -> dict:
     return stats
 
 
+# Injection findings emitted by agentic/context.py over GitHub-sourced text.
+# Declared here as literals rather than imported from agentic.context, which
+# exports the same two code constants. gate.py calls summarize_audit() to serve
+# GET /audit/summary, so importing agentic from this module would pull
+# agentic -> guardrails -> utils.personality into the gate process. The I6
+# isolation test AST-parses gate.py and only sees DIRECT imports, so that would
+# stay green while the invariant's actual intent was broken. test_metrics.py
+# imports both modules and asserts these match -- a test may import anything,
+# this module may not.
+INJECTION_EVENT = "agentic_context_injection_finding"
+INJECTION_FINDING_CODE = "github_content_injection_pattern"
+SCANNER_UNAVAILABLE_CODE = "github_content_scanner_unavailable"
+
+
 def _bucket_key(value: object, default: str = "unknown") -> str:
     """Coerce an audit-event label to a hashable Counter key.
 
@@ -131,10 +145,40 @@ def compute_metrics(events) -> dict:
     mode_counts: Counter = Counter()
     model_counts: Counter = Counter()
     online_escalated = 0
+    injection_total = 0
+    injection_codes: Counter = Counter()
+    injection_fields: Counter = Counter()
+    injection_repos: Counter = Counter()
+    injection_patterns: Counter = Counter()
 
     for e in events:
         total += 1
         event_counts[_bucket_key(e.get("event"))] += 1
+
+        # Folded into this loop rather than given its own function: summarize_audit
+        # passes iter_events(...), a generator, so a second aggregator would either
+        # receive an exhausted iterator or force a third full file pass on top of
+        # compute_audit_integrity's second one. Single-pass is this function's
+        # stated design (see the docstring).
+        if e.get("event") == INJECTION_EVENT:
+            injection_total += 1
+            # Every bucket key goes through _bucket_key for the reason documented
+            # there: audit.jsonl is untrusted evidence, and one hand-edited line
+            # carrying a list where a label belongs would raise
+            # "TypeError: unhashable type" and take down GET /audit/summary.
+            injection_codes[_bucket_key(e.get("code"))] += 1
+            injection_fields[_bucket_key(e.get("field"))] += 1
+            injection_repos[_bucket_key(e.get("repo"))] += 1
+            # patterns names which banned_patterns rule matched, never the text it
+            # matched. Secondary to `code`: a pattern source containing a literal
+            # dotted quad or api_key=... would itself be rewritten to
+            # [REDACTED_IP]/[REDACTED_SECRET] by utils.logger's recursive redaction
+            # on the way to disk, so two such rules would merge into one bucket.
+            # The `code` values are fixed literals and cannot be rewritten.
+            patterns = e.get("patterns")
+            if isinstance(patterns, list):
+                for pattern in patterns:
+                    injection_patterns[_bucket_key(pattern)] += 1
 
         if e.get("event") in ("rag_query", "mcp_rag_query"):
             rag_query_count += 1
@@ -195,6 +239,13 @@ def compute_metrics(events) -> dict:
         "retrieval_modes": dict(mode_counts.most_common()),
         "model_used": dict(model_counts.most_common()),
         "online_escalated": online_escalated,
+        "injection_findings": {
+            "total": injection_total,
+            "by_code": dict(injection_codes.most_common()),
+            "by_field": dict(injection_fields.most_common()),
+            "by_repo": dict(injection_repos.most_common()),
+            "by_pattern": dict(injection_patterns.most_common()),
+        },
     }
 
 
@@ -241,6 +292,20 @@ def print_metrics(config_path: str = "config.yaml"):
             for model, count in summary["model_used"].items():
                 print(f"  {model}: {count}")
         print(f"\nOnline escalations (external LLM): {summary['online_escalated']}")
+    # Deliberately OUTSIDE the `if summary["rag_query_count"]` block above. These
+    # findings come from the out-of-band agentic context fetchers, so the audit log
+    # that contains them typically has zero RAG queries -- nesting this section
+    # there would hide it on exactly the logs it exists to describe.
+    # by_repo is in the summary dict for GET /audit/summary but not printed: the
+    # threat model is single-operator, so the CLI would print one constant line.
+    findings = summary["injection_findings"]
+    if findings["total"]:
+        print(f"\nGitHub content injection findings: {findings['total']}")
+        for label, key in (("By code", "by_code"), ("By field", "by_field"), ("By pattern", "by_pattern")):
+            if findings[key]:
+                print(f"\n{label}:")
+                for name, count in findings[key].items():
+                    print(f"  {name}: {count}")
     if any(integrity.values()):
         print("\nAudit integrity:")
         for name, count in integrity.items():

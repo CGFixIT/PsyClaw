@@ -129,6 +129,7 @@ def test_build_rejects_injection_repo_across_all_ops():
         ("pr_list", {}),
         ("issue_list", {}),
         ("repo_view", {}),
+        ("repo_clone", {"dest": "/tmp/x"}),
     ):
         with pytest.raises(AgenticError):
             build_read_argv(op, "-evil/repo", **kwargs)
@@ -287,3 +288,82 @@ def test_run_read_timeout_exhausted_raises():
          patch.object(gh_client.time, "sleep"):
         with pytest.raises(AgenticError):
             run_read("pr_view", "owner/repo", number=1, retries=1, retry_backoff_sec=0)
+
+
+# --- repo_clone --------------------------------------------------------------
+
+def test_build_repo_clone_argv():
+    argv = build_read_argv("repo_clone", "owner/repo", dest="/tmp/x/repo")
+    assert argv[0] == "gh"
+    assert argv[1:3] == ["repo", "clone"]
+    assert "owner/repo" in argv
+    assert "/tmp/x/repo" in argv
+    # Everything after "--" forwards to git clone; --depth is there and bounded.
+    dashdash = argv.index("--")
+    assert argv[dashdash + 1:] == ["--depth", str(gh_client.CLONE_DEPTH)]
+
+
+def test_build_repo_clone_requires_dest():
+    with pytest.raises(AgenticError):
+        build_read_argv("repo_clone", "owner/repo")
+    with pytest.raises(AgenticError):
+        build_read_argv("repo_clone", "owner/repo", dest="")
+
+
+def test_repo_clone_is_a_read_op():
+    # repo_clone never mutates GitHub state; it belongs in the read allow-list
+    # the same way pr_diff does, materializing local content rather than JSON.
+    assert "repo_clone" in gh_client._READ_OPS
+
+
+def test_run_read_repo_clone_does_not_attempt_json_parse():
+    # gh repo clone's stdout is human progress text, not JSON -- if this ever
+    # fell through to the generic json.loads() branch it would raise
+    # "returned non-JSON output" on a SUCCESSFUL clone.
+    progress_text = "Cloning into 'repo'...\nremote: Enumerating objects: 3, done.\n"
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run",
+                      return_value=_completed(stdout=progress_text)) as mrun:
+        out = run_read("repo_clone", "owner/repo", dest="/tmp/x/repo",
+                        timeout=gh_client.DEFAULT_CLONE_TIMEOUT_SEC)
+    assert out == {"op": "repo_clone", "repo": "owner/repo", "dest": "/tmp/x/repo"}
+    called_argv = mrun.call_args.args[0]
+    assert isinstance(called_argv, list)
+    assert mrun.call_args.kwargs.get("shell", False) is False
+    assert mrun.call_args.kwargs["timeout"] == gh_client.DEFAULT_CLONE_TIMEOUT_SEC
+
+
+def test_run_read_repo_clone_failure_raises_without_json_parse_attempt():
+    # A failed clone (e.g. auth error, repo not found) must raise AgenticError,
+    # not attempt to parse its (non-JSON) stdout/stderr as data.
+    failure = _completed(stderr="fatal: repository 'owner/repo' not found", returncode=1)
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run", return_value=failure):
+        with pytest.raises(AgenticError):
+            run_read("repo_clone", "owner/repo", dest="/tmp/x/repo")
+
+
+def test_run_read_repo_clone_retries_transient_then_succeeds():
+    transient = _completed(stderr="fatal: unable to access: Connection reset", returncode=1)
+    success = _completed(stdout="Cloning into 'repo'...\n", returncode=0)
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run", side_effect=[transient, success]) as mrun, \
+         patch.object(gh_client.time, "sleep"):
+        out = run_read("repo_clone", "owner/repo", dest="/tmp/x/repo", retries=1, retry_backoff_sec=0)
+    assert out["dest"] == "/tmp/x/repo"
+    assert mrun.call_count == 2
+
+
+def test_run_read_repo_clone_audits_dest():
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run",
+                      return_value=_completed(stdout="Cloning into 'repo'...\n")), \
+         patch.object(gh_client, "audit_log") as maudit:
+        run_read("repo_clone", "owner/repo", dest="/tmp/x/repo")
+    events = [c.args[0] for c in maudit.call_args_list if c.args[0].get("event") == "agentic_read"]
+    assert len(events) == 1
+    assert events[0]["dest"] == "/tmp/x/repo"

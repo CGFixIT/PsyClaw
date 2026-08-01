@@ -23,6 +23,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from utils.errors import AgenticConfigError
 from utils.logger import _get_config
@@ -44,6 +45,31 @@ DEFAULT_ALLOWED_READ_OPS = (
     "repo_view",
 )
 DEFAULT_DEEPAGENT_WORKSPACE_ROOT = "data/agentic/workspaces"
+# Prefixes a real-repo candidate must not write into: files that judge the
+# candidate's own acceptance. A candidate that rewrites the tests/lints
+# grading it would otherwise be "accepted" by construction -- the single most
+# common reward-hacking failure mode of a make-the-checks-pass loop. Matched
+# as a path-PREFIX (see decide_real_repo_candidate's use), so "tests/" also
+# covers "tests/unit/test_x.py".
+DEFAULT_PROTECTED_WRITE_PATH_PREFIXES = (
+    "tests/", "conftest.py", ".github/", ".git/",
+    "pyproject.toml", "setup.cfg", "pytest.ini", ".claude/skills/",
+)
+# A whole ITERATION's total proposed-write size, not per-file (that's
+# RepoWorkspaceTools.max_write_bytes). The planner's own system prompt already
+# asks for "the smallest change that satisfies the instruction" -- an
+# iteration blowing past this budget is a signal something went wrong, not a
+# legitimately large legitimate change.
+DEFAULT_MAX_WRITE_BUDGET_BYTES = 100_000
+# The outbound-prompt length cap sanitize_handoff enforces, deliberately its
+# own number rather than a reuse of policy.prompt_filter.max_input_chars
+# (4000): that value is tuned for a short RAG chat query, and a real-repo-loop
+# prompt bundles the instruction, every declared read_paths file's full
+# content, and a quoted PR/issue diff -- routinely tens of thousands of
+# characters even for a modest task. Sized with headroom over observed real
+# prompts (~32k chars), not "large enough to never trigger" -- it stays a
+# meaningful ceiling against a runaway prompt, not a rubber stamp.
+DEFAULT_MAX_HANDOFF_CHARS = 200_000
 DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
 DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 
@@ -52,6 +78,11 @@ _VALID_MODES = ("read", "write")
 # (default) or "openai_compatible" for any other OpenAI-shaped local server
 # (including LM Studio's compatibility endpoint if an operator still runs it).
 _VALID_DEEPAGENT_PROVIDERS = ("ollama", "openai_compatible")
+# Cloud coding-loop providers, keyed by the env var holding their API key. Keys
+# live in the environment ONLY -- never in config.yaml, never in a dataclass
+# field -- mirroring llm/client.py's discipline for the core graph's fallback.
+CLOUD_KEY_ENVS = {"grok": "GROK_API_KEY", "claude": "ANTHROPIC_API_KEY"}
+_VALID_CLOUD_PROVIDERS = tuple(CLOUD_KEY_ENVS)
 # owner/name -- GitHub slugs allow alphanumerics, hyphen, underscore, dot, but the
 # FIRST character of each segment must be alphanumeric. Anchoring it (rather than
 # the looser ``[A-Za-z0-9_.-]+``) closes a flag-injection gap: a slug like
@@ -76,6 +107,22 @@ def _validate_bool(value: object, field_name: str) -> None:
             f"{field_name} must be a boolean, got: {value!r}",
             details={"field": field_name, "received": value},
         )
+
+
+# Mirrors harness/ollama.py's own list. Duplicated rather than imported because
+# I6 forbids agentic/ and harness/ importing each other at all; the values are
+# a closed set (the three spellings of localhost), not a tunable.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback_url(url: str) -> bool:
+    """True when ``url``'s host is loopback. Malformed input is NOT loopback."""
+    try:
+        return (urlparse(url).hostname or "") in _LOOPBACK_HOSTS
+    except ValueError:
+        # urlparse raises on some malformed IPv6 literals -- fail closed rather
+        # than letting an unparseable URL through as "not obviously remote".
+        return False
 
 
 def _validate_no_shell_metachars(value: str, field_name: str) -> None:
@@ -109,6 +156,20 @@ def _resolve_data_path(raw_path: str, field_name: str) -> str:
 
 
 @dataclass
+class DeepAgentCloudProviderConfig:
+    """Per-provider cloud enable + model name. No key material, ever."""
+
+    enabled: bool = False
+    model: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_bool(self.enabled, "agentic.deepagent_github.providers.*.enabled")
+        if not isinstance(self.model, str):
+            raise AgenticConfigError("agentic.deepagent_github.providers.*.model must be a string")
+        _validate_no_shell_metachars(self.model, "agentic.deepagent_github.providers.*.model")
+
+
+@dataclass
 class DeepAgentGitHubConfig:
     """Optional Deep Agents GitHub harness config. Disabled by default."""
 
@@ -121,6 +182,38 @@ class DeepAgentGitHubConfig:
     allow_shell_execution: bool = False
     allow_github_writes: bool = False
     workspace_root: str = DEFAULT_DEEPAGENT_WORKSPACE_ROOT
+    allow_cloud_providers: bool = False
+    providers: dict = field(default_factory=dict)
+    # Deliberately its OWN flag, not a reuse of allow_shell_execution: that flag
+    # already means something different and stricter -- it gates whether the
+    # deep-agent gets a generic host-shell TOOL it can invoke with any command
+    # (agentic/deepagent_github/permissions.py::refuse_unsupported_write_policy
+    # hard-refuses the whole build when it's true, since that tool remains
+    # unimplemented). RepoWorkspaceTools' git methods run four fixed,
+    # non-attacker-chosen subcommands (checkout -b/add/commit/diff) against a
+    # clone this layer made itself, never pushed -- a materially narrower
+    # capability that deserves its own default-off gate rather than colliding
+    # with a flag whose current meaning is "give the model a shell."
+    allow_git_write_tools: bool = False
+    protected_write_paths: list[str] = field(
+        default_factory=lambda: list(DEFAULT_PROTECTED_WRITE_PATH_PREFIXES)
+    )
+    max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
+    max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
+
+    def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
+        """Return a provider's config, or None when it is not configured/enabled.
+
+        Returns None unless BOTH allow_cloud_providers and the provider's own
+        enabled flag are true, so a caller cannot accidentally treat a configured
+        but un-gated provider as usable.
+        """
+        if not self.allow_cloud_providers:
+            return None
+        provider = self.providers.get(name)
+        if isinstance(provider, DeepAgentCloudProviderConfig) and provider.enabled:
+            return provider
+        return None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -129,24 +222,115 @@ class DeepAgentGitHubConfig:
             "agentic.deepagent_github.allow_filesystem_write_tools",
             "agentic.deepagent_github.allow_shell_execution",
             "agentic.deepagent_github.allow_github_writes",
+            "agentic.deepagent_github.allow_cloud_providers",
+            "agentic.deepagent_github.allow_git_write_tools",
         ):
             attr = field_name.rsplit(".", 1)[-1]
             _validate_bool(getattr(self, attr), field_name)
         if self.provider not in _VALID_DEEPAGENT_PROVIDERS:
             raise AgenticConfigError(
-                "agentic.deepagent_github.provider must be 'ollama' or 'openai_compatible'",
+                # The prose and the tuple must be edited together; the tuple is the
+                # source of truth and the message is what an operator actually reads.
+                f"agentic.deepagent_github.provider must be one of {list(_VALID_DEEPAGENT_PROVIDERS)}",
                 details={"received": self.provider, "valid": list(_VALID_DEEPAGENT_PROVIDERS)},
             )
+        self._coerce_providers()
         if not isinstance(self.base_url, str) or not self.base_url:
             raise AgenticConfigError("agentic.deepagent_github.base_url must be a non-empty string")
         if not isinstance(self.model, str):
             raise AgenticConfigError("agentic.deepagent_github.model must be a string")
         _validate_no_shell_metachars(self.base_url, "agentic.deepagent_github.base_url")
         _validate_no_shell_metachars(self.model, "agentic.deepagent_github.model")
+        # This field addresses the LOCAL model only -- the cloud path never uses
+        # it (DeepAgentModelSettings.from_config deliberately returns base_url=""
+        # for a cloud provider, because "letting config point a cloud client at
+        # an arbitrary host would turn a provider toggle into an arbitrary-egress
+        # control"). Without this check the same sentence was true of the LOCAL
+        # path and worse: LocalProposerClient POSTs the entire planner prompt --
+        # operator instruction, quoted GitHub PR/issue/diff, and every
+        # --read-file body -- to base_url with no sanitize_handoff, no redaction
+        # and no egress audit event, so a single non-loopback URL routes around
+        # the whole six-condition cloud chain while allow_cloud_providers,
+        # providers.<name>.enabled, the API key and --confirm-online all stay
+        # false and are never consulted. harness/ollama.py already refuses a
+        # non-loopback base_url for exactly this reason; this is the same
+        # decision for the planner's own client.
+        if not _is_loopback_url(self.base_url):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.base_url must be a loopback URL "
+                f"(one of {list(_LOOPBACK_HOSTS)}); it addresses the local model only",
+                details={"received": self.base_url},
+            )
         self.workspace_root = _resolve_data_path(
             self.workspace_root,
             "agentic.deepagent_github.workspace_root",
         )
+        if not isinstance(self.protected_write_paths, list) or not all(
+            isinstance(p, str) and p for p in self.protected_write_paths
+        ):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.protected_write_paths must be a list of non-empty strings",
+                details={"received": self.protected_write_paths},
+            )
+        if not isinstance(self.max_write_budget_bytes, int) or isinstance(
+            self.max_write_budget_bytes, bool
+        ) or self.max_write_budget_bytes <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.max_write_budget_bytes must be a positive integer",
+                details={"received": self.max_write_budget_bytes},
+            )
+        if not isinstance(self.max_handoff_chars, int) or isinstance(
+            self.max_handoff_chars, bool
+        ) or self.max_handoff_chars <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.max_handoff_chars must be a positive integer",
+                details={"received": self.max_handoff_chars},
+            )
+
+    def _coerce_providers(self) -> None:
+        # Nested blocks arrive as plain dicts from yaml. Unlike the top-level
+        # agentic: block, unknown keys here are NOT filtered upstream, so an
+        # unrecognised provider name would silently become dead config -- reject it
+        # loudly instead.
+        if not isinstance(self.providers, dict):
+            raise AgenticConfigError(
+                "agentic.deepagent_github.providers must be a mapping",
+                details={"received": type(self.providers).__name__},
+            )
+        coerced: dict[str, DeepAgentCloudProviderConfig] = {}
+        for name, block in self.providers.items():
+            if name not in _VALID_CLOUD_PROVIDERS:
+                raise AgenticConfigError(
+                    f"unknown agentic.deepagent_github.providers entry {name!r}",
+                    details={"received": name, "valid": list(_VALID_CLOUD_PROVIDERS)},
+                )
+            if isinstance(block, DeepAgentCloudProviderConfig):
+                coerced[name] = block
+                continue
+            if not isinstance(block, dict):
+                raise AgenticConfigError(
+                    f"agentic.deepagent_github.providers.{name} must be a mapping",
+                    details={"received": type(block).__name__},
+                )
+            try:
+                coerced[name] = DeepAgentCloudProviderConfig(**block)
+            except TypeError as exc:
+                raise AgenticConfigError(
+                    f"agentic.deepagent_github.providers.{name} invalid: {exc}",
+                    details={"provider": name},
+                ) from exc
+        # Fail LOUD, not silently inert: a provider marked enabled while the master
+        # cloud gate is off almost certainly means the operator believes cloud is
+        # on. Refusing to boot is the honest response; quietly running local-only
+        # would look identical to a working cloud setup.
+        if not self.allow_cloud_providers:
+            live = sorted(name for name, provider in coerced.items() if provider.enabled)
+            if live:
+                raise AgenticConfigError(
+                    "agentic.deepagent_github.providers enabled while allow_cloud_providers is false",
+                    details={"enabled": live},
+                )
+        self.providers = coerced
 
 
 @dataclass

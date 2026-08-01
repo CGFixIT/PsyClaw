@@ -60,7 +60,9 @@ Uninstall (keeps data by default):
 | `bin/` | `cyclaw.cmd` + `Invoke-CyClaw.ps1` |
 
 `CYCLAW_HOME` overrides the home location; `CYCLAW_REPO` overrides the repo
-path; `CYCLAW_HARNESS_PORT` overrides the port.
+path; `CYCLAW_HARNESS_PORT` overrides the port. `CYCLAW_API_KEY` authenticates
+the state-changing routes — passed through from the caller's environment, never
+generated or written to disk by the launcher.
 
 ## The console
 
@@ -73,6 +75,9 @@ Slash commands (type `/help` in the console):
 | `/model [use <name>]` | show / select the local model |
 | `/skills`, `/tools`, `/connectors` | merged registry views |
 | `/github` | agentic GitHub status (read-only subprocess) |
+| `/agent run\|confirm\|cancel` | stage, authorize, or discard a real-repo coding run |
+| `/agent status\|approve\|reject <id>` | read a run record, or decide a pending one |
+| `/agent checks` | list the selectable verification profiles |
 | `/harness` | harness optimizer runs |
 | `/tokens` | per-session token tally |
 | `/status` | server status |
@@ -80,6 +85,50 @@ Slash commands (type `/help` in the console):
 
 Every chat reply shows the model name and the prompt/completion token counts
 reported by Ollama; the header bar keeps a running tally across sessions.
+
+### Agentic coding runs
+
+`/agent` drives `agentic/real_repo_loop.py`'s two-step gate from the console.
+Two `config.yaml` flags govern it, and they refuse at **different points** —
+worth knowing before you treat either as an off switch:
+
+- `agentic.enabled: false` (the shipped default) short-circuits immediately.
+  Nothing is fetched, nothing is cloned; the console reports the layer is
+  disabled.
+- `deepagent_github.allow_git_write_tools: false` (also the shipped default)
+  refuses **after** the `gh` context fetch and the full `git clone` have already
+  happened — the gate lives inside the loop, not ahead of it. The run reports
+  `write_refused`, and the clone is discarded, but a network round-trip and a
+  working copy were spent getting there. Leave `agentic.enabled` false if you
+  want the hard off switch.
+
+1. `/agent run claude/<topic> <what the agent should do>` stages a proposal and
+   prints it. Nothing is sent.
+2. `/agent confirm <reason>` authorizes it. This is the request that clones the
+   repo, asks the local model for a patch, and runs the selected verification
+   profile against the result. **It blocks for up to 15 minutes** — the run
+   record is written only when the run ends, so there is no intermediate
+   progress to poll for, and the run id first exists in that response.
+3. On success the run stops *before committing* and reports
+   `status: pending_decision`. `/agent approve <id>` is what actually commits;
+   `/agent reject <id>` discards the clone. Neither pushes.
+4. Escalating past the local commit is two further, separate decisions —
+   deliberately not folded into approve, and each its own route:
+   `/agent push <id>` puts the branch on origin, and
+   `/agent publish <id> <why>` opens a draft PR. **Both refuse on a shipped
+   checkout:** push needs `deepagent_github.allow_git_write_tools` (ships
+   `false`) and publish needs `agentic/writer.py`'s `EXECUTION_ENABLED`, a
+   hardcoded `False` no config file can flip. Arming either is the filed
+   checklist in `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, not a toggle.
+5. `/agent discard <id>` reclaims the clone. It is the only step that frees
+   disk: an approved run keeps its clone on purpose (push and publish still
+   need it) and nothing reclaims it automatically, so a console session that
+   only ever approves accumulates one full repository clone per run.
+
+`checks` names a profile from `/agent checks`, never a command. The console
+cannot send an argv to execute: profile names are resolved against the
+allow-list in `harness/agent_policy.py`, because the executor runs each check
+as a real subprocess with the parent `PATH`.
 
 ## Agent system prompt
 
@@ -93,8 +142,31 @@ read-only.
 ## Security posture
 
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
+- The five state-changing routes (`POST /api/sessions`, `.../rename`,
+  `/api/soul`, `/api/model`, `/api/chat`), `GET /api/sessions/{session_id}`
+  (it returns a session's full message content, unlike the title-only list at
+  `GET /api/sessions`), `GET /api/github/status`, and all six `/api/agent/*`
+  run routes (`run`, `runs/{id}`, `runs/{id}/decision`, `runs/{id}/push`,
+  `runs/{id}/publish`, `runs/{id}/discard`) require a Bearer `CYCLAW_API_KEY`
+  — the same variable the gateway's `/soul` and `/ops/*` endpoints use.
+  **Fail-closed:** an unset key means those routes return 401, not "no auth
+  required". Paste the key into the console's `key` field, or export it
+  before launching. The read-only routes stay open so the console can boot and
+  report that a key is needed. The key is held in the browser page only — never
+  `localStorage`, never a cookie.
+- Those same routes reject browser cross-site requests via `Origin` /
+  `Sec-Fetch-Site`. Requests carrying neither header (curl, PowerShell, the
+  sandbox verifier) are allowed — a non-browser client is not a CSRF vector.
 - The chat client refuses non-loopback model endpoints.
 - Session IDs are server-generated hex; path traversal is rejected.
 - No shell execution from the console; GitHub actions go through the
   whitelisted `utils.ops_runner` subprocess shim.
+- A coding run's verification commands are **never** taken from the request.
+  The console sends a profile name; `harness/agent_policy.py` maps it to a
+  fixed argv. `agentic/executor` runs each check as a real subprocess inheriting
+  the parent `PATH`, and nothing downstream inspects `argv[0]`, so accepting a
+  caller-supplied command would make an authenticated route a remote shell.
+- `run_id` is validated as anchored 32-char lowercase hex at the HTTP boundary,
+  before it can become a `--run-id=` argv element, and branch names must be in
+  the `claude/` namespace.
 - The console renders all model output via `textContent` (no HTML injection).

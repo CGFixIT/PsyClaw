@@ -127,7 +127,15 @@ def main(argv: list[str] | None = None) -> int:
         "CLAUDE.md": claude,
         "config.yaml": (root / "config.yaml").read_text(encoding="utf-8"),
     }
-    for opt in ("guardrails/rails.py", "agentic/fsconnect/client.py"):
+    # README.md and docs/THREAT_MODEL.md were NOT scanned here originally, and
+    # both silently drifted to a stale "32 patterns" while this check reported
+    # "consistent everywhere it's cited" -- the count is cited in a mermaid node
+    # and a threat table, which no other check reads either. A blind spot in a
+    # drift checker is worse than no checker, because it is trusted.
+    for opt in (
+        "guardrails/rails.py", "agentic/fsconnect/client.py",
+        "README.md", "docs/THREAT_MODEL.md", "INVARIANTS.md",
+    ):
         fp = root / opt
         if fp.exists():
             cite_files[opt] = fp.read_text(encoding="utf-8")

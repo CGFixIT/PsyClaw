@@ -460,8 +460,11 @@ sync:
 # Absence of this block, or enabled: false, disables the agentic layer entirely.
 # It runs strictly via `python -m agentic.cli` — never imported by gate.py,
 # graph.py, or the MCP server. Reads use the `gh` CLI (argv-list, no shell, no
-# token forwarded by CyClaw). Writes are a DISABLED, STUBBED scaffold: even in
-# write mode v0.1 only produces dry-run plans and never mutates GitHub.
+# token forwarded by CyClaw). The GitHub write path is IMPLEMENTED but shipped
+# DISARMED: agentic/writer.py's EXECUTION_ENABLED is False, and the mode /
+# writes_enabled gates below fail closed independently, so nothing here can open
+# a pull request as shipped. Arming it is a filed-checklist operator procedure —
+# see docs/agentic/GITHUB_WRITE_ENABLEMENT.md.
 agentic:
   enabled: false                 # off by default; CLI no-ops (exit 0) while false
   repo: "CGFixIT/CyClaw"         # validated: owner/name, no shell metacharacters
@@ -478,19 +481,71 @@ agentic:
     - issue_view
     - issue_list
     - repo_view
-  # Future optional LangChain Deep Agents-backed GitHub coding harness.
-  # Phase 1 config only: disabled, not imported by the core request path, and
-  # not used unless a future reviewed command explicitly invokes it.
+  # Config for the real-repo coding pipeline (agentic/real_repo_loop.py) and,
+  # separately, the now-retired Deep Agents graph. Still never imported by the
+  # core request path. NOT "phase 1 config only" any more: every key below is
+  # read on the shipped `real-repo-run` path -- workspace_root, enabled, model,
+  # base_url, protected_write_paths and max_write_budget_bytes by agentic/cli.py,
+  # allow_git_write_tools inside repo_workspace.py. It is disabled by default,
+  # not unused.
   deepagent_github:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
     model: ""
     allow_deepagents_dependency: false           # extras must be installed explicitly
-    allow_filesystem_write_tools: false          # no real-repo filesystem writes by default
+    # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
+    # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
+    # all gate on allow_git_write_tools below. Setting this false does not stop
+    # a real-repo filesystem write; that is what allow_git_write_tools is for.
+    allow_filesystem_write_tools: false
     allow_shell_execution: false                 # no LocalShellBackend/raw shell by default
     allow_github_writes: false                   # writer.py remains the write-policy boundary
+    # Git plumbing (checkout -b/add/commit/diff/push) inside a clone this
+    # layer made itself under workspace_root. RepoWorkspaceTools.push_branch
+    # gates on this same flag and DOES reach a real remote (origin) when
+    # armed -- it is not local-only. It still never calls the GitHub API
+    # (opening/commenting on a PR is agentic/writer.py's job, gated
+    # separately). A separate gate from allow_shell_execution above, which
+    # means "give the model a generic shell tool" (still hard-refused/
+    # unimplemented).
+    allow_git_write_tools: false
+    # Real-repo loop diff-scope gate: a candidate that writes into any of these
+    # (path-prefix match) is refused outright, because these are exactly the
+    # files that judge the candidate's own acceptance -- rewriting them would
+    # let a candidate pass its own checks by construction. See
+    # agentic.real_repo_loop.decide_real_repo_candidate.
+    protected_write_paths:
+      - "tests/"
+      - "conftest.py"
+      - ".github/"
+      - ".git/"
+      - "pyproject.toml"
+      - "setup.cfg"
+      - "pytest.ini"
+      - ".claude/skills/"
+    max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
+    # Outbound-prompt length cap for sanitize_handoff (agentic/deepagent_github/
+    # handoff.py) -- deliberately separate from policy.prompt_filter.
+    # max_input_chars (4000, tuned for a short RAG chat query). A real-repo-loop
+    # prompt bundles the instruction, every declared read_paths file's content,
+    # and a quoted PR/issue diff -- routinely tens of thousands of characters,
+    # which is why this is not the same number.
+    max_handoff_chars: 200000
     workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
+    # Cloud coding-loop providers. The agentic analog of app.mode: "hybrid" --
+    # gate 3 of the six-condition chain (agentic.enabled, deepagent_github.enabled,
+    # allow_cloud_providers, providers.<name>.enabled, the provider's API key env
+    # var, and a per-run --confirm-online). Setting a provider enabled: true while
+    # allow_cloud_providers is false is a CONFIG ERROR, not a silent no-op.
+    allow_cloud_providers: false
+    providers:
+      grok:
+        enabled: false
+        model: "grok-4.5"                        # cite models.grok.model; re-verify at enable time
+      claude:
+        enabled: false
+        model: "claude-sonnet-5"                 # cite models.claude.model; same drift warning
   # Governed harness optimizer. Candidate application records only a versioned local
   # artifact after all deterministic gates plus an explicit human reason/confirmation;
   # it never mutates source, soul.md, or GitHub.

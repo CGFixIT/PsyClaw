@@ -703,10 +703,13 @@ async def audit_summary(request: Request):
     """API-key-gated compliance summary over the audit log.
 
     Returns aggregates only — query volume, score distribution, retrieval-mode
-    and model-usage breakdowns, and external-LLM escalation count. The audit log
-    persists only SHA-256 query hashes (never plaintext), so no raw query text is
-    exposed here either. This is operational evidence, not a formal compliance
-    artifact or certification.
+    and model-usage breakdowns, external-LLM escalation count, and counts of
+    injection findings over GitHub-sourced context text (by code, field, repo,
+    and matched pattern rule). The audit log persists only SHA-256 query hashes
+    (never plaintext), and an injection finding names the rule that fired rather
+    than the text that fired it, so no raw query or PR content is exposed here
+    either. This is operational evidence, not a formal compliance artifact or
+    certification.
     """
     # _BASE_DIR / value resolves correctly whether the configured path is
     # relative or already absolute (Path.__truediv__ discards the left side

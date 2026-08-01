@@ -3,10 +3,13 @@
 static/harness.html performs in the browser, using httpx from the venv.
 
 Mirrors terminal_emulation.py's approach for the harness console (port 8790
-by default) instead of the RAG gateway (port 8787). The harness has no API
-key gate (loopback-only + TrustedHostMiddleware is the whole threat-model
-boundary, per harness/server.py's own docstring), so unlike terminal.html's
-emulation there is no auth_headers() dance here.
+by default) instead of the RAG gateway (port 8787). The harness's five
+state-changing POSTs, GET /api/github/status and the three /api/agent/* run
+routes are gated on a Bearer
+CYCLAW_API_KEY (utils/auth.py), so this script reads that env var and sends the
+header on every request; the open read routes ignore it. Loopback bind plus
+TrustedHostMiddleware plus an Origin/Sec-Fetch-Site check remain the rest of the
+boundary, per harness/server.py's own docstring.
 
 Verifies, in the same order harness.html's own on-load + first-use calls fire:
   1. GET  /api/status     (header pills: model, tokens, provider)
@@ -29,6 +32,7 @@ Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
 """
 
+import os
 import sys
 
 
@@ -53,7 +57,16 @@ def main() -> int:
     print(f"=== harness.html API emulation → {base} ===")
     print()
 
-    with httpx.Client(base_url=base, timeout=10.0) as client:
+    # The five state-changing POSTs, GET /api/github/status and the three
+    # /api/agent/* run routes require a Bearer CYCLAW_API_KEY (utils/auth.py).
+    # Sent on every request here: the open read
+    # routes ignore it, and a per-path branch would drift from the server's guard
+    # list. An unset key means those routes correctly 401 and the emulation fails
+    # loudly rather than silently skipping them.
+    api_key = os.environ.get("CYCLAW_API_KEY", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    with httpx.Client(base_url=base, timeout=10.0, headers=headers) as client:
 
         # ── 1. GET /api/status (header pills) ─────────────────────────────
         print("[1] GET /api/status  (harness.html header pills)")
@@ -206,6 +219,33 @@ def main() -> int:
             check("/api/harness/runs has 'runs' + 'count'", "runs" in d and "count" in d)
         except Exception as exc:
             check("GET /api/harness/runs", False, repr(exc))
+        print()
+
+        # ── 13. GET /api/agent/checks (/agent checks) ─────────────────────
+        # The only one of the four agent routes that is safe to exercise here.
+        # The other three drive a real `python -m agentic.cli` subprocess: a
+        # run clones a repository, calls a model and can block for 900s, and a
+        # decision reaches a git write. A smoke test must not do either, so
+        # this asserts the console's discovery call plus the gate on the rest.
+        print("[13] GET /api/agent/checks  (/agent checks)")
+        try:
+            r = client.get("/api/agent/checks")
+            profiles = r.json().get("profiles")
+            check("/api/agent/checks lists named profiles", bool(profiles))
+            check(
+                "every profile carries a name + description",
+                all(p.get("name") and p.get("description") for p in profiles or []),
+            )
+        except Exception as exc:
+            check("GET /api/agent/checks", False, repr(exc))
+
+        for path in ("/api/agent/run", f"/api/agent/runs/{'0' * 32}/decision"):
+            try:
+                unauthed = client.post(path, json={}, headers={"Authorization": "Bearer wrong"})
+                check(f"POST {path} rejects a bad key", unauthed.status_code == 401,
+                      f"HTTP {unauthed.status_code}")
+            except Exception as exc:
+                check(f"POST {path} auth gate", False, repr(exc))
         print()
 
     print()

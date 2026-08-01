@@ -34,20 +34,27 @@ apply_telemetry_kill()
 # matching gate.py's identical pattern for the identical reason.
 import logging
 import os
+import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
+    AgentDecisionRequest,
+    AgentPublishRequest,
+    AgentRunRequest,
     ChatRequest,
     ModelSelectRequest,
     RenameRequest,
@@ -56,9 +63,10 @@ from harness.schemas import (
 )
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
+from utils.auth import require_api_key
 from utils.errors import AgenticError
 from utils.logger import _get_config, redact_sensitive
-from utils.ops_runner import OpsError, run_agentic_op
+from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
 
 logger = logging.getLogger("cyclaw.harness.server")
@@ -72,13 +80,35 @@ _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
 _MAX_RUNS = 50
 _HTTP_CREATED = 201
 _HTTP_BAD_REQUEST = 400
+_HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_UNPROCESSABLE = 422
 _HTTP_BAD_GATEWAY = 502
+_HTTP_GATEWAY_TIMEOUT = 504
+# Caps a validation error's echoed field location. An extra="forbid" violation
+# reports the caller's own key as the location, so this bounds what an
+# oversized key can push into the console after redaction.
+_MAX_ERROR_FIELD_LEN = 120
+# Stands in for an extra="forbid" violation's location, which is the key the
+# caller sent rather than anything this app declared.
+_UNEXPECTED_FIELD = "(unexpected field)"
+# Caps the malformed run_id echoed back in an INVALID_RUN_ID detail. A valid
+# one is 32 chars; this bounds an oversized path segment without hiding a
+# near-miss the operator needs to see to spot their own typo.
+_MAX_ECHOED_RUN_ID_LEN = 64
 _DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 3000
 _DEFAULT_TEMPERATURE = 0.3
 _MODEL_KEY = "model"
+# Keys of the error envelope static/harness.html's fetch helper reads. Named
+# rather than repeated inline for the same reason _MODEL_KEY above is: every
+# endpoint must emit the SAME shape, and the helper reads detail.message -- an
+# endpoint that invents its own key renders as a bare "HTTP <status>" with no
+# explanation, which is exactly what the 429 did while it emitted "error".
+_CODE_KEY = "code"
+_MESSAGE_KEY = "message"
+_DETAILS_KEY = "details"
 # Loopback allow-list, enforced at BOTH the bind (main) and the Host header
 # (TrustedHostMiddleware). Deliberately loopback-only — tighter than gate.py's
 # LAN-inclusive CORS list — because the harness is a single-operator console
@@ -144,8 +174,85 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
 
 
 def _err(status: int, exc: AgenticError) -> HTTPException:
-    detail = {"code": exc.code, "message": exc.message, "details": exc.details}
+    detail = {_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: exc.details}
     return HTTPException(status_code=status, detail=detail)
+
+
+def _error_location(err: Mapping[str, object]) -> str:
+    """One validation error's reportable field location.
+
+    ``extra_forbidden`` is the only error type whose ``loc`` is caller-supplied
+    (it IS the key that was sent), so that one is replaced outright rather than
+    filtered -- see ``_validation_error_response`` for why redaction alone is
+    not sufficient there. Every other type names a field declared on the model.
+    """
+    if err.get("type") == "extra_forbidden":
+        return _UNEXPECTED_FIELD
+    raw = err.get("loc")
+    # Pydantic always supplies a tuple here, but the error dicts are typed
+    # loosely enough that asserting it would be a silenced cast rather than a
+    # check -- an unexpected shape degrades to "unknown" instead of raising
+    # inside an error handler, where a second exception is the worst outcome.
+    parts = raw if isinstance(raw, (list, tuple)) else ()
+    location = ".".join(str(part) for part in parts)
+    return redact_sensitive(location)[:_MAX_ERROR_FIELD_LEN]
+
+
+def _validation_error_response(exc: RequestValidationError) -> JSONResponse:
+    """Re-emit FastAPI's 422 in the envelope static/harness.html can read.
+
+    FastAPI's default body puts a LIST of error objects under ``detail``, but
+    the console's fetch helper reads ``data.detail.message`` -- on a list that
+    is undefined, so every malformed request rendered as a bare "HTTP 422"
+    with no hint about which field was wrong. That was already true of the
+    five original POSTs; the agent-run body (six fields, a branch pattern, and
+    a decision Literal) makes a validation failure the single most likely way
+    this app says no, so it is fixed here rather than worked around per-route.
+
+    gate.py solves the same class of problem by hand-raising an HTTPException
+    per case (see its /soul/apply INVALID_REASON path); one handler is the
+    equivalent for a whole app whose every model already forbids extra keys.
+    The offending VALUE is never included, and neither is a caller-invented
+    field NAME. Those are not the same guarantee: for every other error type
+    ``loc`` names a field declared on the model, but for an ``extra="forbid"``
+    violation ``loc`` IS the key the caller sent, so ``{"sk-ant-<key>": 1}``
+    would echo that key into a response the console renders as text.
+    Redaction alone does not close it -- ``redact_sensitive`` matches known
+    secret SHAPES, so anything outside them still round-trips. The whole
+    location is replaced instead, which is a guarantee rather than a filter;
+    redaction and the length cap still run over the declared-field names as
+    defense in depth.
+    """
+    fields = [_error_location(err) for err in exc.errors()]
+    named = ", ".join(fields) or "unknown field"
+    detail = {
+        _CODE_KEY: "VALIDATION_ERROR",
+        _MESSAGE_KEY: f"request body failed validation: {named}",
+        _DETAILS_KEY: {"fields": fields},
+    }
+    return JSONResponse(status_code=_HTTP_UNPROCESSABLE, content={"detail": detail})
+
+
+def _timeout_err(action: str, exc: subprocess.TimeoutExpired) -> HTTPException:
+    """Map a shim timeout to the same envelope every other failure uses.
+
+    ``subprocess.TimeoutExpired`` is a ``SubprocessError``, NOT an ``OpsError``
+    (which subclasses ``ValueError``), so the ``except OpsError`` that guards
+    every other shim call does not catch it and it escaped as an unhandled
+    500 with a text/plain body -- which ``api()`` cannot parse at all, making
+    the longest-running route produce the least informative failure.
+
+    ``exc.cmd`` is deliberately not echoed: the argv carries
+    ``--instruction=``, ``--commit-message=`` and ``--reason=`` values.
+    """
+    return _err(
+        _HTTP_GATEWAY_TIMEOUT,
+        AgenticError(
+            f"agentic {action} exceeded its {int(exc.timeout)}s budget",
+            code="AGENTIC_TIMEOUT",
+            details={"action": action, "timeout_sec": int(exc.timeout)},
+        ),
+    )
 
 
 def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
@@ -175,9 +282,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         limit at all -- every other CyClaw entry point rate-limits its
         request-generating endpoint (/query), this one didn't.
 
-        Applied to the two routes that cost real resources per call:
-        /api/chat (a model round-trip) and /api/github/status (a Python
-        subprocess via utils.ops_runner, up to _TIMEOUT_SEC=120s each). The
+        Applied to every route that costs real resources per call: /api/chat
+        (a model round-trip), /api/github/status, and the three /api/agent/*
+        routes (each a Python subprocess via utils.ops_runner -- 120s for a
+        status or a decision, up to 900s for a run). The
         cheap read-only routes (/api/status, /api/sessions, ...) stay exempt
         so a console refresh loop never eats the budget the expensive routes
         need. The budget is shared across the limited routes on purpose: it
@@ -188,11 +296,57 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise HTTPException(
                 status_code=_HTTP_TOO_MANY_REQUESTS,
                 detail={
-                    "error": f"Rate limit exceeded ({rate_limiter.max_requests} req / "
+                    _CODE_KEY: "RATE_LIMIT",
+                    _MESSAGE_KEY: f"Rate limit exceeded ({rate_limiter.max_requests} req / "
                     f"{rate_limiter.window_seconds}s)",
-                    "code": "RATE_LIMIT",
+                    _DETAILS_KEY: {},
                 },
             )
+
+    def _enforce_same_origin(request: Request) -> None:
+        """Reject browser-initiated cross-site requests to a state-changing route.
+
+        TrustedHostMiddleware already blocks classic DNS rebinding (the rebound
+        page's Host header is the attacker's name, not a loopback one). The gap it
+        leaves is a page on any origin doing
+
+            fetch('http://127.0.0.1:8790/api/soul', {method: 'POST',
+                  headers: {'Content-Type': 'text/plain'}, body: ...})
+
+        -- a CORS "simple request", so no preflight is sent, and the Host header is
+        a legitimate 127.0.0.1. The browser does stamp Origin and Sec-Fetch-Site on
+        it, which is what this checks.
+
+        Absent headers are ALLOWED on purpose: curl, PowerShell, and the sandbox
+        verifier send neither, and a non-browser client is not a CSRF vector. Every
+        browser that can mount this attack sends at least Origin on a cross-origin
+        POST.
+        """
+        site = request.headers.get("sec-fetch-site")
+        if site is not None and site not in ("same-origin", "none"):
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_SITE_BLOCKED",
+                    _MESSAGE_KEY: "Cross-site request rejected",
+                    _DETAILS_KEY: {"sec_fetch_site": site},
+                },
+            )
+        origin = request.headers.get("origin")
+        if origin is not None and urlparse(origin).hostname not in _LOOPBACK_HOSTS:
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {"origin_host": urlparse(origin).hostname},
+                },
+            )
+
+    # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
+    # then origin, then auth. A wrong key against a spent budget must return 429,
+    # not 401, or the limiter stops bounding key-guessing.
+    guarded = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin), Depends(require_api_key)]
 
     # Same shutdown contract gate.py's lifespan already implements: close the
     # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
@@ -219,6 +373,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         lifespan=lifespan,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        return _validation_error_response(exc)
 
     def _current_model() -> str:
         return cfg.selected_model or backend.model
@@ -269,12 +427,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def list_sessions() -> dict:
         return {"sessions": store.list()}
 
-    @app.post("/api/sessions", status_code=_HTTP_CREATED)
+    @app.post("/api/sessions", status_code=_HTTP_CREATED, dependencies=guarded)
     def create_session(req: SessionCreateRequest) -> dict:
         session = store.create(model=_current_model(), title=req.title)
         return session.summary()
 
-    @app.get("/api/sessions/{session_id}")
+    @app.get("/api/sessions/{session_id}", dependencies=guarded)
     def get_session(session_id: str) -> dict:
         try:
             session = store.get(session_id)
@@ -286,7 +444,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         ]
         return session.summary() | {"messages": messages}
 
-    @app.post("/api/sessions/{session_id}/rename")
+    @app.post("/api/sessions/{session_id}/rename", dependencies=guarded)
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
@@ -298,20 +456,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def soul_state() -> dict:
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/soul")
+    @app.post("/api/soul", dependencies=guarded)
     def soul_toggle(req: SoulToggleRequest) -> dict:
         cfg.soul_enabled = req.enabled
         cfg.save()
         return {"enabled": cfg.soul_enabled}
 
-    @app.post("/api/model")
+    @app.post("/api/model", dependencies=guarded)
     def model_select(req: ModelSelectRequest) -> dict:
         cfg.selected_model = req.model.strip()
         cfg.save()
         return {_MODEL_KEY: _current_model()}
 
     # -- chat ------------------------------------------------------------
-    @app.post("/api/chat", dependencies=[Depends(_enforce_rate_limit)])
+    @app.post("/api/chat", dependencies=guarded)
     def chat(req: ChatRequest) -> dict:
         try:
             if req.session_id:
@@ -377,7 +535,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # the operator's box regardless. gate.py's equivalent surface (POST
     # /ops/agentic, gate_ops.py) carries both a rate limit and an API key; the
     # harness is single-operator so it keeps no key, but the throttle applies.
-    @app.get("/api/github/status", dependencies=[Depends(_enforce_rate_limit)])
+    @app.get("/api/github/status", dependencies=guarded)
     def github_status() -> dict:
         try:
             gh_result = run_agentic_op("status")
@@ -389,6 +547,201 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             # is ever parameterized.
             raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         return gh_result.to_dict()
+
+    # -- agentic coding runs ---------------------------------------------
+    # The operator surface for agentic/real_repo_loop.py's two-step gate: run
+    # (clone, plan, patch, verify -- but never commit), then a separate human
+    # approve/reject that is what actually commits. Each route is one shim
+    # call; harness/ holds no run state of its own, because it cannot: every
+    # call is a fresh `python -m agentic.cli` subprocess (I6), so the only
+    # thing that survives between "start a run" and "decide on it" is the run
+    # record agentic/real_repo_run_store.py writes to disk.
+    #
+    # All three carry the full `guarded` chain, decision included. The plan
+    # this implements argued that throttling an approval is hostile; the
+    # limiter runs FIRST in that chain specifically so it bounds API-key
+    # guessing, and dropping it from the highest-privilege route would remove
+    # that bound exactly where it matters most. At 60 req/60s a decision costs
+    # one of sixty.
+    def _validated_run_id(run_id: str) -> str:
+        """Reject a malformed run_id before it becomes a `--run-id=` argv element."""
+        # fullmatch, not match: Python's `$` also matches just before a
+        # trailing newline, so `match()` would accept "<32 hex>\n" -- the
+        # pattern text stays byte-identical to agentic's so the drift test
+        # still compares the two.
+        if not RUN_ID_RE.fullmatch(run_id):
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(
+                    "run_id must be 32 lowercase hex characters",
+                    code="INVALID_RUN_ID",
+                    details={"run_id": run_id[:_MAX_ECHOED_RUN_ID_LEN]},
+                ),
+            )
+        return run_id
+
+    def _agentic_call(action: str, call: Callable[[], OpsResult]) -> dict:
+        """Run one shim call, mapping every failure into the console's envelope.
+
+        Takes a thunk rather than ``**kwargs`` on purpose: forwarding kwargs
+        through this helper would have to type them as ``object`` and silence
+        the resulting mismatch, which would stop mypy checking the ONE thing
+        worth checking here -- that each route passes ``run_agentic_op`` the
+        kwargs that action actually takes. With a thunk the call is written at
+        its route, fully typed, and this only owns the exception mapping.
+
+        Note what is NOT translated: a non-zero CLI exit is a successful shim
+        call, so it returns HTTP 200 carrying ok=false plus the CLI's own
+        stderr. That is the same contract GET /api/github/status already has,
+        and it is what lets the console distinguish "the run was refused"
+        (exit 4) from "the request was malformed" (400) without parsing prose.
+        """
+        try:
+            return call().to_dict()
+        except OpsError as exc:
+            raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise _timeout_err(action, exc) from exc
+
+    @app.get("/api/agent/checks")
+    def agent_checks() -> dict:
+        """The selectable verification profiles. Open: a static allow-list listing.
+
+        Read-only, spawns nothing, and reveals only the names of commands this
+        module already hardcodes -- so it stays outside `guarded` for the same
+        reason /api/registry does: the console must be able to populate its
+        help before the operator has entered a key.
+        """
+        return {"profiles": [{"name": name, "description": desc} for name, desc in available_profiles()]}
+
+    @app.post("/api/agent/run", dependencies=guarded)
+    def agent_run(req: AgentRunRequest) -> dict:
+        """Start one real-repo run. BLOCKS until the run finishes (up to 900s).
+
+        Deliberately synchronous, and deliberately not a poll-a-background-job
+        design, for two reasons found in the backend rather than chosen here:
+        agentic/cli.py writes the run record only when the run ENDS, so a
+        status poll returns "not found" for the whole run and there is no
+        progress to report; and the run_id is minted inside that subprocess and
+        first appears in its stdout, so a route that returned early would hand
+        the operator no handle to approve with. GET /api/github/status already
+        blocks on a 120s subprocess in this same app -- this is that shape with
+        a longer budget, not a new one.
+        """
+        try:
+            checks = resolve_check_profiles(req.checks)
+        except CheckProfileError as exc:
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(str(exc), code="UNKNOWN_CHECK_PROFILE", details={"requested": req.checks}),
+            ) from exc
+        return _agentic_call(
+            "real-repo-run",
+            lambda: run_agentic_op(
+                "real-repo-run",
+                instruction=req.instruction,
+                checks=checks,
+                branch=req.branch,
+                commit_message=req.commit_message,
+                reason=req.reason,
+                confirm=req.confirm,
+                max_iterations=req.max_iterations,
+                pr=req.pr,
+                issue=req.issue,
+            ),
+        )
+
+    @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
+    def agent_run_status(run_id: str) -> dict:
+        """Read one run's persisted record.
+
+        Guarded despite being a read: the record names a branch, the changed
+        file paths, and the clone's absolute location, and serving it spawns a
+        subprocess like /api/github/status does.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-status", lambda: run_agentic_op("real-repo-run-status", run_id=checked)
+        )
+
+    @app.post("/api/agent/runs/{run_id}/decision", dependencies=guarded)
+    def agent_run_decision(run_id: str, req: AgentDecisionRequest) -> dict:
+        """Approve (commit) or reject (discard) a pending run.
+
+        This is the request that can actually put a commit in the clone --
+        the only one in this app that reaches a git write. It performs no
+        gating of its own on purpose: the four conditions
+        (allow_git_write_tools, a pending record, a non-terminal status, git's
+        own refusal of an empty second commit) all live in agentic/, where
+        they are tested, and re-implementing any of them here would create a
+        second place for them to drift.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-decide",
+            lambda: run_agentic_op("real-repo-run-decide", run_id=checked, decision=req.decision),
+        )
+
+    @app.post("/api/agent/runs/{run_id}/push", dependencies=guarded)
+    def agent_run_push(run_id: str) -> dict:
+        """Push an approved run's branch to origin. The first request here that leaves the box.
+
+        Its own route rather than a field on the decision body because it is
+        its own decision, taken AFTER approve: the backend's
+        ``real-repo-run-decide`` refuses a second call on an already-decided
+        run, so an approve-then-push sequence through one endpoint could never
+        reach the push. It carries no body -- invoking it IS the confirmation,
+        the same shape ``decision: "approve"`` already has.
+
+        Gating stays in ``agentic/`` (``allow_git_write_tools``, ships
+        ``false``, enforced inside ``push_branch``; plus the run-state guard
+        ``require_approved_for_push``). Re-implementing either here would give
+        them a second place to drift.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-push", lambda: run_agentic_op("real-repo-run-push", run_id=checked)
+        )
+
+    @app.post("/api/agent/runs/{run_id}/publish", dependencies=guarded)
+    def agent_run_publish(run_id: str, req: AgentPublishRequest) -> dict:
+        """Open a draft PR for an already-pushed run. The most gated route in this app.
+
+        Reaches ``agentic/writer.py``'s six-gate chain, whose first gate
+        (``EXECUTION_ENABLED``) is a hardcoded ``False`` in source that no
+        config file and no request body can flip -- so on a shipped checkout
+        this route always refuses, by design. Arming it is the filed-checklist
+        operator procedure in ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``, not
+        a runtime toggle.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-publish",
+            lambda: run_agentic_op(
+                "real-repo-run-publish", run_id=checked, reason=req.reason, confirm=req.confirm,
+            ),
+        )
+
+    @app.post("/api/agent/runs/{run_id}/discard", dependencies=guarded)
+    def agent_run_discard(run_id: str) -> dict:
+        """Reclaim a decided run's clone from disk. The only route that frees disk.
+
+        Not redundant with ``reject``: reject applies only to a run still
+        awaiting a decision, and an APPROVED run's clone is deliberately
+        retained past its decision because push/publish still need it. Without
+        this route a console-driven operator accumulates one full repository
+        clone per approved run under ``workspace_root`` with no way to free
+        any of them -- the CLI had the reclamation step, the console had no
+        path to it.
+
+        The refusal for a still-pending run lives in ``agentic/`` (discarding
+        then would destroy a live candidate with no decision ever recorded),
+        not here.
+        """
+        checked = _validated_run_id(run_id)
+        return _agentic_call(
+            "real-repo-run-discard", lambda: run_agentic_op("real-repo-run-discard", run_id=checked)
+        )
 
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")
