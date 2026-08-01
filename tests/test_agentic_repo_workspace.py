@@ -889,7 +889,9 @@ def test_attach_rejects_a_missing_directory(tmp_path, monkeypatch):
     cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
     workspace_root = Path(cfg.deepagent_github.workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
-    missing = workspace_root / "does-not-exist"
+    # Two levels deep, matching clone()'s own layout, so this exercises the
+    # is_dir() check rather than the clone()-shape check below it.
+    missing = workspace_root / "cyclaw-repo-clone-x" / "does-not-exist"
     with pytest.raises(AgenticError, match="does not exist"):
         RepoWorkspaceTools.attach(cfg, missing)
 
@@ -897,11 +899,36 @@ def test_attach_rejects_a_missing_directory(tmp_path, monkeypatch):
 def test_attach_wraps_a_jail_failure_as_agentic_error(tmp_path, monkeypatch):
     cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
     workspace_root = Path(cfg.deepagent_github.workspace_root)
-    existing = workspace_root / "already-here"
+    existing = workspace_root / "cyclaw-repo-clone-x" / "repo"
     existing.mkdir(parents=True)
     with patch.object(repo_workspace, "ScopedRoots", side_effect=OSError("boom")):
         with pytest.raises(AgenticError, match="failed to jail"):
             RepoWorkspaceTools.attach(cfg, existing)
+
+
+def test_attach_rejects_workspace_root_itself(tmp_path, monkeypatch):
+    """close() unconditionally rmtrees ``_dest.parent`` -- attaching directly to
+    workspace_root would make that call delete workspace_root's own parent.
+    """
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    workspace_root = Path(cfg.deepagent_github.workspace_root)
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(AgenticError, match=r"not a clone\(\) output"):
+        RepoWorkspaceTools.attach(cfg, workspace_root)
+
+
+def test_attach_rejects_a_destination_only_one_level_under_workspace_root(tmp_path, monkeypatch):
+    """The collateral-damage case: a shallow dest passes the "under workspace_root"
+
+    check but would make close() rmtree workspace_root itself -- every other
+    run's clone and the runs/ directory tracking them, not just this one clone.
+    """
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    workspace_root = Path(cfg.deepagent_github.workspace_root)
+    shallow = workspace_root / "not-nested-enough"
+    shallow.mkdir(parents=True)
+    with pytest.raises(AgenticError, match=r"not a clone\(\) output"):
+        RepoWorkspaceTools.attach(cfg, shallow)
 
 
 def test_module_imports_without_deepagents_or_langchain():

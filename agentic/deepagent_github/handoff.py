@@ -43,6 +43,7 @@ def sanitize_handoff(
     doc_ids: tuple[str, ...] = (),
     config_path: str = "config.yaml",
     cfg: dict | None = None,
+    max_chars: int | None = None,
 ) -> tuple[str, HandoffEnvelope]:
     """Injection-check, redact, and audit an outbound prompt. Returns the redacted text.
 
@@ -52,8 +53,13 @@ def sanitize_handoff(
     is content CyClaw is about to *send*, and a prompt carrying an injection shape
     is precisely what must not be forwarded to a third party under the operator's
     credentials.
+
+    ``max_chars``, when given, replaces ``check_input``'s default length cap
+    (``policy.prompt_filter.max_input_chars``, tuned for a short RAG chat
+    query) -- see ``agentic.config.DEFAULT_MAX_HANDOFF_CHARS`` for why a
+    real-repo-loop prompt needs its own, larger number.
     """
-    checked = check_input(prompt, config_path)
+    checked = check_input(prompt, config_path, max_chars_override=max_chars)
     redacted = redact_sensitive(checked, cfg)
     envelope = HandoffEnvelope(
         provider=provider,

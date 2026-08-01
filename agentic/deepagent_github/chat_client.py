@@ -122,6 +122,7 @@ class ChatModelProposerClient:
         try:
             sanitized_prompt, _envelope = sanitize_handoff(
                 user_prompt, provider=provider, config_path=config_path, cfg=cfg,
+                max_chars=self.settings.max_handoff_chars,
             )
         except PromptInjectionError as exc:
             # sanitize_handoff's own hard fail: unlike agentic/context.py's

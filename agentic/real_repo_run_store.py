@@ -110,7 +110,15 @@ def save_run(runs_dir: Path, record: RealRepoRunRecord) -> None:
     record.updated_at = datetime.now(UTC).isoformat()
     if not record.created_at:
         record.created_at = record.updated_at
-    _atomic_write_json(_run_path(runs_dir, record.run_id), record.to_dict())
+    try:
+        _atomic_write_json(_run_path(runs_dir, record.run_id), record.to_dict())
+    except OSError as exc:
+        # Same precedent as load_run's own try/except above: this file crosses
+        # a real process boundary, so a disk-full write, a permission error, or
+        # a locked temp file on Windows must land here rather than escape past
+        # every caller's `except AgenticError` in agentic/cli.py, reach main()
+        # uncaught, and exit 1 -- a code outside the documented 0/2/3/4 API.
+        raise AgenticError("failed to persist run record", details={"run_id": record.run_id}) from exc
 
 
 def load_run(runs_dir: Path, run_id: str) -> RealRepoRunRecord:
