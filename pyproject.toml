@@ -64,6 +64,11 @@ agentic-deepagents = [
     # transitive defeats the exact-pin reproducibility constraints.txt exists for
     # -- and because the Claude cloud provider imports it directly.
     "langchain-anthropic==1.4.8",
+    # deepagents 0.6.12 ALSO mandatorily requires langchain-google-genai, langsmith,
+    # and wcmatch (verified against its PyPI Requires-Dist, not the package's own
+    # docs, which are silent on this) -- these install unconditionally too, but
+    # nothing in CyClaw imports them directly, so they are pinned in
+    # constraints.txt only (reproducibility), not listed as extra entries here.
 ]
 # Grok only. Deliberately a SEPARATE extra from agentic-deepagents so a local-only
 # install never pulls a cloud SDK it will not use, and deliberately NOT part of
