@@ -157,6 +157,15 @@ read-only.
 - Those same routes reject browser cross-site requests via `Origin` /
   `Sec-Fetch-Site`. Requests carrying neither header (curl, PowerShell, the
   sandbox verifier) are allowed — a non-browser client is not a CSRF vector.
+- A per-process CSRF token, minted fresh at server start and embedded only in
+  the page `GET /` serves, is required on every one of those same routes —
+  unlike the `Origin`/`Sec-Fetch-Site` check above, there is **no** carve-out
+  for a header-less request. This closes the residual gap that check leaves:
+  a local process holding `CYCLAW_API_KEY` but sending neither browser header
+  still needs to have fetched the console page to have the token. Scripted
+  operator tools (`.claude/skills/CyClaw-Sandbox/harness_emulation.py`, etc.)
+  fetch `GET /` once and parse the token out of the page the same way the
+  console's own `api()` helper does.
 - The chat client refuses non-loopback model endpoints.
 - Session IDs are server-generated hex; path traversal is rejected.
 - No shell execution from the console; GitHub actions go through the

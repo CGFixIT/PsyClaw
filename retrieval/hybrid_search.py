@@ -7,6 +7,7 @@ Degrades gracefully if one retrieval path fails.
 
 import heapq
 import json
+import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -17,10 +18,30 @@ from rank_bm25 import BM25Okapi
 from utils.errors import EmbeddingServiceError, IndexNotFoundError
 from utils.logger import audit_log
 
-from .embeddings import get_embedding
+from .embeddings import embedding_fingerprint, get_embedding
 from .indexer import _anchor_index_paths, _resolve_config_path
 from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_reader, parse_stem_tags
+
+logger = logging.getLogger(__name__)
+
+
+def _mps_risk_present() -> bool:
+    """True if this process could plausibly have built a pre-fix index on MPS.
+
+    Deferred import matches retrieval/embeddings.py's own pattern for
+    ``sentence_transformers`` -- avoids pulling torch into every module that
+    imports retrieval.hybrid_search. Any failure here (torch not installed, an
+    unexpected shape on ``backends.mps``) resolves to False -- the safer
+    direction is to warn rather than to spuriously refuse serving on an
+    environment this probe cannot read cleanly.
+    """
+    try:
+        import torch
+
+        return bool(torch.backends.mps.is_available())
+    except Exception:  # noqa: BLE001 -- probe failure must default to "not at risk"
+        return False
 
 
 @dataclass
@@ -59,6 +80,7 @@ class HybridRetriever:
             )
 
         self._vector_reader = get_vector_reader(self.cfg)
+        self._check_embedding_fingerprint()
 
         # Validate path is a regular file before deserializing. The BM25 index is
         # project-generated (retrieval/indexer.py) and read from a config-controlled
@@ -108,6 +130,81 @@ class HybridRetriever:
         # hybrid_search) and returning shared instances across calls would
         # leak one query's fusion state into the next identical query.
         self._bm25_scores = lru_cache(maxsize=256)(self.bm25.get_scores)
+
+    def _check_embedding_fingerprint(self) -> None:
+        """Guard against serving a semantic index built on a different
+        embedding device than the one currently configured.
+
+        ``fingerprint()`` only exists on ``_ChromaReader`` (checked via
+        ``getattr``, not isinstance -- ``_PgVectorReader`` and every test mock
+        that stands in for the reader deliberately have no such method, and
+        that must stay a silent no-op, not an error).
+
+        A present-but-MISMATCHED fingerprint is unambiguous evidence the index
+        does not match the current config (different model, dim, or device) --
+        serving it would compare vectors from different embedding spaces, so
+        this is always fatal, on any platform: raises IndexNotFoundError, which
+        callers (gate.py's boot path) already handle as the documented
+        fail-soft 503 INDEX_NOT_FOUND -- the same mechanism corrupt-BM25
+        already uses above.
+
+        An ABSENT fingerprint (an index built before this check existed) is
+        only fatal when this process could plausibly have built that index on
+        MPS instead of CPU -- i.e. only where MPS is available now. This
+        repo's Linux/Windows torch pin (torch==X+cpu) has never had MPS/CUDA
+        kernels compiled in, so an absent fingerprint there provably means the
+        old index was already CPU-built; only Apple Silicon (which has no
+        separate CPU/CUDA torch build to pin -- see macos/install-cyclaw.sh)
+        could have auto-selected MPS pre-fix. Warn-and-continue everywhere
+        else, per the original design.
+
+        Any OTHER failure here (a bad ``fingerprint_fn()`` call, a torch import
+        error inside ``_mps_risk_present``) degrades to a warning -- this
+        check's own plumbing must never block retrieval; only a POSITIVE
+        finding of staleness does.
+        """
+        fingerprint_fn = getattr(self._vector_reader, "fingerprint", None)
+        if fingerprint_fn is None:
+            return
+
+        try:
+            actual = fingerprint_fn()
+            embeddings_cfg = (self.cfg.get("models") or {}).get("embeddings") or {}
+            expected = embedding_fingerprint(embeddings_cfg)
+        except Exception as e:  # noqa: BLE001 -- observability only, must never block retrieval
+            logger.warning("Embedding fingerprint check failed (non-fatal): %s", e)
+            return
+
+        if actual is None:
+            fatal = _mps_risk_present()
+            logger.warning(
+                "Vector index has no embedding fingerprint recorded (built before "
+                "this check existed) -- rebuild with `python -m retrieval.indexer` "
+                "to confirm it matches the configured model/dim/device."
+            )
+            audit_log(
+                {"event": "embedding_fingerprint_absent", "expected": expected, "fatal": fatal},
+                config_path=self.config_path,
+            )
+            if fatal:
+                raise IndexNotFoundError(
+                    "Vector index has no embedding fingerprint, and MPS is available on "
+                    "this machine -- the index may have been built on a different device "
+                    "than the one now configured. Rebuild with `python -m retrieval.indexer`."
+                )
+        elif actual != expected:
+            logger.warning(
+                "Vector index embedding fingerprint mismatch (index=%r, configured=%r) "
+                "-- rebuild with `python -m retrieval.indexer`.", actual, expected,
+            )
+            audit_log(
+                {"event": "embedding_fingerprint_mismatch", "index": actual, "expected": expected},
+                config_path=self.config_path,
+            )
+            raise IndexNotFoundError(
+                f"Vector index embedding fingerprint mismatch (index={actual!r}, "
+                f"configured={expected!r}) -- rebuild with `python -m retrieval.indexer`."
+            )
 
     def close(self) -> None:
         """Close the underlying vector store connection.

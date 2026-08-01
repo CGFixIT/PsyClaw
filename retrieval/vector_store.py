@@ -69,6 +69,11 @@ def parse_stem_tags(raw: object) -> list[str]:
 _DEFAULT_EMBED_DIM = 384
 _PG_TABLE = "kb_chunks"
 
+# The keys retrieval.embeddings.embedding_fingerprint() stamps into a freshly
+# built index's metadata, and _ChromaReader.fingerprint() reads back. Shared
+# here (not re-derived) so writer and reader agree on the exact key set.
+_FINGERPRINT_KEYS = ("model", "dim", "device")
+
 
 def vector_backend(cfg: dict) -> str:
     """Return the configured vector backend ("chroma" default, or "pgvector")."""
@@ -98,7 +103,7 @@ class _ChromaWriter:
         self._collection_name = cfg["indexing"]["collection_name"]
         self._collection = None
 
-    def reset(self) -> None:
+    def reset(self, fingerprint: dict[str, str] | None = None) -> None:
         import chromadb
         from chromadb.config import Settings
 
@@ -112,8 +117,13 @@ class _ChromaWriter:
             pass
         # Cosine space: embeddings are L2-normalized, so `1 - distance` is genuine
         # cosine similarity (matches hybrid_search's score). See indexer comment.
+        # `fingerprint` (model/dim/device, from embeddings.embedding_fingerprint())
+        # rides in the same flat metadata dict -- ChromaDB collection metadata has
+        # no separate slot, and HybridRetriever reads it back via .fingerprint()
+        # to detect a stale/mismatched index at query time.
+        metadata = {"hnsw:space": "cosine", **(fingerprint or {})}
         self._collection = client.create_collection(
-            self._collection_name, metadata={"hnsw:space": "cosine"}
+            self._collection_name, metadata=metadata
         )
 
     def add(self, ids: list[str], documents: list[str], embeddings: Any, metadatas: list[dict]) -> None:
@@ -148,6 +158,18 @@ class _ChromaReader:
             raise IndexNotFoundError(
                 f"Collection '{collection_name}' not found in ChromaDB: {e}"
             ) from e
+
+    def fingerprint(self) -> dict[str, str] | None:
+        """Return the {model, dim, device} stamp recorded at index-build time.
+
+        None when the collection predates fingerprinting entirely (built before
+        this feature existed) -- distinct from a present-but-mismatched
+        fingerprint, which HybridRetriever warns about differently.
+        """
+        metadata = self._collection.metadata or {}
+        if not any(key in metadata for key in _FINGERPRINT_KEYS):
+            return None
+        return {key: str(metadata.get(key, "")) for key in _FINGERPRINT_KEYS}
 
     def query(self, embedding: Any, k: int) -> list[dict]:
         results = self._collection.query(query_embeddings=[embedding], n_results=k)
@@ -204,7 +226,12 @@ class _PgVectorBase:
 class _PgVectorWriter(_PgVectorBase):
     """Stores embeddings in a pgvector ``kb_chunks`` table with an HNSW index."""
 
-    def reset(self) -> None:
+    def reset(self, fingerprint: dict[str, str] | None = None) -> None:
+        # pgvector has no analogous per-collection metadata slot to stamp a
+        # fingerprint into, so it is accepted (matching _ChromaWriter's signature)
+        # and deliberately ignored -- fingerprint mismatch detection is scoped to
+        # the ChromaDB backend only. HybridRetriever only calls .fingerprint() when
+        # the reader exposes it (getattr), and _PgVectorReader deliberately does not.
         conn = self._connection()
         # Table name and dimension are code constants (never user input). Build the
         # HNSW index AFTER the bulk load (finalize) — far faster than maintaining it

@@ -143,6 +143,29 @@ def test_pgvector_reader_handles_legacy_rows_without_source_hash(fresh_store):
     assert hits[0]["source_sha256"] == ""
 
 
+def test_pgvector_reset_accepts_and_ignores_fingerprint(fresh_store):
+    # pgvector has no per-collection metadata slot to stamp a fingerprint into
+    # (unlike _ChromaWriter) -- reset() must still accept the same optional
+    # `fingerprint` argument indexer.py now always passes, and simply ignore it.
+    cfg = _cfg()
+    md = [{"source": "x.md", "chunk_id": 0, "stem_tags": "[]"}]
+    writer = get_vector_writer(cfg)
+    try:
+        writer.reset({"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"})
+        writer.add(["chunk_0"], ["first"], [_vec((0, 1.0))], md)
+        writer.finalize()
+    finally:
+        writer.close()
+
+    reader = get_vector_reader(cfg)
+    try:
+        hits = reader.query(_vec((0, 1.0)), k=10)
+    finally:
+        reader.close()
+    assert len(hits) == 1 and hits[0]["text"] == "first"
+    assert not hasattr(reader, "fingerprint")
+
+
 def test_pgvector_rebuild_truncates(fresh_store):
     cfg = _cfg()
     md = [{"source": "x.md", "chunk_id": 0, "stem_tags": "[]"}]
