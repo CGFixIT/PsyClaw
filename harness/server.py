@@ -184,6 +184,19 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
     )
 
 
+def _resolve_chat_backend() -> tuple[ResolvedLocalBackend, HarnessChatClient]:
+    """Resolve the backend and build its client as ONE fallible step.
+
+    Paired deliberately: create_app treats "which backend" and "a client that
+    can reach it" as a single outcome -- either both succeed or the console
+    runs without chat. Keeping them together also keeps create_app's try body
+    to a single statement, so the guarded region is exactly the fallible part
+    and nothing else can accidentally be swept into the same handler.
+    """
+    backend = _resolve_backend()
+    return backend, _default_chat_client(backend)
+
+
 def _err(status: int, exc: AgenticError) -> HTTPException:
     detail = {_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: exc.details}
     return HTTPException(status_code=status, detail=detail)
@@ -285,13 +298,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # already knows how to render. The loopback rule itself is NOT relaxed --
     # chat still refuses; it just refuses per-request instead of at import.
     backend_error: AgenticError | LLMServiceError | None = None
-    if chat_client is not None:
-        backend = _resolve_backend()
-        client: HarnessChatClient | None = chat_client
-    else:
+    client: HarnessChatClient | None = chat_client
+    if chat_client is None:
         try:
-            backend = _resolve_backend()
-            client = _default_chat_client(backend)
+            backend, client = _resolve_chat_backend()
         except (AgenticError, LLMServiceError) as exc:
             backend_error = exc
             backend = _UNRESOLVED_BACKEND
@@ -300,6 +310,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 "harness chat backend unavailable (%s); model-independent routes still served",
                 exc.code,
             )
+    else:
+        # An injected client (tests) is already constructed; only the backend
+        # descriptor is still needed, and its resolution is the cheap half.
+        backend = _resolve_backend()
 
     # Per-instance, not module-level: create_app() is the harness's test
     # boundary (mirrors store/client/backend above) -- a module-level
@@ -811,10 +825,10 @@ def main() -> None:
     if host not in _LOOPBACK_HOSTS:
         sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
-    if not port_env:
-        port = cfg.port
-    elif port_env.isdigit():
+    if port_env.isdigit():
         port = int(port_env)
+    elif port_env == "":
+        port = cfg.port
     else:
         # A malformed override used to be dropped silently: "879O" (letter O),
         # "-1", or a stray character all failed isdigit(), so the harness bound
