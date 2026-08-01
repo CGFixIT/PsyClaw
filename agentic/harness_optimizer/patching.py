@@ -36,6 +36,40 @@ _LOCK_STALE_SEC = 60
 _write_lock = threading.Lock()
 
 
+def _claim_stale_lock(lock_dir: Path) -> bool:
+    # Reclaim a stale lock without ever breaking mutual exclusion.
+    #
+    # rmdir()+mkdir() is NOT safe here: two processes that both observe the same
+    # stale directory can both rmdir it and both mkdir it, because the second
+    # rmdir removes the fresh lock the first one just created. Both then believe
+    # they hold the lock, and apply_candidate_artifact's
+    # read-version-increment-write interleaves -- precisely the lost update this
+    # mutex exists to prevent.
+    #
+    # os.replace() of a directory onto a non-existent path is atomic, so at most
+    # ONE racer moves the stale directory aside; every other racer's rename fails
+    # with ENOENT and refuses. The winner then re-creates the lock, and even that
+    # mkdir is allowed to lose to a process that slipped into the gap -- in which
+    # case it refuses too. Worst case is a spurious refusal, never a double grant.
+    # Kept byte-for-byte in step with agentic.registry._claim_stale_lock.
+    aside = lock_dir.with_name(f"{lock_dir.name}.stale.{os.getpid()}.{time.time_ns()}")
+    try:
+        os.replace(lock_dir, aside)
+    except OSError:
+        # Another process moved it first, or it vanished. Do not claim.
+        return False
+    try:
+        aside.rmdir()
+    except OSError:
+        # Leftover debris is harmless; never fail the reclaim over cleanup.
+        pass
+    try:
+        lock_dir.mkdir(parents=True)
+    except OSError:
+        return False
+    return True
+
+
 def _acquire_artifact_lock(lock_dir: Path) -> None:
     """Acquire a cross-process write lock, or raise ``AgenticError``.
 
@@ -54,14 +88,8 @@ def _acquire_artifact_lock(lock_dir: Path) -> None:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
         age = 0.0
-    if age > _LOCK_STALE_SEC:
-        try:
-            lock_dir.rmdir()
-            lock_dir.mkdir(parents=True)
-            return
-        except OSError:
-            # Another process won the reclaim race; fall through and refuse below.
-            pass
+    if age > _LOCK_STALE_SEC and _claim_stale_lock(lock_dir):
+        return
     raise AgenticError(
         "another harness-optimizer accept is in progress for this candidate",
         details={"lock_dir": str(lock_dir)},

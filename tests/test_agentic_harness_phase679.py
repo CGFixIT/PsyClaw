@@ -423,6 +423,55 @@ def test_stale_candidate_lock_is_reclaimed(tmp_path: Path) -> None:
     assert not lock_dir.exists()  # reclaimed then released
 
 
+def test_concurrent_stale_candidate_reclaim_grants_one_holder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two accept runs that observe the SAME stale lock must not both acquire it.
+    # The old rmdir()+mkdir() reclaim allowed exactly that -- the second racer's
+    # rmdir removed the fresh lock the first racer had just created -- so
+    # apply_candidate_artifact's read-version-increment-write could interleave and
+    # lose an update. Reproduce deterministically by driving a second acquire from
+    # inside the first one's reclaim, after the stale dir is moved aside but
+    # before the new lock exists.
+    import os as _os
+    import time as _time
+
+    from agentic.harness_optimizer import patching
+    from agentic.harness_optimizer.patching import _LOCK_STALE_SEC
+
+    lock_dir = tmp_path / "candidate.json.lock.d"
+    lock_dir.mkdir(parents=True)
+    old = _time.time() - (_LOCK_STALE_SEC + 60)
+    _os.utime(lock_dir, (old, old))
+
+    real_replace = patching.os.replace
+    holders: list[str] = []
+    reentered = False
+
+    def racing_replace(src, dst):
+        nonlocal reentered
+        real_replace(src, dst)
+        if not reentered:
+            reentered = True
+            try:
+                patching._acquire_artifact_lock(lock_dir)
+            except AgenticError:
+                pass
+            else:
+                holders.append("racer")
+
+    monkeypatch.setattr(patching.os, "replace", racing_replace)
+    try:
+        patching._acquire_artifact_lock(lock_dir)
+    except AgenticError:
+        pass
+    else:
+        holders.append("first")
+
+    assert len(holders) == 1, f"lock granted to {holders} — mutual exclusion broken"
+    assert not list(tmp_path.glob("candidate.json.lock.d.stale.*"))
+
+
 def test_atomic_json_cleans_up_tmp_file_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A failure between write_text() and os.replace() must not orphan a
     # .{name}.{pid}.tmp file with nothing left to clean it up.

@@ -318,6 +318,54 @@ def test_stale_lock_is_reclaimed(reg):
     assert not lock.exists()  # reclaimed then released
 
 
+def test_concurrent_stale_reclaim_grants_exactly_one_holder(reg, monkeypatch):
+    # Two processes that observe the SAME stale lock must not both end up holding
+    # it. The old rmdir()+mkdir() reclaim allowed exactly that: the second racer's
+    # rmdir deleted the fresh lock the first racer had just created, so both
+    # returned successfully and their read-modify-write of the registry JSON could
+    # interleave. Simulate the interleaving deterministically by letting a second
+    # acquirer run inside the first one's reclaim, at the point where the stale
+    # directory has been moved aside but the new lock is not yet created.
+    from agentic import registry as registry_mod
+
+    lock = _lock_dir(reg)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.mkdir()
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    real_replace = registry_mod.os.replace
+    holders: list[str] = []
+    reentered = False
+
+    def racing_replace(src, dst):
+        nonlocal reentered
+        real_replace(src, dst)
+        if not reentered:
+            reentered = True
+            # The "other process" arrives mid-reclaim and tries to acquire.
+            try:
+                registry_mod._acquire_registry_lock(lock)
+            except SkillRegistryError:
+                pass
+            else:
+                holders.append("racer")
+
+    monkeypatch.setattr(registry_mod.os, "replace", racing_replace)
+    try:
+        registry_mod._acquire_registry_lock(lock)
+    except SkillRegistryError:
+        pass
+    else:
+        holders.append("first")
+
+    assert len(holders) == 1, f"lock granted to {holders} — mutual exclusion broken"
+    if lock.exists():
+        lock.rmdir()
+    # No stale-aside debris should survive a successful reclaim.
+    assert not list(lock.parent.glob(f"{lock.name}.stale.*"))
+
+
 def test_empty_pattern_set_fails_closed(tmp_path, monkeypatch):
     # If the OWASP baseline were ever emptied/refactored away AND config carries
     # no banned_patterns, the compiled set would be empty -> _scan_injection a

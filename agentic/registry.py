@@ -53,6 +53,40 @@ def _utcnow() -> str:
 _LOCK_STALE_SEC = 60
 
 
+def _claim_stale_lock(lock_dir: Path) -> bool:
+    # Reclaim a stale lock without ever breaking mutual exclusion.
+    #
+    # The obvious rmdir()+mkdir() is NOT safe: two processes that both see the
+    # same stale directory can both rmdir it and both mkdir it, because the
+    # second rmdir deletes the fresh lock the first one just created. Both then
+    # believe they hold the lock and their read-modify-write of the registry
+    # JSON interleaves -- exactly the lost update this mutex exists to prevent.
+    #
+    # os.replace() of a directory onto a non-existent path is atomic, so at most
+    # ONE racer can move the stale directory aside; every other racer's rename
+    # fails with ENOENT and refuses. Only the winner then re-creates the lock,
+    # and even its mkdir is allowed to lose (to a process that slipped in during
+    # the gap), in which case it refuses too. Both outcomes keep the invariant
+    # "at most one holder"; the failure mode is a spurious refusal, never a
+    # double grant.
+    aside = lock_dir.with_name(f"{lock_dir.name}.stale.{os.getpid()}.{time.time_ns()}")
+    try:
+        os.replace(lock_dir, aside)
+    except OSError:
+        # Another process moved it first, or it vanished. Do not claim.
+        return False
+    try:
+        aside.rmdir()
+    except OSError:
+        # Leftover debris is harmless; never fail the reclaim over cleanup.
+        logger.warning("Could not remove reclaimed stale lock dir: %s", aside)
+    try:
+        lock_dir.mkdir()
+    except OSError:
+        return False
+    return True
+
+
 def _acquire_registry_lock(lock_dir: Path) -> None:
     """Acquire a cross-process write lock, or raise ``SkillRegistryError``.
 
@@ -73,14 +107,8 @@ def _acquire_registry_lock(lock_dir: Path) -> None:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
         age = 0.0
-    if age > _LOCK_STALE_SEC:
-        try:
-            lock_dir.rmdir()
-            lock_dir.mkdir()
-            return
-        except OSError:
-            # Another process won the reclaim race; fall through and refuse below.
-            pass
+    if age > _LOCK_STALE_SEC and _claim_stale_lock(lock_dir):
+        return
     raise SkillRegistryError(
         "another skills-registry apply is in progress",
         details={
