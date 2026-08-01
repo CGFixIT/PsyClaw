@@ -1,11 +1,12 @@
-"""Tests for the harness control plane's API-key auth and cross-site guard.
+"""Tests for the harness control plane's API-key auth, CSRF token, and cross-site guard.
 
 The harness previously had no authentication at all -- loopback bind plus a Host
 check, and nothing else. That is defensible for a chat console; it is not
 defensible once a route can approve an agent's write. These tests pin the gate:
 which routes it covers, that it fails closed, the dependency ordering that keeps
-key-guessing throttled, and the cross-site rejection that a Host check cannot
-provide on its own.
+key-guessing throttled, the cross-site rejection that a Host check cannot provide
+on its own, and the CSRF token that closes the one gap the cross-site check
+leaves open on purpose (a header-less, non-browser caller).
 """
 
 from __future__ import annotations
@@ -108,6 +109,17 @@ def client(cfg, monkeypatch):
     return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
 
+def _csrf(client) -> dict:
+    """The per-instance CSRF token app.state carries -- the only way a test can
+    learn it, since it is otherwise embedded only in the page GET / serves."""
+    return {"X-CyClaw-CSRF": client.app.state.csrf_token}
+
+
+def _full_auth(client) -> dict:
+    """Both required secrets: the Bearer key and this instance's CSRF token."""
+    return {**_AUTH, **_csrf(client)}
+
+
 def _call(client, method, path, body, **kwargs):
     if method == "get":
         return client.get(path, **kwargs)
@@ -137,7 +149,7 @@ def test_guarded_route_rejects_a_wrong_key(client, method, path, body):
 
 @pytest.mark.parametrize(("method", "path", "body"), GUARDED)
 def test_guarded_route_accepts_the_right_key(client, method, path, body):
-    resp = _call(client, method, path, body, headers=_AUTH)
+    resp = _call(client, method, path, body, headers=_full_auth(client))
     # 404 for the deliberately-absent session; anything but 401/403 proves the
     # dependency chain was satisfied.
     assert resp.status_code not in (401, 403)
@@ -202,7 +214,7 @@ def test_rate_limit_runs_before_auth(cfg, monkeypatch):
     monkeypatch.setattr(harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60})
     c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
-    assert c.post("/api/chat", json={"message": "one"}, headers=_AUTH).status_code == 200
+    assert c.post("/api/chat", json={"message": "one"}, headers=_full_auth(c)).status_code == 200
     assert c.post("/api/chat", json={"message": "two"}, headers={"Authorization": "Bearer wrong"}).status_code == 429
 
 
@@ -212,8 +224,8 @@ def test_rate_limit_body_is_renderable_by_the_console(cfg, monkeypatch):
     monkeypatch.setattr(harness_server, "_rate_limit_settings", lambda: {"max_requests": 1, "window_seconds": 60})
     c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
-    c.post("/api/chat", json={"message": "one"}, headers=_AUTH)
-    detail = c.post("/api/chat", json={"message": "two"}, headers=_AUTH).json()["detail"]
+    c.post("/api/chat", json={"message": "one"}, headers=_full_auth(c))
+    detail = c.post("/api/chat", json={"message": "two"}, headers=_full_auth(c)).json()["detail"]
     assert detail["code"] == "RATE_LIMIT"
     assert "Rate limit exceeded" in detail["message"]
 
@@ -245,24 +257,80 @@ def test_cross_site_fetch_metadata_is_rejected(client):
 
 @pytest.mark.parametrize("origin", ["http://127.0.0.1:8790", "http://localhost:8790", "http://[::1]:8790"])
 def test_loopback_origin_is_allowed(client, origin):
-    resp = client.post("/api/soul", json={"enabled": True}, headers={**_AUTH, "Origin": origin})
+    resp = client.post("/api/soul", json={"enabled": True}, headers={**_full_auth(client), "Origin": origin})
     assert resp.status_code == 200
 
 
 @pytest.mark.parametrize("site", ["same-origin", "none"])
 def test_same_origin_fetch_metadata_is_allowed(client, site):
-    resp = client.post("/api/soul", json={"enabled": True}, headers={**_AUTH, "Sec-Fetch-Site": site})
+    resp = client.post("/api/soul", json={"enabled": True}, headers={**_full_auth(client), "Sec-Fetch-Site": site})
     assert resp.status_code == 200
 
 
 def test_absent_headers_are_allowed(client):
-    """curl, PowerShell, and the sandbox verifier send neither header.
-
-    A non-browser client is not a CSRF vector, and every browser that can mount
-    the attack sends at least Origin on a cross-origin POST. Rejecting on absence
-    would break every scripted operator tool for no security gain.
+    """curl, PowerShell, and the sandbox verifier send neither Origin/Sec-Fetch-Site
+    header -- a non-browser client is not a CSRF vector by that measure, and every
+    browser that can mount the attack sends at least Origin on a cross-origin POST.
+    Rejecting on absence of THOSE headers would break every scripted operator tool
+    for no security gain. The CSRF token is a separate, unconditional requirement
+    (see the csrf-token test section below) -- still supplied here.
     """
-    assert client.post("/api/soul", json={"enabled": True}, headers=_AUTH).status_code == 200
+    assert client.post("/api/soul", json={"enabled": True}, headers=_full_auth(client)).status_code == 200
+
+
+# --- CSRF token --------------------------------------------------------------
+# Closes the exact gap test_absent_headers_are_allowed documents on purpose: a
+# local process holding CYCLAW_API_KEY but sending neither Origin nor
+# Sec-Fetch-Site sails past _enforce_same_origin by design. This token has no
+# such carve-out -- it is checked unconditionally, so that same caller now
+# needs to have also fetched the console page (the only place the token is
+# ever handed out) to reach a guarded route.
+
+
+def test_missing_csrf_token_is_rejected_even_with_a_valid_key(client):
+    resp = client.post("/api/soul", json={"enabled": True}, headers=_AUTH)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CSRF_TOKEN_INVALID"
+
+
+def test_wrong_csrf_token_is_rejected(client):
+    resp = client.post(
+        "/api/soul", json={"enabled": True}, headers={**_AUTH, "X-CyClaw-CSRF": "not-the-token"}
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CSRF_TOKEN_INVALID"
+
+
+def test_valid_key_and_csrf_token_succeeds(client):
+    assert client.post("/api/soul", json={"enabled": True}, headers=_full_auth(client)).status_code == 200
+
+
+def test_csrf_check_runs_after_auth_so_a_bad_key_still_reports_401(client):
+    """A missing/wrong key must still surface as 401, not 403 -- the CSRF check
+    is an ADDITIONAL condition, not a replacement, and must not mask the
+    existing auth failure mode static/harness.html's UI already handles."""
+    resp = client.post("/api/soul", json={"enabled": True}, headers={"Authorization": "Bearer wrong"})
+    assert resp.status_code == 401
+
+
+def test_token_differs_per_app_instance(cfg, monkeypatch):
+    """A fresh create_app() mints a fresh token -- one instance's token must
+    not authorize a request against a different instance (e.g. a stale page
+    left open from a previous server run)."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    other = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    assert other.app.state.csrf_token
+    # Freshly regenerated each create_app() call -- vanishingly unlikely to
+    # collide, and if it ever did the token would stop doing its job.
+    another = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    assert other.app.state.csrf_token != another.app.state.csrf_token
+
+
+def test_console_page_embeds_the_real_token_not_the_placeholder(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert client.app.state.csrf_token in resp.text
+    assert "__CYCLAW_CSRF_TOKEN__" not in resp.text
 
 
 # --- parity with gate.py ---------------------------------------------------
