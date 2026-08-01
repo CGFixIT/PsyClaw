@@ -23,7 +23,11 @@ import pytest
 from agentic import deepagent_github
 from agentic.config import AgenticConfig
 from agentic.deepagent_github import repo_workspace
-from agentic.deepagent_github.repo_workspace import DEFAULT_MAX_READ_BYTES, RepoWorkspaceTools
+from agentic.deepagent_github.repo_workspace import (
+    DEFAULT_MAX_READ_BYTES,
+    RepoWorkspaceTools,
+    canonical_repo_path,
+)
 from utils.errors import AgenticError, AgenticWriteRefused
 
 
@@ -422,6 +426,16 @@ def test_push_branch_disables_the_terminal_credential_prompt(tmp_path, monkeypat
             seen.update(kwargs.get("env") or {})
         return real_run(argv, **kwargs)
 
+    # Set BEFORE the push, and asserted absent after. _git_env() copies only
+    # variables already present in os.environ, so without these setenv calls
+    # the two assertions below were unfalsifiable: widening
+    # _GIT_ENV_ALLOWLIST to include GH_TOKEN/GITHUB_TOKEN left the whole file
+    # green in a clean environment. That is the one guard standing between a
+    # GitHub credential and the environment agentic.executor runs
+    # model-proposed check commands under -- see push_branch's own docstring.
+    monkeypatch.setenv("GH_TOKEN", "sentinel-gh-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "sentinel-github-token")
+
     remote = tmp_path / "origin.git"
     fake = _fake_clone_with_local_origin(files={"a.txt": "hello\n"}, remote=remote)
     with patch.object(repo_workspace, "run_read", side_effect=fake):
@@ -433,6 +447,9 @@ def test_push_branch_disables_the_terminal_credential_prompt(tmp_path, monkeypat
     # and the allowlist itself was not widened to carry a GitHub credential
     assert "GH_TOKEN" not in seen
     assert "GITHUB_TOKEN" not in seen
+    # the VALUES too, in case a future change forwards them under another name
+    assert "sentinel-gh-token" not in seen.values()
+    assert "sentinel-github-token" not in seen.values()
 
 
 def test_git_writes_are_refused_by_default(tmp_path, monkeypatch):
@@ -930,3 +947,55 @@ def test_untracked_files_refused_when_git_writes_are_disabled(tmp_path, monkeypa
         with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
             with pytest.raises(AgenticWriteRefused):
                 tools.untracked_files()
+
+
+# --- canonical_repo_path: the shared write-target primitive ------------------
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    ("conftest.py", "conftest.py"),
+    ("./conftest.py", "conftest.py"),
+    (".\\conftest.py", "conftest.py"),
+    ("tests/unit/test_x.py", "tests/unit/test_x.py"),
+    ("tests\\unit\\test_x.py", "tests/unit/test_x.py"),
+    ("./tests//unit/./test_x.py", "tests/unit/test_x.py"),
+    ("a/b/c.txt", "a/b/c.txt"),
+])
+def test_canonical_repo_path_collapses_equivalent_spellings(raw, expected):
+    """Every spelling of one destination must reduce to one string.
+
+    This is what makes the protected-path gate, the duplicate check and
+    changed_files comparable against what write_file will actually do -- they
+    compared raw planner strings before, so ".\\conftest.py" walked past a gate
+    blocking "conftest.py".
+    """
+    assert canonical_repo_path(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [
+    "/etc/passwd",          # absolute POSIX -- must NOT become "etc/passwd"
+    "\\Windows\\system.ini",  # driveless-but-rooted Windows
+    "C:\\Windows\\system.ini",  # drive-qualified
+    "C:/Windows/system.ini",
+    "../outside.txt",       # traversal
+    "a/../../outside.txt",
+    "-oProxyCommand=x",     # leading dash: reparsed as a git option
+    "",                     # empty
+    ".",                    # collapses to nothing
+    "./",
+    "a\x00b",               # NUL
+])
+def test_canonical_repo_path_returns_none_rather_than_laundering_an_unsafe_path(raw):
+    """None, never a "cleaned up" string.
+
+    Returning "etc/passwd" for "/etc/passwd" would turn normalization into a
+    laundering step: a caller comparing the canonical form would see a
+    plausible relative path and let it through, and only the writer's own
+    refusal would stand between it and disk. Callers keep the raw string on
+    None so that refusal still fires.
+    """
+    assert canonical_repo_path(raw) is None
+
+
+def test_canonical_repo_path_rejects_a_non_string():
+    assert canonical_repo_path(None) is None  # type: ignore[arg-type]
