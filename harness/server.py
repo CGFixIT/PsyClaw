@@ -82,7 +82,7 @@ _DEFAULT_RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "run
 # console shows a phantom run named "accepted", and because the listing sorts
 # lexicographically and then slices to _MAX_RUNS, that phantom can displace a
 # real run from the window.
-_NON_RUN_DIRS = frozenset({"accepted"})
+_NON_RUN_DIRS = frozenset(("accepted",))
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
 _MAX_RUNS = 50
 _HTTP_CREATED = 201
@@ -188,7 +188,8 @@ def _runs_dir() -> Path:
                 raw = optimizer.get("output_dir") or ""
     if not isinstance(raw, str) or not raw.strip():
         return _DEFAULT_RUNS_DIR
-    candidate = Path(os.path.expanduser(os.path.expandvars(raw.strip())))
+    expanded = os.path.expandvars(raw.strip())
+    candidate = Path(os.path.expanduser(expanded))
     if not candidate.is_absolute():
         candidate = _REPO_ROOT / candidate
     try:
