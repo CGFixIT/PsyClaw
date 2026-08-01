@@ -653,3 +653,49 @@ def test_sync_timeout_sec_fallback_on_unreadable_config(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(ops_runner, "_get_config", _boom)
     assert ops_runner._sync_timeout_sec() == 3600 + 60
+
+
+def test_real_repo_run_push_and_discard_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both carry only --run-id; neither had any argv coverage."""
+    for action in ("real-repo-run-push", "real-repo-run-discard"):
+        runner, captured = _fake_run(returncode=0, stdout='{"status": "approved"}')
+        monkeypatch.setattr(ops_runner, "_run", runner)
+        run_agentic_op(action, run_id="abc123")
+        assert action in captured[0]
+        assert "--run-id=abc123" in captured[0]
+
+
+def test_real_repo_run_publish_argv_binds_a_dash_leading_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--reason=<value> as ONE argv element, not two.
+
+    A reason beginning with '-' would otherwise be reparsed by the child's
+    argparse as a flag rather than bound to --reason. The equivalent defense
+    for apply-skill is tested; this path had no argv coverage at all.
+    """
+    runner, captured = _fake_run(returncode=0, stdout='{"status": "approved"}')
+    monkeypatch.setattr(ops_runner, "_run", runner)
+    run_agentic_op("real-repo-run-publish", run_id="abc123", reason="--not-a-flag", confirm=True)
+    assert "--reason=--not-a-flag" in captured[0]
+    assert "--not-a-flag" not in [a for a in captured[0] if not a.startswith("--reason=")]
+    assert "--confirm" in captured[0]
+
+
+def test_real_repo_run_publish_omits_confirm_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reaches the CLI's own refusal path (exit 4) rather than being defaulted."""
+    runner, captured = _fake_run(returncode=4, stdout="")
+    monkeypatch.setattr(ops_runner, "_run", runner)
+    run_agentic_op("real-repo-run-publish", run_id="abc123", reason="r")
+    assert "--confirm" not in captured[0]
+
+
+@pytest.mark.parametrize("field", ["instruction", "reason"])
+def test_real_repo_run_refuses_a_whitespace_only_free_text_field(field: str) -> None:
+    """The .strip() specifically -- Field(min_length=1) upstream does not strip,
+    so this shim is the layer that actually catches "   "."""
+    kwargs = {
+        "instruction": "do a thing", "checks": [{"name": "a", "argv": ["true"]}],
+        "branch": "claude/x", "commit_message": "m", "reason": "r",
+    }
+    kwargs[field] = "   "
+    with pytest.raises(OpsError, match=f"non-empty {field}"):
+        run_agentic_op("real-repo-run", **kwargs)
