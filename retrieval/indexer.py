@@ -1,6 +1,7 @@
 """Build ChromaDB (semantic) and BM25 (keyword) indices from .md corpus.
 
-Uses sentence-transformers for embeddings (CPU, no Ollama).
+Uses sentence-transformers for embeddings (device hardcoded to CPU via
+retrieval.embeddings.EMBED_DEVICE; no Ollama).
 Sanitizes chunks at ingestion time via prompt filter.
 """
 
@@ -14,7 +15,7 @@ import yaml
 from utils.errors import CorpusEmptyError
 from utils.sanitizer import sanitize_chunk
 
-from .embeddings import get_embeddings_batch
+from .embeddings import embedding_fingerprint, get_embeddings_batch
 from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_writer, vector_backend
 
@@ -197,7 +198,8 @@ def build_index(config_path: str = "config.yaml") -> None:
     # #1/#6); only where the vectors live changes.
     backend = vector_backend(cfg)
     writer = get_vector_writer(cfg)
-    writer.reset()
+    fingerprint = embedding_fingerprint(cfg.get("models", {}).get("embeddings", {}))
+    writer.reset(fingerprint)
     logger.info("Building semantic (vector) index [%s]...", backend)
     try:
         for batch_start in range(0, len(all_chunks), batch_size):

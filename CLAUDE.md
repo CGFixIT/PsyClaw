@@ -54,7 +54,7 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
         │
         ▼
    gate.py  — TrustedHost check → rate limit (60/min per IP) → injection filter
-              → soul init → graph invoke (wrapped in 330s timeout)
+              → soul init → graph invoke (wrapped in 660s timeout)
         │
         ▼
    graph.py  (LangGraph 9-node state machine)
@@ -110,7 +110,7 @@ subsystems.
 | `graph.py` | 9-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
-| `retrieval/embeddings.py` | Local CPU embeddings; triple `lru_cache` |
+| `retrieval/embeddings.py` | Local embeddings, device hardcoded to CPU (`EMBED_DEVICE` — cross-platform determinism; see the constant's own comment for why); triple `lru_cache`; `embedding_fingerprint()` for index-staleness detection |
 | `retrieval/stemmer.py` | Porter stemmer + custom vocab; avoids NLTK punkt (CVE) |
 | `retrieval/vector_store.py` | Pluggable reader/writer: embedded ChromaDB (default) or pgvector |
 | `retrieval/clear_cache.py` | Dry-run-by-default embedding-cache cleaner (`cyclaw-clear-cache`) |
@@ -137,7 +137,7 @@ subsystems.
 | `agentic/executor/` | Sandboxed verification: runs caller-declared checks (pytest/ruff/etc.) as argv-list subprocesses against a jailed worktree, scrubbed env, per-check timeout. Soft sandbox, not a kernel boundary — see `docs/THREAT_MODEL.md`'s executor amendments |
 | `agentic/deepagent_github/` | Two subsystems: the live one (`RepoWorkspaceTools`: clone/read/write_file/commit/push, jailed via `agentic/fsconnect/pathsafe.ScopedRoots`; `chat_client.py`/`model_adapter.py`, the cloud-provider planner `real_repo_loop.py` uses) and the **retired** one (`builder.py`'s DeepAgents subgraph — owner decision 2026-07-31, no further development planned, superseded by `real_repo_loop.py`; code/tests/CI kept, not deleted — see `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s retirement note). Both gated `false`/disarmed by default |
 | `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`, via `utils/guardrail_bridge.py` — still opt-in, still never imported directly by `gate.py`/`graph.py` |
-| `harness/` | Out-of-band PowerShell coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home, reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. See `docs/HARNESS_POWERSHELL.md` |
+| `harness/` | Out-of-band coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home on Windows (`~/.CyClaw` on macOS/Linux), reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. Launched via `powershell/` (Windows) or `macos/` (macOS/Linux) — two OS-native script trees, not a shared abstraction, since the harness Python code itself carries no platform branch. See `docs/HARNESS_POWERSHELL.md` and `docs/HARNESS_MACOS.md` |
 
 ### Load-bearing numbers (all from `config.yaml`/`pyproject.toml` — do not invent)
 
@@ -146,8 +146,8 @@ subsystems.
 | `127.0.0.1:8787` | `api.host`/`api.port` | loopback only, never a public interface |
 | `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Fused scores rarely exceed ~0.1 |
 | `60` | `retrieval.rrf_k` | RRF fusion constant |
-| `330` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (300) |
-| `300` / `3000` | `local_llm.timeout_sec` / `max_tokens` | |
+| `660` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (600) |
+| `600` / `3000` | `local_llm.timeout_sec` / `max_tokens` | sized for a dense ~27B local model, not the 7B default |
 | `8000` | `personality.soul_max_chars` | soul is capped |
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |

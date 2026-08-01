@@ -1,6 +1,8 @@
 """Local embedding service using sentence-transformers.
 
-CPU-only. No Ollama. No external service required.
+No Ollama. No external service required. The embedding model's device is
+hardcoded to CPU -- see EMBED_DEVICE below for why this is pinned rather than
+auto-selected.
 Caches the model AND the parsed config across calls to avoid reload/reparse
 overhead on the hot query path.
 
@@ -46,6 +48,19 @@ _MODEL_LOAD_RETRY_DELAY_SEC = 2.0
 # probe below -- confirmed present for the shipped default (all-MiniLM-L6-v2)
 # via a live fetch during development of this check.
 _CACHE_PROBE_FILENAME = "config.json"
+
+# sentence-transformers auto-selects a device via its own get_device_name()
+# ladder (cuda -> mps -> npu -> xpu -> hpu -> cpu) whenever SentenceTransformer(...)
+# is constructed with no explicit device=. On Apple Silicon that lands on "mps"
+# (confirmed via macOS CI: get_device_name() == "mps", and the loaded model's own
+# .device == device(type="mps", index=0)) -- and that measurably shifts retrieval
+# rankings vs. the CPU path Linux/Windows take, not mere floating-point noise (a
+# query's expected top hit moved from rank 3 to outside the top 30 semantic
+# candidates; PR #734). Pinned to CPU so every platform embeds identically.
+# This is the ~22M-parameter embedding model ONLY -- it has no effect on the
+# local LLM (Ollama, configured separately under models.local_llm), which keeps
+# using whatever GPU/Metal acceleration is available to it.
+EMBED_DEVICE = "cpu"
 
 
 def _model_offline_eligible(model_name: str, cache_dir: str) -> bool:
@@ -156,7 +171,12 @@ def _load_model(model_name: str, cache_dir: str) -> "SentenceTransformer":
 
     for attempt in range(_MODEL_LOAD_MAX_ATTEMPTS):
         try:
-            return SentenceTransformer(model_name, cache_folder=cache_dir or None, local_files_only=eligible)
+            return SentenceTransformer(
+                model_name,
+                cache_folder=cache_dir or None,
+                local_files_only=eligible,
+                device=EMBED_DEVICE,
+            )
         except (OSError, RuntimeError):
             if attempt == _MODEL_LOAD_MAX_ATTEMPTS - 1:
                 raise
@@ -183,6 +203,27 @@ def _embeddings_cfg(config_path: str) -> tuple:
     with open(config_path, encoding="utf-8") as f:
         emb_cfg = yaml.safe_load(f)["models"]["embeddings"]
     return emb_cfg["model"], resolve_cache_dir(config_path, emb_cfg.get("cache_dir", ""))
+
+
+def embedding_fingerprint(embeddings_cfg: dict) -> dict[str, str]:
+    """Build the {model, dim, device} stamp recorded on a freshly built index.
+
+    Read back at query time (via the vector store's own ``fingerprint()``) to
+    detect an index built under a different embedding model, dimension, or
+    device than the one currently configured -- most notably an index built
+    before EMBED_DEVICE existed, while sentence-transformers auto-selected
+    mps/cuda. ``embeddings_cfg`` is the raw ``models.embeddings`` config
+    section (whatever ``.get()`` chaining callers already use), not the
+    ``_embeddings_cfg``-cached tuple -- callers that only have the model name
+    can pass ``{"model": name}``. Values are always stringified: they end up
+    as ChromaDB collection metadata, which only stores str/int/float/bool.
+    """
+    return {
+        "model": str(embeddings_cfg.get("model", "")),
+        "dim": str(embeddings_cfg.get("dim", "")),
+        "device": EMBED_DEVICE,
+    }
+
 
 def _default_query_cache_size() -> int:
     """Resolve the query-embedding LRU cache size from CYCLAW_EMBED_CACHE_SIZE.

@@ -337,3 +337,38 @@ class TestOfflineEligibility:
         )
         embeddings._load_model("fresh-model", "")
         assert captured.get("local_files_only") is False
+
+    def test_load_model_passes_embed_device(self, monkeypatch):
+        # This is the actual fix: sentence-transformers auto-selects a device
+        # (cuda -> mps -> ... -> cpu) whenever device= is omitted, which is what
+        # made macOS/Apple-Silicon retrieval rank differently than Linux/Windows
+        # (PR #734). Asserting the constructor kwarg -- not just that EMBED_DEVICE
+        # == "cpu" -- is what would have caught a call site that forgot to pass it.
+        captured = {}
+
+        def _fake_ctor(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakeModel()
+
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": _fake_ctor})(),
+        )
+        embeddings._load_model("some-model", "")
+        assert captured.get("device") == embeddings.EMBED_DEVICE == "cpu"
+
+
+class TestEmbeddingFingerprint:
+    """embedding_fingerprint() stamps a freshly built index so a stale/mismatched
+    index (e.g. one built before EMBED_DEVICE existed) can be detected at query
+    time -- see retrieval/hybrid_search.py's HybridRetriever._check_embedding_fingerprint.
+    """
+
+    def test_stamps_model_dim_and_device_as_strings(self):
+        fp = embeddings.embedding_fingerprint({"model": "all-MiniLM-L6-v2", "dim": 384})
+        assert fp == {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+
+    def test_missing_keys_default_to_empty_string(self):
+        fp = embeddings.embedding_fingerprint({})
+        assert fp == {"model": "", "dim": "", "device": "cpu"}

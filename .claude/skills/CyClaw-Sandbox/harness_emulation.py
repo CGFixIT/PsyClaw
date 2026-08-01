@@ -6,10 +6,13 @@ Mirrors terminal_emulation.py's approach for the harness console (port 8790
 by default) instead of the RAG gateway (port 8787). The harness's five
 state-changing POSTs, GET /api/github/status and the three /api/agent/* run
 routes are gated on a Bearer
-CYCLAW_API_KEY (utils/auth.py), so this script reads that env var and sends the
-header on every request; the open read routes ignore it. Loopback bind plus
-TrustedHostMiddleware plus an Origin/Sec-Fetch-Site check remain the rest of the
-boundary, per harness/server.py's own docstring.
+CYCLAW_API_KEY (utils/auth.py) AND a per-process CSRF token minted at server
+start and embedded only in the page GET / serves, so this script reads the
+key from the environment, fetches GET / once to extract the token the same
+way harness.html's own JS does, and sends both on every request; the open
+read routes ignore both. Loopback bind plus TrustedHostMiddleware plus an
+Origin/Sec-Fetch-Site check remain the rest of the boundary, per
+harness/server.py's own docstring.
 
 Verifies, in the same order harness.html's own on-load + first-use calls fire:
   1. GET  /api/status     (header pills: model, tokens, provider)
@@ -33,7 +36,10 @@ Usage (called from verify.sh while the harness server is running):
 """
 
 import os
+import re
 import sys
+
+_CSRF_META_RE = re.compile(r'<meta name="csrf-token" content="([^"]*)">')
 
 
 def main() -> int:
@@ -58,13 +64,19 @@ def main() -> int:
     print()
 
     # The five state-changing POSTs, GET /api/github/status and the three
-    # /api/agent/* run routes require a Bearer CYCLAW_API_KEY (utils/auth.py).
-    # Sent on every request here: the open read
-    # routes ignore it, and a per-path branch would drift from the server's guard
-    # list. An unset key means those routes correctly 401 and the emulation fails
-    # loudly rather than silently skipping them.
+    # /api/agent/* run routes require a Bearer CYCLAW_API_KEY (utils/auth.py)
+    # AND the per-process CSRF token embedded in the page GET / serves. Sent
+    # on every request here: the open read routes ignore both, and a per-path
+    # branch would drift from the server's guard list. An unset key means
+    # those routes correctly 401 and the emulation fails loudly rather than
+    # silently skipping them.
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    with httpx.Client(base_url=base, timeout=10.0) as probe:
+        page = probe.get("/").text
+    match = _CSRF_META_RE.search(page)
+    if match and match.group(1) and match.group(1) != "__CYCLAW_CSRF_TOKEN__":
+        headers["X-CyClaw-CSRF"] = match.group(1)
 
     with httpx.Client(base_url=base, timeout=10.0, headers=headers) as client:
 

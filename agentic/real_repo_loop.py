@@ -332,7 +332,9 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
     what the model actually proposed, burning ``max_iterations`` on a
     line-ending mismatch rather than the content the operator is trying to
     debug. This matters here specifically because the operator surface is
-    Windows-hosted (``harness/``).
+    ``harness/``, whose Windows launcher (PowerShell) is CRLF-native and whose
+    macOS/Linux launcher (shell) is not -- a fixed model backend can still
+    reply with either line ending regardless of which one launched it.
 
     Raises :class:`AgenticError` if the same path appears in two different
     blocks: a planner has no legitimate reason to propose two different

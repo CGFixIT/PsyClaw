@@ -224,6 +224,70 @@ class TestBuildIndexConfigPropagation:
         assert not (launch_dir / "data" / "index" / "bm25.json").exists()
 
 
+class TestBuildIndexFingerprint:
+    """build_index() must stamp the embedding fingerprint (model/dim/device) into
+    the vector store at reset time, so HybridRetriever can detect a stale/
+    mismatched index later (see retrieval/hybrid_search.py's
+    _check_embedding_fingerprint). writer.reset() is a MagicMock in every one
+    of these tests, which accepts any call signature -- confirming the added
+    optional `fingerprint` parameter cannot break an existing caller.
+    """
+
+    def _write_config(self, tmp_path, corpus, models=None):
+        cfg = {
+            "corpus": {"path": str(corpus), "extensions": [".md"]},
+            "indexing": {
+                "chroma_path": str(tmp_path / "chroma"),
+                "bm25_path": str(tmp_path / "bm25.json"),
+                "collection_name": "test_kb",
+                "chunk_size": 512,
+                "chunk_overlap": 50,
+                "batch_size": 10,
+            },
+        }
+        if models is not None:
+            cfg["models"] = models
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f)
+        return str(config_path)
+
+    def _build_with_mock_writer(self, config_path):
+        fake_writer = MagicMock()
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]),
+            patch("retrieval.indexer.get_vector_writer", return_value=fake_writer),
+        ):
+            build_index(config_path)
+        return fake_writer
+
+    def test_reset_receives_fingerprint_from_configured_embeddings(self, tmp_path):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "a.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        config_path = self._write_config(
+            tmp_path, corpus, models={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
+        )
+
+        fake_writer = self._build_with_mock_writer(config_path)
+
+        fake_writer.reset.assert_called_once_with(
+            {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+        )
+
+    def test_reset_receives_empty_fingerprint_when_models_section_absent(self, tmp_path):
+        # No `models:` key at all -- the config fixtures elsewhere in this file
+        # omit it entirely; build_index must not KeyError on a missing section.
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "a.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        config_path = self._write_config(tmp_path, corpus, models=None)
+
+        fake_writer = self._build_with_mock_writer(config_path)
+
+        fake_writer.reset.assert_called_once_with({"model": "", "dim": "", "device": "cpu"})
+
+
 class TestLoadCorpusCaseInsensitive:
     """load_corpus must match file extensions case-insensitively.
 

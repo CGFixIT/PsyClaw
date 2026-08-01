@@ -62,7 +62,7 @@ class HealthResponse(BaseModel):
     # console can bound its own fetch ABOVE this value — otherwise the browser
     # aborts first and hides the server's truthful 504 GRAPH_TIMEOUT message.
     # Defaulted so existing HealthResponse constructions stay valid.
-    graph_timeout_sec: int = 330
+    graph_timeout_sec: int = 660
     # Installed package version (importlib.metadata; "dev" when not installed).
     # The console footer renders `cyclaw v{version}`; without this field the
     # UI's data.version read is always undefined and the version never shows.

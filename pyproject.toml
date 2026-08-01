@@ -111,7 +111,7 @@ packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrai
 include = [
     "gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
     "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval",
-    "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "powershell",
+    "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "powershell", "macos",
 ]
 
 [tool.pytest.ini_options]

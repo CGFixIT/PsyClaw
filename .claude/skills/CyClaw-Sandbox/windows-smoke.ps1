@@ -98,15 +98,24 @@ Write-Host "=== CyClaw Windows Harness API smoke bomb ($HarnessBase) ===" -Foreg
 
 # The harness's five state-changing POSTs, GET /api/github/status and the three
 # /api/agent/* run routes are gated
-# on the same Bearer CYCLAW_API_KEY the gateway uses (utils/auth.py). Reuses
-# $ApiKey read above; the open read routes ignore the header.
+# on the same Bearer CYCLAW_API_KEY the gateway uses (utils/auth.py), AND a
+# per-process CSRF token minted at server start and embedded only in the page
+# GET / serves. Reuses $ApiKey read above; the token is extracted from the
+# console page fetched at step 7 below, the same way harness.html's own JS
+# reads it. The open read routes ignore both.
 $HarnessHeaders = @{ Authorization = "Bearer $ApiKey" }
 
-# 7. GET / — harness console served
+# 7. GET / — harness console served (also the only source of the CSRF token)
 try {
     $resp = Invoke-WebRequest -Uri "$HarnessBase/" -Method GET -SkipHttpErrorCheck  # DevSkim: ignore DS137138
     if ($resp.StatusCode -eq 200) { Pass "GET / (harness console, HTTP 200)" }
     else { Fail "GET / (harness console) HTTP $($resp.StatusCode)" }
+    $csrfMatch = [regex]::Match($resp.Content, '<meta name="csrf-token" content="([^"]*)">')
+    if ($csrfMatch.Success -and $csrfMatch.Groups[1].Value -and $csrfMatch.Groups[1].Value -ne "__CYCLAW_CSRF_TOKEN__") {
+        $HarnessHeaders["X-CyClaw-CSRF"] = $csrfMatch.Groups[1].Value
+    } else {
+        Fail "GET / did not embed a CSRF token — every guarded route below will 403"
+    }
 } catch { Fail "GET / (harness console) threw: $_" }
 
 # 8. GET /api/status — header pills (model, provider, tokens)
