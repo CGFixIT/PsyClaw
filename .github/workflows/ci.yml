@@ -223,9 +223,25 @@ jobs:
           grep -qF "$GITHUB_WORKSPACE" "$HOME/.CyClaw/bin/cyclaw" \
             || fail "shim does not reference the checked-out repo (--repo-path not honored)"
 
-          RC_FILE="$HOME/.zshrc"   # macos-latest's default $SHELL is zsh
-          [ -f "$RC_FILE" ] || fail "rc file not created"
-          grep -qF "# >>> cyclaw harness path >>>" "$RC_FILE" || fail "PATH block missing from rc file"
+          # NOT hardcoded to .zshrc: verified against a live macos-latest run that
+          # $SHELL in this non-interactive Actions context does not match the
+          # */zsh case in install-cyclaw.sh's own detect_rc_file() (it wrote
+          # .bashrc instead) -- a real gap between "macOS's interactive-login
+          # default shell" and "this CI runner's $SHELL env var", caught by this
+          # smoke test failing for real on its first run. Discover whichever file
+          # actually got the block instead of assuming which one detect_rc_file()
+          # would pick.
+          RC_FILE=""
+          for candidate in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+            if [ -f "$candidate" ] && grep -qF "# >>> cyclaw harness path >>>" "$candidate"; then
+              RC_FILE="$candidate"
+              break
+            fi
+          done
+          # The discovery loop above already proved the PATH block is present
+          # (that's its match condition) -- only the function block is a genuinely
+          # independent assertion here.
+          [ -n "$RC_FILE" ] || fail "no rc file (.zshrc/.bash_profile/.bashrc) contains the PATH block"
           grep -qF "# >>> cyclaw harness >>>" "$RC_FILE" || fail "cyclaw() function block missing from rc file"
           echo "[smoke] install-cyclaw.sh: layout + shim + profile integration OK"
 
