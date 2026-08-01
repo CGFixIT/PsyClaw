@@ -29,7 +29,15 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cp "$repo_root/config.yaml" "$tmp/config.yaml"
-sed -i.bak 's/graph_timeout_sec: 330/graph_timeout_sec: 200/' "$tmp/config.yaml"
+# Value-agnostic on purpose: anchoring this on a literal (it was "330") makes the
+# mutation silently match nothing the moment the shipped timeout is retuned, so the
+# "mutated" config equals the clean one, check_config.py exits 0, and this self-test
+# fails for a reason that has nothing to do with C2. 1 is below any sane llm timeout.
+sed -i.bak 's/^\( *graph_timeout_sec:\) *[0-9][0-9]*/\1 1/' "$tmp/config.yaml"
+grep -qE "graph_timeout_sec: 1([^0-9]|$)" "$tmp/config.yaml" || {
+  echo "mutation A: setup FAILED — graph_timeout_sec was not rewritten; check the sed pattern" >&2
+  exit 1
+}
 
 out="$(python3 "$checker" --repo-root "$tmp" 2>&1)"; rc=$?
 if [ "$rc" -ne 2 ]; then

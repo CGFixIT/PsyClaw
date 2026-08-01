@@ -514,7 +514,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # Overall server-side deadline: a stalled Ollama / retrieval must not hold
     # the request (and a worker thread) open indefinitely. The per-call LLM
     # timeouts are an inner bound; this is the outer one covering the whole graph.
-    graph_timeout = cfg.get("api", {}).get("graph_timeout_sec", 330)
+    graph_timeout = cfg.get("api", {}).get("graph_timeout_sec", 660)
     try:
         result = await asyncio.wait_for(
             asyncio.to_thread(compiled_graph.invoke, initial_state),
@@ -693,7 +693,7 @@ async def health():
         index_ready=retriever is not None,
         graph_ready=compiled_graph is not None,
         mode=cfg["app"]["mode"],
-        graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 330),
+        graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 660),
         version=_CYCLAW_VERSION,
     )
 

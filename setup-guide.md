@@ -189,7 +189,7 @@ models:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # Ollama's OpenAI-compatible endpoint — do not change
     model: "qwen2.5:7b"                     # must match a model tag actually pulled in Ollama
-    timeout_sec: 300                        # must stay < api.graph_timeout_sec (330)
+    timeout_sec: 600                        # must stay < api.graph_timeout_sec (660)
     max_tokens: 3000                        # reserved output budget — see config.yaml's own comment on num_ctx headroom
 
 retrieval:

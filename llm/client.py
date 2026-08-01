@@ -161,8 +161,10 @@ def _post_with_retry(
     ERROR, tagged with ``service`` (e.g. ``ollama`` / ``grok``), the attempt
     count, and the failure category. Only network/HTTP metadata is logged —
     never the prompt or response body — so the breadcrumb is safe for the audit
-    trail. This turns previously-silent retries (a 12-minute Ollama stall would
-    leave no trace) into an observable signal.
+    trail. This turns previously-silent retries (a multi-minute Ollama stall
+    would leave no trace) into an observable signal. Deliberately not stated as
+    a concrete duration: the worst case is a multiple of the caller's own
+    ``timeout_sec``, so any figure written here drifts the moment that is retuned.
     """
     def _delay(attempt: int) -> float:
         return min(backoff_base * (2 ** attempt), backoff_max)
