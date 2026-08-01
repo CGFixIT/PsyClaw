@@ -119,10 +119,22 @@ if [ "$SKIP_PYTHON_DEPS" -eq 0 ]; then
     "$PY_CMD" -m venv "$VENV_DIR"
     [ -x "$VENV_PY" ] || { echo "venv creation failed." >&2; exit 1; }
   fi
-  step "installing dependencies (CPU torch first, then requirements; this can take a few minutes)"
+  step "installing dependencies (torch first, then requirements; this can take a few minutes)"
   "$VENV_PY" -m pip install --upgrade pip >/dev/null
-  "$VENV_PY" -m pip install "torch==2.13.0+cpu" --index-url https://download.pytorch.org/whl/cpu
-  "$VENV_PY" -m pip install -r "$REPO_DIR/requirements.txt" -c "$REPO_DIR/constraints.txt" --ignore-installed PyYAML
+  # Apple Silicon has no separate CPU/CUDA torch build to disambiguate, so
+  # (unlike Linux/Windows) PyTorch publishes a PLAIN torch==2.13.0 for macOS --
+  # confirmed against download.pytorch.org/whl/cpu's own version listing,
+  # which 404s on the "+cpu"-suffixed pin requirements.txt/constraints.txt
+  # hardcode for Linux/Windows reproducibility. Install torch directly, then
+  # strip the torch/extra-index-url lines from copies of both manifests so
+  # pip never tries to reconcile the installed plain build against that pin.
+  "$VENV_PY" -m pip install "torch==2.13.0"
+  TMP_REQ="$(mktemp)"
+  TMP_CONSTRAINTS="$(mktemp)"
+  grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' "$REPO_DIR/requirements.txt" > "$TMP_REQ"
+  grep -v '^torch==' "$REPO_DIR/constraints.txt" > "$TMP_CONSTRAINTS"
+  "$VENV_PY" -m pip install -r "$TMP_REQ" -c "$TMP_CONSTRAINTS" --ignore-installed PyYAML
+  rm -f "$TMP_REQ" "$TMP_CONSTRAINTS"
   step "dependencies installed"
 fi
 

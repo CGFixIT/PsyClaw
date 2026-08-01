@@ -123,6 +123,10 @@ _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 # static asset on disk (the file on disk always carries the placeholder).
 _CSRF_PLACEHOLDER = "__CYCLAW_CSRF_TOKEN__"
 _CSRF_HEADER = "x-cyclaw-csrf"
+# secrets.token_urlsafe's nbytes: 32 random bytes (~43 base64url chars), the
+# same size Python's own docs use as the "good enough for a security token"
+# example -- comfortably beyond brute-force range for a per-process secret.
+_CSRF_TOKEN_BYTES = 32
 
 
 def _llm_settings() -> dict:
@@ -355,7 +359,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # token would defeat the point. Minted fresh per process, embedded ONLY in
     # the page GET / serves (see console() below), and checked unconditionally
     # -- unlike _enforce_same_origin, there is no "no header -> allow" carve-out.
-    csrf_token = secrets.token_urlsafe(32)
+    csrf_token = secrets.token_urlsafe(_CSRF_TOKEN_BYTES)
 
     def _enforce_csrf_token(request: Request) -> None:
         """Reject any guarded request that doesn't carry this instance's CSRF token.
