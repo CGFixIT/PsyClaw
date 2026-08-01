@@ -839,26 +839,42 @@ response. Console equivalents are `/agent run|confirm|status|approve|reject|push
 
 ### Optional cloud planner (Grok / Claude)
 
-The loop is local-only by default. `--provider grok|claude --confirm-online` drives
-it with a cloud model instead, behind a **six-condition chain**: `agentic.enabled`
-→ `deepagent_github.enabled` → `allow_cloud_providers` → `providers.<name>.enabled`
+The loop is local-only by default, and **the local path (no `--provider` flag)
+needs nothing beyond the base install** — `LocalProposerClient` is a plain `httpx`
+call, and nothing on that code path (`real_repo_loop.py`, `repo_workspace.py`,
+`executor/runner.py`) imports `deepagents` or `langchain`. If you just want to try
+the harness against your own Ollama model, `pip install -e .` is enough; skip the
+rest of this section.
+
+`--provider grok|claude --confirm-online` drives the loop with a cloud model
+instead, behind a **six-condition chain**: `agentic.enabled` →
+`deepagent_github.enabled` → `allow_cloud_providers` → `providers.<name>.enabled`
 → the provider's API key env var (`GROK_API_KEY` / `ANTHROPIC_API_KEY`, key presence
 only, never a network probe) → per-run `--confirm-online`. Every outbound prompt is
 injection-scanned, redacted, hashed, and audited as egress before it leaves the
 process.
 
 Cloud SDKs are **opt-in extras, deliberately absent from the default install,
-`requirements.txt`, and the Docker image** — a local-only install never pulls a
-cloud SDK it will not use:
+`requirements.txt`, and the Docker image** — installing them is a separate,
+explicit step, matched to which provider(s) you actually want:
 
 ```bash
-pip install -e ".[agentic-deepagents]"        -c constraints.txt   # local + Claude
-pip install -e ".[agentic-deepagents-cloud]"  -c constraints.txt   # adds Grok
+# Claude only
+pip install -e ".[agentic-deepagents]"                        -c constraints.txt
+
+# Grok only — lighter: just langchain-xai, no deepagents/langchain pulled in
+pip install -e ".[agentic-deepagents-cloud]"                   -c constraints.txt
+
+# Both providers, one command
+pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.txt
 ```
 
-Neither extra is part of `full`. The published Docker image installs
-`requirements.txt` only (base deps), so running this feature in a container means
-installing the extras explicitly on top.
+Neither extra is part of `full` (what CI and `full`-installed dev boxes get) — that
+split is deliberate, so a machine that never touches cloud providers never
+carries their SDKs. The published Docker image installs `requirements.txt` only
+(base deps, no extras at all), so running this feature — local *or* cloud — in a
+container means installing on top: add `pip install -e .` for local mode, or one
+of the three commands above for cloud, after the image's own install step.
 
 ---
 
