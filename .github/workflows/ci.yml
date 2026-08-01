@@ -161,7 +161,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macos-latest is GitHub's Apple Silicon (arm64) runner. Every step in
+        # this job already uses `shell: bash`, so no OS-specific step is added
+        # for this leg -- it exercises the same script path windows-latest's
+        # Git-Bash leg does. NOT independently verified in the authoring
+        # sandbox that torch==2.13.0+cpu resolves on macOS arm64 from
+        # https://download.pytorch.org/whl/cpu (the sandbox's outbound proxy
+        # denies that host outright, and the wheel's whole design point is
+        # that it resolves ONLY from that index, never plain PyPI -- see
+        # requirements.txt's "no dependency-confusion exposure" comment, which
+        # means there is no substitute index to check it against). This run is
+        # the first real signal; if it fails on the torch install step
+        # specifically, the fix is a Darwin-conditional install (plain
+        # `torch==2.13.0` from PyPI, no index override -- Apple Silicon wheels
+        # carry no separate CPU/CUDA variant to disambiguate), not a retry.
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
