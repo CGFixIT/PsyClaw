@@ -151,6 +151,25 @@ def test_deepagent_config_accepts_a_custom_max_handoff_chars(tmp_path: Path) -> 
     assert cfg.deepagent_github.max_handoff_chars == 50_000
 
 
+def test_deepagent_config_defaults_scan_code_shape_on(tmp_path: Path) -> None:
+    """Fail safe: the code-shape scanner is on unless an operator turns it off."""
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+    assert cfg.deepagent_github.scan_code_shape is True
+
+
+def test_deepagent_config_rejects_non_bool_scan_code_shape(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"scan_code_shape": "true"})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_scan_code_shape_off(tmp_path: Path) -> None:
+    """The escape hatch is reachable -- a heuristic gate needs one."""
+    block = _base_block(deepagent_github={"scan_code_shape": False})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.scan_code_shape is False
+
+
 def test_deepagent_config_defaults_planner_timeout_sec(tmp_path: Path) -> None:
     from agentic.config import DEFAULT_PLANNER_TIMEOUT_SEC
 

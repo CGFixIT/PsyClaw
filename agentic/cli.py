@@ -614,6 +614,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             read_paths=args.read_file,
             protected_write_paths=cfg.deepagent_github.protected_write_paths,
             max_write_budget_bytes=cfg.deepagent_github.max_write_budget_bytes,
+            scan_code_shape=cfg.deepagent_github.scan_code_shape,
             config_path=args.config,
             cfg=app_cfg,
         )
