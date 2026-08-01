@@ -798,3 +798,56 @@ def test_harness_runs_excludes_the_accepted_artifact_dir(client, tmp_path, monke
     listed = {r["run_id"] for r in client.get("/api/harness/runs").json()["runs"]}
     assert "accepted" not in listed  # no phantom run
     assert listed == real  # ...and nothing real was displaced by it
+
+
+# -- security response headers --------------------------------------------------
+
+_EXPECTED_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "X-Permitted-Cross-Domain-Policies": "none",
+}
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/", "/api/status", "/api/registry", "/api/sessions", "/api/harness/runs"],
+)
+def test_security_headers_on_every_response(client, path):
+    # Previously only GET / carried any of these, so every JSON response --
+    # including /api/sessions/{id}, which echoes model output verbatim, and
+    # /api/github/status, which echoes subprocess stdout -- shipped without
+    # nosniff or a Referrer-Policy. gate.py stamps them on all responses via
+    # _SecurityHeadersMiddleware; the harness now matches.
+    resp = client.get(path)
+    assert resp.status_code == 200
+    for header, value in _EXPECTED_SECURITY_HEADERS.items():
+        assert resp.headers.get(header) == value, f"{path} missing {header}"
+    assert "frame-ancestors 'none'" in resp.headers.get("Content-Security-Policy", "")
+
+
+def test_security_headers_on_an_error_response(client):
+    # The middleware is registered LAST, so Starlette's outside-in ordering makes
+    # it outermost -- it wraps TrustedHostMiddleware and stamps headers on the
+    # 400 a rejected Host produces. These headers carry no request data, so
+    # putting them on error responses is free.
+    resp = client.get("/api/status", headers={"Host": "evil.example.com"})
+    assert resp.status_code == 400
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert resp.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+
+def test_security_headers_on_a_404(client):
+    resp = client.get("/api/sessions/deadbeefdead")
+    assert resp.status_code == 404
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+def test_console_keeps_its_own_csp_and_is_not_cached(client):
+    # setdefault must not clobber the route's own frame-ancestors CSP.
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers.get("Content-Security-Policy") == "frame-ancestors 'none'"
+    assert "no-store" in resp.headers.get("Cache-Control", "")

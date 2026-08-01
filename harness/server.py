@@ -478,6 +478,41 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
 
+    # Defense-in-depth response headers on EVERY response, matching gate.py's
+    # _SecurityHeadersMiddleware. Previously only GET / carried any -- so every
+    # JSON response (/api/status, /api/registry, /api/sessions/{id}, which
+    # echoes model output verbatim, and /api/github/status, which echoes
+    # subprocess stdout) shipped with no X-Content-Type-Options and no
+    # Referrer-Policy. A MIME-sniffing browser rendering an attacker-influenced
+    # JSON body as HTML is exactly what nosniff closes.
+    #
+    # Added LAST so Starlette's outside-in ordering makes it the OUTERMOST
+    # middleware: it wraps the TrustedHost check and therefore stamps the
+    # headers on the 400 a rejected Host produces too. Same reasoning gate.py
+    # documents -- these headers carry no request data, so putting them on error
+    # responses is free.
+    #
+    # setdefault, never overwrite: GET / already sets its own frame-ancestors
+    # CSP and keeps it.
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next: Callable):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault(
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        )
+        response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")
+        if request.url.path == "/":
+            # The console renders session transcripts; no browser cache for it,
+            # matching gate.py's treatment of the Soul Console.
+            response.headers.setdefault(
+                "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"
+            )
+        return response
+
     @app.exception_handler(RequestValidationError)
     async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
         return _validation_error_response(exc)
