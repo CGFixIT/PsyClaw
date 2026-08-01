@@ -32,7 +32,14 @@ import torch  # noqa: E402
 import yaml  # noqa: E402
 from sentence_transformers.util import get_device_name  # noqa: E402
 
-from retrieval.embeddings import _embeddings_cfg, _load_model  # noqa: E402
+# Module-object import only (not `from retrieval.embeddings import _load_model`):
+# _load_model is the exact attribute tests/test_embeddings.py monkeypatches, so
+# binding its value here would not observe a patch -- CodeQL's
+# py/import-of-mutable-attribute. Importing the same module both ways instead
+# trips py/import-and-import-from, so this stays a single module import, matching
+# the idiom at tests/test_harness_auth.py:20-23. hybrid_search/indexer below are
+# different modules, so the plain from-import is fine for them.
+import retrieval.embeddings as embeddings  # noqa: E402
 from retrieval.hybrid_search import HybridRetriever  # noqa: E402
 from retrieval.indexer import build_index  # noqa: E402
 
@@ -65,8 +72,8 @@ def main() -> int:
     # Guarded because a model-load failure here must not cost us the probes
     # printed above -- they are the point of this run.
     try:
-        model_name, cache_dir = _embeddings_cfg("config.yaml")
-        print(f"  ACTUAL loaded model device:       {_load_model(model_name, cache_dir).device!r}")
+        model_name, cache_dir = embeddings._embeddings_cfg("config.yaml")
+        print(f"  ACTUAL loaded model device:       {embeddings._load_model(model_name, cache_dir).device!r}")
     except Exception as exc:  # noqa: BLE001 - diagnostic must never abort on this
         print(f"  ACTUAL loaded model device:       <unavailable: {type(exc).__name__}>")
 
