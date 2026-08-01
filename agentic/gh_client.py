@@ -176,9 +176,12 @@ _REPO_FIELDS = (
 )
 
 # Every supported op maps to a builder. There is intentionally NO entry that
-# mutates state -- this dict IS the read-only allow-list.
+# mutates state -- this dict IS the read-only allow-list. repo_clone belongs
+# here too: it never mutates GitHub, only materializes a read-only local copy
+# (exactly like pr_diff materializes diff text) -- the mutation boundary this
+# allow-list polices is GitHub state, not the local filesystem.
 _READ_OPS = frozenset(
-    {"pr_view", "pr_list", "pr_diff", "issue_view", "issue_list", "repo_view"}
+    {"pr_view", "pr_list", "pr_diff", "issue_view", "issue_list", "repo_view", "repo_clone"}
 )
 
 # Hard ceilings on caller-tunable sizes. ``limit`` flows verbatim into
@@ -187,6 +190,14 @@ _READ_OPS = frozenset(
 # a multi-MB diff cannot blow up argv or downstream memory.
 MAX_LIST_LIMIT = 1000
 MAX_DIFF_CHARS = 200_000
+
+# repo_clone-specific ceilings. Shallow by design -- a coding-loop workspace
+# needs a working tree, not full history -- and not caller-tunable in this
+# version (YAGNI: no live caller varies it yet). A real network clone can
+# easily exceed the shared 30s default every other read op uses, so it gets
+# its own, larger default rather than forcing every other op's timeout up.
+CLONE_DEPTH = 1
+DEFAULT_CLONE_TIMEOUT_SEC = 120
 
 
 # A non-zero `gh` exit whose stderr matches this is a TRANSIENT network/server
@@ -214,14 +225,22 @@ def build_read_argv(
     number: int | None = None,
     limit: int = 30,
     gh_bin: str = "gh",
+    dest: str | None = None,
 ) -> list[str]:
     """Build the argv list for a read-only ``gh`` operation.
 
     ``op`` must be one of the read-only ops in ``_READ_OPS``; anything else
     raises ``AgenticError`` (no write op can ever be built here). ``repo`` is the
     validated ``owner/name`` slug. ``number`` is required for the *_view / pr_diff
-    ops. The returned list always starts with ``gh_bin`` and uses only literal
-    flags plus validated inputs -- no shell, no interpolation into a string.
+    ops. ``dest`` is required for ``repo_clone`` -- see its callers, which
+    ALWAYS compute it internally (a ``TemporaryDirectory`` subpath) rather than
+    accept it from a config value or request body: unlike every other value
+    here, it flows into argv as a second positional (after ``repo``), and no
+    validated-slug-shaped regex like ``_REPO_RE`` exists for an arbitrary
+    filesystem path, so the only injection-proof posture is to never let it
+    originate outside this codebase. The returned list always starts with
+    ``gh_bin`` and uses only literal flags plus validated inputs -- no shell,
+    no interpolation into a string.
     """
     if op not in _READ_OPS:
         raise AgenticError(
@@ -272,6 +291,14 @@ def build_read_argv(
     if op == "issue_list":
         return [gh_bin, "issue", "list", "--repo", repo, "--json", _ISSUE_LIST_FIELDS,
                 "--limit", safe_limit]
+    if op == "repo_clone":
+        if not dest:
+            raise AgenticError("repo_clone requires a 'dest' path", details={"op": op})
+        # Everything after "--" forwards verbatim to the underlying `git clone`
+        # (gh's own documented passthrough) -- --depth bounds a coding-loop
+        # workspace to a working tree, not full history. "gh repo clone" has no
+        # native depth flag of its own.
+        return [gh_bin, "repo", "clone", repo, dest, "--", "--depth", str(CLONE_DEPTH)]
     # op == "repo_view"
     return [gh_bin, "repo", "view", repo, "--json", _REPO_FIELDS]
 
@@ -287,13 +314,16 @@ def run_read(
     timeout: int = 30,
     retries: int = 0,
     retry_backoff_sec: float = 2.0,
+    dest: str | None = None,
 ) -> dict:
     """Run a read-only ``gh`` op and return a structured result dict.
 
     Verifies the gh version, resolves the binary to an absolute path, runs it
     (argv list, no shell), and audits the call. ``pr_diff`` returns text under
     ``{"diff": ...}``, capped at ``MAX_DIFF_CHARS`` with a truncation marker;
-    the JSON ops return ``{"data": <parsed>}``. Raises ``AgenticError`` on
+    ``repo_clone`` returns ``{"dest": ...}`` (its stdout is human progress text,
+    never JSON, so it does not go through the JSON-parse branch below); the
+    remaining JSON ops return ``{"data": <parsed>}``. Raises ``AgenticError`` on
     non-zero exit. Never raises with secret-bearing details.
 
     ``retries`` adds up to N extra attempts with exponential backoff, but ONLY on
@@ -301,13 +331,17 @@ def run_read(
     network/server pattern (see ``_is_transient_gh_error``). Deterministic
     failures (404, bad flag, auth) are never retried -- they fail fast.
     ``retries=0`` (the default) is exactly the historical single-shot behaviour.
+    ``timeout`` defaults to 30s for every op except ``repo_clone``, whose only
+    caller passes ``DEFAULT_CLONE_TIMEOUT_SEC`` explicitly -- a real network
+    clone routinely exceeds the shared default every other (JSON-only, no
+    filesystem materialization) op uses.
     """
     found = check_gh_version(gh_bin, min_version)
     binary = shutil.which(gh_bin)
     if binary is None:  # pragma: no cover -- check_gh_version already guards this
         raise GhNotInstalledError("gh disappeared after version check", details={"op": op})
 
-    argv = build_read_argv(op, repo, number=number, limit=limit, gh_bin=binary)
+    argv = build_read_argv(op, repo, number=number, limit=limit, gh_bin=binary, dest=dest)
 
     attempts = max(1, retries + 1)
     completed = None
@@ -355,6 +389,10 @@ def run_read(
         "op": op,
         "repo": repo,
         "number": number,
+        # dest is a local filesystem path CyClaw itself computed (never derived
+        # from GitHub content or a request body) -- not secret, safe to audit,
+        # and the one field every other op has no equivalent of.
+        "dest": dest,
         "gh_version": ".".join(map(str, found)),
         "exit_code": completed.returncode,
     })
@@ -371,6 +409,9 @@ def run_read(
         if len(diff) > MAX_DIFF_CHARS:
             diff = diff[:MAX_DIFF_CHARS] + f"\n... [diff truncated at {MAX_DIFF_CHARS} chars]"
         return {"op": op, "repo": repo, "diff": diff}
+
+    if op == "repo_clone":
+        return {"op": op, "repo": repo, "dest": dest}
 
     try:
         data = json.loads(completed.stdout or "null")

@@ -30,6 +30,7 @@
 - [NeMo Guardrails](#nemo-guardrails-v18)
 - [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
 - [PowerShell Coding Harness](#powershell-coding-harness-v19)
+- [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
 - [MCP Server](#mcp-server)
 - [Security Model](#security-model)
 - [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
@@ -48,8 +49,9 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
-9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13); phase 9 is the terminal security gate, so real writes stay disabled by design
+9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — both still shipped disarmed
 10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
+11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and every gate ships closed (the draft-PR step behind a hardcoded `EXECUTION_ENABLED = False` that no config file can flip)
 
 ---
 
@@ -115,7 +117,7 @@ flowchart TD
     subgraph GATEWAY ["gate.py — FastAPI 127.0.0.1:8787"]
         B["TrustedHostMiddleware\nHost header allowlist"]
         B --> C["Rate Limiter\n60 req/min per IP"]
-        C --> D["Prompt Injection Filter\n32 patterns · config-driven · lru_cache"]
+        C --> D["Prompt Injection Filter\n40 patterns · config-driven · lru_cache"]
         D --> E["Build GraphState\nquery + user_confirmed_online"]
     end
 
@@ -339,6 +341,11 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
 pip install -r requirements.txt -c constraints.txt
+
+# Want every optional feature too (Postgres/pgvector, NeMo Guardrails, dev/test
+# tools, both cloud providers) in one environment — a from-scratch dev box, or a
+# full manual smoke test? Use this instead of step 2:
+pip install -e ".[all]" -c constraints.txt
 ```
 
 ### Required local prep
@@ -379,7 +386,7 @@ CyClaw/
 │   ├── context.py
 │   ├── gh_client.py
 │   ├── registry.py
-│   ├── writer.py               # stubbed write scaffold, non-executing
+│   ├── writer.py               # gh pr create --draft, implemented but shipped disarmed
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
 │   │   ├── client.py           # scoped reads (fs_list/stat/read/grep)
@@ -499,7 +506,10 @@ CyClaw now includes a **concise, governed agentic layer** for local operator wor
 - reads only in normal operation
 - no GitHub token is stored or forwarded by CyClaw
 - `gh` is invoked as an argv list, not via shell execution
-- write behavior remains scaffolded and non-executing in the current release
+- the GitHub write path (`gh pr create --draft`) is IMPLEMENTED but shipped
+  DISARMED: `EXECUTION_ENABLED` is a hardcoded `False` in `agentic/writer.py`
+  that no config file can flip, plus four config/per-call gates. Arming it is a
+  filed-checklist operator procedure (`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`)
 - all agentic reads, refusals, and registry changes are audit logged
 
 ### Enable it
@@ -660,6 +670,15 @@ and are documented in `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` — phase 
 a security gate, not authorization to add an executor. Full plan and phase ledger:
 `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
 
+> **Superseded 2026-08-01.** Phase 9's security gate was subsequently satisfied and
+> P10 landed, so "not authorization to add an executor" no longer describes the
+> current tree: a sandboxed verification executor (`agentic/executor/`) and a
+> draft-PR write path (`agentic/writer.py::execute_write`) both exist, and the live
+> real-repo coding pipeline is `agentic/real_repo_loop.py` — **not** the
+> `deepagents`-backed graph this section describes. Both new capabilities still ship
+> disarmed. See [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
+> below for what is actually wired today.
+
 Every gate below the master `agentic.enabled` switch defaults to `false`; while
 disabled, nothing under either package is reachable from `agentic.cli`, and no
 `deepagents`/`langchain` optional dependency is imported.
@@ -711,6 +730,163 @@ Full setup, slash-command reference, home layout, and security posture:
 
 ---
 
+## GitHub Agentic Coding Harness (v1.9)
+
+The real-repo coding pipeline: **clone → plan → patch → verify → human decides →
+commit**, with pushing and opening a draft PR as two further, separate decisions.
+Driven by `agentic/real_repo_loop.py`, which fuses three previously-independent
+pieces — the planner's model call, a jailed real clone
+(`agentic/deepagent_github/repo_workspace.py`), and the sandboxed verification
+executor (`agentic/executor/`). Out-of-band like every other agentic feature:
+never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py` (invariant I6).
+
+**It ships fully disarmed.** Every gate below defaults to closed, and the draft-PR
+step is gated by a constant in code that no config file can flip.
+
+### How a run works
+
+1. **`real-repo-run`** clones the configured repo into a jailed workspace, asks the
+   planner for whole-file replacements, writes them, and runs the selected
+   verification checks. It **stops before committing** and reports
+   `status: pending_decision`. A run that never passes reports `exhausted`.
+2. **`real-repo-run-decide --decision approve`** is what actually commits (locally).
+   `reject` discards. Neither pushes.
+3. **`real-repo-run-push`** puts the `claude/*` branch on origin.
+4. **`real-repo-run-publish`** opens a **draft** PR (`gh pr create --draft`).
+5. **`real-repo-run-discard`** reclaims the clone — the only step that frees disk.
+   An approved run keeps its clone on purpose, since push and publish still need it.
+
+Each escalation is its own command and its own decision, deliberately not folded
+into `approve`.
+
+### Security posture
+
+- **Diff-scope gate.** A candidate that writes into `tests/`, `conftest.py`,
+  `.github/`, `.git/`, `pyproject.toml`, `setup.cfg`, `pytest.ini`, or
+  `.claude/skills/` is refused outright — those are the files that judge the
+  candidate's own acceptance, and rewriting them is the classic reward-hacking
+  failure mode of a make-the-checks-pass loop. Also budget-capped
+  (`max_write_budget_bytes`, 100000 bytes per iteration).
+- **Verification runs as argv-list subprocesses**, never a shell, with `cwd`
+  pinned to the clone, a scrubbed environment allowlist
+  (`PATH`, `HOME`, `LANG`, `LC_ALL`, `PYTHONPATH`, `VIRTUAL_ENV`,
+  `PYTHONIOENCODING`) plus forced `NO_PROXY=*` / `PIP_NO_INDEX=1`, and a 120s
+  per-check timeout. **Containment is best-effort software, not a hard boundary** —
+  the env scrub cannot stop a determined test file from opening a raw socket. See
+  `agentic/executor/runner.py`'s own statement of its limits.
+- **The console sends check-profile *names*, never argv.** `harness/agent_policy.py`
+  resolves them against a fixed allow-list (`pytest`, `ruff`); a request body that
+  could carry an argv would make an authenticated route a remote shell.
+- **`push_branch` passes no credential.** Its four-name env allowlist deliberately
+  excludes `GH_TOKEN`/`GITHUB_TOKEN`, because that environment is shared with the
+  executor that runs model-proposed check commands. It authenticates only via a
+  HOME-resident credential helper (`gh auth setup-git`).
+- Branch names are forced into the `claude/` namespace; `run_id` is validated as
+  32-char lowercase hex before it can become an argv element.
+
+### Enable it
+
+All five ship `false`; the run path needs the first three, and nothing here arms
+the draft-PR step:
+
+```yaml
+agentic:
+  enabled: false                        # master switch
+  deepagent_github:
+    enabled: false
+    allow_git_write_tools: false        # gates every write/commit/push in the clone
+    model: ""                           # must be set for the local planner
+    workspace_root: "data/agentic/workspaces"
+    max_write_budget_bytes: 100000
+    max_handoff_chars: 200000           # outbound-prompt cap for cloud egress
+    allow_cloud_providers: false        # gate 3 of the cloud chain
+    providers:
+      grok:   { enabled: false, model: "grok-4.5" }
+      claude: { enabled: false, model: "claude-sonnet-5" }
+```
+
+Opening a PR additionally requires `agentic.mode: "write"`, `writes_enabled: true`,
+**and** flipping `EXECUTION_ENABLED` in `agentic/writer.py` — a hardcoded `False`
+that is deliberately not config-reachable. Arming it is a filed-checklist
+procedure with a sign-off line, not a toggle:
+[`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
+
+### Commands
+
+```bash
+python -m agentic.cli real-repo-run \
+  --pr 123 --instruction "fix the off-by-one in the parser" \
+  --read-file src/parser.py --checks-file checks.json \
+  --branch claude/parser-fix --commit-message "fix: off-by-one" \
+  --reason "triage issue 123" --confirm
+
+python -m agentic.cli real-repo-run-status  --run-id <32-hex>
+python -m agentic.cli real-repo-run-decide  --run-id <32-hex> --decision approve
+python -m agentic.cli real-repo-run-push    --run-id <32-hex>
+python -m agentic.cli real-repo-run-publish --run-id <32-hex> --reason "..." --confirm
+python -m agentic.cli real-repo-run-discard --run-id <32-hex>
+```
+
+Exit codes are an API: `0` ok · `2` failed · `3` env/config · `4` write refused.
+`real-repo-run` exits `0` whether or not a candidate was accepted — the record's
+`status` field carries that.
+
+### From the harness console
+
+Seven routes on `127.0.0.1:8790`. `GET /api/agent/checks` is open (it lists a
+hardcoded allow-list and spawns nothing); the other six require a Bearer
+`CYCLAW_API_KEY` plus an `Origin`/`Sec-Fetch-Site` cross-site check:
+`POST /api/agent/run`, `GET /api/agent/runs/{id}`, and
+`POST /api/agent/runs/{id}/{decision,push,publish,discard}`.
+`POST /api/agent/run` is deliberately synchronous and blocks up to 900s — the run
+record is written only when the run ends, and the `run_id` first exists in that
+response. Console equivalents are `/agent run|confirm|status|approve|reject|push|publish|discard`.
+
+### Optional cloud planner (Grok / Claude)
+
+The loop is local-only by default, and **the local path (no `--provider` flag)
+needs nothing beyond the base install** — `LocalProposerClient` is a plain `httpx`
+call, and nothing on that code path (`real_repo_loop.py`, `repo_workspace.py`,
+`executor/runner.py`) imports `deepagents` or `langchain`. If you just want to try
+the harness against your own Ollama model, `pip install -e .` is enough; skip the
+rest of this section.
+
+`--provider grok|claude --confirm-online` drives the loop with a cloud model
+instead, behind a **six-condition chain**: `agentic.enabled` →
+`deepagent_github.enabled` → `allow_cloud_providers` → `providers.<name>.enabled`
+→ the provider's API key env var (`GROK_API_KEY` / `ANTHROPIC_API_KEY`, key presence
+only, never a network probe) → per-run `--confirm-online`. Every outbound prompt is
+injection-scanned, redacted, hashed, and audited as egress before it leaves the
+process.
+
+Cloud SDKs are **opt-in extras, deliberately absent from the default install,
+`requirements.txt`, and the Docker image** — installing them is a separate,
+explicit step, matched to which provider(s) you actually want:
+
+```bash
+# Claude only
+pip install -e ".[agentic-deepagents]"                        -c constraints.txt
+
+# Grok only — lighter: just langchain-xai, no deepagents/langchain pulled in
+pip install -e ".[agentic-deepagents-cloud]"                   -c constraints.txt
+
+# Both providers, one command
+pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.txt
+```
+
+(Want Postgres/pgvector and NeMo Guardrails too, not just the cloud providers?
+`pip install -e ".[all]"` in [Quick Start](#quick-start) installs every optional
+extra in one command.)
+
+Neither cloud extra is part of `full` (what CI and `full`-installed dev boxes get)
+— that split is deliberate, so a machine that never touches cloud providers never
+carries their SDKs. The published Docker image installs `requirements.txt` only
+(base deps, no extras at all), so running this feature — local *or* cloud — in a
+container means installing on top: add `pip install -e .` for local mode, or one
+of the three commands above for cloud, after the image's own install step.
+
+---
+
 ## MCP Server
 
 For Claude Desktop or other MCP-compatible clients:
@@ -742,7 +918,7 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
 | Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |
 | Soul writes | Explicit human reason string + enforced write-boundary scan + atomic write |
-| Agentic writes | Stubbed / non-executing in current release |
+| Agentic writes | `pr_create` implemented, shipped disarmed behind six gates (one of them a source constant); `pr_comment`/`issue_comment` remain plan-only |
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |

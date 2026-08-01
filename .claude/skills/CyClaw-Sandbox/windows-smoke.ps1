@@ -96,6 +96,12 @@ try {
 Write-Host ""
 Write-Host "=== CyClaw Windows Harness API smoke bomb ($HarnessBase) ===" -ForegroundColor Cyan
 
+# The harness's five state-changing POSTs, GET /api/github/status and the three
+# /api/agent/* run routes are gated
+# on the same Bearer CYCLAW_API_KEY the gateway uses (utils/auth.py). Reuses
+# $ApiKey read above; the open read routes ignore the header.
+$HarnessHeaders = @{ Authorization = "Bearer $ApiKey" }
+
 # 7. GET / — harness console served
 try {
     $resp = Invoke-WebRequest -Uri "$HarnessBase/" -Method GET -SkipHttpErrorCheck  # DevSkim: ignore DS137138
@@ -123,7 +129,7 @@ try {
 $SessionId = $null
 try {
     $body = '{"title": "windows-smoke"}'
-    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/sessions" -Method POST -ContentType "application/json" -Body $body -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/sessions" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $body -SkipHttpErrorCheck   # DevSkim: ignore DS137138
     if ($resp.StatusCode -eq 201) {
         $s = $resp.Content | ConvertFrom-Json
         $SessionId = $s.session_id
@@ -140,7 +146,7 @@ if ($SessionId) {
 
     try {
         $body = '{"title": "renamed by windows-smoke"}'
-        $s = Invoke-RestMethod -Uri "$HarnessBase/api/sessions/$SessionId/rename" -Method POST -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
+        $s = Invoke-RestMethod -Uri "$HarnessBase/api/sessions/$SessionId/rename" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
         if ($s.title -eq "renamed by windows-smoke") { Pass "POST /api/sessions/{id}/rename (applied)" }
         else { Fail "POST /api/sessions/{id}/rename unexpected: $($s | ConvertTo-Json -Compress)" }
     } catch { Fail "POST /api/sessions/{id}/rename threw: $_" }
@@ -161,17 +167,17 @@ try {
     $before = (Invoke-RestMethod -Uri "$HarnessBase/api/soul" -Method GET).enabled   # DevSkim: ignore DS137138
     $flipped = -not $before
     $flipBody = '{"enabled": ' + $flipped.ToString().ToLower() + '}'
-    $after = (Invoke-RestMethod -Uri "$HarnessBase/api/soul" -Method POST -ContentType "application/json" -Body $flipBody).enabled   # DevSkim: ignore DS137138
+    $after = (Invoke-RestMethod -Uri "$HarnessBase/api/soul" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $flipBody).enabled   # DevSkim: ignore DS137138
     if ($after -eq $flipped) { Pass ("POST /api/soul toggle (before={0}, after={1})" -f $before, $after) }
     else { Fail "POST /api/soul toggle unexpected: before=$before after=$after" }
     $restoreBody = '{"enabled": ' + $before.ToString().ToLower() + '}'
-    Invoke-RestMethod -Uri "$HarnessBase/api/soul" -Method POST -ContentType "application/json" -Body $restoreBody | Out-Null   # DevSkim: ignore DS137138
+    Invoke-RestMethod -Uri "$HarnessBase/api/soul" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $restoreBody | Out-Null   # DevSkim: ignore DS137138
 } catch { Fail "POST /api/soul toggle threw: $_" }
 
 # 15. POST /api/model — model selection persists
 try {
     $body = '{"model": "qwen2.5:7b"}'
-    $m = Invoke-RestMethod -Uri "$HarnessBase/api/model" -Method POST -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
+    $m = Invoke-RestMethod -Uri "$HarnessBase/api/model" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
     if ($m.model -eq "qwen2.5:7b") { Pass "POST /api/model (echoes selected model)" }
     else { Fail "POST /api/model unexpected: $($m | ConvertTo-Json -Compress)" }
 } catch { Fail "POST /api/model threw: $_" }
@@ -181,7 +187,7 @@ try {
 #     127.0.0.1:11434 first for a deterministic 200 instead of the 502 path.
 try {
     $body = '{"message": "hello from windows-smoke"}'
-    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/chat" -Method POST -ContentType "application/json" -Body $body -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/chat" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $body -SkipHttpErrorCheck   # DevSkim: ignore DS137138
     if ($resp.StatusCode -eq 200) {
         $c = $resp.Content | ConvertFrom-Json
         if ($c.session_id -and $c.reply -and $c.model -and $c.usage -and $c.tally) {
@@ -194,7 +200,7 @@ try {
 
 # 17. GET /api/github/status — subprocess-backed, read-only
 try {
-    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/github/status" -Method GET -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/github/status" -Method GET -Headers $HarnessHeaders -SkipHttpErrorCheck   # DevSkim: ignore DS137138
     $null = $resp.Content | ConvertFrom-Json
     Pass "GET /api/github/status (well-formed JSON, HTTP $($resp.StatusCode))"
 } catch { Fail "GET /api/github/status threw or returned non-JSON: $_" }

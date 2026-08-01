@@ -265,7 +265,11 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:11434/v1/models" >/dev/null 2>&1; t
   done
 fi
 
+# CYCLAW_API_KEY is already exported above for the gate.py checks; the harness
+# now needs it too (its state-changing routes and /api/github/status are
+# Bearer-gated), and harness_emulation.py reads the same variable.
 CYCLAW_HOME="$HARNESS_HOME" CYCLAW_HARNESS_HOST=127.0.0.1 CYCLAW_HARNESS_PORT="$HARNESS_PORT" \
+  CYCLAW_API_KEY="$CYCLAW_API_KEY" \
   "$VPY" -m harness.server > /tmp/cyclaw-verify-harness-server.log 2>&1 &  # DevSkim: ignore DS162092
 HARNESS_SERVER_PID=$!
 

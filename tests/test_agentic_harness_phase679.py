@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 
 from agentic.config import AgenticConfig
@@ -17,6 +18,7 @@ from agentic.deepagent_github.skills import governed_skill_files
 from agentic.harness_optimizer import (
     Experiment,
     HarnessApplicationProposal,
+    LocalProposerClient,
     ProposerWorkspaceTools,
     RunReport,
     Surface,
@@ -26,6 +28,7 @@ from agentic.harness_optimizer import (
     decide_candidate,
     propose_candidate_application,
 )
+from agentic.harness_optimizer.loop_driver import run_optimization_loop
 from agentic.harness_optimizer.runners.github_coding_runner import (
     FixtureCase,
     GitHubCodingRunner,
@@ -487,3 +490,194 @@ def test_atomic_json_cleans_up_tmp_file_on_write_failure(tmp_path: Path, monkeyp
 
     assert not target.exists()
     assert list(tmp_path.glob(".*.tmp")) == []
+
+
+# --- loop_driver: plan -> patch -> verify -> review -------------------------
+
+_FIXTURE_REPO = Path(__file__).parent / "fixtures" / "github_coding_repo"
+_WRONG_BLOCK = (
+    "=== SURFACE planner ===\ndef compute() -> str:\n    return \"nope\"\n=== END SURFACE ===\nFirst attempt."
+)
+_RIGHT_BLOCK = (
+    "=== SURFACE planner ===\ndef render() -> str:\n    return \"fixed\"\n=== END SURFACE ===\nFixes render()."
+)
+
+
+def _loop_runner(workspace, cfg) -> GitHubCodingRunner:
+    return GitHubCodingRunner(
+        fixture_repo=_FIXTURE_REPO,
+        workspace=workspace,
+        cases=(
+            FixtureCase("case-visible", "train_visible", "planner.py", "fixed"),
+            FixtureCase("case-hidden", "holdout_hidden", "planner.py", "def render"),
+        ),
+        cfg=cfg,
+    )
+
+
+def _loop_client(handler) -> LocalProposerClient:
+    return LocalProposerClient(
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
+        model="local-test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _chat_response(content: str) -> httpx.Response:
+    return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+
+def test_loop_accepts_on_the_first_correct_proposal(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        result = run_optimization_loop(
+            runner, _experiment(), client, instruction="Fix planner.render", max_iterations=3, cfg=cfg,
+        )
+    finally:
+        client.close()
+
+    assert result.accepted is True
+    assert len(result.iterations) == 1
+    assert result.iterations[0].decision.accepted is True
+    assert result.final_decision is result.iterations[-1].decision
+    assert result.baseline.score == 0.5
+    written = (workspace.current_dir / "planner.py").read_text(encoding="utf-8")
+    assert "fixed" in written
+    assert "def render" in written
+    # The committed fixture file itself must never be mutated by the overlay.
+    assert '"baseline"' in (_FIXTURE_REPO / "planner.py").read_text(encoding="utf-8")
+
+
+def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    seen_prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        seen_prompts.append(body["messages"][1]["content"])
+        return _chat_response(_WRONG_BLOCK if len(seen_prompts) == 1 else _RIGHT_BLOCK)
+
+    client = _loop_client(handler)
+    try:
+        result = run_optimization_loop(
+            runner, _experiment(), client, instruction="Fix planner.render", max_iterations=3, cfg=cfg,
+        )
+    finally:
+        client.close()
+
+    assert result.accepted is True
+    assert len(result.iterations) == 2
+    assert result.iterations[0].decision.accepted is False
+    assert result.iterations[1].decision.accepted is True
+    assert len(seen_prompts) == 2
+    assert "Prior attempt feedback" in seen_prompts[1]
+    assert "rejected" in seen_prompts[1]
+
+
+def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    client = _loop_client(lambda request: _chat_response(_WRONG_BLOCK))
+    try:
+        result = run_optimization_loop(
+            runner, _experiment(), client, instruction="Fix planner.render", max_iterations=2, cfg=cfg,
+        )
+    finally:
+        client.close()
+
+    assert result.accepted is False
+    assert len(result.iterations) == 2
+    assert all(not iteration.decision.accepted for iteration in result.iterations)
+
+
+def test_loop_rejects_visible_case_hardcoding_in_rationale(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    block = (
+        "=== SURFACE planner ===\ndef render() -> str:\n    return \"fixed\"\n=== END SURFACE ===\n"
+        "Special-cased for case-visible."
+    )
+    client = _loop_client(lambda request: _chat_response(block))
+    try:
+        result = run_optimization_loop(
+            runner, _experiment(), client, instruction="Fix planner.render", max_iterations=1, cfg=cfg,
+        )
+    finally:
+        client.close()
+
+    assert result.accepted is False
+    assert "critical_governance_finding" in result.iterations[0].decision.rejected_gates
+    assert any(finding.code == "visible_case_hardcoding" for finding in result.iterations[0].findings)
+
+
+def test_loop_rejects_empty_instruction(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        with pytest.raises(AgenticError, match="instruction"):
+            run_optimization_loop(runner, _experiment(), client, instruction="   ", max_iterations=1, cfg=cfg)
+    finally:
+        client.close()
+
+
+def test_loop_rejects_non_positive_max_iterations(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        with pytest.raises(AgenticError, match="max_iterations"):
+            run_optimization_loop(runner, _experiment(), client, instruction="fix it", max_iterations=0, cfg=cfg)
+    finally:
+        client.close()
+
+
+def test_loop_result_requires_at_least_one_iteration() -> None:
+    from agentic.harness_optimizer.loop_driver import LoopResult
+
+    with pytest.raises(AgenticError):
+        LoopResult(
+            accepted=False,
+            baseline=RunReport("baseline", train_passed=False, holdout_passed=False, score=0.0),
+            iterations=(),
+        )
+
+
+def test_loop_emits_audit_events_for_start_iteration_and_outcome(tmp_path: Path) -> None:
+    workspace, cfg = _workspace(tmp_path)
+    runner = _loop_runner(workspace, cfg)
+    client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+    try:
+        run_optimization_loop(runner, _experiment(), client, instruction="Fix planner.render", max_iterations=2, cfg=cfg)
+    finally:
+        client.close()
+
+    events = [json.loads(line)["event"] for line in Path(cfg["logging"]["audit_file"]).read_text(encoding="utf-8").splitlines()]
+    assert "agentic_harness_loop_started" in events
+    assert "agentic_harness_loop_iteration" in events
+    assert "agentic_harness_loop_accepted" in events
+
+
+def test_parse_surface_blocks_extracts_declared_surfaces_and_drops_unknown() -> None:
+    from agentic.harness_optimizer.loop_driver import _parse_surface_blocks
+
+    text = (
+        "=== SURFACE planner ===\nnew planner body\n=== END SURFACE ===\n"
+        "=== SURFACE unknown_surface ===\nshould be dropped\n=== END SURFACE ===\n"
+        "Rationale text here."
+    )
+    surfaces, rationale = _parse_surface_blocks(text, frozenset({"planner"}))
+    assert surfaces == {"planner": "new planner body"}
+    assert "Rationale text here." in rationale
+    assert "should be dropped" not in rationale
+
+
+def test_parse_surface_blocks_falls_back_to_placeholder_rationale() -> None:
+    from agentic.harness_optimizer.loop_driver import _parse_surface_blocks
+
+    text = "=== SURFACE planner ===\nbody only\n=== END SURFACE ==="
+    _surfaces, rationale = _parse_surface_blocks(text, frozenset({"planner"}))
+    assert rationale == "(no additional rationale provided)"

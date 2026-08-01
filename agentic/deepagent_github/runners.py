@@ -1,4 +1,9 @@
-"""No-write planning and HITL helpers for the optional Deep Agents harness."""
+"""No-write planning and HITL helpers for the optional Deep Agents harness.
+
+Retired (owner decision, 2026-07-31): see
+``agentic.deepagent_github.builder``'s module docstring -- no further
+development is planned here, ``agentic/real_repo_loop.py`` is the live path.
+"""
 
 from __future__ import annotations
 
