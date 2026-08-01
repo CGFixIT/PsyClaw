@@ -64,7 +64,7 @@ from harness.schemas import (
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
-from utils.errors import AgenticError
+from utils.errors import AgenticError, LLMServiceError
 from utils.logger import _get_config, redact_sensitive
 from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
@@ -141,6 +141,17 @@ def _rate_limit_settings() -> dict:
         return {}
     api = parsed.get("api", {})
     return api.get("rate_limit", {}) if isinstance(api, dict) else {}
+
+
+# Stand-in reported by /api/status when backend resolution failed at app build.
+# Deliberately NOT a plausible-looking default: the console must show that chat
+# has no backend rather than name one it will never reach.
+_UNRESOLVED_BACKEND = ResolvedLocalBackend(
+    provider="unavailable",
+    base_url="",
+    model="",
+    source="primary",
+)
 
 
 def _resolve_backend() -> ResolvedLocalBackend:
@@ -260,8 +271,35 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     cfg = config or HarnessConfig.load()
     store = SessionStore(cfg.sessions_dir)
 
-    backend = _resolve_backend()
-    client = chat_client or _default_chat_client(backend)
+    # Model-backend resolution must not be able to take down the whole console.
+    # HarnessChatClient refuses a non-loopback base_url (harness/ollama.py), and
+    # resolve_local_backend raises on an incomplete fallback block -- but a
+    # non-loopback models.local_llm.base_url is a configuration llm/client.py
+    # explicitly permits for the primary, so gate.py and /query work fine while
+    # `cyclaw-harness` died with an unhandled traceback before registering a
+    # single route. Every model-independent surface (/, /api/status,
+    # /api/sessions, /api/registry, /api/github/status, /api/harness/runs) was
+    # collateral damage from a chat-only misconfiguration.
+    #
+    # Capture the failure instead and let /api/chat surface it as the 502 it
+    # already knows how to render. The loopback rule itself is NOT relaxed --
+    # chat still refuses; it just refuses per-request instead of at import.
+    backend_error: AgenticError | LLMServiceError | None = None
+    if chat_client is not None:
+        backend = _resolve_backend()
+        client: HarnessChatClient | None = chat_client
+    else:
+        try:
+            backend = _resolve_backend()
+            client = _default_chat_client(backend)
+        except (AgenticError, LLMServiceError) as exc:
+            backend_error = exc
+            backend = _UNRESOLVED_BACKEND
+            client = None
+            logger.warning(
+                "harness chat backend unavailable (%s); model-independent routes still served",
+                exc.code,
+            )
 
     # Per-instance, not module-level: create_app() is the harness's test
     # boundary (mirrors store/client/backend above) -- a module-level
@@ -486,6 +524,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             if msg.role in {"user", "assistant"}
         ]
         history.append({"role": "user", "content": req.message})
+        if client is None:
+            # Backend resolution failed at app build (see create_app). Chat is
+            # the only surface that needs it, so it -- and only it -- reports
+            # the failure, using the same 502 envelope a live-provider error
+            # produces so the console renders it identically.
+            raise _err(_HTTP_BAD_GATEWAY, backend_error or HarnessLLMError("chat backend unavailable"))
         try:
             reply = client.chat(
                 system_prompt=system_prompt,
@@ -767,7 +811,18 @@ def main() -> None:
     if host not in _LOOPBACK_HOSTS:
         sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
-    port = int(port_env) if port_env.isdigit() else cfg.port
+    if not port_env:
+        port = cfg.port
+    elif port_env.isdigit():
+        port = int(port_env)
+    else:
+        # A malformed override used to be dropped silently: "879O" (letter O),
+        # "-1", or a stray character all failed isdigit(), so the harness bound
+        # the DEFAULT port and the range check below passed vacuously. The
+        # operator's console link then pointed at a port nothing was serving,
+        # with nothing printed to explain it. The adjacent range check exists to
+        # make a bad value fail loudly; the parse must do the same.
+        sys.exit(f"CYCLAW_HARNESS_PORT must be an integer, got: {port_env!r}")
     if not _MIN_USER_PORT <= port <= _MAX_PORT:
         # same bounds config.py applies to the stored port; without this the env
         # override accepts 0 (ephemeral bind — console link breaks) or >65535

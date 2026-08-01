@@ -609,3 +609,108 @@ def test_app_shutdown_survives_a_failing_client_close(cfg):
     chat.close = boom  # type: ignore[method-assign]
     with TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_AUTH) as c:
         assert c.get("/").status_code == 200
+
+
+# -- startup robustness ---------------------------------------------------------
+
+def test_non_loopback_backend_still_builds_the_app(cfg, monkeypatch):
+    # models.local_llm.base_url may legitimately be non-loopback -- llm/client.py
+    # documents that the PRIMARY backend is a deliberate operator choice and
+    # enforces no loopback check on it, so gate.py and /query work fine with one.
+    # HarnessChatClient refuses it (correctly -- the console is loopback-only),
+    # but that refusal used to escape create_app() and kill the whole harness
+    # before a single route was registered, taking every model-independent
+    # surface down with it.
+    monkeypatch.setattr(
+        harness_server,
+        "_llm_settings",
+        lambda: {"base_url": "http://192.168.1.50:11434/v1", "model": "qwen2.5:7b"},
+    )
+    app = create_app(cfg)  # must not raise
+
+    with TestClient(app, base_url="http://127.0.0.1", headers=_AUTH) as c:
+        # Every surface that does not need the model still works.
+        assert c.get("/").status_code == 200
+        status = c.get("/api/status")
+        assert status.status_code == 200
+        # ...and it advertises that chat has no backend rather than naming one
+        # it can never reach.
+        assert status.json()["provider"] == "unavailable"
+        assert c.get("/api/registry").status_code == 200
+        assert c.get("/api/sessions").status_code == 200
+
+        # Chat -- and only chat -- reports the failure, as the 502 the console
+        # already knows how to render.
+        created = c.post("/api/sessions", json={"title": "t"})
+        assert created.status_code == 201
+        sid = created.json()["session_id"]
+        reply = c.post("/api/chat", json={"message": "hi", "session_id": sid})
+        assert reply.status_code == 502
+        detail = reply.json()["detail"]
+        assert detail["code"] and detail["message"]
+
+
+def test_main_refuses_a_non_loopback_bind(monkeypatch):
+    # The CYCLAW_HARNESS_HOST guard is the only thing between an env-var typo
+    # and a 0.0.0.0 bind of an unauthenticated console. It had no coverage, so a
+    # refactor that dropped it would have broken nothing in CI.
+    monkeypatch.setenv("CYCLAW_HARNESS_HOST", "0.0.0.0")  # noqa: S104 - the value under test
+    called: list[object] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append((a, k)))
+
+    with pytest.raises(SystemExit) as exc:
+        harness_server.main()
+    assert "loopback" in str(exc.value)
+    assert not called, "must not reach uvicorn.run"
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_main_accepts_each_loopback_host(monkeypatch, tmp_path, host):
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
+    monkeypatch.setenv("CYCLAW_HARNESS_HOST", host)
+    called: list[tuple] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append((a, k)))
+
+    harness_server.main()
+    assert len(called) == 1
+    assert called[0][1]["host"] == host
+
+
+@pytest.mark.parametrize("bad_port", ["879O", "-1", "87 90", "8790x", "eight"])
+def test_main_rejects_a_malformed_port_instead_of_silently_defaulting(
+    monkeypatch, tmp_path, bad_port
+):
+    # These all fail isdigit(), so the override used to be dropped and the
+    # harness bound the DEFAULT port -- the range check then passed vacuously
+    # and printed nothing. The operator's console link pointed at a port nothing
+    # was listening on, with no explanation.
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
+    monkeypatch.setenv("CYCLAW_HARNESS_PORT", bad_port)
+    called: list[object] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append((a, k)))
+
+    with pytest.raises(SystemExit) as exc:
+        harness_server.main()
+    assert "CYCLAW_HARNESS_PORT" in str(exc.value)
+    assert not called, "must not bind a fallback port after a malformed override"
+
+
+@pytest.mark.parametrize("bad_port", ["0", "65536", "99999"])
+def test_main_rejects_an_out_of_range_port(monkeypatch, tmp_path, bad_port):
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
+    monkeypatch.setenv("CYCLAW_HARNESS_PORT", bad_port)
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit) as exc:
+        harness_server.main()
+    assert "out of range" in str(exc.value)
+
+
+def test_main_uses_a_valid_port_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
+    monkeypatch.setenv("CYCLAW_HARNESS_PORT", "8791")
+    called: list[tuple] = []
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: called.append((a, k)))
+
+    harness_server.main()
+    assert called[0][1]["port"] == 8791
