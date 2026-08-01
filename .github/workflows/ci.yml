@@ -287,6 +287,18 @@ jobs:
           # (Unit tests + coverage run in the next step.)
           python -m tests.ci_rag_smoke
 
+      # TEMPORARY (PR #734 investigation): the macos-latest leg fails the smoke
+      # step above on 2/4 queries while ubuntu-latest passes on the same
+      # commit. `if: always()` runs this regardless of the smoke step's
+      # outcome, on every OS, so the three legs' outputs can be diffed to find
+      # exactly where the platforms' floating-point retrieval scores diverge.
+      # Never-nonzero-exit (diagnostic only, no assertions) -- delete this step
+      # and tests/ci_rag_diagnostic.py once the root cause is found.
+      - name: RAG cross-platform diagnostic (temporary, PR #734)
+        if: always()
+        shell: bash
+        run: python -m tests.ci_rag_diagnostic
+
       - name: Run tests + coverage
         shell: bash
         run: |
