@@ -30,7 +30,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import torch  # noqa: E402
 import yaml  # noqa: E402
+from sentence_transformers.util import get_device_name  # noqa: E402
 
+from retrieval.embeddings import _embeddings_cfg, _load_model  # noqa: E402
 from retrieval.hybrid_search import HybridRetriever  # noqa: E402
 from retrieval.indexer import build_index  # noqa: E402
 
@@ -43,8 +45,30 @@ WIDE_K = 30
 
 
 def main() -> int:
-    print("=== RAG cross-platform diagnostic (round 2: semantic-window depth) ===")
+    print("=== RAG cross-platform diagnostic (round 3: embedding device) ===")
     print(f"platform.machine(): {platform.machine()}  torch: {torch.__version__}")
+
+    # THE question this round exists to settle. retrieval/embeddings.py passes no
+    # device= to SentenceTransformer, so sentence-transformers auto-selects via
+    # get_device_name()'s cuda -> mps -> ... -> cpu ladder. Whether macOS actually
+    # lands on "mps" has been inferred from that code path but never observed.
+    # model.device is the definitive answer: it is the device the tensors are
+    # really on, for both the index build and every query.
+    print("--- device selection ---")
+    print(f"  torch.cuda.is_available():        {torch.cuda.is_available()}")
+    print(f"  torch.backends.mps.is_built():    {torch.backends.mps.is_built()}")
+    print(f"  torch.backends.mps.is_available(): {torch.backends.mps.is_available()}")
+    print(f"  sentence_transformers get_device_name(): {get_device_name()!r}")
+    # get_device_name() above is already decisive (embeddings.py passes no
+    # device=, so whatever it returns IS what the model gets). This is the
+    # belt-and-braces confirmation, reading the device off the real tensors.
+    # Guarded because a model-load failure here must not cost us the probes
+    # printed above -- they are the point of this run.
+    try:
+        model_name, cache_dir = _embeddings_cfg("config.yaml")
+        print(f"  ACTUAL loaded model device:       {_load_model(model_name, cache_dir).device!r}")
+    except Exception as exc:  # noqa: BLE001 - diagnostic must never abort on this
+        print(f"  ACTUAL loaded model device:       <unavailable: {type(exc).__name__}>")
 
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
