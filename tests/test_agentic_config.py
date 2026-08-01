@@ -131,6 +131,26 @@ def test_deepagent_config_accepts_a_custom_protected_write_paths_and_budget(tmp_
     assert cfg.deepagent_github.max_write_budget_bytes == 5000
 
 
+def test_deepagent_config_defaults_max_handoff_chars(tmp_path: Path) -> None:
+    from agentic.config import DEFAULT_MAX_HANDOFF_CHARS
+
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+    assert cfg.deepagent_github.max_handoff_chars == DEFAULT_MAX_HANDOFF_CHARS
+
+
+@pytest.mark.parametrize("bad", [0, -1, "200000", 1.5, True])
+def test_deepagent_config_rejects_invalid_max_handoff_chars(tmp_path: Path, bad) -> None:
+    block = _base_block(deepagent_github={"max_handoff_chars": bad})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_a_custom_max_handoff_chars(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"max_handoff_chars": 50_000})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.max_handoff_chars == 50_000
+
+
 def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:
     block = _base_block(deepagent_github={"model": "good;bad"})
     with pytest.raises(AgenticConfigError):

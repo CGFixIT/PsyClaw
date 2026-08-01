@@ -30,6 +30,9 @@ _AUTH = {"Authorization": f"Bearer {_KEY}"}
 # if the request got past the dependency chain.
 GUARDED = [
     ("post", "/api/sessions", {"title": "t"}),
+    # The single-session read returns full message content (unlike the list
+    # route's title-only summaries, which is why that one stays in OPEN below).
+    ("get", "/api/sessions/does-not-exist", None),
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
     ("post", "/api/soul", {"enabled": True}),
     ("post", "/api/model", {"model": "qwen2.5:7b"}),

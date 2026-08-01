@@ -61,6 +61,15 @@ DEFAULT_PROTECTED_WRITE_PATH_PREFIXES = (
 # iteration blowing past this budget is a signal something went wrong, not a
 # legitimately large legitimate change.
 DEFAULT_MAX_WRITE_BUDGET_BYTES = 100_000
+# The outbound-prompt length cap sanitize_handoff enforces, deliberately its
+# own number rather than a reuse of policy.prompt_filter.max_input_chars
+# (4000): that value is tuned for a short RAG chat query, and a real-repo-loop
+# prompt bundles the instruction, every declared read_paths file's full
+# content, and a quoted PR/issue diff -- routinely tens of thousands of
+# characters even for a modest task. Sized with headroom over observed real
+# prompts (~32k chars), not "large enough to never trigger" -- it stays a
+# meaningful ceiling against a runaway prompt, not a rubber stamp.
+DEFAULT_MAX_HANDOFF_CHARS = 200_000
 DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
 DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 
@@ -190,6 +199,7 @@ class DeepAgentGitHubConfig:
         default_factory=lambda: list(DEFAULT_PROTECTED_WRITE_PATH_PREFIXES)
     )
     max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
+    max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
 
     def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
         """Return a provider's config, or None when it is not configured/enabled.
@@ -268,6 +278,13 @@ class DeepAgentGitHubConfig:
             raise AgenticConfigError(
                 "agentic.deepagent_github.max_write_budget_bytes must be a positive integer",
                 details={"received": self.max_write_budget_bytes},
+            )
+        if not isinstance(self.max_handoff_chars, int) or isinstance(
+            self.max_handoff_chars, bool
+        ) or self.max_handoff_chars <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.max_handoff_chars must be a positive integer",
+                details={"received": self.max_handoff_chars},
             )
 
     def _coerce_providers(self) -> None:

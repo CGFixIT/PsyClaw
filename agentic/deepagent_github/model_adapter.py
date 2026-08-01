@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from agentic.config import CLOUD_KEY_ENVS, DeepAgentGitHubConfig
+from agentic.config import CLOUD_KEY_ENVS, DEFAULT_MAX_HANDOFF_CHARS, DeepAgentGitHubConfig
 from utils.errors import AgenticError
 
 _LOCAL_EXTRA = "agentic-deepagents"
@@ -33,6 +33,7 @@ class DeepAgentModelSettings:
     base_url: str
     model: str
     is_cloud: bool = False
+    max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
 
     @classmethod
     def from_config(
@@ -48,7 +49,10 @@ class DeepAgentModelSettings:
         belong to the caller.
         """
         if cloud_provider is None:
-            return cls(provider=cfg.provider, base_url=cfg.base_url, model=cfg.model)
+            return cls(
+                provider=cfg.provider, base_url=cfg.base_url, model=cfg.model,
+                max_handoff_chars=cfg.max_handoff_chars,
+            )
         provider_cfg = cfg.cloud_provider(cloud_provider)
         if provider_cfg is None:
             raise AgenticError(
@@ -61,7 +65,10 @@ class DeepAgentModelSettings:
         # base_url stays empty: each cloud SDK owns its own endpoint, and letting
         # config point a cloud client at an arbitrary host would turn a provider
         # toggle into an arbitrary-egress control.
-        return cls(provider=cloud_provider, base_url="", model=provider_cfg.model, is_cloud=True)
+        return cls(
+            provider=cloud_provider, base_url="", model=provider_cfg.model, is_cloud=True,
+            max_handoff_chars=cfg.max_handoff_chars,
+        )
 
 
 def cloud_key_available(provider: str) -> bool:

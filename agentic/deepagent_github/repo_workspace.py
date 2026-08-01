@@ -349,6 +349,15 @@ class RepoWorkspaceTools:
         ``dest`` must resolve under ``agentic_cfg.deepagent_github.workspace_root``
         -- defense in depth against a corrupted/tampered persisted path, even
         though in practice this module is always the one that wrote it.
+
+        Beyond that, ``dest`` must be exactly a ``clone()`` output --
+        ``workspace_root/<tempdir>/repo`` -- for a narrower reason:
+        :meth:`close` unconditionally ``rmtree``s ``self._dest.parent``, which
+        is safe only because ``clone()`` always nests its destination two
+        levels deep. Accepting ``workspace_root`` itself, or anything only one
+        level under it, would let ``close()`` delete ``workspace_root`` --
+        every other run's clone and the ``runs/`` directory tracking them --
+        instead of just this one clone.
         """
         deep_cfg = agentic_cfg.deepagent_github
         workspace_root = Path(deep_cfg.workspace_root).resolve()
@@ -356,6 +365,11 @@ class RepoWorkspaceTools:
         if dest_resolved != workspace_root and workspace_root not in dest_resolved.parents:
             raise AgenticError(
                 "attach target is outside the configured workspace root",
+                details={"dest": str(dest), "workspace_root": str(workspace_root)},
+            )
+        if dest_resolved.parent.parent != workspace_root:
+            raise AgenticError(
+                "attach target is not a clone() output (must be workspace_root/<tempdir>/repo)",
                 details={"dest": str(dest), "workspace_root": str(workspace_root)},
             )
         if not dest_resolved.is_dir():

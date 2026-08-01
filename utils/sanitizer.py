@@ -115,14 +115,26 @@ def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
     return enabled, max_chars, patterns
 
 
-def check_input(query: str, config_path: str = "config.yaml") -> str:
+def check_input(query: str, config_path: str = "config.yaml", *, max_chars_override: int | None = None) -> str:
     """Validate user input against length and injection rules.
 
     Returns the (unmodified) query when it passes so callers can use it inline.
     Raises :class:`PromptInjectionError` when the input is too long or matches a
     banned pattern. When the filter is disabled in config, input passes through.
+
+    ``max_chars_override``, when given, replaces ``policy.prompt_filter.
+    max_input_chars`` for the length check only -- pattern scanning is
+    unaffected. Every existing caller (gate.py's ``/query``, the MCP server)
+    leaves this ``None`` and is unaffected. It exists for a caller whose input
+    is not a short chat query: ``agentic.deepagent_github.handoff.
+    sanitize_handoff`` bundles instruction text, file contents, and a PR/issue
+    diff into one outbound prompt, routinely tens of thousands of characters --
+    reusing the RAG-chat-tuned default here would make that call fail closed on
+    every realistic use, not just abusive ones.
     """
     enabled, max_chars, patterns = _load_filter(config_path)
+    if max_chars_override is not None:
+        max_chars = max_chars_override
     if not enabled:
         return query
 

@@ -297,3 +297,45 @@ def test_clean_prompt_records_zero_redactions(test_config):
     _, envelope = sanitize_handoff("summarize the retrieval config", provider="grok",
                                    config_path=config_path, cfg=cfg)
     assert envelope.redactions_applied == 0
+
+
+def test_handoff_without_an_override_uses_the_rag_chat_cap(test_config):
+    """The pre-fix behavior, still correct for a caller that passes nothing.
+
+    Confirms the default really is 4000 (the RAG-chat-tuned value from
+    policy.prompt_filter), not silently bypassed by the new parameter's mere
+    existence.
+    """
+    cfg, config_path = test_config
+    with pytest.raises(PromptInjectionError, match="maximum length"):
+        sanitize_handoff("x" * 4001, provider="grok", config_path=config_path, cfg=cfg)
+
+
+def test_handoff_max_chars_override_admits_a_realistic_planner_prompt(test_config):
+    """The I1 fix: a real-repo-loop prompt (instruction + file contents + a
+
+    quoted diff) routinely exceeds the 4000-char RAG chat cap. Passing the
+    deepagent_github.max_handoff_chars value must let it through instead of
+    failing closed on every realistic use.
+    """
+    cfg, config_path = test_config
+    long_prompt = "Instruction:\ndo the thing\n\n" + ("x" * 32_000)
+    redacted, _envelope = sanitize_handoff(
+        long_prompt, provider="grok", config_path=config_path, cfg=cfg, max_chars=200_000,
+    )
+    assert len(redacted) == len(long_prompt)
+
+
+def test_handoff_max_chars_override_still_enforces_its_own_ceiling(test_config):
+    """The override replaces the cap; it does not disable it."""
+    cfg, config_path = test_config
+    with pytest.raises(PromptInjectionError, match="maximum length"):
+        sanitize_handoff("x" * 101, provider="grok", config_path=config_path, cfg=cfg, max_chars=100)
+
+
+def test_settings_carry_max_handoff_chars_from_config():
+    deep_cfg = _deep_cfg(max_handoff_chars=12_345)
+    local = DeepAgentModelSettings.from_config(deep_cfg)
+    cloud = DeepAgentModelSettings.from_config(deep_cfg, cloud_provider="grok")
+    assert local.max_handoff_chars == 12_345
+    assert cloud.max_handoff_chars == 12_345

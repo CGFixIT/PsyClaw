@@ -525,6 +525,13 @@ agentic:
       - "pytest.ini"
       - ".claude/skills/"
     max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
+    # Outbound-prompt length cap for sanitize_handoff (agentic/deepagent_github/
+    # handoff.py) -- deliberately separate from policy.prompt_filter.
+    # max_input_chars (4000, tuned for a short RAG chat query). A real-repo-loop
+    # prompt bundles the instruction, every declared read_paths file's content,
+    # and a quoted PR/issue diff -- routinely tens of thousands of characters,
+    # which is why this is not the same number.
+    max_handoff_chars: 200000
     workspace_root: "data/agentic/workspaces"    # validated: under repo data/ tree
     # Cloud coding-loop providers. The agentic analog of app.mode: "hybrid" --
     # gate 3 of the six-condition chain (agentic.enabled, deepagent_github.enabled,

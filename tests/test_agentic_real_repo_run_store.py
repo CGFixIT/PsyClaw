@@ -71,6 +71,23 @@ def test_save_is_atomic_no_tmp_file_left_behind(tmp_path: Path):
     assert list(runs_dir.glob("*.json"))
 
 
+def test_save_wraps_an_oserror_as_agentic_error(tmp_path: Path):
+    """Mirrors load_run's own precedent: a write-time OSError (disk full,
+
+    permission denied, a locked temp file) must not escape as a bare OSError --
+    every caller in agentic/cli.py only catches AgenticError, so an unwrapped
+    OSError would skip past all of them, reach main() uncaught, and exit 1, a
+    code outside the documented 0/2/3/4 API.
+    """
+    runs_dir = tmp_path / "runs"
+    # A file where the runs directory needs to be makes mkdir(parents=True) --
+    # and therefore the whole write -- fail with a real OSError, no mocking.
+    runs_dir.parent.mkdir(parents=True, exist_ok=True)
+    runs_dir.write_text("not a directory", encoding="utf-8")
+    with pytest.raises(AgenticError, match="failed to persist run record"):
+        save_run(runs_dir, _record())
+
+
 def test_load_raises_for_a_missing_run(tmp_path: Path):
     with pytest.raises(AgenticError, match="not found"):
         load_run(tmp_path / "runs", new_run_id())

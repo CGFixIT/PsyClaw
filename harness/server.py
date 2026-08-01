@@ -432,7 +432,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         session = store.create(model=_current_model(), title=req.title)
         return session.summary()
 
-    @app.get("/api/sessions/{session_id}")
+    @app.get("/api/sessions/{session_id}", dependencies=guarded)
     def get_session(session_id: str) -> dict:
         try:
             session = store.get(session_id)

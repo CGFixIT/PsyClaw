@@ -143,12 +143,14 @@ read-only.
 
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - The five state-changing routes (`POST /api/sessions`, `.../rename`,
-  `/api/soul`, `/api/model`, `/api/chat`), `GET /api/github/status`, and all
-  six `/api/agent/*` run routes (`run`, `runs/{id}`, `runs/{id}/decision`,
-  `runs/{id}/push`, `runs/{id}/publish`, `runs/{id}/discard`) require a
-  Bearer `CYCLAW_API_KEY` — the same variable the gateway's `/soul` and `/ops/*`
-  endpoints use. **Fail-closed:** an unset key means those routes return 401, not
-  "no auth required". Paste the key into the console's `key` field, or export it
+  `/api/soul`, `/api/model`, `/api/chat`), `GET /api/sessions/{session_id}`
+  (it returns a session's full message content, unlike the title-only list at
+  `GET /api/sessions`), `GET /api/github/status`, and all six `/api/agent/*`
+  run routes (`run`, `runs/{id}`, `runs/{id}/decision`, `runs/{id}/push`,
+  `runs/{id}/publish`, `runs/{id}/discard`) require a Bearer `CYCLAW_API_KEY`
+  — the same variable the gateway's `/soul` and `/ops/*` endpoints use.
+  **Fail-closed:** an unset key means those routes return 401, not "no auth
+  required". Paste the key into the console's `key` field, or export it
   before launching. The read-only routes stay open so the console can boot and
   report that a key is needed. The key is held in the browser page only — never
   `localStorage`, never a cookie.
