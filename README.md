@@ -341,6 +341,11 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
 pip install -r requirements.txt -c constraints.txt
+
+# Want every optional feature too (Postgres/pgvector, NeMo Guardrails, dev/test
+# tools, both cloud providers) in one environment — a from-scratch dev box, or a
+# full manual smoke test? Use this instead of step 2:
+pip install -e ".[all]" -c constraints.txt
 ```
 
 ### Required local prep
@@ -869,8 +874,12 @@ pip install -e ".[agentic-deepagents-cloud]"                   -c constraints.tx
 pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.txt
 ```
 
-Neither extra is part of `full` (what CI and `full`-installed dev boxes get) — that
-split is deliberate, so a machine that never touches cloud providers never
+(Want Postgres/pgvector and NeMo Guardrails too, not just the cloud providers?
+`pip install -e ".[all]"` in [Quick Start](#quick-start) installs every optional
+extra in one command.)
+
+Neither cloud extra is part of `full` (what CI and `full`-installed dev boxes get)
+— that split is deliberate, so a machine that never touches cloud providers never
 carries their SDKs. The published Docker image installs `requirements.txt` only
 (base deps, no extras at all), so running this feature — local *or* cloud — in a
 container means installing on top: add `pip install -e .` for local mode, or one
