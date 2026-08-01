@@ -559,7 +559,7 @@ def test_harness_runs_stray_file_does_not_displace_runs(client, tmp_path, monkey
     for name in ("run-a", "run-b", "run-c"):
         (runs_dir / name).mkdir()
     (runs_dir / "zzz-stray.lock").write_text("", encoding="utf-8")  # sorts first
-    monkeypatch.setattr(harness_server, "_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(harness_server, "_runs_dir", lambda: runs_dir)
     monkeypatch.setattr(harness_server, "_MAX_RUNS", 3)
     data = client.get("/api/harness/runs").json()
     assert data["count"] == 3
@@ -714,3 +714,87 @@ def test_main_uses_a_valid_port_override(monkeypatch, tmp_path):
 
     harness_server.main()
     assert called[0][1]["port"] == 8791
+
+
+# -- harness optimizer runs directory -------------------------------------------
+
+def test_harness_runs_follows_configured_output_dir(client, tmp_path, monkeypatch):
+    # config.yaml owns agentic.harness_optimizer.output_dir. The hardcoded
+    # constant this replaced drifted the moment an operator changed it: the
+    # producer wrote to the configured directory while this endpoint kept
+    # reading the compiled-in one and returned an empty list forever, with no
+    # error and no log line.
+    configured = harness_server._REPO_ROOT / "data" / "agentic" / "_pytest_runs"
+    configured.mkdir(parents=True, exist_ok=True)
+    (configured / "exp-1").mkdir(exist_ok=True)
+    try:
+        monkeypatch.setattr(
+            harness_server,
+            "_get_config",
+            lambda _p: {"agentic": {"harness_optimizer": {"output_dir": "data/agentic/_pytest_runs"}}},
+        )
+        data = client.get("/api/harness/runs").json()
+        assert {r["run_id"] for r in data["runs"]} == {"exp-1"}
+    finally:
+        (configured / "exp-1").rmdir()
+        configured.rmdir()
+
+
+def test_runs_dir_rejects_a_path_outside_the_data_tree(monkeypatch, tmp_path):
+    # Mirrors agentic/config.py::_resolve_data_path's containment rule. A
+    # misconfigured (or hostile) output_dir must not turn a read-only listing
+    # endpoint into an arbitrary-directory enumerator.
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _p: {"agentic": {"harness_optimizer": {"output_dir": str(tmp_path)}}},
+    )
+    assert harness_server._runs_dir() == harness_server._DEFAULT_RUNS_DIR
+
+
+@pytest.mark.parametrize(
+    "parsed",
+    [
+        {},
+        {"agentic": None},
+        {"agentic": {}},
+        {"agentic": {"harness_optimizer": None}},
+        {"agentic": {"harness_optimizer": {}}},
+        {"agentic": {"harness_optimizer": {"output_dir": ""}}},
+        {"agentic": {"harness_optimizer": {"output_dir": "   "}}},
+        {"agentic": {"harness_optimizer": {"output_dir": 42}}},
+    ],
+)
+def test_runs_dir_degrades_to_the_default(monkeypatch, parsed):
+    monkeypatch.setattr(harness_server, "_get_config", lambda _p: parsed)
+    assert harness_server._runs_dir() == harness_server._DEFAULT_RUNS_DIR
+
+
+def test_harness_runs_excludes_the_accepted_artifact_dir(client, tmp_path, monkeypatch):
+    # agentic/harness_optimizer/patching.py writes accepted candidate artifacts
+    # into <output_dir>/accepted/, a SIBLING of the per-run experiment dirs
+    # (its _atomic_json mkdir(parents=True)s that path). It is not a run.
+    #
+    # Two distinct defects, both exercised here. The phantom entry is
+    # unconditional: the console's /harness pane listed a run called
+    # "accepted". The displacement is conditional but real -- run ids are 32
+    # lowercase hex chars (agent_policy.RUN_ID_RE), the listing sorts
+    # reverse-lexicographically and THEN slices to _MAX_RUNS, so any id sorting
+    # below "accepted" (anything starting "aa".."ab", ~1/256 of the id space)
+    # gets pushed out of the window. The ids below are chosen to straddle it.
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    real = {
+        "aa" + "0" * 30,  # sorts BELOW "accepted" -> displaced before this fix
+        "ab" + "1" * 30,  # sorts BELOW "accepted" -> displaced before this fix
+        "ff" + "2" * 30,  # sorts above "accepted"
+    }
+    for name in real:
+        (runs_dir / name).mkdir()
+    (runs_dir / "accepted").mkdir()
+    monkeypatch.setattr(harness_server, "_runs_dir", lambda: runs_dir)
+    monkeypatch.setattr(harness_server, "_MAX_RUNS", 3)
+
+    listed = {r["run_id"] for r in client.get("/api/harness/runs").json()["runs"]}
+    assert "accepted" not in listed  # no phantom run
+    assert listed == real  # ...and nothing real was displaced by it

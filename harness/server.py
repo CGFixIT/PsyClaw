@@ -75,7 +75,14 @@ _HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
-_RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
+_DEFAULT_RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
+# Written by agentic/harness_optimizer/patching.py as a SIBLING of the per-run
+# experiment directories, under the same output_dir root. It holds accepted
+# candidate artifacts, not a run, so listing it as one is wrong twice over: the
+# console shows a phantom run named "accepted", and because the listing sorts
+# lexicographically and then slices to _MAX_RUNS, that phantom can displace a
+# real run from the window.
+_NON_RUN_DIRS = frozenset({"accepted"})
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
 _MAX_RUNS = 50
 _HTTP_CREATED = 201
@@ -152,6 +159,50 @@ _UNRESOLVED_BACKEND = ResolvedLocalBackend(
     model="",
     source="primary",
 )
+
+
+def _runs_dir() -> Path:
+    """Where agentic.harness_optimizer actually writes its runs.
+
+    config.yaml owns this path (``agentic.harness_optimizer.output_dir``); the
+    hardcoded constant this replaced silently drifted the moment an operator
+    changed it. The producer then wrote to the configured directory while
+    ``GET /api/harness/runs`` kept reading the compiled-in one and reported
+    ``{"runs": [], "count": 0}`` forever, with no error and no log line.
+
+    Resolution mirrors agentic/config.py::_resolve_data_path -- expanded,
+    anchored to the repo root when relative, and confined to ``<repo>/data/`` --
+    but is reimplemented here rather than imported: harness/server.py must not
+    import ``agentic`` (I6 module isolation). It already reads config.yaml
+    directly for models/rate-limit, so this adds no new coupling. Anything
+    unreadable, non-string, or outside data/ degrades to the shipped default
+    rather than failing app build or reading an arbitrary directory.
+    """
+    parsed = _get_config(str(_CONFIG_PATH))
+    raw = ""
+    if isinstance(parsed, dict):
+        agentic_cfg = parsed.get("agentic")
+        if isinstance(agentic_cfg, dict):
+            optimizer = agentic_cfg.get("harness_optimizer")
+            if isinstance(optimizer, dict):
+                raw = optimizer.get("output_dir") or ""
+    if not isinstance(raw, str) or not raw.strip():
+        return _DEFAULT_RUNS_DIR
+    candidate = Path(os.path.expanduser(os.path.expandvars(raw.strip())))
+    if not candidate.is_absolute():
+        candidate = _REPO_ROOT / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return _DEFAULT_RUNS_DIR
+    data_root = (_REPO_ROOT / "data").resolve()
+    if data_root not in resolved.parents:
+        logger.warning(
+            "agentic.harness_optimizer.output_dir is outside the repo data/ tree; "
+            "falling back to the default runs directory"
+        )
+        return _DEFAULT_RUNS_DIR
+    return resolved
 
 
 def _resolve_backend() -> ResolvedLocalBackend:
@@ -805,10 +856,18 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/harness/runs")
     def harness_runs() -> dict:
         runs: list[dict] = []
-        if _RUNS_DIR.is_dir():
-            # dirs-only BEFORE the slice: a stray file (index, .lock) among the
-            # newest entries must not push a real run out of the _MAX_RUNS window
-            entries = (entry for entry in _RUNS_DIR.iterdir() if entry.is_dir())
+        runs_dir = _runs_dir()
+        if runs_dir.is_dir():
+            # dirs-only AND non-run-dirs-out BEFORE the slice: a stray file
+            # (index, .lock) or the sibling "accepted" artifact directory among
+            # the newest entries must not push a real run out of the _MAX_RUNS
+            # window. Filtering after the slice would let either silently
+            # consume a slot.
+            entries = (
+                entry
+                for entry in runs_dir.iterdir()
+                if entry.is_dir() and entry.name not in _NON_RUN_DIRS
+            )
             for path in sorted(entries, reverse=True)[:_MAX_RUNS]:
                 runs.append({"run_id": path.name, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
