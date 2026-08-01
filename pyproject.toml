@@ -78,6 +78,18 @@ full = [
     "cyclaw[test]",
     "cyclaw[agentic-deepagents]",
 ]
+# Literally every optional extra, for exercising every gated feature in one
+# install (manual smoke-testing, a from-scratch dev box). NOT what CI/dev boxes
+# install -- that's `full` above, which deliberately excludes the two extras
+# added here for the documented reasons on each: `guardrails` because
+# fastembed's default remote-CDN model fetch cuts against the offline-first
+# posture, `agentic-deepagents-cloud` because a machine that never touches
+# cloud providers shouldn't carry their SDK. Choosing `all` opts into both.
+all = [
+    "cyclaw[full]",
+    "cyclaw[guardrails]",
+    "cyclaw[agentic-deepagents-cloud]",
+]
 
 [project.scripts]
 cyclaw-server = "gate:main"
