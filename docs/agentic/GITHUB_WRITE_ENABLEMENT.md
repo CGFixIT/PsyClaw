@@ -5,14 +5,29 @@ and `config.yaml` ships three further gates closed. Nothing in this repository
 can open a pull request today. This document is the procedure for changing
 that, and the checklist that must be filed first.
 
-> **Checklist re-run in progress (2026-07-31).** Item A's void-and-re-run
-> clause fired: `execute_write` is now reachable from two CLI subcommands and
-> one authenticated HTTP route, which it was not when this document was
-> written. Items A and I are rewritten accordingly and a dated verification
-> record sits below the checklist. **Two decisions are open and are the
-> operator's alone** — item A (accept HTTP reachability, or drop the
-> `/publish` route) and item H (accept the executor-argv scope, or close it).
-> The status above is unchanged and stays unchanged until a signature exists.
+> **Checklist re-run in progress (2026-07-31), decisions recorded
+> (2026-08-01).** Item A's void-and-re-run clause fired: `execute_write` is
+> now reachable from two CLI subcommands and one authenticated HTTP route,
+> which it was not when this document was written. Items A and I were
+> rewritten accordingly and a dated verification record sits below the
+> checklist. The operator has since decided both open items:
+>
+> - **Item A — sign off as-is.** HTTP reachability is accepted; the shipped
+>   mitigations (the six-gate chain, rate limiting ahead of auth, the
+>   Origin/Sec-Fetch-Site cross-site guard) are the accepted posture. No
+>   further code change (no separate publish-tier credential, no added
+>   confirmation factor) is required before signing.
+> - **Item H — accept the scope.** The executor-argv gap stays a documented,
+>   accepted risk, consistent with the single-operator threat model. No
+>   targeted fix (e.g. overriding the executor's git credential helper) is
+>   required before signing.
+>
+> **The status above is still unchanged and still requires an actual
+> signature and date on the line below before it changes.** Recording a
+> decision on what the checklist SAYS is not the same act as signing it —
+> the sign-off line, and the arming steps (procedure steps 5–7, including
+> flipping `EXECUTION_ENABLED`), remain the operator's own, separate, explicit
+> action.
 
 It is the GitHub analogue of `FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md` +
 `FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`, and exists for the same reason: the
@@ -107,7 +122,7 @@ reversible by editing one line back.
 *Flipping the write flag without a completed, filed copy of this checklist is
 an unauthorized change.*
 
-- [ ] **A. Reachability — CHANGED 2026-07-31, read this before signing.**
+- [x] **A. Reachability — CHANGED 2026-07-31, decided 2026-08-01: sign off as-is.**
       This item previously read "No `/ops/*` endpoint, no harness route, and no
       CLI subcommand reaches `execute_write`," and said that if that ever
       changed the checklist was void and had to be re-run. **It changed.** That
@@ -141,6 +156,16 @@ an unauthorized change.*
       `real-repo-run-publish` from `_AGENTIC_ACTIONS` in `utils/ops_runner.py`
       and delete the `/publish` route — push and every other agent route are
       unaffected.
+
+      **Decided 2026-08-01: accept HTTP reachability as-is.** The operator
+      weighed the residual risks (single-tier credential shared with chat; a
+      replayable JSON `confirm: true` in place of terminal keypress friction;
+      `_enforce_same_origin` as a single point of failure for the whole
+      cross-site exposure; no CLI-vs-HTTP channel attribution in the audit
+      trail; `/publish` sharing chat's rate-limit bucket rather than a
+      stricter one) and chose to sign off without further code changes. Those
+      risks are recorded here, not resolved by code — re-read them before any
+      future re-run of this checklist.
 - [ ] **B. Draft-only.** `_build_write_argv`'s `pr_create` branch still ends in
       `--draft`, and `tests/test_agentic_writer.py` still asserts the argv as an
       exact list. That assertion is the only thing pinning draft-ness.
@@ -159,7 +184,7 @@ an unauthorized change.*
 - [ ] **G. Push scoping.** `push_branch` rejects every branch outside
       `claude/*`, enforced by test rather than convention — nothing else in the
       repo statically prevents a push elsewhere.
-- [ ] **H. Known gap, accepted or closed:** `agentic/executor`'s verification
+- [x] **H. Known gap, decided 2026-08-01: accepted.** `agentic/executor`'s verification
       checks run operator-supplied argv with cwd pinned to the clone. A
       checks-file entry of `{"argv": ["git", "push", ...]}` bypasses the
       `claude/*` scoping and the `allow_git_write_tools` gate entirely. The
@@ -173,6 +198,25 @@ an unauthorized change.*
       **names** against a fixed allow-list — see
       `docs/THREAT_MODEL.md`'s outbound/execution-surface sections). Decide
       explicitly: accept that scope, or close before enabling.
+
+      **Decided 2026-08-01: accept the scope.** Worth restating why this gap
+      sharpens once item A is armed, so a future re-read has the full picture:
+      `agentic/executor/runner.py`'s env allowlist and
+      `RepoWorkspaceTools.push_branch()`'s both include `HOME`. Item A's own
+      enablement step 2 requires a `HOME`-resident git credential helper for
+      `push_branch()` to authenticate at all — the same helper is then
+      equally reachable from a checks-file entry invoking `git`, with none of
+      `push_branch()`'s own safeguards (`claude/*`-only branch regex, no
+      `--force`). Before item A is armed this gap has no ambient credential to
+      use; after, it is a second, unguarded path to the same authenticated
+      push. The scope was accepted anyway, consistent with the single-operator
+      threat model, but a future closure — if ever revisited — would override
+      the git credential helper specifically inside the executor's subprocess
+      environment (e.g. `GIT_CONFIG_COUNT=1`/`GIT_CONFIG_KEY0=credential.helper`/
+      `GIT_CONFIG_VALUE0=""`), leaving `push_branch()`'s own credential path
+      untouched, rather than an argv denylist (bypassable by a wrapper script
+      or differently-named binary, and out of scope for a module whose
+      containment model already assumes operator-authored local execution).
 - [ ] **I. Blast radius understood.** With the flag on and gates 2–3 open, this
       code can push a `claude/*` branch and open a draft PR against the
       configured repo, as the authenticated `gh` identity. It cannot push to
@@ -208,7 +252,7 @@ because item A's own void-and-re-run clause had fired. Method and result:
 | E | Located the rebuild + `declared[1:] != argv[1:]` mismatch refusal | Holds |
 | F | Located the timeout → INDETERMINATE path; no retry branch | Holds |
 | G | `tests/test_agentic_repo_workspace.py` parametrizes `main`, `feature/x`, `--force`, `claude/has space`, `""`, `HEAD` | Holds |
-| H | Confirmed no `/ops/*` or harness route accepts raw argv (`checks: list[str]` of profile names → `resolve_check_profiles`) | Holds; **still needs an explicit accept/close** |
+| H | Confirmed no `/ops/*` or harness route accepts raw argv (`checks: list[str]` of profile names → `resolve_check_profiles`) | Holds; **decided 2026-08-01 — accepted** |
 | I | Re-derived from A | **Amended** above |
 | J | Confirmed `_require_gates` checks `agentic.enabled` first | Holds |
 | K | Confirmed `execute_write(confirm=...)` is keyword-required and `plan_write` stores no `confirm` key | Holds |
@@ -219,9 +263,11 @@ Runtime state at verification: `EXECUTION_ENABLED is False`,
 Steps 1, 2, 3, 5, 6 and 7 of the enablement procedure are **not** performed
 here and cannot be: steps 1–2 read the operator's own `gh`/git credential
 state on their machine, and steps 5–7 are the arming itself. This record
-covers step 4's evidence only. Two decisions remain open and are the
-operator's alone: item A (accept HTTP reachability, or drop the `/publish`
-route) and item H (accept the executor-argv scope, or close it).
+covers step 4's evidence only. Both decisions that were open are now
+recorded: item A (sign off as-is, decided 2026-08-01) and item H (accept the
+scope, decided 2026-08-01). Recording those decisions is not the same act as
+signing this checklist — the sign-off line below, and the arming itself
+(steps 5–7), remain the operator's own, separate, explicit action.
 
 **Sign-off:** ______________________  **Date:** ____________
 
