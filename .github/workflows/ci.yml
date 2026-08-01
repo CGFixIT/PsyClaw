@@ -161,20 +161,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is GitHub's Apple Silicon (arm64) runner. Every step in
-        # this job already uses `shell: bash`, so no OS-specific step is added
-        # for this leg -- it exercises the same script path windows-latest's
-        # Git-Bash leg does. NOT independently verified in the authoring
-        # sandbox that torch==2.13.0+cpu resolves on macOS arm64 from
-        # https://download.pytorch.org/whl/cpu (the sandbox's outbound proxy
-        # denies that host outright, and the wheel's whole design point is
-        # that it resolves ONLY from that index, never plain PyPI -- see
-        # requirements.txt's "no dependency-confusion exposure" comment, which
-        # means there is no substitute index to check it against). This run is
-        # the first real signal; if it fails on the torch install step
-        # specifically, the fix is a Darwin-conditional install (plain
-        # `torch==2.13.0` from PyPI, no index override -- Apple Silicon wheels
-        # carry no separate CPU/CUDA variant to disambiguate), not a retry.
+        # macos-latest is GitHub's Apple Silicon (arm64) runner. Every step
+        # except torch installation uses `shell: bash` uniformly across all
+        # three OSes; torch gets its own macOS-specific install step (below)
+        # because torch==2.13.0+cpu 404s on https://download.pytorch.org/whl/cpu
+        # for macOS -- confirmed on this matrix leg's first run, and documented
+        # in docs/HARNESS_MACOS.md.
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
@@ -204,11 +196,13 @@ jobs:
           python -m pip install --upgrade "pip==26.1.2"
 
       - name: Cache torch CPU wheel
+        if: runner.os != 'macOS'
         # Torch (~2GB) is pinned infrequently; caching its wheel separately means
         # a requirements.txt or constraints.txt change only busts the lighter
         # runtime-deps cache (via the setup-python pip cache), not this one.
         # The wheel is downloaded once per (os, pin) pair and reused on every
-        # subsequent run until the pin changes in pyproject.toml.
+        # subsequent run until the pin changes in pyproject.toml. macOS skips
+        # this cache entirely -- see the macOS-specific install step below.
         id: torch-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -218,7 +212,7 @@ jobs:
             torch-cpu-2.13.0-${{ runner.os }}-
 
       - name: Download torch wheel (cache miss only)
-        if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'macOS' && steps.torch-wheel-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # CVE-2025-32434 (weights_only=True RCE bypass) was fixed in torch 2.6.0.
@@ -229,6 +223,7 @@ jobs:
             --no-deps -d .torch-wheels
 
       - name: Install deps (torch CPU + project + test tools)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           # Install torch from the per-version local wheel (no network fetch when
@@ -236,6 +231,26 @@ jobs:
           # PyTorch index on cache-hit runs, speeding up the step significantly.
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -r requirements.txt -c constraints.txt pytest pytest-cov
+
+      - name: Install deps (macOS -- plain torch, no +cpu suffix)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Confirmed via this matrix leg's first run: torch==2.13.0+cpu 404s on
+          # https://download.pytorch.org/whl/cpu for macOS -- that index lists
+          # plain (non "+cpu"-suffixed) versions there instead, because Apple
+          # Silicon has no separate CPU/CUDA build to disambiguate (this was
+          # flagged as an unverified gap in docs/HARNESS_MACOS.md; this is the
+          # fix it named). requirements.txt/constraints.txt both hardcode the
+          # +cpu pin by design (dependency-confusion-proof reproducibility on
+          # Linux/Windows), so this leg installs plain torch directly, then
+          # everything else from copies of both manifests with the torch/
+          # extra-index-url lines stripped -- so pip never tries to reconcile
+          # the installed plain build against the +cpu-suffixed pin.
+          pip install "torch==2.13.0"
+          grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' requirements.txt > /tmp/requirements-macos.txt
+          grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
+          pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt pytest pytest-cov
 
       - name: Prepare hermetic test env
         shell: bash

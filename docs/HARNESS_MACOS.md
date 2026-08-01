@@ -84,16 +84,26 @@ notes worth calling out:
   `agentic/deepagent_github/repo_workspace.py` also explicitly account for
   HFS+/APFS Unicode-format-character stripping, not just NTFS 8.3 names.
 
-## Known verification gap
+## torch on macOS: plain build, not the `+cpu`-suffixed one
 
 `torch==2.13.0+cpu`'s availability on macOS arm64 from
-`https://download.pytorch.org/whl/cpu` was not independently verified while
-authoring this port — every other pinned dependency with a compiled extension
-(`chromadb`, `onnxruntime`, `numpy`, `pandas`, `psycopg-binary`) was confirmed
-to publish an arm64/cp312 wheel, but that one index was unreachable from the
-authoring environment. The `macos-latest` CI lane (`.github/workflows/ci.yml`)
-is the actual verification: if the torch install step fails there specifically,
-the fix is a Darwin-conditional install of plain `torch==2.13.0` from PyPI
-(no index override) rather than the `+cpu`-suffixed CPU-index wheel — Apple
-Silicon builds carry no separate CPU/CUDA variant to disambiguate, unlike
-Linux/Windows.
+`https://download.pytorch.org/whl/cpu` could not be independently verified
+while authoring this port — every other pinned dependency with a compiled
+extension (`chromadb`, `onnxruntime`, `numpy`, `pandas`, `psycopg-binary`) was
+confirmed to publish an arm64/cp312 wheel, but that one index was unreachable
+from the authoring environment. The first `macos-latest` CI run confirmed the
+suspected reason: that index lists plain `torch==2.13.0` for macOS, not a
+`+cpu`-suffixed variant — Apple Silicon has no separate CPU/CUDA build to
+disambiguate, unlike Linux/Windows, where the suffix exists specifically to
+avoid the default CUDA-bundled wheel.
+
+`.github/workflows/ci.yml`'s `macos-latest` leg installs torch directly
+(`pip install "torch==2.13.0"`, no index override) and then the rest of
+`requirements.txt`/`constraints.txt` from copies with the `torch==`/
+`--extra-index-url` lines stripped, so pip never tries to reconcile the
+installed plain build against the `+cpu`-suffixed pin those manifests
+otherwise hardcode for Linux/Windows. If installing the harness locally on
+macOS by hand (not through the CI lane or `macos/install-cyclaw.sh`, which
+both already do this correctly), use `pip install torch==2.13.0` before
+`requirements.txt` rather than following `CLAUDE.md`'s Windows/Linux-oriented
+`torch==2.13.0+cpu --index-url ...` install line verbatim.
