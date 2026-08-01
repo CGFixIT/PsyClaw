@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="csrf-token" content="__CYCLAW_CSRF_TOKEN__">
 <title>CyClaw Harness</title>
 <!-- No external fonts or CDNs: offline-first, loopback-only. System stacks. -->
 <style>
@@ -203,6 +204,10 @@
    through textContent or the table() builder (createElement + textContent). */
 const $ = id => document.getElementById(id);
 const stream = $('stream'), input = $('input'), sendBtn = $('send'), apiKeyInput = $('apiKey');
+/* Substituted server-side into the meta tag at serve time (harness/server.py's
+   console() route) -- the literal placeholder below never reaches a browser. */
+const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+const CSRF_TOKEN = csrfMeta ? csrfMeta.content : '';
 
 let currentSession = null;   // session_id string or null
 let soulEnabled = true;
@@ -263,6 +268,12 @@ async function api(path, method, body) {
      (a cookie would be sent automatically by a cross-site page, which is exactly
      the CSRF shape the server's origin check exists to stop). */
   if (key) opts.headers['Authorization'] = 'Bearer ' + key;
+  /* Minted per-process server-side and substituted into the meta tag above at
+     serve time -- never typed in, never stored beyond this page load. A caller
+     that never fetched this page (a local process replaying just the API key,
+     with no browser Origin/Sec-Fetch-Site headers to trip the origin check)
+     does not have it. */
+  if (CSRF_TOKEN) opts.headers['X-CyClaw-CSRF'] = CSRF_TOKEN;
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const resp = await fetch(path, opts);
   let data = null;

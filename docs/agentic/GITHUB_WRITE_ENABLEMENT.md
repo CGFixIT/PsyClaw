@@ -166,6 +166,22 @@ an unauthorized change.*
       stricter one) and chose to sign off without further code changes. Those
       risks are recorded here, not resolved by code — re-read them before any
       future re-run of this checklist.
+
+      **Amended 2026-08-01, same day: one of those risks got a targeted fix
+      after all.** `_enforce_same_origin` being "a single point of failure"
+      specifically meant a local process holding `CYCLAW_API_KEY` but sending
+      neither `Origin` nor `Sec-Fetch-Site` sailed past that check by design
+      (it exists to stop *browsers*, and deliberately allows header-less
+      callers). `harness/server.py` now also requires a per-process CSRF
+      token, minted at server start and handed out nowhere except embedded in
+      the page `GET /` serves, checked unconditionally (no header-less
+      carve-out) as an additional condition in the `guarded` dependency chain.
+      A caller with the API key but who never fetched the console page still
+      cannot reach `/publish` or any other guarded route. The other four
+      accepted risks in the paragraph above (single-tier credential,
+      replayable `confirm`, no channel attribution, shared rate-limit bucket)
+      remain accepted as-is — this fix is scoped to the one gap named above,
+      not a general re-opening of the checklist.
 - [ ] **B. Draft-only.** `_build_write_argv`'s `pr_create` branch still ends in
       `--draft`, and `tests/test_agentic_writer.py` still asserts the argv as an
       exact list. That assertion is the only thing pinning draft-ness.

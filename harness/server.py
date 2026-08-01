@@ -32,8 +32,10 @@ apply_telemetry_kill()
 # overuse), this file carries a blanket E402 grant in pyproject.toml's
 # [tool.ruff.lint] per-file-ignores and setup.cfg's flake8 per-file-ignores,
 # matching gate.py's identical pattern for the identical reason.
+import hmac
 import logging
 import os
+import secrets
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -43,7 +45,7 @@ from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
@@ -116,6 +118,11 @@ _DETAILS_KEY = "details"
 # defense gate.py added for the same threat model (a rebinding page can drive
 # a loopback server's state-changing POSTs even though CORS blocks reads).
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+# The token placeholder embedded in static/harness.html's <meta> tag. Swapped
+# for a real per-process value in console() below, never checked into a
+# static asset on disk (the file on disk always carries the placeholder).
+_CSRF_PLACEHOLDER = "__CYCLAW_CSRF_TOKEN__"
+_CSRF_HEADER = "x-cyclaw-csrf"
 
 
 def _llm_settings() -> dict:
@@ -343,10 +350,48 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 },
             )
 
+    # Per-instance, like rate_limiter above: a module-level singleton would leak
+    # across separately-configured create_app() calls in tests, and a fixed
+    # token would defeat the point. Minted fresh per process, embedded ONLY in
+    # the page GET / serves (see console() below), and checked unconditionally
+    # -- unlike _enforce_same_origin, there is no "no header -> allow" carve-out.
+    csrf_token = secrets.token_urlsafe(32)
+
+    def _enforce_csrf_token(request: Request) -> None:
+        """Reject any guarded request that doesn't carry this instance's CSRF token.
+
+        Closes the gap _enforce_same_origin leaves on purpose: that check allows
+        a request carrying NEITHER Origin nor Sec-Fetch-Site, on the theory that
+        a non-browser client (curl, PowerShell, the sandbox verifier) is not a
+        CSRF vector -- true, but it means a local process holding
+        CYCLAW_API_KEY and sending no browser headers reaches every guarded
+        route unimpeded. This token is handed out nowhere except embedded in
+        the console page itself, so a caller that never fetched it doesn't have
+        it, regardless of whether it also holds a valid API key.
+        """
+        supplied = request.headers.get(_CSRF_HEADER, "")
+        if not hmac.compare_digest(supplied.encode("utf-8"), csrf_token.encode("utf-8")):
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CSRF_TOKEN_INVALID",
+                    _MESSAGE_KEY: "Missing or invalid CSRF token",
+                    _DETAILS_KEY: {},
+                },
+            )
+
     # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
-    # then origin, then auth. A wrong key against a spent budget must return 429,
-    # not 401, or the limiter stops bounding key-guessing.
-    guarded = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin), Depends(require_api_key)]
+    # then origin, then auth, then CSRF. A wrong key against a spent budget must
+    # return 429, not 401, or the limiter stops bounding key-guessing. CSRF runs
+    # LAST so a missing/wrong API key still reports 401 (not 403) exactly as
+    # before -- it is an additional, independent condition, not a replacement
+    # for any earlier one.
+    guarded = [
+        Depends(_enforce_rate_limit),
+        Depends(_enforce_same_origin),
+        Depends(require_api_key),
+        Depends(_enforce_csrf_token),
+    ]
 
     # Same shutdown contract gate.py's lifespan already implements: close the
     # persistent httpx pool so the OS reclaims file descriptors and TIME_WAIT
@@ -382,10 +427,19 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return cfg.selected_model or backend.model
 
     # -- console -------------------------------------------------------
-    @app.get("/", response_class=FileResponse)
-    def console() -> FileResponse:
-        return FileResponse(
-            str(_STATIC / "harness.html"),
+    # Read once per app instance (the file is static; only the substituted
+    # token differs per instance) rather than per request. app.state also
+    # carries the raw token for tests that need to attach it without a page
+    # fetch -- see tests/test_harness_auth.py.
+    console_html = (_STATIC / "harness.html").read_text(encoding="utf-8").replace(
+        _CSRF_PLACEHOLDER, csrf_token
+    )
+    app.state.csrf_token = csrf_token
+
+    @app.get("/", response_class=HTMLResponse)
+    def console() -> HTMLResponse:
+        return HTMLResponse(
+            console_html,
             headers={
                 "Content-Security-Policy": "frame-ancestors 'none'",
                 "X-Frame-Options": "DENY",

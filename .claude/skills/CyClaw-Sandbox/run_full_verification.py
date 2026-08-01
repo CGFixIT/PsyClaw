@@ -1113,12 +1113,14 @@ def phase_harness_console() -> PhaseResult:
         base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_harness_mock_transport(),
     )
     # The five state-changing POSTs, GET /api/github/status and the three
-    # /api/agent/* run routes are Bearer-gated
-    # (utils/auth.py). verify.sh exports CYCLAW_API_KEY; fall back to a literal so
-    # a standalone run still exercises the guarded routes instead of 401ing.
+    # /api/agent/* run routes are Bearer-gated (utils/auth.py) AND require the
+    # per-process CSRF token create_app() mints and exposes on app.state --
+    # verify.sh exports CYCLAW_API_KEY; fall back to a literal so a standalone
+    # run still exercises the guarded routes instead of 401ing.
     _key = os.environ.setdefault("CYCLAW_API_KEY", "sandbox-harness-key")
-    _auth = {"Authorization": f"Bearer {_key}"}
-    client = TestClient(create_app(cfg, chat), base_url="http://127.0.0.1", headers=_auth)
+    _app = create_app(cfg, chat)
+    _auth = {"Authorization": f"Bearer {_key}", "X-CyClaw-CSRF": _app.state.csrf_token}
+    client = TestClient(_app, base_url="http://127.0.0.1", headers=_auth)
 
     log("\n  --- Status / Registry ---")
     r = client.get("/api/status")

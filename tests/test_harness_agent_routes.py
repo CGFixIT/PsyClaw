@@ -43,7 +43,6 @@ from harness.ollama import HarnessChatClient
 from utils.ops_runner import OpsError, run_agentic_op
 
 _KEY = "harness-agent-test-key"
-_AUTH = {"Authorization": f"Bearer {_KEY}"}
 _RUN_ID = "a" * 32
 _RUN = "/api/agent/run"
 _STATUS = f"/api/agent/runs/{_RUN_ID}"
@@ -106,9 +105,16 @@ def calls(monkeypatch):
     return recorded
 
 
+def _auth_headers(app) -> dict:
+    """Bearer key + the per-instance CSRF token create_app() mints and exposes
+    on app.state -- the only way a test can learn it (see harness/server.py)."""
+    return {"Authorization": f"Bearer {_KEY}", "X-CyClaw-CSRF": app.state.csrf_token}
+
+
 @pytest.fixture()
 def client(cfg, calls):
-    return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1", headers=_AUTH)
+    app = harness_server.create_app(cfg, _chat())
+    return TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
 
 
 # --- I6 constant duplication ------------------------------------------------
@@ -460,7 +466,8 @@ def test_ops_error_is_a_redacted_400(cfg, monkeypatch):
         raise OpsError("upstream said: contact admin@example.com from 10.1.2.3")
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _raise)
-    client = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1", headers=_AUTH)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
     resp = client.post(_RUN, json=_VALID_BODY)
     assert resp.status_code == 400
     message = resp.json()["detail"]["message"]
@@ -479,7 +486,8 @@ def test_a_shim_timeout_is_a_504_that_does_not_echo_the_argv(cfg, monkeypatch):
         raise subprocess.TimeoutExpired(cmd=["python", "--reason=leak me"], timeout=900)
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _timeout)
-    client = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1", headers=_AUTH)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
     resp = client.post(_RUN, json=_VALID_BODY)
     assert resp.status_code == 504
     detail = resp.json()["detail"]
@@ -505,7 +513,8 @@ def test_a_failed_run_is_an_http_200_carrying_ok_false(cfg, monkeypatch, exit_co
         })
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _fail)
-    client = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1", headers=_AUTH)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
     resp = client.post(_RUN, json=_VALID_BODY)
     assert resp.status_code == 200
     assert resp.json() == {
@@ -527,7 +536,8 @@ def test_the_disabled_layer_returns_ok_true_with_a_null_parsed(cfg, monkeypatch)
         })
 
     monkeypatch.setattr(harness_server, "run_agentic_op", _disabled)
-    client = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1", headers=_AUTH)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
     body = client.post(_RUN, json=_VALID_BODY).json()
     assert body["ok"] is True
     assert body["parsed"] is None
