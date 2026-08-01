@@ -42,9 +42,16 @@ class TestBM25PickleRejection:
         (tmp_path / "chroma_db").mkdir()
 
         # Stub the semantic vector backend so init reaches the BM25 loader (the
-        # path under test) without a real ChromaDB/pgvector store.
+        # path under test) without a real ChromaDB/pgvector store. spec=["close"]
+        # is load-bearing, not cosmetic: an unconstrained MagicMock() auto-vivifies
+        # ANY attribute access, including .fingerprint() -- which HybridRetriever's
+        # embedding-fingerprint guard would then treat as a real (mismatched, and
+        # therefore fatal) fingerprint. Restricting the spec to what a reader
+        # actually needs here makes getattr(reader, "fingerprint", None) correctly
+        # resolve to None via AttributeError, matching the SimpleNamespace(close=...)
+        # pattern tests/test_hybrid_search.py already uses for the same reason.
         with patch("retrieval.hybrid_search.get_vector_reader") as mock_reader:
-            mock_reader.return_value = MagicMock()
+            mock_reader.return_value = MagicMock(spec=["close"])
 
             from retrieval.hybrid_search import HybridRetriever
             with pytest.raises((json.JSONDecodeError, ValueError, UnicodeDecodeError)):
@@ -72,9 +79,16 @@ class TestBM25PickleRejection:
         (tmp_path / "chroma_db").mkdir()
 
         # Stub the semantic vector backend so init reaches the BM25 loader (the
-        # path under test) without a real ChromaDB/pgvector store.
+        # path under test) without a real ChromaDB/pgvector store. spec=["close"]
+        # is load-bearing, not cosmetic: an unconstrained MagicMock() auto-vivifies
+        # ANY attribute access, including .fingerprint() -- which HybridRetriever's
+        # embedding-fingerprint guard would then treat as a real (mismatched, and
+        # therefore fatal) fingerprint. Restricting the spec to what a reader
+        # actually needs here makes getattr(reader, "fingerprint", None) correctly
+        # resolve to None via AttributeError, matching the SimpleNamespace(close=...)
+        # pattern tests/test_hybrid_search.py already uses for the same reason.
         with patch("retrieval.hybrid_search.get_vector_reader") as mock_reader:
-            mock_reader.return_value = MagicMock()
+            mock_reader.return_value = MagicMock(spec=["close"])
 
             from retrieval.hybrid_search import HybridRetriever
             retriever = HybridRetriever(config_path=str(config_file))

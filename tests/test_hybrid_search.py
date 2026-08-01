@@ -14,9 +14,9 @@ import pytest
 from rank_bm25 import BM25Okapi
 
 from retrieval.stemmer import tokenize_and_stem
-from retrieval.hybrid_search import HybridRetriever, SearchResult
+from retrieval.hybrid_search import HybridRetriever, SearchResult, _mps_risk_present
 from retrieval.vector_store import parse_stem_tags
-from utils.errors import EmbeddingServiceError
+from utils.errors import EmbeddingServiceError, IndexNotFoundError
 
 
 class TestRRFFusion:
@@ -300,10 +300,18 @@ class TestConfigPathAnchoring:
 
 
 class TestEmbeddingFingerprintCheck:
-    """HybridRetriever.__init__ must warn (never raise) on an absent or
-    mismatched embedding fingerprint, and stay silent when the reader has no
-    .fingerprint() at all -- e.g. pgvector, or any of the SimpleNamespace mocks
-    the rest of this file and TestConfigPathAnchoring above already rely on.
+    """HybridRetriever.__init__'s embedding-fingerprint guard.
+
+    Stays silent when the reader has no .fingerprint() at all -- e.g. pgvector,
+    or any of the SimpleNamespace mocks the rest of this file and
+    TestConfigPathAnchoring above already rely on. A MISMATCHED fingerprint is
+    always fatal (raises IndexNotFoundError), on any platform -- it is proof
+    the index doesn't match the current config. An ABSENT fingerprint is only
+    fatal when _mps_risk_present() says this machine could plausibly have
+    built that index on MPS; otherwise it warns and continues (PR #734's
+    Codex-review finding: the original warn-always design let an Apple Silicon
+    checkout silently compare CPU query vectors against MPS-built corpus
+    vectors -- exactly the bug this PR exists to fix).
     """
 
     @staticmethod
@@ -344,19 +352,44 @@ class TestEmbeddingFingerprintCheck:
             HybridRetriever(str(config_path))
         audit.assert_not_called()
 
-    def test_absent_fingerprint_warns_and_audits(self, tmp_path):
+    def test_absent_fingerprint_warns_and_audits_when_no_mps_risk(self, tmp_path):
         config_path = self._build_repo(
             tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
         )
         reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: None)
         with (
             patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search._mps_risk_present", return_value=False),
             patch("retrieval.hybrid_search.audit_log") as audit,
+        ):
+            HybridRetriever(str(config_path))  # must not raise
+        event = audit.call_args.args[0]
+        assert event["event"] == "embedding_fingerprint_absent"
+        assert event["expected"] == {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+        assert event["fatal"] is False
+
+    def test_absent_fingerprint_raises_when_mps_available(self, tmp_path):
+        # The Codex-review finding this closes: on an Apple Silicon checkout
+        # with a pre-fix index (no fingerprint at all), the corpus vectors may
+        # have been computed on MPS while queries are now computed on CPU --
+        # continuing to serve it silently reproduces the exact cross-device
+        # ranking bug this PR fixes. MPS-available is the only signal that
+        # distinguishes "provably CPU-built" (Linux/Windows) from "possibly
+        # MPS-built" (Apple Silicon) for a fingerprint-less index.
+        config_path = self._build_repo(
+            tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
+        )
+        reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: None)
+        with (
+            patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            patch("retrieval.hybrid_search._mps_risk_present", return_value=True),
+            patch("retrieval.hybrid_search.audit_log") as audit,
+            pytest.raises(IndexNotFoundError, match="no embedding fingerprint"),
         ):
             HybridRetriever(str(config_path))
         event = audit.call_args.args[0]
         assert event["event"] == "embedding_fingerprint_absent"
-        assert event["expected"] == {"model": "all-MiniLM-L6-v2", "dim": "384", "device": "cpu"}
+        assert event["fatal"] is True
 
     def test_matching_fingerprint_is_silent(self, tmp_path):
         config_path = self._build_repo(
@@ -371,7 +404,7 @@ class TestEmbeddingFingerprintCheck:
             HybridRetriever(str(config_path))
         audit.assert_not_called()
 
-    def test_mismatched_fingerprint_warns_and_audits(self, tmp_path):
+    def test_mismatched_fingerprint_always_raises(self, tmp_path):
         config_path = self._build_repo(
             tmp_path, models_cfg={"embeddings": {"model": "all-MiniLM-L6-v2", "dim": 384}}
         )
@@ -381,7 +414,13 @@ class TestEmbeddingFingerprintCheck:
         reader = SimpleNamespace(close=lambda: None, fingerprint=lambda: stale)
         with (
             patch("retrieval.hybrid_search.get_vector_reader", return_value=reader),
+            # A mismatch is unconditionally fatal -- proves this path does not
+            # depend on _mps_risk_present() the way the absent-fingerprint path
+            # does; forcing it False here would make a regression to
+            # "mismatch also needs MPS risk" pass by accident.
+            patch("retrieval.hybrid_search._mps_risk_present", return_value=False),
             patch("retrieval.hybrid_search.audit_log") as audit,
+            pytest.raises(IndexNotFoundError, match="fingerprint mismatch"),
         ):
             HybridRetriever(str(config_path))
         event = audit.call_args.args[0]
@@ -399,6 +438,32 @@ class TestEmbeddingFingerprintCheck:
         with patch("retrieval.hybrid_search.get_vector_reader", return_value=reader):
             # Must not raise -- the fingerprint check is observability only.
             HybridRetriever(str(config_path))
+
+
+class TestMpsRiskPresent:
+    """_mps_risk_present() itself -- the signal that scopes the absent-
+    fingerprint guard to Apple Silicon only (see TestEmbeddingFingerprintCheck)."""
+
+    def test_true_when_mps_available(self):
+        import torch
+
+        with patch.object(torch.backends.mps, "is_available", return_value=True):
+            assert _mps_risk_present() is True
+
+    def test_false_when_mps_unavailable(self):
+        import torch
+
+        with patch.object(torch.backends.mps, "is_available", return_value=False):
+            assert _mps_risk_present() is False
+
+    def test_false_on_probe_failure(self):
+        import torch
+
+        def _boom():
+            raise RuntimeError("backend probe exploded")
+
+        with patch.object(torch.backends.mps, "is_available", side_effect=_boom):
+            assert _mps_risk_present() is False
 
 
 class TestTokenizationForBM25:
