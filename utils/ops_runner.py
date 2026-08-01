@@ -72,7 +72,61 @@ _AGENTIC_JSON_ACTIONS = frozenset({
 # _TIMEOUT_SEC (120s, sized for status/context/skill ops) would routinely
 # kill a legitimate run partway through. status/decide stay on the short
 # default: a read and a git commit are both fast.
-_REAL_REPO_RUN_TIMEOUT_SEC = 900
+#
+# Derived per request rather than a flat constant. It WAS a flat 900s, sized
+# when the planner's own timeout was a hardcoded 30s (30 x 3 iterations = 90s,
+# which fit trivially). Making that timeout configurable and defaulting it to
+# 600s -- necessary for any real local model -- inverted the relationship:
+# 600 x the CLI's own default of 3 iterations is 1800s, twice this ceiling,
+# and the harness route accepts up to 10 iterations and 8 check profiles.
+#
+# The failure this prevents is worse than a slow request. subprocess.run's
+# timeout SIGKILLs the child, so agentic.cli never reaches its own
+# `tools.close()`: an over-budget run leaks the whole repo clone on disk AND
+# leaves a permanently `running` record that no later decide/status call can
+# resolve. Verified by emulated rehearsal (2026-08-02) -- the handled paths
+# clean up correctly, this one does not, because it cannot.
+_REAL_REPO_RUN_FALLBACK_PLANNER_SEC = 600  # mirrors agentic.config.DEFAULT_PLANNER_TIMEOUT_SEC
+_REAL_REPO_RUN_DEFAULT_ITERATIONS = 3  # mirrors agentic/cli.py's --max-iterations default
+_REAL_REPO_RUN_CHECK_SEC = 120  # mirrors agentic.executor.runner.DEFAULT_CHECK_TIMEOUT_SEC
+# Clone (gh_client.DEFAULT_CLONE_TIMEOUT_SEC=120) + context fetch (30) +
+# interpreter startup and bookkeeping, with room to spare.
+_REAL_REPO_RUN_OVERHEAD_SEC = 300
+# A ceiling on the ceiling. The per-request maximum (10 iterations x 8
+# profiles) computes to over three hours, and a synchronous HTTP request held
+# open that long is its own failure mode -- an operator watching a dead
+# console cannot tell it from a hang. Capping means a genuinely enormous
+# request fails with a legible AGENTIC_TIMEOUT instead, which is the more
+# honest outcome. Raise it deliberately if a real workload ever needs to.
+_REAL_REPO_RUN_MAX_TIMEOUT_SEC = 3600
+
+
+def _real_repo_run_timeout_sec(max_iterations: int | None, check_count: int) -> int:
+    """Wall-clock budget for one ``real-repo-run``, sized to what it asked for.
+
+    Mirrors :func:`_sync_timeout_sec`'s shape -- read the authoritative value
+    from config, fall back safely when it is missing or unusable, add overhead
+    -- but is per-call rather than per-action, because this action's cost
+    scales with two request fields (``max_iterations`` and how many check
+    profiles were selected) rather than being fixed by config alone.
+    """
+    try:
+        cfg = _get_config(str(_CONFIG_PATH))
+        deep = ((cfg.get("agentic") or {}).get("deepagent_github") or {})
+        planner_sec = int(deep.get("planner_timeout_sec", _REAL_REPO_RUN_FALLBACK_PLANNER_SEC))
+    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+        planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
+    if planner_sec <= 0:
+        planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
+    iterations = max_iterations if max_iterations and max_iterations > 0 else _REAL_REPO_RUN_DEFAULT_ITERATIONS
+    # A rejected iteration pays for both a planner call and a full verification
+    # sweep, so both scale with the iteration count.
+    budget = (
+        iterations * planner_sec
+        + iterations * max(1, check_count) * _REAL_REPO_RUN_CHECK_SEC
+        + _REAL_REPO_RUN_OVERHEAD_SEC
+    )
+    return min(budget, _REAL_REPO_RUN_MAX_TIMEOUT_SEC)
 
 # fsconnect read-only CLI subcommands exposed via /ops/fsconnect.
 _FSCONNECT_ACTIONS = frozenset({"status", "test", "list", "read", "stat", "grep", "glob"})
@@ -424,7 +478,11 @@ def run_agentic_op(
         # Only real-repo-run needs a non-default timeout (a model + verification
         # loop routinely outlasts _TIMEOUT_SEC); every other action keeps the
         # original bare _run(argv) call so its own default budget is unchanged.
-        proc = _run(argv, timeout_sec=_REAL_REPO_RUN_TIMEOUT_SEC) if action == "real-repo-run" else _run(argv)
+        proc = (
+            _run(argv, timeout_sec=_real_repo_run_timeout_sec(max_iterations, len(checks or ())))
+            if action == "real-repo-run"
+            else _run(argv)
+        )
         ok, label = _AGENTIC_LABELS.get(proc.returncode, (False, "unknown"))
         parsed = _maybe_json(proc.stdout) if (ok and action in _AGENTIC_JSON_ACTIONS) else None
         return OpsResult("agentic", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
