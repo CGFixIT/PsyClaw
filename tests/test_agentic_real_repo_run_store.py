@@ -12,7 +12,9 @@ from agentic.real_repo_run_store import (
     RealRepoRunRecord,
     load_run,
     new_run_id,
+    require_approved_for_push,
     require_pending_decision,
+    require_pushed_for_publish,
     save_run,
 )
 from utils.errors import AgenticError
@@ -143,3 +145,50 @@ def test_require_pending_decision_rejects_still_running():
 def test_record_to_dict_is_json_serializable(tmp_path: Path):
     record = _record(status=PENDING_DECISION)
     json.dumps(record.to_dict())  # must not raise
+
+
+# --- the two escalation guards ----------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["running", PENDING_DECISION, "rejected", "exhausted", "failed"])
+def test_push_requires_an_approved_run(status):
+    """A run that was never approved has no commit to push."""
+    with pytest.raises(AgenticError, match="not approved"):
+        require_approved_for_push(_record(status=status))
+
+
+def test_push_refuses_a_second_push():
+    """A re-push is a git no-op that would report success while doing nothing."""
+    with pytest.raises(AgenticError, match="already pushed"):
+        require_approved_for_push(_record(status="approved", pushed=True))
+
+
+def test_push_accepts_an_approved_unpushed_run():
+    require_approved_for_push(_record(status="approved"))  # must not raise
+
+
+@pytest.mark.parametrize("status", ["running", PENDING_DECISION, "rejected", "exhausted", "failed"])
+def test_publish_requires_an_approved_run(status):
+    with pytest.raises(AgenticError, match="not approved"):
+        require_pushed_for_publish(_record(status=status, pushed=True))
+
+
+def test_publish_requires_the_branch_to_be_on_origin_first():
+    """`gh pr create --head` names a branch GitHub must already be able to see."""
+    with pytest.raises(AgenticError, match="has not been pushed"):
+        require_pushed_for_publish(_record(status="approved", pushed=False))
+
+
+def test_publish_refuses_a_second_pull_request():
+    """The duplicate execute_write's no-retry rule exists to prevent.
+
+    Had ZERO coverage: deleting this branch left the whole suite green, and it
+    is the only thing standing between an operator's natural retry and a
+    second gh pr create on the same branch.
+    """
+    with pytest.raises(AgenticError, match="already has a pull request"):
+        require_pushed_for_publish(_record(status="approved", pushed=True, pr_url="https://x/pull/1"))
+
+
+def test_publish_accepts_an_approved_pushed_run_with_no_pr():
+    require_pushed_for_publish(_record(status="approved", pushed=True))  # must not raise
