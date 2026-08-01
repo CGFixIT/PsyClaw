@@ -174,6 +174,67 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: macOS install-script smoke test (layout + shim + profile integration)
+        if: runner.os == 'macOS'
+        # Exercises macos/install-cyclaw.sh's and uninstall-cyclaw.sh's own shell
+        # logic -- the one part of the macOS/Linux harness port with no CI coverage
+        # at all (confirmed: no workflow file anywhere references install-cyclaw.sh
+        # or uninstall-cyclaw.sh). Placed here, before "Setup Python 3.12", because
+        # install-cyclaw.sh is self-contained -- it clones its own repo copy and
+        # builds its own venv -- so it has zero dependency on anything below and
+        # testing it first keeps it isolated from the rest of this job's Python
+        # setup. --skip-python-deps keeps it fast (venv/pip correctness is already
+        # covered by "Install deps (macOS)" below); the PATH/profile rc-file edits
+        # are deliberately NOT skipped, since exercising them is the point.
+        #
+        # HOME is overridden to a throwaway dir for the whole step so this can never
+        # touch the real runner home or any later step -- required even though
+        # nothing downstream today sources a shell rc file, because
+        # install-cyclaw.sh's detect_rc_file()/`touch "$RC_FILE"` runs
+        # UNCONDITIONALLY, before the --no-path-edit/--no-profile-edit checks (which
+        # this test doesn't pass anyway, since it needs those code paths to run).
+        #
+        # continue-on-error matches this repo's own convention for a new/unproven
+        # smoke path (verify-skills, below) -- the authoritative gate for this OS
+        # leg stays "Run tests + coverage".
+        continue-on-error: true
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/cyclaw-smoke-home
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+          echo "[smoke] isolated HOME=$HOME"
+          fail() { echo "[smoke] FAIL: $1" >&2; exit 1; }
+
+          # --repo-path points the installer at THIS PR's own checkout instead of
+          # cloning origin/main -- without it the smoke test would silently
+          # validate main forever, never the branch under test.
+          bash macos/install-cyclaw.sh --repo-path "$GITHUB_WORKSPACE" --skip-python-deps < /dev/null
+
+          [ -d "$HOME/.CyClaw" ] || fail "home directory not created"
+          # NOT "repo" -- that dir is only created on the clone path; --repo-path
+          # points REPO_DIR straight at the external checkout instead (verified
+          # against the script's own home-layout loop).
+          for d in bin sessions skills tools memory; do
+            [ -d "$HOME/.CyClaw/$d" ] || fail "missing \$HOME/.CyClaw/$d"
+          done
+          [ -x "$HOME/.CyClaw/bin/cyclaw" ] || fail "cyclaw shim missing or not executable"
+          grep -qF "$GITHUB_WORKSPACE" "$HOME/.CyClaw/bin/cyclaw" \
+            || fail "shim does not reference the checked-out repo (--repo-path not honored)"
+
+          RC_FILE="$HOME/.zshrc"   # macos-latest's default $SHELL is zsh
+          [ -f "$RC_FILE" ] || fail "rc file not created"
+          grep -qF "# >>> cyclaw harness path >>>" "$RC_FILE" || fail "PATH block missing from rc file"
+          grep -qF "# >>> cyclaw harness >>>" "$RC_FILE" || fail "cyclaw() function block missing from rc file"
+          echo "[smoke] install-cyclaw.sh: layout + shim + profile integration OK"
+
+          bash macos/uninstall-cyclaw.sh < /dev/null
+          grep -qF "# >>> cyclaw harness path >>>" "$RC_FILE" && fail "PATH block survived uninstall"
+          grep -qF "# >>> cyclaw harness >>>" "$RC_FILE" && fail "cyclaw() block survived uninstall"
+          [ -d "$HOME/.CyClaw" ] || fail "uninstall must keep ~/.CyClaw by default (no --remove-home passed)"
+          echo "[smoke] uninstall-cyclaw.sh: profile blocks removed, data kept OK"
+
       - name: Setup Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
