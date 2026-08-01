@@ -508,7 +508,15 @@ agentic:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
-    model: ""
+    model: "qwen3.6:27b"
+    # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
+    # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
+    # (600) above: this package is never imported by graph.py/gate.py (I6), so it
+    # cannot reuse that value, and this loop's own prompt is comparably large (up
+    # to ~24k chars of declared files + GitHub context + prior-iteration feedback).
+    # Was hardcoded at 30s with no override before this key existed -- a hard,
+    # unrecoverable, first-iteration failure for any real local-model completion.
+    planner_timeout_sec: 600
     allow_deepagents_dependency: false           # extras must be installed explicitly
     # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
     # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
