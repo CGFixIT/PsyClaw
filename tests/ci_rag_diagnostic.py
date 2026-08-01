@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """Temporary cross-platform diagnostic for the macos-latest RAG smoke gap.
 
-PR #734's macos-latest leg fails tests/ci_rag_smoke.py on 2 of 4 queries
-(scores land below the 0.028 min_score gate) while the identical commit
-passes on ubuntu-latest. Read-only: reuses the same HybridRetriever the
-smoke test does, just prints every score component (semantic, keyword, RRF
-contributions) for the top 5 hits instead of asserting on the top 1, plus the
-torch/numpy BLAS backend info, so the two CI runs' outputs can be diffed to
-find exactly where the platforms' floating-point results diverge.
+Round 1 (confirmed): on macOS, cyclaw_overview.md wins the BM25/keyword leg
+for 2 of 4 ci_rag_smoke.py queries but doesn't place in the top-5 semantic
+leg at all (an unrelated doc does instead) -- a real floating-point
+difference between torch's Accelerate-backed macOS build and its MKL-backed
+Linux build (Apple Silicon has no MKL option). A single-leg RRF hit tops out
+at ~0.0167, below the 0.028 gate.
+
+Round 2 (this version): the open question is whether cyclaw_overview.md is
+just OUTSIDE today's top_k_semantic=5 window (in which case widening it is a
+real, principled fix -- more robust to this exact kind of cross-platform
+embedding variance) or whether its semantic similarity for these queries is
+so low that no reasonable top_k_semantic would catch it (in which case the
+fix has to be elsewhere, e.g. corpus content). Calls semantic_search(query,
+k=30) directly -- bypassing top_k_semantic -- and reports cyclaw_overview.md's
+actual rank and score wherever it falls.
 
 Not a test (no assertions, exit code always 0) and not meant to stay in the
 repo -- delete once the root cause is found and either the fix or the
@@ -20,7 +28,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy  # noqa: E402
 import torch  # noqa: E402
 import yaml  # noqa: E402
 
@@ -32,36 +39,43 @@ QUERIES = [
     "What fusion method does CyClaw use to blend semantic and keyword results?",
     "How does CyClaw deploy and run local LLM inference offline?",
 ]
+WIDE_K = 30
 
 
 def main() -> int:
-    print("=== RAG cross-platform diagnostic ===")
-    print(f"platform.platform(): {platform.platform()}")
-    print(f"platform.machine():  {platform.machine()}")
-    print(f"torch.__version__:   {torch.__version__}")
-    print(f"torch backend info:\n{torch.__config__.show()}")
-    print(f"numpy.__version__:   {numpy.__version__}")
-    numpy.show_config()
+    print("=== RAG cross-platform diagnostic (round 2: semantic-window depth) ===")
+    print(f"platform.machine(): {platform.machine()}  torch: {torch.__version__}")
 
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     min_score = float(cfg["retrieval"]["min_score"])
-    print(f"\nConfigured min_score gate: {min_score}")
+    configured_top_k = int(cfg["retrieval"]["top_k_semantic"])
+    print(f"Configured min_score gate: {min_score}  top_k_semantic: {configured_top_k}")
 
     build_index()
     retriever = HybridRetriever()
 
     for query in QUERIES:
         print(f"\n--- Query: {query} ---")
+        wide_hits = retriever.semantic_search(query, k=WIDE_K)
+        print(f"  Widened semantic_search(k={WIDE_K}) returned {len(wide_hits)} candidates:")
+        found_overview = False
+        for rank, hit in enumerate(wide_hits):
+            marker = ""
+            if "cyclaw_overview" in hit.source:
+                marker = "  <-- cyclaw_overview.md"
+                found_overview = True
+            in_window = "IN current top_k_semantic window" if rank < configured_top_k else "OUTSIDE current window"
+            print(f"    rank={rank} ({in_window}) score={hit.score!r} source={hit.source}{marker}")
+        if not found_overview:
+            print(f"  cyclaw_overview.md did NOT appear in the top {WIDE_K} semantic candidates at all.")
+
+        print("\n  Full hybrid_search() top 5 (for reference):")
         results = retriever.hybrid_search(query)
         for rank, r in enumerate(results[:5], start=1):
             print(
-                f"  #{rank} source={r.source} mode={r.retrieval_mode}\n"
-                f"      rrf_score={r.rrf_score!r} score={r.score!r}\n"
-                f"      semantic_score={r.semantic_score!r} semantic_rank={r.semantic_rank!r} "
-                f"rrf_semantic_contrib={r.rrf_semantic_contrib!r}\n"
-                f"      keyword_score={r.keyword_score!r} keyword_rank={r.keyword_rank!r} "
-                f"rrf_keyword_contrib={r.rrf_keyword_contrib!r}"
+                f"    #{rank} source={r.source} mode={r.retrieval_mode} "
+                f"rrf_score={r.rrf_score!r} semantic_rank={r.semantic_rank!r} keyword_rank={r.keyword_rank!r}"
             )
 
     return 0
