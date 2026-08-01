@@ -114,7 +114,7 @@ def test_personality_error_message_names_field():
 
 def _valid_timeouts() -> dict:
     """The shipped config.yaml defaults -- must always validate."""
-    return {"api": {"graph_timeout_sec": 330}, "models": {"local_llm": {"timeout_sec": 300}}}
+    return {"api": {"graph_timeout_sec": 660}, "models": {"local_llm": {"timeout_sec": 600}}}
 
 
 def test_shipped_timeout_defaults_pass():
@@ -123,24 +123,27 @@ def test_shipped_timeout_defaults_pass():
 
 def test_llm_timeout_equal_to_graph_timeout_rejected():
     cfg = _valid_timeouts()
-    cfg["models"]["local_llm"]["timeout_sec"] = 330
+    # Must track _valid_timeouts()'s graph_timeout_sec exactly -- these cases are
+    # defined RELATIVE to it, so a bare retune of the fixture alone would silently
+    # turn "equal" and "greater" into "less than" and stop testing the rejection.
+    cfg["models"]["local_llm"]["timeout_sec"] = 660
     with pytest.raises(ConfigError):
         validate_boot_timeout_config(cfg)
 
 
 def test_llm_timeout_greater_than_graph_timeout_rejected():
     cfg = _valid_timeouts()
-    cfg["models"]["local_llm"]["timeout_sec"] = 400
+    cfg["models"]["local_llm"]["timeout_sec"] = 700
     with pytest.raises(ConfigError):
         validate_boot_timeout_config(cfg)
 
 
 def test_timeout_error_message_names_both_values():
     cfg = _valid_timeouts()
-    cfg["models"]["local_llm"]["timeout_sec"] = 330
+    cfg["models"]["local_llm"]["timeout_sec"] = 660
     with pytest.raises(ConfigError) as exc:
         validate_boot_timeout_config(cfg)
-    assert "330" in str(exc.value)
+    assert "660" in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -149,7 +152,7 @@ def test_timeout_error_message_names_both_values():
         lambda cfg: cfg.pop("api"),
         lambda cfg: cfg.pop("models"),
         lambda cfg: cfg["api"].__setitem__("graph_timeout_sec", None),
-        lambda cfg: cfg["models"]["local_llm"].__setitem__("timeout_sec", "300"),
+        lambda cfg: cfg["models"]["local_llm"].__setitem__("timeout_sec", "600"),
         lambda cfg: cfg["models"].__setitem__("local_llm", None),
         lambda cfg: cfg.__setitem__("api", "not-a-mapping"),
     ],

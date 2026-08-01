@@ -47,11 +47,22 @@ models:
     # With max_context_tokens=4000 + max_tokens=3000 that is 7000 + headroom -> fits.
     max_tokens: 3000
     temperature: 0.3
-    # Hard per-attempt HTTP timeout. A bounded context (retrieval.max_context_tokens)
-    # means local inference finishes in seconds-to-low-minutes; 300s is a backstop
-    # so a genuine Ollama stall surfaces as an error in 5 min rather than 12.
-    # Raise it if you run very large models on slow CPU-only hardware.
-    timeout_sec: 300  # Per-call LLM timeout. Must be < api.graph_timeout_sec (330) to avoid orphaned graph invocations.
+    # Hard per-attempt HTTP timeout, sized for the largest local model this repo
+    # is expected to host rather than for the 7B default above. Worked from the
+    # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
+    # weights, so single-stream decode is memory-bandwidth-bound at roughly
+    # (bandwidth / weight-bytes) x realized-fraction. On 300-310 GB/s Apple
+    # Silicon that lands in the high single digits of tok/s, so the max_tokens
+    # budget below (3000) can take ~6-8 min of decode alone, plus prompt prefill
+    # and a one-time cold model load. 600s clears that with real headroom.
+    # Deliberately NOT higher: gate.py's asyncio.wait_for cancels the await, not
+    # the worker thread, so after a 504 an orphaned thread stays blocked in httpx
+    # for the remainder of this timeout (and the retry block below can multiply
+    # that on transport/5xx failures, which ARE retried -- see the note there).
+    # That orphan occupies a slot in the shared default ThreadPoolExecutor that
+    # rate limiting, audit writes, and /health also use, so an over-long value
+    # degrades the whole server, not just the one stalled query.
+    timeout_sec: 600  # Per-call LLM timeout. Must be < api.graph_timeout_sec (660) to avoid orphaned graph invocations.
     retry:                  # bounded exp-backoff on transport/5xx/429; 4xx AND read-timeouts fail fast
       max_retries: 2        # extra attempts beyond the first (applies to transport/5xx/429 only)
       backoff_base_sec: 0.5 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (0.5s, 1s)
@@ -346,9 +357,14 @@ api:
   # graph invoke is wrapped in asyncio.wait_for; on exceed the endpoint returns
   # HTTP 504 instead of holding the request open, so a stalled Ollama /
   # retrieval can't hang a client indefinitely. Keep this >= the inner
-  # models.local_llm.timeout_sec (300) so normal slow inference is not cut off;
-  # the margin covers retrieval + soul-DB time.
-  graph_timeout_sec: 330  # Must exceed models.local_llm.timeout_sec (300) — the 30s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
+  # models.local_llm.timeout_sec (600) so normal slow inference is not cut off;
+  # the margin covers retrieval + soul-DB time. The 60s margin (double the 30s
+  # documented floor) exists because the FIRST query after boot also pays a cold
+  # sentence-transformers load inside this same deadline, before the LLM call --
+  # embeddings are pinned to CPU on purpose (retrieval/embeddings.py EMBED_DEVICE).
+  # Keeping the inner LLM timeout the one that fires first means the operator sees
+  # the diagnostic LLM error, not a generic 504.
+  graph_timeout_sec: 660  # Must exceed models.local_llm.timeout_sec (600) — the 60s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
   rate_limit:
     max_requests: 60       # per-IP request ceiling within the window
     window_seconds: 60     # sliding-window length in seconds

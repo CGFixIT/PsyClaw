@@ -54,7 +54,7 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
         │
         ▼
    gate.py  — TrustedHost check → rate limit (60/min per IP) → injection filter
-              → soul init → graph invoke (wrapped in 330s timeout)
+              → soul init → graph invoke (wrapped in 660s timeout)
         │
         ▼
    graph.py  (LangGraph 9-node state machine)
@@ -146,8 +146,8 @@ subsystems.
 | `127.0.0.1:8787` | `api.host`/`api.port` | loopback only, never a public interface |
 | `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Fused scores rarely exceed ~0.1 |
 | `60` | `retrieval.rrf_k` | RRF fusion constant |
-| `330` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (300) |
-| `300` / `3000` | `local_llm.timeout_sec` / `max_tokens` | |
+| `660` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (600) |
+| `600` / `3000` | `local_llm.timeout_sec` / `max_tokens` | sized for a dense ~27B local model, not the 7B default |
 | `8000` | `personality.soul_max_chars` | soul is capped |
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |
