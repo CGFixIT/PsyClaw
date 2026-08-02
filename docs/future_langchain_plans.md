@@ -20,7 +20,8 @@ path. Future LangChain-related work should stay split by trust boundary:
 
 The detailed governed GitHub coding and harness optimization plan lives at:
 
-- `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (canonical
+- `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (moved from
+  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`; canonical
   design plan, with per-phase implementation ledgers)
 
 Phases 0-5 are merged on `main`. Phases 6-9 were implemented in PR #515
@@ -28,9 +29,11 @@ Phases 0-5 are merged on `main`. Phases 6-9 were implemented in PR #515
 draft** (this doc previously said otherwise; corrected). The PR #515 review
 checklist, the recorded owner decisions (including Grok/Claude provider
 parity for the harness), the verified `deepagents` API reference, and the
-forward roadmap live in `docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md`
-(renamed from `docs/LG_Deep_Agentic_Harness_status_n_roadmap.md` — update any
-other links pointing at the old filename).
+forward roadmap live in `docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md`
+(moved from `docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md` on
+2026-08-02 as part of the `docs/work/` consolidation; before that it was
+renamed from `docs/LG_Deep_Agentic_Harness_status_n_roadmap.md` — update any
+other links pointing at either old filename).
 
 ## Status as of 2026-07-21
 
