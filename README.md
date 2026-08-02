@@ -29,11 +29,13 @@
 - [Filesystem & SQL Connectors](#filesystem--sql-connectors-v18)
 - [NeMo Guardrails](#nemo-guardrails-v18)
 - [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
-- [PowerShell Coding Harness](#powershell-coding-harness-v19)
+- [Coding Harness Console](#coding-harness-console-v19)
 - [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
 - [MCP Server](#mcp-server)
 - [Security Model](#security-model)
 - [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
+- [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) — retired design history,
+  superseded plans, and the open engineering backlog
 
 ---
 
@@ -327,8 +329,14 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 | Python | 3.12 | Primary supported runtime |
 | [Ollama](https://ollama.com/) | Any | Must be running on `localhost:11434` |
 | Model pulled in Ollama | — | `qwen2.5:7b` (default), `mistral:7b`, or any chat model |
+| Platform | — | Windows, Linux, or **macOS 14+ on Apple Silicon**. macOS needs a different torch step than the block below — see [`setup-guide.md`](setup-guide.md#macos-apple-silicon) |
 
 ### Install
+
+The block below is the **Windows/Linux** path. **On macOS, follow
+[`setup-guide.md`'s macOS section](setup-guide.md#macos-apple-silicon)
+instead** — the `+cpu` torch wheel it installs does not exist for macOS, and
+both manifests hardcode that pin, so this block fails twice on a Mac.
 
 ```bash
 git clone https://github.com/CGFixIT/CyClaw
@@ -337,6 +345,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 # 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
+#    macOS: use `pip install "torch==2.13.0"` — plain, no +cpu, no --index-url.
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
@@ -699,12 +708,18 @@ agentic:
 
 ---
 
-## PowerShell Coding Harness (v1.9)
+## Coding Harness Console (v1.9)
 
-A grok-build-style local coding console for Windows 10/11 and Server 2019–2022,
-shipped as the strictly out-of-band `harness/` package (merged 2026-07-22). Like
-`agentic/`, `sync/`, and `guardrails/`, it is never imported by `gate.py`,
-`graph.py`, or `mcp_hybrid_server.py` and never imports them (invariant I6).
+A grok-build-style local coding console, shipped as the strictly out-of-band
+`harness/` package (Windows merged 2026-07-22; macOS/Linux port merged
+2026-08-01). Like `agentic/`, `sync/`, and `guardrails/`, it is never imported
+by `gate.py`, `graph.py`, or `mcp_hybrid_server.py` and never imports them
+(invariant I6).
+
+`harness/` itself is pure Python with **no OS branch in its request-handling
+path** — same routes, same slash commands, same security posture everywhere.
+Only the install/launch glue is platform-coupled, which is why there are two
+sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 
 - **Launch:** `cyclaw-harness` (or `python -m harness.server`) serves a
   slash-command console at `http://127.0.0.1:8790` (`static/harness.html`);
@@ -712,6 +727,15 @@ shipped as the strictly out-of-band `harness/` package (merged 2026-07-22). Like
 - **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
   sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
   a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
+- **Install (macOS / Linux):** `bash ./macos/install-cyclaw.sh` sets up the
+  same `~/.CyClaw` layout, a venv, a `cyclaw` shim, and a PATH entry plus a
+  `cyclaw()` function in your rc file (`~/.zshrc` on zsh,
+  `~/.bash_profile`/`~/.bashrc` on bash, detected from `$SHELL`). Targets bash
+  (including macOS's stock 3.2) and zsh; BSD userland assumed, no Homebrew
+  dependency, no GNU-only flags. It branches on `uname -s` to install the
+  correct **plain** torch build on macOS — the one step a hand-install most
+  often gets wrong. Uninstall: `bash ./macos/uninstall-cyclaw.sh`
+  (add `--remove-home` to delete `~/.CyClaw` too).
 - **Chat:** talks to the local model through the OpenAI-compatible `/v1`
   endpoint from `config.yaml`'s `models.local_llm.base_url` (Ollama by
   default) — no keys, no login, offline. Every reply shows prompt/completion
@@ -726,7 +750,13 @@ shipped as the strictly out-of-band `harness/` package (merged 2026-07-22). Like
   enabled.
 
 Full setup, slash-command reference, home layout, and security posture:
-[`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md).
+[`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md) (Windows) and
+[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md) (macOS/Linux). The macOS doc
+covers only what genuinely differs — install glue, the torch build, git
+credential helpers (`git-credential-osxkeychain` rather than Windows
+Credential Manager), and the note that `pathsafe.ScopedRoots`' POSIX
+`openat`/`O_NOFOLLOW` containment is the *stronger* branch, so macOS is not on
+a weaker path than Windows here.
 
 ---
 
