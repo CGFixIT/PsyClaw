@@ -53,6 +53,26 @@ $RepoUrl = "https://github.com/CGFixIT/CyClaw.git"
 function Write-Step([string]$msg) { Write-Host ("[cyclaw] " + $msg) -ForegroundColor Cyan }
 function Write-Warn([string]$msg) { Write-Host ("[cyclaw] WARNING: " + $msg) -ForegroundColor Yellow }
 
+# The resolved repo path (the default %USERPROFILE%\.CyClaw\repo, or an
+# operator-supplied -RepoPath once resolved) gets interpolated, unescaped,
+# into $PROFILE.CurrentUserAllHosts via a here-string below, inside a
+# double-quoted `$env:CYCLAW_REPO = "..."` assignment. PowerShell
+# double-quoted strings (including here-strings) evaluate a literal $(...)
+# subexpression inline -- a documented language feature, not an edge case --
+# so a -RepoPath directory name containing $(...) or a backtick-escaped
+# expression is written to disk as inert text now but becomes LIVE code the
+# next time any PowerShell session sources that profile. A literal embedded
+# " would similarly break out of the quoted assignment. NTFS does not forbid
+# $, (, ), or ` in filenames (only reserved chars are < > : " / \ | ? *), so
+# this is a real, constructible primitive from an operator-controlled
+# -RepoPath, not a theoretical one. Reject outright rather than trying to
+# correctly escape at every write site.
+function Assert-SafeRepoPath([string]$path) {
+    if ($path -match '["`$]') {
+        throw "cyclaw: refusing a repo path containing shell metacharacters (`", ``, or `$): $path"
+    }
+}
+
 # -- 1. Home layout -----------------------------------------------------------
 $Home_ = Join-Path $env:USERPROFILE ".CyClaw"
 $Bin   = Join-Path $Home_ "bin"
@@ -82,6 +102,7 @@ else {
     Write-Step "repo already present at $Repo (pulling latest main)"
     & git -C $Repo pull --ff-only
 }
+Assert-SafeRepoPath $Repo
 
 # -- 3. Python + dependencies ---------------------------------------------------
 function Find-Python312 {
