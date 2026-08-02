@@ -20,7 +20,7 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
    - `user_confirmed_online == true`
 
 4. **Audit Convergence**  
-   All eight upstream paths must converge at `audit_logger` node before END. No shortcuts.
+   All nine upstream paths must converge at `audit_logger` node before END. No shortcuts.
 
 5. **Soul Governance**  
    Mutations to `data/personality/soul.md` require an explicit human `reason` string. Never autonomous modification.

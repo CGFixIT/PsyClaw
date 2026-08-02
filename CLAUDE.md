@@ -57,7 +57,7 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
               → soul init → graph invoke (wrapped in 660s timeout)
         │
         ▼
-   graph.py  (LangGraph 9-node state machine)
+   graph.py  (LangGraph 10-node state machine)
    retrieve → route_by_score
               ├─ score ≥ min_score → guardrail_input (offline input rail; opt-in,
               │                       pass-through when guardrails.enabled=false)
@@ -70,7 +70,11 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
                                      └─ declined / offline / no key → guardrail_input
                                             ├─ blocked → audit_logger
                                             └─ passed  → offline_best_effort
-              ↓ (all upstream nodes converge)
+              ↓ (all four answer nodes converge)
+              guardrail_output (offline output rail; opt-in, pass-through when
+                                 guardrails.enabled=false; grounding check applies
+                                 only to the local_llm answer, see Phase 4)
+              ↓
               audit_logger → END
         │
         ▼
@@ -110,7 +114,7 @@ subsystems.
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
-| `graph.py` | 9-node LangGraph topology; all security policy lives in the edges |
+| `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
 | `retrieval/embeddings.py` | Local embeddings, device hardcoded to CPU (`EMBED_DEVICE` — cross-platform determinism; see the constant's own comment for why); triple `lru_cache`; `embedding_fingerprint()` for index-staleness detection |
@@ -127,7 +131,7 @@ subsystems.
 | `utils/errors.py` | Typed exception hierarchy rooted at `RAGError` |
 | `utils/config_validation.py` | Boot-time config validation; fails fast |
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |
-| `utils/guardrail_bridge.py` | Inversion shim: builds the `guardrail_input` node's callable, or `None` when disabled; the only module through which `graph.py` reaches `guardrails/` (never a direct import) |
+| `utils/guardrail_bridge.py` | Inversion shim: builds the `guardrail_input` and `guardrail_output` nodes' callables, or `None` for either when disabled; the only module through which `graph.py` reaches `guardrails/` (never a direct import) |
 | `utils/auth.py` | Harness-only API-key auth: fail-closed on unset `CYCLAW_API_KEY`, `hmac.compare_digest` on UTF-8 bytes. `gate.py` keeps its own separate copy (see §4's mypy/CI trap) — never refactored onto this module |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
 | `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`) |
@@ -139,7 +143,7 @@ subsystems.
 | `agentic/real_repo_loop.py` | Plan → patch → verify → (human decides) → commit against a real jailed clone; the first live caller of `agentic/executor`. Wired to `agentic.cli`'s `real-repo-run`/`real-repo-run-status`/`real-repo-run-decide` and the harness's authenticated agent-run routes. Optional cloud planner (`ChatModelProposerClient`) behind `--provider`/`--confirm-online`. GitHub writes (push, PR) reachable via `real-repo-run-decide --push`/`--publish` (one-shot) or the standalone `real-repo-run-push`/`real-repo-run-publish` subcommands and their harness routes (each its own decision) — all still gated disarmed by default (`allow_git_write_tools`; `EXECUTION_ENABLED` hardcoded `False`) — see `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` |
 | `agentic/executor/` | Sandboxed verification: runs caller-declared checks (pytest/ruff/etc.) as argv-list subprocesses against a jailed worktree, scrubbed env, per-check timeout. Soft sandbox, not a kernel boundary — see `docs/THREAT_MODEL.md`'s executor amendments |
 | `agentic/deepagent_github/` | Two subsystems: the live one (`RepoWorkspaceTools`: clone/read/write_file/commit/push, jailed via `agentic/fsconnect/pathsafe.ScopedRoots`; `chat_client.py`/`model_adapter.py`, the cloud-provider planner `real_repo_loop.py` uses) and the **retired** one (`builder.py`'s DeepAgents subgraph — owner decision 2026-07-31, no further development planned, superseded by `real_repo_loop.py`; code/tests/CI kept, not deleted — see `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s retirement note). Both gated `false`/disarmed by default |
-| `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`, via `utils/guardrail_bridge.py` — still opt-in, still never imported directly by `gate.py`/`graph.py` |
+| `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`; Phase 4 adds an offline output (grounding) rail via `guardrail_output`, scoped to the `local_llm` answer only — both via `utils/guardrail_bridge.py`, still opt-in, still never imported directly by `gate.py`/`graph.py` |
 | `harness/` | Out-of-band coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home on Windows (`~/.CyClaw` on macOS/Linux), reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. Launched via `powershell/` (Windows) or `macos/` (macOS/Linux) — two OS-native script trees, not a shared abstraction, since the harness Python code itself carries no platform branch. See `docs/HARNESS_POWERSHELL.md` and `docs/HARNESS_MACOS.md` |
 
 ### Load-bearing numbers (all from `config.yaml`/`pyproject.toml` — do not invent)
@@ -175,7 +179,7 @@ statically; run it after any change to the core files.
 | I1 | **RAG-first** — `retrieve` is the unconditional entry; no LLM call precedes retrieval | `graph.py` `set_entry_point("retrieve")` | `test_graph` | add a node/edge that answers before `retrieve` runs |
 | I2 | **Topology = policy** — routing is graph edges only, never an LLM or ad-hoc `if` | `graph.py` `score_router`/`guardrail_router`/`user_gate_router` | `test_graph` | add a runtime branch that decides routing outside the three routers |
 | I3 | **Triple-gated external fallback** — a call to Grok or Claude needs `mode=="hybrid"` AND `<provider>.enabled` AND `user_confirmed_online`, all three, for whichever provider is selected (`online_provider`) | `gate.py` construction + `graph.py` `user_gate_router` | `test_graph`, `test_gate` | route to `grok_fallback`/`claude_fallback` without all three conditions for that provider |
-| I4 | **Audit convergence** — all eight upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
+| I4 | **Audit convergence** — all nine upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
 | I5 | **Soul governance** — soul mutation requires a human `reason` string; writes are atomic | `utils/personality.py` `apply_evolution` | `test_personality` | write `soul.md` without a non-empty `reason`, or bypass `PersonalityManager` |
 | I6 | **Module isolation** — `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`, and those never import the core three | import graph | `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core three to "reuse" something |
 

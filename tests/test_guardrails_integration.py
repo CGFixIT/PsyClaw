@@ -13,6 +13,7 @@ from guardrails.config import GuardrailsConfig
 from guardrails.integration import (
     NEMO_AVAILABLE,
     check_input,
+    check_output,
     guardrail_safety_node,
     reset_rails_singleton,
     safe_generate,
@@ -391,4 +392,72 @@ class TestCheckInput:
         cfg = GuardrailsConfig(enabled=True)
         m = _metrics()
         res = check_input("a completely benign local question", cfg=cfg, metrics=m)
+        assert res["blocked"] is False
+
+
+class TestCheckOutput:
+    """Phase 4: offline output (grounding) rail. See
+    docs/NeMo/phase4_implementation_plan.md Decision 1. check_output NEVER
+    generates -- it only scores an answer that already exists against the
+    context it was (supposedly) grounded in."""
+
+    def test_grounded_answer_is_not_blocked(self):
+        cfg = GuardrailsConfig(enabled=False)
+        m = _metrics()
+        res = check_output(
+            "Veeam uses chattr +i to make backups immutable.",
+            "Veeam uses chattr +i to make backups immutable and prevent deletion.",
+            cfg=cfg, metrics=m,
+        )
+        assert res == {"blocked": False, "message": "", "rails": []}
+        assert m.counters["generation_allowed"] == 1
+
+    def test_ungrounded_answer_is_blocked_with_configured_message(self):
+        cfg = GuardrailsConfig(enabled=False)
+        m = _metrics()
+        res = check_output(
+            "The moon is made of green cheese and orbits Jupiter.",
+            "Veeam uses chattr +i to make backups immutable.",
+            cfg=cfg, metrics=m,
+        )
+        assert res["blocked"] is True
+        assert res["message"] == cfg.block_message
+        assert res["rails"] == ["check_grounding"]
+        assert m.counters["blocked_generation"] == 1
+        assert m.counters["hallucination_flagged"] == 1
+
+    def test_blocked_records_hallucination_with_stage_output(self):
+        # record_blocked/record_allowed take stage="output" via **fields --
+        # verify the counters both events land in.
+        cfg = GuardrailsConfig(enabled=False)
+        m = _metrics()
+        check_output("completely unrelated hallucinated text", "some real context", cfg=cfg, metrics=m)
+        assert m.counters["blocked_generation"] == 1
+        assert m.rails_fired["check_grounding"] == 1
+
+    def test_allowed_records_stage_output(self):
+        cfg = GuardrailsConfig(enabled=False)
+        m = _metrics()
+        check_output("shared words shared words", "shared words shared words", cfg=cfg, metrics=m)
+        assert m.counters["generation_allowed"] == 1
+
+    def test_defaults_construct_cfg_and_metrics_when_omitted(self, tmp_path, monkeypatch):
+        # Must be usable standalone, mirroring check_input's own contract.
+        monkeypatch.setattr(
+            "guardrails.integration.load_guardrails_config",
+            lambda: GuardrailsConfig(enabled=False, metrics_path=str(tmp_path / "g.jsonl")),
+        )
+        res = check_output("hello world", "hello world context")
+        assert res == {"blocked": False, "message": "", "rails": []}
+
+    def test_never_calls_the_live_nemo_path(self, monkeypatch):
+        # Same non-generating guarantee as check_input: a graph node built on
+        # this must never trigger a second LLM call.
+        def _boom(cfg=None):
+            raise AssertionError("check_output must not build the live rails engine")
+
+        monkeypatch.setattr("guardrails.integration.get_cyclaw_guardrails", _boom)
+        cfg = GuardrailsConfig(enabled=True)
+        m = _metrics()
+        res = check_output("shared tokens here", "shared tokens here", cfg=cfg, metrics=m)
         assert res["blocked"] is False
