@@ -1,5 +1,10 @@
 # Archive and Roadmap
 
+> **Looking for what is still open?** See
+> [`/remaining_work.md`](../remaining_work.md) — the verified, actionable
+> backlog. This file holds the *history and rationale* behind those items;
+> that one holds the current state with file:line evidence.
+
 This file is the single home for retired design history, superseded plans, and
 scratch research that fed CyClaw's `agentic/` and `sync/` layers. It replaces
 17 files that were classified, during a 2026-08-01 documentation audit, as

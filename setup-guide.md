@@ -218,6 +218,7 @@ prefer the signed app on a machine you care about.
 ollama --version            # sanity check
 ollama serve                # only if you did NOT install the .app — see below
 ollama pull qwen2.5:7b      # the model config.yaml expects by default
+                            # running something bigger instead? see below
 
 # Ollama's own native API — confirms the daemon is up and lists pulled models:
 curl -s http://127.0.0.1:11434/api/tags
@@ -275,6 +276,42 @@ agree with each other — the CI lane (`.github/workflows/ci.yml:316-334`), the
 installer (`macos/install-cyclaw.sh:124-137`), and
 [`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). The by-hand steps in the
 macOS section above are those same commands.
+
+### Running a different (or much larger) local model
+
+`config.yaml` ships `models.local_llm.model: "qwen2.5:7b"`, and the setup steps
+pull exactly that. Nothing stops you running something larger — but two things
+must move together, or CyClaw hangs instead of failing loudly:
+
+1. **The tag must match what you actually pulled.** `config.yaml`'s `model:`
+   value is passed straight through to Ollama; a mismatch is an
+   `Ollama HTTP 404`. Tags are case-sensitive (`qwen2.5:7b`, not
+   `Qwen2.5-7B-Instruct`).
+2. **Ollama's context length must have headroom**, or generation stalls at
+   `0% processing` rather than erroring. The formula (from `config.yaml`'s own
+   comment) is:
+
+   ```
+   num_ctx  >=  retrieval.max_context_tokens + local_llm.max_tokens + ~1500
+   ```
+
+   At the shipped `4000 + 3000 + 1500`, that means **10,000–12,288**. Set it
+   server-wide *before* starting Ollama — `num_ctx` is not a CLI flag:
+
+   ```bash
+   export OLLAMA_CONTEXT_LENGTH=12288
+   ollama serve
+   ```
+
+This is the single most common "CyClaw hangs" cause, and it gets *more* likely
+on a bigger model, not less — a larger model does not raise `num_ctx` for you.
+Full detail, including the per-session `/set parameter num_ctx` alternative:
+[`OLLAMA_SETUP.md`](OLLAMA_SETUP.md).
+
+Note the shipped `local_llm.timeout_sec: 600` and `max_tokens: 3000` are
+already sized for a dense ~27B model rather than the 7B default (see
+`CLAUDE.md`'s load-bearing-numbers table) — so moving up in model size
+generally needs a `num_ctx` change, not a timeout change.
 
 ### Is the index really mandatory?
 

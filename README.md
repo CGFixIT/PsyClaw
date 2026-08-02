@@ -34,8 +34,9 @@
 - [MCP Server](#mcp-server)
 - [Security Model](#security-model)
 - [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
-- [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) — retired design history,
-  superseded plans, and the open engineering backlog
+- [Remaining Work](remaining_work.md) — the open, verified engineering backlog
+- [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) — retired design history and
+  superseded plans (the *why*; `remaining_work.md` is the *what's left*)
 
 ---
 
