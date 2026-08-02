@@ -10,10 +10,15 @@ delay and a specific condition for lifting it.
 
 ---
 
-## D1 — CI smoke test for `real-repo-run` (on hold, 2026-08-02)
+## D1 — CI smoke test for `real-repo-run` (shipped 2026-08-02)
 
-**Status:** drafted and verified locally, deliberately not committed to
-`.github/workflows/ci.yml`.
+**Status:** landed. `real-repo-run-smoke` in `.github/workflows/ci.yml`,
+backed by `tests/test_agentic_real_repo_run_smoke.py`. The design below is
+the as-shipped design; kept for context rather than deleted, per this
+document's own "record what exists, why it was on hold" convention.
+
+Confirmed clean against `actionlint` and `zizmor --offline --min-severity=high`
+before landing, per the trigger condition below.
 
 **What it is.** A `real-repo-run-smoke` job mirroring the existing
 `ollama-mock-smoke` pattern (real socket, mocked content, lightweight deps —
