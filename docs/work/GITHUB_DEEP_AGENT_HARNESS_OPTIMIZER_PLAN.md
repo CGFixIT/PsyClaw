@@ -673,7 +673,8 @@ Recommendation:
 
 Likely files changed:
 
-- `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
+- `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (this document; moved
+  from `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` on 2026-08-02)
 - optional `future_Langchain_plans.md`
 
 Tests required:
@@ -930,7 +931,7 @@ Remains disabled:
 
 Implemented:
 
-- `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`
+- `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`
 - security regression coverage for tool scope, injection, candidate files, and
   HITL decisions
 - `deepagents-harness` CI dependency and pip-audit gate

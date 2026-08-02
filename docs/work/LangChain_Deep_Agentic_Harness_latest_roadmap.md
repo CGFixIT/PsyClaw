@@ -16,13 +16,15 @@ context-handoff pipeline, and a compliance mapping for regulated customers
 
 Authority relationships (deliberate, to avoid drift):
 
-- `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` remains the
-  canonical **design plan** for the two harness features. This document does
-  not restate its design authority; it records **status, decisions, review
-  findings, and roadmap** on top of it.
-- `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` (added by draft PR #515)
-  becomes the authoritative **implemented-controls** description once #515
-  merges.
+- `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (moved from
+  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` on 2026-08-02)
+  remains the canonical **design plan** for the two harness features. This
+  document does not restate its design authority; it records **status,
+  decisions, review findings, and roadmap** on top of it.
+- `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` (moved from
+  `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` on 2026-08-02; added by
+  draft PR #515) becomes the authoritative **implemented-controls**
+  description once #515 merges.
 - `config.yaml` owns every tunable number cited here. Where a number appears
   below, it is sourced from `config.yaml`, `pyproject.toml`, or the named PR
   diff — never invented.
@@ -169,7 +171,7 @@ Based on the code audit of phases 0-5 (now hardened in this session's PRs
 
 | Phase | Status | Key Artifacts |
 |---|---|---|
-| **Phase 0** | Planning doc (the 1055-line blueprint you read) | `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` ✓ |
+| **Phase 0** | Planning doc (the 1055-line blueprint you read) | `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` ✓ |
 | **Phase 1** | Config + docs validated + tests green | `agentic/config.py` + `DeepAgentGitHubConfig` + `HarnessOptimizerConfig` ✓ |
 | **Phase 2** | Harness optimizer data models + workspace builder | `Experiment`, `Surface`, `Variant`, `RunReport`, `CandidateDecision`, `ProposerWorkspace` ✓ |
 | **Phase 3** | Mocked runner + acceptance gate (`decide_candidate()`) | `MockHarnessRunner`, `Scorecard`, scoring/governance modules ✓ |
@@ -186,7 +188,7 @@ Based on the code audit of phases 0-5 (now hardened in this session's PRs
 > `draft_plan()` returns a templated plan rather than raising
 > `NotImplementedError`. Read the two dated notes that follow the table, not the
 > table itself. Implemented-controls record:
-> `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. Note also that phase 9 is a
+> `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`. Note also that phase 9 is a
 > pre-executor *security review checklist*, not a shipped capability — "phases
 > 0-9 are on main" means the documents and regression tests are, not that nine
 > phases of runtime capability are.
@@ -221,7 +223,7 @@ numbered phases.
 **[Update 2026-07-20].** The "not yet merged" clause above is itself now
 stale: **PR #515 merged 2026-07-13**, so phases 6-9 are on `main`
 (`tests/test_agentic_harness_phase679.py`, `deepagents-harness` CI job;
-implementation record: `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`). The
+implementation record: `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`). The
 correction paragraph is preserved for provenance; the merge-state section
 further below already reflects this.
 
@@ -457,7 +459,7 @@ What it implements, per phase:
   pins), the real-package builder test asserting `StateBackend` has no
   `execute` and is not a sandbox backend, approve/reject/timeout interrupt
   regression tests (timeout → reject), and
-  `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` documenting all of it.
+  `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` documenting all of it.
   Dependency pins in both `pyproject.toml` (new `agentic-deepagents` extra)
   and `constraints.txt`: `deepagents==0.6.12`, `langchain==1.3.11`,
   `langchain-openai==1.3.3`. Zero `config.yaml` key changes (comment-only:
@@ -1135,7 +1137,7 @@ it was written under.
   (deleted `refuse_phase5_write_policy`, renamed
   `deepagent_github/governance.py`'s helper to `validate_write_policy()`)
   and the one-hunk doc conflict in
-  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (resolved by
+  `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (resolved by
   taking main's verified model-swap text). Verified before push: 93/93
   relevant agentic tests, `test_agentic_deepagent_optional` skips cleanly
   without the optional dependency, invariant-guard 27/27, ruff clean.
@@ -1151,7 +1153,7 @@ it was written under.
   ordered removed appear in it. Redundancy check: most of its content
   (the `builder.py` toothless-agent bug, the unused `SurfaceType`/
   `GovernanceFinding` findings, the Qwen/Kimi pricing research) was already
-  absorbed into `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
+  absorbed into `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`
   and this document during the 2026-07-11 consolidation. Three items were
   genuinely unique and are folded in below; the source file was not merged.
 

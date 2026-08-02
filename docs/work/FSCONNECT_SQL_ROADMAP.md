@@ -25,6 +25,17 @@
 ## Filesystem connector — next phases
 
 ### FS Phase 2 — production write-enablement
+
+**[Status correction 2026-08-02]: this phase has shipped, verified against
+current code — treat the bullets below as a historical description of the
+plan, not open forward work.** `FsWriter.fs_delete` (`agentic/fsconnect/writer.py:550`)
+implements the trash-vs-purge distinction behind the destructive gate;
+`agentic/fsconnect/trash.py` and `agentic/fsconnect/quota.py` both exist; write
+rate-limiting reuses `utils.ratelimit.RateLimiter` per-root and globally
+(`writer.py:373-388`). Both docs this phase called for also exist:
+`docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md` and
+`docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`.
+
 - Operator playbook + security review checklist for flipping `writes_enabled: true`.
 - `fs_delete` behind the destructive gate (`--confirm` + `--reason`), with a
   trash/soft-delete option instead of unlink.
@@ -39,17 +50,32 @@
   area and requires human release before they enter the corpus.
 
 ### FS Phase 4 — Windows hardening (already designed, needs a Windows CI lane)
-- Wire `GetFinalPathNameByHandle` re-assertion on the open handle into the Windows
-  branch of `pathsafe` and add a Windows CI runner so the `# pragma: no cover`
-  branches are exercised (junction/UNC/8.3/ADS fixtures).
+- ~~Wire `GetFinalPathNameByHandle` re-assertion on the open handle into the
+  Windows branch of `pathsafe`~~ **[Status correction 2026-08-02]: already
+  wired for reads**, per `agentic/fsconnect/pathsafe.py`'s own module
+  docstring (line 27: "File opens additionally re-assert containment via
+  `GetFinalPathNameByHandle` on the open handle when available"). Windows
+  writes remain hard-refused unconditionally pending equivalent write-path
+  hardening (`tests/test_fsconnect_writer.py::test_windows_writes_hard_refused`).
+- Add a Windows CI runner so the `# pragma: no cover` branches are exercised
+  (junction/UNC/8.3/ADS fixtures) — still open: `tests/test_fsconnect_pathsafe.py`
+  is skipped entirely on Windows itself (`pytestmark = pytest.mark.skipif(os.name
+  == "nt", ...)`), so no adversarial junction/UNC/8.3/ADS fixture module runs
+  on the Windows CI leg that does exist.
 - Per-root NTFS ACL inspection surfaced in `fs_stat` (advisory least-privilege check).
 
 ### Audit hardening (connector-wide, high buyer value)
 - **Hash-chain / append-only tamper-evident audit** — the regulated-buyer RFP
   disqualifier. Chain each `audit.jsonl` record to the prior record's hash and store
-  the head where deployer access cannot rewrite history.
-- Add a plain-language **"rule applied"** field to each audited action (the human-
-  readable reason an op was allowed/denied) for auditor reconstructability.
+  the head where deployer access cannot rewrite history. Still open — no
+  chain/tamper/prev-hash construct exists anywhere in `utils/logger.py` or
+  `agentic/fsconnect/` as of 2026-08-02.
+- ~~Add a plain-language **"rule applied"** field to each audited action (the
+  human-readable reason an op was allowed/denied) for auditor
+  reconstructability.~~ **[Status correction 2026-08-02]: shipped, ahead of
+  this doc.** Every audited fsconnect event already carries a `rule_applied`
+  field (`agentic/fsconnect/writer.py:28` states it as a design invariant;
+  concrete emission sites throughout `writer.py`, e.g. lines 139, 403, 478).
 
 ---
 
@@ -61,8 +87,13 @@
 - Schema-aware **NL→SQL** helper (operator-driven, content-agnostic): a generated
   query still passes `assert_read_only_sql` before execution — generation never
   bypasses the guard.
-- More dialects (MySQL/MariaDB, Oracle, SQLite); per-query cost caps and EXPLAIN
-  pre-checks; row-level PII redaction reusing `policy.privacy`.
+- More dialects (MySQL/MariaDB, Oracle, SQLite); per-query cost caps; row-level
+  PII redaction reusing `policy.privacy`.
+- EXPLAIN pre-checks — **[Status correction 2026-08-02]: partially shipped.**
+  `SqlConnectClient.explain` (`agentic/sqlconnect/client.py:521`) already runs a
+  plain (non-`ANALYZE`) `EXPLAIN` before execution for Postgres, but explicitly
+  refuses the `mssql` driver (`client.py:531-533`). MSSQL EXPLAIN support
+  remains open.
 
 ---
 

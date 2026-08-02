@@ -413,7 +413,7 @@ not attacker-chosen at the command level.
   its own docstring. **Retired (owner decision, 2026-07-31): no further
   development is planned on this path** — `run_real_repo_loop` is the one
   live real-repo coding pipeline going forward; see
-  `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s own
+  `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s own
   retirement note.
 
 ### Sixth amendment — the write path is now network-reachable (still disarmed)

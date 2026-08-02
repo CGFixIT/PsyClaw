@@ -73,11 +73,23 @@ behind the same `agentic.enabled` + mode flags), accepting the extra SCA surface
 
 ## Prioritized roadmap (low-risk first)
 1. **(done)** Docs + read-only skeleton + governed registry + stubbed writer + tests.
-2. Wire `context` output into a session-side helper (human reads PR context). No exec.
+2. Wire `context` output into a session-side helper (human reads PR context). No
+   exec. **[Status note 2026-08-02]:** not done as a standalone step, but
+   subsumed by later work — `agentic/context.py`'s structured PR/issue/repo
+   bundles are now consumed by `harness/` and the real-repo pipeline's planning
+   stage instead of a separate helper.
 3. Optional: enable real writes — implement `execute_write` behind the same gate
    with its own tests; only then consider flipping `EXECUTION_ENABLED`. **Requires
-   explicit human sign-off and a security review.**
-4. Optional: surface registry skills to the operator tooling (still read-only at runtime).
+   explicit human sign-off and a security review.** **[Status correction
+   2026-08-02]: shipped, but still disarmed.** This became a materially larger
+   effort than this stub envisioned: a plan → patch → verify → human-decides →
+   commit loop (`agentic/real_repo_loop.py`) against a jailed real clone, backed
+   by a sandboxed verification layer (`agentic/executor/`). `EXECUTION_ENABLED`
+   remains hardcoded `False` in `agentic/writer.py` — consistent with this
+   plan's own precondition that arming needed explicit sign-off first.
+4. Optional: surface registry skills to the operator tooling (still read-only at
+   runtime). Still open as a discrete deliverable as of 2026-08-02 — no
+   dedicated doc or module claims this was done as specified.
 
 ## Risks & mitigations
 - *Scope creep into writes* → executor unimplemented; flag-flip is insufficient.

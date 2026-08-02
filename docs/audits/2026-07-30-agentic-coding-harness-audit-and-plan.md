@@ -257,7 +257,8 @@ repo phase numbers.
 
 Fixes drift found during this audit so later PRs are not planned against stale text.
 
-- `docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md`: the config skeleton at
+- `docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md` (moved from
+  `docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md` on 2026-08-02): the config skeleton at
   `:719-737` still says `provider: "lmstudio"` / `http://localhost:1234/v1` /
   `grok-4.3`; main is `"ollama"` / `http://127.0.0.1:11434/v1`, and `CLAUDE.md`
   names `grok-4.5`. Add a dated correction (the doc's own convention, `:67-71`) —
@@ -325,7 +326,7 @@ still parse after the header argument is added — this is the fragile one),
 ### P3 — Grok/Claude provider parity (closes G4)
 
 Implements the 2026-07-11 owner-approved design at
-`docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md:686-911`, corrected for the
+`docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md:686-911`, corrected for the
 Ollama migration.
 
 - **Config** (`config.yaml` + `agentic/config.py:115-123`): add
@@ -483,7 +484,7 @@ and needs an explicit decision recorded for each new route.
 ### P10 — Push + draft-PR enablement (closes G5) — own phase-9 security review
 
 Last, and gated on the checklist the repo already wrote for itself
-(`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md:67-82`).
+(`docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md:67-82`).
 
 - Implement `execute_write` in `agentic/writer.py:171-185` for the `pr_create`
   path only. The argv is already composed and correct

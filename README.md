@@ -786,9 +786,9 @@ scoring/acceptance gate, the lazy `deepagent_github` builder seam) are covered b
 Phases 6-9 (real Deep Agents subagent wiring, a fixture-based GitHub coding
 evaluator, and governed propose/apply with human-confirmed acceptance) landed in
 PR #515 (merged 2026-07-13), are covered by `tests/test_agentic_harness_phase679.py`,
-and are documented in `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` — phase 9 is
+and are documented in `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` — phase 9 is
 a security gate, not authorization to add an executor. Full plan and phase ledger:
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
 
 > **Superseded 2026-08-01.** Phase 9's security gate was subsequently satisfied and
 > P10 landed, so "not authorization to add an executor" no longer describes the

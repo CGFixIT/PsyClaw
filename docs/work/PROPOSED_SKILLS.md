@@ -26,8 +26,10 @@ invariants — **RAG-first retrieval**, **LangGraph topology as security policy*
 - **Topology-as-policy:** every graph path terminates through the audit node; no
   edge bypasses the user-confirmation gate before an online (Grok) call; the
   sanitizer runs on every inbound query path (HTTP *and* MCP).
-- **Offline-first:** no new unconditional outbound network call; LM Studio /
-  Grok remain optional and gated.
+- **Offline-first:** no new unconditional outbound network call; the local LLM
+  (originally LM Studio, now served by Ollama — `config.yaml`'s
+  `models.local_llm`, corrected 2026-08-02) stays loopback-only, and Grok/Claude
+  remain optional and gated.
 - **RAG-first:** no path answers from the LLM without first attempting retrieval.
 
 **Why a skill:** these are exactly the properties that generic test/lint loops
