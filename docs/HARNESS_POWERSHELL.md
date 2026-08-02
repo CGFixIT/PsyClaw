@@ -46,6 +46,14 @@ Uninstall (keeps data by default):
 .\powershell\Uninstall-CyClaw.ps1 -RemoveHome # also delete ~/.CyClaw (prompts)
 ```
 
+`powershell\Invoke-CyClaw.ps1` (the `cyclaw` shim's launcher) falls back to
+a system `python` on `PATH` when `%USERPROFILE%\.CyClaw\venv\Scripts\python.exe`
+is absent (e.g. after `Install-CyClaw.ps1 -SkipPythonDeps`) — it only throws
+if neither the venv nor a system Python is found. If the harness behaves
+unexpectedly (wrong dependency versions, missing packages), check which
+interpreter actually ran: a system Python without CyClaw's pinned deps will
+silently answer `python -m harness.server` in place of the venv's.
+
 ## Home layout (`%USERPROFILE%\.CyClaw`)
 
 | Path | Contents |

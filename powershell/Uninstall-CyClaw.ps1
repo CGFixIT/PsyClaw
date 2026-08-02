@@ -35,7 +35,7 @@ if (Test-Path $PROFILE.CurrentUserAllHosts) {
 
 # -- PATH entry -------------------------------------------------------------------
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath) {
+if ($UserPath -and (($UserPath -split ";") -contains $Bin)) {
     $entries = $UserPath -split ";" | Where-Object { $_ -ne $Bin -and $_ -ne "" }
     [Environment]::SetEnvironmentVariable("Path", ($entries -join ";"), "User")
     Write-Host "[cyclaw] removed $Bin from the user PATH"
