@@ -34,6 +34,7 @@ This module never imports gate.py, graph.py, or mcp_hybrid_server.py.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from collections.abc import Sequence
@@ -423,6 +424,138 @@ def _real_repo_runs_dir(cfg: AgenticConfig) -> Path:
     return Path(cfg.deepagent_github.workspace_root) / "runs"
 
 
+def _resolve_cloud_provider_gates(cfg: AgenticConfig, args: argparse.Namespace, app_cfg: dict) -> int | None:
+    """Assert cloud gates 3-6 for a provider-driven command. None => allowed.
+
+    Extracted verbatim from ``cmd_real_repo_run`` rather than reimplemented so
+    ``real-repo-run-plan`` cannot drift into a weaker chain than the command it
+    feeds. Gates 1 and 2 (``agentic.enabled``, ``deepagent_github.enabled``)
+    stay at each caller, because their refusal messages differ.
+    """
+    from agentic.deepagent_github.model_adapter import cloud_key_available
+
+    provider = args.provider
+    if cfg.deepagent_github.cloud_provider(provider) is None:
+        _err(f"cloud provider {provider!r} is not enabled (gates 3/4)")
+        return EXIT_ENV
+    if not cloud_key_available(provider):
+        _err(f"cloud provider {provider!r} has no API key set (gate 5)")
+        return EXIT_ENV
+    if not args.confirm_online:
+        _err(f"--confirm-online is required to drive the loop with {provider!r} (gate 6)")
+        return EXIT_REFUSED
+    audit_log({"event": "agentic_deepagent_cloud_confirmed", "provider": provider}, cfg=app_cfg)
+    return None
+
+
+def cmd_real_repo_run_plan(args: argparse.Namespace) -> int:
+    """Ask a model for an implementation plan. Prints it. Changes nothing.
+
+    First half of the two-stage split: a capable (typically cloud) model
+    reasons about the approach ONCE, a human reads it, and a cheaper local
+    model implements it across however many iterations it takes. Paying
+    frontier prices per TASK instead of per failed ITERATION is the entire
+    point.
+
+    Deliberately makes no clone, writes no run record, and touches no git. It
+    fetches context, calls one model, and writes text to stdout or ``--out``.
+    That is what makes the human gate real rather than advisory: there is no
+    path from this command's output into ``real-repo-run`` except an operator
+    reading the plan and passing it forward with ``--plan-file``. A flag on a
+    single command could be set once and forgotten; a file a human must hand
+    over cannot. It also means the operator can EDIT the plan before it is
+    used, which binary approve/reject would not allow.
+
+    ``--provider`` is optional here for the same reason it is on
+    ``real-repo-run``: an operator with a capable enough local model may want
+    the plan from it too, and forcing cloud egress to get a plan would be a
+    worse default than letting them choose.
+    """
+    cfg = _load(args)
+    if cfg is None:
+        return EXIT_ENV
+    if not getattr(cfg, "enabled", False):
+        return _disabled_noop()
+    if not cfg.deepagent_github.enabled:
+        return _deepagent_github_disabled_noop()
+
+    app_cfg = _get_config(args.config)
+    provider: str | None = args.provider
+    if provider:
+        refusal = _resolve_cloud_provider_gates(cfg, args, app_cfg)
+        if refusal is not None:
+            return refusal
+    elif not cfg.deepagent_github.model.strip():
+        _err("agentic.deepagent_github.model must be configured to plan with the local model")
+        return EXIT_ENV
+
+    from agentic import context
+    from agentic.real_repo_loop import generate_plan
+
+    try:
+        if args.pr is not None:
+            bundle = context.fetch_pr_context(cfg, args.pr, app_cfg=app_cfg)
+        elif args.issue is not None:
+            bundle = context.fetch_issue_context(cfg, args.issue, app_cfg=app_cfg)
+        else:
+            bundle = context.fetch_repo_context(cfg, app_cfg=app_cfg)
+    except (GhNotInstalledError, GhVersionError) as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+
+    # Identical refusal to cmd_real_repo_run's: attacker-authored PR/issue text
+    # reaching a PLANNER is the same exposure as it reaching a coder, and a
+    # plan is arguably worse -- it is the thing a human is about to approve.
+    blocking = _blocking_context_findings(bundle)
+    if blocking:
+        _err(
+            f"refusing to plan: {len(blocking)} injection finding(s) in the fetched context "
+            f"({_describe_findings(blocking)})"
+        )
+        return EXIT_FAIL
+    context_text = _bundle_context_text(bundle)
+
+    if provider:
+        from agentic.deepagent_github.chat_client import ChatModelProposerClient
+        from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
+
+        client = ChatModelProposerClient(
+            settings=DeepAgentModelSettings.from_config(cfg.deepagent_github, cloud_provider=provider)
+        )
+    else:
+        from agentic.harness_optimizer.model_adapter import LocalProposerClient
+
+        client = LocalProposerClient(
+            base_url=cfg.deepagent_github.base_url,
+            model=cfg.deepagent_github.model,
+            timeout_sec=cfg.deepagent_github.planner_timeout_sec,
+        )
+    try:
+        plan = generate_plan(
+            client,
+            instruction=args.instruction,
+            context=context_text or "",
+            config_path=args.config,
+            cfg=app_cfg,
+        )
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
+    finally:
+        client.close()
+
+    if args.out:
+        Path(args.out).write_text(plan, encoding="utf-8")
+        _ok(f"plan written to {args.out}")
+        _ok("REVIEW AND EDIT IT, then pass it to real-repo-run with --plan-file")
+    else:
+        print(plan)
+    return EXIT_OK
+
+
 def cmd_real_repo_run(args: argparse.Namespace) -> int:
     """Start a real-repo coding run: clone, plan/patch/verify, but never commit.
 
@@ -558,6 +691,30 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         _err(exc.message)
         return EXIT_ENV
 
+    plan = ""
+    if getattr(args, "plan_file", None):
+        try:
+            plan = Path(args.plan_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            _err(f"could not read --plan-file: {exc}")
+            return EXIT_ENV
+        if not plan:
+            _err("--plan-file is empty; omit the flag to run without a plan")
+            return EXIT_ENV
+        # Scanned even though a human approved it. Approval means "this is the
+        # approach I want", not "I audited every character for injection
+        # shapes" -- and this text is about to steer the model that writes to a
+        # real repo. Same scanner, same refusal, as the fetched GitHub context.
+        from agentic.harness_optimizer.governance import inspect_candidate_text
+
+        findings = inspect_candidate_text(plan, app_cfg)
+        if findings:
+            _err(f"refusing to run: --plan-file content matches a governed injection pattern "
+                 f"({findings[0].code})")
+            return EXIT_FAIL
+
+    plan_sha256 = hashlib.sha256(plan.encode("utf-8")).hexdigest() if plan else None
+
     runs_dir = _real_repo_runs_dir(cfg)
     run_id = new_run_id()
 
@@ -582,7 +739,8 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     # ever writes.
     save_run(
         runs_dir,
-        RealRepoRunRecord(run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="running", provider=provider),
+        RealRepoRunRecord(run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="running",
+                          provider=provider, plan_sha256=plan_sha256),
     )
 
     if provider:
@@ -615,6 +773,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             protected_write_paths=cfg.deepagent_github.protected_write_paths,
             max_write_budget_bytes=cfg.deepagent_github.max_write_budget_bytes,
             scan_code_shape=cfg.deepagent_github.scan_code_shape,
+            plan=plan,
             config_path=args.config,
             cfg=app_cfg,
         )
@@ -628,7 +787,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         # that might reclaim it.
         save_run(runs_dir, RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="failed",
-            error=exc.message, provider=provider,
+            error=exc.message, provider=provider, plan_sha256=plan_sha256,
         ))
         tools.close()
         _err(exc.message)
@@ -636,7 +795,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     except AgenticError as exc:
         record = RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="failed", error=exc.message,
-            provider=provider,
+            provider=provider, plan_sha256=plan_sha256,
         )
         save_run(runs_dir, record)
         tools.close()
@@ -662,11 +821,12 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             # drop it from the approved commit. See RealRepoLoopResult.changed_files.
             changed_files=list(result.changed_files),
             iterations=len(result.iterations),
+            plan_sha256=plan_sha256,
         )
     else:
         record = RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="exhausted",
-            iterations=len(result.iterations), provider=provider,
+            iterations=len(result.iterations), provider=provider, plan_sha256=plan_sha256,
         )
         tools.close()  # nothing accepted -- nothing worth keeping the clone for
     save_run(runs_dir, record)
@@ -1253,6 +1413,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repo-relative path to show the planner before it proposes changes (repeatable). "
              "Declare every existing file an edit task needs -- the planner cannot browse the clone.",
     )
+    p_run.add_argument(
+        "--plan-file", metavar="PATH",
+        help="A human-reviewed implementation plan (see real-repo-run-plan) to steer the coder. "
+             "The plan reaches the model ONLY via this flag -- an operator must read it and pass "
+             "it forward, so an unapproved plan has no path into a run.",
+    )
     p_run.add_argument("--checks-file", required=True, help="Path to a JSON verification-checks manifest.")
     p_run.add_argument("--branch", required=True, help="Branch name to use on acceptance (claude/<topic>).")
     p_run.add_argument("--commit-message", required=True, help="Commit message to use on acceptance.")
@@ -1263,6 +1429,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--confirm-online", action="store_true",
                         help="Required with --provider: per-run confirmation before any cloud egress.")
     p_run.set_defaults(func=cmd_real_repo_run)
+
+    p_plan = sub.add_parser(
+        "real-repo-run-plan",
+        help="Ask a model for an implementation plan. Prints it; clones nothing, commits nothing.",
+    )
+    g_plan = p_plan.add_mutually_exclusive_group()
+    g_plan.add_argument("--pr", type=int, help="Fetch a PR's metadata + diff as task context.")
+    g_plan.add_argument("--issue", type=int, help="Fetch an issue as task context.")
+    g_plan.add_argument("--repo", action="store_true", help="Fetch a repo overview as task context (default).")
+    p_plan.add_argument("--instruction", required=True, help="What the plan should cover.")
+    p_plan.add_argument("--out", metavar="PATH", help="Write the plan here instead of stdout.")
+    p_plan.add_argument("--provider", choices=("grok", "claude"), help="Plan with a gated cloud provider.")
+    p_plan.add_argument("--confirm-online", action="store_true",
+                         help="Required with --provider: per-run confirmation before any cloud egress.")
+    p_plan.set_defaults(func=cmd_real_repo_run_plan)
 
     p_run_status = sub.add_parser("real-repo-run-status", help="Report a real-repo run's persisted status.")
     p_run_status.add_argument("--run-id", required=True)

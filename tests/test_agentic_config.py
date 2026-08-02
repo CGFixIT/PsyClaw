@@ -409,6 +409,15 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     `agentic/writer.py`'s `EXECUTION_ENABLED`, a hardcoded False no config can
     flip. See `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
 
+    `real-repo-run-plan` was added deliberately too: the first half of the
+    two-stage split, where a capable (typically cloud) model reasons about the
+    approach ONCE and a cheaper local model then implements it. It clones
+    nothing, writes no run record, and touches no git -- it fetches context,
+    calls one model, and prints text. It is a SEPARATE subcommand rather than a
+    flag on `real-repo-run` precisely so a human sits between the two: a plan
+    reaches the coding model only when an operator reads it and passes it
+    forward with `--plan-file`, which also lets them edit it first.
+
     If this needs updating again, that wiring was added on purpose. Update it
     deliberately, not by accident."""
     import argparse
@@ -419,7 +428,7 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     sub_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # noqa: SLF001
     assert set(sub_action.choices.keys()) == {
         "status", "context", "propose-skill", "apply-skill", "deepagent-plan",
-        "real-repo-run", "real-repo-run-status", "real-repo-run-decide",
+        "real-repo-run", "real-repo-run-plan", "real-repo-run-status", "real-repo-run-decide",
         "real-repo-run-push", "real-repo-run-publish",
         "real-repo-run-discard", "test",
     }
