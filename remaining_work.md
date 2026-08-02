@@ -90,6 +90,11 @@ which paths it covers and why.
 
 - **Risk tier:** High (`graph.py` edges), and larger than #1 or #3.
 - **Source:** `docs/NeMo/phase3_implementation_plan.md:176`, `:261`.
+- **Design (2026-08-02, not yet approved):** `docs/NeMo/phase4_implementation_plan.md`
+  resolves the design trap above — grounding-only, `local_llm` path only in its
+  first cut, with the `check_soul_leak` half of `output_rails` deliberately left
+  unbuilt pending a false-positive sweep against real model output. No code
+  written; still needs owner sign-off before implementation.
 
 ### 3. NeMo Phase 2 — input rails do not cover the user-gate branch
 
