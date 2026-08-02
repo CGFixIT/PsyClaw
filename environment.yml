@@ -62,6 +62,24 @@ dependencies:
   # conda-forge currently carries 1.42.1 and 1.43.0 (checked 2026-07-29).
   - opentelemetry-exporter-otlp-proto-grpc>=1.42
   - sentence-transformers=5.6.0
+  # huggingface_hub is imported directly by retrieval/embeddings.py (not just an
+  # implicit sentence-transformers transitive) and is now pinned explicitly on
+  # the pip path too (pyproject.toml/constraints.txt). Safe to mirror here
+  # unconditionally, unlike the fastapi/starlette pair below: sentence-transformers
+  # is pinned identically (5.6.0) on both the conda and pip paths, so its
+  # huggingface_hub floor doesn't diverge the way chromadb's conda build forces
+  # fastapi to. Confirmed present on conda-forge at this exact version, 2026-08-02.
+  - huggingface_hub=1.26.0
+  # starlette is gate.py/harness/server.py's other direct-import pin (see the
+  # same two files above) and is pinned starlette==1.3.1 on the pip path -- but
+  # NOT mirrored here. Third deliberate exception, same shape as the fastapi one
+  # above: starlette is fastapi's own core dependency, and this file's fastapi is
+  # already pinned to the older 0.115.9 that conda-forge's chromadb=1.5.9 build
+  # forces, not the pip path's 0.138.0. Forcing starlette=1.3.1 alongside
+  # fastapi=0.115.9 would very likely demand a version pairing fastapi 0.115.9
+  # never declares support for and break the conda solve -- unverified here (no
+  # mamba/conda available to test-solve). Left as fastapi's own implicit
+  # transitive until someone can confirm the compatible pin with a real solve.
   - numpy=1.26.4
   - nltk=3.10.0
   # Test & Dev tooling — pinned to match pyproject.toml's test/dev extras

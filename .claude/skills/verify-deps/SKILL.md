@@ -129,13 +129,19 @@ Pure stdlib, no network, no install — same constraints as `dep-guard` and
 `extract_pins.py`, so it runs in a fresh clone before pip does. Exits 0 with
 warnings, 2 on a failure; `--strict` promotes warnings to a failure.
 
-**Known-and-accepted E3 warnings on a clean tree (2 as of 2026-08-02)** — a
-clean run reports exactly these; a third name is a new finding:
-
-| Module | Imported by | Status |
-|---|---|---|
-| `huggingface_hub` | `retrieval/embeddings.py` | Undeclared; survives as a hard transitive of `sentence-transformers`. Real but low-urgency — it breaks only if that parent drops it |
-| `starlette` | `gate.py`, `harness/server.py` | Same shape; hard transitive of `fastapi` |
+**A clean tree currently reports zero E3 warnings.** `huggingface_hub` and
+`starlette` were the first two findings this check ever surfaced
+(`retrieval/embeddings.py` and `gate.py`/`harness/server.py` import them
+directly; both survived only as hard transitives of `sentence-transformers`/
+`fastapi`) and have since been promoted to explicit pins in
+`pyproject.toml`/`constraints.txt`/`requirements.txt` — real resolved
+versions from a fresh-venv install, not guessed. `huggingface_hub` is also
+mirrored into `environment.yml`; `starlette` deliberately is not, because
+`environment.yml`'s `fastapi` is pinned older (`0.115.9`, forced by
+conda-forge's `chromadb` build — see the comment there) than the pip path's
+`0.138.0`, and forcing the pip-resolved `starlette==1.3.1` alongside it could
+easily demand a pairing `fastapi==0.115.9` was never built against. Any name
+this check reports going forward is a new finding, not a known one.
 
 `pyodbc` is a *third* undeclared import and is **intentional**, so it lives in
 `_IMPORT_ALLOWLIST` with its reason rather than being reported:

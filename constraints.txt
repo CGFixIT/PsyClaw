@@ -44,6 +44,11 @@ langgraph==1.2.6
 langchain-core==1.4.8
 chromadb==1.5.9  # CVE-2026-45829 (Critical pre-auth RCE; risk accepted ONLY for local/offline air-gapped PersistentClient embedded mode). See SECURITY.md + pip-audit.
 sentence-transformers==5.6.0
+# Direct imports (retrieval/embeddings.py; gate.py/harness/server.py), promoted
+# from implicit sentence-transformers/fastapi transitives to explicit pins --
+# see pyproject.toml [project.dependencies] for why.
+huggingface-hub==1.26.0
+starlette==1.3.1
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.0
