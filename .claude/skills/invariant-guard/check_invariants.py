@@ -40,14 +40,16 @@ OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness")
 # that gap by asserting exact equality against the full node/edge shape.
 EXPECTED_NODES = frozenset({
     "retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
-    "grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger",
+    "grok_fallback", "claude_fallback", "offline_best_effort", "guardrail_output",
+    "audit_logger",
 })
 EXPECTED_UNCONDITIONAL_EDGES = frozenset({
     ("retrieve", "route_by_score"),
-    ("local_llm", "audit_logger"),
-    ("grok_fallback", "audit_logger"),
-    ("claude_fallback", "audit_logger"),
-    ("offline_best_effort", "audit_logger"),
+    ("local_llm", "guardrail_output"),
+    ("grok_fallback", "guardrail_output"),
+    ("claude_fallback", "guardrail_output"),
+    ("offline_best_effort", "guardrail_output"),
+    ("guardrail_output", "audit_logger"),
     ("audit_logger", "END"),
 })
 # Conditional-edge sources and their router function names. Single source of
@@ -397,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
         # string "local_llm" score_router happens to return internally.
         adj.setdefault(src, set()).update(conditional_edge_targets(graph_tree, src, router))
     nodes = {"retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
-             "grok_fallback", "claude_fallback", "offline_best_effort"}
+             "grok_fallback", "claude_fallback", "offline_best_effort", "guardrail_output"}
 
     def reaches_audit(start: str, seen: set[str] | None = None) -> bool:
         seen = seen or set()
@@ -411,9 +413,9 @@ def main(argv: list[str] | None = None) -> int:
 
     stranded = sorted(n for n in nodes if not reaches_audit(n))
     if not stranded:
-        ok("all 8 upstream nodes reach audit_logger")
+        ok(f"all {len(nodes)} upstream nodes reach audit_logger")
     else:
-        fail("all 8 upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
+        fail(f"all {len(nodes)} upstream nodes reach audit_logger", f"stranded nodes: {stranded}")
     if any(src == "audit_logger" and dst == "END" for src, dst in edges):
         ok("audit_logger -> END")
     else:
