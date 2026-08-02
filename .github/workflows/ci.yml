@@ -255,6 +255,62 @@ jobs:
           [ -d "$HOME/.CyClaw" ] || fail "uninstall must keep ~/.CyClaw by default (no --remove-home passed)"
           echo "[smoke] uninstall-cyclaw.sh: profile blocks removed, data kept OK"
 
+      - name: Windows install-script adversarial -RepoPath smoke test
+        if: runner.os == 'Windows'
+        # Regression test for a confirmed command-injection finding
+        # (docs/audits/2026-08-02-cyclaw-sandbox-macos-harness-and-guardrails.md,
+        # finding 2 -- previously unverified, now confirmed via a local
+        # reproduction with a real pwsh runtime): powershell/Install-CyClaw.ps1
+        # writes the resolved -RepoPath into $PROFILE.CurrentUserAllHosts via a
+        # here-string, unescaped, inside a double-quoted `$env:CYCLAW_REPO =
+        # "..."` assignment. PowerShell double-quoted strings evaluate a
+        # literal $(...) subexpression inline, so a -RepoPath directory name
+        # containing $(...) becomes live code the next time any PowerShell
+        # session sources the generated profile. NTFS does not forbid $, (,
+        # ), or ` in filenames, so this is a real, constructible primitive.
+        # continue-on-error matches this repo's convention for a new/unproven
+        # smoke path (the macOS install-script smoke tests above, and
+        # verify-skills) -- the authoritative gate for this OS leg stays
+        # "Run tests + coverage".
+        continue-on-error: true
+        shell: pwsh
+        env:
+          USERPROFILE: ${{ runner.temp }}\cyclaw-smoke-home-adversarial
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+
+          # A real directory whose name is itself an injection payload -- the
+          # exact class this finding is about, not a synthetic string. Only
+          # harness\server.py needs to exist for Install-CyClaw.ps1's
+          # -RepoPath validation to pass.
+          $EvilDir = Join-Path "${{ runner.temp }}" 'evil$(New-Item -ItemType File -Path "${{ runner.temp }}\PWNED_VIA_INSTALLER" -Force)'
+          New-Item -ItemType Directory -Force -Path (Join-Path $EvilDir "harness") | Out-Null
+          Copy-Item "$env:GITHUB_WORKSPACE\harness\server.py" (Join-Path $EvilDir "harness\server.py")
+
+          $threw = $false
+          try {
+            & "$env:GITHUB_WORKSPACE\powershell\Install-CyClaw.ps1" -RepoPath $EvilDir -SkipPythonDeps
+          } catch {
+            $threw = $true
+            if ($_.Exception.Message -notmatch "refusing") {
+              Write-Host "[smoke-adversarial] FAIL: installer failed for an unexpected reason: $($_.Exception.Message)"
+              exit 1
+            }
+          }
+          if (-not $threw) {
+            Write-Host "[smoke-adversarial] FAIL: installer accepted a -RepoPath containing shell metacharacters (should have refused)"
+            exit 1
+          }
+          if (Test-Path "${{ runner.temp }}\PWNED_VIA_INSTALLER") {
+            Write-Host "[smoke-adversarial] FAIL: injected command actually ran"
+            exit 1
+          }
+          if (Test-Path (Join-Path $env:USERPROFILE ".CyClaw\bin\cyclaw.cmd")) {
+            Write-Host "[smoke-adversarial] FAIL: shim was written despite the rejected path"
+            exit 1
+          }
+          Write-Host "[smoke-adversarial] Install-CyClaw.ps1 correctly refused a shell-metacharacter repo path"
+
       - name: Setup Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
