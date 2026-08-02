@@ -98,7 +98,7 @@ dev-only tool). Add this step before any `pip install -r requirements.txt` call 
 - `.github/workflows/ci.yml`
 - `.github/workflows/pip-audit.yml` (before the audit step)
 - `.github/workflows/devskim.yml` (if it installs Python deps)
-- Developer setup instructions in `docs/SETUP.md`
+- Developer setup instructions in `docs/work/SETUP.md`
 
 ---
 
@@ -119,7 +119,7 @@ Python 3.12.3 in a clean venv:
 **Conclusion:** CyClaw `main` is fully functional under Python 3.12. The "degraded" health
 status is the expected baseline when LM Studio is not running and the ChromaDB index has
 not been built (`python -m retrieval.indexer`). This matches the documented startup sequence
-in `docs/SETUP.md`.
+in `docs/work/SETUP.md`.
 
 Prior verification (commit `9aa163a`, 2026-06-16) confirmed 90/90 unit tests passing
 under Python 3.12.3. See `tests/VERIFICATION_REPORT_3.12.md` for the full test matrix.

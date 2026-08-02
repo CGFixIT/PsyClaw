@@ -57,7 +57,7 @@ These are derived from CyClaw's README "five security invariants" + security mod
 5. **Soul Governance preserved.** `data/personality/**` is **excluded by default** from sync. A synced file can never overwrite `soul.md` or `cyclaw_soul.db` and thereby bypass the `apply_evolution()` injection scan behind `POST /soul/apply`. **This is the single most important path-safety rule.** Opt-in (`include_soul: true`) is loud and discouraged.
 6. **Loopback/no-listener posture preserved.** Sync adds no socket, no `Depends`, no route. `rclone` makes an *outbound* HTTPS call only; there is no inbound surface.
 7. **Zero-telemetry posture preserved.** `rclone` has no LangSmith/Chroma/OTel surface, but the subprocess must run with no remote-control (`--rc`), no usage reporting, and inherit CyClaw's clean env. (`gate.py`'s telemetry-kill block is request-path only; sync sets its own minimal clean env for the child.)
-8. **Minimal-deps posture preserved.** **Zero** new entries in `requirements.txt` / `constraints.txt` / `pyproject.toml` dependencies. `rclone` is an external binary installed out-of-band (just like LM Studio at `127.0.0.1:1234` already is).
+8. **Minimal-deps posture preserved.** **Zero** new entries in `requirements.txt` / `constraints.txt` / `pyproject.toml` dependencies. `rclone` is an external binary installed out-of-band, the same way the local LLM already is (this doc originally cited LM Studio at `127.0.0.1:1234`; the shipped local model is now served by Ollama at `http://127.0.0.1:11434/v1` — `config.yaml`'s `models.local_llm.base_url` — corrected 2026-08-02, no change to the underlying "external binary, zero new deps" argument).
 
 ---
 
@@ -340,7 +340,7 @@ Coverage targets (port PsyClaw's 25-test suite intent):
 
 - **`docs/SYNC_README.md`** — operator guide: install rclone (≥1.68.2), App-Folder OAuth via `rclone config`, edit the `sync:` block, `setup`/`test`/`sync --dry-run`/`schedule`, exit-code chain, troubleshooting table, and an explicit "why pull / why soul is excluded" security section.
 - **`README.md`** — one paragraph under the roadmap marking v1.4.0 "Dropbox corpus sync" delivered + link to `docs/SYNC_README.md`. (Additive; no security-claim changes.)
-- **`docs/SETUP.md`** — mention rclone as an optional external binary (like LM Studio).
+- **`docs/work/SETUP.md`** (moved from `docs/SETUP.md`) — mention rclone as an optional external binary (like LM Studio).
 
 ---
 

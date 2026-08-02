@@ -9,7 +9,8 @@ Canonical references:
   map, load-bearing config numbers, traps, conventions, escalation rules.
 - `.github/copilot-instructions.md` for Copilot and PR behavior.
 - `setup-guide.md` (repo root) for local setup details — Windows, macOS, and
-  Linux. `docs/SETUP.md` is only a redirect stub kept for old links.
+  Linux. `docs/work/SETUP.md` (moved from `docs/SETUP.md` on 2026-08-02) is
+  only a redirect stub kept for old links.
 - `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security assumptions.
 - `.codex/skills/fable-protocol/SKILL.md` for Codex session-start reasoning,
   verification discipline, findings-before-writes, security posture, and
