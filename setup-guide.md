@@ -248,25 +248,35 @@ uvicorn gate:app --host 127.0.0.1 --port 8787
 # 2) The coding-harness console — serves static/harness.html
 #    In a SECOND Terminal tab (this one blocks too):
 source .venv/bin/activate
-cyclaw-harness                  # identical: python -m harness.server
-#    → http://127.0.0.1:8790
+python -m harness.server        # → http://127.0.0.1:8790
 ```
 
-Two things about the harness command that differ from the gateway:
+Three things about the harness command that differ from the gateway:
 
-- **`uvicorn harness.server:app` works, but `cyclaw-harness` is the better
-  form.** The module exposes `app` lazily — it is built on first attribute
-  access, not at import, so importing `harness.server` never reads or creates
-  `~/.CyClaw`. The catch is that the uvicorn form skips the bind-address guard
-  in `main()`, so `--host 0.0.0.0` opens a public socket where
-  `cyclaw-harness` would have exited. `TrustedHostMiddleware` still rejects any
-  non-loopback `Host` header in both forms, so a bound socket is not an open
-  door — but `cyclaw-harness` keeps both layers, and it is what the docs and
-  scripts assume.
+- **Use `python -m harness.server`, not `cyclaw-harness`.** `cyclaw-harness` is
+  a `[project.scripts]` console script, and pip writes that shim into the venv
+  only when the CyClaw *project itself* is installed (`pip install -e .`). The
+  install above installs `requirements.txt`, which is a third-party pin list
+  with no self-install line — so after following this guide exactly,
+  `cyclaw-harness` is `command not found`. The `-m` form always works and is
+  what both shipped launchers use (`macos/invoke-cyclaw.sh:87`,
+  `powershell/Invoke-CyClaw.ps1:78`). If you want the short names, add
+  `pip install -e . -c constraints.txt` after step 3. The same applies to
+  `cyclaw-server`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`, and
+  `cyclaw-clear-cache` — every `python -m …` form in this guide is chosen
+  because it needs no self-install.
+- **`uvicorn harness.server:app` also works, but the `-m` form is safer.** The
+  module exposes `app` lazily — built on first attribute access, not at import,
+  so importing `harness.server` never reads or creates `~/.CyClaw`. The catch
+  is that the uvicorn form skips the bind-address guard in `main()`, so
+  `--host 0.0.0.0` opens a public socket that `python -m harness.server` would
+  have refused. `TrustedHostMiddleware` still rejects any non-loopback `Host`
+  header in both forms, so a bound socket is not an open door — but the `-m`
+  form keeps both layers.
 - **The port is 8790, and you change it with an env var, not a flag:**
 
   ```bash
-  CYCLAW_HARNESS_PORT=8795 cyclaw-harness
+  CYCLAW_HARNESS_PORT=8795 python -m harness.server
   ```
 
   Values outside 1024–65535 are rejected at startup. `CYCLAW_HARNESS_HOST`
@@ -413,9 +423,17 @@ curl -s -X POST http://127.0.0.1:8787/ops/sqlconnect \
   -H "$AUTH" -H 'Content-Type: application/json' -d '{"action":"status"}'
 ```
 
-`POST /soul/apply` is the one route that mutates state. It needs a non-empty
-`reason` string — that requirement is an architectural invariant, not a
-validation nicety, so there is no flag to skip it.
+**Four of these mutate state. Do not treat any of them as a probe.**
+
+| Route | What it changes |
+|---|---|
+| `POST /soul/apply` | rewrites `soul.md`, rotates the old copy to `.bak`, records a version row. Requires a non-empty `reason` — an architectural invariant, not a validation nicety, so there is no flag to skip it |
+| `POST /soul/restore` | **also rewrites `soul.md`**, from the `.bak`. It reaches the same atomic write path with a hardcoded reason and `scan=False`, so it skips the injection scan `/soul/apply` enforces. Firing it "just to see" silently replaces your live soul with stale backup content |
+| `POST /ops/sync` | with `action: "sync"` this is a **real rclone corpus transfer**. Only `"dry_run": true` makes it read-only; `action: "status"` is the safe probe |
+| `POST /ops/agentic` | with `action: "apply-skill"` this writes a skill file. `action: "status"` is the safe probe |
+
+Every other route above, and the `"status"` action on all four `/ops/*`
+endpoints, is read-only.
 
 ### Reading the status codes
 
