@@ -960,6 +960,18 @@ class TestGuardrailRouter:
     def test_explicit_false_routes_to_local_llm(self):
         assert guardrail_router({"guardrail_blocked": False}) == "local_llm"
 
+    def test_offline_arrival_routes_to_offline_best_effort(self):
+        # needs_user_confirm is True only on the low-score path, so it is the
+        # discriminator for "this query re-entered guardrail_input from
+        # user_gate" vs "it came straight from route_by_score".
+        assert guardrail_router({"needs_user_confirm": True}) == "offline_best_effort"
+
+    def test_block_wins_over_offline_arrival(self):
+        # A blocked query must never reach ANY LLM node, offline included.
+        assert guardrail_router(
+            {"needs_user_confirm": True, "guardrail_blocked": True}
+        ) == "audit_logger"
+
 
 class TestGuardrailInputGraphIntegration:
     """Full build_graph() wiring: default behavior is byte-identical to
@@ -992,6 +1004,40 @@ class TestGuardrailInputGraphIntegration:
         assert result["guardrail_blocked"] is True
         assert llm.last_prompt is None  # local_llm_node was never reached
         assert "audit_event" in result  # I4: still converges
+
+    def test_offline_best_effort_passes_through_the_input_rail(self, tmp_path):
+        # Regression for the gap closed 2026-08-02: the offline branch used to
+        # run straight from user_gate into offline_best_effort, so the rail
+        # only ever saw high-score queries.
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="should never be produced")
+        guard = lambda q: {"blocked": True, "message": "blocked by policy", "rails": ["check_injection"]}  # noqa: E731
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg, input_guard=guard)
+        result = graph.invoke({"query": "malicious payload", "user_confirmed_online": False})
+
+        assert result["answer_model"] == "guardrail-blocked"
+        assert result["guardrail_blocked"] is True
+        assert llm.last_prompt is None  # offline_best_effort_node never ran
+        assert "audit_event" in result  # I4: still converges
+
+    def test_offline_best_effort_still_answers_when_the_rail_passes(self, tmp_path):
+        # The rail must be a filter on the offline path, not a wall: a clean
+        # declined-escalation query still gets its local best-effort answer.
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Best I can do offline.")
+        seen = []
+        guard = lambda q: (seen.append(q), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg, input_guard=guard)
+        result = graph.invoke({"query": "what is RRF?", "user_confirmed_online": False})
+
+        assert result["answer_model"] == "offline-best-effort"
+        assert "Best I can do offline." in result["answer"]
+        assert seen == ["what is RRF?"]  # the rail actually inspected it
+        assert "audit_event" in result
 
     def test_metrics_write_failure_cannot_discard_block(self, tmp_path, monkeypatch):
         from guardrails.config import GuardrailsConfig
@@ -1039,10 +1085,15 @@ class TestGuardrailInputGraphIntegration:
         assert result["answer_model"] == "local"
         assert llm.last_prompt is not None
 
-    def test_low_score_path_never_invokes_the_guard(self, tmp_path):
-        # Decision 4: input rails apply only to the local_llm (high-score)
-        # branch in Phase 2 -- the low-score/user_gate branch is already
-        # sanitizer-screened and human-confirmed before any external call.
+    def test_low_score_offline_path_now_invokes_the_guard(self, tmp_path):
+        # SUPERSEDES test_low_score_path_never_invokes_the_guard (2026-08-02).
+        # Phase 2's Decision 4 scoped the input rail to the high-score branch
+        # on the reasoning that the low-score branch is "already
+        # sanitizer-screened and human-confirmed before any external call".
+        # True for the EXTERNAL legs -- but the offline leg makes a local LLM
+        # call with no external escalation, so that reasoning never covered
+        # it, and the rail's coverage ended up keyed on a retrieval score.
+        # It is now railed; the grok/claude legs still are not, deliberately.
         cfg = _make_cfg(tmp_path)
         retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
         llm = MockLocalLLM(response="Best effort from local model.")
@@ -1053,4 +1104,24 @@ class TestGuardrailInputGraphIntegration:
         result = graph.invoke({"query": "off topic", "user_confirmed_online": False})
 
         assert result["answer_model"] == "offline-best-effort"
+        assert calls == ["off topic"]
+
+    def test_external_fallback_leg_is_not_railed(self, tmp_path):
+        # The confirmed-escalation legs bypass the rail by design: their policy
+        # gate is the triple gate in user_gate_router. Pinned so a future
+        # path_map edit that quietly reroutes them through guardrail_input is a
+        # deliberate decision, not a silent one.
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="never used")
+        calls = []
+        guard = lambda q: (calls.append(q), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=MockGrokClient(response="from grok"),
+            cfg=cfg, input_guard=guard,
+        )
+        result = graph.invoke({"query": "off topic", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "grok"
         assert calls == []

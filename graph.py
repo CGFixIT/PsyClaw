@@ -5,7 +5,7 @@ Graph flow (matching CyClaw final diagram):
                               -> user_gate (low score)
                                   -> grok_fallback (confirmed + hybrid, provider=grok)
                                   -> claude_fallback (confirmed + hybrid, provider=claude)
-                                  -> offline_best_effort (denied or offline)
+                                  -> guardrail_input -> offline_best_effort (denied or offline)
   guardrail_input -> audit_logger (blocked by the offline input rail)
   ALL paths -> audit_logger -> END
 
@@ -19,6 +19,9 @@ CHANGES (Phase 2 NeMo Guardrails wiring, docs/NeMo/phase2_implementation_plan.md
   - New node guardrail_input between route_by_score and local_llm: a sync,
     offline-only input rail (injection markers + soul-mutation regex, no LLM).
   - New router guardrail_router: blocked -> audit_logger, else -> local_llm.
+    (Extended 2026-08-02: guardrail_input is now ALSO the offline branch's
+    entry, so the router's third target is offline_best_effort -- see the
+    guardrail_router docstring.)
   - build_graph() accepts optional input_guard (built by
     utils/guardrail_bridge.py); None (default) is a pure pass-through, so
     every existing caller is byte-identical to pre-Phase-2 behavior.
@@ -704,11 +707,28 @@ def score_router(state: GraphState) -> Literal["local_llm", "user_gate"]:
         return "user_gate"
     return "local_llm"
 
-def guardrail_router(state: GraphState) -> Literal["local_llm", "audit_logger"]:
-    """After guardrail_input: local_llm normally, or straight to audit_logger
-    when the input rail blocked the query (no LLM call for a blocked input)."""
+def guardrail_router(state: GraphState) -> Literal["local_llm", "offline_best_effort", "audit_logger"]:
+    """After guardrail_input: on to the LLM node, or straight to audit_logger
+    when the input rail blocked the query (no LLM call for a blocked input).
+
+    guardrail_input has TWO inbound edges, so the pass-through target depends on
+    which one the query arrived on:
+      - route_by_score (high score)      -> local_llm
+      - user_gate      (low score, offline/declined) -> offline_best_effort
+
+    ``needs_user_confirm`` is the discriminator, and it is reliable because
+    ``route_by_score_node`` sets it explicitly on BOTH branches (True only on
+    the low-score path) and ``user_gate_node`` leaves it untouched when the
+    query is confirmed. Before 2026-08-02 the offline branch ran straight from
+    user_gate into offline_best_effort, so a low-score or declined-escalation
+    injection query reached the local LLM un-railed while its high-score twin
+    was blocked -- the rail's coverage depended on a retrieval score, which is
+    not a security property.
+    """
     if state.get("guardrail_blocked"):
         return "audit_logger"
+    if state.get("needs_user_confirm"):
+        return "offline_best_effort"
     return "local_llm"
 
 def user_gate_router(
@@ -833,12 +853,15 @@ def build_graph(
         }
     )
 
-    # guardrail_input → local_llm | audit_logger (conditional on the rail's verdict)
+    # guardrail_input → local_llm | offline_best_effort | audit_logger
+    # (conditional on the rail's verdict, then on which inbound edge the query
+    # arrived by — see guardrail_router's docstring)
     graph.add_conditional_edges(
         "guardrail_input",
         guardrail_router,
         {
             "local_llm": "local_llm",
+            "offline_best_effort": "offline_best_effort",
             "audit_logger": "audit_logger"
         }
     )
@@ -846,20 +869,26 @@ def build_graph(
     # local_llm → audit_logger (always)
     graph.add_edge("local_llm", "audit_logger")
 
-    # user_gate → grok_fallback | offline_best_effort | audit_logger (conditional)
-    # KNOWN GAP: offline_best_effort bypasses guardrail_input — the offline
-    # input rail covers only the high-score route above. A low-score or
-    # declined-escalation injection-pattern query reaches the local LLM
-    # un-railed while a high-score twin is blocked. Closing this needs
-    # guardrail_router to learn the offline target — a maintainer design
-    # decision, flagged in the linked PR.
+    # user_gate → grok_fallback | claude_fallback | guardrail_input | audit_logger
+    # The offline branch is routed BACK THROUGH guardrail_input (2026-08-02,
+    # closing the gap that used to be documented here): the offline input rail
+    # previously covered only the high-score route, so an injection-pattern
+    # query that scored below min_score — or one whose escalation the operator
+    # declined — reached the local LLM un-railed while its high-score twin was
+    # blocked. user_gate_router still returns "offline_best_effort"; the
+    # path_map is what redirects it, so provider gating (I3) is untouched.
+    # guardrail_router then forwards to the real offline node, or to
+    # audit_logger if the rail blocked — so audit convergence (I4) holds on
+    # both legs. The external-provider legs deliberately do NOT pass through
+    # the rail: they are the operator-confirmed escalation path, and their
+    # policy gate is the triple gate in user_gate_router, not this rail.
     graph.add_conditional_edges(
         "user_gate",
         partial(user_gate_router, grok=grok, claude=claude),
         {
             "grok_fallback":        "grok_fallback",
             "claude_fallback":      "claude_fallback",
-            "offline_best_effort":  "offline_best_effort",
+            "offline_best_effort":  "guardrail_input",
             "audit_logger":         "audit_logger"
         }
     )
