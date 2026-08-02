@@ -39,6 +39,14 @@ bash ./macos/uninstall-cyclaw.sh                 # remove PATH/rc-function hooks
 bash ./macos/uninstall-cyclaw.sh --remove-home   # also delete ~/.CyClaw (prompts)
 ```
 
+`macos/invoke-cyclaw.sh` (the `cyclaw` shim's launcher) falls back to a
+system `python3`/`python` on `PATH` when `~/.CyClaw/venv/bin/python` is
+absent (e.g. after `install-cyclaw.sh --skip-python-deps`) — it only warns
+if neither the venv nor a system Python is found. If the harness behaves
+unexpectedly (wrong dependency versions, missing packages), check which
+interpreter actually ran: a system Python without CyClaw's pinned deps will
+silently answer `python -m harness.server` in place of the venv's.
+
 ## Home layout (`~/.CyClaw`)
 
 Identical to the Windows layout described in `docs/HARNESS_POWERSHELL.md`

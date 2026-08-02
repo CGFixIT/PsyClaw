@@ -25,7 +25,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int]$Port = 8790,
+    [int]$Port = $(if ($env:CYCLAW_HARNESS_PORT) { [int]$env:CYCLAW_HARNESS_PORT } else { 8790 }),
     [switch]$NoBrowser,
     [string]$Repo = ""
 )
