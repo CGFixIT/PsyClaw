@@ -125,3 +125,20 @@ def test_repo_config_yaml_block_is_valid():
     assert gc.enabled is False  # ships disabled by default
     assert gc.nemo_config_present is True
     reset_config_cache()
+
+
+@pytest.mark.parametrize("field_name", ["input_rails", "output_rails", "topical_rails", "soul_topics"])
+def test_bare_string_rail_list_raises(tmp_path, field_name):
+    # A bare string instead of a one-item list (e.g. `input_rails: check_injection`)
+    # must fail fast at config load, not silently iterate as individual characters.
+    path = _write_config(tmp_path, {field_name: "check_injection"})
+    with pytest.raises(GuardrailsConfigError):
+        load_guardrails_config(path)
+    reset_config_cache()
+
+
+def test_non_string_item_in_rail_list_raises(tmp_path):
+    path = _write_config(tmp_path, {"input_rails": ["check_injection", 1]})
+    with pytest.raises(GuardrailsConfigError):
+        load_guardrails_config(path)
+    reset_config_cache()

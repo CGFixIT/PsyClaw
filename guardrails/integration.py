@@ -143,9 +143,9 @@ def _offline_checks(query: str, cfg: GuardrailsConfig) -> tuple[bool, list[str]]
     (always ~1.0) and its result was discarded by the caller -- dead, misleading work.
     """
     triggered: list[str] = []
-    if scan_injection(query):
+    if "check_injection" in cfg.input_rails and scan_injection(query):
         triggered.append("check_injection")
-    if detect_soul_mutation_intent(query):
+    if "check_soul_mutation" in cfg.input_rails and detect_soul_mutation_intent(query):
         triggered.append("check_soul_mutation")
     blocked = bool(triggered)
     return blocked, triggered
@@ -213,7 +213,9 @@ def check_output(
         metrics = GuardrailMetrics(cfg.metrics_path)
 
     score = grounding_score(answer, context)
-    if not is_possible_hallucination(answer, context, cfg.hallucination_threshold):
+    if "check_grounding" not in cfg.output_rails or not is_possible_hallucination(
+        answer, context, cfg.hallucination_threshold
+    ):
         metrics.record_allowed(stage="output", score=score, query=query)
         return {"blocked": False, "message": "", "rails": []}
 
@@ -333,7 +335,9 @@ async def safe_generate(
     # flag) and 0.0 when there is content but no supporting context, so the
     # unconditional call is well-defined for every input.
     score = grounding_score(response, context)
-    out_blocked = is_possible_hallucination(response, context, cfg.hallucination_threshold)
+    out_blocked = "check_grounding" in cfg.output_rails and is_possible_hallucination(
+        response, context, cfg.hallucination_threshold
+    )
     if out_blocked:
         metrics.record_hallucination(score=score or 0.0, threshold=cfg.hallucination_threshold, query=prompt)
         metrics.record_blocked(stage="output", rail="check_grounding", reason="low grounding", query=prompt)
