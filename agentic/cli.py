@@ -385,7 +385,45 @@ def _describe_findings(findings: list[dict]) -> str:
     return ", ".join(f"{f.get('code')}:{f.get('field') or 'bundle'}" for f in findings)
 
 
-def _refuse_if_injected_instruction(instruction: str, app_cfg: dict, *, verb: str) -> int | None:
+def _audit_operator_text_injection_blocked(app_cfg: dict, *, field: str, code: str, repo: str, command: str) -> None:
+    """Record an operator-supplied-text refusal in the audit trail.
+
+    Both ``inspect_candidate_text`` call sites in this file (the ``--plan-file``
+    load and ``--instruction``, below) refused silently: the finding reached
+    ``_err()`` -- stderr, not the audit log -- and nothing else. That is a real
+    gap relative to this scanner's OTHER two call sites: a context-fetch
+    finding is audited unconditionally at discovery
+    (``agentic.context``'s ``agentic_context_injection_finding``, regardless
+    of whether it later blocks), and a proposed-file-content finding inside
+    the coding loop lands in ``agentic_real_repo_loop_iteration``'s
+    ``rejected_gates`` as ``"critical_governance_finding"``. An operator whose
+    run was refused by THIS gate had, until now, no forensic record that it
+    happened at all -- not even a hash, not even a code -- while the other two
+    gates already gave them one.
+
+    One shared event name with a ``field`` discriminator (``"instruction"`` /
+    ``"plan_file"``), mirroring how ``agentic_context_injection_finding``
+    discriminates pr_title/pr_body/diff/etc. with its own ``field`` key,
+    rather than inventing a differently-shaped event per call site.
+
+    ``code`` is the only thing named about the match -- never the flagged
+    text -- because ``inspect_candidate_text`` itself has nothing more
+    specific to give: unlike ``agentic.context``'s scanner, it returns a
+    single fixed finding on the first pattern that hits, never which pattern.
+    """
+    audit_log(
+        {
+            "event": "agentic_real_repo_operator_text_injection_blocked",
+            "field": field,
+            "code": code,
+            "repo": repo,
+            "command": command,
+        },
+        cfg=app_cfg,
+    )
+
+
+def _refuse_if_injected_instruction(instruction: str, app_cfg: dict, *, repo: str, verb: str) -> int | None:
     """Scan the operator's ``--instruction`` for a governed injection pattern.
 
     The fetched GitHub context is scanned and refused
@@ -414,6 +452,9 @@ def _refuse_if_injected_instruction(instruction: str, app_cfg: dict, *, verb: st
 
     findings = inspect_candidate_text(instruction, app_cfg)
     if findings:
+        _audit_operator_text_injection_blocked(
+            app_cfg, field="instruction", code=findings[0].code, repo=repo, command=verb,
+        )
         _err(f"refusing to {verb}: --instruction matches a governed injection pattern ({findings[0].code})")
         return EXIT_FAIL
     return None
@@ -522,7 +563,7 @@ def cmd_real_repo_run_plan(args: argparse.Namespace) -> int:
     elif not cfg.deepagent_github.model.strip():
         _err("agentic.deepagent_github.model must be configured to plan with the local model")
         return EXIT_ENV
-    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, verb="plan")
+    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, repo=cfg.repo, verb="plan")
     if refusal is not None:
         return refusal
 
@@ -689,7 +730,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     if not args.confirm:
         _err("--confirm is required to actually run")
         return EXIT_REFUSED
-    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, verb="run")
+    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, repo=cfg.repo, verb="run")
     if refusal is not None:
         return refusal
 
@@ -749,6 +790,9 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
 
         findings = inspect_candidate_text(plan, app_cfg)
         if findings:
+            _audit_operator_text_injection_blocked(
+                app_cfg, field="plan_file", code=findings[0].code, repo=cfg.repo, command="run",
+            )
             _err(f"refusing to run: --plan-file content matches a governed injection pattern "
                  f"({findings[0].code})")
             return EXIT_FAIL
