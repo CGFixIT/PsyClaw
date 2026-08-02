@@ -464,6 +464,35 @@ claude = None
 if cfg["app"]["mode"] == "hybrid" and cfg["models"].get("claude", {}).get("enabled", False):
     claude = ClaudeClient(cfg=cfg)
 
+def _usable_online_providers() -> list[str]:
+    # The SAME predicate graph.py's user_gate_router applies before routing to a
+    # fallback node: the client must exist (mode=="hybrid" AND that provider
+    # enabled, both decided above) AND is_available() must be true (its API key
+    # env var is set). Kept as one helper so the confirm prompt cannot offer a
+    # provider the router would silently decline to use -- before this, the
+    # prompt named Grok and Claude unconditionally, so an operator running fully
+    # offline could pick "Send to Grok" and get a local offline answer labelled
+    # as if it had gone to Grok. is_available() is pure key presence with no
+    # network probe (llm/client.py), so calling it per request costs nothing.
+    usable: list[str] = []
+    if grok is not None and grok.is_available():
+        usable.append("grok")
+    if claude is not None and claude.is_available():
+        usable.append("claude")
+    return usable
+
+_PROVIDER_LABELS = {"grok": "Send to Grok", "claude": "Send to Claude"}
+
+def _confirm_choices(providers: list[str]) -> str:
+    """The 'here are your options' half of a confirm prompt, provider-accurate."""
+    if not providers:
+        return (
+            "No external provider is available (offline mode, provider disabled, "
+            "or its API key is unset), so the only option is Offline Best Effort."
+        )
+    labels = [_PROVIDER_LABELS[p] for p in providers]
+    return "Choose Offline Best Effort or " + " or ".join(labels) + "."
+
 personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
@@ -563,15 +592,15 @@ async def query_endpoint(request: Request, req: QueryRequest):
         # message (the console renders only confirm_message on this path) and
         # pass error through for API consumers, matching the answered path.
         retrieval_error = result.get("error")
+        providers = _usable_online_providers()
+        choices = _confirm_choices(providers)
         if retrieval_error:
             confirm_message = (
-                f"Retrieval failed ({retrieval_error}) — no vault results available. "
-                f"Choose Offline Best Effort, Send to Grok, or Send to Claude."
+                f"Retrieval failed ({retrieval_error}) — no vault results available. {choices}"
             )
         else:
             confirm_message = (
-                f"Vault miss (best score: {top_score:.3f} < {threshold}). "
-                f"Choose Offline Best Effort, Send to Grok, or Send to Claude."
+                f"Vault miss (best score: {top_score:.3f} < {threshold}). {choices}"
             )
         return QueryResponse(
             answer="",
@@ -581,6 +610,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             model_used="",
             needs_confirm=True,
             confirm_message=confirm_message,
+            available_providers=providers,
             error=retrieval_error,
         )
 

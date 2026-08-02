@@ -51,11 +51,29 @@ def test_console_path_extraction_is_not_empty():
 
 
 def test_online_confirm_buttons_send_explicit_provider():
+    # The two provider buttons used to be hardcoded, so this asserted the
+    # literal handleConfirm(true, id, 'grok') / (…, 'claude') call sites. They
+    # are now generated from the server's available_providers list, so assert
+    # the contract instead of the old shape: both provider names are still
+    # wired, and the click still passes an explicit provider rather than a bare
+    # `true` (which the graph would default to grok).
     html = _TERMINAL_HTML.read_text(encoding="utf-8")
-    assert "handleConfirm(true, id, 'grok')" in html
-    assert "handleConfirm(true, id, 'claude')" in html
+    assert "grok:" in html and "claude:" in html
+    assert "handleConfirm(true, id, provider)" in html
     assert "body.online_provider = onlineProvider" in html
     assert "Escalating to ${providerLabel}" in html
+
+
+def test_confirm_buttons_are_gated_on_server_declared_availability():
+    """A 'Send to <provider>' button must never be rendered for a provider the
+    user gate would decline to route to — pressing it silently produced an
+    offline answer labelled as a cloud answer. The console reads the server's
+    available_providers list, and defaults to the empty (offline-only) list so
+    a response without the field fails closed."""
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    assert "data.available_providers" in html
+    assert "availableProviders = []" in html, "the default must be offline-only, not both providers"
+    assert "for (const provider of availableProviders)" in html
 
 
 @pytest.mark.parametrize("path", sorted(_console_paths()))

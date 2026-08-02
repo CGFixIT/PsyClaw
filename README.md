@@ -458,12 +458,17 @@ uvicorn gate:app --host 127.0.0.1 --port 8787        # → http://127.0.0.1:8787
 cyclaw-harness                                       # → http://127.0.0.1:8790
 ```
 
-`cyclaw-harness` (identical to `python -m harness.server`) is **not** a
-`uvicorn <module>:app` target: `harness/server.py` has no module-level `app`, it
-builds one via `create_app(cfg)` from the resolved `~/.CyClaw` config, so
-`uvicorn harness.server:app` raises `AttributeError`. Override its port with
-`CYCLAW_HARNESS_PORT=8795 cyclaw-harness`, not a CLI flag; only loopback hosts
-are accepted.
+`cyclaw-harness` is identical to `python -m harness.server`. Override its port
+with `CYCLAW_HARNESS_PORT=8795 cyclaw-harness`, not a CLI flag; it refuses to
+bind a non-loopback address.
+
+`uvicorn harness.server:app` also works, via a lazy module-level `app`
+(`harness/server.py` builds it on first attribute access rather than at import,
+so merely importing the module never touches `~/.CyClaw`). Prefer
+`cyclaw-harness` anyway: the uvicorn form bypasses its bind-address guard, so
+`--host 0.0.0.0` opens a public socket that `cyclaw-harness` would have
+refused. `TrustedHostMiddleware` still rejects any non-loopback `Host` header
+either way, so the containment holds — but one layer fewer.
 
 Open `/` for the terminal UI and `/health` for readiness. The terminal exposes five operator consoles — **Soul**, **Sync**, **Agentic**, **Filesystem**, and **SQL** — the latter four calling `POST /ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect` (API-key gated, rate-limited, audited).
 

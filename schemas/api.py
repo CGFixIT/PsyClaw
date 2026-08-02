@@ -49,6 +49,15 @@ class QueryResponse(BaseModel):
     model_used: str
     needs_confirm: bool = False
     confirm_message: str | None = None
+    # Which external providers the user gate would ACTUALLY route to if the user
+    # confirms — populated only on the needs_confirm pause, empty everywhere
+    # else. gate.py derives it from the same client-exists-and-has-a-key
+    # predicate graph.py's user_gate_router applies, so the console can render a
+    # "Send to <provider>" button only when pressing it does something. Without
+    # it the console offered both providers unconditionally and a confirmed
+    # query against a disabled provider fell through to offline_best_effort,
+    # presenting a local answer as though it had come from the cloud.
+    available_providers: list[str] = []
     error: str | None = None
 
 class HealthResponse(BaseModel):

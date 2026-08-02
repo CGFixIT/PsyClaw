@@ -252,15 +252,17 @@ cyclaw-harness                  # identical: python -m harness.server
 #    → http://127.0.0.1:8790
 ```
 
-Two things about the harness command that differ from the gateway, both
-deliberate:
+Two things about the harness command that differ from the gateway:
 
-- **It is not a `uvicorn <module>:app` target.** `harness/server.py` has no
-  module-level `app`; it builds one with `create_app(cfg)` inside `main()` so
-  the app is constructed from the resolved `~/.CyClaw` config rather than at
-  import time. `uvicorn harness.server:app` therefore fails with an
-  `AttributeError`. Use `cyclaw-harness` / `python -m harness.server`, which
-  call `uvicorn.run()` for you.
+- **`uvicorn harness.server:app` works, but `cyclaw-harness` is the better
+  form.** The module exposes `app` lazily — it is built on first attribute
+  access, not at import, so importing `harness.server` never reads or creates
+  `~/.CyClaw`. The catch is that the uvicorn form skips the bind-address guard
+  in `main()`, so `--host 0.0.0.0` opens a public socket where
+  `cyclaw-harness` would have exited. `TrustedHostMiddleware` still rejects any
+  non-loopback `Host` header in both forms, so a bound socket is not an open
+  door — but `cyclaw-harness` keeps both layers, and it is what the docs and
+  scripts assume.
 - **The port is 8790, and you change it with an env var, not a flag:**
 
   ```bash
