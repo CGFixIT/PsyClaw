@@ -89,7 +89,26 @@ def _extract_claude_content(resp: httpx.Response) -> str:
         raise ValueError(f"malformed Claude response ({type(e).__name__})") from e
     content = "\n".join(p for p in parts if isinstance(p, str) and p.strip()).strip()
     if not content:
-        raise ValueError("empty Claude response: no text content")
+        # Name WHY there is no text instead of reporting a generic emptiness.
+        # stop_reason is a documented enum on the Messages response
+        # (platform.claude.com/docs/en/api/messages, verified 2026-08-02); two
+        # of its values produce a perfectly successful HTTP 200 carrying no
+        # answer, and they need opposite operator responses. Without this the
+        # caller's `except Exception` arm turned both into the same opaque
+        # "Claude error: ValueError" -- correct behavior (no retry; a refusal
+        # is terminal), but with nothing to act on.
+        stop_reason = data.get("stop_reason") if isinstance(data, dict) else None
+        if stop_reason == "refusal":
+            raise ValueError(
+                "Claude declined this request (stop_reason=refusal) — a safety "
+                "decision, not a transport error; retrying will not help"
+            )
+        if stop_reason == "max_tokens":
+            raise ValueError(
+                "Claude produced no text before hitting max_tokens "
+                "(stop_reason=max_tokens) — raise models.claude.max_tokens"
+            )
+        raise ValueError(f"empty Claude response: no text content (stop_reason={stop_reason!r})")
     # Same truncation visibility as _extract_content, in Anthropic's dialect.
     if data.get("stop_reason") == "max_tokens":
         log.warning("Claude response truncated at max_tokens (stop_reason=max_tokens)")
@@ -101,6 +120,38 @@ def _extract_claude_content(resp: httpx.Response) -> str:
 # mis-tuned ``max_retries``/``backoff_base_sec`` could block the calling worker
 # for minutes-to-hours on the final attempt.
 _DEFAULT_BACKOFF_MAX_SEC = 30.0
+
+
+def _retry_after_delay(resp: httpx.Response, backoff_max: float) -> float | None:
+    # Both cloud vendors tell us how long to wait, and both mean it. Anthropic's
+    # rate-limit reference documents `retry-after` as "The number of seconds to
+    # wait until you can retry the request. Earlier retries will fail."
+    # (platform.claude.com/docs/en/api/rate-limits, verified 2026-08-02), and
+    # xAI's own first-party sampler derives its 429 wait from the same header
+    # before falling back to exponential backoff. Our local backoff is 1s then
+    # 2s -- both inside the window the vendor says is guaranteed to fail -- so
+    # ignoring the header spent the whole retry budget on requests that could
+    # not succeed, and counted every one against the org's rate limit.
+    #
+    # Returns None when the header is absent or unparseable, so the caller
+    # keeps its exponential backoff. Clamped to backoff_max for the same reason
+    # that ceiling exists at all: a misbehaving or hostile upstream must not be
+    # able to park a worker thread for an arbitrary duration. Ollama is
+    # unaffected in practice (a local server sends no retry-after), so this
+    # needs no per-service branch.
+    raw = resp.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        # Integer/float seconds only. The HTTP-date form is legal per RFC 9110
+        # but neither vendor documents it, and parsing it here would add a
+        # clock-skew dependency to a retry path -- fall back to backoff instead.
+        seconds = float(raw.strip())
+    except (TypeError, ValueError):
+        return None
+    if seconds < 0:
+        return None
+    return min(seconds, backoff_max)
 
 
 def _read_retry(model_cfg: dict) -> tuple[int, float, float]:
@@ -178,7 +229,9 @@ def _post_with_retry(
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
             if attempt < max_retries and _is_retryable_status(status):
-                delay = _delay(attempt)
+                delay = _retry_after_delay(e.response, backoff_max)
+                if delay is None:
+                    delay = _delay(attempt)
                 log.warning(
                     "%s call HTTP %s (attempt %d/%d); retrying in %.1fs",
                     service, status, attempt + 1, total, delay,

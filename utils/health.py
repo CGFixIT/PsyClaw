@@ -83,8 +83,38 @@ def _health_cfg(config_path: str) -> dict:
     return cfg
 
 
+# Credential env vars whose live values must never reach a probe's error string.
+# /health is UNAUTHENTICATED (gate.py), so anything _safe_error lets through is
+# world-readable to any local process. Mirrors gate.py::_sanitize_error's own
+# env-value sweep — the same defense, on the one response path that had only the
+# URL half of it.
+_CREDENTIAL_ENVS = ("GROK_API_KEY", "ANTHROPIC_API_KEY", "CYCLAW_API_KEY")
+_MIN_REDACTABLE_LEN = 8
+
+
 def _safe_error(exc: Exception) -> str:
-    return re.sub(r"https?://\S+", "[URL REDACTED]", str(exc))
+    """Strip URLs AND live credential values from a probe failure message.
+
+    The URL half was here from the start. The credential half closes a real
+    leak, reproduced against httpx 0.28.1 / h11: if an API key carries a
+    trailing newline, a trailing CRLF, or a leading space -- exactly what a
+    CRLF ``.env`` on Windows, a Docker ``--env-file``, or a hand-edited systemd
+    ``EnvironmentFile`` produces -- h11 rejects the header and raises
+    ``LocalProtocolError: Illegal header value b'<the entire key>'``. That
+    message survived the URL-only regex and was returned verbatim in the
+    unauthenticated ``GET /health`` body. ``_ping``'s bare ``except Exception``
+    means every future exception type inherits this scrub for free.
+    """
+    msg = re.sub(r"https?://\S+", "[URL REDACTED]", str(exc))
+    for env_key in _CREDENTIAL_ENVS:
+        val = os.environ.get(env_key, "")
+        # Substring, not equality: the raw (unstripped) value is what lands in
+        # an h11 message, and repr() escaping means the printed form may differ
+        # from the value -- so also sweep the stripped form.
+        for candidate in (val, val.strip()):
+            if len(candidate) > _MIN_REDACTABLE_LEN:
+                msg = msg.replace(candidate, "[REDACTED]")
+    return msg
 
 
 def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
@@ -142,7 +172,12 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
         # GrokClient uses. With no key configured (the default offline posture),
         # report a clear "key not set" state instead of a misleading 401/network
         # error, and skip the doomed request entirely.
-        api_key = os.environ.get("GROK_API_KEY", "")
+        # .strip() matches llm/client.py:485 -- a key carrying a trailing
+        # newline (CRLF .env, --env-file, EnvironmentFile) is an illegal HTTP
+        # header value, and h11 puts the whole value in the exception it
+        # raises. Stripping at read means the probe simply works instead of
+        # relying on _safe_error to scrub the fallout.
+        api_key = os.environ.get("GROK_API_KEY", "").strip()
         if api_key:
             results.append(_ping(
                 f"{grok_base}/models", "grok_api",
@@ -157,7 +192,8 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     if (cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("claude", {}).get("enabled", False)):
         claude_cfg = cfg["models"]["claude"]
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        # .strip() matches llm/client.py:543 -- see the GROK_API_KEY note above.
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         if api_key:
             results.append(_ping(
                 f"{claude_cfg['base_url'].rstrip('/')}/models", "claude_api",
