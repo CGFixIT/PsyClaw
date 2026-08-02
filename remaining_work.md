@@ -10,6 +10,18 @@ was refuted** (see [Refuted](#refuted-already-shipped)). So this is not a wish
 list scraped from stale plan docs: each entry below is something a reviewer
 actively tried and failed to disprove.
 
+**Update, later on 2026-08-02:** a second pass acted on most of what was still
+open here. #1 was already done before this pass started. #2 went from "design
+only" to "designed and implemented" (two PRs). #3 turned out to be stale on
+inspection — refuted, not implemented, moved below. #4 turned out to be
+mechanically already closed by a PR that landed between the original audit and
+this pass; only its test coverage was missing, now added. #5 (Tier 1 dep bump)
+was independently found already done, by a different track, before this pass's
+own dep-bump agent could touch it. #10/#11 were resolved by relocation instead
+of deletion, per an explicit owner decision that changed the plan mid-stream.
+Each item below is annotated in place rather than silently rewritten, so the
+history stays legible.
+
 **Relationship to other docs.** [`docs/ARCHIVE_AND_ROADMAP.md`](docs/ARCHIVE_AND_ROADMAP.md)
 holds the *history and rationale* — retired designs, superseded plans, why
 things were decided. This file is the *actionable checklist*: what is still
@@ -48,7 +60,12 @@ explicitly on both branches by `route_by_score_node`, so it is a reliable
   was superseded by `test_low_score_offline_path_now_invokes_the_guard`, plus
   `test_external_fallback_leg_is_not_railed` to pin the deliberate exclusion.
 
-### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`)
+### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`) — **DESIGNED + IMPLEMENTED 2026-08-02, pending merge**
+
+> **Update 2026-08-02.** Designed in `docs/NeMo/phase4_implementation_plan.md`
+> (PR #750) and implemented per that design (PR #751), both open as of this
+> writing. The section below is left as the original finding for context —
+> everything after this note describes the state that PR #751 closes.
 
 A repo-wide search for `guardrail_output` returns **zero hits in any `.py`
 file**. There is no output rail on the query path.
@@ -90,8 +107,25 @@ which paths it covers and why.
 
 - **Risk tier:** High (`graph.py` edges), and larger than #1 or #3.
 - **Source:** `docs/NeMo/phase3_implementation_plan.md:176`, `:261`.
+- **Design (PR #750):** `docs/NeMo/phase4_implementation_plan.md` resolved the
+  design trap above — grounding-only, `local_llm` path only, with the
+  `check_soul_leak` half of `output_rails` deliberately left unbuilt pending a
+  false-positive sweep against real model output.
+- **Implementation (PR #751):** built exactly to that design and independently
+  re-verified in a second pass (fresh checkout, own commands, `CONFIRMED_SAFE`,
+  zero defects) before the PR was opened. Adds `guardrail_output` as a 10th
+  graph node between all four answer-producing nodes and `audit_logger`, with
+  no new router (one unconditional outbound edge) and no new `GraphState`
+  field (input- vs. output-blocked already distinguishable via the existing
+  `answer_model` sentinel). `CLAUDE.md`/`README.md`/`INVARIANTS.md`/
+  `PROJECT_RULES.md`'s topology counts were updated in the same PR.
 
-### 3. NeMo Phase 2 — input rails do not cover the user-gate branch
+### 3. NeMo Phase 2 — input rails do not cover the user-gate branch — **REFUTED 2026-08-02, see below**
+
+> **Correction 2026-08-02.** This entry's text (below, left unmodified for
+> context) is stale — it was written to describe the same gap #1 closed, and
+> was never updated once #1 shipped. Re-checked before treating it as
+> actionable work: it is not. See the "Refuted" section for why.
 
 `graph.py`'s `user_gate_router` maps to `grok_fallback` / `claude_fallback` /
 `offline_best_effort` / `audit_logger` with no `guardrail_input` on any of
@@ -100,7 +134,19 @@ those paths. Same shape as #1, different branch.
 - **Risk tier:** High (`graph.py` edges).
 - **Source:** `docs/NeMo/phase2_implementation_plan.md:180`.
 
-### 4. No injection scan on `instruction` at `POST /api/agent/run`
+### 4. No injection scan on `instruction` at `POST /api/agent/run` — **CLOSED 2026-08-02**
+
+> **Correction 2026-08-02.** This entry's framing (below, left unmodified for
+> context) is stale. PR #748 (merged, landed between the original audit and
+> this correction) added `_refuse_if_injected_instruction` to
+> `agentic/cli.py`'s `cmd_real_repo_run`, called before any context fetch or
+> clone. `harness/server.py`'s `POST /api/agent/run` reaches exactly that code
+> path via `utils.ops_runner.run_agentic_op("real-repo-run", instruction=...)`,
+> which spawns `python -m agentic.cli ... real-repo-run --instruction=...` —
+> so the scan already covers this route today. The only real gap was test
+> coverage of that fact through the harness's *specific* call shape (as
+> opposed to the bare CLI, which PR #748's own tests already covered) — PR
+> #752 closes that.
 
 `harness/server.py:675`'s handler passes `instruction=req.instruction` through
 to the agentic run with no pre-flight scan. Operator-supplied text goes
@@ -118,14 +164,14 @@ straight into a planning loop.
 
 ## Dependency currency
 
-Five tiers, none started. All pins verified unchanged at `constraints.txt` on
-2026-08-02. These are **staleness, not known vulnerabilities** — no CVE is
+Four tiers remain (Tier 1 is done). All pins re-verified at `constraints.txt`
+on 2026-08-02. These are **staleness, not known vulnerabilities** — no CVE is
 being carried knowingly. Bumping a runtime pin is Medium–High tier per
 `CLAUDE.md` §7 and needs explicit approval.
 
 | # | Tier | Pins (`constraints.txt`) | Notes |
 |---|---|---|---|
-| 5 | Tier 1 — dev tooling | `ruff==0.15.20` (:114), `mypy==2.1.0` (:115) | Lowest blast radius, but a `ruff`/`mypy` bump silently changes what lint/type-check accept — re-run both gates in the same PR |
+| 5 | Tier 1 — dev tooling — **DONE 2026-08-02** | `ruff==0.16.1`, `mypy==2.3.0` | Bumped from `0.15.20`/`2.1.0` in commit `3d540cd` across all four install surfaces. Re-verified same day, independently, against live PyPI (`pypi.org/pypi/{ruff,mypy}/json`) — both are still the current latest stable release, nothing newer to bump to. A `mypy` 2.1.0-vs-2.3.0 spot-check on two representative files showed byte-identical output — no new findings from the bump |
 | 6 | Tier 2 — agentic/db | `langgraph==1.2.6` (:43), `langchain==1.3.11` (:81), `langchain-openai==1.3.3` (:82), `psycopg`/`psycopg-binary==3.2.13`, `pgvector==0.4.2` | |
 | 7 | Tier 3 — web/core | `fastapi==0.138.0` (:33), `uvicorn==0.49.0` (:37), `langchain-core==1.4.8` (:44) | Touches the `gate.py` request path |
 | 8 | `websockets` 15 → 16 (major) | `websockets==15.0.1` (:42) | **Genuinely blocked**, not merely unscheduled: `langgraph-sdk` imports `websockets.asyncio` at graph-import time, which is why this pin is direct rather than transitive. An earlier attempt was abandoned |
@@ -139,7 +185,20 @@ drift class `.claude/skills/verify-deps/` exists to catch.
 
 ## Documentation consolidation
 
-### 10. The `ARCHIVE_AND_ROADMAP` cutover is half-done
+### 10. The `ARCHIVE_AND_ROADMAP` cutover is half-done — **RESOLVED 2026-08-02, by relocation not deletion**
+
+> **Update 2026-08-02.** The plan below (delete the 17 source files) was
+> superseded by an explicit owner decision: relocate and lightly refresh
+> instead of delete. 16 of the 17 were `git mv`'d into a new `docs/work/`
+> folder (history preserved), each got a surgical staleness pass, and every
+> citing file was repointed — see PR #753. The 17th,
+> `docs/NeMo/phase3_implementation_plan.md`, was deliberately left in place
+> because it's still cited by exact file:line from item #2 above and from
+> `docs/NeMo/phase4_implementation_plan.md` (PR #750/#751, unmerged as of this
+> writing) — moving it now would break live cross-references from in-flight
+> work. Revisit once those merge. `docs/ARCHIVE_AND_ROADMAP.md`'s own preamble
+> now documents the old→new mapping directly; this entry is left below for
+> historical context, not as an open task.
 
 `docs/ARCHIVE_AND_ROADMAP.md` was written to replace 17 retired/superseded
 docs. **All 17 are still on disk**, side by side with the file that condenses
@@ -147,23 +206,24 @@ them. The doc says so itself at `:13-17` and calls it a deliberate staged
 rollout — but stage 2 was never scheduled, so the current state is duplication
 without the consolidation benefit.
 
-Remaining steps, in order:
+Original planned steps, in order (superseded by the relocation above):
 
 1. ~~Repoint `AGENTS.md`'s two `docs/SETUP.md` citations at `setup-guide.md`~~
    — **done 2026-08-02** (this was the doc's own stated prerequisite).
-2. Delete the 17 source files.
-3. Run `python3 .claude/skills/doc-sync/doc_sync.py`.
+2. ~~Delete the 17 source files.~~ — **superseded**: relocated instead, see above.
+3. Run `python3 .claude/skills/doc-sync/doc_sync.py` — done as part of PR #753.
 4. Separately grep `CLAUDE.md` / `README.md` / `AGENTS.md` for the other 16
    paths — **`doc-sync` does not check dangling doc-to-doc references**, only
-   config-number and route-table drift, so step 4 is not optional.
+   config-number and route-table drift — done as part of PR #753. A handful of
+   citations outside that scope (`.claude/rules/PROJECT_RULES.md` and a few
+   others — see PR #753's body for the full list) were deliberately left for a
+   future pass that next touches those specific files.
 
-- **Risk tier:** Low, but irreversible-ish (deletions) — worth one explicit
-  confirmation before step 2.
+### 11. `docs/SETUP.md` is still a redirect stub — **RESOLVED 2026-08-02**
 
-### 11. `docs/SETUP.md` is still a redirect stub
-
-Kept deliberately so old links resolve. Nothing dangles either way today; its
-deletion is part of item 10's step 2, not separate work.
+Kept deliberately so old links resolve. Nothing dangles either way today; it
+was relocated to `docs/work/SETUP.md` alongside the other 16 in PR #753
+(not deleted — see item 10's update above).
 
 ---
 
@@ -196,39 +256,47 @@ plan → patch → verify loop against their own local project.
 
 ## Refuted (already shipped)
 
-Listed so nobody re-opens it: **promote `agentic/fsconnect`'s injection scanner
-from advisory to enforcing.** Already done — `agentic/fsconnect/writer.py:240-254`
-implements `_check_injection()`, raising `FsWriteRefused` with
-`failed_gate="injection_scan"`. It landed as Phase 2 write-enablement item 8,
-independently of and prior to the Phase 3 item that still lists it as open.
-The stale plan entry is the only thing suggesting otherwise.
+Listed so nobody re-opens either of these:
+
+- **Promote `agentic/fsconnect`'s injection scanner from advisory to
+  enforcing.** Already done — `agentic/fsconnect/writer.py:240-254`
+  implements `_check_injection()`, raising `FsWriteRefused` with
+  `failed_gate="injection_scan"`. It landed as Phase 2 write-enablement item 8,
+  independently of and prior to the Phase 3 item that still lists it as open.
+  The stale plan entry is the only thing suggesting otherwise.
+- **Item #3, NeMo Phase 2 input rails on the user-gate branch (2026-08-02).**
+  Item #3's text describes `grok_fallback`/`claude_fallback`/
+  `offline_best_effort` as all lacking `guardrail_input` coverage — but that's
+  leftover from before item #1 shipped. Item #1's fix already routed
+  `offline_best_effort` through `guardrail_input`, and its own resolution
+  **permanently and deliberately excludes** the two external-provider legs
+  from the rail ("their policy gate is the triple gate, not this rail"),
+  pinned by `tests/test_graph.py::test_external_fallback_leg_is_not_railed`.
+  Implementing #3 as literally written would mean reversing that already-
+  shipped, explicitly-tested design decision. There is no coherent remaining
+  work under this description — the file's own text just never got updated
+  once #1 landed.
 
 ---
 
 ## Suggested order
 
-Re-ranked 2026-08-02, after #2's entry was corrected (see the note there — it
-was previously listed first on a false premise).
+**Superseded 2026-08-02 — most of this list is done; kept for history.** #1,
+#2 (design + implementation, PRs #750/#751 pending merge), #4 (PR #752 pending
+merge), #5, and #10/#11 (PR #753 pending merge) are all closed or in-review.
+#3 turned out to be stale and is refuted, not implemented. What's left:
 
-1. **#1** (`offline_best_effort` bypasses `guardrail_input`) — the only
-   graph-edge item the phase-3 plan explicitly blesses: *"a real inconsistency
-   and a legitimate bug fix under FEATURE FREEZE"* that *"can proceed on its own
-   schedule."* It closes a live gap — a hostile query is blocked when it
-   retrieves well and answered when it retrieves poorly — and needs no new
-   `guardrails/` primitive, because the input guard it routes through already
-   exists and is already wired.
-2. **#5** (Tier 1 dep bumps) — dev-tooling only, contained.
-3. **#4** (instruction scan on `POST /api/agent/run`) — the other live gap
-   rather than staleness or staging.
+1. **Get PRs #750, #751, #752, #753 reviewed and merged** — nothing else in
+   this file is blocked on more investigation; it's blocked on review.
+2. **Tier 2/3/4 dependency bumps** (`langgraph`/`langchain`/`psycopg`/
+   `pgvector`; `fastapi`/`uvicorn`/`langchain-core`; the blocked `websockets`
+   major and the `httpx2` migration) — the four-surface pattern Tier 1
+   established is mechanical to repeat, but each of these touches more of the
+   request path and is correspondingly higher risk; take them one at a time,
+   not as a batch.
+3. **The `check_soul_leak` question PR #751's design deliberately deferred**
+   (see `docs/NeMo/phase4_implementation_plan.md` Decision 2) — needs a
+   dedicated false-positive sweep against real model output before it's
+   buildable, not a code change on its own.
 
-**#3** is the same shape as #1 (extend the existing input rail to another
-branch) and is the natural companion to do in the same sitting, while the graph
-topology is loaded in someone's head.
-
-**#2 is deliberately not in this list.** It is the largest of the graph items,
-it needs a new `guardrails/` primitive and a new bridge function rather than an
-edge, and the plan still carries it as an unanswered question at priority: low.
-It wants a written design and a sign-off before code, not a slot in a queue.
-
-The remaining dependency tiers are mechanical once #5 establishes the
-four-surface pattern.
+No other item in the original ranking remains open.
