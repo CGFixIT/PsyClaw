@@ -745,6 +745,12 @@ step is gated by a constant in code that no config file can flip.
 
 ### How a run works
 
+0. **`real-repo-run-plan`** (optional, two-stage) asks a model for an implementation
+   plan and prints it. It clones nothing, writes nothing, and commits nothing. You
+   read the plan, edit it, and feed it back with `--plan-file` — so one model plans,
+   a **human approves**, and another model codes against the approved text. The plan
+   is injection-scanned on load, truncated at 6,000 chars, and its SHA-256 is
+   recorded on the run so the record says which plan was in force.
 1. **`real-repo-run`** clones the configured repo into a jailed workspace, asks the
    planner for whole-file replacements, writes them, and runs the selected
    verification checks. It **stops before committing** and reports
@@ -767,6 +773,14 @@ into `approve`.
   candidate's own acceptance, and rewriting them is the classic reward-hacking
   failure mode of a make-the-checks-pass loop. Also budget-capped
   (`max_write_budget_bytes`, 100000 bytes per iteration).
+- **Two scanners, two questions, on the same bytes.** Proposed file content is run
+  through an injection scan (*is this trying to talk to a model?*) **and** a
+  code-shape scan (*is this code trying to exfiltrate a key?* —
+  `inspect_code_shape`, `agentic.deepagent_github.scan_code_shape`, ships `true`).
+  The second exists because a working SSH-key exfiltration payload contains no
+  injection phrase at all: it matches on *combinations* — a secret path plus a
+  network egress call, a decode plus a dynamic exec, a socket plus an fd-dup or a
+  shell path, a pipe-to-shell. Every hit is CRITICAL and refuses the candidate.
 - **Verification runs as argv-list subprocesses**, never a shell, with `cwd`
   pinned to the clone, a scrubbed environment allowlist
   (`PATH`, `HOME`, `LANG`, `LC_ALL`, `PYTHONPATH`, `VIRTUAL_ENV`,
@@ -814,9 +828,14 @@ procedure with a sign-off line, not a toggle:
 ### Commands
 
 ```bash
+# Optional stage 0: plan, review by hand, then hand the approved text to the coder.
+python -m agentic.cli real-repo-run-plan \
+  --pr 123 --instruction "fix the off-by-one in the parser" --out plan.md
+
 python -m agentic.cli real-repo-run \
   --pr 123 --instruction "fix the off-by-one in the parser" \
   --read-file src/parser.py --checks-file checks.json \
+  --plan-file plan.md \
   --branch claude/parser-fix --commit-message "fix: off-by-one" \
   --reason "triage issue 123" --confirm
 
@@ -838,9 +857,14 @@ hardcoded allow-list and spawns nothing); the other six require a Bearer
 `CYCLAW_API_KEY` plus an `Origin`/`Sec-Fetch-Site` cross-site check:
 `POST /api/agent/run`, `GET /api/agent/runs/{id}`, and
 `POST /api/agent/runs/{id}/{decision,push,publish,discard}`.
-`POST /api/agent/run` is deliberately synchronous and blocks up to 900s — the run
-record is written only when the run ends, and the `run_id` first exists in that
-response. Console equivalents are `/agent run|confirm|status|approve|reject|push|publish|discard`.
+`POST /api/agent/run` is deliberately synchronous — the run record is written only
+when the run ends, and the `run_id` first exists in that response. Its wall-clock
+budget is **derived from what the request asked for**, not a flat constant:
+`iterations × planner_timeout + iterations × checks × 120s + 300s` overhead, capped
+at 3600s. A flat budget was a real bug — `subprocess.run(timeout=)` sends an
+uncatchable SIGKILL, so a request whose own planner budget exceeded it left a
+leaked clone and a permanently `running` record that no later status call could
+resolve. Console equivalents are `/agent run|confirm|status|approve|reject|push|publish|discard`.
 
 ### Optional cloud planner (Grok / Claude)
 
