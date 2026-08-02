@@ -282,8 +282,17 @@ jobs:
           # A real directory whose name is itself an injection payload -- the
           # exact class this finding is about, not a synthetic string. Only
           # harness\server.py needs to exist for Install-CyClaw.ps1's
-          # -RepoPath validation to pass.
-          $EvilDir = Join-Path "${{ runner.temp }}" 'evil$(New-Item -ItemType File -Path "${{ runner.temp }}\PWNED_VIA_INSTALLER" -Force)'
+          # -RepoPath validation to pass. The payload must be a LEGAL single
+          # NTFS path component: no <>:"/\|?* (reserved chars). A previous
+          # version embedded a quoted absolute Windows path (drive letter +
+          # backslashes + quotes) inside the payload, which is illegal in a
+          # single filename component -- New-Item would fail before
+          # Install-CyClaw.ps1 was ever invoked, and continue-on-error masked
+          # that setup failure, leaving Assert-SafeRepoPath untested (caught
+          # by Codex review on PR #757). $, (, and ) are NTFS-legal, so
+          # 'evil$(Get-Date)' both creates cleanly and still contains the
+          # exact character class ($) Assert-SafeRepoPath rejects.
+          $EvilDir = Join-Path "${{ runner.temp }}" 'evil$(Get-Date)'
           New-Item -ItemType Directory -Force -Path (Join-Path $EvilDir "harness") | Out-Null
           Copy-Item "$env:GITHUB_WORKSPACE\harness\server.py" (Join-Path $EvilDir "harness\server.py")
 
@@ -299,10 +308,6 @@ jobs:
           }
           if (-not $threw) {
             Write-Host "[smoke-adversarial] FAIL: installer accepted a -RepoPath containing shell metacharacters (should have refused)"
-            exit 1
-          }
-          if (Test-Path "${{ runner.temp }}\PWNED_VIA_INSTALLER") {
-            Write-Host "[smoke-adversarial] FAIL: injected command actually ran"
             exit 1
           }
           if (Test-Path (Join-Path $env:USERPROFILE ".CyClaw\bin\cyclaw.cmd")) {
