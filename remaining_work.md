@@ -60,12 +60,12 @@ explicitly on both branches by `route_by_score_node`, so it is a reliable
   was superseded by `test_low_score_offline_path_now_invokes_the_guard`, plus
   `test_external_fallback_leg_is_not_railed` to pin the deliberate exclusion.
 
-### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`) — **DESIGNED + IMPLEMENTED 2026-08-02, pending merge**
+### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`) — **DONE 2026-08-02**
 
 > **Update 2026-08-02.** Designed in `docs/NeMo/phase4_implementation_plan.md`
-> (PR #750) and implemented per that design (PR #751), both open as of this
-> writing. The section below is left as the original finding for context —
-> everything after this note describes the state that PR #751 closes.
+> (PR #750) and implemented per that design (PR #751) — both **merged**. The
+> section below is left as the original finding for context — everything
+> after this note describes the state that landed.
 
 A repo-wide search for `guardrail_output` returns **zero hits in any `.py`
 file**. There is no output rail on the query path.
@@ -107,18 +107,19 @@ which paths it covers and why.
 
 - **Risk tier:** High (`graph.py` edges), and larger than #1 or #3.
 - **Source:** `docs/NeMo/phase3_implementation_plan.md:176`, `:261`.
-- **Design (PR #750):** `docs/NeMo/phase4_implementation_plan.md` resolved the
-  design trap above — grounding-only, `local_llm` path only, with the
+- **Design (PR #750, merged):** `docs/NeMo/phase4_implementation_plan.md` resolved
+  the design trap above — grounding-only, `local_llm` path only, with the
   `check_soul_leak` half of `output_rails` deliberately left unbuilt pending a
   false-positive sweep against real model output.
-- **Implementation (PR #751):** built exactly to that design and independently
-  re-verified in a second pass (fresh checkout, own commands, `CONFIRMED_SAFE`,
-  zero defects) before the PR was opened. Adds `guardrail_output` as a 10th
-  graph node between all four answer-producing nodes and `audit_logger`, with
-  no new router (one unconditional outbound edge) and no new `GraphState`
-  field (input- vs. output-blocked already distinguishable via the existing
-  `answer_model` sentinel). `CLAUDE.md`/`README.md`/`INVARIANTS.md`/
-  `PROJECT_RULES.md`'s topology counts were updated in the same PR.
+- **Implementation (PR #751, merged):** built exactly to that design and
+  independently re-verified in a second pass (fresh checkout, own commands,
+  `CONFIRMED_SAFE`, zero defects) before the PR was opened. Added
+  `guardrail_output` as a 10th graph node between all four answer-producing
+  nodes and `audit_logger`, with no new router (one unconditional outbound
+  edge) and no new `GraphState` field (input- vs. output-blocked already
+  distinguishable via the existing `answer_model` sentinel).
+  `CLAUDE.md`/`README.md`/`INVARIANTS.md`/`PROJECT_RULES.md`'s topology counts
+  were updated in the same PR.
 
 ### 3. NeMo Phase 2 — input rails do not cover the user-gate branch — **REFUTED 2026-08-02, see below**
 
@@ -193,12 +194,13 @@ drift class `.claude/skills/verify-deps/` exists to catch.
 > folder (history preserved), each got a surgical staleness pass, and every
 > citing file was repointed — see PR #753. The 17th,
 > `docs/NeMo/phase3_implementation_plan.md`, was deliberately left in place
-> because it's still cited by exact file:line from item #2 above and from
-> `docs/NeMo/phase4_implementation_plan.md` (PR #750/#751, unmerged as of this
-> writing) — moving it now would break live cross-references from in-flight
-> work. Revisit once those merge. `docs/ARCHIVE_AND_ROADMAP.md`'s own preamble
-> now documents the old→new mapping directly; this entry is left below for
-> historical context, not as an open task.
+> because `docs/NeMo/phase4_implementation_plan.md` (PR #750, now merged and
+> permanent on `main`) cites it by exact file:line — moving it would break
+> that reference. This is no longer a temporary in-flight concern; revisit
+> only if `phase3_implementation_plan.md` itself is ever retired or folded
+> into `phase4_implementation_plan.md` directly. `docs/ARCHIVE_AND_ROADMAP.md`'s
+> own preamble now documents the old→new mapping directly; this entry is left
+> below for historical context, not as an open task.
 
 `docs/ARCHIVE_AND_ROADMAP.md` was written to replace 17 retired/superseded
 docs. **All 17 are still on disk**, side by side with the file that condenses
@@ -282,12 +284,13 @@ Listed so nobody re-opens either of these:
 ## Suggested order
 
 **Superseded 2026-08-02 — most of this list is done; kept for history.** #1,
-#2 (design + implementation, PRs #750/#751 pending merge), #4 (PR #752 pending
-merge), #5, and #10/#11 (PR #753 pending merge) are all closed or in-review.
+#2 (design + implementation, PRs #750/#751, both **merged**), #4 (PR #752,
+**merged**), #5, and #10/#11 (PR #753, still open) are all closed or in-review.
 #3 turned out to be stale and is refuted, not implemented. What's left:
 
-1. **Get PRs #750, #751, #752, #753 reviewed and merged** — nothing else in
-   this file is blocked on more investigation; it's blocked on review.
+1. **Get PR #753 reviewed and merged** — the only one of this round's five
+   PRs still open; nothing else in this file is blocked on more
+   investigation, it's blocked on review.
 2. **Tier 2/3/4 dependency bumps** (`langgraph`/`langchain`/`psycopg`/
    `pgvector`; `fastapi`/`uvicorn`/`langchain-core`; the blocked `websockets`
    major and the `httpx2` migration) — the four-surface pattern Tier 1

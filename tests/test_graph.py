@@ -17,7 +17,7 @@ from pathlib import Path
 from graph import (
     build_graph, retrieve_node, local_llm_node,
     offline_best_effort_node, grok_fallback_node, claude_fallback_node,
-    audit_logger_node, guardrail_input_node, guardrail_router,
+    audit_logger_node, guardrail_input_node, guardrail_output_node, guardrail_router,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
     _context_char_budget,
 )
@@ -1125,3 +1125,178 @@ class TestGuardrailInputGraphIntegration:
 
         assert result["answer_model"] == "grok"
         assert calls == []
+
+
+class TestGuardrailOutputNode:
+    """Phase 4: offline output (grounding) rail after generation, local_llm
+    scope only. See docs/NeMo/phase4_implementation_plan.md Decision 3."""
+
+    def test_no_guard_is_pure_passthrough(self):
+        state = {"answer_model": "local", "answer": "some answer", "retrieved_docs": []}
+        out = guardrail_output_node(state, output_guard=None)
+        assert out == {}
+
+    def test_non_local_answer_model_is_passthrough_even_with_a_configured_guard(self):
+        # Proves the scope exclusion (Decision 2): grok/claude/offline-best-effort
+        # answers never reach the check function at all, regardless of what it
+        # would have returned.
+        guard = lambda q, a, c: {"blocked": True, "message": "nope", "rails": ["check_grounding"]}  # noqa: E731
+        for model in ("grok", "claude", "offline-best-effort", "guardrail-blocked", ""):
+            state = {"answer_model": model, "answer": "an answer", "retrieved_docs": []}
+            out = guardrail_output_node(state, output_guard=guard)
+            assert out == {}, f"answer_model={model!r} must be out of scope for guardrail_output"
+
+    def test_passing_guard_on_local_answer_is_passthrough(self):
+        guard = lambda q, a, c: {"blocked": False, "message": "", "rails": []}  # noqa: E731
+        state = {"answer_model": "local", "answer": "grounded answer", "retrieved_docs": []}
+        out = guardrail_output_node(state, output_guard=guard)
+        assert out == {}
+
+    def test_blocking_guard_replaces_answer_but_leaves_answer_model_untouched(self):
+        # Decision 6: the disambiguation between input-blocked and
+        # output-blocked relies on answer_model staying a real model name here
+        # (unlike guardrail_input_node, which sets "guardrail-blocked").
+        guard = lambda q, a, c: {"blocked": True, "message": "ungrounded", "rails": ["check_grounding"]}  # noqa: E731
+        state = {
+            "answer_model": "local", "answer": "ungrounded answer",
+            "answer_sources": [{"source": "x.md"}], "retrieved_docs": [],
+        }
+        out = guardrail_output_node(state, output_guard=guard)
+        assert out["answer"] == "ungrounded"
+        assert out["answer_sources"] == []
+        assert "answer_model" not in out
+        assert out["guardrail_blocked"] is True
+        assert out["guardrail_rails"] == ["check_grounding"]
+
+    def test_raising_guard_fails_open(self):
+        def _boom(q, a, c):
+            raise RuntimeError("guard exploded")
+
+        state = {"answer_model": "local", "answer": "kept as-is", "retrieved_docs": []}
+        out = guardrail_output_node(state, output_guard=_boom)
+        assert out == {}
+
+    def test_guard_receives_query_answer_and_joined_context(self):
+        seen = []
+        guard = lambda q, a, c: (seen.append((q, a, c)), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+        docs = [{"text": "doc one"}, {"text": "doc two"}]
+        state = {
+            "query": "what is RRF?", "answer_model": "local", "answer": "an answer",
+            "retrieved_docs": docs,
+        }
+        guardrail_output_node(state, output_guard=guard)
+        assert seen == [("what is RRF?", "an answer", "doc one\n\ndoc two")]
+
+
+class TestGuardrailOutputGraphIntegration:
+    """Full build_graph() wiring: default behavior is byte-identical to
+    pre-Phase-4 (no output_guard passed), and a real check_output /
+    build_output_guard wiring blocks an ungrounded local_llm answer while the
+    grok/claude/offline_best_effort legs pass through unchecked even with
+    guardrails.enabled: true. See docs/NeMo/phase4_implementation_plan.md
+    Decisions 2 and 4."""
+
+    def _patch_guardrails_config(self, monkeypatch, tmp_path):
+        from guardrails.config import GuardrailsConfig
+        monkeypatch.setattr(
+            "guardrails.config.load_guardrails_config",
+            lambda: GuardrailsConfig(enabled=True, metrics_path=str(tmp_path / "guardrails.jsonl")),
+        )
+
+    def test_default_no_output_guard_behavior_unchanged(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Anything at all, ungrounded or not.")
+
+        graph = build_graph(retriever=retriever, llm=llm, grok=None, cfg=cfg)
+        result = graph.invoke({"query": "What is Veeam immutability?"})
+
+        assert result["answer_model"] == "local"
+        assert result["answer"] == "Anything at all, ungrounded or not."
+        assert result.get("guardrail_blocked", False) is False
+
+    def test_ungrounded_local_llm_answer_blocked_end_to_end(self, tmp_path, monkeypatch):
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Pineapple recipes require baking soda and sugar.")
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=None, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        result = graph.invoke({"query": "What is Veeam immutability?"})
+
+        assert result["answer_model"] == "local"  # Decision 6: unchanged on an output block
+        assert result["answer"] != "Pineapple recipes require baking soda and sugar."
+        assert result["guardrail_blocked"] is True
+        assert result["guardrail_rails"] == ["check_grounding"]
+        assert result["answer_sources"] == []
+        assert "audit_event" in result  # I4: still converges
+
+    def test_grounded_local_llm_answer_passes_through_end_to_end(self, tmp_path, monkeypatch):
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Veeam uses chattr +i for immutability.")
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=None, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        result = graph.invoke({"query": "What is Veeam immutability?"})
+
+        assert result["answer_model"] == "local"
+        assert result["answer"] == "Veeam uses chattr +i for immutability."
+        assert result.get("guardrail_blocked", False) is False
+
+    def test_offline_best_effort_passes_through_unchecked_even_when_enabled(self, tmp_path, monkeypatch):
+        # Decision 2's scope exclusion, proven at the build_graph level, not
+        # just the node-unit level: offline_best_effort's prompt explicitly
+        # invites ungrounded answers, so it must never reach the output rail.
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="A totally unrelated ungrounded ramble about spaceships.")
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=None, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        result = graph.invoke({"query": "off topic", "user_confirmed_online": False})
+
+        assert result["answer_model"] == "offline-best-effort"
+        assert result["answer"] == "A totally unrelated ungrounded ramble about spaceships."
+        assert result.get("guardrail_blocked", False) is False
+
+    def test_grok_fallback_passes_through_unchecked_even_when_enabled(self, tmp_path, monkeypatch):
+        # Same scope exclusion for the external-provider leg: it gets zero
+        # local context by default (send_local_context_to_grok defaults false),
+        # so a uniform grounding check would false-positive-block it.
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="never used")
+        grok = MockGrokClient(response="A completely ungrounded grok answer unrelated to anything retrieved.")
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=grok, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        result = graph.invoke({"query": "off topic", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "grok"
+        assert result["answer"] == "A completely ungrounded grok answer unrelated to anything retrieved."
+        assert result.get("guardrail_blocked", False) is False
