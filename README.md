@@ -91,8 +91,13 @@ User Query (HTTP POST /query or MCP tool call)
     │                    ├─ confirmed + hybrid ──→        │
     │                    │      6. grok_fallback OR       │
     │                    │         claude_fallback        │
-    │                    │      (selected per-query)      │
+    │                    │      (selected per-query;      │
+    │                    │       NOT railed — the triple  │
+    │                    │       gate is their gate)      │
     │                    └─ declined / offline ──→        │
+    │                       3. guardrail_input (again)    │
+    │                           blocked ──→ 8. audit_logger│
+    │                           passed  ──→                │
     │                           7. offline_best_effort    │
     │     ↓ (all paths converge)                          │
     │  8. audit_logger (SHA-256 + PII redact → jsonl)     │
@@ -131,11 +136,12 @@ flowchart TD
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
         X -->|"blocked"| L
-        X -->|"passed"| H["④ local_llm\nOllama :11434\nqwen3.6:27b"]
+        X -->|"passed · high score"| H["④ local_llm\nOllama :11434\nqwen3.6:27b"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
-        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated"]
-        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
-        I -->|"confirmed=false\nor offline mode"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
+        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated · not railed"]
+        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated · not railed"]
+        I -->|"confirmed=false\nor offline mode"| X
+        X -->|"passed · vault miss"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
         H --> L
         J --> L
         W --> L
@@ -189,7 +195,82 @@ CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`
 
 > **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, and the console pages (`GET /`, `/static/*`) are unauthenticated.
 
+### macOS — zsh (the default shell) or bash
+
+Set for the current Terminal tab. Generate a real value instead of typing one —
+`openssl` ships with macOS:
+
+```bash
+export CYCLAW_API_KEY="$(openssl rand -hex 20)"
+echo "$CYCLAW_API_KEY"        # copy it; you paste this into the console UI
+uvicorn gate:app --host 127.0.0.1 --port 8787
+```
+
+Persist it. macOS has defaulted to **zsh** since Catalina, so that means
+`~/.zshrc` unless you switched — check with `echo $SHELL` first:
+
+```bash
+echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.zshrc
+source ~/.zshrc
+echo "$CYCLAW_API_KEY"        # confirm it survived
+uvicorn gate:app --host 127.0.0.1 --port 8787
+```
+
+On bash, use `~/.bash_profile` — macOS bash reads that for login shells, not
+`~/.bashrc`, which is the single most common reason "I added the export and it
+still 401s" happens on a Mac.
+
+Full macOS walkthrough — including launching the harness console beside the
+gateway and exercising every REST endpoint with `curl` — is in
+[`setup-guide.md`](setup-guide.md#macos-apple-silicon).
+
+### Linux — bash / zsh
+
+Set for the current session:
+
+```bash
+export CYCLAW_API_KEY="your-strong-local-secret"
+uvicorn gate:app --host 127.0.0.1 --port 8787
+```
+
+Persist in your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.profile`):
+
+```bash
+echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.bashrc
+source ~/.bashrc
+uvicorn gate:app --host 127.0.0.1 --port 8787
+```
+
+Persist for a **systemd service** (Linux server):
+
+```ini
+# /etc/systemd/system/cyclaw.service
+[Unit]
+Description=CyClaw RAG Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=cyclaw
+WorkingDirectory=/opt/CyClaw
+Environment="CYCLAW_API_KEY=your-strong-local-secret"
+Environment="GROK_API_KEY=offline-dummy-sk-123"
+ExecStart=/opt/CyClaw/.venv/bin/uvicorn gate:app --host 127.0.0.1 --port 8787
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now cyclaw
+```
+
 ### Windows — PowerShell
+
+*(Windows is the fallback path; CyClaw is developed and verified on macOS
+first. Everything below still works and is CI-covered on `windows-latest`.)*
 
 Set for the current session only (cleared on terminal close):
 
@@ -241,59 +322,22 @@ setx CYCLAW_API_KEY "your-strong-local-secret"
 
 Or via GUI: **System Properties → Advanced → Environment Variables → System variables → New**.
 
-### Linux / macOS — Bash / Zsh
-
-Set for the current session:
-
-```bash
-export CYCLAW_API_KEY="your-strong-local-secret"
-uvicorn gate:app --host 127.0.0.1 --port 8787
-```
-
-Persist in your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.profile`):
-
-```bash
-echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.bashrc
-source ~/.bashrc
-uvicorn gate:app --host 127.0.0.1 --port 8787
-```
-
-Persist for a **systemd service** (Linux server):
-
-```ini
-# /etc/systemd/system/cyclaw.service
-[Unit]
-Description=CyClaw RAG Gateway
-After=network.target
-
-[Service]
-Type=simple
-User=cyclaw
-WorkingDirectory=/opt/CyClaw
-Environment="CYCLAW_API_KEY=your-strong-local-secret"
-Environment="GROK_API_KEY=offline-dummy-sk-123"
-ExecStart=/opt/CyClaw/.venv/bin/uvicorn gate:app --host 127.0.0.1 --port 8787
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now cyclaw
-```
-
 ### All platforms — `.env` file (already in `.gitignore`)
 
 Create `.env` in the repo root:
 
 ```
-API KEYS added to config.yaml
-CYCLAW_API_KEY=api-key
-GROK_API_KEY=InputAPIkey
-CLAUDE_API_KEY=InputAPIkey
+# Keys live here, never in config.yaml — config.yaml only names which
+# provider is enabled; the key itself is read from the environment.
+CYCLAW_API_KEY=your-strong-local-secret
+GROK_API_KEY=your-xai-key-or-dummy-when-offline
+ANTHROPIC_API_KEY=your-anthropic-key
 ```
+
+The Claude variable is **`ANTHROPIC_API_KEY`**, not `CLAUDE_API_KEY` —
+`llm/client.py` and `agentic/config.py` both read the former, and nothing in
+the codebase reads the latter. Setting the wrong name is silent: Claude simply
+reports unavailable and the query falls back to a local answer.
 
 Load it before launching:
 
@@ -330,14 +374,41 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 | Python | 3.12 | Primary supported runtime |
 | [Ollama](https://ollama.com/) | Any | Must be running on `localhost:11434` |
 | Model pulled in Ollama | — | `qwen3.6:27b` (default), `mistral:7b`, or any chat model |
-| Platform | — | Windows, Linux, or **macOS 14+ on Apple Silicon**. macOS needs a different torch step than the block below — see [`setup-guide.md`](setup-guide.md#macos-apple-silicon) |
+| **macOS** (primary) | 14 Sonoma+ | **Apple Silicon only.** An Intel Mac cannot install this repo's pinned torch at all — no `x86_64` wheel is published at that pin |
+| Windows / Linux (fallback) | — | Both fully supported and CI-covered; they share the `+cpu` torch path below |
 
-### Install
+### Install — macOS (Apple Silicon)
 
-The block below is the **Windows/Linux** path. **On macOS, follow
-[`setup-guide.md`'s macOS section](setup-guide.md#macos-apple-silicon)
-instead** — the `+cpu` torch wheel it installs does not exist for macOS, and
-both manifests hardcode that pin, so this block fails twice on a Mac.
+macOS is the primary supported platform, and it needs a **different torch step**
+than Windows/Linux: the `+cpu` local-version wheel does not exist for macOS, and
+both manifests hardcode that pin, so the generic block fails twice on a Mac.
+
+```bash
+git clone https://github.com/CGFixIT/CyClaw
+cd CyClaw
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 1) torch FIRST, and PLAIN — no +cpu suffix, no --index-url override.
+#    Apple Silicon has one arm64 wheel; there is no CPU/CUDA build to pick between.
+pip install "torch==2.13.0"
+
+# 2) Everything else, from copies of both manifests with the torch and
+#    PyTorch-index lines stripped out. Same thing CI's macos-latest leg runs.
+grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
+    requirements.txt > /tmp/requirements-macos.txt
+grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
+pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
+    --ignore-installed PyYAML
+```
+
+Prefer a script? `bash ./macos/install-cyclaw.sh` branches on `uname -s` and
+handles the torch difference for you — but it targets the **harness console**,
+not the RAG gateway, and skips Ollama, the index, and the API keys. The
+tradeoffs are tabulated in
+[`setup-guide.md`](setup-guide.md#option-a--the-installer-script-handles-the-torch-difference-for-you).
+
+### Install — Windows / Linux (fallback)
 
 ```bash
 git clone https://github.com/CGFixIT/CyClaw
@@ -346,15 +417,18 @@ python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 # 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
-#    macOS: use `pip install "torch==2.13.0"` — plain, no +cpu, no --index-url.
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
 pip install -r requirements.txt -c constraints.txt
+```
 
-# Want every optional feature too (Postgres/pgvector, NeMo Guardrails, dev/test
-# tools, both cloud providers) in one environment — a from-scratch dev box, or a
-# full manual smoke test? Use this instead of step 2:
+### Every optional feature in one environment (any platform)
+
+For a from-scratch dev box or a full manual smoke test — Postgres/pgvector, NeMo
+Guardrails, dev/test tools, and both cloud providers — substitute step 2 with:
+
+```bash
 pip install -e ".[all]" -c constraints.txt
 ```
 
@@ -372,12 +446,30 @@ generic default, but that's a recovery path, not the normal first-run state.
 
 ### Run
 
+CyClaw ships **two** independent local web apps. Neither starts the other; run
+whichever you need, or both in separate terminal tabs.
+
 ```bash
-python -m retrieval.indexer
-uvicorn gate:app --host 127.0.0.1 --port 8787
+# The RAG gateway — serves static/terminal.html at / plus the whole REST API
+python -m retrieval.indexer                          # once, before the first /query
+uvicorn gate:app --host 127.0.0.1 --port 8787        # → http://127.0.0.1:8787
+
+# The coding-harness console — serves static/harness.html
+cyclaw-harness                                       # → http://127.0.0.1:8790
 ```
 
+`cyclaw-harness` (identical to `python -m harness.server`) is **not** a
+`uvicorn <module>:app` target: `harness/server.py` has no module-level `app`, it
+builds one via `create_app(cfg)` from the resolved `~/.CyClaw` config, so
+`uvicorn harness.server:app` raises `AttributeError`. Override its port with
+`CYCLAW_HARNESS_PORT=8795 cyclaw-harness`, not a CLI flag; only loopback hosts
+are accepted.
+
 Open `/` for the terminal UI and `/health` for readiness. The terminal exposes five operator consoles — **Soul**, **Sync**, **Agentic**, **Filesystem**, and **SQL** — the latter four calling `POST /ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect` (API-key gated, rate-limited, audited).
+
+Every gateway route with a copy-pasteable `curl` invocation, plus what each
+status code means, is in
+[`setup-guide.md`](setup-guide.md#rest-api--testing-every-endpoint-from-the-terminal).
 
 ---
 
