@@ -57,6 +57,29 @@ done
 step() { printf '[cyclaw] %s\n' "$1"; }
 warn() { printf '[cyclaw] WARNING: %s\n' "$1" >&2; }
 
+# A repo path (the default $HOME_DIR/repo, or an operator-supplied
+# --repo-path once canonicalized) gets interpolated, unescaped, into two
+# generated files below: the cyclaw shim (a chmod +x'd script) and this rc
+# file's cyclaw() function, both inside a double-quoted
+# CYCLAW_REPO="..." assignment. Bash double-quoting suppresses word-splitting
+# and globbing but NOT command substitution -- a literal embedded $(...) or
+# `...` in the path is evaluated for real the next time the generated file is
+# parsed and run (confirmed empirically: a value containing $(touch pwned)
+# with no quote character at all still executes on re-parse), and a literal
+# embedded " closes the quoted region early, turning everything after it into
+# live shell syntax too. POSIX filenames may legally contain any of these
+# (only / and NUL are forbidden), so this is a real, constructible primitive
+# from an operator-controlled --repo-path, not a theoretical one. Reject
+# outright rather than trying to correctly escape at every write site.
+reject_shell_metachars() {
+  case "$1" in
+    *'"'*|*'`'*|*'$'*|*'\'*)
+      echo "cyclaw: refusing a repo path containing shell metacharacters (\", \`, \$, or \\): $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # -- 1. Home layout ------------------------------------------------------------
 HOME_DIR="$HOME/.CyClaw"
 BIN_DIR="$HOME_DIR/bin"
@@ -83,6 +106,7 @@ else
   step "repo already present at $REPO_DIR (pulling latest main)"
   git -C "$REPO_DIR" pull --ff-only
 fi
+reject_shell_metachars "$REPO_DIR"
 
 # -- 3. Python + dependencies -----------------------------------------------------
 find_python312() {
