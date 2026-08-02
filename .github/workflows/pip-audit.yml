@@ -7,11 +7,17 @@ on:
     paths:
       - 'requirements.txt'
       - 'constraints.txt'
+      # pyproject.toml is where EVERY optional extra lives (guardrails,
+      # postgres, pgvector, agentic-deepagents, agentic-deepagents-cloud, dev,
+      # test). Without it here, adding or bumping an optional dependency
+      # changed no triggering path and this workflow never ran on the change.
+      - 'pyproject.toml'
       - '.github/workflows/pip-audit.yml'
   pull_request:
     paths:
       - 'requirements.txt'
       - 'constraints.txt'
+      - 'pyproject.toml'
       - '.github/workflows/pip-audit.yml'
   workflow_dispatch:
 
@@ -141,6 +147,10 @@ jobs:
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
         #
+        # (This step audits requirements.txt only, which by its own scope
+        # contract is base runtime + test tools and carries ZERO extras. Every
+        # optional dependency is audited by the scan-optional job below.)
+        #
         # PYSEC-2026-3447 (setuptools, fixed in 83.0.0) — scanner-resolution
         # artifact, added 2026-07-17 after 3 consecutive daily failures on main
         # (first red: 2026-07-15). setuptools is not pinned or shipped by any
@@ -153,3 +163,86 @@ jobs:
         # environment resolves the patched version. Remove this ignore once the
         # runner's resolution picks setuptools>=83.0.0; if the audit then still
         # flags setuptools, treat that as a real finding, not noise.
+
+  scan-optional:
+    # Why this job exists: requirements.txt (what the `scan` job above audits)
+    # carries base runtime + test tools and NOTHING else -- that is its declared
+    # scope contract, enforced by .claude/skills/verify-deps/check_env_drift.py
+    # check E4. Every optional capability therefore had zero CVE coverage:
+    # NeMo Guardrails, the deepagents agentic-coding stack, the Grok and Claude
+    # cloud SDKs, and the Postgres/pgvector backends. This job closes that.
+    #
+    # Deliberately NOT merged into the `scan` job: the extras are opt-in and
+    # some (nemoguardrails, deepagents) drag large transitive trees, so keeping
+    # them separate means a resolution problem in an optional stack cannot mask
+    # or block the base-runtime audit that actually gates every install.
+    name: scan-optional (extras CVE scan)
+    needs: verify-install
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-audit (CI scanner only)
+        run: pip install pip-audit
+
+      - name: Generate one requirements file per extra
+        shell: bash
+        # Generated from pyproject.toml rather than hand-listed, so a new extra
+        # is scanned the day it lands instead of the day someone remembers to
+        # update this workflow. Aggregate extras (`full`, `all`) are skipped:
+        # their entries are `cyclaw[...]` self-references, and the extras they
+        # point at are each scanned on their own anyway.
+        run: |
+          mkdir -p .audit-extras
+          python - <<'PY'
+          import pathlib, tomllib
+          extras = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["optional-dependencies"]
+          out = pathlib.Path(".audit-extras")
+          for name, reqs in extras.items():
+              direct = [r for r in reqs if not r.startswith("cyclaw[")]
+              if not direct:
+                  print(f"skip {name} (aggregate extra, no direct pins)")
+                  continue
+              (out / f"{name}.txt").write_text("\n".join(direct) + "\n")
+              print(f"wrote {name}.txt ({len(direct)} pin(s))")
+          PY
+
+      - name: Run pip-audit over every extra
+        shell: bash
+        # Loops instead of failing on the first extra so one vulnerable stack
+        # does not hide findings in the others -- the whole point is a complete
+        # picture per run. `failed` accumulates and the step exits non-zero at
+        # the end if any extra had findings.
+        #
+        # PYSEC-2026-3447 (setuptools) is ignored for the same documented
+        # reason as the base scan above: setuptools is pinned by no CyClaw
+        # manifest and enters the closure only through a transitive's metadata,
+        # where the runner can resolve a pre-83.0.0 build. Every other CVE is a
+        # real finding here -- the base scan's chromadb/nltk ignores are
+        # deliberately NOT carried over, since neither package is an extra.
+        run: |
+          failed=""
+          for f in .audit-extras/*.txt; do
+            extra="$(basename "$f" .txt)"
+            echo "::group::pip-audit -r $f"
+            if pip-audit -r "$f" --ignore-vuln PYSEC-2026-3447; then
+              echo "OK: $extra"
+            else
+              echo "FINDINGS: $extra"
+              failed="$failed $extra"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::pip-audit reported findings in optional extra(s):$failed"
+            exit 1
+          fi
+          echo "All optional extras clean."
