@@ -114,7 +114,7 @@ class ChatModelProposerClient:
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 2048,
-        temperature: float = 0.0,
+        temperature: float | None = 0.0,
         config_path: str = "config.yaml",
         cfg: dict | None = None,
     ) -> ChatModelProposerResponse:
@@ -139,8 +139,24 @@ class ChatModelProposerClient:
 
         model = build_chat_model(self.settings)
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=sanitized_prompt)]
+        # Anthropic REJECTS a non-default temperature outright on the Claude 5
+        # family: "non-default temperature, top_p, or top_k values return a 400
+        # error on every request, regardless of whether thinking is used"
+        # (platform.claude.com/docs/en/build-with-claude/thinking, verified
+        # 2026-08-02), and the Messages API default is 1.0 -- so the 0.0 this
+        # method used to send unconditionally made EVERY Claude plan call fail
+        # 400 on the shipped providers.claude.model "claude-sonnet-5". The core
+        # RAG path already knew this (llm/client.py's ClaudeClient omits
+        # temperature while GrokClient sends it, pinned by
+        # tests/test_client.py's "temperature not in json" assertion); this
+        # path had simply not inherited the rule. Dropped only for Claude:
+        # xAI's OpenAI-compatible surface still wants it, and passing None
+        # explicitly lets a caller opt out for any provider.
+        invoke_kwargs: dict[str, object] = {"max_tokens": max_tokens}
+        if temperature is not None and provider != "claude":
+            invoke_kwargs["temperature"] = temperature
         try:
-            ai_message = model.invoke(messages, max_tokens=max_tokens, temperature=temperature)
+            ai_message = model.invoke(messages, **invoke_kwargs)
         except Exception as exc:
             # The concrete exception type depends on which SDK is active
             # (openai/xai/anthropic clients, none importable here to enumerate) --

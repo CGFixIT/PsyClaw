@@ -134,6 +134,12 @@ class ProposerClient(Protocol):
     ``temperature`` are declared with defaults because this loop never passes
     them explicitly, so a conforming implementation must supply its own
     sensible values, not rely on the loop to.
+
+    ``temperature`` is ``float | None`` rather than ``float`` so an
+    implementation can drop the parameter entirely: Anthropic rejects a
+    non-default temperature with HTTP 400 on the Claude 5 family, so the cloud
+    client omits it for that provider (see
+    ``agentic.deepagent_github.chat_client.ChatModelProposerClient.invoke``).
     """
 
     def invoke(
@@ -142,7 +148,7 @@ class ProposerClient(Protocol):
         system_prompt: str,
         user_prompt: str,
         max_tokens: int = 2048,
-        temperature: float = 0.0,
+        temperature: float | None = 0.0,
         config_path: str = "config.yaml",
         cfg: dict | None = None,
     ) -> ProposerResponse:

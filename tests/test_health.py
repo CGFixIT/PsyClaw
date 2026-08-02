@@ -11,6 +11,8 @@ in test_gate.py); none of its own branches were exercised directly:
 All HTTP is mocked; no live service is required.
 """
 
+import os
+
 import httpx
 import pytest
 import yaml
@@ -420,3 +422,62 @@ class TestSharedClientLifecycle:
             assert len(created) == 2
         finally:
             health._http_client = None
+
+
+class TestSafeErrorRedactsCredentials:
+    """/health is UNAUTHENTICATED (gate.py), so every string _safe_error lets
+    through is readable by any local process.
+
+    Reproduced against httpx 0.28.1 / h11 (2026-08-02): an API key carrying a
+    trailing newline, a trailing CRLF, or a leading space -- exactly what a CRLF
+    .env on Windows, a Docker --env-file, or a hand-edited systemd
+    EnvironmentFile produces -- makes h11 reject the header and raise
+    LocalProtocolError("Illegal header value b'<the entire key>'"). The old
+    URL-only regex passed that straight through into the public JSON body.
+    """
+
+    SECRET = "sk-ant-SUPERSECRETVALUE1234567890"
+
+    @pytest.mark.parametrize("suffix", ["\n", "\r\n", ""])
+    @pytest.mark.parametrize("env", ["ANTHROPIC_API_KEY", "GROK_API_KEY", "CYCLAW_API_KEY"])
+    def test_live_key_never_survives(self, monkeypatch, env, suffix):
+        monkeypatch.setenv(env, self.SECRET + suffix)
+        exc = ValueError(f"Illegal header value b'{self.SECRET}{suffix}'")
+        assert self.SECRET not in health._safe_error(exc)
+
+    def test_leading_space_variant_is_redacted(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", f" {self.SECRET}")
+        exc = ValueError(f"Illegal header value b' {self.SECRET}'")
+        assert self.SECRET not in health._safe_error(exc)
+
+    def test_url_redaction_still_applies(self, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        out = health._safe_error(ValueError("connect failed to https://api.anthropic.com/v1/models"))
+        assert "api.anthropic.com" not in out
+        assert "[URL REDACTED]" in out
+
+    def test_unset_and_short_values_do_not_blank_the_message(self, monkeypatch):
+        # An empty or trivially short env value must not turn every message
+        # into [REDACTED] via a substring match on "" or "x".
+        monkeypatch.setenv("GROK_API_KEY", "")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "short")
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        out = health._safe_error(ValueError("Connection refused"))
+        assert out == "Connection refused"
+
+    def test_probe_key_is_stripped_before_it_becomes_a_header(self, monkeypatch, tmp_path):
+        """The other half of the fix: strip at read, so the illegal-header case
+        never arises rather than relying on the scrub to clean up after it."""
+        captured = {}
+
+        def _fake_get(url, *, timeout, headers=None):
+            captured["headers"] = headers or {}
+            raise RuntimeError("stop here")
+
+        monkeypatch.setattr(health, "_http_get", _fake_get)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", f"{self.SECRET}\r\n")
+        health._ping(
+            "https://api.anthropic.com/v1/models", "claude_api",
+            headers={"x-api-key": os.environ["ANTHROPIC_API_KEY"].strip()},
+        )
+        assert captured["headers"]["x-api-key"] == self.SECRET
