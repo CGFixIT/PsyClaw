@@ -3,7 +3,7 @@
 Script Name : mock_ollama.py
 Summary     : Minimal mock Ollama server for CyClaw sandbox audits.
 Requires    : Python >= 3.12, stdlib only
-Usage       : python mock_ollama.py --host 127.0.0.1 --port 11434 --model qwen2.5:7b-instruct
+Usage       : python mock_ollama.py --host 127.0.0.1 --port 11434 --model qwen3.6:27b
 Author      : CGFixIT Personal Agent
 Version     : 1.0
 Last-Updated: 2026-07-20
@@ -45,7 +45,7 @@ Health check:
 Ollama chat test:
 
     curl http://127.0.0.1:11434/api/chat -d '{
-      "model": "qwen2.5:7b-instruct",
+      "model": "qwen3.6:27b",
       "messages": [{"role": "user", "content": "Describe CyClaw in one sentence."}],
       "stream": false
     }'
@@ -53,7 +53,7 @@ Ollama chat test:
 OpenAI-compatible fallback test:
 
     curl http://127.0.0.1:11434/v1/chat/completions -d '{
-      "model": "qwen2.5:7b-instruct",
+      "model": "qwen3.6:27b",
       "messages": [{"role": "user", "content": "Describe CyClaw in one sentence."}]
     }'
 """
@@ -77,7 +77,7 @@ from urllib.parse import urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11434
-DEFAULT_MODEL = "qwen2.5:7b-instruct"
+DEFAULT_MODEL = "qwen3.6:27b"
 LOG_PATH = Path("mock_ollama.log")
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(message)s"
 

@@ -35,7 +35,7 @@ models:
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
 #    api_key: "your-ollama-key"
-    model: "qwen2.5:7b"
+    model: "qwen3.6:27b"
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
@@ -692,7 +692,7 @@ guardrails:
                                   # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
   engine: "openai"               # Ollama exposes an OpenAI-compatible API
   base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
-  model: "qwen2.5:7b"            # keep in sync with models.local_llm.model
+  model: "qwen3.6:27b"           # keep in sync with models.local_llm.model
   nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
   metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
   block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."

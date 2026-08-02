@@ -17,7 +17,7 @@ core RAG gateway running.
 |---|---|
 | Git | Any recent version |
 | Python 3.12 | Primary supported runtime (`requires-python >=3.12`) |
-| [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434`, with `qwen2.5:7b` pulled: `ollama pull qwen2.5:7b` |
+| [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434`, with `qwen3.6:27b` pulled: `ollama pull qwen3.6:27b` |
 | Corpus `.md` files (optional) | The repo ships a small sample corpus in `data/corpus/`, so the indexer has something to build against out of the box. Copy your own `.md` files in to replace/extend it — from your own notes, or an existing SafeClaw/PsyClaw-style corpus if you have one. |
 | Windows | PowerShell, no admin/elevation needed. If script execution is blocked, run once: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 | Linux | bash |
@@ -217,7 +217,7 @@ prefer the signed app on a machine you care about.
 ```bash
 ollama --version            # sanity check
 ollama serve                # only if you did NOT install the .app — see below
-ollama pull qwen2.5:7b      # the model config.yaml expects by default
+ollama pull qwen3.6:27b      # the model config.yaml expects by default
                             # running something bigger instead? see below
 
 # Ollama's own native API — confirms the daemon is up and lists pulled models:
@@ -277,16 +277,20 @@ installer (`macos/install-cyclaw.sh:124-137`), and
 [`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). The by-hand steps in the
 macOS section above are those same commands.
 
-### Running a different (or much larger) local model
+### Running a different local model
 
-`config.yaml` ships `models.local_llm.model: "qwen2.5:7b"`, and the setup steps
-pull exactly that. Nothing stops you running something larger — but two things
-must move together, or CyClaw hangs instead of failing loudly:
+`config.yaml` ships `models.local_llm.model: "qwen3.6:27b"` — a dense ~27B
+model — and the setup steps pull exactly that. It is the heaviest default this
+project has shipped: expect a multi-gigabyte pull and meaningful RAM use. On
+modest hardware a smaller tag (`qwen2.5:7b`, `mistral:7b`) is a perfectly
+supported swap. Either direction, two things must move together, or CyClaw
+hangs instead of failing loudly:
 
-1. **The tag must match what you actually pulled.** `config.yaml`'s `model:`
-   value is passed straight through to Ollama; a mismatch is an
-   `Ollama HTTP 404`. Tags are case-sensitive (`qwen2.5:7b`, not
-   `Qwen2.5-7B-Instruct`).
+1. **The tag must match what you actually pulled, in _two_ config keys.**
+   `models.local_llm.model` **and** `guardrails.model` are both passed through
+   to Ollama, and `config-guard`'s C11 check fails the build if they drift
+   apart. A tag mismatch against Ollama is an `Ollama HTTP 404`. Tags are
+   case-sensitive — use exactly what `ollama list` prints.
 2. **Ollama's context length must have headroom**, or generation stalls at
    `0% processing` rather than erroring. The formula (from `config.yaml`'s own
    comment) is:
@@ -303,15 +307,17 @@ must move together, or CyClaw hangs instead of failing loudly:
    ollama serve
    ```
 
-This is the single most common "CyClaw hangs" cause, and it gets *more* likely
-on a bigger model, not less — a larger model does not raise `num_ctx` for you.
+This is the single most common "CyClaw hangs" cause, and it is *more* likely on
+a large model, not less — a bigger model does not raise `num_ctx` for you.
 Full detail, including the per-session `/set parameter num_ctx` alternative:
 [`OLLAMA_SETUP.md`](OLLAMA_SETUP.md).
 
-Note the shipped `local_llm.timeout_sec: 600` and `max_tokens: 3000` are
-already sized for a dense ~27B model rather than the 7B default (see
-`CLAUDE.md`'s load-bearing-numbers table) — so moving up in model size
-generally needs a `num_ctx` change, not a timeout change.
+The shipped `local_llm.timeout_sec: 600` and `max_tokens: 3000` are sized for a
+dense ~27B model (see `CLAUDE.md`'s load-bearing-numbers table), so they already
+match the default above — no timeout tuning needed. `timeout_sec` must stay
+below `api.graph_timeout_sec` (660) if you do raise it. Dropping to a smaller
+model needs no config change beyond the two `model:` keys; the generous timeout
+simply goes unused.
 
 ### Is the index really mandatory?
 
@@ -398,7 +404,7 @@ models:
   local_llm:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # Ollama's OpenAI-compatible endpoint — do not change
-    model: "qwen2.5:7b"                     # must match a model tag actually pulled in Ollama
+    model: "qwen3.6:27b"                     # must match a model tag actually pulled in Ollama
     timeout_sec: 600                        # must stay < api.graph_timeout_sec (660)
     max_tokens: 3000                        # reserved output budget — see config.yaml's own comment on num_ctx headroom
 

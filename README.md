@@ -131,7 +131,7 @@ flowchart TD
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
         X -->|"blocked"| L
-        X -->|"passed"| H["④ local_llm\nOllama :11434\nqwen2.5:7b"]
+        X -->|"passed"| H["④ local_llm\nOllama :11434\nqwen3.6:27b"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
         I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated"]
         I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated"]
@@ -329,7 +329,7 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 |---|---|---|
 | Python | 3.12 | Primary supported runtime |
 | [Ollama](https://ollama.com/) | Any | Must be running on `localhost:11434` |
-| Model pulled in Ollama | — | `qwen2.5:7b` (default), `mistral:7b`, or any chat model |
+| Model pulled in Ollama | — | `qwen3.6:27b` (default), `mistral:7b`, or any chat model |
 | Platform | — | Windows, Linux, or **macOS 14+ on Apple Silicon**. macOS needs a different torch step than the block below — see [`setup-guide.md`](setup-guide.md#macos-apple-silicon) |
 
 ### Install
@@ -644,7 +644,7 @@ python -m guardrails.cli test                            # pre-flight self-test
 guardrails:
   enabled: false                 # opt-in; also gates the graph.py guardrail_input node
   engine: "openai"               # Ollama OpenAI-compatible endpoint
-  model: "qwen2.5:7b"            # keep in sync with models.local_llm.model
+  model: "qwen3.6:27b"            # keep in sync with models.local_llm.model
   hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
 ```

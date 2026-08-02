@@ -167,7 +167,7 @@ def _resolve_backend() -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
             provider="ollama", # Or LM studio - Default fallback label
             base_url="http://127.0.0.1:11434/v1",
-            model="qwen2.5:7b",
+            model="qwen3.6:27b",
             source="primary",
         )
     return resolve_local_backend(llm)
