@@ -128,9 +128,14 @@ def _claude_ok_response(content: str = "hello from claude") -> httpx.Response:
     )
 
 
-def _status_response(status: int) -> httpx.Response:
+def _status_response(status: int, headers: dict | None = None) -> httpx.Response:
     req = httpx.Request("POST", _URL)
-    return httpx.Response(status, json={"error": "boom"}, request=req)
+    return httpx.Response(status, json={"error": "boom"}, request=req, headers=headers or {})
+
+
+def _claude_response(payload: dict) -> httpx.Response:
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return httpx.Response(200, json=payload, request=req)
 
 
 # =============================================================================
@@ -667,6 +672,63 @@ class TestRetryBehavior:
         assert len(fake.calls) == 2
         client.close()
 
+    # -- retry-after -----------------------------------------------------
+    # Both vendors document the header and mean it. Anthropic's rate-limit
+    # reference: "The number of seconds to wait until you can retry the
+    # request. Earlier retries will fail." Our exponential backoff is 1s then
+    # 2s, both inside a window the vendor says is guaranteed to fail, so the
+    # whole retry budget was previously spent on doomed requests.
+
+    def test_retry_after_header_overrides_exponential_backoff(self, tmp_path, monkeypatch, no_sleep):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path, retry={"max_retries": 2, "backoff_base_sec": 1.0}))
+        fake = _ScriptedPost([
+            _status_response(429, headers={"retry-after": "7"}),
+            _claude_ok_response("claude ok"),
+        ])
+        client._client.post = fake
+        assert client.generate("p") == "claude ok"
+        assert no_sleep == [7.0], "the server's own wait must win over the computed 1.0s"
+        client.close()
+
+    def test_retry_after_is_clamped_to_backoff_max(self, tmp_path, monkeypatch, no_sleep):
+        # A hostile or misconfigured upstream must not be able to park a worker
+        # thread; backoff_max is the same ceiling the computed delay respects.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(
+            tmp_path, retry={"max_retries": 2, "backoff_base_sec": 1.0, "backoff_max_sec": 5.0},
+        ))
+        fake = _ScriptedPost([
+            _status_response(429, headers={"retry-after": "3600"}),
+            _claude_ok_response("claude ok"),
+        ])
+        client._client.post = fake
+        assert client.generate("p") == "claude ok"
+        assert no_sleep == [5.0]
+        client.close()
+
+    @pytest.mark.parametrize("bad", ["", "later", "-3", "Wed, 21 Oct 2026 07:28:00 GMT"])
+    def test_unparseable_retry_after_falls_back_to_backoff(self, tmp_path, monkeypatch, no_sleep, bad):
+        # The HTTP-date form is legal per RFC 9110 but neither vendor documents
+        # it, so it deliberately falls through to the computed backoff rather
+        # than adding a clock-skew dependency to the retry path.
+        monkeypatch.setenv("GROK_API_KEY", "grok-secret")
+        client = GrokClient(_write_config(tmp_path, retry={"max_retries": 1, "backoff_base_sec": 1.0}))
+        fake = _ScriptedPost([_status_response(429, headers={"retry-after": bad}), _ok_response("ok")])
+        client._client.post = fake
+        assert client.generate("p") == "ok"
+        assert no_sleep == [1.0]
+        client.close()
+
+    def test_grok_retry_after_is_honored_too(self, tmp_path, monkeypatch, no_sleep):
+        monkeypatch.setenv("GROK_API_KEY", "grok-secret")
+        client = GrokClient(_write_config(tmp_path, retry={"max_retries": 1, "backoff_base_sec": 1.0}))
+        fake = _ScriptedPost([_status_response(429, headers={"retry-after": "4"}), _ok_response("ok")])
+        client._client.post = fake
+        assert client.generate("p") == "ok"
+        assert no_sleep == [4.0]
+        client.close()
+
     def test_claude_401_fails_fast(self, tmp_path, monkeypatch, no_sleep):
         # Mirrors test_grok_401_fails_fast.
         monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
@@ -899,3 +961,44 @@ class TestResolveLocalBackend:
         resolved = resolve_local_backend(llm_cfg)
         assert resolved.source == "primary"
         assert resolved.provider == "ollama"
+
+
+class TestClaudeStopReasonDiagnostics:
+    """A Claude 200 can legitimately carry no answer text. stop_reason is the
+    documented enum that says why (platform.claude.com/docs/en/api/messages),
+    and the two cases need opposite operator responses -- a refusal is terminal
+    and a truncation is a budget problem. Both previously collapsed into the
+    same opaque "Claude error: ValueError"."""
+
+    def _client(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        return ClaudeClient(_write_config(tmp_path))
+
+    def test_refusal_names_the_refusal_and_does_not_retry(self, tmp_path, monkeypatch, no_sleep):
+        client = self._client(tmp_path, monkeypatch)
+        fake = _ScriptedPost([_claude_response({"content": [], "stop_reason": "refusal"})])
+        client._client.post = fake
+        with pytest.raises(ClaudeServiceError):
+            client.generate("p")
+        # Terminal state: one attempt, no backoff. Retrying a safety decision
+        # only spends money.
+        assert len(fake.calls) == 1
+        assert no_sleep == []
+        client.close()
+
+    def test_max_tokens_with_no_text_points_at_the_budget(self, tmp_path, monkeypatch, no_sleep):
+        client = self._client(tmp_path, monkeypatch)
+        fake = _ScriptedPost([_claude_response({"content": [], "stop_reason": "max_tokens"})])
+        client._client.post = fake
+        with pytest.raises(ClaudeServiceError):
+            client.generate("p")
+        assert len(fake.calls) == 1
+        client.close()
+
+    def test_unknown_empty_reason_still_raises(self, tmp_path, monkeypatch, no_sleep):
+        client = self._client(tmp_path, monkeypatch)
+        fake = _ScriptedPost([_claude_response({"content": [], "stop_reason": "end_turn"})])
+        client._client.post = fake
+        with pytest.raises(ClaudeServiceError):
+            client.generate("p")
+        client.close()

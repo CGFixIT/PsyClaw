@@ -129,6 +129,70 @@ class TestQueryEndpoint:
         assert "Vault miss" in data["confirm_message"]
         assert data["error"] is None  # a real vault miss carries no error
 
+    # ── confirm prompt must not offer a provider the gate would decline ──────
+    # The fixture pins gate.grok = gate.claude = None (offline), which is the
+    # shipped default. Before this, confirm_message named both providers
+    # unconditionally: an operator could press "Send to Grok" and get an
+    # offline_best_effort answer, because user_gate_router falls through to
+    # offline when the selected client is None or has no key.
+
+    def _vault_miss_state(self):
+        return {
+            "query": "quantum physics",
+            "answer": "",
+            "answer_model": "",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.3,
+            "retrieval_mode": "hybrid",
+            "needs_user_confirm": True,
+            "audit_event": {},
+        }
+
+    def test_confirm_offers_no_provider_when_both_are_unavailable(self, client):
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = self._vault_miss_state()
+
+        data = test_client.post("/query", json={"query": "q"}).json()
+        assert data["available_providers"] == []
+        assert "No external provider is available" in data["confirm_message"]
+        assert "Send to Grok" not in data["confirm_message"]
+        assert "Send to Claude" not in data["confirm_message"]
+
+    def test_confirm_offers_only_the_usable_provider(self, client):
+        import gate
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = self._vault_miss_state()
+        # Claude enabled with a key; Grok constructed but its key env var unset,
+        # which is the case user_gate_router treats identically to `is None`.
+        gate.claude = MockGrokClient(available=True)
+        gate.grok = MockGrokClient(available=False)
+
+        data = test_client.post("/query", json={"query": "q"}).json()
+        assert data["available_providers"] == ["claude"]
+        assert "Send to Claude" in data["confirm_message"]
+        assert "Send to Grok" not in data["confirm_message"]
+
+    def test_confirm_offers_both_when_both_are_usable(self, client):
+        import gate
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = self._vault_miss_state()
+        gate.grok = MockGrokClient(available=True)
+        gate.claude = MockGrokClient(available=True)
+
+        data = test_client.post("/query", json={"query": "q"}).json()
+        assert data["available_providers"] == ["grok", "claude"]
+        assert "Send to Grok" in data["confirm_message"]
+        assert "Send to Claude" in data["confirm_message"]
+
+    def test_answered_response_carries_no_provider_list(self, client):
+        """available_providers is meaningful only on the pause; an answered
+        response must not imply an escalation is still on offer."""
+        test_client, _ = client
+        data = test_client.post("/query", json={"query": "q"}).json()
+        assert data["needs_confirm"] is False
+        assert data["available_providers"] == []
+
     def test_retrieval_failure_not_masked_as_vault_miss(self, client):
         """retrieve_node catches RAGError and returns top_score=0.0 + error,
         which routes to user_gate exactly like an empty vault. The confirm

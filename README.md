@@ -81,13 +81,17 @@ User Query (HTTP POST /query or MCP tool call)
     │     ↓                                               │
     │  1. retrieve  (Chroma + BM25 + RRF fusion)          │
     │     ↓                                               │
-    │  2. route_score  (top_score >= 0.028 RRF?)          │
+    │  2. route_by_score  (top_score >= 0.028 RRF?)       │
     │     ├─ YES ──→ 3. guardrail_input (offline rail;    │
     │     │           opt-in, pass-through when disabled) │
     │     │           blocked ──→ 8. audit_logger          │
     │     │           passed  ──→ 4. local_llm             │
     │     │                        (Ollama :11434)        │
     │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
+    │                    ├─ not yet answered ──→          │
+    │                    │      8. audit_logger  (PAUSE:  │
+    │                    │      return needs_confirm to   │
+    │                    │      the client and stop)      │
     │                    ├─ confirmed + hybrid ──→        │
     │                    │      6. grok_fallback OR       │
     │                    │         claude_fallback        │
@@ -142,6 +146,7 @@ flowchart TD
         I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated · not railed"]
         I -->|"confirmed=false\nor offline mode"| X
         X -->|"passed · vault miss"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
+        I -->|"confirmed=None — PAUSE\nreturn needs_confirm to the client"| L
         H --> L
         J --> L
         W --> L
@@ -455,15 +460,28 @@ python -m retrieval.indexer                          # once, before the first /q
 uvicorn gate:app --host 127.0.0.1 --port 8787        # → http://127.0.0.1:8787
 
 # The coding-harness console — serves static/harness.html
-cyclaw-harness                                       # → http://127.0.0.1:8790
+python -m harness.server                             # → http://127.0.0.1:8790
 ```
 
-`cyclaw-harness` (identical to `python -m harness.server`) is **not** a
-`uvicorn <module>:app` target: `harness/server.py` has no module-level `app`, it
-builds one via `create_app(cfg)` from the resolved `~/.CyClaw` config, so
-`uvicorn harness.server:app` raises `AttributeError`. Override its port with
-`CYCLAW_HARNESS_PORT=8795 cyclaw-harness`, not a CLI flag; only loopback hosts
-are accepted.
+**The `cyclaw-*` short names need a self-install.** `cyclaw-server`,
+`cyclaw-harness`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`, and
+`cyclaw-clear-cache` are `[project.scripts]` console scripts, and pip writes
+those shims only when the CyClaw *project itself* is installed. The install
+steps above install `requirements.txt` — a third-party pin list with no
+self-install line — so those names are `command not found` after them. Add
+`pip install -e . -c constraints.txt` if you want them; otherwise use the
+`python -m …` forms, which always work and are what both shipped launchers use.
+
+Override the harness port with `CYCLAW_HARNESS_PORT=8795 python -m
+harness.server`, not a CLI flag; it refuses to bind a non-loopback address.
+
+`uvicorn harness.server:app` also works, via a lazy module-level `app`
+(`harness/server.py` builds it on first attribute access rather than at import,
+so merely importing the module never touches `~/.CyClaw`). Prefer the `-m` form
+anyway: the uvicorn form bypasses the bind-address guard, so `--host 0.0.0.0`
+opens a public socket that `python -m harness.server` would have refused.
+`TrustedHostMiddleware` still rejects any non-loopback `Host` header either
+way, so the containment holds — but one layer fewer.
 
 Open `/` for the terminal UI and `/health` for readiness. The terminal exposes five operator consoles — **Soul**, **Sync**, **Agentic**, **Filesystem**, and **SQL** — the latter four calling `POST /ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect` (API-key gated, rate-limited, audited).
 
@@ -814,9 +832,11 @@ path** — same routes, same slash commands, same security posture everywhere.
 Only the install/launch glue is platform-coupled, which is why there are two
 sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 
-- **Launch:** `cyclaw-harness` (or `python -m harness.server`) serves a
-  slash-command console at `http://127.0.0.1:8790` (`static/harness.html`);
-  loopback-only bind, non-loopback hosts refused. `gate.py` keeps `:8787`.
+- **Launch:** `python -m harness.server` serves a slash-command console at
+  `http://127.0.0.1:8790` (`static/harness.html`); loopback-only bind,
+  non-loopback hosts refused. `gate.py` keeps `:8787`. (`cyclaw-harness` is the
+  same entry point, but only exists after `pip install -e .` — see
+  [Quick Start](#quick-start).)
 - **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
   sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
   a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.

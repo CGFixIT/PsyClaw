@@ -1223,7 +1223,10 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
 
     if (data.needs_confirm) {
       pendingConfirmQuery = query;
-      addConfirmEntry(data.confirm_message || 'Low confidence. Send online?');
+      addConfirmEntry(
+        data.confirm_message || 'Low confidence. Send online?',
+        Array.isArray(data.available_providers) ? data.available_providers : []
+      );
       return;
     }
 
@@ -1333,7 +1336,14 @@ function removeEntry(id) {
   if (el) el.remove();
 }
 
-function addConfirmEntry(message) {
+// availableProviders comes from the server's QueryResponse and lists only the
+// providers the user gate would actually route to. A "Send to <provider>"
+// button is rendered ONLY for those — previously both were always shown, so
+// pressing one against a disabled provider silently produced an offline answer
+// that looked like a cloud answer. Defaults to [] (offline-only) rather than
+// both, so an older/partial response fails closed instead of re-offering the
+// buttons that caused the problem.
+function addConfirmEntry(message, availableProviders = []) {
   const id = `entry-${entryCounter++}`;
   const el = document.createElement('div');
   el.className = 'entry confirm-entry';
@@ -1359,32 +1369,39 @@ function addConfirmEntry(message) {
   buttons.setAttribute('role', 'group');
   buttons.setAttribute('aria-label', 'Confirmation actions');
 
-  const yesBtn = document.createElement('button');
-  yesBtn.className = 'btn-confirm yes';
-  yesBtn.textContent = 'Send to Grok';
-  yesBtn.setAttribute('aria-label', 'Confirm: send query to Grok online');
-  yesBtn.addEventListener('click', () => handleConfirm(true, id, 'grok'));
+  const PROVIDER_BUTTONS = {
+    grok:   { text: 'Send to Grok',   aria: 'Confirm: send query to Grok online' },
+    claude: { text: 'Send to Claude', aria: 'Confirm: send query to Claude API online' }
+  };
 
-  const claudeBtn = document.createElement('button');
-  claudeBtn.className = 'btn-confirm yes';
-  claudeBtn.textContent = 'Send to Claude';
-  claudeBtn.setAttribute('aria-label', 'Confirm: send query to Claude API online');
-  claudeBtn.addEventListener('click', () => handleConfirm(true, id, 'claude'));
+  const providerBtns = [];
+  for (const provider of availableProviders) {
+    const spec = PROVIDER_BUTTONS[provider];
+    if (!spec) continue;   // unknown provider name from the server — don't render a dead button
+    const btn = document.createElement('button');
+    btn.className = 'btn-confirm yes';
+    btn.textContent = spec.text;
+    btn.setAttribute('aria-label', spec.aria);
+    btn.addEventListener('click', () => handleConfirm(true, id, provider));
+    providerBtns.push(btn);
+  }
 
   const noBtn = document.createElement('button');
   noBtn.className = 'btn-confirm no';
-  noBtn.textContent = 'No — Stay Offline';
+  // With no provider available this is the only button, so "No —" would be
+  // answering a question that was never asked.
+  noBtn.textContent = providerBtns.length ? 'No — Stay Offline' : 'Offline Best Effort';
   noBtn.setAttribute('aria-label', 'Decline: stay offline with best-effort local');
   noBtn.addEventListener('click', () => handleConfirm(false, id));
 
-  buttons.append(yesBtn, claudeBtn, noBtn);
+  buttons.append(...providerBtns, noBtn);
   el.append(label, text, buttons);
   resultsEl.appendChild(el);
   resultsEl.scrollTop = resultsEl.scrollHeight;
   noBtn.focus();
 
-  // Trap focus within the modal dialog (Tab cycles between Yes and No).
-  const focusable = [yesBtn, claudeBtn, noBtn];
+  // Trap focus within the modal dialog (Tab cycles through the rendered buttons).
+  const focusable = [...providerBtns, noBtn];
   el.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
     const idx = focusable.indexOf(document.activeElement);

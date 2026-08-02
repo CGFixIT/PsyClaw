@@ -103,6 +103,57 @@ def test_invoke_sanitizes_the_prompt_before_it_reaches_the_model(test_config, mo
     assert kwargs == {"max_tokens": 2048, "temperature": 0.0}
 
 
+def test_invoke_omits_temperature_for_claude(test_config, monkeypatch):
+    """Anthropic returns HTTP 400 for a non-default temperature on the Claude 5
+    family -- "on every request, regardless of whether thinking is used"
+    (platform.claude.com/docs/en/build-with-claude/thinking, verified
+    2026-08-02) -- and the Messages API default is 1.0, so the 0.0 this client
+    defaults to is non-default. Sending it made every Claude plan call fail 400
+    on the shipped providers.claude.model "claude-sonnet-5". llm/client.py's
+    ClaudeClient already omitted it on the RAG path; this pins the same rule
+    here."""
+    cfg, config_path = test_config
+    stub = _StubModel(content="plan")
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+
+    client = ChatModelProposerClient(settings=_settings(provider="claude"))
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    [(_messages, kwargs)] = stub.calls
+    assert "temperature" not in kwargs, "a non-default temperature 400s on Claude 5"
+    assert kwargs == {"max_tokens": 2048}
+
+
+def test_invoke_still_sends_temperature_for_grok(test_config, monkeypatch):
+    """The Claude carve-out must not silently strip the parameter for xAI, whose
+    OpenAI-compatible surface accepts and uses it."""
+    cfg, config_path = test_config
+    stub = _StubModel(content="plan")
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+
+    client = ChatModelProposerClient(settings=_settings(provider="grok"))
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    [(_messages, kwargs)] = stub.calls
+    assert kwargs == {"max_tokens": 2048, "temperature": 0.0}
+
+
+def test_invoke_temperature_none_drops_it_for_every_provider(test_config, monkeypatch):
+    """An explicit None is the provider-agnostic opt-out."""
+    cfg, config_path = test_config
+    stub = _StubModel(content="plan")
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+
+    client = ChatModelProposerClient(settings=_settings(provider="grok"))
+    client.invoke(
+        system_prompt="s", user_prompt="u", temperature=None,
+        config_path=config_path, cfg=cfg,
+    )
+
+    [(_messages, kwargs)] = stub.calls
+    assert kwargs == {"max_tokens": 2048}
+
+
 def test_invoke_coerces_list_content_from_the_model(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content=[{"type": "text", "text": "patch body"}])
