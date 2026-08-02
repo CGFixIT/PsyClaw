@@ -54,4 +54,53 @@ if [ "$rc" -ne 3 ]; then
 fi
 echo "missing pin files: PASS (exit 3)"
 
+# --- check_env_drift.py: the non-manifest drift surfaces --------------------
+drift="$here/check_env_drift.py"
+
+# 4. Clean tree: no FAILures. Warnings are expected and allowed (huggingface_hub
+#    and starlette are known-undeclared hard transitives), so this asserts the
+#    exit code, not a warning count that would rot on the next transitive.
+out="$(python3 "$drift" --repo-root "$repo_root" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "env drift clean tree: FAIL — expected exit 0, got $rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "env drift clean tree: PASS (exit 0, no E1/E2/E4 failures)"
+
+# 5. Mutation E1: the same tool pinned at two versions in two workflow files.
+#    This is the drift class nothing else in the repo can see.
+c="$(mktemp -d)"
+mkdir -p "$c/.github/workflows"
+printf 'jobs:\n  a:\n    steps:\n      - run: pip install ruff==0.15.20\n' > "$c/.github/workflows/one.yml"
+printf 'jobs:\n  b:\n    steps:\n      - run: pip install ruff==0.14.0\n' > "$c/.github/workflows/two.yml"
+out="$(python3 "$drift" --repo-root "$c" 2>&1)"; rc=$?
+rm -rf "$c"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "ruff pinned at 2 different versions"; then
+  echo "env drift mutation (E1 split tool pin): FAIL — expected exit 2 + E1 line, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "env drift mutation (E1 split tool pin): PASS (exit 2)"
+
+# 6. Mutation E4: an extras-only package leaking into requirements.txt, which is
+#    the BASE surface. Also asserts the comment-vs-requirement distinction —
+#    requirements.txt mentions extras in prose and must not trip on that.
+d="$(mktemp -d)"
+printf '# nemoguardrails lives in the guardrails extra, not here\nhttpx==0.28.1\n' > "$d/requirements.txt"
+out="$(python3 "$drift" --repo-root "$d" 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "env drift mutation (E4 comment is not an install): FAIL — a commented package must not trip E4, got rc=$rc" >&2
+  echo "$out" >&2; rm -rf "$d"; exit 1
+fi
+printf 'nemoguardrails==0.19.0\n' >> "$d/requirements.txt"
+out="$(python3 "$drift" --repo-root "$d" 2>&1)"; rc=$?
+rm -rf "$d"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "installs extras-only package"; then
+  echo "env drift mutation (E4 extras leak): FAIL — expected exit 2 + E4 line, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "env drift mutation (E4 extras leak): PASS (exit 2; commented mention correctly ignored)"
+
 echo "== verify-deps verify: OK =="
