@@ -88,6 +88,12 @@ class RealRepoRunRecord:
     error: str | None = None
     pushed: bool = False  # branch reached origin via RepoWorkspaceTools.push_branch
     pr_url: str | None = None  # `gh pr create`'s stdout on a successful publish (still disarmed by default)
+    # SHA-256 of the human-approved plan that steered this run, or None if it
+    # ran unplanned. The HASH, not the text: the plan can quote repo content,
+    # and this record is printed to a console and returned over HTTP. Enough to
+    # answer "which plan produced this diff" when the operator still has the
+    # file, which is the question a reviewer actually asks.
+    plan_sha256: str | None = None
     created_at: str = ""
     updated_at: str = ""
 
