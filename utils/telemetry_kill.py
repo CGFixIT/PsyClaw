@@ -42,12 +42,17 @@ function and suppresses only that ping; it does not touch
 ``is_offline_mode()``, so it carries none of ``HF_HUB_OFFLINE``'s first-run
 bootstrap risk and is safe to set for every process from the start.
 ``DO_NOT_TRACK=1`` is confirmed (NVIDIA's own NeMo Guardrails docs) to be an
-equivalent opt-out for that library specifically; whether huggingface_hub's
-current release also honors it is unconfirmed and sources disagree -- one
-huggingface.co doc page claims parity with ``HF_HUB_DISABLE_TELEMETRY``, but
-the installed ``_telemetry.py`` source read for this note did not reference it.
-Set anyway as a harmless, standard opt-out convention belt-and-suspenders; do
-not treat it as a substitute for the explicit HF var above.
+equivalent opt-out for that library specifically. Verified 2026-08-02 that
+huggingface_hub honors it too, resolving the "sources disagree" note this
+paragraph used to carry: ``constants.py`` computes
+``HF_HUB_DISABLE_TELEMETRY`` as the OR of three env vars --
+``HF_HUB_DISABLE_TELEMETRY``, ``DISABLE_TELEMETRY``, and ``DO_NOT_TRACK`` --
+so setting any one of them suppresses the ping. The earlier read missed it
+because it looked in ``utils/_telemetry.py``, which only consumes the
+already-computed constant; the env-var parsing lives in ``constants.py``.
+Checked against the pinned huggingface_hub 1.26.0. Keep the explicit HF var
+set anyway: it is the vendor's own documented name and does not depend on the
+cross-ecosystem convention continuing to be honored.
 
 Applying this is an intentional process-wide side effect: it mutates
 ``os.environ`` for the whole interpreter. That is the point -- the libraries
@@ -78,8 +83,9 @@ TELEMETRY_KILL: dict[str, str] = {
     # download or cache-miss fetch, so it is safe unconditionally.
     "HF_HUB_DISABLE_TELEMETRY": "1",
     # Cross-ecosystem opt-out convention; confirmed effective for NeMo
-    # Guardrails, unconfirmed (sources disagree) for huggingface_hub -- see
-    # module docstring. Harmless where unread.
+    # Guardrails AND (as of 2026-08-02, read from constants.py in the pinned
+    # 1.26.0) for huggingface_hub -- see module docstring. Harmless where
+    # unread.
     "DO_NOT_TRACK": "1",
     # ONNX Runtime, a transitive dependency of chromadb (and of nemoguardrails's
     # fastembed base, when guardrails is enabled) -- see constraints.txt. Kept

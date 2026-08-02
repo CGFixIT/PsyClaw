@@ -5,9 +5,16 @@ Verified 2026-07-29 against `main`; macOS path re-verified 2026-08-02.
 
 This is the canonical setup guide (`docs/SETUP.md` now points here). For the
 full architecture tour — agentic layer, filesystem/SQL connectors, NeMo
-Guardrails, the PowerShell harness, and the security model — see
-[`README.md`](README.md). This guide covers only what's needed to get the
-core RAG gateway running.
+Guardrails, the coding harness, and the security model — see
+[`README.md`](README.md). This guide covers what's needed to get the core RAG
+gateway running, plus how to launch the harness console beside it and exercise
+every REST endpoint from a terminal.
+
+**On a Mac, go straight to [macOS (Apple Silicon)](#macos-apple-silicon)** —
+the Linux block above it does not work here, for a reason spelled out in that
+section. Then:
+[running both servers](#running-both-servers-on-macos) ·
+[testing every endpoint](#rest-api--testing-every-endpoint-from-the-terminal).
 
 ---
 
@@ -193,6 +200,13 @@ pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
 # 4. Required env (any non-empty value works — see "GROK_API_KEY" below)
 export GROK_API_KEY=dummy
 
+# 4b. API key for the Soul + operator consoles. /query, /health and the
+#     terminal UI need no key, but every /soul/* and /ops/* route fails CLOSED
+#     with 401 without one — see "CYCLAW_API_KEY" below. Generate a real value
+#     rather than typing a word: openssl ships with macOS, no install needed.
+export CYCLAW_API_KEY="$(openssl rand -hex 20)"
+echo "$CYCLAW_API_KEY"          # copy this — you paste it into the console UI
+
 # 5. Build the retrieval index (see "Is the index really mandatory?" below)
 python -m retrieval.indexer
 
@@ -201,6 +215,65 @@ uvicorn gate:app --reload --host 127.0.0.1 --port 8787
 ```
 
 Open `http://127.0.0.1:8787` → the terminal UI loads automatically.
+
+`export` lasts only for that Terminal tab. To persist both keys, append them to
+your shell rc file — zsh is the macOS default since Catalina, so that is
+`~/.zshrc` unless you switched:
+
+```bash
+cat >> ~/.zshrc <<'EOF'
+export GROK_API_KEY=dummy
+export CYCLAW_API_KEY="paste-the-value-you-generated"
+EOF
+source ~/.zshrc
+echo "$CYCLAW_API_KEY"          # confirm it survived
+```
+
+Check which shell you are actually in with `echo $SHELL` first — on bash, use
+`~/.bash_profile` instead (macOS bash reads that, not `~/.bashrc`, for login
+shells).
+
+### Running both servers on macOS
+
+CyClaw ships **two** independent local web apps. They are separate processes on
+separate ports; neither needs the other, and running one does not start the
+other.
+
+```bash
+# 1) The RAG gateway — serves static/terminal.html at /, plus the whole REST API
+source .venv/bin/activate
+uvicorn gate:app --host 127.0.0.1 --port 8787
+#    → http://127.0.0.1:8787
+
+# 2) The coding-harness console — serves static/harness.html
+#    In a SECOND Terminal tab (this one blocks too):
+source .venv/bin/activate
+cyclaw-harness                  # identical: python -m harness.server
+#    → http://127.0.0.1:8790
+```
+
+Two things about the harness command that differ from the gateway, both
+deliberate:
+
+- **It is not a `uvicorn <module>:app` target.** `harness/server.py` has no
+  module-level `app`; it builds one with `create_app(cfg)` inside `main()` so
+  the app is constructed from the resolved `~/.CyClaw` config rather than at
+  import time. `uvicorn harness.server:app` therefore fails with an
+  `AttributeError`. Use `cyclaw-harness` / `python -m harness.server`, which
+  call `uvicorn.run()` for you.
+- **The port is 8790, and you change it with an env var, not a flag:**
+
+  ```bash
+  CYCLAW_HARNESS_PORT=8795 cyclaw-harness
+  ```
+
+  Values outside 1024–65535 are rejected at startup. `CYCLAW_HARNESS_HOST`
+  exists too but only accepts loopback addresses — a non-loopback host exits
+  immediately, by threat-model design.
+
+Add `--reload` to the `uvicorn gate:app` line while editing code; leave it off
+otherwise (it doubles the process count and re-imports the whole retrieval
+stack on every save).
 
 ### Ollama on macOS
 
@@ -242,6 +315,125 @@ as the install gate, or a one-line readiness check against a running server:
 GROK_API_KEY=dummy pytest tests/ -q --tb=short
 curl -s http://127.0.0.1:8787/health
 ```
+
+---
+
+## REST API — testing every endpoint from the Terminal
+
+Every route below is on the RAG gateway (`127.0.0.1:8787`). `curl` and
+`python3` both ship with macOS; nothing extra to install. Pipe anything
+through `python3 -m json.tool` to pretty-print it.
+
+Export the key once per tab so the authenticated examples work as written:
+
+```bash
+export CYCLAW_API_KEY="the-value-you-generated"
+AUTH="Authorization: Bearer $CYCLAW_API_KEY"
+```
+
+### Open routes (no key)
+
+| Route | Method | What it does |
+|---|---|---|
+| `/` | GET | serves `static/terminal.html` — the browser console |
+| `/static/*` | GET | static assets for that page |
+| `/health` | GET | readiness: per-service status, `index_ready`, `graph_ready`, `mode` |
+| `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized |
+
+```bash
+# Readiness. "degraded" without Ollama running is NORMAL, not an error.
+curl -s http://127.0.0.1:8787/health | python3 -m json.tool
+
+# A normal query.
+curl -s -X POST http://127.0.0.1:8787/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What is RRF fusion?"}' | python3 -m json.tool
+```
+
+If the corpus does not answer it, the response comes back with
+`needs_confirm: true` and a `confirm_message` instead of an answer. Re-POST the
+same query with your decision — this is the user gate, and it is the only way
+an external provider is ever reached:
+
+```bash
+# Decline escalation → a local best-effort answer
+curl -s -X POST http://127.0.0.1:8787/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"Who won the 2026 World Cup?","user_confirmed_online":false}'
+
+# Confirm escalation, naming the provider. Still requires app.mode: "hybrid"
+# AND that provider enabled in config.yaml AND its key env var set — all three,
+# or it silently answers offline instead.
+curl -s -X POST http://127.0.0.1:8787/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"Who won the 2026 World Cup?","user_confirmed_online":true,"online_provider":"grok"}'
+```
+
+`online_provider` accepts only `"grok"` or `"claude"`. The request model is
+`extra='forbid'`, so a typo'd field name returns `422`, not a silent ignore.
+
+### Authenticated routes (Bearer `CYCLAW_API_KEY`)
+
+All of these return `401` when the key is missing **or** when `CYCLAW_API_KEY`
+is unset on the server — fail-closed in both directions.
+
+| Route | Method | What it does |
+|---|---|---|
+| `/soul` | GET | current soul text + version metadata |
+| `/soul/propose` | POST | advisory injection scan of a proposed soul — never writes |
+| `/soul/apply` | POST | enforced scan + atomic write; **requires a `reason`** |
+| `/soul/reload` | POST | re-read `soul.md` from disk |
+| `/soul/restore` | POST | restore from the `.bak` copy |
+| `/audit/summary` | GET | aggregate audit stats only — never raw query text |
+| `/ops/sync` | POST | Dropbox corpus sync shim |
+| `/ops/agentic` | POST | agentic-layer shim |
+| `/ops/fsconnect` | POST | filesystem-connector shim |
+| `/ops/sqlconnect` | POST | SQL-connector shim |
+
+```bash
+curl -s -H "$AUTH" http://127.0.0.1:8787/soul | python3 -m json.tool
+curl -s -H "$AUTH" http://127.0.0.1:8787/audit/summary | python3 -m json.tool
+
+# Dry-run a soul change — scans and reports, writes nothing.
+curl -s -X POST http://127.0.0.1:8787/soul/propose \
+  -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"new_soul":"# Soul\n\nBe concise.","reason":"testing the scanner"}'
+
+# Operator consoles. "status" is the read-only action on each; every one of the
+# four takes an `action` field and nothing else is required.
+curl -s -X POST http://127.0.0.1:8787/ops/sync \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"action":"status"}'
+curl -s -X POST http://127.0.0.1:8787/ops/agentic \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"action":"status"}'
+curl -s -X POST http://127.0.0.1:8787/ops/fsconnect \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"action":"status"}'
+curl -s -X POST http://127.0.0.1:8787/ops/sqlconnect \
+  -H "$AUTH" -H 'Content-Type: application/json' -d '{"action":"status"}'
+```
+
+`POST /soul/apply` is the one route that mutates state. It needs a non-empty
+`reason` string — that requirement is an architectural invariant, not a
+validation nicety, so there is no flag to skip it.
+
+### Reading the status codes
+
+| Code | Means |
+|---|---|
+| `200` | success — including a `needs_confirm: true` gate response, which is not an error |
+| `400` | your `Host` header is not in `config.yaml`'s `allowed_hosts`, or the injection filter rejected the query |
+| `401` | missing/invalid `CYCLAW_API_KEY` (or it is unset server-side) |
+| `404` | on a `/soul/*` route: `personality.enabled` is `false` in `config.yaml` |
+| `422` | request body failed Pydantic validation — usually a misspelled field, since the models forbid extras |
+| `429` | rate limit — 60 requests/min per IP |
+| `503` | `INDEX_NOT_FOUND` — run `python -m retrieval.indexer` |
+| `504` | the graph exceeded `api.graph_timeout_sec` (660s) |
+
+### The harness console's API
+
+The coding-harness console on `:8790` is a **separate app with its own route
+set** (`/api/status`, `/api/chat`, `/api/sessions`, …), documented in
+[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md). None of the routes above
+exist on `:8790`, and none of the harness routes exist on `:8787`.
 
 ---
 
