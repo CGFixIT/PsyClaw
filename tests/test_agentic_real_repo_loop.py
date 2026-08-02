@@ -1128,6 +1128,96 @@ def test_overwrite_guard_allows_a_declared_existing_file(tmp_path, monkeypatch):
         assert (Path(tools.worktree) / "existing.py").read_text(encoding="utf-8") == "replaced with review"
 
 
+def test_overwrite_guard_refuses_a_budget_omitted_declared_file(tmp_path, monkeypatch):
+    """A file CAN be declared via read_paths and still never be shown: if
+    earlier declared files already spent the total read budget
+    (_MAX_TOTAL_READ_CHARS), a later path gets only the bare "omitted"
+    marker -- zero content. Before this fix, "declared" alone was enough to
+    bypass the blind-overwrite backstop, so a model that declared enough
+    large files to exhaust the budget could "unlock" write access to a file
+    it never actually saw a single byte of. This proves that no longer works:
+    existing.py must be refused exactly like the undeclared case, even though
+    it IS in read_paths.
+
+    Three decoys of EXACTLY _MAX_READ_FILE_CHARS each (not one big one): a
+    single oversized decoy gets per-file TRUNCATED to ~_MAX_READ_FILE_CHARS
+    + a ~30-char suffix before the total-budget check ever sees it, which
+    leaves far more total-budget headroom than it looks like and defeats the
+    setup. Sized to land exactly at 3 x 4_000 = 12_000 = _MAX_TOTAL_READ_CHARS,
+    each individually under the per-file cap (untruncated), so existing.py's
+    own content -- of any length -- always overflows what's left."""
+    from agentic.real_repo_loop import _MAX_READ_FILE_CHARS, _MAX_TOTAL_READ_CHARS
+
+    assert _MAX_READ_FILE_CHARS * 3 == _MAX_TOTAL_READ_CHARS  # the setup's load-bearing assumption
+
+    block = "=== FILE existing.py ===\nhallucinated replacement\n=== END FILE ===\nfix"
+    files = {
+        "decoy1.txt": "d" * _MAX_READ_FILE_CHARS,
+        "decoy2.txt": "d" * _MAX_READ_FILE_CHARS,
+        "decoy3.txt": "d" * _MAX_READ_FILE_CHARS,  # spends the whole 12_000-char budget exactly
+        "existing.py": "original content\n",
+    }
+    with _cloned_tools(tmp_path, monkeypatch, files=files) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="edit existing.py",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/budget-omitted",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    # declared, but pushed past budget by the three decoys ahead of it
+                    read_paths=["decoy1.txt", "decoy2.txt", "decoy3.txt", "existing.py"],
+                )
+        finally:
+            client.close()
+
+        assert result.accepted is False
+        assert "file_write_failed" in result.iterations[0].decision.rejected_gates
+        mverify.assert_not_called()
+        assert (Path(tools.worktree) / "existing.py").read_text(encoding="utf-8") == "original content\n"
+
+
+def test_overwrite_guard_refuses_a_truncated_declared_file(tmp_path, monkeypatch):
+    """A second, distinct way a declared file can fail to earn write
+    permission: existing.py IS shown, but its content exceeds
+    _MAX_READ_FILE_CHARS and gets per-file truncated -- the model only ever
+    saw the first _MAX_READ_FILE_CHARS characters. A whole-file replacement
+    of it is exactly as much an unverifiable reconstruction as the
+    never-shown case, just for the tail instead of the whole thing -- the
+    backstop must refuse it the same way."""
+    from agentic.real_repo_loop import _MAX_READ_FILE_CHARS
+
+    block = "=== FILE existing.py ===\nhallucinated replacement\n=== END FILE ===\nfix"
+    files = {"existing.py": ("original content, line one\n" * 1000)[: _MAX_READ_FILE_CHARS + 500]}
+    with _cloned_tools(tmp_path, monkeypatch, files=files) as tools:
+        client = _loop_client(lambda request: _chat_response(block))
+        try:
+            with patch("agentic.real_repo_loop.run_verification") as mverify:
+                result = run_real_repo_loop(
+                    tools, client,
+                    instruction="edit existing.py",
+                    checks=[_MARKER_CHECK],
+                    branch_name="claude/truncated",
+                    commit_message="x",
+                    max_iterations=1,
+                    reason="test run",
+                    confirm=True,
+                    read_paths=["existing.py"],  # declared and shown -- but only partially
+                )
+        finally:
+            client.close()
+
+        assert result.accepted is False
+        assert "file_write_failed" in result.iterations[0].decision.rejected_gates
+        mverify.assert_not_called()
+        assert (Path(tools.worktree) / "existing.py").read_text(encoding="utf-8") == files["existing.py"]
+
+
 def test_render_existing_files_bounds_per_file_and_total_size():
     from agentic.real_repo_loop import _MAX_READ_FILE_CHARS, _MAX_TOTAL_READ_CHARS, _render_existing_files
 
@@ -1135,9 +1225,50 @@ def test_render_existing_files_bounds_per_file_and_total_size():
         def read_file(self, path):
             return {"big.txt": "x" * (_MAX_READ_FILE_CHARS + 500), "small.txt": "y" * 10}[path]
 
-    rendered = _render_existing_files(_FakeTools(), ["big.txt", "small.txt"])
+    rendered, shown = _render_existing_files(_FakeTools(), ["big.txt", "small.txt"])
     assert "truncated" in rendered
     assert len(rendered) < _MAX_TOTAL_READ_CHARS + 2_000  # generous slack for markers/labels
+    # big.txt is still USEFUL context (rendered, truncated, clearly labeled) but
+    # does NOT earn a place in `shown` -- the model only saw its first
+    # _MAX_READ_FILE_CHARS characters, not the whole file, so it cannot honestly
+    # justify a whole-file replacement of it. Only small.txt, shown in full,
+    # qualifies. See test_overwrite_guard_refuses_a_truncated_declared_file for
+    # the end-to-end write-permission consequence of this.
+    assert shown == {"small.txt"}
+
+
+def test_render_existing_files_excludes_a_budget_omitted_path_from_shown():
+    """A path can be declared and still not be SHOWN -- this is the
+    distinction the caller's blind-overwrite backstop depends on. If the
+    running total is already spent by earlier files, a later declared path
+    gets only the bare "omitted" marker: zero content, no truncation notice,
+    nothing the model could have actually read.
+
+    Three decoys of EXACTLY _MAX_READ_FILE_CHARS (not one oversized one): a
+    single big decoy gets per-file truncated to ~_MAX_READ_FILE_CHARS before
+    the total-budget check ever runs, so its real contribution to the running
+    total is far smaller than its raw length suggests -- leaving enough
+    headroom for target.txt to still fit and defeating the test's premise.
+    3 x 4_000 lands exactly on _MAX_TOTAL_READ_CHARS's 12_000, each decoy
+    individually under the per-file cap (so untruncated), leaving zero
+    headroom for anything that follows."""
+    from agentic.real_repo_loop import _MAX_READ_FILE_CHARS, _MAX_TOTAL_READ_CHARS, _render_existing_files
+
+    assert _MAX_READ_FILE_CHARS * 3 == _MAX_TOTAL_READ_CHARS  # the setup's load-bearing assumption
+
+    class _FakeTools:
+        def read_file(self, path):
+            if path.startswith("decoy"):
+                return "d" * _MAX_READ_FILE_CHARS
+            return {"target.txt": "real content that must not be blindly overwritten"}[path]
+
+    rendered, shown = _render_existing_files(
+        _FakeTools(), ["decoy1.txt", "decoy2.txt", "decoy3.txt", "target.txt"],
+    )
+    assert {"decoy1.txt", "decoy2.txt", "decoy3.txt"} <= shown
+    assert "target.txt" not in shown
+    assert "target.txt omitted" in rendered
+    assert "real content that must not be blindly overwritten" not in rendered
 
 
 # --- verification evidence in feedback (Tier 1) ------------------------------
