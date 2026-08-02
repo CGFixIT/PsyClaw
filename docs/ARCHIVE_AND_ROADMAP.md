@@ -911,7 +911,20 @@ The doc's "one query-path item that still stands on its own" (deferred from the 
 ```
 (`graph.py:849-855`, immediately above the `user_gate` conditional-edges block.)
 
-This gap is currently **dormant, not active**: `config.yaml:652` ships `guardrails.enabled: false`, which makes the `guardrail_input` node a pure pass-through for every route (per `config.yaml:651-655`'s own comment) — so today neither the high-score nor the low-score path is actually railed, and the asymmetry the comment describes has no live effect. It becomes a real, exploitable asymmetry only if an operator flips `guardrails.enabled: true` without also closing this gap; it remains a graph-edge change (High tier, `CLAUDE.md` §7) and is explicitly out of scope for the 3A consolidation work.
+> **CLOSED 2026-08-02.** The comment quoted above no longer exists. `user_gate`'s
+> `path_map` now routes its `"offline_best_effort"` return **back through
+> `guardrail_input`**, and `guardrail_router` gained a third target
+> (`offline_best_effort`), discriminated on `needs_user_confirm` — which
+> `route_by_score_node` sets explicitly on both branches. The two external legs
+> (`grok_fallback` / `claude_fallback`) are still deliberately un-railed: their
+> policy gate is the triple gate in `user_gate_router` (I3), not this rail.
+> `invariant-guard`'s expected-target sets were updated in the same change, and
+> `tests/test_graph.py::test_low_score_path_never_invokes_the_guard` — which
+> pinned the old behavior — was superseded by
+> `test_low_score_offline_path_now_invokes_the_guard`. The paragraph below is
+> retained as the record of why it stood open, not as current state.
+
+This gap was **dormant, not active**: `config.yaml:652` ships `guardrails.enabled: false`, which makes the `guardrail_input` node a pure pass-through for every route (per `config.yaml:651-655`'s own comment) — so today neither the high-score nor the low-score path is actually railed, and the asymmetry the comment describes has no live effect. It becomes a real, exploitable asymmetry only if an operator flips `guardrails.enabled: true` without also closing this gap; it remains a graph-edge change (High tier, `CLAUDE.md` §7) and is explicitly out of scope for the 3A consolidation work.
 
 ## 9. Still-Open Ideas — Index
 
@@ -972,4 +985,4 @@ that test, not a judgment on the idea's merit.
 | Matter/client tagging + conflict-wall checks | NOT_IMPLEMENTED | law-firm-specific hypothesis — hold | §7 |
 | 3B: harness-side pre-flight scanner for the `instruction` field on `POST /api/agent/run` | NOT_IMPLEMENTED — **the doc's own revisit trigger has fired** | real, currently-unaddressed gap in a now-live path — flag for the prompt/harness owner, not a quiet fix | §8 |
 | 3C: promote `agentic/fsconnect/client.py`'s injection scanner from advisory (`block_on_injection_flags: false`) to enforcing | NOT_IMPLEMENTED, still an open operator decision | deliberate decision needed, not a default flip | §8 |
-| `graph.py` KNOWN GAP: `offline_best_effort` bypasses `guardrail_input` | NOT_IMPLEMENTED, dormant (`guardrails.enabled: false`) | real, code-acknowledged gap; needs a maintainer decision on `guardrail_router` before guardrails ever ship enabled — graph-edge change, High tier | §8 |
+| `graph.py` KNOWN GAP: `offline_best_effort` bypasses `guardrail_input` | **CLOSED 2026-08-02** | `user_gate`'s path_map now routes the offline return through `guardrail_input`; `guardrail_router` gained an `offline_best_effort` target | §8 |

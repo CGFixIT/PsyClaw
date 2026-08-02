@@ -111,6 +111,13 @@ pytest-cov==7.1.0
 # Previously unpinned, so `pip install -e ".[dev]" -c constraints.txt` could pull in
 # ruff/mypy/bandit releases that changed lint rules mid-CI or (for mypy) type-check
 # semantics — silently breaking a green run. Pinned to the currently-green versions.
-ruff==0.15.20
-mypy==2.1.0
+# Bumped 2026-08-02 (ruff 0.15.20 -> 0.16.1, mypy 2.1.0 -> 2.3.0). ruff is the
+# CI-enforced one, so 0.16.1 was run against the whole tree with this repo's exact
+# rule set (--select E,F,I,B,C4,UP,S) before the pin moved: clean, zero new
+# findings. mypy is NOT wired into any CI workflow (see CLAUDE.md §4), so its bump
+# carries no gate risk. Both versions verified present on conda-forge too, since
+# environment.yml carries the same pins and a conda-only version would break that
+# lane's solve. bandit is already at its latest release (1.9.4) — left alone.
+ruff==0.16.1
+mypy==2.3.0
 bandit==1.9.4
