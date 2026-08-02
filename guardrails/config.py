@@ -32,7 +32,7 @@ DEFAULT_ENGINE = "openai"  # Ollama exposes an OpenAI-compatible API
 # Loopback-only binding to local Ollama is a core CyClaw security invariant
 # (offline-first, never off-box), not debug code -- suppress the devskim heuristic.
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"  # noqa: S104  # DevSkim: ignore DS162092
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = "qwen3.6:27b"
 DEFAULT_NEMO_CONFIG_DIR = "guardrails/config"
 DEFAULT_METRICS_PATH = "logs/guardrails.jsonl"
 DEFAULT_BLOCK_MESSAGE = (

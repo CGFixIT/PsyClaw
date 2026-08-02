@@ -147,14 +147,14 @@ subsystems.
 | `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Fused scores rarely exceed ~0.1 |
 | `60` | `retrieval.rrf_k` | RRF fusion constant |
 | `660` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (600) |
-| `600` / `3000` | `local_llm.timeout_sec` / `max_tokens` | sized for a dense ~27B local model, not the 7B default |
+| `600` / `3000` | `local_llm.timeout_sec` / `max_tokens` | sized for a dense ~27B local model — which `local_llm.model` now is, so these match the shipped default |
 | `8000` | `personality.soul_max_chars` | soul is capped |
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |
 | `60` per `60`s | `api.rate_limit` | per-IP |
 | `40` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
-| `qwen2.5:7b` | `local_llm.model` | Ollama |
+| `qwen3.6:27b` | `local_llm.model` | Ollama |
 | `grok-4.5` | `grok.model` | disabled by default |
 | `claude-sonnet-5` | `claude.model` | disabled by default; second external fallback (PR #441) |
 

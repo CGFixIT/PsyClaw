@@ -257,7 +257,7 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:11434/v1/models" >/dev/null 2>&1; t
   # extra fork), so $! below is the real server PID -- `(cd dir && cmd &)`
   # without exec backgrounds the whole `cd && cmd` list as its own job and
   # $! would instead capture that wrapper, one PID off from the real server.
-  (cd /tmp && exec "$VPY" "$SKILL_DIR/mock_ollama.py" --port 11434 --model qwen2.5:7b > /tmp/cyclaw-verify-mock-ollama.log 2>&1) &
+  (cd /tmp && exec "$VPY" "$SKILL_DIR/mock_ollama.py" --port 11434 --model qwen3.6:27b > /tmp/cyclaw-verify-mock-ollama.log 2>&1) &
   MOCK_OLLAMA_PID=$!
   for _ in $(seq 1 20); do
     curl -sf --max-time 1 "http://127.0.0.1:11434/v1/models" >/dev/null 2>&1 && break  # DevSkim: ignore DS162092,DS137138

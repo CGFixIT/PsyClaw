@@ -1077,7 +1077,7 @@ def _harness_mock_transport(reply: str = "mock harness reply", prompt_tokens: in
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen2.5:7b",
+            "model": "qwen3.6:27b",
             "choices": [{"message": {"role": "assistant", "content": reply}}],
             "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
         })
@@ -1110,7 +1110,7 @@ def phase_harness_console() -> PhaseResult:
 
     cfg = HarnessConfig.load()
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_harness_mock_transport(),
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_harness_mock_transport(),
     )
     # The five state-changing POSTs, GET /api/github/status and the three
     # /api/agent/* run routes are Bearer-gated (utils/auth.py) AND require the
