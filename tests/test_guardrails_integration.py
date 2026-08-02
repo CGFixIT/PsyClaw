@@ -294,10 +294,10 @@ def test_apply_guardrails_config_overrides_static_template(monkeypatch):
         SimpleNamespace(engine="openai", model="stale-model", parameters=None),
     ])
     cfg = GuardrailsConfig(enabled=True, base_url="http://127.0.0.1:11434/v1",
-                           model="qwen2.5:7b", engine="openai")
+                           model="qwen3.6:27b", engine="openai")
     _apply_guardrails_config(fake_config, cfg)
     for m in fake_config.models:
-        assert m.model == "qwen2.5:7b"
+        assert m.model == "qwen3.6:27b"
         assert m.parameters["base_url"] == "http://127.0.0.1:11434/v1"
 
 

@@ -217,8 +217,9 @@ prefer the signed app on a machine you care about.
 ```bash
 ollama --version            # sanity check
 ollama serve                # only if you did NOT install the .app — see below
-ollama pull qwen3.6:27b      # the model config.yaml expects by default
-                            # running something bigger instead? see below
+ollama pull qwen3.6:27b     # the model config.yaml expects by default (dense
+                            # ~27B — multi-GB pull). Want a lighter one? See
+                            # "Running a different local model" below.
 
 # Ollama's own native API — confirms the daemon is up and lists pulled models:
 curl -s http://127.0.0.1:11434/api/tags

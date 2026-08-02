@@ -36,7 +36,7 @@ GUARDED = [
     ("get", "/api/sessions/does-not-exist", None),
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
     ("post", "/api/soul", {"enabled": True}),
-    ("post", "/api/model", {"model": "qwen2.5:7b"}),
+    ("post", "/api/model", {"model": "qwen3.6:27b"}),
     ("post", "/api/chat", {"message": "hi"}),
     ("get", "/api/github/status", None),
     # The agentic coding routes. The decision route is guarded like the rest --
@@ -69,13 +69,13 @@ OPEN = [
 def _chat() -> HarnessChatClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen2.5:7b",
+            "model": "qwen3.6:27b",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         })
 
     return HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=httpx.MockTransport(handler)
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=httpx.MockTransport(handler)
     )
 
 

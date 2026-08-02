@@ -28,7 +28,7 @@ from utils.ops_runner import OpsError
 def _mock_transport(reply: str = "ok", prompt_tokens: int = 11, completion_tokens: int = 7):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen2.5:7b",
+            "model": "qwen3.6:27b",
             "choices": [{"message": {"role": "assistant", "content": reply}}],
             "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens},
         })
@@ -64,7 +64,7 @@ def cfg(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(cfg):
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_mock_transport()
     )
     app = create_app(cfg, chat)
     # base_url sets the Host header to an allowed loopback host; the default
@@ -311,7 +311,7 @@ def test_session_store_skips_corrupt_files_in_listing(tmp_path):
 
 def test_chat_client_extracts_usage():
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport("hello", 21, 9)
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_mock_transport("hello", 21, 9)
     )
     result = chat.chat(system_prompt="s", messages=[{"role": "user", "content": "hi"}])
     assert result.body_text == "hello"
@@ -342,7 +342,7 @@ def test_console_follows_local_backend_fallback(cfg, monkeypatch):
 
     llm_cfg = {
         "base_url": "http://127.0.0.1:11434/v1",
-        "model": "qwen2.5:7b",
+        "model": "qwen3.6:27b",
         "provider": "ollama",
         "fallback": {
             "enabled": True,
@@ -398,7 +398,7 @@ def test_rejects_non_loopback_host_header(cfg):
 
 def _loopback_chat() -> HarnessChatClient:
     return HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_mock_transport()
     )
 
 
@@ -420,9 +420,9 @@ def test_chat_honors_persisted_model_selection(client, cfg):
     calls, not just what /api/status and the session record display. Before
     the fix, `chat()` was invoked with `model=req.model or None`, so a
     request with no explicit model= silently fell through to the resolved
-    backend's default (qwen2.5:7b) instead of the operator's selection --
+    backend's default (qwen3.6:27b) instead of the operator's selection --
     /api/status and the session record would say llama3.1:8b while inference
-    actually ran on qwen2.5:7b."""
+    actually ran on qwen3.6:27b."""
     client.post("/api/model", json={"model": "llama3.1:8b"})
 
     sent_model = {}
@@ -439,7 +439,7 @@ def test_chat_honors_persisted_model_selection(client, cfg):
     # create_app closes over it directly (no reload), so the persisted
     # selection is visible immediately to this second app instance.
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b",
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b",
         transport=httpx.MockTransport(handler),
     )
     app = create_app(cfg, chat)
@@ -603,7 +603,7 @@ def test_app_shutdown_closes_chat_client(cfg):
     # lifespan hook existed, close() was defined but never called and every
     # create_app leaked its connection pool.
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_mock_transport()
     )
     app = create_app(cfg, chat)
     with TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app)) as c:
@@ -615,7 +615,7 @@ def test_app_shutdown_closes_chat_client(cfg):
 def test_app_shutdown_survives_a_failing_client_close(cfg):
     # A teardown failure must not turn shutdown into an exception.
     chat = HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen2.5:7b", transport=_mock_transport()
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=_mock_transport()
     )
 
     def boom() -> None:

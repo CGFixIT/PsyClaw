@@ -324,14 +324,20 @@ class MockOllamaHandler(BaseHTTPRequestHandler):
                     "name": self.config.model,
                     "model": self.config.model,
                     "modified_at": "2026-07-20T00:00:00Z",
-                    "size": 4_200_000_000,
+                    # Metadata describes the SHIPPED default (a dense ~27B), not
+                    # a 7B -- these were left at 7B values when the default tag
+                    # changed, so /api/tags served a 27B name self-described as a
+                    # 4.2 GB qwen2 7B. Nothing in CyClaw reads /api/tags
+                    # (utils/health.py probes /v1/models), but an operator
+                    # following the documented `curl .../api/tags` sees this.
+                    "size": 17_000_000_000,
                     "digest": "sha256:mock-cyclaw-ollama-model",
                     "details": {
                         "parent_model": "",
                         "format": "gguf",
-                        "family": "qwen2",
-                        "families": ["qwen2"],
-                        "parameter_size": "7B",
+                        "family": "qwen3",
+                        "families": ["qwen3"],
+                        "parameter_size": "27B",
                         "quantization_level": "Q4_K_M",
                     },
                 }
