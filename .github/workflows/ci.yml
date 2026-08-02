@@ -255,6 +255,45 @@ jobs:
           [ -d "$HOME/.CyClaw" ] || fail "uninstall must keep ~/.CyClaw by default (no --remove-home passed)"
           echo "[smoke] uninstall-cyclaw.sh: profile blocks removed, data kept OK"
 
+      - name: macOS install-script adversarial --repo-path smoke test
+        if: runner.os == 'macOS'
+        # Regression test for a confirmed command-injection finding
+        # (docs/audits/2026-08-02-cyclaw-sandbox-macos-harness-and-guardrails.md):
+        # install-cyclaw.sh writes the cyclaw shim and the rc-file cyclaw()
+        # function via an unquoted, unescaped interpolation of the resolved
+        # --repo-path -- a directory name containing a shell metacharacter used
+        # to inject live code into both generated files, executed on every
+        # subsequent shim/shell invocation. The benign-path smoke test above
+        # provides zero coverage against this class of input by construction
+        # (it always passes a clean checkout path), so this is a second,
+        # deliberately adversarial step, not a duplicate.
+        continue-on-error: true
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/cyclaw-smoke-home-adversarial
+        run: |
+          set -uo pipefail  # not -e: the installer's own rejection (exit 1) is the expected outcome
+          mkdir -p "$HOME"
+          fail() { echo "[smoke-adversarial] FAIL: $1" >&2; exit 1; }
+
+          # A real directory whose name is itself an injection payload -- the
+          # exact class this finding is about, not a synthetic string. Only
+          # harness/server.py needs to exist for install-cyclaw.sh's --repo-path
+          # validation to pass (see the check at repo-resolution time); a full
+          # copy of $GITHUB_WORKSPACE is unnecessary and needlessly slow.
+          EVIL_DIR="${{ runner.temp }}/evil\$(touch ${{ runner.temp }}/PWNED_VIA_INSTALLER)"
+          mkdir -p "$EVIL_DIR/harness"
+          cp "$GITHUB_WORKSPACE/harness/server.py" "$EVIL_DIR/harness/server.py"
+
+          if bash macos/install-cyclaw.sh --repo-path "$EVIL_DIR" --skip-python-deps < /dev/null 2>/tmp/adversarial_install.log; then
+            fail "installer accepted a --repo-path containing shell metacharacters (should have refused)"
+          fi
+          grep -qi "refusing" /tmp/adversarial_install.log \
+            || fail "installer failed for an unexpected reason (expected the metachar-rejection message): $(cat /tmp/adversarial_install.log)"
+          [ -f "${{ runner.temp }}/PWNED_VIA_INSTALLER" ] && fail "injected command actually ran"
+          [ ! -e "$HOME/.CyClaw/bin/cyclaw" ] || fail "shim was written despite the rejected path"
+          echo "[smoke-adversarial] install-cyclaw.sh correctly refused a shell-metacharacter repo path"
+
       - name: Setup Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
