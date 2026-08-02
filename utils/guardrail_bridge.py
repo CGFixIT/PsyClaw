@@ -37,3 +37,25 @@ def build_input_guard(cfg: dict[str, Any]) -> Callable[[str], dict[str, Any]] | 
         return check_input(query, cfg=gcfg, metrics=metrics)
 
     return _input_guard
+
+
+def build_output_guard(cfg: dict[str, Any]) -> Callable[[str, str, str], dict[str, Any]] | None:
+    """Build the Phase 4 guardrail_output callable, or None when disabled.
+
+    Same guardrails.enabled gate as build_input_guard -- no separate toggle.
+    Returns None before importing guardrails at all when disabled.
+    """
+    if not (cfg.get("guardrails") or {}).get("enabled", False):
+        return None
+
+    from guardrails.config import load_guardrails_config
+    from guardrails.integration import check_output
+    from guardrails.metrics import GuardrailMetrics
+
+    gcfg = load_guardrails_config()
+    metrics = GuardrailMetrics(gcfg.metrics_path)
+
+    def _output_guard(query: str, answer: str, context: str) -> dict[str, Any]:
+        return check_output(answer, context, query=query, cfg=gcfg, metrics=metrics)
+
+    return _output_guard
