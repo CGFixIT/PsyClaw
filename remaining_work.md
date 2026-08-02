@@ -43,15 +43,47 @@ the `guardrail_input` node.
   a line is written.
 - **Blocked on:** nothing technical; it is a scoping decision.
 
-### 2. NeMo Phase 3 — the `guardrail_output` node is built but never wired
+### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`)
 
 A repo-wide search for `guardrail_output` returns **zero hits in any `.py`
-file**. The output-rail *logic* is implemented and tested; only the `graph.py`
-wiring is missing.
+file**. There is no output rail on the query path.
 
-- **Why it is the best value-per-risk item on this list:** the expensive,
-  error-prone half already exists and has tests. What is missing is the edge.
-- **Risk tier:** High (same reason as #1 — it is a `graph.py` edge change).
+> **Corrected 2026-08-02.** This entry previously claimed "the output-rail logic
+> is implemented and tested; only the `graph.py` wiring is missing," and called
+> it the best value-per-risk item here. **Both claims were wrong** — they came
+> from a summary that was not checked against the code. What is actually there:
+
+- The grounding/hallucination check lives **inside `safe_generate()`**
+  (`guardrails/integration.py:308`), which is `async` and **generates its own
+  answer** — it is "the guardrailed analogue of a raw LLM call," not a checker.
+- `guardrail_safety_node()` exists but is marked **"PROVIDED FOR FUTURE WIRING
+  ONLY"** (`integration.py:320`), and `check_input`'s own docstring names the
+  reason it stays unwired: wiring it would **double-generate** — the graph has
+  already produced an answer by then.
+- `utils/guardrail_bridge.py` exposes only `build_input_guard`. There is no
+  output counterpart, and I6 forbids `graph.py` importing `guardrails` directly.
+
+So the real work is a new **sync, non-generating** output check, a
+`build_output_guard` bridge function, a node, a router, and edges preserving I4
+— not an edge.
+
+**It is also not an approved design.** `docs/NeMo/phase3_implementation_plan.md`
+carries it as an *open question*, not a plan: *"Do the query-path output rails
+ever get built? Deferred by this redirect, not cancelled. Revisit once 3A has
+landed... **(Priority: low)**."* 3A has since landed
+(`build_injection_pattern_sources`/`compile_injection_patterns` are in
+`guardrails/rails.py`), so the gate is lifted — but the question is still
+unanswered.
+
+**Design trap to solve before building.** The output rail is a *grounding check
+against retrieved context*. The `grok_fallback` / `claude_fallback` /
+`offline_best_effort` paths are reached **precisely because retrieval scored
+below `min_score`**, so context is weak or absent — and `grounding_score`
+returns 0.0 when there is content but no supporting context. Applying the rail
+to those paths would block nearly every fallback answer. Any design must say
+which paths it covers and why.
+
+- **Risk tier:** High (`graph.py` edges), and larger than #1 or #3.
 - **Source:** `docs/NeMo/phase3_implementation_plan.md:176`, `:261`.
 
 ### 3. NeMo Phase 2 — input rails do not cover the user-gate branch
@@ -170,12 +202,28 @@ The stale plan entry is the only thing suggesting otherwise.
 
 ## Suggested order
 
-1. **#2** (`guardrail_output` wiring) — logic and tests already exist; highest
-   value per unit of risk.
+Re-ranked 2026-08-02, after #2's entry was corrected (see the note there — it
+was previously listed first on a false premise).
+
+1. **#1** (`offline_best_effort` bypasses `guardrail_input`) — the only
+   graph-edge item the phase-3 plan explicitly blesses: *"a real inconsistency
+   and a legitimate bug fix under FEATURE FREEZE"* that *"can proceed on its own
+   schedule."* It closes a live gap — a hostile query is blocked when it
+   retrieves well and answered when it retrieves poorly — and needs no new
+   `guardrails/` primitive, because the input guard it routes through already
+   exists and is already wired.
 2. **#5** (Tier 1 dep bumps) — dev-tooling only, contained.
-3. **#4** (instruction scan) — the one item on this list that is a live gap
+3. **#4** (instruction scan on `POST /api/agent/run`) — the other live gap
    rather than staleness or staging.
 
-#1 and #3 are the same class as #2 and are best done in the same sitting as it,
-while the graph topology is already loaded in someone's head. The remaining
-dependency tiers are mechanical once #5 establishes the four-surface pattern.
+**#3** is the same shape as #1 (extend the existing input rail to another
+branch) and is the natural companion to do in the same sitting, while the graph
+topology is loaded in someone's head.
+
+**#2 is deliberately not in this list.** It is the largest of the graph items,
+it needs a new `guardrails/` primitive and a new bridge function rather than an
+edge, and the plan still carries it as an unanswered question at priority: low.
+It wants a written design and a sign-off before code, not a slot in a queue.
+
+The remaining dependency tiers are mechanical once #5 establishes the
+four-surface pattern.
