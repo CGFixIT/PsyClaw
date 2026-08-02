@@ -16,6 +16,17 @@ dependencies = [
     # dep-guard D1 lock-step check reads the pair from constraints.txt, not pyproject.
     "chromadb==1.5.9",  # CVE-2026-45829 (Critical pre-auth RCE; no upstream patch). Risk accepted ONLY for local/offline air-gapped use via PersistentClient (embedded mode, path from config.yaml). No HttpClient, no trust_remote_code. See SECURITY.md + pip-audit workflow.
     "sentence-transformers==5.6.0",
+    # huggingface_hub and starlette are imported directly by first-party source
+    # (retrieval/embeddings.py, gate.py/harness/server.py) but were, until now,
+    # only implicit transitives of sentence-transformers/fastapi respectively --
+    # a resolver has no obligation to keep pulling them in just because a parent
+    # happens to today. Pinned to the exact version a clean `pip install -c
+    # constraints.txt` resolves under the pins above (verified 2026-08-02; torch
+    # excluded from that resolution only because its CPU wheel index was
+    # unreachable in the verifying sandbox -- torch shares no dependency with
+    # either package, so the resolution is unaffected).
+    "huggingface-hub==1.26.0",
+    "starlette==1.3.1",
     "rank-bm25==0.2.2",
     "httpx==0.28.1",
     "pyyaml==6.0.3",
