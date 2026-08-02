@@ -135,10 +135,10 @@ class TestCheckAll:
     def test_offline_ollama_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
         # Mirror of the Grok/Claude model-pin guard for the local Ollama probe:
         # when config pins a tag and /api-or-/v1/models lists it, ollama is healthy.
-        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen3.6:27b")
         monkeypatch.setattr(
             health, "_http_get",
-            lambda url, **kw: _ModelsResp(["qwen2.5:7b", "nomic-embed-text"]),
+            lambda url, **kw: _ModelsResp(["qwen3.6:27b", "nomic-embed-text"]),
         )
         statuses = health.check_all(cfg_path)
         ollama = next(s for s in statuses if s.name == "ollama")
@@ -147,7 +147,7 @@ class TestCheckAll:
     def test_offline_ollama_missing_model_pin_reports_unhealthy(self, tmp_path, monkeypatch):
         # Operator never pulled the configured tag: endpoint is up, model is not.
         # Without this, /health stays green until the first /query fails.
-        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen3.6:27b")
         monkeypatch.setattr(
             health, "_http_get",
             lambda url, **kw: _ModelsResp(["llama3.2:3b", "nomic-embed-text"]),
@@ -155,19 +155,19 @@ class TestCheckAll:
         statuses = health.check_all(cfg_path)
         ollama = next(s for s in statuses if s.name == "ollama")
         assert ollama.healthy is False
-        assert "qwen2.5:7b" in ollama.error
+        assert "qwen3.6:27b" in ollama.error
         assert "not in provider /models list" in ollama.error
 
     def test_offline_ollama_empty_model_catalog_reports_unhealthy(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen3.6:27b")
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _ModelsResp([]))
         statuses = health.check_all(cfg_path)
         ollama = next(s for s in statuses if s.name == "ollama")
         assert ollama.healthy is False
-        assert "qwen2.5:7b" in ollama.error
+        assert "qwen3.6:27b" in ollama.error
 
     def test_offline_ollama_malformed_model_catalog_stays_healthy(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen3.6:27b")
         response = httpx.Response(
             200,
             json={"object": "list", "data": None},
@@ -181,7 +181,7 @@ class TestCheckAll:
     def test_offline_ollama_unparseable_models_body_stays_healthy(self, tmp_path, monkeypatch):
         # Same tolerance as Grok/Claude: an up endpoint with an odd body must
         # not invent a new failure mode for the availability probe.
-        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen2.5:7b")
+        cfg_path = _write_cfg(tmp_path, mode="offline", local_model="qwen3.6:27b")
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         statuses = health.check_all(cfg_path)
         ollama = next(s for s in statuses if s.name == "ollama")

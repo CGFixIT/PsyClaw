@@ -208,6 +208,21 @@ def checks_file(tmp_path):
     return str(path)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "POSIX-only by construction, not an untested gap. The fake `gh` is an "
+        "extensionless file with a `#!/usr/bin/env python3` shebang; on Windows "
+        "shutil.which() resolves through PATHEXT (.EXE/.CMD/.BAT), so gh_client "
+        "would never find it, and Windows cannot execute a shebang script anyway. "
+        "Making it work there means a .cmd shim whose subprocess behavior cannot "
+        "be verified from this repo's Linux/macOS dev environment. The wiring this "
+        "test guards is platform-independent Python, and it still runs as a real "
+        "blocking gate on every PR via ci.yml's dedicated `real-repo-run-smoke` "
+        "job (ubuntu-latest) plus the macos-latest matrix leg -- so skipping the "
+        "redundant windows matrix execution loses no coverage."
+    ),
+)
 def test_real_repo_run_reaches_pending_decision_over_real_socket_and_gh(
     fake_gh_on_path, real_bare_repo, smoke_config, checks_file, monkeypatch, capsys,
 ):
@@ -229,9 +244,13 @@ def test_real_repo_run_reaches_pending_decision_over_real_socket_and_gh(
         "--reason", "CI smoke test", "--confirm",
     ])
 
-    out = capsys.readouterr().out
-    assert code == EXIT_OK, capsys.readouterr().err
-    record = json.loads(out)
+    # Capture BOTH streams in ONE call: capsys.readouterr() DRAINS the buffer,
+    # so reading .out first and then calling it again for .err in the assert
+    # message yields an empty string -- which is exactly what the first CI
+    # failure of this test reported ("AssertionError:" with nothing after it).
+    captured = capsys.readouterr()
+    assert code == EXIT_OK, f"exit={code} stderr={captured.err!r}"
+    record = json.loads(captured.out)
     assert record["status"] == "pending_decision"
     assert record["branch_name"] == "claude/smoke-topic"
     assert record["changed_files"] == ["target.txt"]

@@ -612,7 +612,7 @@ either `gate.py` or the harness console -- both read
 `models.local_llm.base_url` from `config.yaml`, which defaults to this
 mock's own default bind (`127.0.0.1:11434`).
 ```bash
-python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen2.5:7b
+python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen3.6:27b
 ```
 
 ### `verify.sh` / `smoke.sh` / `windows-smoke.ps1`

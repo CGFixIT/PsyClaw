@@ -167,7 +167,7 @@ def _resolve_backend() -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
             provider="ollama", # Or LM studio - Default fallback label
             base_url="http://127.0.0.1:11434/v1",
-            model="qwen2.5:7b",
+            model="qwen3.6:27b",
             source="primary",
         )
     return resolve_local_backend(llm)
@@ -296,7 +296,8 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         Applied to every route that costs real resources per call: /api/chat
         (a model round-trip), /api/github/status, and the three /api/agent/*
         routes (each a Python subprocess via utils.ops_runner -- 120s for a
-        status or a decision, up to 900s for a run). The
+        status or a decision; a run's budget is derived per request from its
+        own iteration/check counts, capped at 3600s). The
         cheap read-only routes (/api/status, /api/sessions, ...) stay exempt
         so a console refresh loop never eats the budget the expensive routes
         need. The budget is shared across the limited routes on purpose: it
@@ -674,7 +675,13 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
 
     @app.post("/api/agent/run", dependencies=guarded)
     def agent_run(req: AgentRunRequest) -> dict:
-        """Start one real-repo run. BLOCKS until the run finishes (up to 900s).
+        """Start one real-repo run. BLOCKS until the run finishes.
+
+        The wall-clock budget is derived per request by
+        utils.ops_runner._real_repo_run_timeout_sec from this request's own
+        --max-iterations and check count, capped at 3600s -- it was a flat 900s
+        until that flat ceiling started killing legitimate runs once the
+        planner timeout became configurable (default 600s x 3 iterations).
 
         Deliberately synchronous, and deliberately not a poll-a-background-job
         design, for two reasons found in the backend rather than chosen here:

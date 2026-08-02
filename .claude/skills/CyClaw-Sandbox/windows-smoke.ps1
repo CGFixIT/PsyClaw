@@ -185,9 +185,9 @@ try {
 
 # 15. POST /api/model — model selection persists
 try {
-    $body = '{"model": "qwen2.5:7b"}'
+    $body = '{"model": "qwen3.6:27b"}'
     $m = Invoke-RestMethod -Uri "$HarnessBase/api/model" -Method POST -Headers $HarnessHeaders -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
-    if ($m.model -eq "qwen2.5:7b") { Pass "POST /api/model (echoes selected model)" }
+    if ($m.model -eq "qwen3.6:27b") { Pass "POST /api/model (echoes selected model)" }
     else { Fail "POST /api/model unexpected: $($m | ConvertTo-Json -Compress)" }
 } catch { Fail "POST /api/model threw: $_" }
 

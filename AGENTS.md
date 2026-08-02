@@ -8,7 +8,8 @@ Canonical references:
 - `CLAUDE.md` for the detailed agent operating contract — invariants, module
   map, load-bearing config numbers, traps, conventions, escalation rules.
 - `.github/copilot-instructions.md` for Copilot and PR behavior.
-- `docs/SETUP.md` for local setup details.
+- `setup-guide.md` (repo root) for local setup details — Windows, macOS, and
+  Linux. `docs/SETUP.md` is only a redirect stub kept for old links.
 - `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security assumptions.
 - `.codex/skills/fable-protocol/SKILL.md` for Codex session-start reasoning,
   verification discipline, findings-before-writes, security posture, and
@@ -165,7 +166,15 @@ mkdir -p data/personality index logs
 export GROK_API_KEY=dummy
 ```
 
-Windows PowerShell setup is documented in `docs/SETUP.md`. Keep the same torch-first rule there too.
+Windows PowerShell setup is documented in `setup-guide.md`. Keep the same torch-first rule there too.
+
+macOS is the one platform where "torch first" is not enough: it needs the
+**plain** `torch==2.13.0`, not the `+cpu`-suffixed pin, and both
+`requirements.txt` and `constraints.txt` must have their `torch==` /
+`--extra-index-url` lines stripped before install. See
+[`setup-guide.md`](setup-guide.md#macos-apple-silicon); `.github/workflows/ci.yml`'s
+`macos-latest` leg and `macos/install-cyclaw.sh`'s `Darwin` branch both already
+do this.
 
 ## Build And Run Commands
 

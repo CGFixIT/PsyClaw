@@ -86,16 +86,28 @@ notes worth calling out:
 
 ## torch on macOS: plain build, not the `+cpu`-suffixed one
 
-`torch==2.13.0+cpu`'s availability on macOS arm64 from
-`https://download.pytorch.org/whl/cpu` could not be independently verified
-while authoring this port — every other pinned dependency with a compiled
-extension (`chromadb`, `onnxruntime`, `numpy`, `pandas`, `psycopg-binary`) was
-confirmed to publish an arm64/cp312 wheel, but that one index was unreachable
-from the authoring environment. The first `macos-latest` CI run confirmed the
-suspected reason: that index lists plain `torch==2.13.0` for macOS, not a
-`+cpu`-suffixed variant — Apple Silicon has no separate CPU/CUDA build to
-disambiguate, unlike Linux/Windows, where the suffix exists specifically to
-avoid the default CUDA-bundled wheel.
+**macOS installs plain `torch==2.13.0`.** No `+cpu` suffix, no `--index-url`
+override. Apple Silicon has no separate CPU/CUDA build to disambiguate, so no
+`+cpu`-suffixed macOS wheel is published at all — unlike Linux/Windows, where
+that suffix exists specifically to avoid the default CUDA-bundled wheel.
+Confirmed by this repo's first `macos-latest` CI run (the `+cpu` pin 404s
+there), and independently against PyPI on 2026-08-02: `torch==2.13.0` publishes
+six macOS wheels and every one is `macosx_14_0_arm64`.
+
+Two consequences that follow from that platform tag, and are worth stating
+because they bound who can run this at all:
+
+- **macOS 14 (Sonoma) is a floor, not a preference.** macOS 13 and earlier
+  cannot install the wheel.
+- **Intel Macs are unsupported at this pin.** There is no `x86_64` macOS wheel
+  for torch 2.13.0, so an Intel Mac cannot satisfy it.
+
+*(History, kept because the reasoning is still instructive: while authoring
+this port, `download.pytorch.org` was unreachable from the authoring
+environment, so this was originally written as a suspicion — every other
+compiled-extension dependency (`chromadb`, `onnxruntime`, `numpy`, `pandas`,
+`psycopg-binary`) had been confirmed to publish an arm64/cp312 wheel, but that
+one index could not be checked. CI then confirmed it.)*
 
 `.github/workflows/ci.yml`'s `macos-latest` leg installs torch directly
 (`pip install "torch==2.13.0"`, no index override) and then the rest of

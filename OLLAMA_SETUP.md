@@ -11,7 +11,7 @@ This guide covers installing CyClaw with Ollama as the local LLM backend. Ollama
 | Aspect | Before (LM Studio) | After (Ollama) |
 |--------|-------------------|----------------|
 | Default port | `1234` | `11434` |
-| Default model | `qwen2.5-7b-instruct` | `qwen2.5:7b` |
+| Default model tag | `qwen2.5-7b-instruct` | `qwen2.5:7b` → now `qwen3.6:27b` |
 | Provider name | `lmstudio` | `ollama` |
 | Install method | GUI download + model search | `curl \| sh` + `ollama pull` |
 | Model format | Multiple (GGUF, etc.) | Ollama Registry (built on GGUF) |
@@ -72,10 +72,10 @@ curl http://127.0.0.1:11434/api/tags
 
 ```bash
 # Pull the default CyClaw model (recommended)
-ollama pull qwen2.5:7b
+ollama pull qwen3.6:27b
 
 # Verify it works
-ollama run qwen2.5:7b "Say hello"
+ollama run qwen3.6:27b "Say hello"
 # Should respond immediately
 ```
 
@@ -83,12 +83,15 @@ ollama run qwen2.5:7b "Say hello"
 
 | Model | Command | Notes |
 |-------|---------|-------|
-| Qwen 2.5 7B (default) | `ollama pull qwen2.5:7b` | Best balance of quality + speed |
+| Qwen 3.6 27B (default) | `ollama pull qwen3.6:27b` | What `config.yaml` ships. Dense ~27B — `timeout_sec: 600`/`max_tokens: 3000` are already sized for it. Needs the most `num_ctx` headroom and the most RAM |
+| Qwen 2.5 7B | `ollama pull qwen2.5:7b` | Much lighter; the prior default. Best balance of quality + speed on modest hardware |
 | Mistral 7B | `ollama pull mistral:7b` | Good alternative |
 | Llama 3.1 8B | `ollama pull llama3.1:8b` | Meta's latest |
 | Qwen 2.5 14B | `ollama pull qwen2.5:14b` | Higher quality, slower |
 
-> **Note:** Model tags are case-sensitive in Ollama. Use `qwen2.5:7b` (lowercase), not `Qwen2.5-7B-Instruct`.
+> **Note:** Model tags are case-sensitive in Ollama. Use the exact lowercase tag `ollama list` prints (e.g. `qwen3.6:27b`), not a display name like `Qwen3.6-27B-Instruct`.
+>
+> **Changing model = changing `config.yaml`.** `models.local_llm.model` AND `guardrails.model` must both match the tag you pulled — `config-guard`'s C11 check fails the build if they drift apart. Smaller model? Everything still works. Larger? Re-check `num_ctx` below.
 
 ---
 
@@ -130,12 +133,12 @@ models:
   local_llm:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"
-    model: "qwen2.5:7b"  # must match your `ollama pull` tag exactly
-    timeout_sec: 300
+    model: "qwen3.6:27b"  # must match your `ollama pull` tag exactly
+    timeout_sec: 600     # what ships; sized for the dense ~27B default
     max_tokens: 3000
 ```
 
-**If you pulled a different model in Step 2,** update the `model` field to match exactly (e.g., `mistral:7b`, `llama3.1:8b`).
+**If you pulled a different model in Step 2,** update **both** `models.local_llm.model` and `guardrails.model` to match it exactly (e.g. `mistral:7b`, `llama3.1:8b`) — `config-guard`'s C11 check fails the build if the two drift apart.
 
 ---
 
@@ -183,14 +186,20 @@ You should get a JSON response with an `answer` field and `model_used: "local"`.
 
 ## Switching Models
 
-Ollama makes it trivial to swap models without changing CyClaw config:
+Ollama makes swapping models cheap — no reindex, no reinstall. It does take a
+small config edit (two keys, see below):
 
 ```bash
 # Pull a new model
 ollama pull mistral:7b
 
-# Edit config.yaml -> model: "mistral:7b"
-# Restart CyClaw (no need to reindex)
+# Edit config.yaml -> BOTH keys must match the tag you pulled:
+#   models.local_llm.model: "mistral:7b"
+#   guardrails.model:       "mistral:7b"
+# (config-guard's C11 check fails the build if they disagree)
+
+# Restart CyClaw (no need to reindex — the index is model-independent;
+# it is built from the embedding model, not the chat model)
 ```
 
 ---
@@ -209,7 +218,7 @@ ollama serve
 Or per-session inside an interactive `ollama run` shell (there is no `--num_ctx` CLI flag):
 
 ```
-ollama run qwen2.5:7b
+ollama run qwen3.6:27b
 >>> /set parameter num_ctx 12288
 ```
 
@@ -225,7 +234,7 @@ With defaults: `4000 + 3000 + 1500 = 8500`, so `10000-12288` is the safe range.
 | Symptom | Fix |
 |---------|-----|
 | `Ollama timeout` error | Check `ollama serve` is running; increase `timeout_sec` in config.yaml |
-| `Ollama HTTP 404` | Model not pulled: run `ollama pull qwen2.5:7b` |
+| `Ollama HTTP 404` | Model not pulled, or the tag does not match `config.yaml`: run `ollama pull qwen3.6:27b` (or set `model:` to what `ollama list` shows) |
 | `0% processing` stall | Ollama context too small: increase `num_ctx` (see above) |
 | `IndexNotFoundError` on startup | Run `python -m retrieval.indexer` first |
 | Empty answers | Check corpus files exist in `data/corpus/` |
@@ -255,7 +264,7 @@ CyClaw's `LocalLLMClient` (in `llm/client.py`) speaks raw HTTP to any OpenAI-com
 CyClaw (LocalLLMClient)
   |
   |  POST http://127.0.0.1:11434/v1/chat/completions
-  |  { "model": "qwen2.5:7b", "messages": [...], ... }
+  |  { "model": "qwen3.6:27b", "messages": [...], ... }
   v
 Ollama (OpenAI-compatible API)
   |
