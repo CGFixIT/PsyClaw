@@ -385,6 +385,40 @@ def _describe_findings(findings: list[dict]) -> str:
     return ", ".join(f"{f.get('code')}:{f.get('field') or 'bundle'}" for f in findings)
 
 
+def _refuse_if_injected_instruction(instruction: str, app_cfg: dict, *, verb: str) -> int | None:
+    """Scan the operator's ``--instruction`` for a governed injection pattern.
+
+    The fetched GitHub context is scanned and refused
+    (:func:`_blocking_context_findings`), and an approved ``--plan-file`` is
+    scanned on load (below, in ``cmd_real_repo_run``) -- but the operator's own
+    ``--instruction`` text reached both planner prompts (``generate_plan`` and
+    ``run_real_repo_loop``) completely unscanned, placed FIRST and unfenced in
+    each. Same scanner (:func:`inspect_candidate_text`), same refuse-on-any-
+    finding posture, as the ``--plan-file`` scan, so the two operator-supplied-
+    text paths cannot drift into different strengths.
+
+    This is not a remote-attacker surface (every entry path -- direct CLI,
+    ``harness``'s ``/api/agent/run`` via ``utils.ops_runner`` -- requires the
+    operator to type or paste the value themselves), it is a confused-deputy
+    one: text pasted from a ticket, chat, or web page straight into a command
+    that clones and writes to a real repo. A human typing ``--instruction``
+    is not the same act as auditing every character of what they typed for
+    injection shapes -- the same reasoning the ``--plan-file`` scan's comment
+    already applies to a human-approved plan.
+
+    Returns ``EXIT_FAIL`` when refused, else ``None``. Never echoes the
+    flagged text, only the finding's code -- the same discipline
+    ``_describe_findings`` applies to context findings.
+    """
+    from agentic.harness_optimizer.governance import inspect_candidate_text
+
+    findings = inspect_candidate_text(instruction, app_cfg)
+    if findings:
+        _err(f"refusing to {verb}: --instruction matches a governed injection pattern ({findings[0].code})")
+        return EXIT_FAIL
+    return None
+
+
 def _load_checks_file(path: str) -> tuple[Check, ...]:
     """Parse a JSON manifest of verification checks into `Check` objects.
 
@@ -488,6 +522,9 @@ def cmd_real_repo_run_plan(args: argparse.Namespace) -> int:
     elif not cfg.deepagent_github.model.strip():
         _err("agentic.deepagent_github.model must be configured to plan with the local model")
         return EXIT_ENV
+    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, verb="plan")
+    if refusal is not None:
+        return refusal
 
     from agentic import context
     from agentic.real_repo_loop import generate_plan
@@ -652,6 +689,9 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     if not args.confirm:
         _err("--confirm is required to actually run")
         return EXIT_REFUSED
+    refusal = _refuse_if_injected_instruction(args.instruction, app_cfg, verb="run")
+    if refusal is not None:
+        return refusal
 
     from agentic import context
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
