@@ -237,7 +237,9 @@ def _defuse_fence(text: str) -> str:
     return text.replace(_UNTRUSTED_CLOSE, "[fence-removed]").replace(_UNTRUSTED_OPEN, "[fence-removed]")
 
 
-def _render_existing_files(tools: RepoWorkspaceTools, read_paths: Sequence[str]) -> str:
+def _render_existing_files(
+    tools: RepoWorkspaceTools, read_paths: Sequence[str],
+) -> tuple[str, frozenset[str]]:
     """Read each declared path fresh from the clone and render it for the prompt.
 
     Re-reads from disk on every call rather than caching: the clone persists
@@ -256,24 +258,49 @@ def _render_existing_files(tools: RepoWorkspaceTools, read_paths: Sequence[str])
     ``_MAX_LOOP_CONTEXT_CHARS`` exists: CLAUDE.md's documented Ollama
     ``num_ctx`` footgun means an unbounded read can silently stall the whole
     run rather than fail loudly.
+
+    Returns the rendered prompt text AND the set of canonical paths whose
+    FULL content actually made it into that text. The two are NOT the same as
+    ``read_paths``: a path can be declared and still be absent from the
+    returned set for three reasons -- it doesn't exist yet (a legitimate
+    create); the running ``_MAX_TOTAL_READ_CHARS`` total was already spent by
+    earlier files, so it gets only the bare "omitted" marker below, no
+    content at all; or its own content exceeded ``_MAX_READ_FILE_CHARS`` and
+    was truncated. The caller MUST gate write-permission on this returned
+    set, not on raw declaration: a path the model was told exists but never
+    actually shown -- in full -- is exactly the blind-overwrite scenario the
+    caller's backstop exists to catch. Checking only "was it declared" misses
+    the budget-omitted case entirely (a model that declares enough large
+    files to exhaust the total budget could otherwise "unlock" write access
+    to a file it never saw a single byte of); checking "was it rendered at
+    all" still misses the truncated case, since the whole point of this
+    function's caller is to justify a WHOLE-FILE replacement -- a model that
+    saw only the first ``_MAX_READ_FILE_CHARS`` characters cannot honestly
+    reconstruct what comes after them, so a truncated render does not earn
+    that trust either, even though it IS useful context and stays in the
+    rendered text.
     """
     if not read_paths:
-        return ""
+        return "", frozenset()
     rendered: list[str] = []
+    shown: set[str] = set()
     total = 0
     for path in read_paths:
         try:
             content = tools.read_file(path)
         except AgenticError:
             continue
-        if len(content) > _MAX_READ_FILE_CHARS:
+        truncated = len(content) > _MAX_READ_FILE_CHARS
+        if truncated:
             content = content[:_MAX_READ_FILE_CHARS] + f"\n... [truncated at {_MAX_READ_FILE_CHARS} chars]"
         if total + len(content) > _MAX_TOTAL_READ_CHARS:
             rendered.append(f"[{path} omitted -- total existing-file budget of {_MAX_TOTAL_READ_CHARS} chars reached]")
             continue
         total += len(content)
         rendered.append(f"{_EXISTING_FILE_OPEN}{path} ---\n{content}\n{_EXISTING_FILE_CLOSE}")
-    return "\n\n".join(rendered)
+        if not truncated:
+            shown.add(canonical_repo_path(path) or path)
+    return "\n\n".join(rendered), frozenset(shown)
 
 
 # Bounds for verification evidence folded into rejection feedback -- separate
@@ -726,7 +753,7 @@ def run_real_repo_loop(
         # last. The reverse order shipped briefly and put attacker-authored PR
         # text ahead of the only trusted sentence in the prompt.
         quoted_context = f"{_UNTRUSTED_OPEN}\n{_defuse_fence(context)}\n{_UNTRUSTED_CLOSE}" if context else ""
-        existing_files = _render_existing_files(tools, read_paths)
+        existing_files, shown_paths = _render_existing_files(tools, read_paths)
         user_prompt = "\n\n".join(
             part
             for part in (
@@ -801,21 +828,19 @@ def run_real_repo_loop(
             max_write_budget_bytes is not None and total_write_bytes > max_write_budget_bytes
         )
 
-        # Canonicalized to match _parse_file_blocks' keys: an operator who
-        # declares "./src/x.py" (or a Windows-style "src\x.py") must not be
-        # told to declare a file they already declared.
-        read_paths_set = {canonical_repo_path(p) or p for p in read_paths}
         if not has_critical and not out_of_scope_files and not write_budget_exceeded:
             for path, content in proposed_files.items():
                 # Backstop against the whole-file-replacement protocol
                 # silently destroying a file the model was never shown: if it
-                # already exists, wasn't declared via read_paths, AND wasn't
-                # written by an earlier iteration of this same loop (which IS
-                # allowed to be freely rewritten -- that's the iterate-on-
-                # feedback design), refuse rather than trust a reconstruction
-                # from memory. A path that does not yet exist is a legitimate
-                # create and is unaffected by this check.
-                if path not in read_paths_set and path not in ever_written:
+                # already exists, was never actually SHOWN via read_paths
+                # (``shown_paths`` -- not merely declared; see
+                # ``_render_existing_files``'s own docstring for why those two
+                # differ), AND wasn't written by an earlier iteration of this
+                # same loop (which IS allowed to be freely rewritten -- that's
+                # the iterate-on-feedback design), refuse rather than trust a
+                # reconstruction from memory. A path that does not yet exist
+                # is a legitimate create and is unaffected by this check.
+                if path not in shown_paths and path not in ever_written:
                     try:
                         tools.stat_file(path)
                     except AgenticError:
@@ -823,8 +848,10 @@ def run_real_repo_loop(
                     else:
                         write_failed = True
                         write_failure_messages.append(
-                            f"{path!r} already exists and was not shown to you (declare it with --read-file "
-                            f"to edit it) -- refusing to overwrite content you have not seen"
+                            f"{path!r} already exists and its full content was not shown to you (declare "
+                            f"it with --read-file, or it may already have been -- and omitted or truncated "
+                            f"by the read-context budget) -- refusing a whole-file replacement of content "
+                            f"you have not fully seen"
                         )
                         continue
                 try:
