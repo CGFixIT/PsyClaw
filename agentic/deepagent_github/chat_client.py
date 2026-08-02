@@ -156,8 +156,16 @@ class ChatModelProposerClient:
                 config_path=config_path,
                 cfg=cfg,
             )
+            # Type name in the MESSAGE, for the same reason LocalProposerClient
+            # does it: agentic/cli.py prints exc.message alone and persists it
+            # as the run record's `error`, so details={} never reaches an
+            # operator. Deliberately NOT annotated with a timeout budget the
+            # way the local client's is -- the concrete exception types belong
+            # to whichever SDK is active (none importable here, hence the bare
+            # `except Exception` above), so this cannot tell a timeout from a
+            # rate limit without guessing.
             raise AgenticError(
-                "cloud proposer invocation failed",
+                f"cloud proposer invocation failed ({type(exc).__name__})",
                 details={"provider": provider, "error_type": type(exc).__name__},
             ) from exc
 

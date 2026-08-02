@@ -16,6 +16,22 @@ def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _failure_detail(exc: Exception, timeout_sec: float) -> str:
+    """Name the failure, and for a timeout the budget and the knob that sets it.
+
+    Carries no request content -- only the exception's type name and a number
+    already present in config -- so it is safe in an error surfaced to the
+    console and persisted in a run record.
+    """
+    name = type(exc).__name__
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            f"{name} after {timeout_sec:g}s; raise "
+            f"agentic.deepagent_github.planner_timeout_sec if the model needs longer"
+        )
+    return name
+
+
 @dataclass(frozen=True)
 class LocalProposerResponse:
     """Structured response from the local proposer model."""
@@ -44,6 +60,10 @@ class LocalProposerClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key.strip()
+        # Kept as a scalar alongside the client purely so a timeout failure can
+        # name the budget it exceeded -- httpx.Client exposes it only as a
+        # Timeout object with four separate fields.
+        self._timeout_sec = timeout_sec
         self._client = httpx.Client(timeout=timeout_sec, transport=transport)
 
     def close(self) -> None:
@@ -101,8 +121,21 @@ class LocalProposerClient:
                 config_path=config_path,
                 cfg=cfg,
             )
+            # The exception type belongs in the MESSAGE, not only in details:
+            # agentic/cli.py's real-repo-run handler prints `exc.message` alone
+            # (unlike _load, which loops over details too) and persists it as
+            # the run record's `error` field, which is what real-repo-run-status
+            # and the harness console then show. Without this, every failure
+            # here -- a read timeout, a refused connection, a malformed
+            # response -- was reported identically as "local proposer
+            # invocation failed", and the one artifact naming the real cause
+            # was an audit_log line in logs/audit.jsonl that an operator has no
+            # reason to go read. A timeout additionally names its own budget
+            # and the config key that raises it, because "ReadTimeout" alone
+            # still does not say which of several timeouts in this pipeline
+            # fired.
             raise AgenticError(
-                "local proposer invocation failed",
+                f"local proposer invocation failed ({_failure_detail(exc, self._timeout_sec)})",
                 details={"error_type": type(exc).__name__},
             ) from exc
         if not isinstance(content, str) or not content.strip():

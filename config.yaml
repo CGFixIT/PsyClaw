@@ -508,7 +508,15 @@ agentic:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
-    model: ""
+    model: "qwen3.6:27b"
+    # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
+    # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
+    # (600) above: this package is never imported by graph.py/gate.py (I6), so it
+    # cannot reuse that value, and this loop's own prompt is comparably large (up
+    # to ~24k chars of declared files + GitHub context + prior-iteration feedback).
+    # Was hardcoded at 30s with no override before this key existed -- a hard,
+    # unrecoverable, first-iteration failure for any real local-model completion.
+    planner_timeout_sec: 600
     allow_deepagents_dependency: false           # extras must be installed explicitly
     # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
     # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
@@ -541,6 +549,17 @@ agentic:
       - "pytest.ini"
       - ".claude/skills/"
     max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
+    # Blocks an iteration whose proposed file content is shaped like an
+    # exfiltration, a reverse shell, an obfuscated exec, or a pipe-to-shell
+    # install. Separate from the prompt-injection scan that already ran here:
+    # that one asks "is this trying to talk to a model", which answered ZERO
+    # findings for a real SSH-key exfiltration payload (demonstrated against
+    # the live loop, 2026-08-02). A HEURISTIC, not a complete control -- see
+    # agentic/harness_optimizer/governance.py::inspect_code_shape for exactly
+    # what defeats it. Set false only if a legitimate change is genuinely
+    # blocked; the human diff review at pending_decision is the real gate
+    # either way.
+    scan_code_shape: true
     # Outbound-prompt length cap for sanitize_handoff (agentic/deepagent_github/
     # handoff.py) -- deliberately separate from policy.prompt_filter.
     # max_input_chars (4000, tuned for a short RAG chat query). A real-repo-loop
