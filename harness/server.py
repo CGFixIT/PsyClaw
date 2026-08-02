@@ -823,6 +823,36 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     return app
 
 
+_lazy_app: FastAPI | None = None
+
+def __getattr__(name: str) -> object:
+    # PEP 562 module-level __getattr__, so `uvicorn harness.server:app` works
+    # the way `uvicorn gate:app` does -- uvicorn's import_from_string does
+    # importlib.import_module() then getattr(module, "app"), and that getattr
+    # is what lands here.
+    #
+    # Deliberately lazy rather than a plain `app = create_app(...)` at module
+    # scope. HarnessConfig.load() reads (and creates) the operator's ~/.CyClaw
+    # home directory, and harness.html is read off disk during create_app; an
+    # eager binding would do all of that on any `import harness.server`,
+    # including every test module that imports it only for a helper. Lazy
+    # keeps import free of side effects while still exposing the attribute.
+    #
+    # Security note: this bypasses main()'s bind-address guard, so
+    # `uvicorn harness.server:app --host 0.0.0.0` WILL open a public socket
+    # where `cyclaw-harness` would have refused. The containment that actually
+    # matters is unaffected -- create_app() installs TrustedHostMiddleware with
+    # loopback-only allowed_hosts, so a request carrying any other Host header
+    # is rejected regardless of what the socket is bound to. Prefer
+    # `cyclaw-harness`, which keeps both layers.
+    global _lazy_app
+    if name == "app":
+        if _lazy_app is None:
+            _lazy_app = create_app(HarnessConfig.load())
+        return _lazy_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def main() -> None:
     """``python -m harness.server`` / ``cyclaw-harness`` entry point."""
     import uvicorn
