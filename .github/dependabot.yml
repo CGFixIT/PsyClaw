@@ -11,6 +11,29 @@
 #   2. GitHub Actions – bumps versions in .github/workflows/*
 # (npm ecosystem removed with the unused root package.json scaffolding.)
 #
+# WHAT THE pip ECOSYSTEM BELOW ACTUALLY COVERS (verified 2026-08-02 against
+# dependabot-core's own source, not inference):
+#   - pyproject.toml's [project.optional-dependencies] IS parsed. Its Python
+#     file parser treats a project as PEP 621 when either `project.dependencies`
+#     or `project.optional-dependencies` is present, and parses both
+#     (python/lib/dependabot/python/file_parser/pyproject_files_parser.rb).
+#     So every optional extra — guardrails (nemoguardrails), postgres, pgvector,
+#     agentic-deepagents (deepagents + langchain + the Claude SDK),
+#     agentic-deepagents-cloud (the Grok SDK), dev, test — is in scope for
+#     version updates via the pip-all group below. No extra config is needed.
+#   - constraints.txt is NOT. Dependabot's Python file fetcher collects
+#     pyproject/poetry.lock/pdm.lock plus requirements*.txt and *.in path
+#     dependencies; a standalone constraints file that no requirements file
+#     references via `-c` is never fetched. It stays a hand-synced ceiling —
+#     which is exactly what .claude/skills/dep-guard/check_deps.py (D5/D6, and
+#     D9 for environment.yml) exists to enforce, so a Dependabot PR that bumps
+#     a pin in pyproject without the matching constraints.txt edit fails CI
+#     rather than drifting silently.
+#
+# CVE SCANNING of those same extras is a separate concern and lives in
+# .github/workflows/pip-audit.yml's `scan-optional` job — the base `scan` job
+# audits requirements.txt, which carries zero extras by scope contract.
+#
 # Schedule: weekly on Thursday (≈03:00 UTC by default)
 # Each ecosystem uses a single catch-all group so related bumps arrive as ONE
 # consolidated PR per ecosystem instead of one PR per dependency.
