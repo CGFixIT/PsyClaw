@@ -70,9 +70,9 @@ an `if` mentioning both `hybrid` and `enabled`), and the tripwire
 
 ## Rule 3 — every path converges at `audit_logger` before END
 
-**Must never change:** all eight upstream nodes (`retrieve`, `route_by_score`,
+**Must never change:** all nine upstream nodes (`retrieve`, `route_by_score`,
 `guardrail_input`, `local_llm`, `user_gate`, `grok_fallback`, `claude_fallback`,
-`offline_best_effort`) reach `audit_logger`, and `audit_logger`'s only outgoing edge is `END`
+`offline_best_effort`, `guardrail_output`) reach `audit_logger`, and `audit_logger`'s only outgoing edge is `END`
 (`add_edge("audit_logger", END)`). Do not add an edge out of `audit_logger`; do not
 add a node with a path to `END` that skips it. Every query — including the
 `user_gate` pause — must emit an audit event.

@@ -75,7 +75,7 @@ User Query (HTTP POST /query or MCP tool call)
                        │
                        ▼
     ┌─────────────────────────────────────────────────────┐
-    │  graph.py  (LangGraph 9-node State Machine)         │
+    │  graph.py  (LangGraph 10-node State Machine)        │
     │                                                     │
     │  [ENTRY]                                            │
     │     ↓                                               │
@@ -84,12 +84,12 @@ User Query (HTTP POST /query or MCP tool call)
     │  2. route_by_score  (top_score >= 0.028 RRF?)       │
     │     ├─ YES ──→ 3. guardrail_input (offline rail;    │
     │     │           opt-in, pass-through when disabled) │
-    │     │           blocked ──→ 8. audit_logger          │
+    │     │           blocked ──→ 9. audit_logger          │
     │     │           passed  ──→ 4. local_llm             │
     │     │                        (Ollama :11434)        │
     │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
     │                    ├─ not yet answered ──→          │
-    │                    │      8. audit_logger  (PAUSE:  │
+    │                    │      9. audit_logger  (PAUSE:  │
     │                    │      return needs_confirm to   │
     │                    │      the client and stop)      │
     │                    ├─ confirmed + hybrid ──→        │
@@ -100,11 +100,14 @@ User Query (HTTP POST /query or MCP tool call)
     │                    │       gate is their gate)      │
     │                    └─ declined / offline ──→        │
     │                       3. guardrail_input (again)    │
-    │                           blocked ──→ 8. audit_logger│
+    │                           blocked ──→ 9. audit_logger│
     │                           passed  ──→                │
     │                           7. offline_best_effort    │
-    │     ↓ (all paths converge)                          │
-    │  8. audit_logger (SHA-256 + PII redact → jsonl)     │
+    │     ↓ (all four answer nodes converge)              │
+    │  8. guardrail_output (offline output rail; opt-in;  │
+    │     grounding check applies to local_llm answer only)│
+    │     ↓                                               │
+    │  9. audit_logger (SHA-256 + PII redact → jsonl)     │
     │     ↓                                               │
     │  [END]                                              │
     └─────────────────────────────────────────────────────┘
@@ -135,7 +138,7 @@ flowchart TD
 
     E --> F
 
-    subgraph GRAPH ["graph.py — LangGraph 9-node State Machine"]
+    subgraph GRAPH ["graph.py — LangGraph 10-node State Machine"]
         F(["① retrieve\nChroma + BM25 + RRF"])
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
@@ -147,11 +150,12 @@ flowchart TD
         I -->|"confirmed=false\nor offline mode"| X
         X -->|"passed · vault miss"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
         I -->|"confirmed=None — PAUSE\nreturn needs_confirm to the client"| L
-        H --> L
-        J --> L
-        W --> L
-        K --> L
-        L(["⑨ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
+        H --> Y["⑨ guardrail_output\noffline rail · opt-in\ngrounding check: local_llm only"]
+        J --> Y
+        W --> Y
+        K --> Y
+        Y --> L
+        L(["⑩ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
     end
 
     L --> M(["📤 QueryResponse\nanswer · sources · model_used\nretrieval_mode · needs_confirm"])
