@@ -25,7 +25,7 @@ _UPSTREAM_URL = "https://internal-gateway.corp.example/v1/chat/completions"
 def _client(handler) -> HarnessChatClient:
     return HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1",
-        model="qwen2.5:7b",
+        model="qwen3.6:27b",
         transport=httpx.MockTransport(handler),
     )
 
@@ -89,7 +89,7 @@ def test_transport_failure_reports_exception_type_not_its_message():
 def test_successful_chat_is_unaffected():
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen2.5:7b",
+            "model": "qwen3.6:27b",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 11, "completion_tokens": 7},
         })

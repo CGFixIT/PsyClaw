@@ -11,7 +11,7 @@ This guide covers installing CyClaw with Ollama as the local LLM backend. Ollama
 | Aspect | Before (LM Studio) | After (Ollama) |
 |--------|-------------------|----------------|
 | Default port | `1234` | `11434` |
-| Default model | `qwen2.5-7b-instruct` | `qwen3.6:27b` |
+| Default model tag | `qwen2.5-7b-instruct` | `qwen2.5:7b` → now `qwen3.6:27b` |
 | Provider name | `lmstudio` | `ollama` |
 | Install method | GUI download + model search | `curl \| sh` + `ollama pull` |
 | Model format | Multiple (GGUF, etc.) | Ollama Registry (built on GGUF) |
@@ -134,11 +134,11 @@ models:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"
     model: "qwen3.6:27b"  # must match your `ollama pull` tag exactly
-    timeout_sec: 300
+    timeout_sec: 600     # what ships; sized for the dense ~27B default
     max_tokens: 3000
 ```
 
-**If you pulled a different model in Step 2,** update the `model` field to match exactly (e.g., `mistral:7b`, `llama3.1:8b`).
+**If you pulled a different model in Step 2,** update **both** `models.local_llm.model` and `guardrails.model` to match it exactly (e.g. `mistral:7b`, `llama3.1:8b`) — `config-guard`'s C11 check fails the build if the two drift apart.
 
 ---
 
@@ -186,14 +186,20 @@ You should get a JSON response with an `answer` field and `model_used: "local"`.
 
 ## Switching Models
 
-Ollama makes it trivial to swap models without changing CyClaw config:
+Ollama makes swapping models cheap — no reindex, no reinstall. It does take a
+small config edit (two keys, see below):
 
 ```bash
 # Pull a new model
 ollama pull mistral:7b
 
-# Edit config.yaml -> model: "mistral:7b"
-# Restart CyClaw (no need to reindex)
+# Edit config.yaml -> BOTH keys must match the tag you pulled:
+#   models.local_llm.model: "mistral:7b"
+#   guardrails.model:       "mistral:7b"
+# (config-guard's C11 check fails the build if they disagree)
+
+# Restart CyClaw (no need to reindex — the index is model-independent;
+# it is built from the embedding model, not the chat model)
 ```
 
 ---

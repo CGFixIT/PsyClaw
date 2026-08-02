@@ -34,7 +34,7 @@ from utils.errors import AgenticConfigError, AgenticError, PromptInjectionError
 def _deep_cfg(**overrides) -> DeepAgentGitHubConfig:
     kwargs: dict = {
         "enabled": True,
-        "model": "qwen2.5:7b",
+        "model": "qwen3.6:27b",
         "allow_cloud_providers": True,
         "providers": {"grok": {"enabled": True, "model": "grok-4.5"}},
     }
@@ -135,7 +135,7 @@ def test_settings_default_to_the_local_provider():
     settings = DeepAgentModelSettings.from_config(_deep_cfg())
     assert settings.is_cloud is False
     assert settings.provider == "ollama"
-    assert settings.model == "qwen2.5:7b"
+    assert settings.model == "qwen3.6:27b"
 
 
 def test_settings_resolve_a_gated_cloud_provider():

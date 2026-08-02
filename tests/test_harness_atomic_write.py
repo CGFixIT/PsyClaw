@@ -181,7 +181,7 @@ def test_session_write_maps_serialization_failure_to_typed_error(tmp_path, monke
     from harness import sessions as sessions_mod
 
     store = sessions_mod.SessionStore(tmp_path)
-    session = store.create(model="qwen2.5:7b", title="t")
+    session = store.create(model="qwen3.6:27b", title="t")
 
     def _boom(*_args, **_kwargs):
         raise TypeError("Object of type object is not JSON serializable")

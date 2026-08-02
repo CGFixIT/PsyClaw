@@ -48,7 +48,10 @@ models:
     max_tokens: 3000
     temperature: 0.3
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host rather than for the 7B default above. Worked from the
+    # is expected to host -- which, since the default above became qwen3.6:27b,
+    # is now the shipped default itself rather than a headroom allowance for a
+    # model heavier than it. A smaller tag simply leaves this budget unused.
+    # Worked from the
     # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
     # weights, so single-stream decode is memory-bandwidth-bound at roughly
     # (bandwidth / weight-bytes) x realized-fraction. On 300-310 GB/s Apple
@@ -80,7 +83,7 @@ models:
       enabled: false
       provider: "lmstudio"                       # label only; same OpenAI-compat stack
       base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
-      model: "qwen2.5:7b-Instruct"               # set to your LM Studio loaded model id when enabling
+      model: "qwen3.6-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.6:27b` verbatim
       probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
   embeddings:
     provider: "sentence-transformers"
