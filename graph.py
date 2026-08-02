@@ -7,6 +7,7 @@ Graph flow (matching CyClaw final diagram):
                                   -> claude_fallback (confirmed + hybrid, provider=claude)
                                   -> guardrail_input -> offline_best_effort (denied or offline)
   guardrail_input -> audit_logger (blocked by the offline input rail)
+  local_llm | grok_fallback | claude_fallback | offline_best_effort -> guardrail_output
   ALL paths -> audit_logger -> END
 
 Invariants enforced by graph edges, not prompts:
@@ -27,6 +28,19 @@ CHANGES (Phase 2 NeMo Guardrails wiring, docs/NeMo/phase2_implementation_plan.md
     every existing caller is byte-identical to pre-Phase-2 behavior.
   - graph.py still never imports guardrails -- input_guard is an injected
     callable, preserving module isolation (invariant I6).
+
+CHANGES (Phase 4 NeMo Guardrails wiring, docs/NeMo/phase4_implementation_plan.md):
+  - New node guardrail_output after local_llm/grok_fallback/claude_fallback/
+    offline_best_effort, before audit_logger: a sync, offline-only grounding
+    (hallucination) check. Grounding-only in this cut, and scoped to the
+    local_llm answer path -- see guardrail_output_node's docstring for why.
+  - No new router: guardrail_output has exactly one unconditional outbound
+    edge to audit_logger. The scope/verdict branching happens inside the node
+    and changes what gets logged, never which node runs next (I2 is
+    preserved by construction -- see guardrail_output_node's docstring).
+  - build_graph() accepts optional output_guard (built by
+    utils/guardrail_bridge.py); None (default) is a pure pass-through, so
+    every existing caller is byte-identical to pre-Phase-4 behavior.
 
 CHANGES FROM ORIGINAL (soul.md / persistent personality integration):
   - Import PersonalityManager from utils.personality
@@ -351,6 +365,40 @@ def guardrail_input_node(
     return {
         "answer": result.get("message", ""),
         "answer_model": "guardrail-blocked",
+        "answer_sources": [],
+        "guardrail_blocked": True,
+        "guardrail_rails": result.get("rails", []),
+    }
+
+def guardrail_output_node(
+    state: GraphState, *, output_guard: Callable[[str, str, str], dict[str, Any]] | None
+) -> dict:
+    """Node 7.5: offline output rail, local_llm path only in this cut (Decision 2).
+
+    Runs AFTER generation, unlike guardrail_input_node -- the answer already
+    exists, so a block here REPLACES it rather than skipping a call. Every
+    inbound edge still reaches audit_logger next regardless of verdict: there is
+    no conditional edge here because the verdict changes what the next node
+    LOGS, never WHICH node runs next. See docs/NeMo/phase4_implementation_plan.md
+    Decision 3.
+    """
+    if output_guard is None or state.get("answer_model") != "local":
+        return {}
+
+    docs = state.get("retrieved_docs", [])
+    context = "\n\n".join(d.get("text", "") for d in docs)  # matches guardrail_safety_node's own precedent, integration.py
+
+    try:
+        result = output_guard(state.get("query", ""), state.get("answer", ""), context)
+    except Exception:
+        logger.warning("output_guard raised; failing open (answer returned as generated)", exc_info=True)
+        return {}
+
+    if not result.get("blocked"):
+        return {}
+
+    return {
+        "answer": result.get("message", ""),
         "answer_sources": [],
         "guardrail_blocked": True,
         "guardrail_rails": result.get("rails", []),
@@ -791,6 +839,7 @@ def build_graph(
     claude: ClaudeClient | None = None,
     personality: PersonalityManager | None = None,
     input_guard: Callable[[str], dict[str, Any]] | None = None,
+    output_guard: Callable[[str, str, str], dict[str, Any]] | None = None,
 ):
     """Build and compile the CyClaw LangGraph.
 
@@ -817,6 +866,11 @@ def build_graph(
                      offline input rail run between route_by_score and
                      local_llm. None (default) is a pure pass-through, so
                      omitting it reproduces pre-Phase-2 behavior exactly.
+        output_guard: optional callable built by utils.guardrail_bridge —
+                     offline output (grounding) rail run after local_llm,
+                     before audit_logger. None (default) is a pure
+                     pass-through; local_llm is the only path it inspects
+                     (see guardrail_output_node's docstring).
 
     Returns:
         Compiled LangGraph (CompiledGraph) ready to invoke.
@@ -829,6 +883,7 @@ def build_graph(
     graph.add_node("retrieve",        partial(retrieve_node,           retriever=retriever, cfg=cfg))
     graph.add_node("route_by_score",  partial(route_by_score_node,     cfg=cfg))
     graph.add_node("guardrail_input", partial(guardrail_input_node,    input_guard=input_guard))
+    graph.add_node("guardrail_output", partial(guardrail_output_node,  output_guard=output_guard))
     graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
     graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))
@@ -866,8 +921,8 @@ def build_graph(
         }
     )
 
-    # local_llm → audit_logger (always)
-    graph.add_edge("local_llm", "audit_logger")
+    # local_llm → guardrail_output (always)
+    graph.add_edge("local_llm", "guardrail_output")
 
     # user_gate → grok_fallback | claude_fallback | guardrail_input | audit_logger
     # The offline branch is routed BACK THROUGH guardrail_input (2026-08-02,
@@ -893,12 +948,17 @@ def build_graph(
         }
     )
 
-    # grok_fallback → audit_logger (always)
-    graph.add_edge("grok_fallback", "audit_logger")
-    graph.add_edge("claude_fallback", "audit_logger")
+    # grok_fallback → guardrail_output (always; guardrail_output_node itself
+    # is the scope gate -- these two paths pass through untouched, see Decision 2)
+    graph.add_edge("grok_fallback", "guardrail_output")
+    graph.add_edge("claude_fallback", "guardrail_output")
 
-    # offline_best_effort → audit_logger (always)
-    graph.add_edge("offline_best_effort", "audit_logger")
+    # offline_best_effort → guardrail_output (always; same scope gate as above)
+    graph.add_edge("offline_best_effort", "guardrail_output")
+
+    # guardrail_output → audit_logger (always -- no conditional edge here; the
+    # verdict changes what gets logged, never which node runs next)
+    graph.add_edge("guardrail_output", "audit_logger")
 
     # audit_logger → END (always — convergence guaranteed)
     graph.add_edge("audit_logger", END)

@@ -292,10 +292,15 @@ class TestAuditConvergence:
         assert 'add_edge("audit_logger", END)' in src
 
     def test_every_external_node_edges_to_audit_logger(self):
-        # Both external providers must converge at audit_logger.
+        # Both external providers must converge at audit_logger -- via
+        # guardrail_output since Phase 4 (docs/NeMo/phase4_implementation_plan.md
+        # Decision 4): all four answer nodes now edge to guardrail_output, and
+        # guardrail_output has exactly one unconditional outbound edge, to
+        # audit_logger. Convergence still holds, just through one more hop.
         src = (_REPO_ROOT / "graph.py").read_text(encoding="utf-8")
         for node in ("grok_fallback", "claude_fallback", "offline_best_effort", "local_llm"):
-            assert f'add_edge("{node}", "audit_logger")' in src, f"{node} no longer converges on audit"
+            assert f'add_edge("{node}", "guardrail_output")' in src, f"{node} no longer converges on audit"
+        assert 'add_edge("guardrail_output", "audit_logger")' in src
 
 
 class TestGuardrailInputAuditConvergence:
