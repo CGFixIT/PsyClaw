@@ -338,6 +338,62 @@ def test_local_proposer_invoke_audits_failure_with_error_type(tmp_path: Path) ->
     assert not any(event["event"] == "agentic_harness_proposer_model_succeeded" for event in events)
 
 
+def test_local_proposer_failure_message_names_the_cause(tmp_path: Path) -> None:
+    """The exception type must reach the MESSAGE, not only details/the audit log.
+
+    agentic/cli.py's real-repo-run handler prints exc.message alone and
+    persists it as the run record's `error` -- the field real-repo-run-status
+    and the harness console both display. Before this, a read timeout, a
+    refused connection and a malformed response all surfaced identically as
+    "local proposer invocation failed".
+    """
+    cfg = _audit_cfg(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "boom"})
+
+    client = LocalProposerClient(
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
+        model="local-test-model",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(AgenticError) as excinfo:
+            client.invoke(system_prompt="sys", user_prompt="usr", cfg=cfg)
+    finally:
+        client.close()
+    assert "HTTPStatusError" in excinfo.value.message
+
+
+def test_local_proposer_timeout_message_names_the_budget_and_the_knob(tmp_path: Path) -> None:
+    """A timeout is the failure an operator is most likely to hit and least
+
+    able to diagnose: "ReadTimeout" alone does not say WHICH of the several
+    timeouts in this pipeline fired, so the message names the budget it
+    exceeded and the config key that raises it.
+    """
+    cfg = _audit_cfg(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    client = LocalProposerClient(
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
+        model="local-test-model",
+        timeout_sec=42,
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(AgenticError) as excinfo:
+            client.invoke(system_prompt="sys", user_prompt="usr", cfg=cfg)
+    finally:
+        client.close()
+    message = excinfo.value.message
+    assert "ReadTimeout" in message
+    assert "42s" in message
+    assert "planner_timeout_sec" in message
+
+
 def _agentic_config(*, enabled: bool, deepagent: dict) -> AgenticConfig:
     cfg = AgenticConfig(deepagent_github=deepagent)
     cfg.enabled = enabled  # type: ignore[attr-defined]

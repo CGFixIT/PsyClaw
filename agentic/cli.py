@@ -594,7 +594,11 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
     else:
         from agentic.harness_optimizer.model_adapter import LocalProposerClient
 
-        client = LocalProposerClient(base_url=cfg.deepagent_github.base_url, model=cfg.deepagent_github.model)
+        client = LocalProposerClient(
+            base_url=cfg.deepagent_github.base_url,
+            model=cfg.deepagent_github.model,
+            timeout_sec=cfg.deepagent_github.planner_timeout_sec,
+        )
     try:
         result = run_real_repo_loop(
             tools,
@@ -610,6 +614,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             read_paths=args.read_file,
             protected_write_paths=cfg.deepagent_github.protected_write_paths,
             max_write_budget_bytes=cfg.deepagent_github.max_write_budget_bytes,
+            scan_code_shape=cfg.deepagent_github.scan_code_shape,
             config_path=args.config,
             cfg=app_cfg,
         )

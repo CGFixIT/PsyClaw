@@ -72,6 +72,23 @@ DEFAULT_MAX_WRITE_BUDGET_BYTES = 100_000
 DEFAULT_MAX_HANDOFF_CHARS = 200_000
 DEFAULT_HARNESS_OUTPUT_DIR = "data/agentic/harness_optimizer/runs"
 DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
+# Per-call timeout for the planner's own model call -- LocalProposerClient's
+# httpx.Client (agentic/harness_optimizer/model_adapter.py) or
+# ChatModelProposerClient's underlying LangChain chat model (agentic/
+# deepagent_github/model_adapter.py::build_chat_model). A DIFFERENT client
+# than llm/client.py's LocalLLMClient, which serves graph.py's RAG nodes and
+# is never reachable from this package (I6) -- so it needs its own knob
+# rather than reusing models.local_llm.timeout_sec. Before this field
+# existed, LocalProposerClient's own constructor default (30.0s) was never
+# overridden by any caller: a 2026-08-02 audit found this to be a hard,
+# unrecoverable, first-iteration failure (no retry) for any local-model
+# completion over 30 wall-clock seconds -- effectively unusable for any model
+# slower than a trivial one. Sized to the same "dense ~27B, 8-16 tok/s"
+# rationale as models.local_llm.timeout_sec's 600s retune, since this loop's
+# own single-shot prompt (instruction + up to 12k chars of declared files +
+# up to 8k chars of GitHub context + up to 4k chars of prior-iteration
+# feedback) is comparably large.
+DEFAULT_PLANNER_TIMEOUT_SEC = 600
 
 _VALID_MODES = ("read", "write")
 # Post-Ollama migration: "lmstudio" is retired as a provider id. Use "ollama"
@@ -200,6 +217,14 @@ class DeepAgentGitHubConfig:
     )
     max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
     max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
+    planner_timeout_sec: int = DEFAULT_PLANNER_TIMEOUT_SEC
+    # The escape hatch for agentic.harness_optimizer.governance.inspect_code_shape.
+    # Defaults ON (fail safe). It exists because that scanner is a HEURISTIC that
+    # hard-blocks an iteration, and a heuristic gate with no recourse is a broken
+    # gate: some legitimate changes genuinely do combine, say, subprocess with a
+    # path that looks credential-shaped. Turning it off is an explicit operator
+    # act with a config diff behind it, not a silent default.
+    scan_code_shape: bool = True
 
     def cloud_provider(self, name: str) -> DeepAgentCloudProviderConfig | None:
         """Return a provider's config, or None when it is not configured/enabled.
@@ -224,6 +249,7 @@ class DeepAgentGitHubConfig:
             "agentic.deepagent_github.allow_github_writes",
             "agentic.deepagent_github.allow_cloud_providers",
             "agentic.deepagent_github.allow_git_write_tools",
+            "agentic.deepagent_github.scan_code_shape",
         ):
             attr = field_name.rsplit(".", 1)[-1]
             _validate_bool(getattr(self, attr), field_name)
@@ -285,6 +311,13 @@ class DeepAgentGitHubConfig:
             raise AgenticConfigError(
                 "agentic.deepagent_github.max_handoff_chars must be a positive integer",
                 details={"received": self.max_handoff_chars},
+            )
+        if not isinstance(self.planner_timeout_sec, int) or isinstance(
+            self.planner_timeout_sec, bool
+        ) or self.planner_timeout_sec <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.planner_timeout_sec must be a positive integer",
+                details={"received": self.planner_timeout_sec},
             )
 
     def _coerce_providers(self) -> None:

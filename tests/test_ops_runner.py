@@ -400,7 +400,76 @@ def test_real_repo_run_uses_the_long_timeout(monkeypatch: pytest.MonkeyPatch) ->
         "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
         branch="claude/x", commit_message="m", reason="r",
     )
-    assert seen_timeouts == [ops_runner._REAL_REPO_RUN_TIMEOUT_SEC]  # noqa: SLF001
+    assert seen_timeouts == [ops_runner._real_repo_run_timeout_sec(None, 1)]  # noqa: SLF001
+
+
+# --------------------------------------------------------------- real-repo-run budget
+
+def test_real_repo_run_budget_covers_every_iteration_of_planner_and_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget must outlast what the run is actually allowed to spend.
+
+    Regression for a real inversion: this was a flat 900s, sized when the
+    planner's own timeout was a hardcoded 30s. Once that became configurable
+    and defaulted to 600s, three iterations alone (the CLI's own default)
+    could spend 1800s -- twice the ceiling -- and blowing it SIGKILLs the CLI
+    before its own cleanup runs, leaking the clone and stranding a
+    permanently `running` record.
+    """
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 600}}},
+    )
+    budget = ops_runner._real_repo_run_timeout_sec(3, 1)  # noqa: SLF001
+    assert budget > 3 * 600, "must outlast three full planner calls"
+    assert budget >= 3 * 600 + 3 * 120, "and their verification sweeps"
+
+
+def test_real_repo_run_budget_tracks_a_raised_planner_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raising planner_timeout_sec must move the ceiling with it, not strand it."""
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 200}}},
+    )
+    low = ops_runner._real_repo_run_timeout_sec(2, 1)  # noqa: SLF001
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 400}}},
+    )
+    high = ops_runner._real_repo_run_timeout_sec(2, 1)  # noqa: SLF001
+    assert high - low == 2 * (400 - 200)
+
+
+def test_real_repo_run_budget_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The route's own maxima compute past three hours; a synchronous HTTP
+    request held open that long is its own failure mode, so the budget caps."""
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 600}}},
+    )
+    assert ops_runner._real_repo_run_timeout_sec(10, 8) == ops_runner._REAL_REPO_RUN_MAX_TIMEOUT_SEC  # noqa: SLF001
+
+
+@pytest.mark.parametrize("bad_cfg", [{}, {"agentic": None}, {"agentic": {"deepagent_github": None}}])
+def test_real_repo_run_budget_falls_back_on_missing_config(
+    monkeypatch: pytest.MonkeyPatch, bad_cfg: dict
+) -> None:
+    monkeypatch.setattr(ops_runner, "_get_config", lambda _path: bad_cfg)
+    expected = (
+        3 * ops_runner._REAL_REPO_RUN_FALLBACK_PLANNER_SEC  # noqa: SLF001
+        + 3 * 120
+        + ops_runner._REAL_REPO_RUN_OVERHEAD_SEC  # noqa: SLF001
+    )
+    assert ops_runner._real_repo_run_timeout_sec(None, 1) == expected  # noqa: SLF001
+
+
+def test_real_repo_run_budget_falls_back_on_unreadable_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(_path):
+        raise OSError("config missing")
+
+    monkeypatch.setattr(ops_runner, "_get_config", _boom)
+    assert ops_runner._real_repo_run_timeout_sec(1, 1) > 0  # noqa: SLF001
 
 
 def test_real_repo_run_checks_file_cleaned_up_when_run_raises(monkeypatch: pytest.MonkeyPatch) -> None:

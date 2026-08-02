@@ -180,6 +180,34 @@ def test_run_accepts_and_persists_a_pending_decision(cfg_path, checks_file, monk
     assert Path(record["dest"]).is_dir()
 
 
+def test_run_threads_planner_timeout_sec_into_the_local_client(cfg_path, checks_file, monkeypatch, capsys):
+    """Regression for the confirmed 2026-08-02 finding: LocalProposerClient's own
+
+    30.0s constructor default was never overridden by any caller, so a real
+    local-model completion over 30 wall-clock seconds killed the whole run on
+    iteration 1 with no retry. cli.py must now pass
+    agentic.deepagent_github.planner_timeout_sec through to the client's
+    underlying httpx.Client, not rely on the class's own hardcoded default.
+    """
+    captured_timeout = []
+
+    def fake_invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
+                     config_path="config.yaml", cfg=None):
+        captured_timeout.append(self._client.timeout.read)
+        return LocalProposerResponse(content=_RIGHT_BLOCK, model=self.model)
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", fake_invoke)
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["planner_timeout_sec"] = 723
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    from utils.logger import reset_config_cache
+
+    reset_config_cache()
+
+    assert _run_start(cfg_path, checks_file) == EXIT_OK
+    assert captured_timeout == [723.0]
+
+
 def test_run_exhausts_and_discards_the_clone(cfg_path, checks_file, monkeypatch, capsys):
     monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_WRONG_BLOCK))
     assert _run_start(cfg_path, checks_file, extra=("--max-iterations", "1")) == EXIT_OK
