@@ -26,22 +26,27 @@ rollouts whose second half was never scheduled.
 These four are the ones with a security or behavioral consequence. They are
 listed first on purpose.
 
-### 1. `offline_best_effort` bypasses the input guardrail
+### 1. `offline_best_effort` bypasses the input guardrail — **DONE 2026-08-02**
 
-`graph.py:850` carries the gap as a literal in-code comment:
+The offline input rail used to cover only the high-score retrieval route, so a
+query that fell through to `offline_best_effort` reached the local model without
+passing the `guardrail_input` node. The rail's coverage was keyed on a retrieval
+score, which is not a security property.
 
-```
-# KNOWN GAP: offline_best_effort bypasses guardrail_input — the offline
-```
+Closed by routing `user_gate`'s `"offline_best_effort"` return **through
+`guardrail_input`** in the conditional-edge `path_map`, and giving
+`guardrail_router` a third target discriminated on `needs_user_confirm` (set
+explicitly on both branches by `route_by_score_node`, so it is a reliable
+"which inbound edge did this arrive on" signal).
 
-The offline input rail covers only the high-score retrieval route. A query that
-falls through to `offline_best_effort` reaches the local model without passing
-the `guardrail_input` node.
-
-- **Risk tier:** High — touches `graph.py` edges, i.e. invariant I2
-  (topology = policy). Per `CLAUDE.md` §7 this needs explicit sign-off before
-  a line is written.
-- **Blocked on:** nothing technical; it is a scoping decision.
+- **I2** holds: the decision is still a graph edge, not a runtime `if` outside a
+  router. **I3** is untouched — `user_gate_router`'s provider gating is
+  unchanged and the two external legs stay deliberately un-railed (their policy
+  gate is the triple gate, not this rail). **I4** holds on both new legs.
+- `invariant-guard`'s expected-target sets were updated in the same change;
+  `test_low_score_path_never_invokes_the_guard` (which pinned the old behavior)
+  was superseded by `test_low_score_offline_path_now_invokes_the_guard`, plus
+  `test_external_fallback_leg_is_not_railed` to pin the deliberate exclusion.
 
 ### 2. NeMo Phase 3 — query-path output rails (`guardrail_output`)
 

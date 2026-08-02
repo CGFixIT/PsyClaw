@@ -315,17 +315,25 @@ def main(argv: list[str] | None = None) -> int:
              f"real targets: {sorted(score_targets)} -- a path_map value change can reroute around "
              "guardrail_input/user_gate without score_router's own code changing at all")
     guardrail_targets = conditional_edge_targets(graph_tree, "guardrail_input", "guardrail_router")
-    if guardrail_targets == {"local_llm", "audit_logger"}:
-        ok("guardrail_input's real targets are exactly {local_llm, audit_logger}")
+    # offline_best_effort joined this set on 2026-08-02: guardrail_input is now
+    # the offline branch's entry too, so the rail covers the low-score/declined
+    # path instead of only the high-score one.
+    if guardrail_targets == {"local_llm", "offline_best_effort", "audit_logger"}:
+        ok("guardrail_input's real targets are exactly {local_llm, offline_best_effort, audit_logger}")
     else:
-        fail("guardrail_input's real targets are exactly {local_llm, audit_logger}",
+        fail("guardrail_input's real targets are exactly {local_llm, offline_best_effort, audit_logger}",
              f"real targets: {sorted(guardrail_targets)}")
     gate_targets = conditional_edge_targets(graph_tree, "user_gate", "user_gate_router")
-    expected_gate_targets = {"grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"}
+    # user_gate_router still RETURNS "offline_best_effort"; the path_map sends
+    # that return through guardrail_input first, which is why the real target
+    # here is guardrail_input. A path_map edit that points it straight at
+    # offline_best_effort again would re-open the un-railed offline path, and
+    # this equality is what catches it.
+    expected_gate_targets = {"grok_fallback", "claude_fallback", "guardrail_input", "audit_logger"}
     if gate_targets == expected_gate_targets:
-        ok("user_gate's real targets are exactly the documented provider/offline/audit targets")
+        ok("user_gate's real targets are exactly the documented provider/railed-offline/audit targets")
     else:
-        fail("user_gate's real targets are the documented provider/offline/audit targets",
+        fail("user_gate's real targets are the documented provider/railed-offline/audit targets",
              f"real targets: {sorted(gate_targets)}")
     actual_nodes = node_names(graph_tree)
     if actual_nodes == EXPECTED_NODES:

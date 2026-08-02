@@ -65,8 +65,11 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
               │                       └─ passed  → local_llm
               └─ score < min_score → user_gate
                                      ├─ confirmed + hybrid + selected provider usable
-                                     │    → grok_fallback | claude_fallback
-                                     └─ declined / offline / no key → offline_best_effort
+                                     │    → grok_fallback | claude_fallback  (NOT railed —
+                                     │      their gate is the triple gate, not the rail)
+                                     └─ declined / offline / no key → guardrail_input
+                                            ├─ blocked → audit_logger
+                                            └─ passed  → offline_best_effort
               ↓ (all upstream nodes converge)
               audit_logger → END
         │
