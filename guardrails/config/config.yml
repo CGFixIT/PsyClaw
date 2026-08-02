@@ -21,7 +21,7 @@
 models:
   - type: main
     engine: openai
-    model: qwen2.5:7b                   # Ollama tag (authoritative: config.yaml guardrails.model)
+    model: qwen3.6:27b                   # Ollama tag (authoritative: config.yaml guardrails.model)
     parameters:
       # Loopback-only binding to local Ollama is a core CyClaw security
       # invariant (offline-first), not debug code -- suppress devskim heuristic.
@@ -33,7 +33,7 @@ models:
   # it can mirror `main`.
   - type: self_check
     engine: openai
-    model: qwen2.5:7b
+    model: qwen3.6:27b
     parameters:
       # Loopback-only binding to local Ollama is a core CyClaw security
       # invariant (offline-first), not debug code -- suppress devskim heuristic.

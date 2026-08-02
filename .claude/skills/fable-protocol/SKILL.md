@@ -178,7 +178,7 @@ rising eval-awareness (~6% of rollouts).
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
   - 9-node LangGraph state machine; FastAPI on 127.0.0.1:8787 (loopback only)
   - Hybrid retrieval: ChromaDB + BM25 with RRF fusion (k=60); embeddings all-MiniLM-L6-v2
-  - Local inference: Ollama (qwen2.5:7b) — migrated off LM Studio; triple-gated
+  - Local inference: Ollama (qwen3.6:27b) — migrated off LM Studio; triple-gated
     fallback to Grok and/or Claude (selected per-query via `online_provider`),
     each gated on mode==hybrid AND <provider>.enabled AND user_confirmed_online.
     FOOTGUN (carried over from the LM Studio era, same failure mode): Ollama's

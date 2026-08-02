@@ -91,7 +91,7 @@ def _write_config(tmp_path, base_url: str) -> str:
         "models": {
             "local_llm": {
                 "base_url": base_url,
-                "model": "qwen2.5:7b",
+                "model": "qwen3.6:27b",
                 "max_tokens": 256,
                 "temperature": 0.1,
                 "timeout_sec": 5,
@@ -126,7 +126,7 @@ class TestLocalLLMClientAgainstRealHTTPServer:
         client.close()
         assert len(server.received) == 1
         body = server.received[0]
-        assert body["model"] == "qwen2.5:7b"
+        assert body["model"] == "qwen3.6:27b"
         assert body["messages"] == [{"role": "user", "content": "what is CyClaw?"}]
         assert body["max_tokens"] == 256
         assert body["temperature"] == pytest.approx(0.1)

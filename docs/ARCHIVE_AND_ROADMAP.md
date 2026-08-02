@@ -1,5 +1,10 @@
 # Archive and Roadmap
 
+> **Looking for what is still open?** See
+> [`/remaining_work.md`](../remaining_work.md) — the verified, actionable
+> backlog. This file holds the *history and rationale* behind those items;
+> that one holds the current state with file:line evidence.
+
 This file is the single home for retired design history, superseded plans, and
 scratch research that fed CyClaw's `agentic/` and `sync/` layers. It replaces
 17 files that were classified, during a 2026-08-01 documentation audit, as
@@ -17,13 +22,20 @@ the existence of both as drift — it's a deliberate staged rollout, not an
 oversight.
 
 **Required follow-up before the source files are deleted** (tracked here so it
-isn't lost): `AGENTS.md` cites `docs/SETUP.md` by name at least twice; those
-citations need to point at `/setup-guide.md` directly before `docs/SETUP.md`
-goes away. After deletion, run `python3 .claude/skills/doc-sync/doc_sync.py`
-and separately grep `CLAUDE.md`/`README.md`/`AGENTS.md` for the other 16 paths
-being removed — this is exactly the class of drift that skill exists to catch,
-and it does not currently check for dangling doc-to-doc references, only the
-config-number and route-table drift it's built for.
+isn't lost):
+
+- ~~`AGENTS.md` cites `docs/SETUP.md` by name at least twice; those citations
+  need to point at `/setup-guide.md` directly before `docs/SETUP.md` goes
+  away.~~ **DONE 2026-08-02** — both citations (`AGENTS.md:11` and the
+  Windows-PowerShell-setup line) now point at `setup-guide.md`. `docs/SETUP.md`
+  itself is still present as a redirect stub, so nothing is dangling either
+  way; deleting it remains part of the un-started cutover below.
+- **Still owed:** after deletion, run
+  `python3 .claude/skills/doc-sync/doc_sync.py` and separately grep
+  `CLAUDE.md`/`README.md`/`AGENTS.md` for the other 16 paths being removed —
+  this is exactly the class of drift that skill exists to catch, and it does
+  not currently check for dangling doc-to-doc references, only the
+  config-number and route-table drift it's built for.
 
 **Files this document replaces** (verbatim list, so a future reader can
 confirm nothing here was quietly dropped from the retirement announcement):

@@ -35,7 +35,7 @@ models:
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
 #    api_key: "your-ollama-key"
-    model: "qwen2.5:7b"
+    model: "qwen3.6:27b"
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
@@ -48,7 +48,10 @@ models:
     max_tokens: 3000
     temperature: 0.3
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host rather than for the 7B default above. Worked from the
+    # is expected to host -- which, since the default above became qwen3.6:27b,
+    # is now the shipped default itself rather than a headroom allowance for a
+    # model heavier than it. A smaller tag simply leaves this budget unused.
+    # Worked from the
     # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
     # weights, so single-stream decode is memory-bandwidth-bound at roughly
     # (bandwidth / weight-bytes) x realized-fraction. On 300-310 GB/s Apple
@@ -80,7 +83,7 @@ models:
       enabled: false
       provider: "lmstudio"                       # label only; same OpenAI-compat stack
       base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
-      model: "qwen2.5:7b-Instruct"               # set to your LM Studio loaded model id when enabling
+      model: "qwen3.6-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.6:27b` verbatim
       probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
   embeddings:
     provider: "sentence-transformers"
@@ -692,7 +695,7 @@ guardrails:
                                   # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
   engine: "openai"               # Ollama exposes an OpenAI-compatible API
   base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
-  model: "qwen2.5:7b"            # keep in sync with models.local_llm.model
+  model: "qwen3.6:27b"           # keep in sync with models.local_llm.model
   nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
   metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
   block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."
