@@ -6,7 +6,7 @@
 > that one holds the current state with file:line evidence.
 
 This file is the single home for retired design history, superseded plans, and
-scratch research that fed CyClaw's `agentic/` and `sync/` layers. It replaces
+scratch research that fed CyClaw's `agentic/` and `sync/` layers. It condenses
 17 files that were classified, during a 2026-08-01 documentation audit, as
 either explicitly retired/superseded, dated one-shot plans whose substance is
 better tracked as a living checklist, or scratch research notes never meant to
@@ -15,43 +15,67 @@ live checklist with an open sign-off, or a dated historical record — those
 categories stay as their own separate, uncombined files (see each section
 below for the specific doc a given topic still lives in when it isn't here).
 
-**Status: this file has been built; the 17 source files it condenses have
-NOT yet been deleted.** They still exist on disk, side by side with this one,
-pending an explicit follow-up decision to complete the cutover. Do not treat
-the existence of both as drift — it's a deliberate staged rollout, not an
-oversight.
+**Status (updated 2026-08-02): relocation replaced the original deletion
+plan.** This file originally tracked an eventual deletion of the 17 source
+files once this condensed record existed. That plan changed by explicit owner
+decision: 16 of the 17 have instead been moved — via `git mv`, so each file's
+history is preserved — into a new `docs/work/` folder, and each got a light,
+surgical pass fixing genuinely stale claims against current code (not a
+rewrite; historical/rationale content was kept). They are not deleted, and
+this file's condensed summaries of them still stand alongside the (now
+relocated, lightly refreshed) originals — treat both as intentionally
+coexisting, not as drift. The 17th file,
+`docs/NeMo/phase3_implementation_plan.md`, was deliberately **left in place,
+not moved**: it is still cited by exact file:line from `remaining_work.md`'s
+still-open item #2 and from a new `docs/NeMo/phase4_implementation_plan.md`
+design doc on an unmerged branch/PR, and relocating it now would break live
+cross-references from in-flight work that has not landed yet. Revisit that
+exclusion once phase4 merges and item #2 closes.
 
-**Required follow-up before the source files are deleted** (tracked here so it
-isn't lost):
+**Follow-up from the prior "before deletion" list — completed 2026-08-02**
+(tracked here so it isn't lost):
 
-- ~~`AGENTS.md` cites `docs/SETUP.md` by name at least twice; those citations
-  need to point at `/setup-guide.md` directly before `docs/SETUP.md` goes
-  away.~~ **DONE 2026-08-02** — both citations (`AGENTS.md:11` and the
-  Windows-PowerShell-setup line) now point at `setup-guide.md`. `docs/SETUP.md`
-  itself is still present as a redirect stub, so nothing is dangling either
-  way; deleting it remains part of the un-started cutover below.
-- **Still owed:** after deletion, run
-  `python3 .claude/skills/doc-sync/doc_sync.py` and separately grep
-  `CLAUDE.md`/`README.md`/`AGENTS.md` for the other 16 paths being removed —
-  this is exactly the class of drift that skill exists to catch, and it does
-  not currently check for dangling doc-to-doc references, only the
-  config-number and route-table drift it's built for.
+- `AGENTS.md` cited `docs/SETUP.md` by name; that citation, and every other
+  citation of the 16 relocated files across `CLAUDE.md`, `README.md`,
+  `AGENTS.md`, and the rest of `docs/**`, was repointed at the new
+  `docs/work/<filename>` location in the same change that performed the move.
+- `python3 .claude/skills/doc-sync/doc_sync.py` was re-run afterward, and a
+  manual repo-wide grep for each of the 16 old paths (doc-sync does not check
+  dangling doc-to-doc references — only config-number and route-table drift —
+  per its own documented limitation) confirmed nothing under `docs/**`,
+  `CLAUDE.md`, `README.md`, or `AGENTS.md` still cites an old path. A handful
+  of citations outside that scope were deliberately left untouched as this
+  pass's stated boundary — repoint these separately if/when their own files
+  are next touched: `.claude/rules/PROJECT_RULES.md`,
+  `.claude/skills/doc-sync/SKILL.md`,
+  `.claude/skills/create-session-notes/SKILL.md`,
+  `.claude/commands/create-session-notes.md`,
+  `.codex/skills/cyclaw-run-cyclaw/SKILL.md`,
+  `tests/fixtures/github_coding_repo/README.md`, and the root `setup-guide.md`
+  (all cite `docs/SESSION_NOTES.md` or `docs/SETUP.md` by their pre-move path).
 
 **Files this document replaces** (verbatim list, so a future reader can
-confirm nothing here was quietly dropped from the retirement announcement):
-`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`,
-`docs/agentic/CyClaw_Safe_Agentic_Enhancement_Plan.md`,
-`docs/agentic/FSCONNECT_SQL_ROADMAP.md`,
-`docs/agentic/cyclaw_codebase_notes.md`,
-`docs/agentic/subagent_researcher_notes.md`,
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`,
-`docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md`, `docs/SETUP.md`,
-`docs/SESSION_NOTES.md`, `docs/PSYCLAW_FEATURE_IDEAS.md`,
-`docs/LOCAL_REMOTE_SYNC_GUARD.md`, `docs/DEPENDENCY_CURRENCY_PLAN.md`,
-`docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md`, `docs/zIdeas/PROPOSED_SKILLS.md`,
-`docs/zIdeas/online-llm-grok-claude.md`,
-`docs/security-philosophy/SECURITY_THREAT_model.md`,
-`docs/NeMo/phase3_implementation_plan.md`.
+confirm nothing here was quietly dropped from the retirement announcement) —
+each now relocated to `docs/work/` (old path → new path), except the one
+exclusion noted above:
+`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` → `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`,
+`docs/agentic/CyClaw_Safe_Agentic_Enhancement_Plan.md` → `docs/work/CyClaw_Safe_Agentic_Enhancement_Plan.md`,
+`docs/agentic/FSCONNECT_SQL_ROADMAP.md` → `docs/work/FSCONNECT_SQL_ROADMAP.md`,
+`docs/agentic/cyclaw_codebase_notes.md` → `docs/work/cyclaw_codebase_notes.md`,
+`docs/agentic/subagent_researcher_notes.md` → `docs/work/subagent_researcher_notes.md`,
+`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` → `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`,
+`docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md` → `docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md`,
+`docs/SETUP.md` → `docs/work/SETUP.md`,
+`docs/SESSION_NOTES.md` → `docs/work/SESSION_NOTES.md`,
+`docs/PSYCLAW_FEATURE_IDEAS.md` → `docs/work/PSYCLAW_FEATURE_IDEAS.md`,
+`docs/LOCAL_REMOTE_SYNC_GUARD.md` → `docs/work/LOCAL_REMOTE_SYNC_GUARD.md`,
+`docs/DEPENDENCY_CURRENCY_PLAN.md` → `docs/work/DEPENDENCY_CURRENCY_PLAN.md`,
+`docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` → `docs/work/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md`,
+`docs/zIdeas/PROPOSED_SKILLS.md` → `docs/work/PROPOSED_SKILLS.md`,
+`docs/zIdeas/online-llm-grok-claude.md` → `docs/work/online-llm-grok-claude.md`,
+`docs/security-philosophy/SECURITY_THREAT_model.md` → `docs/work/SECURITY_THREAT_model.md`,
+and `docs/NeMo/phase3_implementation_plan.md` — **excluded from this move,
+still at its original path** (see the Status note above).
 
 **Files that stay separate and are NOT folded in here**, because they are
 binding governance, a live checklist with a real (possibly still-open)
@@ -90,7 +114,7 @@ tracked in that file, not duplicated here.
 
 ### DeepAgents graph harness, Phases 6-9
 
-Source: `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. Its own header (lines 6-11) states: **retired by owner decision on 2026-07-31, superseded by `agentic/real_repo_loop.py` as the live real-repo coding path.** The record itself is left "accurate and unmodified" — it documents a dead path, not a live one. All feature flags for this subsystem ship disabled in `config.yaml` by default (line 3-4), and none of what follows enables real GitHub writes, host shell execution, real-repository writes, remote memory, or an external approval decorator (line 17-18).
+Source: `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`. Its own header (lines 6-11) states: **retired by owner decision on 2026-07-31, superseded by `agentic/real_repo_loop.py` as the live real-repo coding path.** The record itself is left "accurate and unmodified" — it documents a dead path, not a live one. All feature flags for this subsystem ship disabled in `config.yaml` by default (line 3-4), and none of what follows enables real GitHub writes, host shell execution, real-repository writes, remote memory, or an external approval decorator (line 17-18).
 
 What phases 6-9 actually built, on top of the phase-5 scaffold in `GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`:
 
@@ -102,18 +126,18 @@ What phases 6-9 actually built, on top of the phase-5 scaffold in `GITHUB_DEEP_A
 
 ### One-line redirects
 
-- `docs/SETUP.md` — moved; the file is a one-paragraph stub stating it "has moved to keep a single canonical setup guide instead of two drifting copies" and points to `/setup-guide.md` at the repo root (Windows + Linux, Ollama; the stub dates that target as current as of 2026-07-29).
-- `docs/security-philosophy/SECURITY_THREAT_model.md` — confirmed stub: its entire content is a single line, the GitHub URL `https://github.com/cgfixit/CyClaw/blob/main/docs/THREAT_MODEL.md`, i.e. it redirects to `docs/THREAT_MODEL.md`.
-- `docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` — its status banner confirms the plan is superseded by the shipped `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`, driven from the terminal's Sync Console via `POST /ops/sync`, covered by `tests/test_sync_*.py`), kept only for design rationale; the banner's own words name the successor doc as `Dropbox_Sync_Guide.md`. Note this is ambiguous against the rest of the same file: §5's file layout, §12's documentation deliverables, and §16.3 (Role C) all instead name `docs/SYNC_README.md` as the shipped operator guide. The banner text and the body of its own document disagree on the successor filename — flagging rather than guessing which is current.
+- `docs/work/SETUP.md` (moved from `docs/SETUP.md`) — moved; the file is a one-paragraph stub stating it "has moved to keep a single canonical setup guide instead of two drifting copies" and points to `/setup-guide.md` at the repo root (Windows + Linux, Ollama; the stub dates that target as current as of 2026-07-29).
+- `docs/work/SECURITY_THREAT_model.md` (moved from `docs/security-philosophy/SECURITY_THREAT_model.md`) — confirmed stub: its entire content is a single line, the GitHub URL `https://github.com/cgfixit/CyClaw/blob/main/docs/THREAT_MODEL.md`, i.e. it redirects to `docs/THREAT_MODEL.md`.
+- `docs/work/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md` (moved from `docs/DROPBOX_SYNC_IMPLEMENTATION_PLAN.md`) — its status banner confirms the plan is superseded by the shipped `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`, driven from the terminal's Sync Console via `POST /ops/sync`, covered by `tests/test_sync_*.py`), kept only for design rationale; the banner's own words name the successor doc as `Dropbox_Sync_Guide.md`. Note this is ambiguous against the rest of the same file: §5's file layout, §12's documentation deliverables, and §16.3 (Role C) all instead name `docs/SYNC_README.md` as the shipped operator guide. The banner text and the body of its own document disagree on the successor filename — flagging rather than guessing which is current.
 
 ## 2b. Retired Subsystem Record — GitHub Deep Agent Harness Optimizer
 
-Source: `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (1145 lines).
+Source: `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (1145 lines).
 **Retired by owner decision, 2026-07-31: no further development planned.**
 `agentic/real_repo_loop.py` — a separate, simpler plan→patch→verify→commit
 pipeline *not* built on `deepagents` — is now the one live real-repo coding
 path. Authoritative current behavior lives in
-`docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`; the split between the two
+`docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`; the split between the two
 subsystems is recorded in `docs/THREAT_MODEL.md`'s fifth amendment and
 `docs/agentic/AGENTIC_README.md` §9. The plan doc's code (`builder.py`,
 `subagents.py`, `tools.py`, `permissions.py`, and the rest of
@@ -238,9 +262,9 @@ single-operator portfolio project needs going forward).
 Tracks the now-retired `agentic/deepagent_github/` + `agentic/harness_optimizer/`
 subsystem: a LangChain Deep Agents-backed local GitHub coding harness plus a
 better-harness-style optimizer, designed and built across
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (canonical design
-plan), `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` (implemented-controls
-record), `docs/LangChain_Deep_Agentic_Harness_latest_roadmap.md` (status/review/
+`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (canonical design
+plan), `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` (implemented-controls
+record), `docs/work/LangChain_Deep_Agentic_Harness_latest_roadmap.md` (status/review/
 roadmap), and `docs/future_langchain_plans.md` (root pointer). **Retired by
 owner decision, 2026-07-31: no further development planned.**
 `agentic/real_repo_loop.py` — a separate, simpler plan→patch→verify→commit
@@ -502,7 +526,7 @@ roadmap, checked against the current tree:
 after this plan — a DeepAgents subgraph (`builder.py`) explored as an
 alternative to the real-repo loop. It was retired by owner decision on
 2026-07-31 ("no further development is planned," per
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`), superseded by
+`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`), superseded by
 `agentic/real_repo_loop.py`; its code/tests/CI are kept, not deleted, matching
 this repo's general pattern of leaving superseded-but-tested code in place
 rather than churning it out.
@@ -517,7 +541,7 @@ established — the isolation boundary is still enforced and unit-tested
 
 ## 4. Dependency Currency Tracking
 
-Source: `docs/DEPENDENCY_CURRENCY_PLAN.md`, deferred from PR #596 (merged
+Source: `docs/work/DEPENDENCY_CURRENCY_PLAN.md` (moved from `docs/DEPENDENCY_CURRENCY_PLAN.md`), deferred from PR #596 (merged
 2026-07-21), which added the `verify-deps` skill and ran its PyPI currency +
 CVE sweep across all 26 pinned packages. That doc was a one-shot snapshot;
 this section reframes it as a living checklist so status can be updated in
@@ -660,7 +684,7 @@ PR body").
 
 ## 5. Fsconnect/Sqlconnect Forward Roadmap
 
-Source: `docs/agentic/FSCONNECT_SQL_ROADMAP.md`. Every item below is still governed by
+Source: `docs/work/FSCONNECT_SQL_ROADMAP.md` (moved from `docs/agentic/FSCONNECT_SQL_ROADMAP.md`). Every item below is still governed by
 the design invariants that doc states up front — out-of-band isolation (new code only
 under `agentic/<connector>/`, run via `python -m agentic.<connector>.cli`, guarded by
 the recursive AST check in `tests/test_agentic_isolation.py`), topology-never-a-node,
@@ -806,11 +830,11 @@ not an in-flight task.
 
 ## 6. Session/Sync Hygiene Notes
 
-### `docs/SESSION_NOTES.md`
+### `docs/work/SESSION_NOTES.md` (moved from `docs/SESSION_NOTES.md`)
 
-This file is confirmed to be an empty template scaffold, not a live log: it contains only the purpose statement, a `### Session: <YYYY-MM-DD>` markdown template block, and a placeholder line — `*None yet. Sessions from this template will be appended below.*` (`docs/SESSION_NOTES.md:49`) — with zero populated session entries. This matches `.claude/rules/PROJECT_RULES.md`'s own note that the active log lives under `.claude/session-notes/`, not here. Do not add session entries to this file; it stays as the blank template it already is. For session goals, decisions, blockers, discoveries, and coverage gaps, write to `.claude/session-notes/` instead — that is where CLAUDE.md §7 ("Blocked") and §10 ("End") both point.
+This file is confirmed to be an empty template scaffold, not a live log: it contains only the purpose statement, a `### Session: <YYYY-MM-DD>` markdown template block, and a placeholder line — `*None yet. Sessions from this template will be appended below.*` (`docs/work/SESSION_NOTES.md:49`) — with zero populated session entries. This matches `.claude/rules/PROJECT_RULES.md`'s own note that the active log lives under `.claude/session-notes/`, not here. Do not add session entries to this file; it stays as the blank template it already is. For session goals, decisions, blockers, discoveries, and coverage gaps, write to `.claude/session-notes/` instead — that is where CLAUDE.md §7 ("Blocked") and §10 ("End") both point.
 
-### `docs/LOCAL_REMOTE_SYNC_GUARD.md`
+### `docs/work/LOCAL_REMOTE_SYNC_GUARD.md` (moved from `docs/LOCAL_REMOTE_SYNC_GUARD.md`)
 
 Proposes a `SessionStart` hook, `.claude/hooks/session-start-sync-check.sh`, to close a recurring failure mode: local `main` drifting from `origin/main` (wrong-identity commits flagged "Unverified," ahead/behind divergence after remote merges, `git reset --hard` reached for as an ad-hoc — and destructive — fix). The hook is deliberately advisory only: on session start it (1) pins commit identity repo-locally to `noreply@anthropic.com`/`Claude`, (2) fetches the default branch read-only and reports ahead/behind counts, (3) prints reconciliation guidance (ff-only when safe, review `git log origin/main..HEAD` before discarding) without ever running reset/rebase/push/delete itself, and always exits 0 so it can never block a session. The doc also states the underlying operating conventions independent of the hook: treat local `main` as read-mostly, `git fetch && git merge --ff-only` after a remote merge rather than reset, treat `git reset --hard` as a last resort with a preservation branch first, and rely on pinned identity for verifiable commits.
 
@@ -818,7 +842,7 @@ Proposes a `SessionStart` hook, `.claude/hooks/session-start-sync-check.sh`, to 
 
 ## 7. Skill and Feature Proposals (Unbuilt)
 
-### docs/zIdeas/PROPOSED_SKILLS.md — skill backlog
+### docs/work/PROPOSED_SKILLS.md (moved from docs/zIdeas/PROPOSED_SKILLS.md) — skill backlog
 
 Five skills were proposed, ranked by leverage, with a self-reported status note (PROPOSED_SKILLS.md:7-16) claiming `invariant-guard`, `injection-redteam`, and `index-doctor` implemented, plus an unlisted fourth (`doc-sync`) added alongside them. Verified directly against `.claude/skills/` (not assumed from the doc):
 
@@ -839,7 +863,7 @@ Two proposals remain genuinely open, carried forward verbatim:
 
 Neither is a defect fix or hardening pass — both are net-new tooling. Under CLAUDE.md §1's FEATURE FREEZE (as of 2026-07-03), building either requires passing the explicit test first ("does this polish the portfolio signal or fix a real defect?"), not treating this backlog entry alone as authorization.
 
-### docs/zIdeas/online-llm-grok-claude.md — web UI toggle for online fallback
+### docs/work/online-llm-grok-claude.md (moved from docs/zIdeas/online-llm-grok-claude.md) — web UI toggle for online fallback
 
 The doc is largely a now-superseded how-to: its own verification summary (online-llm-grok-claude.md:76-93) describes wiring — hybrid-mode gating, `is_available()` checks, shared redaction across Grok/Claude clients — that matches current `gate.py`/`graph.py`/`llm/client.py` behavior and is no longer a proposal. One idea in it is still open and unbuilt:
 
@@ -854,7 +878,7 @@ Per CLAUDE.md §7, this sits in the High tier (editing something adjacent to a s
 
 **Stale reference flagged:** the doc pins `grok.model: "grok-4.3"` (online-llm-grok-claude.md:20,39). Current `config.yaml:87` ships `grok-4.5` as `models.grok.model` (`grok-4.3` is noted only as a still-resolvable prior default in that line's own comment, kept available if cost or the larger context window matters more than currency). The doc's `claude.model: "claude-sonnet-5"` (online-llm-grok-claude.md:26,45) does still match `config.yaml:98`. Per CLAUDE.md §1, code/config is the source of truth — treat the grok model string in this doc as stale.
 
-### docs/PSYCLAW_FEATURE_IDEAS.md — vertical-market hypotheses
+### docs/work/PSYCLAW_FEATURE_IDEAS.md (moved from docs/PSYCLAW_FEATURE_IDEAS.md) — vertical-market hypotheses
 
 The doc's own framing governs everything in it: the named verticals (law, psychology/therapy, medical/dental, accounting) are "plausible, not validated... until buyer conversations prove urgency, budget, procurement path, and trust requirements" (PSYCLAW_FEATURE_IDEAS.md:14-16), and its business-status note states net-new features stay frozen absent a customer, paid pilot, or interview trigger (lines 27-29). Three items are catalogued; one is already built, two remain hypotheses:
 

@@ -143,9 +143,9 @@ going forward. The code, its tests, and its `deepagents-harness` CI lane
 remain in the repository unmodified (this is a documentation-only decision,
 not a deletion), so the rest of this description stays accurate for anyone
 reading it: it remains disabled by default and out-of-band. Its canonical
-plan is `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (see its
+plan is `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (see its
 own retirement note); the implemented phase 6-9 controls and operator
-boundaries are in `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md`. It uses
+boundaries are in `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`. It uses
 scoped proposer-workspace tools, a virtual in-state Deep Agents backend,
 local-only memory/skills, fixture-only evaluation, and human-gated local
 candidate artifacts, and does not execute shell commands, write the real
