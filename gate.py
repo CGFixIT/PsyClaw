@@ -84,7 +84,7 @@ from utils.sanitizer import check_input
 from utils.errors import (
     PromptInjectionError, IndexNotFoundError
 )
-from utils.guardrail_bridge import build_input_guard
+from utils.guardrail_bridge import build_input_guard, build_output_guard
 from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from gate_ops import register_ops_routes
@@ -503,11 +503,16 @@ if cfg.get("personality", {}).get("enabled", False):
 # package, preserving module isolation (invariant I6).
 input_guard = build_input_guard(cfg)
 
+# Phase 4 NeMo Guardrails offline output (grounding) rail
+# (docs/NeMo/phase4_implementation_plan.md). Same enabled gate and the same
+# module-isolation guarantee as build_input_guard above.
+output_guard = build_output_guard(cfg)
+
 compiled_graph = None
 if retriever is not None:
     compiled_graph = build_graph(
         retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
-        personality=personality, input_guard=input_guard,
+        personality=personality, input_guard=input_guard, output_guard=output_guard,
     )
 
 @app.post("/query", response_model=QueryResponse)

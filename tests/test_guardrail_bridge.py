@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from guardrails.config import GuardrailsConfig
-from utils.guardrail_bridge import build_input_guard
+from utils.guardrail_bridge import build_input_guard, build_output_guard
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -100,3 +100,74 @@ class TestBuildInputGuardEnabled:
         monkeypatch.setattr("guardrails.config.load_guardrails_config", _boom)
         with pytest.raises(GuardrailsConfigError):
             build_input_guard({"guardrails": {"enabled": True}})
+
+
+class TestBuildOutputGuardDisabled:
+    """Mirrors TestBuildInputGuardDisabled -- same enabled gate, same
+    no-import-when-disabled contract. See
+    docs/NeMo/phase4_implementation_plan.md Decision 2."""
+
+    def test_absent_guardrails_block_returns_none(self):
+        assert build_output_guard({}) is None
+
+    def test_explicit_enabled_false_returns_none(self):
+        assert build_output_guard({"guardrails": {"enabled": False}}) is None
+
+    def test_present_but_empty_guardrails_block_returns_none(self):
+        assert build_output_guard({"guardrails": None}) is None
+
+    def test_disabled_path_never_imports_guardrails_package(self):
+        script = (
+            "import sys; "
+            "from utils.guardrail_bridge import build_output_guard; "
+            "build_output_guard({'guardrails': {'enabled': False}}); "
+            "leaked = [m for m in sys.modules if m == 'guardrails' or m.startswith('guardrails.')]; "
+            "assert not leaked, f'disabled build_output_guard imported {leaked}'; "
+            "print('OK')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, cwd=_REPO_ROOT
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
+
+
+class TestBuildOutputGuardEnabled:
+    """build_output_guard's enabled branch calls load_guardrails_config() with
+    no arguments, same as build_input_guard -- every test here monkeypatches
+    that loader so the guard is deterministic and never writes to the real
+    repo's logs/guardrails.jsonl."""
+
+    def _patch_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "guardrails.config.load_guardrails_config",
+            lambda: GuardrailsConfig(enabled=True, metrics_path=str(tmp_path / "guardrails.jsonl")),
+        )
+
+    def test_enabled_returns_a_callable(self, tmp_path, monkeypatch):
+        self._patch_config(monkeypatch, tmp_path)
+        guard = build_output_guard({"guardrails": {"enabled": True}})
+        assert callable(guard)
+
+    def test_returned_guard_blocks_ungrounded_answer(self, tmp_path, monkeypatch):
+        self._patch_config(monkeypatch, tmp_path)
+        guard = build_output_guard({"guardrails": {"enabled": True}})
+        result = guard("what is RRF?", "the moon is made of green cheese", "veeam uses chattr for immutability")
+        assert result["blocked"] is True
+        assert result["rails"] == ["check_grounding"]
+
+    def test_returned_guard_passes_grounded_answer(self, tmp_path, monkeypatch):
+        self._patch_config(monkeypatch, tmp_path)
+        guard = build_output_guard({"guardrails": {"enabled": True}})
+        result = guard("what is RRF?", "RRF fuses ranks", "RRF fuses ranks from two retrieval legs")
+        assert result == {"blocked": False, "message": "", "rails": []}
+
+    def test_invalid_guardrails_block_fails_fast(self, monkeypatch):
+        from guardrails.errors import GuardrailsConfigError
+
+        def _boom():
+            raise GuardrailsConfigError("bad config")
+
+        monkeypatch.setattr("guardrails.config.load_guardrails_config", _boom)
+        with pytest.raises(GuardrailsConfigError):
+            build_output_guard({"guardrails": {"enabled": True}})
