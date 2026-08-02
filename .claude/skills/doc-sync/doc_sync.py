@@ -153,16 +153,80 @@ def main(argv: list[str] | None = None) -> int:
              f"count drift: {drift_files}")
 
     # ── D5 Route table ──────────────────────────────────────────────────────
-    print("D5 gate.py routes -> CLAUDE.md")
+    print("D5 gate.py routes -> CLAUDE.md + setup-guide.md")
     gate_src = (root / "gate.py").read_text(encoding="utf-8")
-    routes = sorted(set(re.findall(r'@app\.(?:get|post)\("([^"]+)"', gate_src)))
+    # gate_ops.py registers the four /ops/* routes onto gate.py's own app with
+    # the same @app.post decorator, just from inside a registration function.
+    # Reading only gate.py left those four unchecked in both directions.
+    ops_path = root / "gate_ops.py"
+    ops_src = ops_path.read_text(encoding="utf-8") if ops_path.exists() else ""
+    _decl = r'@app\.(?:get|post)\("([^"]+)"'
+    routes = sorted(set(re.findall(_decl, gate_src)) | set(re.findall(_decl, ops_src)))
     # Ignore the static mount and root; check the meaningful API routes.
     api_routes = [r for r in routes if r not in ("/",)]
     missing = [r for r in api_routes if r not in claude]
     if not missing:
         ok("D5", f"all {len(api_routes)} API routes named in CLAUDE.md")
     else:
-        note("D5", "gate.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
+        note("D5", "gate.py/gate_ops.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
+
+    # setup-guide.md's REST section enumerates the same routes with runnable
+    # curl invocations, so it drifts the same way CLAUDE.md's table does -- and
+    # more damagingly, since a reader copy-pastes from it. Checked BOTH ways:
+    # a route the code has but the guide omits, and a route the guide documents
+    # that no longer exists (the failure mode a one-way check misses entirely).
+    guide_path = root / "setup-guide.md"
+    if not guide_path.exists():
+        ok("D5", "setup-guide.md absent -- REST-section cross-check skipped")
+    else:
+        guide = guide_path.read_text(encoding="utf-8")
+        # Scope to the REST section only. Outside it the guide is full of
+        # filesystem paths (/tmp/..., /etc/...) and other-service endpoints
+        # (Ollama's /v1/models) that are not gateway routes.
+        sec = re.search(r"(?ms)^## REST API\b.*?(?=^## |\Z)", guide)
+        if sec is None:
+            note("D5", "setup-guide.md",
+                 "no '## REST API' section found -- it was renamed or removed, so the "
+                 "route cross-check silently stopped covering anything")
+        else:
+            body = sec.group(0)
+            undocumented = [r for r in api_routes if r not in body]
+            # Route-shaped tokens the guide claims: backticked table cells and
+            # literal curl URLs against a loopback host:port.
+            claimed = set(re.findall(r"`(/[A-Za-z0-9_/*-]*)`", body))
+            claimed |= set(re.findall(r"https?://127\.0\.0\.1:\d+(/[A-Za-z0-9_/-]*)", body))
+            # The section closes by naming a few harness-console routes to make
+            # the point that they live on a DIFFERENT app and port. Those are
+            # real routes, so validate them against harness/server.py rather
+            # than either ignoring them (no coverage) or flagging them (noise).
+            harness_path = root / "harness" / "server.py"
+            harness_routes = set(
+                re.findall(_decl, harness_path.read_text(encoding="utf-8"))
+            ) if harness_path.exists() else set()
+            known = set(api_routes) | harness_routes | {"/", "/static/*"}
+
+            def _known(token: str) -> bool:
+                if token in known:
+                    return True
+                # A documented glob ("/soul/*") is satisfied when at least one
+                # real route sits under that prefix. Writing the family rather
+                # than ten rows is normal prose, not drift -- but a glob over a
+                # prefix that no longer exists still gets caught.
+                if token.endswith("/*"):
+                    prefix = token[:-1]
+                    return any(r.startswith(prefix) for r in known)
+                return False
+
+            phantom = sorted(c for c in claimed if not _known(c))
+            if not undocumented and not phantom:
+                ok("D5", f"setup-guide.md's REST section matches all {len(api_routes)} "
+                         "routes, with no phantom routes")
+            if undocumented:
+                note("D5", "gate.py/gate_ops.py @app decorators",
+                     f"routes missing from setup-guide.md's REST section: {undocumented}")
+            if phantom:
+                note("D5", "gate.py/gate_ops.py @app decorators",
+                     f"setup-guide.md documents routes that do not exist in code: {phantom}")
 
     # ── D6 Stop-hook claims ─────────────────────────────────────────────────
     print("D6 Hook claims -> settings.json")

@@ -40,6 +40,7 @@ import subprocess  # nosec B404 - imported only for TimeoutExpired; no process i
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -821,6 +822,41 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         return {"runs": runs, "count": len(runs)}
 
     return app
+
+
+@lru_cache(maxsize=1)
+def _default_app() -> FastAPI:
+    """The app `uvicorn harness.server:app` resolves, built once on first use.
+
+    Deliberately behind a cache rather than bound at module scope.
+    HarnessConfig.load() reads (and creates) the operator's ~/.CyClaw home and
+    create_app() reads harness.html off disk, so an eager module-level
+    `app = create_app(...)` would do all of that on ANY `import harness.server`
+    -- including every test module that imports this file only for a helper.
+    """
+    return create_app(HarnessConfig.load())
+
+
+def __getattr__(name: str) -> object:  # noqa: WPS413 - see the comment below
+    # PEP 562 module-level __getattr__, so `uvicorn harness.server:app` works
+    # the way `uvicorn gate:app` does -- uvicorn's import_from_string does
+    # importlib.import_module() then getattr(module, "app"), and that getattr
+    # is what lands here. WPS413 objects to magic module functions as a class;
+    # this is the one construct that buys the symmetry without the import-time
+    # side effects described on _default_app above, so it is suppressed inline
+    # (a setup.cfg per-file grant would also silently permit any FUTURE magic
+    # module function added to this file, which is broader than intended).
+    #
+    # Security note: this bypasses main()'s bind-address guard, so
+    # `uvicorn harness.server:app --host 0.0.0.0` WILL open a public socket
+    # where `cyclaw-harness` would have refused. The containment that actually
+    # matters is unaffected -- create_app() installs TrustedHostMiddleware with
+    # loopback-only allowed_hosts, so a request carrying any other Host header
+    # is rejected regardless of what the socket is bound to. Prefer
+    # `cyclaw-harness`, which keeps both layers.
+    if name == "app":
+        return _default_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main() -> None:
