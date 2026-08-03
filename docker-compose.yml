@@ -17,6 +17,11 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - ./data:/app/data:rw
+      # Generated ChromaDB + BM25 state (config.yaml indexing.chroma_path /
+      # bm25_path → index/*). Keep it out of image layers (.dockerignore) and
+      # available under the read-only root filesystem so /query can load the
+      # hybrid index without baking private corpus-derived vectors into the image.
+      - ./index:/app/index:rw
       - ./checkpoints:/app/checkpoints:rw
       - ./logs:/app/logs:rw
       - ./config.yaml:/app/config.yaml:ro
@@ -32,7 +37,7 @@ services:
       - HUGGINGFACE_HUB_CACHE=/app/data/.hf_cache
       - SENTENCE_TRANSFORMERS_HOME=/app/data/.st_cache
     # Read-only root filesystem. Everything the app writes is carved out above
-    # (data/logs/checkpoints/emb-cache) or via tmpfs below.
+    # (data/index/logs/checkpoints/emb-cache) or via tmpfs below.
     read_only: true
     tmpfs:
       - /tmp
