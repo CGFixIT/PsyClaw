@@ -1,6 +1,6 @@
 # CyClaw: Local AI you can Trust.
 
-> **Offline-first, RAG-enforced, $ecure Local AI chatbot / agentic coding harness w/ Dropbox Sync for RAG data/corpus/ + [coming soon: telegram/slack since I dont trust sms due to spam being an attack vector]
+> Offline-first, RAG-enforced, $ecure Local AI chatbot / agentic coding harness w/ Dropbox Sync for RAG data/corpus/ + [coming soon: telegram/slack since I dont trust sms due to spam being an attack vector]
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.138-blue.svg)](https://fastapi.tiangolo.com/)
