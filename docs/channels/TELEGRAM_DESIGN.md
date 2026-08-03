@@ -53,6 +53,7 @@ Phone (Telegram cloud)
 | `telegram/config.py` | `TelegramConfig` + `load_telegram_config` | T0 |
 | `telegram/client.py` | Bot API + `/query` HTTP | T1–T2 |
 | `telegram/runner.py` | `send_notify`, `handle_inbound_text`, `poll_*` | T1–T2 |
+| `telegram/ratelimit.py` | Process-local sliding-window limiter | T0 (sqlite optional T1) |
 | `telegram/cli.py` | `status` / `test` / `send` / `poll` | T0–T2 |
 | `telegram/selftest.py` | Operator pre-flight (no network required) | T0 |
 | `tests/test_telegram_isolation.py` | I6 regression | T0 |
@@ -116,10 +117,12 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 
 - [x] `telegram/` package, default `enabled: false`
 - [x] Config loader with hard validation
-- [x] CLI: `status`, `test`, `send`, `poll`
-- [x] Isolation tests + config tests
+- [x] CLI: `status`, `test`, `send` (+ `--dry-run`), `poll`
+- [x] Process-local rate limiter (`telegram/ratelimit.py`) on outbound + inbound
+- [x] Isolation tests + config/client/runner/cli tests
 - [x] Design doc + threat-model amendment
 - [x] `telegram` listed in invariant-guard `OUT_OF_BAND_PKGS` and `pyproject` package lists
+- [x] CI `--cov=telegram` on both coverage lanes (dep-guard D10)
 
 **Do not** enable in production `config.yaml` until T1 operator checklist is green.
 
@@ -152,10 +155,11 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 
 | Item | File(s) | Instructions |
 |---|---|---|
-| In-process rate limiter | `telegram/runner.py` or new `telegram/ratelimit.py` | Reuse `utils.ratelimit.RateLimiter` with a dedicated sqlite path under `data/` (do **not** share the gateway limiter DB). Key by `tg:outbound` and `tg:inbound:{chat_id}`. |
+| Persistent rate limiter | `telegram/ratelimit.py` | **T0 ships process-local sliding window.** Upgrade to `utils.ratelimit.RateLimiter` with a dedicated sqlite path under `data/` (do **not** share the gateway limiter DB) if multi-process pollers are needed. Keys: `tg:outbound`, `tg:inbound:{chat_id}`. |
 | Launchd template | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist` | Example job: curl `/health` → on fail `python -m telegram.cli send …`. Disabled by default; document in this file. |
 | Message chunking | `telegram/client.py` | Telegram hard limit 4096; already truncate via `max_message_chars`. Prefer split-on-paragraph for long answers in T2. |
-| `send` dry-run | `telegram/cli.py` | Add `--dry-run` that validates allowlist + prints payload without HTTP. |
+| `send` dry-run | `telegram/cli.py` | **Shipped in T0** (`--dry-run` validates allowlist + prints preview, no HTTP). |
+
 
 **Tests to add**
 

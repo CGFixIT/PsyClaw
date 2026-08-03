@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Any
 
 from telegram.config import load_telegram_config
 from telegram.runner import poll_forever, send_notify
@@ -127,6 +126,17 @@ def cmd_send(args: argparse.Namespace) -> int:
         _err("Provide --text or --body-file with non-empty content.")
         return EXIT_ENV
 
+    if args.dry_run:
+        if not cfg.is_chat_allowed(args.chat_id):
+            _err(f"chat_id {args.chat_id} not in allowed_chat_ids (dry-run)")
+            return EXIT_FAIL
+        preview = str(text).strip()
+        if len(preview) > cfg.max_message_chars:
+            preview = preview[: cfg.max_message_chars - 20] + "\n…[truncated]"
+        _ok(f"dry-run: would send {len(preview)} chars to chat_id={args.chat_id}")
+        print(f"  preview: {preview[:200]!r}{'…' if len(preview) > 200 else ''}")
+        return EXIT_OK
+
     try:
         result = send_notify(cfg, chat_id=args.chat_id, text=str(text))
     except TelegramRefused as exc:
@@ -202,6 +212,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_send.add_argument("--chat-id", required=True, help="Telegram chat id (must be allowlisted).")
     p_send.add_argument("--text", default="", help="Message text.")
     p_send.add_argument("--body-file", default="", help="Read message text from file (overrides --text).")
+    p_send.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate allowlist and print preview; do not call Telegram.",
+    )
     p_send.set_defaults(func=cmd_send)
 
     p_poll = sub.add_parser("poll", help="T2: long-poll inbound (mode=chat only).")

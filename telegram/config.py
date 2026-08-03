@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 from utils.errors import TelegramConfigError
 from utils.logger import _get_config
 
-DEFAULT_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
+DEFAULT_BOT_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"  # noqa: S105 -- env VAR NAME, not a secret value
 DEFAULT_MODE = "notify"  # "notify" (outbound only) | "chat" (2-way)
 DEFAULT_API_BASE = "https://api.telegram.org"
 DEFAULT_POLL_TIMEOUT_SEC = 30
