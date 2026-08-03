@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Block commits on branches that are not on the allowlist / grok/* convention.
+set -euo pipefail
+
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+# Detached HEAD (rebase, bisect, etc.) — do not block
+if [[ -z "$branch" ]]; then
+  exit 0
+fi
+
+case "$branch" in
+  main|master|develop) exit 0 ;;
+  grok/*) exit 0 ;;
+  claude/*) exit 0 ;;
+  dependabot/*|renovate/*) exit 0 ;;
+  release/*|hotfix/*) exit 0 ;;
+esac
+
+printf '%s\n' \
+  "pre-commit: branch '${branch}' violates naming convention" \
+  "  Feature branches must be named: grok/<feature>" \
+  "  Rename:  git branch -m grok/<feature>" \
+  "  Allowed: main | master | develop | grok/* | claude/* |" \
+  "           dependabot/* | renovate/* | release/* | hotfix/*" \
+  >&2
+exit 1
