@@ -445,24 +445,34 @@ class TestMpsRiskPresent:
     fingerprint guard to Apple Silicon only (see TestEmbeddingFingerprintCheck)."""
 
     def test_true_when_mps_available(self):
-        import torch
+        torch = pytest.importorskip("torch")
 
         with patch.object(torch.backends.mps, "is_available", return_value=True):
             assert _mps_risk_present() is True
 
     def test_false_when_mps_unavailable(self):
-        import torch
+        torch = pytest.importorskip("torch")
 
         with patch.object(torch.backends.mps, "is_available", return_value=False):
             assert _mps_risk_present() is False
 
     def test_false_on_probe_failure(self):
-        import torch
+        torch = pytest.importorskip("torch")
 
         def _boom():
             raise RuntimeError("backend probe exploded")
 
         with patch.object(torch.backends.mps, "is_available", side_effect=_boom):
+            assert _mps_risk_present() is False
+
+    def test_false_when_torch_not_installed(self):
+        # The docstring on _mps_risk_present names "torch not installed" as a
+        # supported condition that must resolve to False, but the three tests
+        # above all require torch to be importable -- so the one branch the
+        # function documents as its safety property had no coverage. A None
+        # entry in sys.modules makes `import torch` raise ImportError, which
+        # reproduces the absent-torch case on a machine that HAS torch.
+        with patch.dict("sys.modules", {"torch": None}):
             assert _mps_risk_present() is False
 
 
