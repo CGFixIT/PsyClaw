@@ -70,6 +70,19 @@ services:
   # not a containment boundary. Requires a privileged sidecar, so it ships off:
   #   enable with:  docker compose --profile monitoring up
   # Rules + rationale: deploy/falco/README.md, deploy/falco/falco_rules.yaml.
+  #
+  # Operator notes (Linux host, when you enable modern eBPF Falco):
+  # - Image pin falcosecurity/falco:0.39.2; --modern-bpf uses the CO-RE eBPF
+  #   probe (kernel ≥ ~5.8). Detection only — seccomp remains the block path
+  #   (see docs/SECCOMP_EBPF_HARDENING.md after you collect traces).
+  # - privileged:true is required for host kernel debugfs + eBPF load; keep
+  #   the monitoring profile off unless you accept that trade.
+  # - Any explicit -r makes Falco ignore falco.yaml's rules_files list. Load
+  #   the image's shipped defaults FIRST so CyClaw rules can use default macros
+  #   (spawned_process, open_write, outbound), then the CyClaw overlay.
+  # - Validate on a Docker-capable Linux host before trusting alerts:
+  #     docker compose --profile monitoring up -d && docker logs -f cyclaw-falco
+  #   See deploy/falco/README.md "Validate before trust" checklist.
   falco:
     image: falcosecurity/falco:0.39.2
     container_name: cyclaw-falco
@@ -81,7 +94,15 @@ services:
       - /proc:/host/proc:ro
       - /sys/kernel/debug:/sys/kernel/debug:ro
       - ./deploy/falco/falco_rules.yaml:/etc/falco/rules.d/cyclaw_rules.yaml:ro
-    command: ["/usr/bin/falco", "--modern-bpf", "-r", "/etc/falco/rules.d/cyclaw_rules.yaml"]
+    # Supplying any -r flag makes Falco ignore falco.yaml's rules_files list.
+    # Order is load-bearing: defaults (macros) then CyClaw custom rules.
+    command:
+      - /usr/bin/falco
+      - --modern-bpf
+      - -r
+      - /etc/falco/falco_rules.yaml
+      - -r
+      - /etc/falco/rules.d/cyclaw_rules.yaml
 
   # Optional: redis or postgres for future checkpointer / state if scaling
   # redis:
