@@ -13,6 +13,7 @@ No optional dependency is needed: this module imports nothing from
 
 from __future__ import annotations
 
+import importlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -565,6 +566,74 @@ def test_commit_forces_the_configured_committer_identity(tmp_path, monkeypatch):
                 cwd=str(dest), capture_output=True, text=True, check=True,
             ).stdout.strip()
     assert log == "Claude <noreply@anthropic.com>"
+
+
+def test_defaults_are_byte_identical_to_the_historical_convention():
+    """The CYCLAW_AGENT_* knobs change NO default.
+
+    With none of them set, the identity strings and the compiled branch pattern
+    must be exactly the historical literals -- the pattern is also what the
+    mirrors in agentic/writer.py and harness/agent_policy.py assert equality
+    against, so any drift here breaks those tests too.
+    """
+    assert repo_workspace._COMMIT_NAME == "Claude"
+    assert repo_workspace._COMMIT_EMAIL == "noreply@anthropic.com"
+    assert repo_workspace.BRANCH_NAME_RE.pattern == r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$"
+
+
+def test_env_override_reconfigures_identity_and_branch_prefix(tmp_path, monkeypatch):
+    """The configured identity/prefix, not the hardcoded historical one, wins.
+
+    The constants resolve at import, so this reloads the module under the
+    override -- and must reload it back in the finally, because reload()
+    mutates the shared module object in place and a leaked kimi/ pattern would
+    silently invert every later test's claude/ expectations.
+    """
+    monkeypatch.setenv("CYCLAW_AGENT_COMMIT_NAME", "Kimi")
+    monkeypatch.setenv("CYCLAW_AGENT_COMMIT_EMAIL", "kimi-agent@example.com")
+    monkeypatch.setenv("CYCLAW_AGENT_BRANCH_PREFIX", "kimi")
+    importlib.reload(repo_workspace)
+    try:
+        fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+        with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+            with repo_workspace.RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+                dest = Path(mrun.call_args.kwargs["dest"])
+                assert tools.checkout_branch("kimi/topic") == {"branch": "kimi/topic"}
+                with pytest.raises(AgenticError):
+                    tools.checkout_branch("claude/no-longer-allowed")
+                (dest / "a.txt").write_text("changed\n", encoding="utf-8")
+                tools.add(["a.txt"])
+                tools.commit("test commit")
+                log = subprocess.run(
+                    [shutil.which("git"), "log", "-1", "--format=%an <%ae>"],
+                    cwd=str(dest), capture_output=True, text=True, check=True,
+                ).stdout.strip()
+        assert log == "Kimi <kimi-agent@example.com>"
+    finally:
+        monkeypatch.delenv("CYCLAW_AGENT_COMMIT_NAME")
+        monkeypatch.delenv("CYCLAW_AGENT_COMMIT_EMAIL")
+        monkeypatch.delenv("CYCLAW_AGENT_BRANCH_PREFIX")
+        importlib.reload(repo_workspace)
+
+
+@pytest.mark.parametrize("bad", ["-evil", "has space", "has/slash", "", "x" * 33])
+def test_branch_prefix_env_validation_fails_closed(monkeypatch, bad):
+    """The prefix is the argv-injection anchor: only an alphanumeric-led
+    [A-Za-z0-9._-] prefix can never produce a branch name starting with "-".
+    Anything else must refuse at import rather than weaken the anchor (or
+    silently revert, which would misattribute branches an operator believed
+    were going to their configured namespace).
+    """
+    monkeypatch.setenv("CYCLAW_AGENT_BRANCH_PREFIX", bad)
+    try:
+        with pytest.raises(ValueError, match="CYCLAW_AGENT_BRANCH_PREFIX"):
+            importlib.reload(repo_workspace)
+    finally:
+        # A reload that raised leaves the module half-executed (new
+        # _BRANCH_PREFIX, stale BRANCH_NAME_RE) -- reload under a clean
+        # environment to restore the one true state for later tests.
+        monkeypatch.delenv("CYCLAW_AGENT_BRANCH_PREFIX")
+        importlib.reload(repo_workspace)
 
 
 def test_commit_message_is_hashed_not_logged_raw(tmp_path, monkeypatch):
