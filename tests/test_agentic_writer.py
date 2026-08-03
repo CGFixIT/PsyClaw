@@ -91,7 +91,7 @@ def test_master_switch_refuses_execute_write_when_agentic_disabled(monkeypatch, 
     mutating GitHub while the layer is 'nominally disabled')."""
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
     plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
-                      config_path=_config_path(tmp_path), head="claude/topic", title="t", body="b")
+                      config_path=_config_path(tmp_path), head="agent/topic", title="t", body="b")
     disabled = AgenticConfig(mode="write", writes_enabled=True)  # .enabled left unset -> False
     with pytest.raises(AgenticWriteRefused) as exc:
         execute_write(plan, cfg=disabled, confirm=True, config_path=_config_path(tmp_path))
@@ -108,7 +108,7 @@ def test_execute_write_does_not_manufacture_confirm(monkeypatch, tmp_path: Path)
     """
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
     plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
-                      config_path=_config_path(tmp_path), head="claude/topic", title="t", body="b")
+                      config_path=_config_path(tmp_path), head="agent/topic", title="t", body="b")
     with pytest.raises(AgenticWriteRefused) as exc:
         execute_write(plan, cfg=_write_cfg(), confirm=False, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "confirm"
@@ -192,7 +192,7 @@ def test_full_gate_pr_create_returns_dryrun_only():
     # suite pinning that the PR is a DRAFT, and now also the only thing pinning
     # that the head branch is never left for gh to infer from the cwd.
     plan = plan_write(_write_cfg(), "pr_create", "open focused fix PR", confirm=True,
-                      head="claude/fix-thing", title="Fix thing", body="details")
+                      head="agent/fix-thing", title="Fix thing", body="details")
     assert plan["status"] == "dry_run_plan"
     assert plan["executed"] is False
     assert plan["would_run"] == [
@@ -202,7 +202,7 @@ def test_full_gate_pr_create_returns_dryrun_only():
         "--repo",
         "CGFixIT/CyClaw",
         "--head",
-        "claude/fix-thing",
+        "agent/fix-thing",
         "--base",
         "main",
         "--title",
@@ -284,7 +284,7 @@ def test_a_tampered_would_run_is_never_executed(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
     plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
                       config_path=_config_path(tmp_path),
-                      head="claude/topic", title="t", body="b")
+                      head="agent/topic", title="t", body="b")
     plan["would_run"] = ["gh", "repo", "delete", "--yes"]
     with pytest.raises(AgenticWriteRefused) as exc:
         execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
@@ -296,20 +296,20 @@ def test_a_plan_naming_another_repo_is_refused(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
     plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
                       config_path=_config_path(tmp_path),
-                      head="claude/topic", title="t", body="b")
+                      head="agent/topic", title="t", body="b")
     plan["repo"] = "attacker/elsewhere"
     with pytest.raises(AgenticWriteRefused) as exc:
         execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
     assert exc.value.details.get("failed_gate") == "repo_match"
 
 
-@pytest.mark.parametrize("bad_head", [None, "", "main", "feature/x", "-rf", "claude/" + "z" * 100])
+@pytest.mark.parametrize("bad_head", [None, "", "main", "feature/x", "-rf", "agent/" + "z" * 100])
 def test_pr_create_requires_a_claude_head_branch(bad_head, tmp_path: Path):
     """Without --head, gh infers the head branch from the process's cwd.
 
     On the ops_runner path that cwd is the operator's own checkout, so an
     omitted head would open a PR from whatever branch they had checked out.
-    It is required, and constrained to the claude/ namespace.
+    It is required, and constrained to the agent/ namespace.
     """
     params = {"title": "t", "body": "b"}
     if bad_head is not None:

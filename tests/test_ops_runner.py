@@ -319,14 +319,14 @@ def test_to_dict_redacts_subprocess_output(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
-        ({"checks": [{"name": "x", "argv": ["y"]}], "branch": "claude/x", "commit_message": "m", "reason": "r"},
+        ({"checks": [{"name": "x", "argv": ["y"]}], "branch": "agent/x", "commit_message": "m", "reason": "r"},
          "instruction"),
-        ({"instruction": "do it", "branch": "claude/x", "commit_message": "m", "reason": "r"}, "checks"),
+        ({"instruction": "do it", "branch": "agent/x", "commit_message": "m", "reason": "r"}, "checks"),
         ({"instruction": "do it", "checks": [{"name": "x", "argv": ["y"]}], "commit_message": "m", "reason": "r"},
          "branch"),
-        ({"instruction": "do it", "checks": [{"name": "x", "argv": ["y"]}], "branch": "claude/x", "reason": "r"},
+        ({"instruction": "do it", "checks": [{"name": "x", "argv": ["y"]}], "branch": "agent/x", "reason": "r"},
          "branch"),
-        ({"instruction": "do it", "checks": [{"name": "x", "argv": ["y"]}], "branch": "claude/x",
+        ({"instruction": "do it", "checks": [{"name": "x", "argv": ["y"]}], "branch": "agent/x",
           "commit_message": "m"}, "reason"),
     ],
 )
@@ -342,13 +342,13 @@ def test_real_repo_run_argv_shape_and_checks_file_cleanup(monkeypatch: pytest.Mo
     monkeypatch.setattr(ops_runner, "_run", runner)
     checks = [{"name": "pytest", "argv": ["python", "-m", "pytest"]}]
     res = run_agentic_op(
-        "real-repo-run", instruction="add a marker", checks=checks, branch="claude/topic",
+        "real-repo-run", instruction="add a marker", checks=checks, branch="agent/topic",
         commit_message="add marker", reason="test run", confirm=True, max_iterations=5,
     )
     argv = captured[0]
     assert "--repo" in argv  # default target when pr/issue omitted
     assert "--instruction=add a marker" in argv
-    assert "--branch=claude/topic" in argv
+    assert "--branch=agent/topic" in argv
     assert "--commit-message=add marker" in argv
     assert "--reason=test run" in argv
     assert "--confirm" in argv
@@ -365,13 +365,13 @@ def test_real_repo_run_pr_and_issue_selectors(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(ops_runner, "_run", runner)
     checks = [{"name": "x", "argv": ["y"]}]
     run_agentic_op(
-        "real-repo-run", pr=42, instruction="x", checks=checks, branch="claude/x",
+        "real-repo-run", pr=42, instruction="x", checks=checks, branch="agent/x",
         commit_message="m", reason="r",
     )
     assert "--pr" in captured[0] and "42" in captured[0]
     captured.clear()
     run_agentic_op(
-        "real-repo-run", issue=7, instruction="x", checks=checks, branch="claude/x",
+        "real-repo-run", issue=7, instruction="x", checks=checks, branch="agent/x",
         commit_message="m", reason="r",
     )
     assert "--issue" in captured[0] and "7" in captured[0]
@@ -382,7 +382,7 @@ def test_real_repo_run_no_confirm_omits_flag(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(ops_runner, "_run", runner)
     res = run_agentic_op(
         "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
-        branch="claude/x", commit_message="m", reason="r", confirm=False,
+        branch="agent/x", commit_message="m", reason="r", confirm=False,
     )
     assert "--confirm" not in captured[0]
     assert res.exit_code == 4 and res.label == "write_refused"
@@ -398,7 +398,7 @@ def test_real_repo_run_uses_the_long_timeout(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(ops_runner, "_run", runner)
     run_agentic_op(
         "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
-        branch="claude/x", commit_message="m", reason="r",
+        branch="agent/x", commit_message="m", reason="r",
     )
     assert seen_timeouts == [ops_runner._real_repo_run_timeout_sec(None, 1)]  # noqa: SLF001
 
@@ -485,7 +485,7 @@ def test_real_repo_run_checks_file_cleaned_up_when_run_raises(monkeypatch: pytes
     with pytest.raises(subprocess.TimeoutExpired):
         run_agentic_op(
             "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
-            branch="claude/x", commit_message="m", reason="r",
+            branch="agent/x", commit_message="m", reason="r",
         )
     argv = captured_argv[0]
     checks_path = argv[argv.index("--checks-file") + 1]
@@ -763,7 +763,7 @@ def test_real_repo_run_refuses_a_whitespace_only_free_text_field(field: str) -> 
     so this shim is the layer that actually catches "   "."""
     kwargs = {
         "instruction": "do a thing", "checks": [{"name": "a", "argv": ["true"]}],
-        "branch": "claude/x", "commit_message": "m", "reason": "r",
+        "branch": "agent/x", "commit_message": "m", "reason": "r",
     }
     kwargs[field] = "   "
     with pytest.raises(OpsError, match=f"non-empty {field}"):

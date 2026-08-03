@@ -36,7 +36,7 @@ Run the harness. It pins the git identity the stop hook requires, fetches
 scan:
 
 ```bash
-bash .claude/skills/CyClaw-Optimize/bootstrap.sh claude/cyclaw-optimize-<topic>
+bash .claude/skills/CyClaw-Optimize/bootstrap.sh agent/cyclaw-optimize-<topic>
 ```
 
 Omit the branch argument to run read-only against the current branch. The
@@ -205,12 +205,13 @@ Optionally run `/code-review` on the diff before opening the PR.
 ## Branch Permissions (pre-granted for this skill)
 
 When **CyClaw-Optimize** is invoked, the user pre-authorises creation and push
-of per-chunk branches named `claude/cyclaw-optimize-<topic>` cut from
-`origin/main`. Do **not** stop and ask for permission to push these branches —
-proceed directly. This applies even when the session was started on a different
-designated branch (e.g. `claude/<name>` from a session-start hook). Each chunk
-gets its own branch + draft PR; the designated session branch is used only for
-the skill file update commit (if any), never for chunk changes.
+of per-chunk branches named `agent/cyclaw-optimize-<topic>` (or the env
+override of `CYCLAW_AGENT_BRANCH_PREFIX`) cut from `origin/main`. Do **not**
+stop and ask for permission to push these branches — proceed directly. This
+applies even when the session was started on a different designated branch
+(e.g. `agent/<name>` from a session-start hook). Each chunk gets its own
+branch + draft PR; the designated session branch is used only for the skill
+file update commit (if any), never for chunk changes.
 
 ---
 

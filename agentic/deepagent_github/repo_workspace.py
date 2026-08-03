@@ -4,8 +4,9 @@ Closes the gap the audit found: containment-by-copy already existed
 (``harness_optimizer``'s fixture runner), but nothing in the codebase could
 clone a REAL repository. This module clones, jails, and reads -- and, as of the
 git-write addition below, can also make local commits inside that same jailed
-clone. As of P10 it can also PUSH one agent-namespaced branch (``claude/`` by
-default, overridable via ``CYCLAW_AGENT_BRANCH_PREFIX``) to origin
+clone. As of P10 it can also PUSH one agent-namespaced branch (``agent/``,
+``grok/``, ``kimi/``, ``claude/``, ``codex/``, ``CyClaw/``, … — see
+``utils.agent_identity`` / the PR template) to origin
 (:meth:`RepoWorkspaceTools.push_branch`) -- the single method here that reaches
 the network, gated on the same ``allow_git_write_tools`` flag (default
 ``False``) as every other write, and passing no credential of its own. It still
@@ -73,8 +74,16 @@ from typing import NoReturn
 from agentic.config import AgenticConfig, DeepAgentGitHubConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
 from agentic.gh_client import DEFAULT_CLONE_TIMEOUT_SEC, run_read
+from utils.agent_identity import BRANCH_NAME_RE, allowed_prefixes_help
+from utils.agent_identity import BRANCH_PREFIX as _BRANCH_PREFIX
+from utils.agent_identity import COMMIT_EMAIL as _COMMIT_EMAIL
+from utils.agent_identity import COMMIT_NAME as _COMMIT_NAME
 from utils.errors import AgenticError, AgenticWriteRefused, FsConnectError
 from utils.logger import audit_log
+
+# Re-export preferred prefix for tests / operators that inspect this module.
+# Validation still uses multi-vendor BRANCH_NAME_RE, not this single value.
+assert _BRANCH_PREFIX  # noqa: S101 - fail closed if identity module misconfigured
 
 # Matches harness_optimizer/mcp/tools.py's ProposerWorkspaceTools ceiling --
 # same "one file at a time, bounded" read discipline, same number, so an
@@ -164,38 +173,10 @@ def _is_dotgit_name(part: str) -> bool:
 # DEFAULT_CLONE_TIMEOUT_SEC rather than the local-plumbing budget.
 DEFAULT_PUSH_TIMEOUT_SEC = 120
 
-# CLAUDE.md Section 10's committer identity strings, now overridable via
-# environment. Forced via `-c` on every commit invocation (scoped to that one
-# subprocess, never written to the clone's or the operator's git config), so a
-# commit made through this surface is always attributable to this layer, never
-# to whatever `user.*` the clone happened to inherit (a fresh clone has none).
-#
-# The defaults are the exact historical values -- this knob changes no default.
-# It exists because the loop driving this surface is not necessarily Claude
-# (a local Qwen model by default) and the operator's own conventions also use
-# kimi/ and codex/ branches, so attribution should be able to name the actual
-# driver. NOTE: the stop-hook that enforces the session committer email is
-# applied by the session runtime, not this repo, and the branch-pattern mirrors
-# in agentic/writer.py and harness/agent_policy.py stay pinned to "claude/" --
-# overriding these variables does not reconfigure those surfaces.
-_COMMIT_NAME = os.environ.get("CYCLAW_AGENT_COMMIT_NAME", "Claude")
-_COMMIT_EMAIL = os.environ.get("CYCLAW_AGENT_COMMIT_EMAIL", "noreply@anthropic.com")
-
-# Mirrors CLAUDE.md's own branch convention ("short-lived claude/<topic>"),
-# overridable via CYCLAW_AGENT_BRANCH_PREFIX with the default unchanged.
-# Anchoring the required prefix is also the argv-injection defense: `git
-# checkout -b <name>` would let a name starting with "-" be parsed as a `git`
-# option instead of a branch name, and no string starting with an alphanumeric
-# prefix can start with "-". The prefix is therefore validated to that shape
-# (and re.escape()d into the pattern) so an override can never weaken the
-# defense the anchor provides; an invalid value fails closed at import.
-_BRANCH_PREFIX = os.environ.get("CYCLAW_AGENT_BRANCH_PREFIX", "claude")
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", _BRANCH_PREFIX):
-    raise ValueError(
-        "CYCLAW_AGENT_BRANCH_PREFIX must be 1-32 chars from [A-Za-z0-9._-] "
-        f"and start alphanumeric, got {_BRANCH_PREFIX!r}"
-    )
-BRANCH_NAME_RE = re.compile(rf"^{re.escape(_BRANCH_PREFIX)}/[A-Za-z0-9][A-Za-z0-9._/-]{{0,79}}$")
+# Committer identity + branch namespace: single source in utils.agent_identity
+# (driver-agnostic defaults; env overrides). Imported above as
+# _COMMIT_NAME / _COMMIT_EMAIL / _BRANCH_PREFIX / BRANCH_NAME_RE. Writer and
+# harness import the same module so all three surfaces stay in lock-step.
 
 # Same allowlist discipline as agentic/executor/runner.py's _scrubbed_env, kept
 # as an independent (smaller) copy rather than an import: these four git
@@ -601,17 +582,19 @@ class RepoWorkspaceTools:
     # --- git writes: scoped to this clone; only push_branch leaves the box ---
 
     def checkout_branch(self, name: str) -> dict:
-        """Create and switch to a new branch. ``name`` must be ``<prefix>/<topic>``.
+        """Create and switch to a new branch. ``name`` must be ``<vendor>/<topic>``.
 
-        The required prefix is ``CYCLAW_AGENT_BRANCH_PREFIX`` (default
-        ``claude``) -- see :data:`BRANCH_NAME_RE`.
+        Allowed prefixes are the PR-template set (claude/, codex/, grok/,
+        kimi/, CyClaw/, …) plus preferred ``CYCLAW_AGENT_BRANCH_PREFIX``
+        (default ``agent/``). See :data:`BRANCH_NAME_RE`.
         """
         tool = "checkout_branch"
         self._require_git_writes_enabled(tool)
         if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
             self._deny_git(
                 tool,
-                f"branch name must start with '{_BRANCH_PREFIX}/' and use only [A-Za-z0-9._/-]",
+                f"branch name must start with one of [{allowed_prefixes_help()}] "
+                "and use only [A-Za-z0-9._/-] after the slash",
                 target=name,
             )
         self._run_git(tool, ["checkout", "-b", name])
@@ -678,7 +661,7 @@ class RepoWorkspaceTools:
         """Commit staged changes, identity forced to the configured committer.
 
         The identity is ``CYCLAW_AGENT_COMMIT_NAME``/``CYCLAW_AGENT_COMMIT_EMAIL``
-        (defaults: CyClaw's ``Claude <noreply@anthropic.com>`` convention).
+        (defaults: ``CyClaw Agent <cyclaw-agent@users.noreply.github.com>``).
 
         ``-c user.email=...``/``-c user.name=...`` scope the identity override to
         this one subprocess invocation -- never written to the clone's
@@ -740,7 +723,8 @@ class RepoWorkspaceTools:
         if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
             self._deny_git(
                 tool,
-                f"push branch must start with '{_BRANCH_PREFIX}/' and use only [A-Za-z0-9._/-]",
+                f"push branch must start with one of [{allowed_prefixes_help()}] "
+                "and use only [A-Za-z0-9._/-] after the slash",
                 target=name,
             )
         self._run_git(
