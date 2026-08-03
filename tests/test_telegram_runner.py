@@ -180,6 +180,37 @@ def test_poll_once_does_not_advance_offset_on_runtime_failure(tmp_path: Path) ->
     assert "error" in handled[0]
 
 
+def test_poll_once_mixed_batch_redelivers_remainder_on_runtime_failure(tmp_path: Path) -> None:
+    """A runtime failure mid-batch must not be acked by a later success in the same batch."""
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 10,
+            "message": {"chat": {"id": 42}, "text": "first"},
+        },
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "second"},
+        },
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=[
+                TelegramRuntimeError("send failed", details={"method": "sendMessage"}),
+                {"answer": "ok"},
+            ],
+        ) as handler,
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    # Failed update_id 10 stays un-acked so Telegram redelivers it (and 11).
+    assert next_offset is None
+    # The second update was NOT processed this batch; it returns with the redelivery.
+    assert handler.call_count == 1
+    assert handled[0]["error"]
+
+
 def test_poll_once_advances_offset_on_terminal_refusal(tmp_path: Path) -> None:
     """Allowlist/mode refusals are terminal — ack so the stream does not stall."""
     cfg = _cfg(tmp_path)
