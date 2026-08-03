@@ -28,6 +28,40 @@ def bot_api_url(cfg: TelegramConfig, method: str, token: str) -> str:
     return f"{cfg.api_base}/bot{token}/{method}"
 
 
+def chunk_text(text: str, max_chars: int) -> list[str]:
+    """Split text into pieces that fit Telegram/config max length.
+
+    Prefer paragraph (\\n\\n) then line (\\n) boundaries; hard-split only as last resort.
+    """
+    body = (text or "").strip()
+    if not body:
+        return []
+    if max_chars <= 0:
+        raise ValueError("max_chars must be > 0")
+    if len(body) <= max_chars:
+        return [body]
+
+    chunks: list[str] = []
+    remaining = body
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+        window = remaining[:max_chars]
+        split_at = window.rfind("\n\n")
+        if split_at < max_chars // 4:
+            split_at = window.rfind("\n")
+        if split_at < max_chars // 4:
+            split_at = max_chars
+        piece = remaining[:split_at].rstrip()
+        if not piece:
+            piece = remaining[:max_chars]
+            split_at = max_chars
+        chunks.append(piece)
+        remaining = remaining[split_at:].lstrip()
+    return chunks
+
+
 def _transport_error_message(method: str, exc: BaseException, *secrets: str) -> str:
     """Build a transport error string that never echoes Bot API secrets.
 
@@ -43,30 +77,15 @@ def _transport_error_message(method: str, exc: BaseException, *secrets: str) -> 
     return f"Telegram {method} transport error: {raw}"
 
 
-def send_message(
+def _send_one(
     cfg: TelegramConfig,
     *,
     chat_id: int | str,
-    text: str,
-    token: str | None = None,
-    disable_notification: bool = False,
+    body: str,
+    tok: str,
+    disable_notification: bool,
 ) -> dict[str, Any]:
-    """Send a text message via Bot API ``sendMessage``.
-
-    Raises TelegramRefused on allowlist miss; TelegramRuntimeError on HTTP/API failure.
-    """
-    if not cfg.is_chat_allowed(chat_id):
-        raise TelegramRefused(
-            "chat_id not in telegram.allowed_chat_ids",
-            details={"chat_id": str(chat_id), "gate": "allowlist"},
-        )
-    body = (text or "").strip()
-    if not body:
-        raise TelegramRefused("message text is empty", details={"gate": "empty_text"})
-    if len(body) > cfg.max_message_chars:
-        body = body[: cfg.max_message_chars - 20] + "\n…[truncated]"
-
-    tok = token if token is not None else cfg.resolve_bot_token()
+    """POST one sendMessage body (already sized). Returns Bot API JSON."""
     url = bot_api_url(cfg, "sendMessage", tok)
     payload = {
         "chat_id": int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
@@ -113,6 +132,68 @@ def send_message(
             details={"status": resp.status_code, "description": data.get("description")},
         )
     return data
+
+
+def send_message(
+    cfg: TelegramConfig,
+    *,
+    chat_id: int | str,
+    text: str,
+    token: str | None = None,
+    disable_notification: bool = False,
+) -> dict[str, Any]:
+    """Send a text message via Bot API ``sendMessage``.
+
+    Long text is split on paragraph/line boundaries (see ``chunk_text``) and
+    sent as sequential messages. Returns the last Bot API response.
+
+    Raises TelegramRefused on allowlist miss; TelegramRuntimeError on HTTP/API failure.
+    """
+    if not cfg.is_chat_allowed(chat_id):
+        raise TelegramRefused(
+            "chat_id not in telegram.allowed_chat_ids",
+            details={"chat_id": str(chat_id), "gate": "allowlist"},
+        )
+    pieces = chunk_text(text, cfg.max_message_chars)
+    if not pieces:
+        raise TelegramRefused("message text is empty", details={"gate": "empty_text"})
+
+    tok = token if token is not None else cfg.resolve_bot_token()
+    last: dict[str, Any] = {}
+    for piece in pieces:
+        last = _send_one(
+            cfg,
+            chat_id=chat_id,
+            body=piece,
+            tok=tok,
+            disable_notification=disable_notification,
+        )
+    return last
+
+
+def fetch_loopback_health(cfg: TelegramConfig, *, timeout_sec: float = 5.0) -> str:
+    """GET CyClaw ``/health`` over loopback only. No graph imports."""
+    url = f"{cfg.query.base_url}/health"
+    try:
+        with httpx.Client(timeout=timeout_sec) as client:
+            resp = client.get(url)
+    except httpx.HTTPError as exc:
+        return f"health unreachable: {type(exc).__name__}"
+    try:
+        data = resp.json()
+    except ValueError:
+        return f"health HTTP {resp.status_code} (non-JSON)"
+    if not isinstance(data, dict):
+        return f"health HTTP {resp.status_code}"
+    status = data.get("status", "?")
+    mode = data.get("mode", "?")
+    index_ready = data.get("index_ready")
+    graph_ready = data.get("graph_ready")
+    return (
+        f"status={status} mode={mode} "
+        f"index_ready={index_ready} graph_ready={graph_ready} "
+        f"http={resp.status_code}"
+    )
 
 
 def get_updates(
