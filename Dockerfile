@@ -36,8 +36,10 @@ COPY pyproject.toml constraints.txt requirements.txt ./
 # when constraints moved 2.12.1 -> 2.13.0 this line stayed behind, so the
 # fallback path installed 2.12.1 and then immediately failed the constrained
 # resolve. Keep the two in lock-step on any torch bump.
+# Fallback pins pip==26.1.2 first (matches ci.yml CVE/repro pin) before torch + reqs.
 RUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt 2>/dev/null || \
-    ( pip install --no-cache-dir torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    ( pip install --no-cache-dir --upgrade "pip==26.1.2" && \
+      pip install --no-cache-dir torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
       pip install --no-cache-dir -r requirements.txt -c constraints.txt )
 
 # Runtime stage

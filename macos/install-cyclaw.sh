@@ -144,7 +144,8 @@ if [ "$SKIP_PYTHON_DEPS" -eq 0 ]; then
     [ -x "$VENV_PY" ] || { echo "venv creation failed." >&2; exit 1; }
   fi
   step "installing dependencies (torch first, then requirements; this can take a few minutes)"
-  "$VENV_PY" -m pip install --upgrade pip >/dev/null
+  # Match ci.yml's exact pip pin (CVE/repro); never float to latest on installers.
+  "$VENV_PY" -m pip install --upgrade "pip==26.1.2" >/dev/null
   if [ "$(uname -s)" = "Darwin" ]; then
     # Apple Silicon has no separate CPU/CUDA torch build to disambiguate, so
     # (unlike Linux) PyTorch publishes a PLAIN torch==2.13.0 for macOS --
