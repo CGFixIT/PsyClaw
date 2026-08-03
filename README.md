@@ -8,13 +8,13 @@
 [![PGvector](https://img.shields.io/badge/PGvector-0.4.2-blue.svg)](https://github.com/pgvector/pgvector/)
 [![CodeQL Advanced](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/codeql.yml)
 [![CyClaw CI/CD testing](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml/badge.svg)](https://github.com/cgfixit/CyClaw/actions/workflows/ci.yml)
-[![DevSkim](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/devskim.yml)
 [![Gitleaks Secret Scan](https://github.com/CGFixIT/CyClaw/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/gitleaks.yml)
 [![OSV-Scanner](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml/badge.svg)](https://github.com/CGFixIT/CyClaw/actions/workflows/osv-scanner.yml)
 
 [![Screenshots: local AI](https://raw.githubusercontent.com/cgfixit/CyClaw/refs/heads/main/docs/screenshots/IMG_3630.jpeg)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
 
----
+[![Screenshots: local AI](https://i.imgur.com/N7hPPez.png)](https://github.com/CGFixIT/CyClaw/tree/main/docs/screenshots)
+
 
 ## Table of Contents
 
@@ -25,18 +25,11 @@
 - [Full Setup Guide](setup-guide.md)
 - [Project Structure](#project-structure)
 - [Dropbox Corpus Sync](#dropbox-corpus-sync)
-- [Agentic Layer](#agentic-layer-v160)
-- [Filesystem & SQL Connectors](#filesystem--sql-connectors-v18)
 - [NeMo Guardrails](#nemo-guardrails-v18)
-- [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
-- [Coding Harness Console](#coding-harness-console-v19)
 - [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
-- [MCP Server](#mcp-server)
-- [Security Model](#security-model)
-- [Invariants Comparison](docs/comparisons/INVARIANTS_COMPARISON.md)
-- [Remaining Work](remaining_work.md) — the open, verified engineering backlog
-- [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) — retired design history and
-  superseded plans (the *why*; `remaining_work.md` is the *what's left*)
+- [Security Model](https://github.com/cgfixit/CyClaw/tree/main/docs/security-philosophy)
+- [Remaining Work](remaining_work.md) 
+- [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) 
 
 ---
 
@@ -89,15 +82,10 @@ User Query (HTTP POST /query or MCP tool call)
     │     │                        (Ollama :11434)        │
     │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
     │                    ├─ not yet answered ──→          │
-    │                    │      9. audit_logger  (PAUSE:  │
-    │                    │      return needs_confirm to   │
-    │                    │      the client and stop)      │
+    │                    │      9. audit_logger           │
     │                    ├─ confirmed + hybrid ──→        │
     │                    │      6. grok_fallback OR       │
     │                    │         claude_fallback        │
-    │                    │      (selected per-query;      │
-    │                    │       NOT railed — the triple  │
-    │                    │       gate is their gate)      │
     │                    └─ declined / offline ──→        │
     │                       3. guardrail_input (again)    │
     │                           blocked ──→ 9. audit_logger│
@@ -250,32 +238,6 @@ source ~/.bashrc
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Persist for a **systemd service** (Linux server):
-
-```ini
-# /etc/systemd/system/cyclaw.service
-[Unit]
-Description=CyClaw RAG Gateway
-After=network.target
-
-[Service]
-Type=simple
-User=cyclaw
-WorkingDirectory=/opt/CyClaw
-Environment="CYCLAW_API_KEY=your-strong-local-secret"
-Environment="GROK_API_KEY=offline-dummy-sk-123"
-ExecStart=/opt/CyClaw/.venv/bin/uvicorn gate:app --host 127.0.0.1 --port 8787
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now cyclaw
-```
-
 ### Windows — PowerShell
 
 *(Windows is the fallback path; CyClaw is developed and verified on macOS
@@ -366,13 +328,14 @@ Get-Content .env | ForEach-Object {
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-### Choosing a key value
+### Choosing an API key value
 
 CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. Still:
 
 - Use at least **20 random characters**: `openssl rand -hex 20` (Linux/macOS) or `[System.Web.Security.Membership]::GeneratePassword(24,4)` (PowerShell)
 - Do **not** reuse a password from elsewhere
 - Do **not** commit the key to Git (`.env` is already in `.gitignore`)
+- Don't forget to set the api key via terminal on Mac or env var in Windows or the web app will not recognize it.
 
 ## Quick Start
 
@@ -1056,24 +1019,6 @@ carries their SDKs. The published Docker image installs `requirements.txt` only
 container means installing on top: add `pip install -e .` for local mode, or one
 of the three commands above for cloud, after the image's own install step.
 
----
-
-## MCP Server
-
-For Claude Desktop or other MCP-compatible clients:
-
-```json
-{
-  "mcpServers": {
-    "cyclaw": {
-      "command": "python",
-      "args": ["/path/to/CyClaw/mcp_hybrid_server.py"]
-    }
-  }
-}
-```
-
-The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampling capability** and is intentionally isolated from the agentic, filesystem/SQL connector, NeMo Guardrails, and Dropbox corpus sync layers.
 
 ---
 
@@ -1097,9 +1042,6 @@ The MCP server exposes a retrieval-only `hybrid_search` tool. It has **no sampli
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
 
 > **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
->
-> **Compared to peers:** where policy lives (topology vs prompts) vs AnythingLLM, Open WebUI, and PrivateGPT — [`docs/comparisons/INVARIANTS_COMPARISON.md`](docs/comparisons/INVARIANTS_COMPARISON.md).
-
 ---
 
-*Built by [Chris Grady](https://cgfixit.com) · [cgfixit.com/linkedin](https://cgfixit.com/linkedin)*
+*Envisioned and initially created then vibe coded further (via AI) by [Chris Grady](https://cgfixit.com) · [cgfixit.com/linkedin](https://cgfixit.com/linkedin)*
