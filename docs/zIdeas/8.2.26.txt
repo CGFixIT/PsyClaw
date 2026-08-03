@@ -1,0 +1,39 @@
+https://www.perplexity.ai/computer/a/88141e9a-ec06-542f-9527-aab37c30bce2
+https://www.perplexity.ai/computer/a/88141e9a-ec06-542f-9527-aab37c30bce2
+https://www.perplexity.ai/search/8ac7af53-cf1a-490a-8372-95ffb46abda6
+https://www.perplexity.ai/computer/a/fbb6f2fe-52be-5b00-8899-7678761e7d90
+https://www.perplexity.ai/computer/a/1c745bd5-f868-533b-aec6-d16214ae1490
+https://cg-mooreslaw.pplx.app/
+https://vfd-timeline.pplx.app/
+
+--
+
+1) get mac agentic coding harness stable/secure - confirm working with agentic github coding moderate diff task
+2) clean up stale docs
+3) clean up terminal and harness ui/ux -- should terminal agentic console be removed and added to harness? prob
+4) see if any other OTel keys should be added based on dependencies - do the equiv of sysinternals tcpview for mac (https://tcpviewer.proxyman.com/ or wireshark or https://github.com/mezantrop/sockstat)
+5) test grok or claude plan handoff to qwen cached
+6) see if better cached model can be tried
+7)https://www.perplexity.ai/computer/tasks/9ab441a9-664f-4d94-9189-4b7f82d1387e?view=thread
+
+
+--
+
+
+https://www.perplexity.ai/computer/a/6105ee37-9496-52d5-b557-87fc6ae3ac5c
+^ 10 days... keep it going. - https://www.perplexity.ai/computer/a/c8aeb366-697e-5577-9f5f-03334e87876b
+6911 102217 <3
+
+--
+
+
+https://www.perplexity.ai/computer/a/324a4372-7a22-5e42-bcf5-b276fba1d914
+
+https://www.perplexity.ai/computer/tasks/4cef8921-1201-4221-a28b-ad2e3dca71e3
+
+
+https://arxiv.org/pdf/2605.23989
+
+https://arxiv.org/pdf/2603.13247
+
+z.ai, qwen, grok build (literally cursor composer trained on kimi), 
