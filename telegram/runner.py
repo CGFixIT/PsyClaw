@@ -146,17 +146,20 @@ def poll_once(
         if not isinstance(upd, dict):
             continue
         uid = upd.get("update_id")
-        if isinstance(uid, int):
-            next_offset = uid + 1
         parsed = _message_from_update(upd)
         if parsed is None:
+            # Non-text updates (edits, stickers, …): ack so the stream advances.
+            if isinstance(uid, int):
+                next_offset = uid + 1
             continue
         chat_id, text = parsed
         try:
             handled.append(
                 handle_inbound_text(cfg, chat_id=chat_id, text=text, update_id=uid if isinstance(uid, int) else None)
             )
-        except (TelegramRefused, TelegramRuntimeError) as exc:
+        except TelegramRefused as exc:
+            # Terminal policy refusal (allowlist/mode/rate-limit): ack so we do
+            # not re-process forever. Transport/query failures must NOT ack.
             handled.append(
                 {
                     "error": getattr(exc, "message", str(exc)),
@@ -164,6 +167,19 @@ def poll_once(
                     "chat_id": str(chat_id),
                 }
             )
+        except TelegramRuntimeError as exc:
+            handled.append(
+                {
+                    "error": getattr(exc, "message", str(exc)),
+                    "code": getattr(exc, "code", "TELEGRAM_ERROR"),
+                    "chat_id": str(chat_id),
+                }
+            )
+            # Leave next_offset unchanged for this update_id so Telegram redelivers
+            # after a transient /query or sendMessage failure.
+            continue
+        if isinstance(uid, int):
+            next_offset = uid + 1
     return next_offset, handled
 
 

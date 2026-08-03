@@ -11,7 +11,7 @@ import yaml
 from telegram.config import load_telegram_config
 from telegram.ratelimit import SlidingWindowLimiter, get_limiter, reset_limiters_for_tests
 from telegram.runner import handle_inbound_text, poll_once, send_notify
-from utils.errors import TelegramRefused
+from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import reset_config_cache
 
 
@@ -90,6 +90,49 @@ def test_poll_once_handles_text_update(tmp_path: Path) -> None:
     assert next_offset == 6
     assert handled == [{"answer": "ok"}]
     handler.assert_called_once()
+
+
+def test_poll_once_does_not_advance_offset_on_runtime_failure(tmp_path: Path) -> None:
+    """A failed send/query must not ack the update (Telegram will not redeliver)."""
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 10,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRuntimeError("send failed", details={"method": "sendMessage"}),
+        ),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset is None
+    assert handled[0]["code"]
+    assert "error" in handled[0]
+
+
+def test_poll_once_advances_offset_on_terminal_refusal(tmp_path: Path) -> None:
+    """Allowlist/mode refusals are terminal — ack so the stream does not stall."""
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRefused("not allowed", details={"gate": "allowlist"}),
+        ),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 12
+    assert handled[0]["error"]
 
 
 def test_rate_limiter_trips() -> None:
