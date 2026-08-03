@@ -233,6 +233,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return EXIT_ENV
     except SyncError as exc:
         _err(f"Sync error: {exc.message}")
+        # Partial copy then raise (e.g. rclone wall-clock timeout): prefer reindex
+        # over silent stale index when the runner attached corpus_changed=True.
+        if (
+            getattr(cfg, "reindex_on_change", False)
+            and bool((exc.details or {}).get("corpus_changed"))
+            and not args.dry_run
+        ):
+            _warn("Corpus changed before sync error; exit 10 so callers reindex.")
+            if getattr(cfg, "auto_reindex", False):
+                return _run_auto_reindex(cfg)
+            return EXIT_REINDEX
         return EXIT_FAIL
 
     counts = result.event_counts()
