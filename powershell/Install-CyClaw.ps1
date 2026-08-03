@@ -137,7 +137,9 @@ if (-not $SkipPythonDeps) {
         if (-not (Test-Path $VenvPy)) { throw "venv creation failed." }
     }
     Write-Step "installing dependencies (CPU torch first, then requirements; this can take a few minutes)"
-    & $VenvPy -m pip install --upgrade pip | Out-Null
+    # Match ci.yml's exact pip pin (CVE/repro); never float to latest on installers.
+    & $VenvPy -m pip install --upgrade "pip==26.1.2" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "pip pin failed." }
     & $VenvPy -m pip install "torch==2.13.0+cpu" --index-url https://download.pytorch.org/whl/cpu
     if ($LASTEXITCODE -ne 0) { throw "torch install failed." }
     & $VenvPy -m pip install -r (Join-Path $Repo "requirements.txt") -c (Join-Path $Repo "constraints.txt") --ignore-installed PyYAML

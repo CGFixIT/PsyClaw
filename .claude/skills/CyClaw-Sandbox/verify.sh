@@ -92,7 +92,7 @@ source "$VENV_DIR/bin/activate"
 
 if [ -z "${SKIP_INSTALL:-}" ]; then
   note "Installing torch (CPU) + pinned requirements into clean venv"
-  if "$VPY" -m pip install --quiet --upgrade pip \
+  if "$VPY" -m pip install --quiet --upgrade "pip==26.1.2" \
      && "$VPY" -m pip install --quiet torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu \
      && "$VPY" -m pip install --quiet -r requirements.txt -c constraints.txt --ignore-installed PyYAML \
      && "$VPY" -m pip install --quiet pytest pytest-asyncio pytest-cov pyyaml; then
