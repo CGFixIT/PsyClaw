@@ -893,13 +893,14 @@ def test_run_post_sync_check_not_ok_when_differences_found(tmp_path):
     assert "notes.md" in cr.errors[0]
 
 
-def test_run_post_sync_check_timeout_raises_sync_runtime_error(tmp_path):
+def test_run_post_sync_check_timeout_soft_fails(tmp_path):
+    """Timeout must not raise: callers need audits + reindex after successful copy."""
     cfg = _make_cfg(tmp_path, sync_timeout_sec=1)
     with patch("sync.runner.subprocess.run",
                side_effect=subprocess.TimeoutExpired(cmd=["rclone"], timeout=1)):
-        with pytest.raises(SyncRuntimeError) as exc:
-            run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE)
-    assert exc.value.details.get("op") == "check"
+        cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE)
+    assert cr.ok is False
+    assert any("timed out" in e for e in cr.errors)
 
 
 def test_run_sync_calls_check_on_success_when_configured(tmp_path):
