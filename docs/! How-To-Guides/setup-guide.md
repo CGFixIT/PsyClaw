@@ -134,7 +134,9 @@ bash ./macos/install-cyclaw.sh
 It finds a Python ≥3.12, creates `~/.CyClaw/venv`, installs the correct torch
 build, installs the rest from corrected manifests, writes a `cyclaw` shim, and
 adds a PATH entry plus a `cyclaw()` function to your rc file (`~/.zshrc` on
-zsh, else `~/.bash_profile`/`~/.bashrc`, detected from `$SHELL`). Useful flags:
+zsh; on macOS bash it preserves the first existing login file among
+`~/.bash_profile`, `~/.bash_login`, and `~/.profile`, creating
+`~/.bash_profile` only when none exists). Useful flags:
 `--repo-path ~/src/CyClaw` (use an existing clone), `--skip-python-deps`,
 `--no-profile-edit`, `--no-path-edit`. Uninstall with
 `bash ./macos/uninstall-cyclaw.sh` (`--remove-home` also deletes `~/.CyClaw`,
@@ -229,9 +231,10 @@ source ~/.zshrc
 echo "$CYCLAW_API_KEY"          # confirm it survived
 ```
 
-Check which shell you are actually in with `echo $SHELL` first — on bash, use
-`~/.bash_profile` instead (macOS bash reads that, not `~/.bashrc`, for login
-shells).
+Check which shell you are actually in with `echo $SHELL` first. On bash, append
+to the first existing login file in this order: `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`; create `~/.bash_profile` only when none exists.
+macOS bash login shells do not read `~/.bashrc`.
 
 ### Running both servers on macOS
 
