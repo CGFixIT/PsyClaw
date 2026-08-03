@@ -1,0 +1,1 @@
+Read https://github.com/cgfixit/CyClaw/tree/main/.claude/skills/OTel-Hardening (https://github.com/cgfixit/CyClaw/blob/main/.claude/skills/OTel-Hardening/SKILL.md and https://github.com/cgfixit/CyClaw/blob/main/.claude/skills/OTel-Hardening/check_otel.py and https://github.com/cgfixit/CyClaw/blob/main/.claude/skills/OTel-Hardening/verify.sh)
