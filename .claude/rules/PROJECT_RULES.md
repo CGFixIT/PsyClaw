@@ -95,7 +95,7 @@ See `retrieval/hybrid_search.py` for implementation.
   git config user.name "CyClaw Agent"
   ```
 
-- **Feature Branches:** Develop on `grok/<feature>` (enforced by `.githooks/` pre-commit + pre-push; install via `bash scripts/install-githooks.sh`). Agentic harness branches remain `claude/*`. Do not push to `main` directly when a feature branch and open PR exist.
+- **Feature Branches:** Develop on a documented vendor prefix (`grok/`, `claude/`, `codex/`, `kimi/`, `agent/`, `CyClaw/`, `cyclaw/` — see `utils.agent_identity.ALLOWED_BRANCH_PREFIXES` and the PR template). Enforced by `.githooks/` pre-commit + pre-push after `bash scripts/install-githooks.sh`. Do not push to `main` directly when a feature branch and open PR exist.
 
 - **Commits:** Clear, descriptive messages. Reference issue numbers when applicable.
 

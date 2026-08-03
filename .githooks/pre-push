@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Enforce CyClaw / Grok feature-branch naming on push.
-# Feature work must use: grok/<feature>
-# Allowlist covers mainline, agentic harness (claude/*), bots, and release lines.
+# Enforce documented multi-vendor branch naming on push.
+# Canonical feature prefixes: utils.agent_identity.ALLOWED_BRANCH_PREFIXES
+# (CLAUDE.md §5, Kimi section, .github/PULL_REQUEST_TEMPLATE.md).
 set -euo pipefail
 
 allowed_branch() {
   case "$1" in
     main|master|develop) return 0 ;;
-    grok/*) return 0 ;;
-    claude/*) return 0 ;;          # agentic real-repo / harness write path
+    grok/*|claude/*|codex/*|kimi/*|agent/*|CyClaw/*|cyclaw/*) return 0 ;;
     dependabot/*|renovate/*) return 0 ;;
     release/*|hotfix/*) return 0 ;;
     *) return 1 ;;
@@ -26,10 +25,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     if ! allowed_branch "$branch"; then
       printf '%s\n' \
         "pre-push: refused push of branch '${branch}'" \
-        "  Feature branches must be named: grok/<feature>" \
-        "  Allowed: main | master | develop | grok/* | claude/* |" \
-        "           dependabot/* | renovate/* | release/* | hotfix/*" \
-        "  Rename:  git branch -m grok/<feature> && git push -u origin HEAD" \
+        "  Feature branches must use a documented vendor prefix:" \
+        "  grok/ | claude/ | codex/ | kimi/ | agent/ | CyClaw/ | cyclaw/" \
+        "  Also allowed: main | master | develop | dependabot/* | renovate/* |" \
+        "                 release/* | hotfix/*" \
+        "  Rename:  git branch -m <prefix>/<feature> && git push -u origin HEAD" \
         >&2
       fail=1
     fi
