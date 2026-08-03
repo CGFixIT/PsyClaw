@@ -24,14 +24,6 @@ and/or Claude, selected per-query via `online_provider`). It binds
 - Never use docstrings as multi-line comments other than when placed at the beginning of a python file.
 - When multi-line comments required outside of that context, just use a # at the beginning of each line of the comment
 
-**Current project mode: FEATURE FREEZE (as of 2026-07-03).** CyClaw is a
-polished portfolio artifact, not a product under active feature development.
-Polish, hardening, docs, tests, and bug fixes **pass** the bar. New features
-need explicit user justification first. Before proposing new code, apply the
-operative test: *"Does this polish the portfolio signal or fix a real defect?"*
-If it is a new capability, stop and ask. Full rationale:
-`docs/memories/CONSOLIDATED.md`.
-
 **Where truth lives.** In priority order:
 1. **Code** — the running behavior. When docs and code disagree, code wins.
 2. **`config.yaml`** — the single source of truth for every tunable. No
