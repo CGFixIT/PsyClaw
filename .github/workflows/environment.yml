@@ -1,0 +1,26 @@
+# Relocated: the conda environment *spec* lives at /environment.yml (repo root).
+# This path previously held that file, so GitHub registered it as a workflow.
+# After c708148 moved the file, GitHub kept a ghost "active" workflow that
+# produced empty failing runs on main pushes (no jobs, no logs).
+#
+# This no-op file reclaims the path with a real workflow that never auto-runs
+# (workflow_dispatch only). Conda CI remains:
+#   .github/workflows/python-package-conda.yml  → uses root environment.yml
+name: "environment.yml (relocated — no-op)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Document relocation
+        run: |
+          echo "Conda env file: environment.yml (repo root)"
+          echo "Conda CI workflow: .github/workflows/python-package-conda.yml"
+          echo "This workflow is a no-op placeholder for the pre-c708148 path."
