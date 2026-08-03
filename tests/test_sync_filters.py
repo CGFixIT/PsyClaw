@@ -54,6 +54,8 @@ def test_hardened_categories_present(tmp_path: Path) -> None:
         "- index/**",
         "- .emb_cache/**",
         "- .chroma/**",
+        "- **/.fsindex_cache.json",
+        "- .fsindex_cache.json",
         "- logs/**",
         "- *.jsonl",
         "- *.db",
@@ -142,6 +144,11 @@ def test_crlf_extra_exclude_split_too(tmp_path: Path) -> None:
     live = [ln for ln in text.splitlines() if not ln.startswith("#")]
     assert not any(ln.strip() == "!" for ln in live)
     assert "- keep/**" in text
+
+
+def test_hardened_excludes_fsconnect_index_cache(tmp_path: Path) -> None:
+    text = generate_filters(_load(tmp_path))
+    assert "- **/.fsindex_cache.json" in text or "- .fsindex_cache.json" in text
 
 
 def test_write_filter_file_is_atomic_no_tmp_left(tmp_path: Path) -> None:
