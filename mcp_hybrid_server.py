@@ -185,7 +185,7 @@ def _handle_search(msg_id, args: dict, retriever: HybridRetriever) -> dict:
         audit_log({"event": "mcp_rag_error", "query": query, "retrieval_mode": mode, "error": safe_err})
         return _error(msg_id, -32000, f"Search error: {safe_err}")
 
-def handle_message(msg: dict, retriever: HybridRetriever) -> dict:
+def handle_message(msg: dict, retriever: HybridRetriever) -> dict | None:
     if not isinstance(msg, dict):
         return _error(None, -32600, "Invalid Request")
     method = msg.get("method")

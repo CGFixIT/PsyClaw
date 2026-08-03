@@ -812,13 +812,27 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # -- harness optimizer runs ------------------------------------------
     @app.get("/api/harness/runs")
     def harness_runs() -> dict:
+        """List persisted accepted optimizer artifacts, newest first.
+
+        The only writer (agentic/harness_optimizer/patching.py) persists runs
+        as ``runs/accepted/<variant_id>.json`` FILES. Listing directories under
+        ``runs/`` (the old behavior) could therefore never surface a real run
+        -- the console showed the phantom ``accepted`` directory itself and
+        nothing else. Sort by mtime (not name): variant ids are not
+        chronologically sortable.
+        """
         runs: list[dict] = []
-        if _RUNS_DIR.is_dir():
-            # dirs-only BEFORE the slice: a stray file (index, .lock) among the
-            # newest entries must not push a real run out of the _MAX_RUNS window
-            entries = (entry for entry in _RUNS_DIR.iterdir() if entry.is_dir())
-            for path in sorted(entries, reverse=True)[:_MAX_RUNS]:
-                runs.append({"run_id": path.name, "path": str(path)})
+        accepted = _RUNS_DIR / "accepted"
+        if accepted.is_dir():
+            # Split list/sort/slice so WPS Jones complexity stays under the limit
+            # (inline sorted(..., key=lambda p: ...) failed WPS221 + WPS111).
+            # os.path.getmtime accepts Path and avoids a short-name lambda key.
+            json_files = [
+                entry for entry in accepted.glob("*.json") if entry.is_file()
+            ]
+            json_files.sort(key=os.path.getmtime, reverse=True)
+            for path in json_files[:_MAX_RUNS]:
+                runs.append({"run_id": path.stem, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
 
     return app
