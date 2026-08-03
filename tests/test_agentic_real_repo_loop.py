@@ -1422,6 +1422,20 @@ def test_matches_protected_path_bare_filename_matches_root_and_nested():
     assert _matches_protected_path("myconftest.py", prefixes) is False  # not a path-segment match
 
 
+def test_matches_protected_path_case_and_trailing_dot_aliases():
+    """Windows/macOS can open protected files under alias spellings."""
+    from agentic.real_repo_loop import _matches_protected_path
+
+    prefixes = ("tests/", "pyproject.toml", ".github/")
+    assert _matches_protected_path("Tests/unit/test_x.py", prefixes) is True
+    assert _matches_protected_path("TESTS/unit/test_x.py", prefixes) is True
+    assert _matches_protected_path("pyproject.toml.", prefixes) is True
+    assert _matches_protected_path("PyProject.Toml", prefixes) is True
+    assert _matches_protected_path(".GitHub/workflows/ci.yml", prefixes) is True
+    # Unrelated path still free
+    assert _matches_protected_path("src/app.py", prefixes) is False
+
+
 def test_decide_rejects_an_out_of_scope_write():
     decision = decide_real_repo_candidate(
         changed_files=(), verification=None, governance_findings=(), out_of_scope=True,
