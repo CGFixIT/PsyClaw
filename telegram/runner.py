@@ -16,6 +16,7 @@ from typing import Any
 
 from telegram import client as tg_client
 from telegram.config import TelegramConfig
+from telegram.ratelimit import get_limiter
 from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import audit_log
 
@@ -32,6 +33,7 @@ def send_notify(
             "telegram.enabled is false",
             details={"gate": "enabled"},
         )
+    get_limiter(cfg.rate_limit.max_ops, cfg.rate_limit.window_seconds).check("tg:outbound")
     return tg_client.send_message(cfg, chat_id=chat_id, text=text)
 
 
@@ -82,6 +84,10 @@ def handle_inbound_text(
             "chat_id not in telegram.allowed_chat_ids",
             details={"chat_id": str(chat_id), "gate": "allowlist"},
         )
+
+    get_limiter(cfg.rate_limit.max_ops, cfg.rate_limit.window_seconds).check(
+        f"tg:inbound:{chat_id}"
+    )
 
     audit_log(
         {
