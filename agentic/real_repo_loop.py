@@ -88,6 +88,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
@@ -370,6 +371,28 @@ def _verification_feedback(verification: VerificationReport, *, config_path: str
     return "\n\n".join(parts)
 
 
+def _fs_equiv_path(path: str) -> str:
+    """Normalize a repo-relative path for name-equivalence compares.
+
+    Mirrors the Windows/macOS rules already applied to ``.git`` segment checks
+    in ``repo_workspace._is_dotgit_name`` (trailing dots/spaces stripped,
+    Unicode Cf stripped, casefold). The protected-path gate must refuse the
+    same aliases the writer can open on a case-insensitive volume — e.g.
+    ``Tests/`` vs ``tests/``, or ``pyproject.toml.`` vs ``pyproject.toml``.
+    Platform-independent on purpose so Linux CI cannot claim safety that
+    Windows operators do not have.
+    """
+    normalized = path.replace("\\", "/")
+    parts: list[str] = []
+    for part in normalized.split("/"):
+        if part in {"", "."}:
+            continue
+        trimmed = part.rstrip(". ")
+        cleaned = "".join(ch for ch in trimmed if unicodedata.category(ch) != "Cf")
+        parts.append(cleaned.casefold())
+    return "/".join(parts)
+
+
 def _matches_protected_path(path: str, protected_prefixes: Sequence[str]) -> bool:
     """True when ``path`` falls under one of ``protected_prefixes``.
 
@@ -378,12 +401,22 @@ def _matches_protected_path(path: str, protected_prefixes: Sequence[str]) -> boo
     e.g. ``"conftest.py"``) matches at the repo root OR nested anywhere
     (``"src/conftest.py"``), since a conftest.py anywhere can affect pytest
     collection, not only one at the root.
+
+    Comparisons use :func:`_fs_equiv_path` so case and trailing-dot aliases
+    on Windows/macOS cannot bypass a prefix that would match the real file.
     """
+    path_n = _fs_equiv_path(path)
+    if not path_n:
+        return False
     for prefix in protected_prefixes:
-        if prefix.endswith("/"):
-            if path.startswith(prefix):
+        is_dir = prefix.endswith("/")
+        pref_n = _fs_equiv_path(prefix.rstrip("/") if is_dir else prefix)
+        if not pref_n:
+            continue
+        if is_dir:
+            if path_n == pref_n or path_n.startswith(pref_n + "/"):
                 return True
-        elif path == prefix or path.endswith("/" + prefix):
+        elif path_n == pref_n or path_n.endswith("/" + pref_n):
             return True
     return False
 
