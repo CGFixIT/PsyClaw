@@ -637,18 +637,30 @@ git config user.email cyclaw-agent@users.noreply.github.com
 git config user.name "CyClaw Agent"
 ```
 
-Single source of truth: `utils/agent_identity.py`. Defaults are
+Single source of truth: `utils/agent_identity.py`. Committer defaults are
 **driver-agnostic** (not Claude/Anthropic) because the agentic loop is often a
 local model or another coding agent — attribution should not pretend otherwise.
 All three write surfaces read the same module: repo_workspace commits, writer
 PR heads, and harness console branch validation.
 
+**Branch namespaces** follow `.github/PULL_REQUEST_TEMPLATE.md` — validation
+accepts every listed vendor (and `agent/`):
+
+| Driver | Branch form |
+|--------|-------------|
+| Claude Code | `claude/{feature}` |
+| Codex | `codex/{feature}` |
+| Grok Build | `grok/{feature}` |
+| Kimi / Kimi Code | `kimi/{feature}` |
+| CyClaw direct / MCP | `CyClaw/{feature}-{date}` (also `cyclaw/`) |
+| Unknown / generic | `agent/{feature}` |
+
 Environment overrides (optional, per session):
 
 - `CYCLAW_AGENT_COMMIT_NAME` (default `CyClaw Agent`)
 - `CYCLAW_AGENT_COMMIT_EMAIL` (default `cyclaw-agent@users.noreply.github.com`)
-- `CYCLAW_AGENT_BRANCH_PREFIX` (default `agent` — branch names must be
-  `<prefix>/<topic>`, 1–32 chars from `[A-Za-z0-9._-]`, alphanumeric first)
+- `CYCLAW_AGENT_BRANCH_PREFIX` (default `agent` — *preferred* prefix only;
+  does **not** revoke the multi-vendor allowlist above)
 
 Caveat: an external **session-runtime** stop hook (outside this repo) may still
 enforce a different committer email if your host installs one — align that

@@ -569,16 +569,21 @@ def test_commit_forces_the_configured_committer_identity(tmp_path, monkeypatch):
 
 
 def test_defaults_are_byte_identical_to_the_driver_agnostic_defaults():
-    """Defaults match utils.agent_identity (driver-agnostic).
+    """Committer defaults match utils.agent_identity; branch allowlist is multi-vendor.
 
-    With none of the env overrides set, the identity strings and the compiled branch pattern
-    must be exactly the module defaults -- the pattern is also what the
-    mirrors in agentic/writer.py and harness/agent_policy.py assert equality
-    against, so any drift here breaks those tests too.
+    With no env overrides, committer strings are CyClaw Agent, preferred prefix
+    is agent/, and BRANCH_NAME_RE accepts every PR-template vendor prefix.
     """
+    import utils.agent_identity as agent_identity
+
     assert repo_workspace._COMMIT_NAME == "CyClaw Agent"
     assert repo_workspace._COMMIT_EMAIL == "cyclaw-agent@users.noreply.github.com"
-    assert repo_workspace.BRANCH_NAME_RE.pattern == r"^agent/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$"
+    assert repo_workspace._BRANCH_PREFIX == "agent"
+    for prefix in ("agent", "claude", "codex", "grok", "kimi", "CyClaw", "cyclaw"):
+        assert prefix in agent_identity.ALLOWED_BRANCH_PREFIXES
+        assert repo_workspace.BRANCH_NAME_RE.match(f"{prefix}/topic")
+    assert not repo_workspace.BRANCH_NAME_RE.match("main")
+    assert not repo_workspace.BRANCH_NAME_RE.match("feature/x")
 
 
 def _reload_identity_stack() -> None:
@@ -589,25 +594,27 @@ def _reload_identity_stack() -> None:
     importlib.reload(repo_workspace)
 
 
-def test_env_override_reconfigures_identity_and_branch_prefix(tmp_path, monkeypatch):
-    """The configured identity/prefix, not the module defaults, wins.
+def test_env_override_reconfigures_committer_and_preferred_prefix(tmp_path, monkeypatch):
+    """Committer + preferred prefix follow env; template prefixes stay allowed.
 
-    Constants resolve at import in utils.agent_identity; consumers re-bind on
-    their own import. Reload identity first, then repo_workspace -- and restore
-    both in finally so a leaked kimi/ pattern cannot invert later tests.
+    CYCLAW_AGENT_BRANCH_PREFIX is preferred, not exclusive — setting kimi does
+    not revoke grok/claude/codex/agent validation (PR-template multi-vendor).
     """
     monkeypatch.setenv("CYCLAW_AGENT_COMMIT_NAME", "Kimi")
     monkeypatch.setenv("CYCLAW_AGENT_COMMIT_EMAIL", "kimi-agent@example.com")
     monkeypatch.setenv("CYCLAW_AGENT_BRANCH_PREFIX", "kimi")
     _reload_identity_stack()
     try:
+        assert repo_workspace._BRANCH_PREFIX == "kimi"
         fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
         with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
             with repo_workspace.RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
                 dest = Path(mrun.call_args.kwargs["dest"])
                 assert tools.checkout_branch("kimi/topic") == {"branch": "kimi/topic"}
+                # Still on the allowlist even when preferred is kimi:
+                assert tools.checkout_branch("grok/also-ok") == {"branch": "grok/also-ok"}
                 with pytest.raises(AgenticError):
-                    tools.checkout_branch("agent/no-longer-allowed")
+                    tools.checkout_branch("feature/not-a-vendor")
                 (dest / "a.txt").write_text("changed\n", encoding="utf-8")
                 tools.add(["a.txt"])
                 tools.commit("test commit")

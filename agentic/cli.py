@@ -1504,7 +1504,12 @@ def build_parser() -> argparse.ArgumentParser:
              "it forward, so an unapproved plan has no path into a run.",
     )
     p_run.add_argument("--checks-file", required=True, help="Path to a JSON verification-checks manifest.")
-    p_run.add_argument("--branch", required=True, help="Branch name to use on acceptance (agent/<topic> by default).")
+    p_run.add_argument(
+        "--branch",
+        required=True,
+        help="Branch on acceptance (vendor prefix from PR template: "
+        "grok|kimi|claude|codex|CyClaw|agent/<topic>).",
+    )
     p_run.add_argument("--commit-message", required=True, help="Commit message to use on acceptance.")
     p_run.add_argument("--max-iterations", type=int, default=3, help="Planner attempts before giving up.")
     p_run.add_argument("--reason", required=True, help="Human reason string (required).")
