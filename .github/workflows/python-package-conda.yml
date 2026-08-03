@@ -30,10 +30,14 @@ jobs:
       with:
         persist-credentials: false
 
+    # Env spec is repo-root environment.yml (NOT .github/workflows/environment.yml —
+    # that path is a no-op placeholder after c708148; see that workflow's header).
     - name: Setup Miniconda + mamba (fast solver)
       uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5  # v4.0.1
       with:
-        miniforge-version: latest
+        # Pin the installer base (not "latest") so Miniforge itself is reproducible.
+        # Matches the install-surface pin policy in ci.yml (pip==26.1.2).
+        miniforge-version: "25.3.0-3"
         python-version: ${{ matrix.python-version }}
         channels: conda-forge
         channel-priority: strict
@@ -48,7 +52,7 @@ jobs:
         path: |
           /home/runner/miniconda3/envs/cyclaw
           /home/runner/miniconda3/pkgs
-        # The -v2 segment is a cache GENERATION marker, present in both the key
+        # The -vN segment is a cache GENERATION marker, present in both the key
         # and the restore-keys prefix. On 2026-07-30 every PR in the repo started
         # failing here with:
         #
@@ -62,9 +66,10 @@ jobs:
         # main -- restored that same broken env, so re-running never recovered.
         # Bumping the generation is what actually evicts it: the poisoned entries
         # only match the old prefix, so they can never be selected again.
-        key: conda-${{ runner.os }}-${{ matrix.python-version }}-v2-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
+        # -v3: also keys off the pinned miniforge installer (not floating latest).
+        key: conda-${{ runner.os }}-${{ matrix.python-version }}-v3-${{ hashFiles('environment.yml', 'pyproject.toml', '**/requirements*.txt') }}
         restore-keys: |
-          conda-${{ runner.os }}-${{ matrix.python-version }}-v2-
+          conda-${{ runner.os }}-${{ matrix.python-version }}-v3-
 
     - name: Pin pip in the conda env (matches ci.yml's exact pin)
       shell: bash -l {0}
