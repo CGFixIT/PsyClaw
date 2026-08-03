@@ -43,6 +43,7 @@ from utils.errors import (
     RcloneNotInstalledError,
     RcloneTimeoutError,
     RcloneVersionError,
+    SyncError,
     SyncRuntimeError,
 )
 from utils.logger import audit_log
@@ -373,8 +374,12 @@ def run_post_sync_check(cfg: RcloneConfig, rclone_bin: str = "rclone") -> CheckR
 
     ``rclone check`` exits 0 when remote and local are identical (filtered),
     non-zero when differences exist. This function NEVER raises on differences --
-    it returns a ``CheckResult(ok=False)`` so callers can react. Only raises
-    :class:`SyncRuntimeError` on subprocess failure (binary gone, OS error).
+    it returns a ``CheckResult(ok=False)`` so callers can react.
+
+    Timeout and subprocess launch failures are also soft-failed as
+    ``CheckResult(ok=False)``: the copy already finished (or failed) before the
+    check, and raising here would skip per-file audit rows and the reindex
+    signal. Only a programming misuse should raise from this path.
 
     Timeout reuses ``cfg.sync_timeout_sec`` (0 = unbounded). Audit event is emitted
     whether the check passes or not so the operator has a verifiable record.
@@ -389,16 +394,23 @@ def run_post_sync_check(cfg: RcloneConfig, rclone_bin: str = "rclone") -> CheckR
             check=False,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise SyncRuntimeError(
-            f"rclone check timed out after {cfg.sync_timeout_sec}s",
-            details={"op": "check"},
-        ) from exc
+    except subprocess.TimeoutExpired:
+        # Soft-fail: copies already landed; do not drop audits / reindex path.
+        return CheckResult(
+            ok=False,
+            missing_local=0,
+            missing_remote=0,
+            differences=0,
+            errors=[f"rclone check timed out after {cfg.sync_timeout_sec}s"],
+        )
     except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        raise SyncRuntimeError(
-            f"rclone check subprocess failed: {type(exc).__name__}",
-            details={"op": "check"},
-        ) from exc
+        return CheckResult(
+            ok=False,
+            missing_local=0,
+            missing_remote=0,
+            differences=0,
+            errors=[f"rclone check subprocess failed: {type(exc).__name__}"],
+        )
 
     # rclone check writes to stderr (text mode). Combine stdout+stderr defensively
     # in case a future rclone version changes the target stream.
@@ -1050,6 +1062,7 @@ def _run_sync_locked(
         # last observed code (None if rclone never returned one); aborted_for_safety
         # is False -- an exceptional exit is not a --max-delete/--max-transfer trip.
         # Skipped under dry_run like every other audit row in this body.
+        corpus_changed_exc = any(not _is_rclone_internal(ev.path) for ev in partial)
         if not dry_run:
             audit_log({
                 "event": "sync_failed",
@@ -1060,9 +1073,15 @@ def _run_sync_locked(
                 "errors_n": len(final_errors),
                 "aborted_for_safety": False,
                 "dry_run": dry_run,
-                "corpus_changed": any(not _is_rclone_internal(ev.path) for ev in partial),
+                "corpus_changed": corpus_changed_exc,
                 "error_type": type(exc).__name__,
             })
+        # Surface corpus_changed on typed SyncError so CLI can still exit 10
+        # (reindex) when copies landed before the failure (timeout, etc.).
+        if isinstance(exc, SyncError):
+            details = dict(exc.details or {})
+            details["corpus_changed"] = corpus_changed_exc
+            exc.details = details
         raise
 
 
