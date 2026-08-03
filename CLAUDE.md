@@ -637,6 +637,24 @@ git config user.email noreply@anthropic.com
 git config user.name Claude
 ```
 
+The same identity and branch convention are configurable via environment
+variables, with defaults that preserve the pinned values exactly:
+
+- `CYCLAW_AGENT_COMMIT_NAME` (default `Claude`)
+- `CYCLAW_AGENT_COMMIT_EMAIL` (default `noreply@anthropic.com`)
+- `CYCLAW_AGENT_BRANCH_PREFIX` (default `claude` — branch names must be
+  `<prefix>/<topic>`, 1–32 chars from `[A-Za-z0-9._-]`, alphanumeric first)
+
+These are read by `agentic/deepagent_github/repo_workspace.py` (which forces
+the identity via `git -c` on every commit and anchors branch names to
+`<prefix>/`) and by the SessionStart/bootstrap identity pins. Two caveats when
+overriding: the stop hook below enforces `noreply@anthropic.com` at the
+**session-runtime** level (outside this repo), so a different email requires a
+matching runtime change; and the branch-pattern mirrors in
+`agentic/writer.py` and `harness/agent_policy.py` remain pinned to `claude/`
+by design, so an overridden prefix is honored only by the repo-workspace
+surface.
+
 A stop hook, applied by the **session runtime** (not wired in repo
 `settings.json`), rejects commits whose committer email is not
 `noreply@anthropic.com` and blocks `--force-with-lease` without explicit

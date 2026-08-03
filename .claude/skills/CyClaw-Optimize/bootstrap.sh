@@ -30,10 +30,11 @@ WORK_BRANCH="${1:-}"
 hr() { printf '%s\n' "------------------------------------------------------------"; }
 
 # ---------------------------------------------------------------------------
-# 1. Git identity (stop hook rejects any other committer email)
+# 1. Git identity (stop hook rejects any other committer email; overridable via
+#    CYCLAW_AGENT_COMMIT_EMAIL / CYCLAW_AGENT_COMMIT_NAME, defaults unchanged)
 # ---------------------------------------------------------------------------
-git config user.email noreply@anthropic.com
-git config user.name Claude
+git config user.email "${CYCLAW_AGENT_COMMIT_EMAIL:-noreply@anthropic.com}"
+git config user.name "${CYCLAW_AGENT_COMMIT_NAME:-Claude}"
 hr
 echo "git identity: $(git config user.name) <$(git config user.email)>"
 
