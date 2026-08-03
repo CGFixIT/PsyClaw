@@ -70,6 +70,58 @@ def test_send_message_api_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
             send_message(cfg, chat_id=42, text="hello")
 
 
+def test_send_message_transport_error_redacts_bot_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """httpx errors often embed the request URL; the bot token is in that path."""
+    import httpx
+
+    token = "123456:ABC-DEF_secret-token"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    cfg = _cfg(tmp_path)
+
+    class _HttpLeak(httpx.HTTPError):
+        def __str__(self) -> str:
+            return (
+                f"ConnectError: GET https://api.telegram.org/bot{token}/sendMessage "
+                "failed"
+            )
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.__enter__.return_value.post.side_effect = _HttpLeak(
+            "boom"
+        )
+        with pytest.raises(TelegramRuntimeError) as exc:
+            send_message(cfg, chat_id=42, text="hello")
+    msg = getattr(exc.value, "message", str(exc.value))
+    assert token not in msg
+    assert "<redacted>" in msg
+    assert "sendMessage" in msg
+
+
+def test_get_updates_transport_error_redacts_bot_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    token = "999:live-bot-token-xyz"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    cfg = _cfg(tmp_path)
+
+    class _HttpLeak(httpx.HTTPError):
+        def __str__(self) -> str:
+            return f"ReadTimeout for url https://api.telegram.org/bot{token}/getUpdates"
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.__enter__.return_value.get.side_effect = _HttpLeak(
+            "timeout"
+        )
+        with pytest.raises(TelegramRuntimeError) as exc:
+            get_updates(cfg, offset=1)
+    msg = getattr(exc.value, "message", str(exc.value))
+    assert token not in msg
+    assert "<redacted>" in msg
+
 def test_post_query_empty_refuses(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with pytest.raises(TelegramRefused):

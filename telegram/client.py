@@ -28,6 +28,21 @@ def bot_api_url(cfg: TelegramConfig, method: str, token: str) -> str:
     return f"{cfg.api_base}/bot{token}/{method}"
 
 
+def _transport_error_message(method: str, exc: BaseException, *secrets: str) -> str:
+    """Build a transport error string that never echoes Bot API secrets.
+
+    httpx embeds the full request URL in many HTTPError messages. Telegram puts
+    the bot token in the URL path (``/bot<token>/method``), so ``str(exc)`` can
+    leak the live token into CLI output, poll error dicts, and logs. Scrub every
+    known secret substring; fall back to exception type only if scrubbing fails.
+    """
+    raw = f"{type(exc).__name__}: {exc}"
+    for secret in secrets:
+        if secret and secret in raw:
+            raw = raw.replace(secret, "<redacted>")
+    return f"Telegram {method} transport error: {raw}"
+
+
 def send_message(
     cfg: TelegramConfig,
     *,
@@ -64,7 +79,7 @@ def send_message(
             resp = client.post(url, json=payload)
     except httpx.HTTPError as exc:
         raise TelegramRuntimeError(
-            f"Telegram sendMessage transport error: {exc}",
+            _transport_error_message("sendMessage", exc, tok),
             details={"method": "sendMessage"},
         ) from exc
 
@@ -119,7 +134,7 @@ def get_updates(
             resp = client.get(url, params=params)
     except httpx.HTTPError as exc:
         raise TelegramRuntimeError(
-            f"Telegram getUpdates transport error: {exc}",
+            _transport_error_message("getUpdates", exc, tok),
             details={"method": "getUpdates"},
         ) from exc
     try:
