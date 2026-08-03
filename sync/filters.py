@@ -54,6 +54,10 @@ _HARDENED_EXCLUDES: list[str] = [
     "- index/**",
     "- .emb_cache/**",
     "- .chroma/**",
+    # 3b. fsconnect ownership/skip cache under corpus staging — host-local;
+    # Dropbox must not clobber or publish it (wrong incremental index/prune).
+    "- **/.fsindex_cache.json",
+    "- .fsindex_cache.json",
     # 4. Python and virtualenv noise.
     "- venv/**",
     "- .venv/**",
