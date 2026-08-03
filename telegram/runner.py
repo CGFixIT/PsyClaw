@@ -226,9 +226,11 @@ def poll_once(
                     "chat_id": str(chat_id),
                 }
             )
-            # Leave next_offset unchanged for this update_id so Telegram redelivers
-            # after a transient /query or sendMessage failure.
-            continue
+            # Stop processing the batch: leaving next_offset at/before this
+            # update_id means Telegram redelivers it AND everything after it on
+            # the next poll. Continuing here would let a later successful update
+            # advance next_offset past this failure, silently dropping the message.
+            break
         if isinstance(uid, int):
             next_offset = uid + 1
     return next_offset, handled

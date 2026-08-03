@@ -17,6 +17,27 @@ from telegram.config import TelegramConfig
 from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import audit_log
 
+# Pooled module-level client (same pattern as llm/client.py's persistent
+# clients): a forever-poll loop otherwise pays a fresh TCP+TLS handshake per
+# Bot API call. Lazily created; every call still passes its own per-request
+# timeout, so per-call timeout semantics are unchanged.
+_http_client: httpx.Client | None = None
+
+
+def _get_http_client() -> httpx.Client:
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.Client()
+    return _http_client
+
+
+def reset_http_client_for_tests() -> None:
+    """Drop the pooled client (unit tests only — it can hold a patched mock)."""
+    global _http_client
+    if _http_client is not None:
+        _http_client.close()
+        _http_client = None
+
 
 def _hash_token_fingerprint(token: str) -> str:
     """Short non-reversible fingerprint for audit (never the token itself)."""
@@ -94,8 +115,7 @@ def _send_one(
     }
     started = time.monotonic()
     try:
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(url, json=payload)
+        resp = _get_http_client().post(url, json=payload, timeout=30.0)
     except httpx.HTTPError as exc:
         raise TelegramRuntimeError(
             _transport_error_message("sendMessage", exc, tok),
@@ -175,8 +195,7 @@ def fetch_loopback_health(cfg: TelegramConfig, *, timeout_sec: float = 5.0) -> s
     """GET CyClaw ``/health`` over loopback only. No graph imports."""
     url = f"{cfg.query.base_url}/health"
     try:
-        with httpx.Client(timeout=timeout_sec) as client:
-            resp = client.get(url)
+        resp = _get_http_client().get(url, timeout=timeout_sec)
     except httpx.HTTPError as exc:
         return f"health unreachable: {type(exc).__name__}"
     try:
@@ -211,8 +230,7 @@ def get_updates(
     # httpx timeout must exceed Telegram long-poll timeout.
     timeout = httpx.Timeout(cfg.poll_timeout_sec + 15.0, connect=10.0)
     try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.get(url, params=params)
+        resp = _get_http_client().get(url, params=params, timeout=timeout)
     except httpx.HTTPError as exc:
         raise TelegramRuntimeError(
             _transport_error_message("getUpdates", exc, tok),
@@ -268,8 +286,9 @@ def post_query(
     }
     started = time.monotonic()
     try:
-        with httpx.Client(timeout=float(cfg.query.timeout_sec)) as client:
-            resp = client.post(url, json=payload, headers=headers)
+        resp = _get_http_client().post(
+            url, json=payload, headers=headers, timeout=float(cfg.query.timeout_sec)
+        )
     except httpx.HTTPError as exc:
         raise TelegramRuntimeError(
             f"CyClaw /query transport error: {exc}",
