@@ -444,6 +444,39 @@ not attacker-chosen at the command level.
   2026-07-31; that document, not this one, is authoritative on the gate chain
   and carries the open operator decisions.
 
+### Seventh amendment — Telegram channel (out-of-band, default-off)
+
+- **What changed (2026-08-03).** A new out-of-band package `telegram/` can
+  reach the Telegram Bot API for outbound notify (mode `notify`) and, when
+  configured, long-poll inbound chat (mode `chat`). Inbound text is turned into
+  answers **only** by HTTP `POST /query` to the existing loopback CyClaw server
+  (`telegram.query.base_url` is validated to loopback). Design:
+  `docs/channels/TELEGRAM_DESIGN.md`.
+- **What this does NOT change.** Graph topology, triple-gate hybrid, soul
+  governance, agentic write disarm, and the I6 import boundary are unchanged.
+  `gate.py` / `graph.py` / `mcp_hybrid_server.py` do **not** import `telegram`.
+  The channel never sets `user_confirmed_online=true` automatically.
+- **Shipped posture.** `telegram.enabled: false`, `mode: notify`, empty
+  `allowed_chat_ids`. Enabling with an empty allowlist is a **config load
+  error**. Bot token is env-only (`TELEGRAM_BOT_TOKEN` by default).
+- **Threat surface added (honest).** Telegram's cloud sees message plaintext
+  for any traffic the operator sends or receives through the bot. This is
+  **not** offline end-to-end privacy for the chat channel; local RAG inference
+  still runs on-box, but the *transport* is third-party. Branding and MSP
+  narratives must not claim otherwise.
+- **Controls.** Chat-id allowlist; loopback-only CyClaw base URL; audit events
+  (`telegram_inbound` / `telegram_outbound` / `telegram_query`) with query
+  hashing and token fingerprint only; no webhook listener in the skeleton
+  (long-poll only); no multi-tenant isolation claims.
+- **Residual risk.** A stolen bot token + knowledge of an allowlisted chat id
+  can send messages as the bot and, if `mode: chat` and CyClaw is up, submit
+  queries as the operator would over `/query`. Treat the token like an API key;
+  rotate via BotFather if leaked. Compromised Telegram infrastructure is out of
+  CyClaw's control (same class as any cloud chat product).
+- **What still does not exist.** Webhook mode, hybrid confirm-from-Telegram
+  (T3), media→corpus auto-ingest (T4), group multi-user ACLs, in-process
+  scheduler inside `gate.py`.
+
 ---
 
 ## 6. Hardening maturity ladder

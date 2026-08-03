@@ -13,7 +13,8 @@ Checks (one section per invariant, plus supporting guards):
   I3  Triple-gated external providers  hybrid mode + provider.enabled + user confirmation
   I4  Audit convergence  every node reaches audit_logger; audit_logger -> END
   I5  Soul governance    apply_evolution refuses an empty reason
-  I6  Module isolation   agentic/sync/guardrails never meet gate/graph/mcp
+  I6  Module isolation   agentic/sync/guardrails/harness/telegram never meet gate/graph/mcp
+
   G1  Telemetry kill     env kill-block precedes heavy imports in gate.py
   G2  Auth fail-closed   soul endpoints 401 when CYCLAW_API_KEY unset
   G3  Sanitizer contract documented phrases still caught by banned_patterns
@@ -31,7 +32,8 @@ import sys
 from pathlib import Path
 
 CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
-OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness")
+OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness", "telegram")
+
 # The full documented graph shape (CLAUDE.md's "9-node LangGraph topology").
 # I1/I2 previously checked only that specific expected edges/sources were
 # PRESENT (membership), never that the graph declares nothing else -- an
