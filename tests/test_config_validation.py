@@ -6,6 +6,7 @@ import pytest
 
 from utils.config_validation import (
     validate_boot_timeout_config,
+    validate_fallback_confirm_placeholder,
     validate_personality_config,
     validate_retrieval_config,
 )
@@ -168,3 +169,39 @@ def test_missing_or_non_numeric_values_are_a_no_op(mutate):
 
 def test_empty_config_is_a_no_op():
     validate_boot_timeout_config({})
+
+
+def test_llm_timeout_margin_under_30s_rejected():
+    """graph_timeout must be >= llm_timeout + 30 (config.yaml formula)."""
+    cfg = {
+        "api": {"graph_timeout_sec": 610},
+        "models": {"local_llm": {"timeout_sec": 600}},
+    }
+    with pytest.raises(ConfigError) as exc:
+        validate_boot_timeout_config(cfg)
+    assert "30" in str(exc.value)
+
+
+def test_llm_timeout_margin_exactly_30s_ok():
+    cfg = {
+        "api": {"graph_timeout_sec": 630},
+        "models": {"local_llm": {"timeout_sec": 600}},
+    }
+    validate_boot_timeout_config(cfg)
+
+
+def test_fallback_confirm_false_rejected():
+    cfg = {"policy": {"fallback": {"require_user_confirm": False}}}
+    with pytest.raises(ConfigError):
+        validate_fallback_confirm_placeholder(cfg)
+
+
+def test_fallback_confirm_true_ok():
+    validate_fallback_confirm_placeholder(
+        {"policy": {"fallback": {"require_user_confirm": True}}}
+    )
+
+
+def test_fallback_confirm_absent_ok():
+    validate_fallback_confirm_placeholder({"policy": {"fallback": {}}})
+    validate_fallback_confirm_placeholder({})

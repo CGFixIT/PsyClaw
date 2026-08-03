@@ -58,21 +58,22 @@ def validate_retrieval_config(cfg: dict[str, Any]) -> None:
             )
 
 
-def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
-    """Validate ``api.graph_timeout_sec`` exceeds ``models.local_llm.timeout_sec``.
+# Documented in config.yaml: graph_timeout >= llm_timeout + 30 (retrieval +
+# routing + cold embed headroom). Enforced as a boot hard-fail when both
+# values are present.
+_GRAPH_LLM_TIMEOUT_MARGIN_SEC = 30
 
-    ``config.yaml``'s own comment documents this as a required relationship
-    (``Formula: graph_timeout >= llm_timeout + 30``): if the per-call LLM
-    timeout can fire at or after the graph's own deadline, the LLM timeout is
-    unreachable and a hung call is instead cut off by the outer graph
-    deadline, orphaning whatever work was in flight rather than failing
-    cleanly at the layer meant to catch it.
+
+def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
+    """Validate ``api.graph_timeout_sec`` vs ``models.local_llm.timeout_sec``.
+
+    Requires ``graph_timeout >= llm_timeout + 30`` when both are present
+    (``config.yaml`` formula). A 1s headroom pair still makes the LLM timeout
+    effectively unreachable under load.
 
     No-op when either value is absent or not a real number -- gate.py's own
     ``cfg.get(..., default)`` calls already treat those cases as "use the
-    default," and this validator only tightens the case both values are
-    explicitly present and already violate the relationship (previously a
-    boot-time warning only, unlike every other check in this module).
+    default."
     """
     api = cfg.get("api")
     models = cfg.get("models")
@@ -92,6 +93,46 @@ def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
             "deadline fires first and the per-call LLM timeout is unreachable",
             details={"llm_timeout_sec": llm_timeout, "graph_timeout_sec": graph_timeout},
         )
+    min_graph = llm_timeout + _GRAPH_LLM_TIMEOUT_MARGIN_SEC
+    if graph_timeout < min_graph:
+        raise ConfigError(
+            f"api.graph_timeout_sec ({graph_timeout}) must be at least "
+            f"models.local_llm.timeout_sec + {_GRAPH_LLM_TIMEOUT_MARGIN_SEC} "
+            f"({min_graph}); formula: graph_timeout >= llm_timeout + "
+            f"{_GRAPH_LLM_TIMEOUT_MARGIN_SEC}",
+            details={
+                "llm_timeout_sec": llm_timeout,
+                "graph_timeout_sec": graph_timeout,
+                "required_margin_sec": _GRAPH_LLM_TIMEOUT_MARGIN_SEC,
+            },
+        )
+
+
+def validate_fallback_confirm_placeholder(cfg: dict[str, Any]) -> None:
+    """Reject a false ``policy.fallback.require_user_confirm`` placeholder.
+
+    The key is **not wired** into graph routing (confirm pause is hardcoded).
+    ``false`` would silently fail to skip confirmation — refuse it at boot so
+    operators cannot believe the switch works. ``true`` or absent is fine.
+    """
+    policy = cfg.get("policy")
+    if not isinstance(policy, dict):
+        return
+    fallback = policy.get("fallback")
+    if not isinstance(fallback, dict):
+        return
+    if "require_user_confirm" not in fallback:
+        return
+    val = fallback["require_user_confirm"]
+    if val is True:
+        return
+    raise ConfigError(
+        "policy.fallback.require_user_confirm is not wired to the graph "
+        "(confirmation is always enforced in user_gate_router). Only true "
+        "is allowed; setting false has no effect and is rejected so it "
+        "cannot be mistaken for a live safety switch.",
+        details={"received": val, "hint": "Leave true or omit the key."},
+    )
 
 
 def validate_personality_config(cfg: dict[str, Any]) -> None:
