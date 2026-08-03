@@ -51,7 +51,7 @@ import subprocess  # nosec B404 - argv-list only, no shell, absolute binary, fix
 
 from agentic.config import AgenticConfig
 from utils.agent_identity import BRANCH_NAME_RE as _HEAD_BRANCH_RE
-from utils.agent_identity import BRANCH_PREFIX as _HEAD_BRANCH_PREFIX
+from utils.agent_identity import allowed_prefixes_help
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
@@ -116,18 +116,19 @@ def _require_int_number(op: str, params: dict) -> str:
 
 
 def _require_head_branch(op: str, params: dict) -> str:
-    """Return params['head'], validated as an agent-namespaced branch.
+    """Return params['head'], validated as a vendor/agent-namespaced branch.
 
-    Anchored to ``CYCLAW_AGENT_BRANCH_PREFIX`` (default ``agent/``) for the
-    same two reasons repo_workspace.BRANCH_NAME_RE is: it is the repo's own
-    branch convention, and no string starting with an alphanumeric prefix can
-    start with '-', so the value cannot be reparsed by ``gh`` as an option
-    instead of a branch.
+    Accepts every prefix in ``utils.agent_identity.ALLOWED_BRANCH_PREFIXES``
+    (PR-template conventions: claude/, codex/, grok/, kimi/, CyClaw/, plus
+    agent/). Same argv-injection defense as repo_workspace: every allowed
+    prefix is alphanumeric-led, so the value cannot be reparsed by ``gh`` as
+    an option instead of a branch.
     """
     head = params.get("head")
     if not isinstance(head, str) or not _HEAD_BRANCH_RE.match(head):
         raise AgenticError(
-            f"op {op!r} requires 'head' to be a {_HEAD_BRANCH_PREFIX}/<topic> branch name",
+            f"op {op!r} requires 'head' to be <vendor>/<topic> "
+            f"(allowed prefixes: {allowed_prefixes_help()})",
             details={"op": op, "head": str(head)[:120]},
         )
     return head

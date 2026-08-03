@@ -4,8 +4,9 @@ Closes the gap the audit found: containment-by-copy already existed
 (``harness_optimizer``'s fixture runner), but nothing in the codebase could
 clone a REAL repository. This module clones, jails, and reads -- and, as of the
 git-write addition below, can also make local commits inside that same jailed
-clone. As of P10 it can also PUSH one agent-namespaced branch (``agent/`` by
-default, overridable via ``CYCLAW_AGENT_BRANCH_PREFIX``) to origin
+clone. As of P10 it can also PUSH one agent-namespaced branch (``agent/``,
+``grok/``, ``kimi/``, ``claude/``, ``codex/``, ``CyClaw/``, … — see
+``utils.agent_identity`` / the PR template) to origin
 (:meth:`RepoWorkspaceTools.push_branch`) -- the single method here that reaches
 the network, gated on the same ``allow_git_write_tools`` flag (default
 ``False``) as every other write, and passing no credential of its own. It still
@@ -73,12 +74,16 @@ from typing import NoReturn
 from agentic.config import AgenticConfig, DeepAgentGitHubConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
 from agentic.gh_client import DEFAULT_CLONE_TIMEOUT_SEC, run_read
-from utils.agent_identity import BRANCH_NAME_RE
+from utils.agent_identity import BRANCH_NAME_RE, allowed_prefixes_help
 from utils.agent_identity import BRANCH_PREFIX as _BRANCH_PREFIX
 from utils.agent_identity import COMMIT_EMAIL as _COMMIT_EMAIL
 from utils.agent_identity import COMMIT_NAME as _COMMIT_NAME
 from utils.errors import AgenticError, AgenticWriteRefused, FsConnectError
 from utils.logger import audit_log
+
+# Re-export preferred prefix for tests / operators that inspect this module.
+# Validation still uses multi-vendor BRANCH_NAME_RE, not this single value.
+assert _BRANCH_PREFIX  # noqa: S101 - fail closed if identity module misconfigured
 
 # Matches harness_optimizer/mcp/tools.py's ProposerWorkspaceTools ceiling --
 # same "one file at a time, bounded" read discipline, same number, so an
@@ -577,17 +582,19 @@ class RepoWorkspaceTools:
     # --- git writes: scoped to this clone; only push_branch leaves the box ---
 
     def checkout_branch(self, name: str) -> dict:
-        """Create and switch to a new branch. ``name`` must be ``<prefix>/<topic>``.
+        """Create and switch to a new branch. ``name`` must be ``<vendor>/<topic>``.
 
-        The required prefix is ``CYCLAW_AGENT_BRANCH_PREFIX`` (default
-        ``claude``) -- see :data:`BRANCH_NAME_RE`.
+        Allowed prefixes are the PR-template set (claude/, codex/, grok/,
+        kimi/, CyClaw/, …) plus preferred ``CYCLAW_AGENT_BRANCH_PREFIX``
+        (default ``agent/``). See :data:`BRANCH_NAME_RE`.
         """
         tool = "checkout_branch"
         self._require_git_writes_enabled(tool)
         if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
             self._deny_git(
                 tool,
-                f"branch name must start with '{_BRANCH_PREFIX}/' and use only [A-Za-z0-9._/-]",
+                f"branch name must start with one of [{allowed_prefixes_help()}] "
+                "and use only [A-Za-z0-9._/-] after the slash",
                 target=name,
             )
         self._run_git(tool, ["checkout", "-b", name])
@@ -716,7 +723,8 @@ class RepoWorkspaceTools:
         if not isinstance(name, str) or not BRANCH_NAME_RE.match(name):
             self._deny_git(
                 tool,
-                f"push branch must start with '{_BRANCH_PREFIX}/' and use only [A-Za-z0-9._/-]",
+                f"push branch must start with one of [{allowed_prefixes_help()}] "
+                "and use only [A-Za-z0-9._/-] after the slash",
                 target=name,
             )
         self._run_git(
