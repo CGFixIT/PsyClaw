@@ -1,13 +1,25 @@
 # Git hooks (branch naming)
 
-Enforces **`grok/<feature>`** for feature branches on commit and push.
+Enforces **documented multi-vendor feature-branch prefixes** on commit and push.
+
+Canonical list (must stay aligned with `utils.agent_identity.ALLOWED_BRANCH_PREFIXES`,
+`CLAUDE.md` §5 / Kimi section, and `.github/PULL_REQUEST_TEMPLATE.md`):
+
+| Prefix | Driver |
+|--------|--------|
+| `grok/<feature>` | Grok Build |
+| `claude/<feature>` | Claude Code / agentic harness |
+| `codex/<feature>` | Codex |
+| `kimi/<feature>` | Kimi / Kimi Code |
+| `agent/<feature>` | Generic / default agent identity |
+| `CyClaw/<feature>-…` / `cyclaw/…` | CyClaw direct / MCP |
+
+Also allowed: `main`, `master`, `develop`, `dependabot/*`, `renovate/*`, `release/*`, `hotfix/*`.
 
 | Hook | When | Behavior |
 |------|------|----------|
 | `pre-commit` | every commit | refuses commit if current branch is off-convention |
 | `pre-push` | every push | refuses push of any off-convention head ref |
-
-**Allowlist:** `main`, `master`, `develop`, `grok/*`, `claude/*` (agentic harness), `dependabot/*`, `renovate/*`, `release/*`, `hotfix/*`.
 
 ## Install (once per clone)
 
