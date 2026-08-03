@@ -661,7 +661,7 @@ class RepoWorkspaceTools:
         """Commit staged changes, identity forced to the configured committer.
 
         The identity is ``CYCLAW_AGENT_COMMIT_NAME``/``CYCLAW_AGENT_COMMIT_EMAIL``
-        (defaults: CyClaw's ``Claude <noreply@anthropic.com>`` convention).
+        (defaults: ``CyClaw Agent <cyclaw-agent@users.noreply.github.com>``).
 
         ``-c user.email=...``/``-c user.name=...`` scope the identity override to
         this one subprocess invocation -- never written to the clone's
