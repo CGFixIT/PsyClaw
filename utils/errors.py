@@ -255,6 +255,39 @@ class SqlConnectRuntimeError(SqlConnectError):
         super().__init__(message, code="SQLCONNECT_RUNTIME_ERROR", details=details)
 
 
+class TelegramError(RAGError):
+    """Base error for the out-of-band Telegram channel layer.
+
+    Mirrors SyncError / AgenticError: a dedicated hierarchy for a strictly
+    out-of-band feature that is never imported by gate.py / graph.py /
+    mcp_hybrid_server.py.
+    """
+
+    def __init__(self, message: str, code: str = "TELEGRAM_ERROR", details: dict | None = None):
+        super().__init__(message, code=code, details=details)
+
+
+class TelegramConfigError(TelegramError):
+    """The telegram: block in config.yaml is missing or invalid."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="TELEGRAM_CONFIG_INVALID", details=details)
+
+
+class TelegramRefused(TelegramError):
+    """A Telegram operation was refused by a gate (allowlist, mode, rate limit)."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="TELEGRAM_REFUSED", details=details)
+
+
+class TelegramRuntimeError(TelegramError):
+    """A Telegram or CyClaw HTTP call failed at runtime."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="TELEGRAM_RUNTIME_ERROR", details=details)
+
+
 @dataclass
 class HealthStatus:
     name: str
