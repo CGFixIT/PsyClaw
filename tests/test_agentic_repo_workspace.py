@@ -150,7 +150,13 @@ def test_read_file_rejects_a_symlink_escape(tmp_path, monkeypatch):
         dest = Path(result["dest"])
         outside = dest.parent / "outside-secret.txt"
         outside.write_text("do not read me", encoding="utf-8")
-        (dest / "link").symlink_to(outside)
+        try:
+            (dest / "link").symlink_to(outside)
+        except (OSError, NotImplementedError) as exc:
+            # Windows hosts without SeCreateSymbolicLinkPrivilege (WinError 1314)
+            # cannot plant the fixture; same skip pattern as test_indexer /
+            # harness_optimizer symlink guards. Privilege present → full test.
+            pytest.skip(f"symlink creation unavailable on this host: {exc}")
         return result
 
     with patch.object(repo_workspace, "run_read", side_effect=fake_with_symlink):
@@ -531,7 +537,10 @@ def test_add_rejects_a_symlink_escape(tmp_path, monkeypatch):
             dest = Path(mrun.call_args.kwargs["dest"])
             outside = dest.parent / "outside-secret.txt"
             outside.write_text("do not add me", encoding="utf-8")
-            (dest / "escape-link").symlink_to(outside)
+            try:
+                (dest / "escape-link").symlink_to(outside)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
             with pytest.raises(AgenticError, match="escaped the clone root"):
                 tools.add(["escape-link"])
 
@@ -809,7 +818,10 @@ def test_write_file_refuses_a_symlink_that_points_at_the_git_directory(tmp_path,
     with patch.object(repo_workspace, "run_read", side_effect=fake):
         with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
             worktree = Path(tools.worktree)
-            (worktree / "docs").symlink_to(".git")
+            try:
+                (worktree / "docs").symlink_to(".git")
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
             original = (worktree / ".git" / "config").read_text(encoding="utf-8")
             with pytest.raises(AgenticError, match="\\.git directory"):
                 tools.write_file("docs/config", "[filter \"pwn\"]\n")
@@ -824,7 +836,10 @@ def test_write_file_allows_a_symlink_to_an_ordinary_directory(tmp_path, monkeypa
     fake = _fake_clone_populating_git_repo(files={"real/keep.txt": "x\n"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
         with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
-            (Path(tools.worktree) / "link").symlink_to("real")
+            try:
+                (Path(tools.worktree) / "link").symlink_to("real")
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
             assert tools.write_file("link/new.txt", "ok\n")["target"] == "link/new.txt"
 
 
@@ -937,7 +952,10 @@ def test_write_file_rejects_a_symlink_escape_via_existing_ancestor(tmp_path, mon
             dest = Path(mrun.call_args.kwargs["dest"])
             outside = dest.parent / "outside-dir"
             outside.mkdir()
-            (dest / "escape-link").symlink_to(outside, target_is_directory=True)
+            try:
+                (dest / "escape-link").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
             with pytest.raises(AgenticError, match="escaped the clone root"):
                 tools.write_file("escape-link/new.txt", "x")
 
