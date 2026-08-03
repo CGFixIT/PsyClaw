@@ -35,6 +35,8 @@ import sys
 from types import MappingProxyType
 from typing import NamedTuple
 
+from utils.agent_identity import BRANCH_NAME_RE
+
 # Mirrors agentic/real_repo_run_store.py's RUN_ID_RE. A run_id arrives as an
 # HTTP path parameter and is interpolated into a `--run-id=<value>` argv
 # element, so it is validated at the boundary rather than only inside the
@@ -42,12 +44,11 @@ from typing import NamedTuple
 # no room for a leading dash, a path separator, or a traversal segment.
 RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
-# Mirrors agentic/deepagent_github/repo_workspace.py's BRANCH_NAME_RE. The
-# backend re-validates this itself, but only after a full clone, a model call,
-# and a verification run -- up to fifteen minutes spent before a typo'd branch
-# name is reported. Rejecting it at the boundary turns that into an immediate
-# 422.
-BRANCH_NAME_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
+# BRANCH_NAME_RE imported from utils.agent_identity (same module agentic uses).
+# The backend re-validates itself, but only after a full clone, a model call,
+# and a verification run -- up to fifteen minutes before a typo is reported.
+# Rejecting at the boundary turns that into an immediate 422. I6 still holds:
+# harness imports utils/, never agentic/.
 
 # The one entry every request gets when it names no profile. Named rather than
 # inlined so the console's `/agent checks` listing and the request model's

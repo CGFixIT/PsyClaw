@@ -53,7 +53,7 @@ _DISCARD = f"/api/agent/runs/{_RUN_ID}/discard"
 
 _VALID_BODY = {
     "instruction": "fix the typo in README.md",
-    "branch": "claude/fix-typo",
+    "branch": "agent/fix-typo",
     "commit_message": "docs: fix a typo",
     "reason": "operator asked for it",
     "confirm": True,
@@ -96,7 +96,7 @@ def calls(monkeypatch):
             "stdout": "{}", "stderr": "",
             "parsed": {
                 "run_id": _RUN_ID, "repo": "CGFixIT/CyClaw", "dest": "/tmp/x", "status": "pending_decision",
-                "branch_name": "claude/fix-typo", "commit_message": "docs: fix a typo",
+                "branch_name": "agent/fix-typo", "commit_message": "docs: fix a typo",
                 "changed_files": ["README.md"], "iterations": 1, "error": None,
             },
         })
@@ -338,9 +338,9 @@ def test_decision_rejects_a_malformed_run_id_before_the_shim(client, calls):
 
 
 @pytest.mark.parametrize("bad_branch", [
-    "main", "feature/x", "claude/", "claude/-dash", "../claude/x", "claude/" + "y" * 100,
+    "main", "feature/x", "agent/", "agent/-dash", "../agent/x", "agent/" + "y" * 100,
 ])
-def test_run_rejects_a_branch_outside_the_claude_namespace(client, calls, bad_branch):
+def test_run_rejects_a_branch_outside_the_agent_namespace(client, calls, bad_branch):
     """The backend re-checks this itself, but only after a clone, a model call
     and a verification run -- up to fifteen minutes spent on a typo."""
     assert client.post(_RUN, json={**_VALID_BODY, "branch": bad_branch}).status_code == 422
@@ -348,8 +348,8 @@ def test_run_rejects_a_branch_outside_the_claude_namespace(client, calls, bad_br
 
 
 def test_run_accepts_a_valid_claude_branch(client, calls):
-    assert client.post(_RUN, json={**_VALID_BODY, "branch": "claude/a.b_c-d/e"}).status_code == 200
-    assert BRANCH_NAME_RE.match("claude/a.b_c-d/e")
+    assert client.post(_RUN, json={**_VALID_BODY, "branch": "agent/a.b_c-d/e"}).status_code == 200
+    assert BRANCH_NAME_RE.match("agent/a.b_c-d/e")
 
 
 # --- the error envelope the console can actually read -----------------------

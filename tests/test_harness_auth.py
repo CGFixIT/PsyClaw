@@ -43,7 +43,7 @@ GUARDED = [
     # the limiter runs first in the chain precisely so it bounds key guessing,
     # and the route that can commit is the last one to exempt from that.
     ("post", "/api/agent/run", {
-        "instruction": "do a thing", "branch": "claude/x", "commit_message": "m", "reason": "r",
+        "instruction": "do a thing", "branch": "agent/x", "commit_message": "m", "reason": "r",
     }),
     ("get", "/api/agent/runs/" + "0" * 32, None),
     ("post", "/api/agent/runs/" + "0" * 32 + "/decision", {"decision": "reject"}),

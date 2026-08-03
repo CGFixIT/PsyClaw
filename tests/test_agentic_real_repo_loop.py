@@ -140,7 +140,7 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
                 client,
                 instruction="Add target.txt with the expected marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fixture-topic",
+                branch_name="agent/fixture-topic",
                 commit_message="add target.txt",
                 max_iterations=3,
                 reason="test run",
@@ -151,7 +151,7 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
 
         # Accepted but NOT yet committed -- no branch created, nothing staged.
         assert result.accepted is True
-        assert result.branch_name == "claude/fixture-topic"
+        assert result.branch_name == "agent/fixture-topic"
         assert result.commit_message == "add target.txt"
         assert len(result.iterations) == 1
         assert result.iterations[0].decision.accepted is True
@@ -159,7 +159,7 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
         branch_before = subprocess.run(
             [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip()
-        assert branch_before != "claude/fixture-topic"
+        assert branch_before != "agent/fixture-topic"
 
         outcome = finalize_real_repo_change(
             tools,
@@ -168,17 +168,17 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
             changed_files=result.iterations[-1].changed_files,
             decision="approve",
         )
-        assert outcome == {"status": "approved", "branch": "claude/fixture-topic"}
+        assert outcome == {"status": "approved", "branch": "agent/fixture-topic"}
 
         log = subprocess.run(
             [git_bin, "log", "-1", "--format=%an <%ae> %s"],
             cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip()
-        assert log == "Claude <noreply@anthropic.com> add target.txt"
+        assert log == "CyClaw Agent <cyclaw-agent@users.noreply.github.com> add target.txt"
         branch_after = subprocess.run(
             [git_bin, "branch", "--show-current"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip()
-        assert branch_after == "claude/fixture-topic"
+        assert branch_after == "agent/fixture-topic"
 
 
 def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
@@ -190,7 +190,7 @@ def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
                 client,
                 instruction="Add target.txt with the expected marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fixture-topic",
+                branch_name="agent/fixture-topic",
                 commit_message="add target.txt",
                 max_iterations=1,
                 reason="test run",
@@ -206,13 +206,13 @@ def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
             changed_files=result.iterations[-1].changed_files,
             decision="reject",
         )
-        assert outcome == {"status": "rejected", "branch": "claude/fixture-topic"}
+        assert outcome == {"status": "rejected", "branch": "agent/fixture-topic"}
 
         git_bin = shutil.which("git")
         branches = subprocess.run(
             [git_bin, "branch", "--list"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout
-        assert "claude/fixture-topic" not in branches
+        assert "agent/fixture-topic" not in branches
         log_count = subprocess.run(
             [git_bin, "log", "--oneline"], cwd=str(tools.worktree), capture_output=True, text=True, check=True,
         ).stdout.strip().splitlines()
@@ -224,7 +224,7 @@ def test_finalize_rejects_an_invalid_decision_value(tmp_path, monkeypatch):
         with pytest.raises(AgenticError, match="approve.*reject"):
             finalize_real_repo_change(
                 tools,
-                branch_name="claude/x",
+                branch_name="agent/x",
                 commit_message="x",
                 changed_files=("a.txt",),
                 decision="maybe",  # type: ignore[arg-type]
@@ -239,12 +239,12 @@ def test_finalize_works_from_reconstructed_primitives_not_just_a_live_result(tmp
         (tools.worktree / "a.txt").write_text("changed\n", encoding="utf-8")
         outcome = finalize_real_repo_change(
             tools,
-            branch_name="claude/reconstructed",
+            branch_name="agent/reconstructed",
             commit_message="reconstructed commit",
             changed_files=["a.txt"],
             decision="approve",
         )
-        assert outcome == {"status": "approved", "branch": "claude/reconstructed"}
+        assert outcome == {"status": "approved", "branch": "agent/reconstructed"}
         git_bin = shutil.which("git")
         log = subprocess.run(
             [git_bin, "log", "-1", "--format=%s"],
@@ -269,7 +269,7 @@ def test_loop_iterates_using_rejection_feedback_then_accepts(tmp_path, monkeypat
                 client,
                 instruction="Add target.txt with the expected marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fixture-topic",
+                branch_name="agent/fixture-topic",
                 commit_message="add target.txt",
                 max_iterations=3,
                 reason="test run",
@@ -324,7 +324,7 @@ def test_accepted_result_reports_files_from_every_iteration_not_just_the_last(tm
                 client,
                 instruction="Add a.txt then b.txt",
                 checks=[two_file_check],
-                branch_name="claude/two-files",
+                branch_name="agent/two-files",
                 commit_message="add a.txt and b.txt",
                 max_iterations=3,
                 reason="test run",
@@ -347,7 +347,7 @@ def test_accepted_result_reports_files_from_every_iteration_not_just_the_last(tm
             changed_files=result.changed_files,
             decision="approve",
         )
-        assert outcome == {"status": "approved", "branch": "claude/two-files"}
+        assert outcome == {"status": "approved", "branch": "agent/two-files"}
 
         git_bin = shutil.which("git")
         committed = subprocess.run(
@@ -381,7 +381,7 @@ def test_context_is_folded_into_every_iterations_prompt(tmp_path, monkeypatch):
                 client,
                 instruction="Add target.txt with the expected marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fixture-topic",
+                branch_name="agent/fixture-topic",
                 commit_message="add target.txt",
                 max_iterations=3,
                 reason="test run",
@@ -410,7 +410,7 @@ def test_context_omitted_when_not_supplied(tmp_path, monkeypatch):
         try:
             run_real_repo_loop(
                 tools, client, instruction="Add target.txt with the expected marker",
-                checks=[_MARKER_CHECK], branch_name="claude/fixture-topic",
+                checks=[_MARKER_CHECK], branch_name="agent/fixture-topic",
                 commit_message="add target.txt", max_iterations=1, reason="test run", confirm=True,
             )
         finally:
@@ -428,7 +428,7 @@ def test_loop_exhausts_max_iterations_when_never_accepted(tmp_path, monkeypatch)
                 client,
                 instruction="Add target.txt with the expected marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fixture-topic",
+                branch_name="agent/fixture-topic",
                 commit_message="add target.txt",
                 max_iterations=2,
                 reason="test run",
@@ -453,7 +453,7 @@ def test_loop_rejects_when_no_files_are_proposed(tmp_path, monkeypatch):
                     client,
                     instruction="Do nothing",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/no-op",
+                    branch_name="agent/no-op",
                     commit_message="no-op",
                     max_iterations=1,
                     reason="test run",
@@ -481,7 +481,7 @@ def test_loop_rejects_on_critical_governance_finding_and_skips_verification(tmp_
                     client,
                     instruction="Add target.txt",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/injection-check",
+                    branch_name="agent/injection-check",
                     commit_message="add target.txt",
                     max_iterations=1,
                     reason="test run",
@@ -540,7 +540,7 @@ def test_critically_flagged_content_never_reaches_a_later_iterations_verificatio
                 client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/quarantine",
+                branch_name="agent/quarantine",
                 commit_message="add target.txt",
                 max_iterations=2,
                 reason="test run",
@@ -567,7 +567,7 @@ def test_loop_rejects_a_malicious_file_path_without_crashing(tmp_path, monkeypat
                     client,
                     instruction="Add target.txt",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/escape-check",
+                    branch_name="agent/escape-check",
                     commit_message="add target.txt",
                     max_iterations=1,
                     reason="test run",
@@ -591,7 +591,7 @@ def test_run_refuses_when_git_writes_are_disabled_by_default(tmp_path, monkeypat
         try:
             with pytest.raises(AgenticWriteRefused, match="allow_git_write_tools"):
                 run_real_repo_loop(
-                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=1, reason="test", confirm=True,
                 )
         finally:
@@ -604,7 +604,7 @@ def test_run_refuses_without_a_reason(tmp_path, monkeypatch):
         try:
             with pytest.raises(AgenticWriteRefused, match="reason"):
                 run_real_repo_loop(
-                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=1, reason="   ", confirm=True,
                 )
         finally:
@@ -617,7 +617,7 @@ def test_run_refuses_without_explicit_confirm(tmp_path, monkeypatch):
         try:
             with pytest.raises(AgenticWriteRefused, match="confirm"):
                 run_real_repo_loop(
-                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=1, reason="test", confirm=False,
                 )
         finally:
@@ -630,7 +630,7 @@ def test_run_rejects_empty_checks(tmp_path, monkeypatch):
         try:
             with pytest.raises(AgenticError, match="checks must not be empty"):
                 run_real_repo_loop(
-                    tools, client, instruction="x", checks=[], branch_name="claude/x",
+                    tools, client, instruction="x", checks=[], branch_name="agent/x",
                     commit_message="x", max_iterations=1, reason="test", confirm=True,
                 )
         finally:
@@ -643,7 +643,7 @@ def test_run_rejects_empty_instruction(tmp_path, monkeypatch):
         try:
             with pytest.raises(AgenticError, match="instruction"):
                 run_real_repo_loop(
-                    tools, client, instruction="  ", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    tools, client, instruction="  ", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=1, reason="test", confirm=True,
                 )
         finally:
@@ -656,7 +656,7 @@ def test_run_rejects_non_positive_max_iterations(tmp_path, monkeypatch):
         try:
             with pytest.raises(AgenticError, match="max_iterations"):
                 run_real_repo_loop(
-                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="claude/x",
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=0, reason="test", confirm=True,
                 )
         finally:
@@ -697,7 +697,7 @@ def test_changed_files_excludes_a_critically_rejected_iterations_writes():
     )
     result = RealRepoLoopResult(
         accepted=True,
-        branch_name="claude/x",
+        branch_name="agent/x",
         commit_message="x",
         iterations=(poisoned, clean),
     )
@@ -723,7 +723,7 @@ def test_changed_files_still_unions_ordinarily_rejected_iterations():
         decision=RealRepoDecision(accepted=True, reason="accepted"),
     )
     result = RealRepoLoopResult(
-        accepted=True, branch_name="claude/x", commit_message="x", iterations=(first, second),
+        accepted=True, branch_name="agent/x", commit_message="x", iterations=(first, second),
     )
     assert result.changed_files == ("dep.txt", "main.txt")
 
@@ -802,7 +802,7 @@ def test_github_context_is_fenced_and_placed_after_the_operator_instruction(tmp_
                 tools, client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fence",
+                branch_name="agent/fence",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -837,7 +837,7 @@ def test_context_cannot_break_out_of_its_own_fence(tmp_path, monkeypatch):
                 tools, client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/fence-escape",
+                branch_name="agent/fence-escape",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -883,7 +883,7 @@ def test_verification_audit_events_use_the_loops_own_config_not_the_default(tmp_
                     tools, client,
                     instruction="add the marker",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/audit-routing",
+                    branch_name="agent/audit-routing",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -930,7 +930,7 @@ def test_loop_writes_a_file_from_a_crlf_planner_response(tmp_path, monkeypatch):
                 tools, client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/crlf",
+                branch_name="agent/crlf",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -955,7 +955,7 @@ def test_loop_rejects_an_iteration_that_proposes_a_duplicate_path(tmp_path, monk
                     tools, client,
                     instruction="add the marker",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/dup",
+                    branch_name="agent/dup",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -992,7 +992,7 @@ def test_read_paths_shows_existing_content_in_the_prompt(tmp_path, monkeypatch):
                 tools, client,
                 instruction="edit existing.py",
                 checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                branch_name="claude/edit",
+                branch_name="agent/edit",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -1020,7 +1020,7 @@ def test_read_paths_omits_a_path_that_does_not_exist_yet(tmp_path, monkeypatch):
                 tools, client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/create",
+                branch_name="agent/create",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -1060,7 +1060,7 @@ def test_read_paths_shows_a_prior_iterations_own_write_not_a_stale_snapshot(tmp_
                 tools, client,
                 instruction="edit existing.py",
                 checks=[check],
-                branch_name="claude/iterate",
+                branch_name="agent/iterate",
                 commit_message="x",
                 max_iterations=2,
                 reason="test run",
@@ -1089,7 +1089,7 @@ def test_overwrite_guard_refuses_an_undeclared_existing_file(tmp_path, monkeypat
                     tools, client,
                     instruction="edit existing.py",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/undeclared",
+                    branch_name="agent/undeclared",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1114,7 +1114,7 @@ def test_overwrite_guard_allows_a_declared_existing_file(tmp_path, monkeypatch):
                 tools, client,
                 instruction="edit existing.py",
                 checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                branch_name="claude/declared",
+                branch_name="agent/declared",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",
@@ -1165,7 +1165,7 @@ def test_overwrite_guard_refuses_a_budget_omitted_declared_file(tmp_path, monkey
                     tools, client,
                     instruction="edit existing.py",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/budget-omitted",
+                    branch_name="agent/budget-omitted",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1202,7 +1202,7 @@ def test_overwrite_guard_refuses_a_truncated_declared_file(tmp_path, monkeypatch
                     tools, client,
                     instruction="edit existing.py",
                     checks=[_MARKER_CHECK],
-                    branch_name="claude/truncated",
+                    branch_name="agent/truncated",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1348,7 +1348,7 @@ def test_loop_feeds_the_failing_checks_output_into_the_next_prompt(tmp_path, mon
                 tools, client,
                 instruction="add the marker",
                 checks=[_MARKER_CHECK],
-                branch_name="claude/evidence",
+                branch_name="agent/evidence",
                 commit_message="x",
                 max_iterations=2,
                 reason="test run",
@@ -1384,7 +1384,7 @@ def test_undeclared_overwrite_message_reaches_the_next_prompt(tmp_path, monkeypa
                 tools, client,
                 instruction="edit",
                 checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                branch_name="claude/feedback-overwrite",
+                branch_name="agent/feedback-overwrite",
                 commit_message="x",
                 max_iterations=2,
                 reason="test run",
@@ -1474,7 +1474,7 @@ def test_changed_files_excludes_out_of_scope_and_budget_quarantined_iterations()
         step=3, changed_files=("good.py",), decision=RealRepoDecision(accepted=True, reason="accepted"),
     )
     result = RealRepoLoopResult(
-        accepted=True, branch_name="claude/x", commit_message="x",
+        accepted=True, branch_name="agent/x", commit_message="x",
         iterations=(scope_violation, budget_violation, clean),
     )
     assert result.changed_files == ("good.py",)
@@ -1490,7 +1490,7 @@ def test_loop_quarantines_a_write_into_a_protected_path(tmp_path, monkeypatch):
                     tools, client,
                     instruction="add a test",
                     checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                    branch_name="claude/scope",
+                    branch_name="agent/scope",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1536,7 +1536,7 @@ def test_protected_path_gate_cannot_be_bypassed_by_respelling_the_path(tmp_path,
                     tools, client,
                     instruction="add a test",
                     checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                    branch_name="claude/scope",
+                    branch_name="agent/scope",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1574,7 +1574,7 @@ def test_changed_files_are_canonical_so_the_review_diff_can_match_them(tmp_path,
                     tools, client,
                     instruction="add a file",
                     checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                    branch_name="claude/canon",
+                    branch_name="agent/canon",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1600,7 +1600,7 @@ def test_loop_quarantines_an_over_budget_write(tmp_path, monkeypatch):
                     tools, client,
                     instruction="add a big file",
                     checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                    branch_name="claude/budget",
+                    branch_name="agent/budget",
                     commit_message="x",
                     max_iterations=1,
                     reason="test run",
@@ -1637,7 +1637,7 @@ def test_loop_feeds_scope_and_budget_violations_into_the_next_prompt(tmp_path, m
                 tools, client,
                 instruction="add a test",
                 checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                branch_name="claude/scope-feedback",
+                branch_name="agent/scope-feedback",
                 commit_message="x",
                 max_iterations=2,
                 reason="test run",
@@ -1664,7 +1664,7 @@ def test_no_protected_paths_or_budget_configured_disables_the_gate(tmp_path, mon
                 tools, client,
                 instruction="add a test",
                 checks=[Check("noop", (sys.executable, "-c", "pass"))],
-                branch_name="claude/no-gate",
+                branch_name="agent/no-gate",
                 commit_message="x",
                 max_iterations=1,
                 reason="test run",

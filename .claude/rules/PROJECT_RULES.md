@@ -89,10 +89,10 @@ See `retrieval/hybrid_search.py` for implementation.
 
 ## Git Workflow
 
-- **Identity:** Before any commits, set:
+- **Identity:** Before agent commits, set the driver-agnostic defaults (or env overrides from `utils/agent_identity.py`):
   ```bash
-  git config user.email noreply@anthropic.com
-  git config user.name Claude
+  git config user.email cyclaw-agent@users.noreply.github.com
+  git config user.name "CyClaw Agent"
   ```
 
 - **Feature Branches:** Develop on assigned branch (e.g., `cc/feature-name`). Do not push to `main` directly when a feature branch and open PR exist.
