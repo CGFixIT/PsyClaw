@@ -21,7 +21,12 @@ from sync.cli import (
     main,
 )
 from sync.config import RcloneConfig
-from utils.errors import RcloneNotInstalledError, SchedulerError, SyncConfigError
+from utils.errors import (
+    RcloneNotInstalledError,
+    SchedulerError,
+    SyncConfigError,
+    SyncRuntimeError,
+)
 from utils.logger import reset_config_cache
 
 
@@ -86,6 +91,29 @@ def test_sync_rclone_missing_exit_3():
     with patch("sync.cli.load_sync_config", return_value=_cfg()), \
          patch("sync.cli.run_sync", side_effect=RcloneNotInstalledError("nope")):
         assert main(["sync"]) == EXIT_ENV
+
+
+def test_sync_exception_with_corpus_changed_exits_reindex():
+    """Partial copy then raise must still request reindex (exit 10)."""
+    cfg = _cfg()
+    cfg.reindex_on_change = True
+    cfg.auto_reindex = False
+    err = SyncRuntimeError(
+        "rclone sync timed out",
+        details={"corpus_changed": True, "direction": "pull"},
+    )
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", side_effect=err):
+        assert main(["sync"]) == EXIT_REINDEX
+
+
+def test_sync_exception_without_corpus_changed_exits_fail():
+    cfg = _cfg()
+    cfg.reindex_on_change = True
+    err = SyncRuntimeError("lock busy", details={"corpus_changed": False})
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", side_effect=err):
+        assert main(["sync"]) == EXIT_FAIL
 
 
 def test_sync_bad_config_exit_3():
