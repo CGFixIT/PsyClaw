@@ -1,4 +1,4 @@
-# CyClaw eBPF + Seccomp Hardening
+# CyClaw eBPF + Seccomp Hardening #679 and 725
 
 Where this fits in the overall posture: see [`docs/THREAT_MODEL.md`](./THREAT_MODEL.md)
 (§3 what the sandbox covers, §6 the hardening maturity ladder).
