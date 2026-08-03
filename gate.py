@@ -134,6 +134,7 @@ def require_api_key(
 from fastapi import Request
 from utils.config_validation import (
     validate_boot_timeout_config,
+    validate_fallback_confirm_placeholder,
     validate_personality_config,
     validate_retrieval_config,
 )
@@ -288,6 +289,7 @@ if not os.environ.get("CYCLAW_API_KEY", ""):
 # production (orphaned graph invocations under load) instead of failing at
 # start like its siblings. See utils.config_validation.validate_boot_timeout_config.
 validate_boot_timeout_config(cfg)
+validate_fallback_confirm_placeholder(cfg)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
