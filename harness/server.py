@@ -824,8 +824,14 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         runs: list[dict] = []
         accepted = _RUNS_DIR / "accepted"
         if accepted.is_dir():
-            entries = (entry for entry in accepted.glob("*.json") if entry.is_file())
-            for path in sorted(entries, key=lambda p: p.stat().st_mtime, reverse=True)[:_MAX_RUNS]:
+            # Split list/sort/slice so WPS Jones complexity stays under the limit
+            # (inline sorted(..., key=lambda p: ...) failed WPS221 + WPS111).
+            # os.path.getmtime accepts Path and avoids a short-name lambda key.
+            json_files = [
+                entry for entry in accepted.glob("*.json") if entry.is_file()
+            ]
+            json_files.sort(key=os.path.getmtime, reverse=True)
+            for path in json_files[:_MAX_RUNS]:
                 runs.append({"run_id": path.stem, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
 
