@@ -48,8 +48,16 @@
 # is not on the shipped default (11434). Loopback literals are intentional
 # (CyClaw is loopback-only by design), not debug code -- suppress the devskim
 # DS162092 heuristic on this line.
+#
+# Keep address AND port joined as one allowance. A port-only alternative
+# (or fd.sport = 11434) would suppress alerts to every external host listening
+# on that port — port 11434 is a common Ollama bind and is not a secret.
+# When Ollama is remote, change BOTH the sip match and sport together; do not
+# widen to "any host on 11434".
 - macro: cyclaw_expected_outbound
-  condition: '(fd.sip = "127.0.0.1" or fd.sip = "::1" or fd.sport = 11434)'  # DevSkim: ignore DS162092
+  condition: >  # DevSkim: ignore DS162092
+    ((fd.sip = "127.0.0.1" or fd.sip = "::1") and
+     fd.sport = 11434)
 
 # ---------------------------------------------------------------------------
 # Rules.
