@@ -227,7 +227,9 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
             venv_cmd = [sys.executable, "-m", "venv", str(repo / ".venv")]
         results.append(_run("create venv", venv_cmd, repo, env, 120))
         py = _python_in_venv(repo)
-        results.append(_run("upgrade pip", [str(py), "-m", "pip", "install", "--upgrade", "pip"], repo, env, 180))
+        results.append(
+            _run("upgrade pip", [str(py), "-m", "pip", "install", "--upgrade", "pip==26.1.2"], repo, env, 180)
+        )
         results.append(
             _run(
                 "install torch cpu",
