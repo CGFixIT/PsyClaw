@@ -39,13 +39,13 @@ def test_new_run_id_matches_its_own_validation_pattern():
 
 def test_save_then_load_round_trips(tmp_path: Path):
     runs_dir = tmp_path / "runs"
-    record = _record(status=PENDING_DECISION, branch_name="claude/x", commit_message="msg", changed_files=["a.txt"])
+    record = _record(status=PENDING_DECISION, branch_name="agent/x", commit_message="msg", changed_files=["a.txt"])
     save_run(runs_dir, record)
 
     loaded = load_run(runs_dir, record.run_id)
     assert loaded.run_id == record.run_id
     assert loaded.status == PENDING_DECISION
-    assert loaded.branch_name == "claude/x"
+    assert loaded.branch_name == "agent/x"
     assert loaded.changed_files == ["a.txt"]
     assert loaded.created_at
     assert loaded.updated_at
