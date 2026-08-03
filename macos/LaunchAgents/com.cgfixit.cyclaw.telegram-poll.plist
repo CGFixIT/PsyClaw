@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CyClaw Telegram T2 — long-poll chat adapter (KeepAlive).
+
+  DISABLED BY DEFAULT. Operator steps:
+    1. CyClaw server + Ollama already running on loopback.
+    2. config.yaml: telegram.enabled true, mode: chat, allowed_chat_ids set.
+    3. Copy/edit this plist (WorkingDirectory, paths, token).
+    4. mkdir -p ~/Library/Logs/CyClaw
+    5. launchctl load ~/Library/LaunchAgents/com.cgfixit.cyclaw.telegram-poll.plist
+
+  Offset persistence: data/telegram/offset.json under the repo WorkingDirectory.
+  Separate process from uvicorn so a stuck /query does not kill the web UI.
+  See docs/channels/TELEGRAM_DESIGN.md §5 T2 + §9.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cgfixit.cyclaw.telegram-poll</string>
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_CYCLAW_REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_VENV_OR_SYSTEM_PYTHON</string>
+    <string>-m</string>
+    <string>telegram.cli</string>
+    <string>poll</string>
+  </array>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/telegram-poll.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/telegram-poll.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TELEGRAM_BOT_TOKEN</key>
+    <string>REPLACE_OR_USE_KEYCHAIN_WRAPPER</string>
+    <key>CYCLAW_API_KEY</key>
+    <string></string>
+  </dict>
+</dict>
+</plist>

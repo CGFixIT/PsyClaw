@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CyClaw Telegram T1 — health probe → notify on failure.
+
+  DISABLED BY DEFAULT. Operator steps:
+    1. Copy to ~/Library/LaunchAgents/ and edit:
+         - CYCLAW_REPO path (WorkingDirectory + ProgramArguments python -m)
+         - TELEGRAM_BOT_TOKEN in EnvironmentVariables (or use a wrapper that sources a root-owned env file)
+         - chat id in the send --chat-id argument
+    2. Ensure config.yaml has telegram.enabled: true, mode: notify, allowed_chat_ids set.
+    3. launchctl load ~/Library/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist
+    4. Logs: ~/Library/Logs/CyClaw/telegram-health.log
+
+  Does NOT start gate.py. Uses curl to loopback /health only.
+  See docs/channels/TELEGRAM_DESIGN.md §5 T1 + §6.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cgfixit.cyclaw.telegram-health</string>
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_CYCLAW_REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>curl -sf --max-time 5 http://127.0.0.1:8787/health &gt;/dev/null || python -m telegram.cli send --chat-id REPLACE_CHAT_ID --text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/telegram-health.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/telegram-health.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TELEGRAM_BOT_TOKEN</key>
+    <string>REPLACE_OR_USE_KEYCHAIN_WRAPPER</string>
+  </dict>
+</dict>
+</plist>

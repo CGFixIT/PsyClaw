@@ -40,6 +40,8 @@ data/personality/*.db
 data/personality/*.db-shm
 data/personality/*.db-wal
 data/personality/soul.md.bak
+# Telegram poller state (getUpdates offset) — never commit runtime offset
+data/telegram/
 
 # Corpus content (personal knowledge base — keep private)
 # data/corpus/   <-- uncomment this line to gitignore your corpus

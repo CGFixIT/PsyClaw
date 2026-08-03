@@ -11,14 +11,29 @@ No graph imports. All CyClaw answers go through HTTP POST /query.
 
 from __future__ import annotations
 
+import re
 import time
+from pathlib import Path
 from typing import Any
 
 from telegram import client as tg_client
 from telegram.config import TelegramConfig
 from telegram.ratelimit import get_limiter
+from telegram.state import load_offset, save_offset
 from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import audit_log
+
+# Reserved commands (no /online until T3). BotFather may append @BotName.
+_CMD_RE = re.compile(r"^/(help|status|id)(?:@\S+)?(?:\s|$)", re.IGNORECASE)
+
+_HELP_TEXT = (
+    "CyClaw Telegram channel\n"
+    "/help — this text\n"
+    "/status — loopback CyClaw /health\n"
+    "/id — your chat id\n"
+    "Anything else → local RAG via POST /query (mode=chat).\n"
+    "Hybrid /online confirm is not available yet (T3)."
+)
 
 
 def send_notify(
@@ -38,20 +53,46 @@ def send_notify(
 
 
 def _extract_answer(query_response: dict[str, Any]) -> str:
-    """Best-effort answer text from CyClaw /query response shapes."""
-    for key in ("answer", "response", "text", "output"):
-        val = query_response.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    # Some responses nest under data/result.
+    """Answer text from CyClaw /query JSON (schemas.api.QueryResponse.answer first)."""
+    # Live gate returns QueryResponse: answer + model_used (+ sources, …).
+    val = query_response.get("answer")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    # Defensive aliases if a proxy rewrites the body.
+    for key in ("response", "text", "output"):
+        alt = query_response.get(key)
+        if isinstance(alt, str) and alt.strip():
+            return alt.strip()
     for nest in ("data", "result"):
         inner = query_response.get(nest)
         if isinstance(inner, dict):
-            for key in ("answer", "response", "text"):
-                val = inner.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
+            nested = inner.get("answer")
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    err = query_response.get("error")
+    if isinstance(err, str) and err.strip():
+        return f"(error) {err.strip()}"
     return "(no answer field in /query response)"
+
+
+def _dispatch_command(
+    cfg: TelegramConfig,
+    *,
+    chat_id: int | str,
+    text: str,
+) -> str | None:
+    """Return reply text for reserved commands, or None if not a command."""
+    m = _CMD_RE.match(text.strip())
+    if not m:
+        return None
+    cmd = m.group(1).lower()
+    if cmd == "help":
+        return _HELP_TEXT
+    if cmd == "id":
+        return f"chat_id={chat_id}"
+    if cmd == "status":
+        return tg_client.fetch_loopback_health(cfg)
+    return None
 
 
 def handle_inbound_text(
@@ -61,7 +102,7 @@ def handle_inbound_text(
     text: str,
     update_id: int | None = None,
 ) -> dict[str, Any]:
-    """T2: allowlisted inbound text → POST /query → reply via Bot API."""
+    """T2: allowlisted inbound text → command or POST /query → reply via Bot API."""
     if not cfg.enabled:
         raise TelegramRefused("telegram.enabled is false", details={"gate": "enabled"})
     if cfg.mode != "chat":
@@ -100,6 +141,11 @@ def handle_inbound_text(
         },
         config_path=cfg._config_path,
     )
+
+    cmd_reply = _dispatch_command(cfg, chat_id=chat_id, text=text)
+    if cmd_reply is not None:
+        outbound = tg_client.send_message(cfg, chat_id=chat_id, text=cmd_reply)
+        return {"command": True, "outbound": outbound, "answer": cmd_reply}
 
     result = tg_client.post_query(cfg, query=text)
     answer = _extract_answer(result)
@@ -155,7 +201,12 @@ def poll_once(
         chat_id, text = parsed
         try:
             handled.append(
-                handle_inbound_text(cfg, chat_id=chat_id, text=text, update_id=uid if isinstance(uid, int) else None)
+                handle_inbound_text(
+                    cfg,
+                    chat_id=chat_id,
+                    text=text,
+                    update_id=uid if isinstance(uid, int) else None,
+                )
             )
         except TelegramRefused as exc:
             # Terminal policy refusal (allowlist/mode/rate-limit): ack so we do
@@ -188,8 +239,13 @@ def poll_forever(
     *,
     max_iterations: int | None = None,
     sleep_on_error_sec: float = 2.0,
+    offset_path: Path | None = None,
 ) -> int:
     """Blocking long-poll loop. Returns number of batches processed.
+
+    Loads/saves getUpdates offset from ``offset_path`` (default
+    ``data/telegram/offset.json``). Only persists when the offset advances
+    (respects no-ack-on-TelegramRuntimeError from poll_once).
 
     ``max_iterations`` is for tests; production leaves it None.
     """
@@ -201,11 +257,18 @@ def poll_forever(
             details={"gate": "mode", "mode": cfg.mode},
         )
 
-    offset: int | None = None
+    offset: int | None = load_offset(offset_path)
     batches = 0
     while max_iterations is None or batches < max_iterations:
         try:
-            offset, _ = poll_once(cfg, offset=offset)
+            new_offset, _ = poll_once(cfg, offset=offset)
+            if new_offset is not None and new_offset != offset:
+                try:
+                    save_offset(new_offset, offset_path)
+                except OSError:
+                    # ponytail: keep polling even if disk write fails; memory offset still advances.
+                    pass
+                offset = new_offset
             batches += 1
         except TelegramRuntimeError:
             time.sleep(sleep_on_error_sec)
