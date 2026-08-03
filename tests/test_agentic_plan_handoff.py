@@ -147,7 +147,7 @@ def test_loop_renders_an_approved_plan_ahead_of_untrusted_context(audit_cfg) -> 
         tools, client,
         instruction="do a thing",
         checks=[MagicMock()],
-        branch_name="claude/x", commit_message="m", reason="r", confirm=True,
+        branch_name="agent/x", commit_message="m", reason="r", confirm=True,
         plan=_PLAN_TEXT, context="third party text", max_iterations=1,
         cfg=audit_cfg,
     )
@@ -173,7 +173,7 @@ def test_loop_without_a_plan_renders_no_plan_section(audit_cfg) -> None:
 
     run_real_repo_loop(
         tools, client, instruction="do a thing", checks=[MagicMock()],
-        branch_name="claude/x", commit_message="m", reason="r", confirm=True,
+        branch_name="agent/x", commit_message="m", reason="r", confirm=True,
         max_iterations=1, cfg=audit_cfg,
     )
     assert "Approved implementation plan" not in client.user_prompts[0]
@@ -365,7 +365,7 @@ def test_run_refuses_an_empty_plan_file(cfg_path, tmp_path, capsys) -> None:
     code = main([
         "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
         "--plan-file", str(empty), "--checks-file", str(checks),
-        "--branch", "claude/x", "--commit-message", "m", "--reason", "r", "--confirm",
+        "--branch", "agent/x", "--commit-message", "m", "--reason", "r", "--confirm",
     ])
     assert code == EXIT_ENV
     assert "empty" in capsys.readouterr().err
@@ -377,7 +377,7 @@ def test_run_refuses_a_missing_plan_file(cfg_path, tmp_path, capsys) -> None:
     code = main([
         "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
         "--plan-file", str(tmp_path / "nope.md"), "--checks-file", str(checks),
-        "--branch", "claude/x", "--commit-message", "m", "--reason", "r", "--confirm",
+        "--branch", "agent/x", "--commit-message", "m", "--reason", "r", "--confirm",
     ])
     assert code == EXIT_ENV
     assert "plan-file" in capsys.readouterr().err
@@ -396,7 +396,7 @@ def test_run_refuses_an_injection_shaped_plan_file(cfg_path, tmp_path, capsys) -
     code = main([
         "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
         "--plan-file", str(bad), "--checks-file", str(checks),
-        "--branch", "claude/x", "--commit-message", "m", "--reason", "r", "--confirm",
+        "--branch", "agent/x", "--commit-message", "m", "--reason", "r", "--confirm",
     ])
     assert code == EXIT_FAIL
     assert "injection" in capsys.readouterr().err
@@ -414,7 +414,7 @@ def test_run_audits_a_blocked_plan_file_naming_the_code_never_the_text(cfg_path,
     code = main([
         "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
         "--plan-file", str(bad), "--checks-file", str(checks),
-        "--branch", "claude/x", "--commit-message", "m", "--reason", "r", "--confirm",
+        "--branch", "agent/x", "--commit-message", "m", "--reason", "r", "--confirm",
     ])
     assert code == EXIT_FAIL
     capsys.readouterr()

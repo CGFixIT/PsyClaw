@@ -4,7 +4,7 @@ Closes the gap the audit found: containment-by-copy already existed
 (``harness_optimizer``'s fixture runner), but nothing in the codebase could
 clone a REAL repository. This module clones, jails, and reads -- and, as of the
 git-write addition below, can also make local commits inside that same jailed
-clone. As of P10 it can also PUSH one agent-namespaced branch (``claude/`` by
+clone. As of P10 it can also PUSH one agent-namespaced branch (``agent/`` by
 default, overridable via ``CYCLAW_AGENT_BRANCH_PREFIX``) to origin
 (:meth:`RepoWorkspaceTools.push_branch`) -- the single method here that reaches
 the network, gated on the same ``allow_git_write_tools`` flag (default
@@ -73,6 +73,10 @@ from typing import NoReturn
 from agentic.config import AgenticConfig, DeepAgentGitHubConfig
 from agentic.fsconnect.pathsafe import ScopedRoots
 from agentic.gh_client import DEFAULT_CLONE_TIMEOUT_SEC, run_read
+from utils.agent_identity import BRANCH_NAME_RE
+from utils.agent_identity import BRANCH_PREFIX as _BRANCH_PREFIX
+from utils.agent_identity import COMMIT_EMAIL as _COMMIT_EMAIL
+from utils.agent_identity import COMMIT_NAME as _COMMIT_NAME
 from utils.errors import AgenticError, AgenticWriteRefused, FsConnectError
 from utils.logger import audit_log
 
@@ -164,38 +168,10 @@ def _is_dotgit_name(part: str) -> bool:
 # DEFAULT_CLONE_TIMEOUT_SEC rather than the local-plumbing budget.
 DEFAULT_PUSH_TIMEOUT_SEC = 120
 
-# CLAUDE.md Section 10's committer identity strings, now overridable via
-# environment. Forced via `-c` on every commit invocation (scoped to that one
-# subprocess, never written to the clone's or the operator's git config), so a
-# commit made through this surface is always attributable to this layer, never
-# to whatever `user.*` the clone happened to inherit (a fresh clone has none).
-#
-# The defaults are the exact historical values -- this knob changes no default.
-# It exists because the loop driving this surface is not necessarily Claude
-# (a local Qwen model by default) and the operator's own conventions also use
-# kimi/ and codex/ branches, so attribution should be able to name the actual
-# driver. NOTE: the stop-hook that enforces the session committer email is
-# applied by the session runtime, not this repo, and the branch-pattern mirrors
-# in agentic/writer.py and harness/agent_policy.py stay pinned to "claude/" --
-# overriding these variables does not reconfigure those surfaces.
-_COMMIT_NAME = os.environ.get("CYCLAW_AGENT_COMMIT_NAME", "Claude")
-_COMMIT_EMAIL = os.environ.get("CYCLAW_AGENT_COMMIT_EMAIL", "noreply@anthropic.com")
-
-# Mirrors CLAUDE.md's own branch convention ("short-lived claude/<topic>"),
-# overridable via CYCLAW_AGENT_BRANCH_PREFIX with the default unchanged.
-# Anchoring the required prefix is also the argv-injection defense: `git
-# checkout -b <name>` would let a name starting with "-" be parsed as a `git`
-# option instead of a branch name, and no string starting with an alphanumeric
-# prefix can start with "-". The prefix is therefore validated to that shape
-# (and re.escape()d into the pattern) so an override can never weaken the
-# defense the anchor provides; an invalid value fails closed at import.
-_BRANCH_PREFIX = os.environ.get("CYCLAW_AGENT_BRANCH_PREFIX", "claude")
-if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", _BRANCH_PREFIX):
-    raise ValueError(
-        "CYCLAW_AGENT_BRANCH_PREFIX must be 1-32 chars from [A-Za-z0-9._-] "
-        f"and start alphanumeric, got {_BRANCH_PREFIX!r}"
-    )
-BRANCH_NAME_RE = re.compile(rf"^{re.escape(_BRANCH_PREFIX)}/[A-Za-z0-9][A-Za-z0-9._/-]{{0,79}}$")
+# Committer identity + branch namespace: single source in utils.agent_identity
+# (driver-agnostic defaults; env overrides). Imported above as
+# _COMMIT_NAME / _COMMIT_EMAIL / _BRANCH_PREFIX / BRANCH_NAME_RE. Writer and
+# harness import the same module so all three surfaces stay in lock-step.
 
 # Same allowlist discipline as agentic/executor/runner.py's _scrubbed_env, kept
 # as an independent (smaller) copy rather than an import: these four git

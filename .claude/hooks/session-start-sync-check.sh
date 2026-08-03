@@ -2,11 +2,10 @@
 # CyClaw SessionStart hook — git identity + local/remote sync guard.
 #
 # Purpose (proactive, NON-destructive):
-#   1. Pin the commit identity to noreply@anthropic.com / Claude so commits are
-#      not flagged "Unverified" by the stop-hook (recurring friction otherwise).
-#      Both values are overridable via CYCLAW_AGENT_COMMIT_EMAIL /
-#      CYCLAW_AGENT_COMMIT_NAME (the same knobs agentic/deepagent_github/
-#      repo_workspace.py reads); the defaults preserve the pinned convention.
+#   1. Pin the commit identity to CyClaw Agent / cyclaw-agent@users.noreply...
+#      so agent commits are attributable without pretending the driver is
+#      Claude Code. Overridable via CYCLAW_AGENT_COMMIT_EMAIL /
+#      CYCLAW_AGENT_COMMIT_NAME (same knobs as utils/agent_identity.py).
 #   2. Fetch the default branch and REPORT divergence between local and remote.
 #      It never resets, rebases, pushes, or deletes — it only informs, so a
 #      human stays in control of how to reconcile.
@@ -18,8 +17,8 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$repo_root" || exit 0
 
 # ── 1. Pin commit identity (repo-local, durable) ─────────────────────────────
-git config --local user.email "${CYCLAW_AGENT_COMMIT_EMAIL:-noreply@anthropic.com}"
-git config --local user.name  "${CYCLAW_AGENT_COMMIT_NAME:-Claude}"
+git config --local user.email "${CYCLAW_AGENT_COMMIT_EMAIL:-cyclaw-agent@users.noreply.github.com}"
+git config --local user.name  "${CYCLAW_AGENT_COMMIT_NAME:-CyClaw Agent}"
 
 # ── 2. Detect default branch (origin/HEAD, fallback main) ────────────────────
 default_branch=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')

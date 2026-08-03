@@ -46,11 +46,12 @@ Any gate failure raises ``AgenticWriteRefused`` and is audited.
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess  # nosec B404 - argv-list only, no shell, absolute binary, fixed subcommand
 
 from agentic.config import AgenticConfig
+from utils.agent_identity import BRANCH_NAME_RE as _HEAD_BRANCH_RE
+from utils.agent_identity import BRANCH_PREFIX as _HEAD_BRANCH_PREFIX
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
@@ -86,14 +87,6 @@ _WRITE_OPS = frozenset({"pr_comment", "issue_comment", "pr_create"})
 # falling through to a generic "unknown op" that reads like a typo.
 _EXECUTABLE_WRITE_OPS = frozenset({"pr_create"})
 
-# Mirrors agentic/deepagent_github/repo_workspace.py's BRANCH_NAME_RE.
-# Duplicated rather than imported: that module lives in the deepagent_github
-# subpackage, whose __init__ pulls the optional deepagents/langchain stack, and
-# this module must stay importable without it. tests/test_agentic_writer.py
-# asserts the two patterns still match -- the test may import that module, this
-# one may not afford to.
-_HEAD_BRANCH_RE = re.compile(r"^claude/[A-Za-z0-9][A-Za-z0-9._/-]{0,79}$")
-
 # gh pr create is not idempotent: a second run against the same head branch
 # either opens a duplicate PR or errors. run_read's transient-retry loop is
 # therefore NOT reused here -- both of its retry branches (TimeoutExpired and a
@@ -123,17 +116,18 @@ def _require_int_number(op: str, params: dict) -> str:
 
 
 def _require_head_branch(op: str, params: dict) -> str:
-    """Return params['head'], validated as a claude/ branch name.
+    """Return params['head'], validated as an agent-namespaced branch.
 
-    Anchored to the claude/ namespace for the same two reasons
-    repo_workspace.BRANCH_NAME_RE is: it is the repo's own branch convention,
-    and no string starting with 'claude/' can start with '-', so the value
-    cannot be reparsed by ``gh`` as an option instead of a branch.
+    Anchored to ``CYCLAW_AGENT_BRANCH_PREFIX`` (default ``agent/``) for the
+    same two reasons repo_workspace.BRANCH_NAME_RE is: it is the repo's own
+    branch convention, and no string starting with an alphanumeric prefix can
+    start with '-', so the value cannot be reparsed by ``gh`` as an option
+    instead of a branch.
     """
     head = params.get("head")
     if not isinstance(head, str) or not _HEAD_BRANCH_RE.match(head):
         raise AgenticError(
-            f"op {op!r} requires 'head' to be a claude/<topic> branch name",
+            f"op {op!r} requires 'head' to be a {_HEAD_BRANCH_PREFIX}/<topic> branch name",
             details={"op": op, "head": str(head)[:120]},
         )
     return head

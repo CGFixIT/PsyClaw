@@ -393,7 +393,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 ### Commits, branches, PRs
 - **Conventional commits:** `feat:`/`fix:`/`perf:`/`chore:`/`test:`/`docs:`/`ci:`
   (`feat(scope):` when scoped).
-- **Branches:** short-lived `claude/<topic>` (or `codex/<topic>`), deleted after
+- **Branches:** short-lived `agent/<topic>` (or env-overridden prefix; e.g. `claude/`/`codex/` when that agent is driving), deleted after
   merge. Develop on the assigned feature branch; never on `main`.
 - **PRs are draft.** One reviewable concern each. Body = **What / Why / Risk to
   monitor**. A human decides when to merge.
@@ -633,32 +633,30 @@ local↔remote divergence without mutating. If it did not run, set the identity
 yourself before any commit:
 
 ```bash
-git config user.email noreply@anthropic.com
-git config user.name Claude
+git config user.email cyclaw-agent@users.noreply.github.com
+git config user.name "CyClaw Agent"
 ```
 
-The same identity and branch convention are configurable via environment
-variables, with defaults that preserve the pinned values exactly:
+Single source of truth: `utils/agent_identity.py`. Defaults are
+**driver-agnostic** (not Claude/Anthropic) because the agentic loop is often a
+local model or another coding agent — attribution should not pretend otherwise.
+All three write surfaces read the same module: repo_workspace commits, writer
+PR heads, and harness console branch validation.
 
-- `CYCLAW_AGENT_COMMIT_NAME` (default `Claude`)
-- `CYCLAW_AGENT_COMMIT_EMAIL` (default `noreply@anthropic.com`)
-- `CYCLAW_AGENT_BRANCH_PREFIX` (default `claude` — branch names must be
+Environment overrides (optional, per session):
+
+- `CYCLAW_AGENT_COMMIT_NAME` (default `CyClaw Agent`)
+- `CYCLAW_AGENT_COMMIT_EMAIL` (default `cyclaw-agent@users.noreply.github.com`)
+- `CYCLAW_AGENT_BRANCH_PREFIX` (default `agent` — branch names must be
   `<prefix>/<topic>`, 1–32 chars from `[A-Za-z0-9._-]`, alphanumeric first)
 
-These are read by `agentic/deepagent_github/repo_workspace.py` (which forces
-the identity via `git -c` on every commit and anchors branch names to
-`<prefix>/`) and by the SessionStart/bootstrap identity pins. Two caveats when
-overriding: the stop hook below enforces `noreply@anthropic.com` at the
-**session-runtime** level (outside this repo), so a different email requires a
-matching runtime change; and the branch-pattern mirrors in
-`agentic/writer.py` and `harness/agent_policy.py` remain pinned to `claude/`
-by design, so an overridden prefix is honored only by the repo-workspace
-surface.
+Caveat: an external **session-runtime** stop hook (outside this repo) may still
+enforce a different committer email if your host installs one — align that
+hook with these defaults, or set the env vars to match what the hook allows.
 
-A stop hook, applied by the **session runtime** (not wired in repo
-`settings.json`), rejects commits whose committer email is not
-`noreply@anthropic.com` and blocks `--force-with-lease` without explicit
-authorization.
+A stop hook, if applied by the **session runtime** (not wired in repo
+`settings.json`), may reject commits whose committer email does not match its
+allowlist and blocks `--force-with-lease` without explicit authorization.
 
 **During.** Track compact memory: Goal, Constraints, Decisions (with one-line
 rationale), Open questions, Verification state. Prefer file-backed facts over
