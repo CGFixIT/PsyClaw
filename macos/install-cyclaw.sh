@@ -202,7 +202,17 @@ detect_rc_file() {
   case "${SHELL:-}" in
     */zsh) echo "$HOME/.zshrc" ;;
     *)
-      if [ -f "$HOME/.bash_profile" ]; then echo "$HOME/.bash_profile"
+      if [ "$(uname -s)" = "Darwin" ]; then
+        # Bash login-file precedence: do not create ~/.bash_profile over an
+        # existing ~/.bash_login or ~/.profile and suppress the user's setup.
+        for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+          if [ -f "$candidate" ]; then
+            echo "$candidate"
+            return 0
+          fi
+        done
+        echo "$HOME/.bash_profile"
+      elif [ -f "$HOME/.bash_profile" ]; then echo "$HOME/.bash_profile"
       else echo "$HOME/.bashrc"
       fi
       ;;

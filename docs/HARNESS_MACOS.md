@@ -28,8 +28,10 @@ The installer: creates `~/.CyClaw`, clones or links the repo, creates a venv
 and installs dependencies (CPU torch first, then `requirements.txt -c
 constraints.txt`, matching the documented trap-avoidance order), writes the
 `cyclaw` shim, and adds a PATH entry plus a `cyclaw()` shell function to your
-rc file (`~/.zshrc` on zsh, `~/.bash_profile`/`~/.bashrc` on bash — detected
-from `$SHELL`). Target shells: bash (including macOS's stock 3.2) and zsh;
+rc file (`~/.zshrc` on zsh; on macOS bash, the first existing login file among
+`~/.bash_profile`, `~/.bash_login`, and `~/.profile`, with `~/.bash_profile`
+created only when none exists; Linux retains its `.bash_profile`/`.bashrc`
+selection). Target shells: bash (including macOS's stock 3.2) and zsh;
 BSD userland is assumed on macOS — no GNU-only flags, no Homebrew dependency.
 
 Uninstall (keeps data by default):
@@ -38,6 +40,10 @@ Uninstall (keeps data by default):
 bash ./macos/uninstall-cyclaw.sh                 # remove PATH/rc-function hooks only
 bash ./macos/uninstall-cyclaw.sh --remove-home   # also delete ~/.CyClaw (prompts)
 ```
+
+The uninstaller removes complete CyClaw-managed blocks atomically per startup
+file, leaves malformed files unchanged, and preserves symlinked startup files
+by updating their regular-file target.
 
 `macos/invoke-cyclaw.sh` (the `cyclaw` shim's launcher) falls back to a
 system `python3`/`python` on `PATH` when `~/.CyClaw/venv/bin/python` is

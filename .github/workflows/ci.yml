@@ -198,16 +198,15 @@ jobs:
         # UNCONDITIONALLY, before the --no-path-edit/--no-profile-edit checks (which
         # this test doesn't pass anyway, since it needs those code paths to run).
         #
-        # continue-on-error matches this repo's own convention for a new/unproven
-        # smoke path (verify-skills, below) -- the authoritative gate for this OS
-        # leg stays "Run tests + coverage".
-        continue-on-error: true
         shell: bash
         env:
           HOME: ${{ runner.temp }}/cyclaw-smoke-home
+          SHELL: /bin/bash
         run: |
           set -euo pipefail
           mkdir -p "$HOME"
+          echo 'export CYCLAW_PROFILE_SENTINEL=loaded' > "$HOME/profile-target"
+          ln -s profile-target "$HOME/.profile"
           echo "[smoke] isolated HOME=$HOME"
           fail() { echo "[smoke] FAIL: $1" >&2; exit 1; }
 
@@ -227,31 +226,47 @@ jobs:
           grep -qF "$GITHUB_WORKSPACE" "$HOME/.CyClaw/bin/cyclaw" \
             || fail "shim does not reference the checked-out repo (--repo-path not honored)"
 
-          # NOT hardcoded to .zshrc: verified against a live macos-latest run that
-          # $SHELL in this non-interactive Actions context does not match the
-          # */zsh case in install-cyclaw.sh's own detect_rc_file() (it wrote
-          # .bashrc instead) -- a real gap between "macOS's interactive-login
-          # default shell" and "this CI runner's $SHELL env var", caught by this
-          # smoke test failing for real on its first run. Discover whichever file
-          # actually got the block instead of assuming which one detect_rc_file()
-          # would pick.
-          RC_FILE=""
-          for candidate in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc"; do
-            if [ -f "$candidate" ] && grep -qF "# >>> cyclaw harness path >>>" "$candidate"; then
-              RC_FILE="$candidate"
-              break
-            fi
-          done
-          # The discovery loop above already proved the PATH block is present
-          # (that's its match condition) -- only the function block is a genuinely
-          # independent assertion here.
-          [ -n "$RC_FILE" ] || fail "no rc file (.zshrc/.bash_profile/.bashrc) contains the PATH block"
-          grep -qF "# >>> cyclaw harness >>>" "$RC_FILE" || fail "cyclaw() function block missing from rc file"
+          # macOS bash login shells use the first existing file in
+          # ~/.bash_profile, ~/.bash_login, ~/.profile order. Preserve and update
+          # that file instead of creating ~/.bash_profile and suppressing it.
+          RC_FILE="$HOME/.profile"
+          RC_TARGET="$HOME/profile-target"
+          [ ! -e "$HOME/.bash_profile" ] || fail "installer suppressed an existing ~/.profile"
+          [ ! -e "$HOME/.bashrc" ] || fail "macOS bash install wrote the non-login ~/.bashrc"
+          [ -L "$RC_FILE" ] || fail "installer replaced a symlinked ~/.profile"
+          grep -qF "# >>> cyclaw harness path >>>" "$RC_TARGET" || fail "PATH block missing from ~/.profile target"
+          grep -qF "# >>> cyclaw harness >>>" "$RC_TARGET" || fail "cyclaw() function block missing from ~/.profile target"
+          LOGIN_TYPE="$(/bin/bash --login -c 'test "$CYCLAW_PROFILE_SENTINEL" = loaded && type -t cyclaw' || true)"
+          [ "$LOGIN_TYPE" = "function" ] || fail "existing ~/.profile was not preserved and sourced"
           echo "[smoke] install-cyclaw.sh: layout + shim + profile integration OK"
 
+          # Current main wrote clean macOS bash installs to ~/.bashrc. Seed that
+          # legacy shape and prove uninstall removes both old and new hooks.
+          cp "$RC_TARGET" "$HOME/.bashrc"
+          chmod 600 "$RC_TARGET"
+          # Nested and mixed marker damage must leave the whole file unchanged,
+          # including an otherwise valid managed block in the same file.
+          printf '%s\n' \
+            'keep-before' \
+            '# >>> cyclaw harness path >>>' \
+            'managed-looking' \
+            '# >>> cyclaw harness path >>>' \
+            'USER_KEEP' \
+            '# <<< cyclaw harness path <<<' \
+            '# >>> cyclaw harness >>>' \
+            'cyclaw() { :; }' \
+            '# <<< cyclaw harness <<<' \
+            'keep-after' > "$HOME/.bash_login"
+          cp "$HOME/.bash_login" "$HOME/.bash_login.expected"
           bash macos/uninstall-cyclaw.sh < /dev/null
-          grep -qF "# >>> cyclaw harness path >>>" "$RC_FILE" && fail "PATH block survived uninstall"
-          grep -qF "# >>> cyclaw harness >>>" "$RC_FILE" && fail "cyclaw() block survived uninstall"
+          [ -L "$RC_FILE" ] || fail "uninstall replaced a symlinked ~/.profile"
+          grep -qF "# >>> cyclaw harness path >>>" "$RC_TARGET" && fail "PATH block survived uninstall"
+          grep -qF "# >>> cyclaw harness >>>" "$RC_TARGET" && fail "cyclaw() block survived uninstall"
+          grep -qF "CYCLAW_PROFILE_SENTINEL=loaded" "$RC_TARGET" || fail "uninstall changed user-owned profile content"
+          [ "$(stat -f '%Lp' "$RC_TARGET")" = "600" ] || fail "uninstall changed ~/.profile target permissions"
+          grep -qF "# >>> cyclaw harness path >>>" "$HOME/.bashrc" && fail "legacy ~/.bashrc PATH block survived uninstall"
+          grep -qF "# >>> cyclaw harness >>>" "$HOME/.bashrc" && fail "legacy ~/.bashrc function block survived uninstall"
+          cmp -s "$HOME/.bash_login" "$HOME/.bash_login.expected" || fail "uninstall partially edited a malformed rc file"
           [ -d "$HOME/.CyClaw" ] || fail "uninstall must keep ~/.CyClaw by default (no --remove-home passed)"
           echo "[smoke] uninstall-cyclaw.sh: profile blocks removed, data kept OK"
 

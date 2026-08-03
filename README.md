@@ -214,9 +214,9 @@ echo "$CYCLAW_API_KEY"        # confirm it survived
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-On bash, use `~/.bash_profile` — macOS bash reads that for login shells, not
-`~/.bashrc`, which is the single most common reason "I added the export and it
-still 401s" happens on a Mac.
+On bash, append it to the first existing login file in this order:
+`~/.bash_profile`, `~/.bash_login`, `~/.profile`. Create `~/.bash_profile` only
+when none exists; macOS bash login shells do not read `~/.bashrc`.
 
 Full macOS walkthrough — including launching the harness console beside the
 gateway and exercising every REST endpoint with `curl` — is in
@@ -810,8 +810,10 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
   a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
 - **Install (macOS / Linux):** `bash ./macos/install-cyclaw.sh` sets up the
   same `~/.CyClaw` layout, a venv, a `cyclaw` shim, and a PATH entry plus a
-  `cyclaw()` function in your rc file (`~/.zshrc` on zsh,
-  `~/.bash_profile`/`~/.bashrc` on bash, detected from `$SHELL`). Targets bash
+  `cyclaw()` function in your rc file (`~/.zshrc` on zsh; macOS bash preserves
+  the first existing login file among `.bash_profile`, `.bash_login`, and
+  `.profile`, creating `.bash_profile` only when none exists; Linux retains its
+  `.bash_profile`/`.bashrc` selection). Targets bash
   (including macOS's stock 3.2) and zsh; BSD userland assumed, no Homebrew
   dependency, no GNU-only flags. It branches on `uname -s` to install the
   correct **plain** torch build on macOS — the one step a hand-install most
