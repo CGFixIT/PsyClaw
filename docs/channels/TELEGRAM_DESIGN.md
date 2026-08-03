@@ -51,11 +51,13 @@ Phone (Telegram cloud)
 |---|---|---|
 | `telegram/__init__.py` | Public exports + telemetry-kill | T0 |
 | `telegram/config.py` | `TelegramConfig` + `load_telegram_config` | T0 |
-| `telegram/client.py` | Bot API + `/query` HTTP | T1–T2 |
-| `telegram/runner.py` | `send_notify`, `handle_inbound_text`, `poll_*` | T1–T2 |
-| `telegram/ratelimit.py` | Process-local sliding-window limiter | T0 (sqlite optional T1) |
+| `telegram/client.py` | Bot API + `/query` HTTP + chunking | T1–T2 |
+| `telegram/runner.py` | `send_notify`, `handle_inbound_text`, `poll_*`, commands | T1–T2 |
+| `telegram/state.py` | Persistent getUpdates offset (`data/telegram/offset.json`) | T2 |
+| `telegram/ratelimit.py` | Process-local sliding-window limiter | T0 (sqlite optional later) |
 | `telegram/cli.py` | `status` / `test` / `send` / `poll` | T0–T2 |
 | `telegram/selftest.py` | Operator pre-flight (no network required) | T0 |
+| `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-*.plist` | Health notify + poll KeepAlive (disabled templates) | T1–T2 |
 | `tests/test_telegram_isolation.py` | I6 regression | T0 |
 | `tests/test_telegram_config.py` | Config validation | T0 |
 
@@ -153,18 +155,17 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 
 **Code still to harden (T1 follow-ups)**
 
-| Item | File(s) | Instructions |
+| Item | File(s) | Status / instructions |
 |---|---|---|
-| Persistent rate limiter | `telegram/ratelimit.py` | **T0 ships process-local sliding window.** Upgrade to `utils.ratelimit.RateLimiter` with a dedicated sqlite path under `data/` (do **not** share the gateway limiter DB) if multi-process pollers are needed. Keys: `tg:outbound`, `tg:inbound:{chat_id}`. |
-| Launchd template | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist` | Example job: curl `/health` → on fail `python -m telegram.cli send …`. Disabled by default; document in this file. |
-| Message chunking | `telegram/client.py` | Telegram hard limit 4096; already truncate via `max_message_chars`. Prefer split-on-paragraph for long answers in T2. |
+| Persistent rate limiter | `telegram/ratelimit.py` | **Deferred (YAGNI).** Process-local sliding window is enough for a single poller. Upgrade to dedicated sqlite under `data/` only if multi-process pollers are needed. Keys: `tg:outbound`, `tg:inbound:{chat_id}`. |
+| Launchd template | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist` | **Shipped (template).** curl `/health` → on fail `telegram.cli send`. Disabled by default; replace path/token placeholders before `launchctl load`. |
+| Message chunking | `telegram/client.py` | **Shipped.** `chunk_text` splits on paragraph/line before hard cut; `send_message` sends sequential chunks. |
 | `send` dry-run | `telegram/cli.py` | **Shipped in T0** (`--dry-run` validates allowlist + prints preview, no HTTP). |
 
+**Tests**
 
-**Tests to add**
-
-- Mock `httpx` for `send_message` success/fail.
-- Allowlist refusal unit test (already partially covered via config).
+- Mock `httpx` for `send_message` success/fail — **shipped**.
+- Allowlist refusal unit test — **shipped**.
 
 **Exit criteria:** nightly or on-demand notify works on M5 Mac without `mode: chat`.
 
@@ -195,20 +196,20 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 
 **Code still to build / harden**
 
-| Item | File(s) | Instructions |
+| Item | File(s) | Status / instructions |
 |---|---|---|
-| Answer field normalization | `telegram/runner.py::_extract_answer` | Align with live `schemas/api.py` response model fields; add a unit test with a fixture of a real `/query` JSON body from `tests/` or a captured sample. |
-| Streaming / typing indicator | `telegram/client.py` | Optional `sendChatAction` typing while `/query` runs (long 27B calls). Do not change graph timeouts. |
-| Concurrent updates | `telegram/runner.py` | Process updates **sequentially** in v1 (one in-flight `/query`). Document that parallelism is out of scope until a worker queue exists **outside** gate. |
-| Offset persistence | new `telegram/state.py` | Persist `getUpdates` offset under `data/telegram/offset.json` (atomic write) so restarts do not re-handle messages. |
-| Command namespace | `telegram/runner.py` | Reserve `/help`, `/status` (local health only via loopback), `/id` (echo chat id). Do **not** implement `/online` until T3. |
-| Injection double-check | optional | `/query` already runs the 40-pattern sanitizer. Do not reimplement; do not strip content in ways that desync from gate. |
-| launchd plist | `macos/…` | Keep-alive poller with `KeepAlive` + `ThrottleInterval`; log to `~/Library/Logs/CyClaw/telegram-poll.log`. |
+| Answer field normalization | `telegram/runner.py::_extract_answer` | **Shipped.** Prefers `QueryResponse.answer` / `model_used`; unit test with full response-shaped fixture. |
+| Streaming / typing indicator | `telegram/client.py` | **Deferred (optional).** `sendChatAction` typing while `/query` runs. Do not change graph timeouts. |
+| Concurrent updates | `telegram/runner.py` | **Shipped sequential.** One in-flight `/query` per poll batch; parallelism out of scope until a worker queue exists **outside** gate. |
+| Offset persistence | `telegram/state.py` | **Shipped.** Atomic `data/telegram/offset.json`; `poll_forever` loads/saves; still respects no-ack-on-`TelegramRuntimeError`. |
+| Command namespace | `telegram/runner.py` | **Shipped.** `/help`, `/status` (loopback `/health` only), `/id`. No `/online` until T3. |
+| Injection double-check | optional | `/query` already runs the sanitizer. Do not reimplement. |
+| launchd plist | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-poll.plist` | **Shipped (template).** KeepAlive + ThrottleInterval; log path documented in plist header. |
 
-**Tests to add**
+**Tests**
 
-- `handle_inbound_text` with httpx mock for `/query` + `sendMessage`.
-- Poll loop with `max_iterations=1` and mocked `get_updates`.
+- `handle_inbound_text` with mocks for `/query` + `sendMessage` — **shipped** (+ commands).
+- Poll loop with `max_iterations=1` and mocked `get_updates` — **shipped** (+ offset file).
 - Isolation test remains green.
 
 **Exit criteria:** allowlisted phone chat rounds trip offline RAG answers; non-allowlisted chat is silent/refused; audit.jsonl shows inbound+query+outbound events.
@@ -324,3 +325,4 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 | Date | Change |
 |---|---|
 | 2026-08-03 | Initial design + skeleton package (T0) |
+| 2026-08-03 | T1/T2 residual: offset file, commands, chunking, launchd templates |

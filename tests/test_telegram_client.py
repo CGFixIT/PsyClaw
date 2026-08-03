@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from telegram.client import get_updates, post_query, send_message
+from telegram.client import chunk_text, get_updates, post_query, send_message
 from telegram.config import load_telegram_config
 from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import reset_config_cache
@@ -43,6 +43,14 @@ def test_send_message_allowlist_refuses(tmp_path: Path, monkeypatch: pytest.Monk
     assert exc.value.details and exc.value.details.get("gate") == "allowlist"
 
 
+def test_chunk_text_prefers_paragraph() -> None:
+    text = "para one\n\n" + ("x" * 50) + "\n\npara three"
+    parts = chunk_text(text, max_chars=40)
+    assert len(parts) >= 2
+    assert all(len(p) <= 40 for p in parts)
+    assert "para one" in parts[0]
+
+
 def test_send_message_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
     cfg = _cfg(tmp_path)
@@ -55,6 +63,20 @@ def test_send_message_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         data = send_message(cfg, chat_id=42, text="hello")
     assert data["ok"] is True
     assert data["result"]["message_id"] == 7
+
+
+def test_send_message_chunks_long_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path, max_message_chars=30)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True, "result": {"message_id": 1}}
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        post = client_cls.return_value.__enter__.return_value.post
+        post.return_value = mock_resp
+        send_message(cfg, chat_id=42, text=("hello world\n\n" * 5).strip())
+    assert post.call_count >= 2
 
 
 def test_send_message_api_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
