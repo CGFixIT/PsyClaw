@@ -30,9 +30,13 @@ env/
 **/.hf_cache/
 **/.st_cache/
 
-# Local runtime state — provided via bind mounts at runtime, not baked in
+# Local runtime state — provided via bind mounts at runtime, not baked in.
+# `index/` is the config.yaml hybrid-retrieval root (ChromaDB + BM25). It can
+# hold private corpus-derived vectors/keyword state; never copy it into image
+# layers. Compose bind-mounts ./index at runtime (see docker-compose.yml).
 logs/
 checkpoints/
+index/
 data/chroma/
 data/bm25/
 

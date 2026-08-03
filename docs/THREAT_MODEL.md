@@ -72,7 +72,7 @@ Container/OS-level controls currently enforced (see `Dockerfile` +
 - **`no-new-privileges:true`** — no setuid privilege escalation in-container.
 - **`cap_drop: ALL`** — zero Linux capabilities.
 - **Read-only root filesystem** with explicit writable carve-outs
-  (`data`/`logs`/`checkpoints`/`.emb_cache` + `tmpfs:/tmp`).
+  (`data`/`index`/`logs`/`checkpoints`/`.emb_cache` + `tmpfs:/tmp`).
 - **seccomp profile** applied (`deploy/seccomp/sync-rclone.json`) — blocks
   `mount`, `ptrace`, `reboot`, etc.
 - **Resource ceilings** (`mem_limit`, `pids_limit`, `cpus`).
