@@ -7,6 +7,7 @@ and the FastAPI app is tested via TestClient against a tmp-path harness home.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -566,18 +567,48 @@ def test_harness_runs_endpoint(client):
 
 
 def test_harness_runs_stray_file_does_not_displace_runs(client, tmp_path, monkeypatch):
-    """Regression: the newest-N slice used to happen BEFORE the is_dir filter,
-    so a stray file (index, .lock) inside the window silently dropped a real run."""
-    runs_dir = tmp_path / "runs"
-    runs_dir.mkdir()
+    """Regression: the newest-N slice used to happen BEFORE the file filter,
+    so a stray non-artifact inside the window silently dropped a real run."""
+    accepted = tmp_path / "runs" / "accepted"
+    accepted.mkdir(parents=True)
     for name in ("run-a", "run-b", "run-c"):
-        (runs_dir / name).mkdir()
-    (runs_dir / "zzz-stray.lock").write_text("", encoding="utf-8")  # sorts first
-    monkeypatch.setattr(harness_server, "_RUNS_DIR", runs_dir)
+        (accepted / f"{name}.json").write_text("{}", encoding="utf-8")
+    (accepted / "zzz-stray.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(harness_server, "_RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(harness_server, "_MAX_RUNS", 3)
     data = client.get("/api/harness/runs").json()
     assert data["count"] == 3
     assert {r["run_id"] for r in data["runs"]} == {"run-a", "run-b", "run-c"}
+
+
+def test_harness_runs_lists_accepted_artifacts_by_mtime(client, tmp_path, monkeypatch):
+    """The writer persists runs as runs/accepted/<variant_id>.json files; the
+    route must list those files newest-first (mtime), capped at _MAX_RUNS,
+    and must NOT list the phantom `accepted` directory itself."""
+    accepted = tmp_path / "runs" / "accepted"
+    accepted.mkdir(parents=True)
+    older = accepted / "variant-old.json"
+    newer = accepted / "variant-new.json"
+    older.write_text("{}", encoding="utf-8")
+    newer.write_text("{}", encoding="utf-8")
+    os.utime(older, (1_000_000, 1_000_000))
+    os.utime(newer, (2_000_000, 2_000_000))
+    monkeypatch.setattr(harness_server, "_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(harness_server, "_MAX_RUNS", 1)
+    data = client.get("/api/harness/runs").json()
+    assert data["count"] == 1
+    assert data["runs"] == [{"run_id": "variant-new", "path": str(newer)}]
+
+    monkeypatch.setattr(harness_server, "_MAX_RUNS", 50)
+    data = client.get("/api/harness/runs").json()
+    assert [r["run_id"] for r in data["runs"]] == ["variant-new", "variant-old"]
+    assert all(set(r) == {"run_id", "path"} for r in data["runs"])
+
+
+def test_harness_runs_empty_when_no_accepted_dir(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(harness_server, "_RUNS_DIR", tmp_path / "runs")
+    data = client.get("/api/harness/runs").json()
+    assert data == {"runs": [], "count": 0}
 
 
 def test_console_served(client):
