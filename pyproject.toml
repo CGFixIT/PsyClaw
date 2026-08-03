@@ -116,13 +116,14 @@ cyclaw-clear-cache = "retrieval.clear_cache:main"
 cyclaw-harness = "harness.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness"]
+packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram"]
+
 
 [tool.hatch.build.targets.sdist]
 include = [
     "gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
     "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval",
-    "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "powershell", "macos",
+    "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "telegram", "powershell", "macos",
 ]
 
 [tool.pytest.ini_options]
@@ -142,7 +143,8 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness"]
+source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram"]
+
 # fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
 # Windows branch needs a separate Windows CI lane (deferred -- see
 # docs/agentic/FSCONNECT_SQL_ROADMAP.md, FS Phase 4). Their tests run on Linux CI for
@@ -170,10 +172,12 @@ exclude = [".claude"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "S"]
 ignore = ["E501"]
-per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"], "agentic/__init__.py" = ["E402"], "guardrails/__init__.py" = ["E402"], "harness/server.py" = ["E402"] }
+per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"], "agentic/__init__.py" = ["E402"], "guardrails/__init__.py" = ["E402"], "telegram/__init__.py" = ["E402"], "harness/server.py" = ["E402"] }
+
 
 [tool.ruff.lint.isort]
-known-first-party = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness"]
+known-first-party = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram"]
+
 
 [tool.mypy]
 python_version = "3.12"

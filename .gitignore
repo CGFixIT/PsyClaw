@@ -88,3 +88,4 @@ docs/memories/CONSOLIDATED.md
 
 # Claude Code agent worktree isolation (runtime scaffolding, never repo content)
 .claude/worktrees/
+.venv-tg/

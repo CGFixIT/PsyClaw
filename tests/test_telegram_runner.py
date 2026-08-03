@@ -1,0 +1,107 @@
+"""Unit tests for telegram.runner and telegram.ratelimit."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+import yaml
+
+from telegram.config import load_telegram_config
+from telegram.ratelimit import SlidingWindowLimiter, get_limiter, reset_limiters_for_tests
+from telegram.runner import handle_inbound_text, poll_once, send_notify
+from utils.errors import TelegramRefused
+from utils.logger import reset_config_cache
+
+
+@pytest.fixture(autouse=True)
+def _reset():
+    reset_config_cache()
+    reset_limiters_for_tests()
+    yield
+    reset_config_cache()
+    reset_limiters_for_tests()
+
+
+def _cfg(tmp_path: Path, **overrides: object):
+    block = {
+        "enabled": True,
+        "mode": "chat",
+        "allowed_chat_ids": ["42"],
+        "rate_limit": {"max_ops": 3, "window_seconds": 60},
+        "query": {"base_url": "http://127.0.0.1:8787"},
+    }
+    block.update(overrides)
+    raw = {"logging": {"audit_file": str(tmp_path / "audit.jsonl")}, "telegram": block}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return load_telegram_config(str(path))
+
+
+def test_send_notify_disabled(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, enabled=False, allowed_chat_ids=[])
+    with pytest.raises(TelegramRefused) as exc:
+        send_notify(cfg, chat_id=42, text="x")
+    assert "enabled" in (exc.value.details or {}).get("gate", "")
+
+
+def test_handle_inbound_requires_chat_mode(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, mode="notify")
+    with pytest.raises(TelegramRefused) as exc:
+        handle_inbound_text(cfg, chat_id=42, text="hi")
+    assert (exc.value.details or {}).get("gate") == "mode"
+
+
+def test_handle_inbound_happy_path(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with (
+        patch(
+            "telegram.client.post_query",
+            return_value={"answer": "pong", "model_used": "qwen3.6:27b"},
+        ),
+        patch(
+            "telegram.client.send_message",
+            return_value={"ok": True, "result": {"message_id": 1}},
+        ) as send,
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="ping", update_id=9)
+    assert "pong" in out["answer"]
+    assert "qwen3.6:27b" in out["answer"]
+    send.assert_called_once()
+
+
+def test_poll_once_handles_text_update(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 5,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            return_value={"answer": "ok"},
+        ) as handler,
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 6
+    assert handled == [{"answer": "ok"}]
+    handler.assert_called_once()
+
+
+def test_rate_limiter_trips() -> None:
+    lim = SlidingWindowLimiter(max_ops=2, window_seconds=60)
+    lim.check("k")
+    lim.check("k")
+    with pytest.raises(TelegramRefused) as exc:
+        lim.check("k")
+    assert (exc.value.details or {}).get("gate") == "rate_limit"
+
+
+def test_get_limiter_shared() -> None:
+    a = get_limiter(5, 60)
+    b = get_limiter(5, 60)
+    assert a is b
