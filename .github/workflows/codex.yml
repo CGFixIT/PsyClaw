@@ -13,7 +13,7 @@ jobs:
   codex:
     name: Codex Agent
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@codex') &&
