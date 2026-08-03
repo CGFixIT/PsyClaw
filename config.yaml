@@ -720,3 +720,29 @@ guardrails:
     - system prompt
     - your instructions
     - persona
+
+# ===========================
+# Telegram channel (out-of-band)  [v0.1 — skeleton]
+# ===========================
+# Absence of this block, or enabled: false, disables the Telegram channel entirely.
+# Runs strictly via `python -m telegram.cli` — never imported by gate.py, graph.py,
+# or mcp_hybrid_server.py. Answers (mode=chat) go only through HTTP POST /query on
+# loopback so I1–I5 stay intact. Bot token lives in the environment only.
+# Design + phase plan: docs/channels/TELEGRAM_DESIGN.md
+# Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
+telegram:
+  enabled: false                 # off by default; CLI status/test work; send/poll no-op or refuse
+  mode: "notify"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
+  bot_token_env: "TELEGRAM_BOT_TOKEN"  # token NEVER stored here — set the env var
+  allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
+  api_base: "https://api.telegram.org"
+  poll_timeout_sec: 30           # long-poll window for getUpdates (mode=chat)
+  max_message_chars: 4000        # align with policy.prompt_filter.max_input_chars
+  allow_hybrid_confirm: false    # T3 reserved — not wired; leave false
+  rate_limit:
+    max_ops: 20                  # soft ceiling (enforcement hardened in T1/T2 follow-ups)
+    window_seconds: 60
+  query:
+    base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
+    api_key_env: "CYCLAW_API_KEY"
+    timeout_sec: 660             # match api.graph_timeout_sec
