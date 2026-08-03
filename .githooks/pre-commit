@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Block commits on branches that are not on the allowlist / grok/* convention.
+# Block commits on branches outside the documented multi-vendor allowlist.
+# Canonical feature prefixes: utils.agent_identity.ALLOWED_BRANCH_PREFIXES
+# (+ PR template / CLAUDE.md §5 / Kimi section).
 set -euo pipefail
 
 branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
@@ -10,17 +12,18 @@ fi
 
 case "$branch" in
   main|master|develop) exit 0 ;;
-  grok/*) exit 0 ;;
-  claude/*) exit 0 ;;
+  # Vendor / agent feature prefixes (see utils/agent_identity.py)
+  grok/*|claude/*|codex/*|kimi/*|agent/*|CyClaw/*|cyclaw/*) exit 0 ;;
   dependabot/*|renovate/*) exit 0 ;;
   release/*|hotfix/*) exit 0 ;;
 esac
 
 printf '%s\n' \
   "pre-commit: branch '${branch}' violates naming convention" \
-  "  Feature branches must be named: grok/<feature>" \
-  "  Rename:  git branch -m grok/<feature>" \
-  "  Allowed: main | master | develop | grok/* | claude/* |" \
-  "           dependabot/* | renovate/* | release/* | hotfix/*" \
+  "  Feature branches must use a documented vendor prefix:" \
+  "  grok/ | claude/ | codex/ | kimi/ | agent/ | CyClaw/ | cyclaw/" \
+  "  Also allowed: main | master | develop | dependabot/* | renovate/* |" \
+  "                 release/* | hotfix/*" \
+  "  Rename:  git branch -m <prefix>/<feature>" \
   >&2
 exit 1
