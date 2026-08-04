@@ -70,9 +70,9 @@ jobs:
       )
 
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+      contents: write       # push applied-fix commits to same-repo PR head only
+      pull-requests: write  # post apply-fixes result on the PR
+      issues: write         # PR conversation comments use the Issues API
 
     outputs:
       final_message: ${{ steps.run_codex.outputs.final-message }}
@@ -260,6 +260,9 @@ jobs:
             core.info(`Apply-fixes gated OK: PR #${prNumber} parent@${parent.author} via ${trigger}`);
 
       - name: Checkout PR head (writable)
+        # zizmor: ignore[artipacked] intentional: persist-credentials required so the
+        # subsequent commit/push step can fast-forward the same-repo PR head with
+        # GITHUB_TOKEN; no artifacts are uploaded from this job.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ steps.gate.outputs.head_ref }}
@@ -356,15 +359,18 @@ jobs:
           fi
 
           git add -A
-          # Safety: never stage secrets-ish paths if they appear.
-          # Unquote-free loop (SC2046): never expand git paths unquoted.
-          git reset -- '.env' || true
-          while IFS= read -r -d '' unsafe_path; do
-            git reset -- -- "$unsafe_path" || true
-          done < <(
-            git diff --cached -z --name-only \
-              | grep -zE '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true
-          )
+          # Safety: unstage secret-like paths before commit.
+          # Null-delimited read + quoted "$path" (SC2046-safe; spaces OK).
+          # Pipeline form avoids process-substitution /dev/fd edge cases.
+          git diff --cached -z --name-only | while IFS= read -r -d '' path; do
+            case "$path" in
+              .env|.env.*|*/.env|*/.env.*) ;;
+              *.pem) ;;
+              id_rsa|id_rsa.*|*/id_rsa|*/id_rsa.*) ;;
+              *) continue ;;
+            esac
+            git reset -- -- "$path" || true
+          done
 
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
