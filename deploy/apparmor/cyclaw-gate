@@ -1,0 +1,64 @@
+abi <abi/3.0>,
+#include <tunables/global>
+
+# Single-container gate-runtime candidate. Load in complain mode and replay the
+# documented workload before enforcement. External /ops tools are omitted, but
+# Python-only /ops children inherit this same profile.
+profile cyclaw-gate flags=(attach_disconnected,mediate_deleted) {
+  network inet tcp,
+  network inet6 tcp,
+  network inet udp,
+  network inet6 udp,
+  network unix stream,
+  # glibc uses unprivileged NETLINK_ROUTE/SOCK_RAW for address discovery.
+  network netlink raw,
+  deny network inet raw,
+  deny network inet6 raw,
+  deny network packet,
+  deny network alg,
+
+  signal (receive) peer=unconfined,
+  signal (receive) peer=runc,
+  signal (receive) peer=crun,
+  signal (send,receive) peer=cyclaw-gate,
+  deny mount,
+  deny umount,
+  deny ptrace,
+
+  # Read the image, map native libraries, and execute only the gate runtime.
+  /** r,
+  /lib{,32,64}/** mr,
+  /usr/lib{,32,64}/** mr,
+  /usr/local/lib/** mr,
+  /usr/local/bin/uvicorn ixr,
+  /usr/local/bin/python ixr,
+  /usr/local/bin/python3 ixr,
+  /usr/local/bin/python3.12 ixr,
+
+  /dev/null rw,
+  /dev/zero rw,
+  /dev/full rw,
+  /dev/random r,
+  /dev/urandom r,
+
+  # The only writable paths in the shipped container contract.
+  /app/data/ rw,
+  /app/data/** rwkl,
+  /app/index/ rw,
+  /app/index/** rwkl,
+  /app/logs/ rw,
+  /app/logs/** rwkl,
+  /app/checkpoints/ rw,
+  /app/checkpoints/** rwkl,
+  /app/.emb_cache/ rw,
+  /app/.emb_cache/** rwkl,
+  /tmp/ rw,
+  /tmp/** rwkl,
+
+  deny @{PROC}/[0-9]*/environ r,
+  deny @{PROC}/{kcore,mem,kmem} rwklx,
+  deny /sys/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/devices/virtual/powercap/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+}

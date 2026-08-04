@@ -26,9 +26,14 @@
 # out-of-band layers exec only these (all via argv-list, never a shell):
 #   - python  : ops_runner launches `python -m sync.cli` / `agentic.cli`, reindex
 #   - rclone  : sync/runner.py corpus sync
-#   - gh      : agentic/gh_client.py read-only GitHub CLI
+#   - gh/git  : agentic GitHub context and governed real-repo workflow
 - list: cyclaw_expected_exes
-  items: [python, python3, python3.12, uvicorn, rclone, gh]
+  items: [python, python3, python3.12, uvicorn, rclone, gh, git, git-remote-http, git-remote-https]
+
+# These optional tools legitimately use external TLS. Keep their egress visible
+# at NOTICE rather than hiding it behind a broad SaaS-IP or port allow-list.
+- list: cyclaw_optional_network_exes
+  items: [rclone, gh, git, git-remote-http, git-remote-https]
 
 # A real interactive/served shell is never part of CyClaw's runtime.
 - list: cyclaw_shell_binaries
@@ -38,14 +43,15 @@
 - macro: cyclaw_expected_write_dir
   condition: >
     (fd.name startswith "/app/data/" or
+     fd.name startswith "/app/index/" or
      fd.name startswith "/app/logs/" or
      fd.name startswith "/app/checkpoints/" or
      fd.name startswith "/app/.emb_cache/" or
      fd.name startswith "/tmp/")
 
-# The only egress CyClaw makes off-container is to the local Ollama / optional
-# Grok·Claude endpoints. Loopback stays in-container; adjust host/port if Ollama
-# is not on the shipped default (11434). Loopback literals are intentional
+# The normal core egress target is local Ollama. Explicit cloud providers and
+# optional tools are intentionally still observable; adjust this exact host/port
+# pair if Ollama is not on the shipped default (11434). Loopback literals are intentional
 # (CyClaw is loopback-only by design), not debug code -- suppress the devskim
 # DS162092 heuristic on this line.
 #
@@ -67,7 +73,7 @@
 #    a shell spawn or an unexpected binary on the agentic/sync subprocess path.
 - rule: CyClaw unexpected process spawned
   desc: >
-    A process other than CyClaw's known interpreters/tools (python, rclone, gh)
+    A process other than CyClaw's known interpreters/tools (python, rclone, gh, git)
     executed inside the app container. The core request path execs nothing; the
     out-of-band layers exec only the allow-listed binaries. Investigate.
   condition: >
@@ -100,7 +106,7 @@
 - rule: CyClaw write outside allowed roots
   desc: >
     A file write occurred outside CyClaw's expected writable directories
-    (data/logs/checkpoints/.emb_cache/tmp). With read_only:true this should be
+    (data/index/logs/checkpoints/.emb_cache/tmp). With read_only:true this should be
     impossible; an alert means drift from the hardened baseline.
   condition: >
     open_write and cyclaw_container and
@@ -113,10 +119,10 @@
   priority: ERROR
   tags: [cyclaw, filesystem]
 
-# 4) Unexpected outbound network. CyClaw is loopback-only plus local Ollama
-#    (and optional hybrid cloud providers when explicitly enabled); egress to
-#    anywhere else from the app container is suspicious (data exfiltration, C2,
-#    unexpected cloud call).
+# 4) Unexpected outbound network from Python or another non-tool process.
+#    Explicit cloud-model traffic will still alert and should correlate with a
+#    CyClaw audit event; hostile tests use the same interpreter, so suppressing
+#    all Python TLS would erase the signal.
 - rule: CyClaw unexpected outbound connection
   desc: >
     The CyClaw container opened an outbound connection to something other than
@@ -124,9 +130,28 @@
     your model host before relying on this in production.
   condition: >
     outbound and cyclaw_container and
-    not cyclaw_expected_outbound
+    not cyclaw_expected_outbound and
+    not proc.name in (cyclaw_optional_network_exes)
   output: >
     CyClaw unexpected egress (dest=%fd.sip:%fd.sport proc=%proc.name
     container=%container.name)
   priority: WARNING
   tags: [cyclaw, network, exfiltration]
+
+# 5) Optional GitHub/rclone egress is expected only when the operator invokes
+#    those out-of-band paths. Log it for audit correlation without treating
+#    normal operation as the same severity as unexplained Python egress.
+- rule: CyClaw optional tool outbound connection
+  desc: >
+    A configured GitHub or rclone tool opened an external connection. This can
+    be expected, but must correspond to an explicit operator action and audit
+    event; no broad destination allow-list is implied.
+  condition: >
+    outbound and cyclaw_container and
+    proc.name in (cyclaw_optional_network_exes) and
+    not cyclaw_expected_outbound
+  output: >
+    CyClaw optional-tool egress (dest=%fd.sip:%fd.sport proc=%proc.name
+    cmdline=%proc.cmdline container=%container.name)
+  priority: NOTICE
+  tags: [cyclaw, network, agentic, sync]

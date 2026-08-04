@@ -6,20 +6,21 @@ This is an eBPF tripwire, **not** a containment boundary. [Falco](https://falco.
 watches kernel syscalls and **logs** when the CyClaw container does something
 outside its known-good behaviour. It never blocks a call. It is defense-in-depth
 *observability* layered on top of the real controls (loopback-only binding,
-read-only rootfs, dropped capabilities, seccomp, and CyClaw's topology/injection
+read-only rootfs, dropped capabilities, Docker's builtin seccomp, and CyClaw's topology/injection
 gates). See [`docs/THREAT_MODEL.md`](../../docs/THREAT_MODEL.md) for where this
 sits in the overall posture and what it does **not** cover.
 
 ## What it watches
 
-[`falco_rules.yaml`](./falco_rules.yaml) ships four CyClaw-specific rules:
+[`falco_rules.yaml`](./falco_rules.yaml) ships five CyClaw-specific rules:
 
 | Rule | Fires when | Priority |
 |---|---|---|
-| Unexpected process spawned | A binary other than `python`/`rclone`/`gh`/`uvicorn` execs in the app container | WARNING |
+| Unexpected process spawned | A binary other than `python`/`rclone`/`gh`/`git`/Git HTTPS helpers/`uvicorn` execs in the app container | WARNING |
 | Shell spawned in container | Any shell (`bash`/`sh`/…) starts — CyClaw never uses one | CRITICAL |
-| Write outside allowed roots | A write lands outside `data/logs/checkpoints/.emb_cache/tmp` | ERROR |
-| Unexpected outbound connection | Egress to anything other than loopback / local Ollama | WARNING |
+| Write outside allowed roots | A write lands outside `data/index/logs/checkpoints/.emb_cache/tmp` | ERROR |
+| Unexpected outbound connection | Non-tool egress to anything other than loopback / local Ollama | WARNING |
+| Optional tool outbound connection | `git`/Git HTTPS helpers/`gh`/`rclone` external egress that needs audit correlation | NOTICE |
 
 These map directly to the out-of-band agentic & sync write paths and the gate's
 egress — the surfaces a 2026 review would (fairly) want eyes on.
@@ -49,6 +50,12 @@ deployment:
    the shipped default (`127.0.0.1:11434`). Keep the destination address and
    port joined with `and`; a port-only alternative permits that port on every
    external host.
+
+Do not suppress all Python HTTPS traffic: explicitly gated cloud-model calls and
+hostile test code use the same interpreter. Keep the alert and correlate it to
+the provider-selection/audit event. The `git`/`git-remote-http[s]`/`gh`/`rclone`
+rule is lower severity but deliberately remains visible; do not replace it with
+a broad SaaS IP range.
 
 ## Compose command: defaults before CyClaw rules
 
@@ -93,6 +100,20 @@ Kernel need: ≥ ~5.8 for `--modern-bpf` (CO-RE). Image pin:
 [`docs/SECCOMP_EBPF_HARDENING.md`](../../docs/SECCOMP_EBPF_HARDENING.md) for
 turning traces into a tighter *block* profile later — Falco here only logs.
 
+## Detection to enforcement
+
+Falco remains delayed detection. Use a reproduced event to tighten seccomp,
+AppArmor, or a separate no-network executor; those controls block. Do not give
+an automatic responder the Docker socket merely to stop containers: that adds a
+privileged denial-of-service control plane. If forwarding is needed, send JSON
+alerts to a local operator-owned sink and retain the CyClaw audit-event ID used
+to classify the event.
+
+When gate, agentic, sync, Telegram, and executor become separate containers,
+replace the monolithic process exceptions with role-specific rules. Any
+executor egress should then be CRITICAL. Until that split, actor + action +
+destination exceptions are the narrowest safe tuning unit.
+
 ## Requirements & caveats
 
 - Linux host with a kernel new enough for Falco's modern eBPF probe
@@ -105,3 +126,8 @@ turning traces into a tighter *block* profile later — Falco here only logs.
   [`docs/SECCOMP_EBPF_HARDENING.md`](../../docs/SECCOMP_EBPF_HARDENING.md)).
 - The monitoring profile is **privileged**. Leave it off unless you need the
   eBPF tripwire and accept host-kernel access for the sidecar.
+- The read-only Docker socket mount still exposes a powerful host API; `:ro`
+  protects the socket inode, not the API methods reachable through it.
+- The `0.39.2` image is version-tagged, not digest-pinned. Re-pin and runtime
+  validate a newer Falco in a separate change; Falco 0.44 removed the gVisor
+  engine, so host eBPF cannot provide complete in-sandbox syscall visibility.
