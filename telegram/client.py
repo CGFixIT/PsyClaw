@@ -12,6 +12,7 @@ import math
 import threading
 import time
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -163,8 +164,8 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
 
     Prefer paragraph (\\n\\n) then line (\\n) boundaries; hard-split only as last resort.
     """
-    body = (text or "").strip()
-    if not body:
+    body = text or ""
+    if not body.strip():
         return []
     if max_chars <= 0:
         raise ValueError("max_chars must be > 0")
@@ -183,12 +184,12 @@ def chunk_text(text: str, max_chars: int) -> list[str]:
             split_at = window.rfind("\n")
         if split_at < max_chars // 4:
             split_at = max_chars
-        piece = remaining[:split_at].rstrip()
+        piece = remaining[:split_at]
         if not piece:
             piece = remaining[:max_chars]
             split_at = max_chars
         chunks.append(piece)
-        remaining = remaining[split_at:].lstrip()
+        remaining = remaining[split_at:]
     return chunks
 
 
@@ -523,14 +524,197 @@ def get_updates(
     )
 
 
+def get_file(cfg: TelegramConfig, *, file_id: str) -> dict[str, Any]:
+    """Resolve a Telegram file id to a short-lived download descriptor.
+
+    The caller must never log ``file_path``: it becomes token-bearing only when
+    assembled into a download URL below. The Bot API supports this two-step flow
+    for cloud-hosted files; download size is bounded separately by
+    :func:`download_file`.
+    """
+    if not isinstance(file_id, str) or not file_id.strip():
+        raise TelegramRefused("Telegram file id is missing", details={"gate": "file_id"})
+    tok = cfg.resolve_bot_token()
+    url = bot_api_url(cfg, "getFile", tok)
+    for attempt in range(_TELEGRAM_429_MAX_RETRIES + 1):
+        _raise_during_retry_cooldown(tok, "getFile")
+        try:
+            resp = _get_http_client().post(url, json={"file_id": file_id}, timeout=30.0)
+        except httpx.HTTPError as exc:
+            raise TelegramRuntimeError(
+                _transport_error_message("Telegram getFile", exc),
+                details={"method": "getFile", "retryable": True},
+            ) from None
+        try:
+            raw_data = resp.json()
+        except ValueError:
+            raise TelegramRuntimeError(
+                f"Telegram getFile returned non-JSON (HTTP {resp.status_code})",
+                details={
+                    "method": "getFile",
+                    "status": resp.status_code,
+                    "retryable": _bot_api_response_is_retryable(resp.status_code),
+                    "fatal": _bot_api_response_is_fatal(resp.status_code),
+                },
+            ) from None
+        if not isinstance(raw_data, dict):
+            raise TelegramRuntimeError(
+                f"Telegram getFile returned non-object JSON (HTTP {resp.status_code})",
+                details={
+                    "method": "getFile",
+                    "status": resp.status_code,
+                    "retryable": _bot_api_response_is_retryable(resp.status_code),
+                    "fatal": _bot_api_response_is_fatal(resp.status_code),
+                },
+            )
+        data = cast(dict[str, Any], raw_data)
+        result = data.get("result")
+        if data.get("ok") is True and resp.status_code == 200 and isinstance(result, dict):
+            file_path = result.get("file_path")
+            if isinstance(file_path, str) and file_path.strip():
+                return result
+            raise TelegramRuntimeError(
+                "Telegram getFile response has no download path",
+                details={"method": "getFile", "retryable": True},
+            )
+
+        retry_after = None
+        if resp.status_code == 429:
+            should_retry, retry_after = _handle_retry_after(
+                data,
+                tok,
+                attempt,
+                "getFile",
+                _TELEGRAM_429_MAX_RETRIES,
+            )
+            if should_retry:
+                continue
+        raise TelegramRuntimeError(
+            f"Telegram getFile failed (HTTP {resp.status_code})",
+            details={
+                "method": "getFile",
+                "status": resp.status_code,
+                "retry_after": retry_after,
+                "retryable": _bot_api_response_is_retryable(resp.status_code),
+                "fatal": _bot_api_response_is_fatal(resp.status_code),
+            },
+        )
+
+    raise TelegramRuntimeError(
+        "Telegram getFile retry loop exhausted",
+        details={"method": "getFile", "retryable": True},
+    )
+
+
+def download_file(cfg: TelegramConfig, *, file_path: str, max_bytes: int) -> bytes:
+    """Stream one Bot API file with a hard byte ceiling."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise TelegramRefused("Telegram file path is missing", details={"gate": "file_path"})
+
+    tok = cfg.resolve_bot_token()
+    _raise_during_retry_cooldown(tok, "downloadFile")
+    # File paths originate with Telegram but are still treated as untrusted
+    # opaque paths. Never log this URL: the Bot API token is part of it.
+    raw_path = file_path.strip().lstrip("/")
+    path_parts = raw_path.split("/")
+    if not raw_path or any(part in {"", ".", ".."} for part in path_parts):
+        raise TelegramRefused("Telegram returned an unsafe file path", details={"gate": "file_path"})
+    encoded_path = quote(raw_path, safe="/")
+    url = f"{cfg.api_base}/file/bot{tok}/{encoded_path}"
+    for attempt in range(_TELEGRAM_429_MAX_RETRIES + 1):
+        _raise_during_retry_cooldown(tok, "downloadFile")
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            with _get_http_client().stream(
+                "GET",
+                url,
+                timeout=httpx.Timeout(60.0, connect=10.0),
+                follow_redirects=False,
+            ) as resp:
+                if resp.status_code == 429:
+                    try:
+                        raw_data = resp.json()
+                    except ValueError:
+                        raw_data = {}
+                    data = raw_data if isinstance(raw_data, dict) else {}
+                    should_retry, retry_after = _handle_retry_after(
+                        data,
+                        tok,
+                        attempt,
+                        "downloadFile",
+                        _TELEGRAM_429_MAX_RETRIES,
+                    )
+                    if should_retry:
+                        continue
+                    raise TelegramRuntimeError(
+                        "Telegram file download failed (HTTP 429)",
+                        details={
+                            "method": "downloadFile",
+                            "status": 429,
+                            "retry_after": retry_after,
+                            "retryable": True,
+                        },
+                    )
+                if resp.status_code != 200:
+                    raise TelegramRuntimeError(
+                        f"Telegram file download failed (HTTP {resp.status_code})",
+                        details={
+                            "method": "downloadFile",
+                            "status": resp.status_code,
+                            "retryable": _http_status_is_retryable(resp.status_code),
+                            "fatal": _bot_api_response_is_fatal(resp.status_code),
+                        },
+                    )
+                content_length = resp.headers.get("content-length")
+                if content_length is not None:
+                    try:
+                        declared_size = int(content_length)
+                    except ValueError:
+                        declared_size = None
+                    if declared_size is not None and declared_size > max_bytes:
+                        raise TelegramRefused(
+                            "Telegram file exceeds the configured download cap",
+                            details={"gate": "max_download_bytes"},
+                        )
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise TelegramRefused(
+                            "Telegram file exceeds the configured download cap",
+                            details={"gate": "max_download_bytes"},
+                        )
+                    chunks.append(chunk)
+        except TelegramRuntimeError:
+            raise
+        except TelegramRefused:
+            raise
+        except httpx.HTTPError as exc:
+            raise TelegramRuntimeError(
+                _transport_error_message("Telegram file download", exc),
+                details={"method": "downloadFile", "retryable": True},
+            ) from None
+        return b"".join(chunks)
+
+    raise TelegramRuntimeError(
+        "Telegram file download retry loop exhausted",
+        details={"method": "downloadFile", "retryable": True},
+    )
+
+
 def post_query(
     cfg: TelegramConfig,
     *,
     query: str,
+    user_confirmed_online: bool = False,
+    online_provider: str | None = None,
 ) -> dict[str, Any]:
     """Call existing CyClaw ``POST /query`` over loopback. Never bypasses the graph.
 
-    Does not set user_confirmed_online — hybrid remains triple-gated by the core.
+    The default remains offline. T3 supplies ``user_confirmed_online`` only after
+    a one-time, allowlisted Telegram consent has been claimed by the runner.
     """
     text = (query or "").strip()
     if not text:
@@ -539,6 +723,21 @@ def post_query(
         raise TelegramRefused(
             f"query exceeds telegram.max_message_chars ({cfg.max_message_chars})",
             details={"gate": "max_message_chars", "len": len(text)},
+        )
+    if not isinstance(user_confirmed_online, bool):
+        raise TelegramRefused(
+            "user_confirmed_online must be a boolean",
+            details={"gate": "hybrid_confirm"},
+        )
+    if online_provider not in (None, "grok", "claude"):
+        raise TelegramRefused(
+            "online_provider must be grok or claude",
+            details={"gate": "online_provider"},
+        )
+    if online_provider is not None and not user_confirmed_online:
+        raise TelegramRefused(
+            "online_provider requires explicit hybrid confirmation",
+            details={"gate": "hybrid_confirm"},
         )
 
     url = f"{cfg.query.base_url}/query"
@@ -549,9 +748,10 @@ def post_query(
 
     payload = {
         "query": text,
-        # Explicit: Telegram must never auto-confirm online / hybrid.
-        "user_confirmed_online": False,
+        "user_confirmed_online": user_confirmed_online,
     }
+    if online_provider is not None:
+        payload["online_provider"] = online_provider
     started = time.monotonic()
     try:
         resp = _get_loopback_http_client().post(
@@ -598,6 +798,8 @@ def post_query(
         "query_hash": hash_query(text),
         "query_len": len(text),
         "answer_model": answer_model,
+        "user_confirmed_online": user_confirmed_online,
+        "online_provider": online_provider,
     }
     if parse_error:
         event["error_type"] = parse_error

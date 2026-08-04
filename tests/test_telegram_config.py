@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from telegram.config import TelegramConfig, load_telegram_config
+from telegram.config import (
+    DEFAULT_HYBRID_CONFIRM_TTL_SEC,
+    DEFAULT_MEDIA_MAX_DOWNLOAD_BYTES,
+    TelegramConfig,
+    load_telegram_config,
+)
 from utils.errors import TelegramConfigError
 from utils.logger import reset_config_cache
 
@@ -67,6 +72,58 @@ def test_valid_enabled_load(tmp_path: Path) -> None:
     assert cfg.is_chat_allowed(12345)
     assert cfg.is_chat_allowed("67890")
     assert not cfg.is_chat_allowed(999)
+
+
+def test_t3_t4_defaults_are_default_off_and_bounded(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"enabled": False})
+    cfg = load_telegram_config(path)
+    assert cfg.allow_hybrid_confirm is False
+    assert cfg.hybrid_confirm_ttl_sec == DEFAULT_HYBRID_CONFIRM_TTL_SEC
+    assert cfg.media.enabled is False
+    assert cfg.media.max_download_bytes == DEFAULT_MEDIA_MAX_DOWNLOAD_BYTES
+
+
+@pytest.mark.parametrize("ttl", [False, 0, -1, 301, "120"])
+def test_rejects_unsafe_hybrid_confirmation_ttl(tmp_path: Path, ttl: object) -> None:
+    path = _write_config(tmp_path, {"enabled": False, "hybrid_confirm_ttl_sec": ttl})
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
+
+
+def test_media_enable_requires_explicit_fsconnect_root(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"enabled": False, "media": {"enabled": True}})
+    with pytest.raises(TelegramConfigError) as exc:
+        load_telegram_config(path)
+    assert "fsconnect_root" in exc.value.message
+
+
+def test_media_enable_requires_an_absolute_fsconnect_root(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {"enabled": False, "media": {"enabled": True, "fsconnect_root": "relative/staging"}},
+    )
+    with pytest.raises(TelegramConfigError) as exc:
+        load_telegram_config(path)
+    assert "absolute" in exc.value.message
+
+
+@pytest.mark.parametrize("value", [0, -1, 20 * 1024 * 1024 + 1, "1024"])
+def test_rejects_invalid_media_download_cap(tmp_path: Path, value: object) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "enabled": False,
+            "media": {"enabled": False, "max_download_bytes": value},
+        },
+    )
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
+
+
+def test_media_unknown_keys_are_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"enabled": False, "media": {"unknown": True}})
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
 
 
 def test_rejects_non_loopback_query_url(tmp_path: Path) -> None:

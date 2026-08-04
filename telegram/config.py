@@ -41,7 +41,11 @@ DEFAULT_API_KEY_ENV = "CYCLAW_API_KEY"
 DEFAULT_QUERY_TIMEOUT_SEC = 660  # match api.graph_timeout_sec
 DEFAULT_RATE_MAX_OPS = 20
 DEFAULT_RATE_WINDOW_SECONDS = 60
-DEFAULT_ALLOW_HYBRID_CONFIRM = False  # T3 — not wired in skeleton
+DEFAULT_ALLOW_HYBRID_CONFIRM = False
+DEFAULT_HYBRID_CONFIRM_TTL_SEC = 120
+MAX_HYBRID_CONFIRM_TTL_SEC = 300
+DEFAULT_MEDIA_MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024
+MAX_TELEGRAM_CLOUD_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 _VALID_MODES = ("notify", "chat")
 # Telegram chat ids are signed 64-bit integers (user positive, groups negative).
@@ -158,6 +162,47 @@ class TelegramQueryConfig:
 
 
 @dataclass
+class TelegramMediaConfig:
+    """Default-off controls for the T4 media-to-fsconnect staging bridge."""
+
+    enabled: bool = False
+    fsconnect_root: str = ""
+    max_download_bytes: int = DEFAULT_MEDIA_MAX_DOWNLOAD_BYTES
+
+    def __post_init__(self) -> None:
+        _validate_bool(self.enabled, "telegram.media.enabled")
+        self.max_download_bytes = _validate_positive_int(
+            self.max_download_bytes,
+            "telegram.media.max_download_bytes",
+        )
+        if self.max_download_bytes > MAX_TELEGRAM_CLOUD_DOWNLOAD_BYTES:
+            raise TelegramConfigError(
+                "telegram.media.max_download_bytes must be <= 20 MiB",
+                details={"received": self.max_download_bytes},
+            )
+        if not isinstance(self.fsconnect_root, str):
+            raise TelegramConfigError(
+                "telegram.media.fsconnect_root must be a string",
+                details={"received_type": type(self.fsconnect_root).__name__},
+            )
+        if "\x00" in self.fsconnect_root:
+            raise TelegramConfigError("telegram.media.fsconnect_root must not contain a NUL byte")
+        self.fsconnect_root = self.fsconnect_root.strip()
+        if self.enabled and not self.fsconnect_root:
+            raise TelegramConfigError(
+                "telegram.media.fsconnect_root is required when telegram.media.enabled is true",
+                details={"hint": "Use one explicit path from fsconnect.writable_roots."},
+            )
+        if self.enabled:
+            expanded_root = os.path.expanduser(os.path.expandvars(self.fsconnect_root))
+            if not os.path.isabs(expanded_root):
+                raise TelegramConfigError(
+                    "telegram.media.fsconnect_root must be an absolute path when enabled",
+                    details={"hint": "Use a dedicated absolute fsconnect.writable_roots path."},
+                )
+
+
+@dataclass
 class TelegramConfig:
     """Parsed and validated ``telegram:`` block from config.yaml."""
 
@@ -169,14 +214,25 @@ class TelegramConfig:
     poll_timeout_sec: int = DEFAULT_POLL_TIMEOUT_SEC
     max_message_chars: int = DEFAULT_MAX_MESSAGE_CHARS
     allow_hybrid_confirm: bool = DEFAULT_ALLOW_HYBRID_CONFIRM
+    hybrid_confirm_ttl_sec: int = DEFAULT_HYBRID_CONFIRM_TTL_SEC
     rate_limit: TelegramRateLimitConfig = field(default_factory=TelegramRateLimitConfig)
     query: TelegramQueryConfig = field(default_factory=TelegramQueryConfig)
+    media: TelegramMediaConfig = field(default_factory=TelegramMediaConfig)
     # Bookkeeping — not a config key.
     _config_path: str = "config.yaml"
 
     def __post_init__(self) -> None:
         _validate_bool(self.enabled, "telegram.enabled")
         _validate_bool(self.allow_hybrid_confirm, "telegram.allow_hybrid_confirm")
+        self.hybrid_confirm_ttl_sec = _validate_positive_int(
+            self.hybrid_confirm_ttl_sec,
+            "telegram.hybrid_confirm_ttl_sec",
+        )
+        if self.hybrid_confirm_ttl_sec > MAX_HYBRID_CONFIRM_TTL_SEC:
+            raise TelegramConfigError(
+                f"telegram.hybrid_confirm_ttl_sec must be <= {MAX_HYBRID_CONFIRM_TTL_SEC}",
+                details={"received": self.hybrid_confirm_ttl_sec},
+            )
 
         if self.mode not in _VALID_MODES:
             raise TelegramConfigError(
@@ -258,6 +314,8 @@ class TelegramConfig:
             raise TelegramConfigError("telegram.rate_limit must be a mapping")
         if not isinstance(self.query, TelegramQueryConfig):
             raise TelegramConfigError("telegram.query must be a mapping")
+        if not isinstance(self.media, TelegramMediaConfig):
+            raise TelegramConfigError("telegram.media must be a mapping")
 
         # Fail loud when enabled with an empty allowlist: nothing would ever work,
         # and silent "enabled but dead" is worse than a config error at load time.
@@ -333,8 +391,10 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
         "poll_timeout_sec",
         "max_message_chars",
         "allow_hybrid_confirm",
+        "hybrid_confirm_ttl_sec",
         "rate_limit",
         "query",
+        "media",
     }
     unknown = set(block) - known
     if unknown:
@@ -375,6 +435,22 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
             details={"unknown": unknown_display},
         )
 
+    media_raw = block.get("media", {})
+    if not isinstance(media_raw, dict):
+        raise TelegramConfigError("telegram.media must be a mapping")
+    media = TelegramMediaConfig(
+        enabled=media_raw.get("enabled", False),
+        fsconnect_root=media_raw.get("fsconnect_root", ""),
+        max_download_bytes=media_raw.get("max_download_bytes", DEFAULT_MEDIA_MAX_DOWNLOAD_BYTES),
+    )
+    unknown_media = set(media_raw) - {"enabled", "fsconnect_root", "max_download_bytes"}
+    if unknown_media:
+        unknown_display = sorted(str(key) for key in unknown_media)
+        raise TelegramConfigError(
+            f"telegram.media unknown key(s): {unknown_display}",
+            details={"unknown": unknown_display},
+        )
+
     cfg = TelegramConfig(
         enabled=block.get("enabled", False),
         mode=block.get("mode", DEFAULT_MODE),
@@ -387,8 +463,13 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
         poll_timeout_sec=block.get("poll_timeout_sec", DEFAULT_POLL_TIMEOUT_SEC),
         max_message_chars=block.get("max_message_chars", DEFAULT_MAX_MESSAGE_CHARS),
         allow_hybrid_confirm=block.get("allow_hybrid_confirm", DEFAULT_ALLOW_HYBRID_CONFIRM),
+        hybrid_confirm_ttl_sec=block.get(
+            "hybrid_confirm_ttl_sec",
+            DEFAULT_HYBRID_CONFIRM_TTL_SEC,
+        ),
         rate_limit=rate_limit,
         query=query,
+        media=media,
         _config_path=config_path,
     )
     return cfg

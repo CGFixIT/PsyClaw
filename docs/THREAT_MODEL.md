@@ -462,7 +462,7 @@ not attacker-chosen at the command level.
 
 ### Seventh amendment — Telegram channel (out-of-band, default-off)
 
-- **What changed (2026-08-03).** A new out-of-band package `telegram/` can
+- **What changed (2026-08-03; expanded 2026-08-04).** A new out-of-band package `telegram/` can
   reach the Telegram Bot API for outbound notify (mode `notify`) and, when
   configured, long-poll inbound chat (mode `chat`). Inbound text is turned into
   answers **only** by HTTP `POST /query` to the existing loopback CyClaw server
@@ -471,10 +471,16 @@ not attacker-chosen at the command level.
 - **What this does NOT change.** Graph topology, triple-gate hybrid, soul
   governance, agentic write disarm, and the I6 import boundary are unchanged.
   `gate.py` / `graph.py` / `mcp_hybrid_server.py` do **not** import `telegram`.
-  The channel never sets `user_confirmed_online=true` automatically.
+  The channel never derives `user_confirmed_online=true` from ordinary message
+  text. When its default-off T3 master switch is enabled, only the exact,
+  provider-specific `/online on <grok|claude>` command creates a one-shot,
+  short-lived consent record; the next non-command message claims and deletes
+  it before `/query`. Core `mode=hybrid` and provider-enabled gates remain the
+  final authority.
 - **Shipped posture.** `telegram.enabled: false`, `mode: notify`, empty
   `allowed_chat_ids`. Enabling with an empty allowlist is a **config load
-  error**. Bot token is env-only (`TELEGRAM_BOT_TOKEN` by default).
+  error**. Bot token is env-only (`TELEGRAM_BOT_TOKEN` by default). T3 consent
+  and T4 attachment staging are both independently default-off.
 - **Threat surface added (honest).** Telegram's cloud sees message plaintext
   for any traffic the operator sends or receives through the bot. This is
   **not** offline end-to-end privacy for the chat channel; local RAG inference
@@ -482,16 +488,26 @@ not attacker-chosen at the command level.
   narratives must not claim otherwise.
 - **Controls.** Chat-id allowlist; loopback-only CyClaw base URL; audit events
   (`telegram_inbound` / `telegram_outbound` / `telegram_query`) with query
-  hashing and token fingerprint only; no webhook listener in the skeleton
-  (long-poll only); no multi-tenant isolation claims.
+  hashing and token fingerprint only; no webhook listener (long-poll only);
+  no multi-tenant isolation claims. T3 state contains only expiry/provider,
+  uses per-session locking and atomic replacement, and is consumed before the
+  query. T4 accepts only allowlisted private-chat photos/documents with an
+  explicit caption confirmation, strips user-controlled filename/MIME from its
+  write decision, bounds Bot API download size, requires fsconnect's enabled,
+  write, strict-root, scan, injection-block, and persistent write-rate-limit
+  gates; requires an absolute root outside the repository/corpus and separate
+  from read roots; and runs the existing fsconnect CLI with fixed argv and
+  stdin. T4 does not auto-index or write the corpus.
 - **Residual risk.** A stolen bot token + knowledge of an allowlisted chat id
   can send messages as the bot and, if `mode: chat` and CyClaw is up, submit
   queries as the operator would over `/query`. Treat the token like an API key;
   rotate via BotFather if leaked. Compromised Telegram infrastructure is out of
   CyClaw's control (same class as any cloud chat product).
-- **What still does not exist.** Webhook mode, hybrid confirm-from-Telegram
-  (T3), media→corpus auto-ingest (T4), group multi-user ACLs, in-process
-  scheduler inside `gate.py`.
+- **What still does not exist.** Webhook mode, media→corpus auto-ingest,
+  group multi-user ACLs, Telegram routing into the terminal/harness UI, and an
+  in-process scheduler inside `gate.py`. T4 remains rollout-partial pending a
+  disposable-root live validation and a separately reviewed replay/ingest
+  policy.
 
 ---
 
