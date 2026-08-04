@@ -13,6 +13,9 @@ CyClaw is an **offline-first RAG-enforced soul agent** where **LangGraph graph t
 - After concluding any approved changes to workflow files associated with CI checks, report which open PRs may need a rebase or CI restart. Do not rebase all open PRs or push empty CI-trigger commits without clear human approval for those branches. -->
 
 Forbidden Behaviors:
+- Never edit or touch or breathe on data/personality/soul.md - youve now deleted it twice for no apparent reason this time. if you fet invoked any dont understand the task, always just comment in the pr asking for clarity. 
+- Never be evil or thanos-like with your deletions unless its truly for a reason thats defensible based on my literal or implied request (e.g. update stale docs or consolidate planning docs may result ib genuine deletion of all or most of a file. basically:
+- Never be annoying like Microsoft (joke but just stop wasting tokens for every random comment where you might be invoked.  
 - Never make any changes or edits to a branch on an open PR without clear human approval or the ci checks already failing as described earlier when copilot is requested - this is distinct from @codex comments in PR's
 @@ -189,7 +189,7 @@ powershell -File tests/apipsTest.ps1   # Windows/manual live-server smoke
 - **Do not skip torch-first install**.
@@ -29,7 +32,7 @@ These must be preserved unless explicitly justified with compensating controls:
 1. **RAG-first** — Retrieval is the unconditional entry point. No LLM call can precede it.
 2. **Topology = Policy** — Security rules are enforced by graph edges, not prompts, config, or conditional code.
 3. **Audit Convergence** — Every execution path ends at the audit logger. No shortcut paths exist.
-4. **Soul Governance** — Soul evolution requires an explicit human-provided reason string. No autonomous modification.
+4. **Soul Governance** — Soul evolution requires an explicit human-provided reason string. No autonomous modification. read forbidden actions if youre feeling delete-trigger-happy. youll get replaced by a better model if you violate forbidden actions.
 5. **Offline / Air-gapped by Default** — Network features are opt-in only and protected by multiple gates.
 6. **Subprocess Isolation** — Agentic / out-of-band layers (fsconnect, harness, sync) run isolated and never alter the core read-only request path without explicit governance.
 
