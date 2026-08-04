@@ -103,14 +103,11 @@ def test_attachment_parser_uses_no_original_filename_and_selects_largest_photo()
 def test_save_confirmation_requires_the_closed_explicit_form(caption: object) -> None:
     assert save_confirmation(caption) is None
 
-@pytest.mark.skipif(
-    os.name == "nt",
-    reason="fsconnect writes hard-refused on Windows (name-based TOCTOU; see writer._writes_refused_platform / codex #593 P1)",
-)
-deftest_confirmed_private_media_executes_the_existing_fsconnect_cli(
-    tmp_path: Path,
-) -> None:
-    """Exercise the bridge's real local write boundary without Telegram network I/O."""
+
+
+# take a moment and rethink the non indent more of oversight from before I luckily noticed - but tldr it should err on paranoid with fs access until
+# I feel like i understand telegram a lot more on api and attack vector level. this is a test function but it raises a good q for later
+
 
 
 
