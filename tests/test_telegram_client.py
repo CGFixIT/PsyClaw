@@ -10,7 +10,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from telegram.client import chunk_text, get_updates, post_query, reset_http_client_for_tests, send_message
+from telegram.client import (
+    chunk_text,
+    download_file,
+    get_file,
+    get_updates,
+    post_query,
+    reset_http_client_for_tests,
+    send_message,
+)
 from telegram.config import load_telegram_config
 from telegram.ratelimit import get_limiter, reset_limiters_for_tests
 from utils.errors import TelegramRefused, TelegramRuntimeError
@@ -56,6 +64,12 @@ def test_chunk_text_prefers_paragraph() -> None:
     assert len(parts) >= 2
     assert all(len(p) <= 40 for p in parts)
     assert "para one" in parts[0]
+
+
+def test_chunk_text_preserves_answer_text_across_message_boundaries() -> None:
+    text = "  leading\n\n" + ("x" * 45) + "\n\ntrailing  "
+    parts = chunk_text(text, max_chars=20)
+    assert "".join(parts) == text
 
 
 def test_send_message_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,6 +457,112 @@ def test_post_query_success(tmp_path: Path) -> None:
         payload = kwargs.kwargs.get("json") or kwargs[1].get("json")
         assert payload["user_confirmed_online"] is False
     assert data["answer"] == "from local"
+
+
+def test_post_query_allows_runner_controlled_one_shot_confirmation(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"answer": "from configured fallback", "model_used": "claude"}
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client = client_cls.return_value
+        client.post.return_value = mock_resp
+        post_query(
+            cfg,
+            query="one explicit external request",
+            user_confirmed_online=True,
+            online_provider="claude",
+        )
+    payload = client.post.call_args.kwargs["json"]
+    assert payload["user_confirmed_online"] is True
+    assert payload["online_provider"] == "claude"
+
+
+def test_post_query_refuses_provider_without_confirmation(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with pytest.raises(TelegramRefused) as exc:
+        post_query(cfg, query="still local", online_provider="grok")
+    assert (exc.value.details or {}).get("gate") == "hybrid_confirm"
+
+
+def test_get_file_resolves_a_download_path_without_exposing_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "123456:ABC-live-secret"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    cfg = _cfg(tmp_path)
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "ok": True,
+        "result": {"file_id": "opaque-id", "file_path": "documents/opaque.bin", "file_size": 3},
+    }
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = response
+        descriptor = get_file(cfg, file_id="opaque-id")
+    assert descriptor["file_size"] == 3
+    assert token not in str(descriptor)
+
+
+def test_download_file_stops_after_the_configured_byte_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {"content-length": "4"}
+    stream = MagicMock()
+    stream.__enter__.return_value = response
+    stream.__exit__.return_value = False
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.stream.return_value = stream
+        with pytest.raises(TelegramRefused) as exc:
+            download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert (exc.value.details or {}).get("gate") == "max_download_bytes"
+
+
+def test_download_file_refuses_unsafe_telegram_path_before_network(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    with patch("telegram.client.httpx.Client") as client_cls:
+        with pytest.raises(TelegramRefused) as exc:
+            download_file(cfg, file_path="documents/../outside.bin", max_bytes=3)
+    assert (exc.value.details or {}).get("gate") == "file_path"
+    client_cls.return_value.stream.assert_not_called()
+
+
+def test_download_file_honors_one_bot_api_429_retry_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    limited = MagicMock()
+    limited.status_code = 429
+    limited.json.return_value = {"ok": False, "parameters": {"retry_after": 1}}
+    success = MagicMock()
+    success.status_code = 200
+    success.headers = {"content-length": "3"}
+    success.iter_bytes.return_value = [b"abc"]
+    limited_stream = MagicMock()
+    limited_stream.__enter__.return_value = limited
+    limited_stream.__exit__.return_value = False
+    success_stream = MagicMock()
+    success_stream.__enter__.return_value = success
+    success_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+    ):
+        client_cls.return_value.stream.side_effect = [limited_stream, success_stream]
+        data = download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert data == b"abc"
+    sleep.assert_called_once_with(1.0)
+    assert client_cls.return_value.stream.call_count == 2
+    assert client_cls.return_value.stream.call_args.kwargs["follow_redirects"] is False
 
 
 def test_post_query_uses_proxy_disabled_loopback_client(tmp_path: Path) -> None:

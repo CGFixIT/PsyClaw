@@ -28,7 +28,7 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
         results.append(ok("01. Config loads and validates"))
     except TelegramConfigError as exc:
         results.append(fail("01. Config loads and validates", exc.message))
-        for n in range(2, 8):
+        for n in range(2, 9):
             results.append(skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
         return cast(tuple[int, int, list[str]], finalize(results))
 
@@ -82,14 +82,25 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
     else:
         results.append(fail("06. telegram/ does not import request-path modules", "; ".join(leaked_files)))
 
-    # 07. Hybrid auto-confirm is off by default.
+    # 07. Hybrid consent remains default-off and requires a one-shot command.
     if cfg.allow_hybrid_confirm is False:
         results.append(ok("07. allow_hybrid_confirm is false (T3 not armed)"))
     else:
         results.append(
             skip(
                 "07. allow_hybrid_confirm is false (T3 not armed)",
-                "operator set true — T3 UX still not implemented in skeleton",
+                "operator enabled explicit one-shot T3 confirmation",
+            )
+        )
+
+    # 08. T4 media is independently disabled unless an operator configures it.
+    if cfg.media.enabled is False:
+        results.append(ok("08. media staging is disabled by default"))
+    else:
+        results.append(
+            skip(
+                "08. media staging is disabled by default",
+                "operator enabled explicit private-chat fsconnect staging",
             )
         )
 

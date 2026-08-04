@@ -741,7 +741,8 @@ telegram:
   api_base: "https://api.telegram.org"
   poll_timeout_sec: 30           # long-poll window for getUpdates (mode=chat)
   max_message_chars: 4000        # align with policy.prompt_filter.max_input_chars
-  allow_hybrid_confirm: false    # T3 reserved — not wired; leave false
+  allow_hybrid_confirm: false    # T3 master switch; explicit /online on <grok|claude> only
+  hybrid_confirm_ttl_sec: 120    # T3 one-request consent lifetime; hard-capped at 300 seconds
   rate_limit:
     max_ops: 20                  # soft ceiling (enforcement hardened in T1/T2 follow-ups)
     window_seconds: 60
@@ -749,3 +750,7 @@ telegram:
     base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
     api_key_env: "CYCLAW_API_KEY"
     timeout_sec: 660             # match api.graph_timeout_sec
+  media:
+    enabled: false               # T4 default-off; accepts only private-chat /save --confirm attachments
+    fsconnect_root: ""           # REQUIRED when enabled; exact explicit fsconnect.writable_roots entry
+    max_download_bytes: 10485760 # bounded again by fsconnect.max_write_bytes and Bot API's 20 MiB cloud cap
