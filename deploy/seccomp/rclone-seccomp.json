@@ -1,7 +1,0 @@
-{
-  "defaultAction": "SCMP_ACT_ERRNO",
-  "defaultErrnoRet": 1,
-  "syscalls": [
-    {"names": ["read", "write", "open", "close", "stat", "fstat", "lstat", "poll", "lseek", "mmap", "mprotect", "munmap", "socket", "connect", "sendto", "recvfrom", "sendmsg", "recvmsg", "bind", "listen", "accept", "getsockname", "getpeername", "setsockopt", "clone", "fork", "vfork", "execve", "wait4", "kill", "uname", "fcntl", "getdents", "getcwd", "chdir", "fchdir", "rename", "mkdir", "rmdir", "unlink", "symlink", "chmod", "chown", "fstatfs", "getuid", "getgid", "setuid", "setgid", "geteuid", "getegid", "setpgid", "getppid", "getpgrp", "setsid", "setreuid", "setregid", "getgroups", "setgroups", "getresuid", "getresgid", "getpgid", "getsid", "getsid", "capget", "capset", "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "ioctl", "readv", "writev", "pread64", "pwrite64", "access", "pipe", "select", "sched_yield", "mremap", "msync", "dup", "dup2", "pause", "nanosleep", "getitimer", "alarm", "setitimer", "getpid", "sendfile", "ftruncate", "fchmod", "fchown", "getpriority", "setpriority", "flock", "fsync", "fdatasync", "truncate", "getrlimit", "setrlimit", "prctl", "chroot", "sync", "mount?no", "umount2?no", "reboot?no", "ptrace?no"], "action": "SCMP_ACT_ALLOW"}
-  ]
-}
