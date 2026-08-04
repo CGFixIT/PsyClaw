@@ -18,14 +18,13 @@ What this adds that dep-guard does not check:
     has zero references to the file). A stale requirements.txt pin would
     pass every dep-guard check silently.
   - Output is a flat, normalized {package: {file: version}} table meant to
-    be handed to a currency check (verify-deps/SKILL.md Step 2) or read by
-    a human — not a pass/fail gate.
+    be handed to a currency check (verify-deps/SKILL.md Step 2) or read by a
+    human. `--strict` turns requirements.txt/constraints.txt drift into a gate.
 
-Exit codes: 0 always, unless a required pin file is missing/unparseable (3).
-This script does not FAIL on drift — it reports. Drift detection belongs to
-dep-guard (D6 for pyproject<->constraints, and REQ_MISMATCH here as an
-extension for requirements.txt<->constraints); this script's job is to
-produce the table both dep-guard-style checks and a currency check consume.
+Exit codes: 0 when the table is readable, 2 for reported requirements drift
+under --strict, and 3 when a required pin file is missing or unparseable.
+Without --strict this remains a reporting tool; --strict lets automated callers
+fail closed on requirements.txt<->constraints.txt drift.
 """
 from __future__ import annotations
 
@@ -96,13 +95,21 @@ def build_table(root: Path) -> dict[str, dict[str, str]]:
 
 
 def find_requirements_drift(table: dict[str, dict[str, str]]) -> list[str]:
-    """Packages where requirements.txt disagrees with constraints.txt —
-    the one cross-file agreement dep-guard's D6 does not cover."""
+    """Packages where requirements.txt is not constrained identically.
+
+    This is the one cross-file agreement dep-guard's D6 does not cover.
+    A requirements pin absent from constraints is drift too: the legacy/CI/Docker
+    path would otherwise resolve it outside the reproducibility ceiling.
+    """
     drift = []
     for name, by_file in sorted(table.items()):
         req_v = by_file.get("requirements.txt")
         con_v = by_file.get("constraints.txt")
-        if req_v is not None and con_v is not None and req_v != con_v:
+        if req_v is None:
+            continue
+        if con_v is None:
+            drift.append(f"{name}: requirements.txt=={req_v} missing from constraints.txt")
+        elif req_v != con_v:
             drift.append(f"{name}: requirements.txt=={req_v} vs constraints.txt=={con_v}")
     return drift
 
@@ -111,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None)
     p.add_argument("--json", action="store_true", help="emit the raw table as JSON")
+    p.add_argument("--strict", action="store_true",
+                   help="return 2 when requirements.txt and constraints.txt drift")
     args = p.parse_args(argv)
 
     root = args.repo_root or Path(__file__).resolve().parents[3]
@@ -126,9 +135,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"env error: could not parse pins: {exc}", file=sys.stderr)
         return 3
 
+    drift = find_requirements_drift(table)
+
     if args.json:
         print(json.dumps(table, indent=2, sort_keys=True))
-        return 0
+        return 2 if args.strict and drift else 0
 
     print(f"{'package':<24} {'pyproject.toml':<16} {'constraints.txt':<16} "
           f"{'requirements.txt':<18} {'environment.yml':<16}")
@@ -141,7 +152,6 @@ def main(argv: list[str] | None = None) -> int:
             f"{by_file.get('environment.yml', '-'):<16}"
         )
 
-    drift = find_requirements_drift(table)
     print()
     if drift:
         print(f"requirements.txt <-> constraints.txt drift ({len(drift)}):")
@@ -149,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  DRIFT  {line}")
     else:
         print("requirements.txt <-> constraints.txt: no drift (dep-guard does not check this pair)")
-    return 0
+    return 2 if args.strict and drift else 0
 
 
 if __name__ == "__main__":
