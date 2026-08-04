@@ -178,6 +178,7 @@ def test_poll_once_does_not_advance_offset_on_runtime_failure(tmp_path: Path) ->
     assert next_offset is None
     assert handled[0]["code"]
     assert "error" in handled[0]
+    assert handled[0]["retryable"] is True
 
 
 def test_poll_once_mixed_batch_redelivers_remainder_on_runtime_failure(tmp_path: Path) -> None:
@@ -232,6 +233,30 @@ def test_poll_once_advances_offset_on_terminal_refusal(tmp_path: Path) -> None:
     assert handled[0]["error"]
 
 
+def test_poll_once_does_not_advance_offset_on_rate_limit_refusal(tmp_path: Path) -> None:
+    """A spent inbound budget is temporary, so Telegram must redeliver the update."""
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 12,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRefused(
+                "rate limited",
+                details={"gate": "rate_limit"},
+            ),
+        ),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset is None
+    assert handled[0]["retryable"] is True
+
+
 def test_rate_limiter_trips() -> None:
     lim = SlidingWindowLimiter(max_ops=2, window_seconds=60)
     lim.check("k")
@@ -275,3 +300,35 @@ def test_poll_forever_persists_offset(tmp_path: Path) -> None:
         n = poll_forever(cfg, max_iterations=1, offset_path=offset_path)
     assert n == 1
     assert load_offset(offset_path) == 6
+
+
+def test_poll_forever_backs_off_after_message_runtime_failure(tmp_path: Path) -> None:
+    """A failed query/send must back off without acknowledging the Telegram update."""
+    cfg = _cfg(tmp_path)
+    offset_path = tmp_path / "offset.json"
+    updates = [
+        {
+            "update_id": 10,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRuntimeError(
+                "send failed",
+                details={"method": "sendMessage"},
+            ),
+        ),
+        patch("telegram.runner.time.sleep") as sleep,
+    ):
+        n = poll_forever(
+            cfg,
+            max_iterations=1,
+            sleep_on_error_sec=2.5,
+            offset_path=offset_path,
+        )
+    assert n == 1
+    assert load_offset(offset_path) is None
+    sleep.assert_called_once_with(2.5)
