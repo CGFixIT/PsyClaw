@@ -94,6 +94,33 @@ def test_send_message_api_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
             send_message(cfg, chat_id=42, text="hello")
 
 
+def test_send_message_retries_429_with_bounded_retry_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.json.return_value = {
+        "ok": False,
+        "error_code": 429,
+        "parameters": {"retry_after": 999},
+    }
+    success = MagicMock()
+    success.status_code = 200
+    success.json.return_value = {"ok": True, "result": {"message_id": 8}}
+
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+    ):
+        client_cls.return_value.post.side_effect = [rate_limited, success]
+        data = send_message(cfg, chat_id=42, text="hello")
+    assert data["result"]["message_id"] == 8
+    assert client_cls.return_value.post.call_count == 2
+    sleep.assert_called_once_with(60.0)
+
+
 def test_send_message_transport_error_redacts_bot_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -183,3 +210,30 @@ def test_get_updates_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         updates = get_updates(cfg, offset=None)
     assert len(updates) == 1
     assert updates[0]["update_id"] == 1
+
+
+def test_get_updates_retries_429_after_server_delay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.json.return_value = {
+        "ok": False,
+        "error_code": 429,
+        "parameters": {"retry_after": 2},
+    }
+    success = MagicMock()
+    success.status_code = 200
+    success.json.return_value = {"ok": True, "result": []}
+
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+    ):
+        client_cls.return_value.get.side_effect = [rate_limited, success]
+        updates = get_updates(cfg, offset=4)
+    assert updates == []
+    assert client_cls.return_value.get.call_count == 2
+    sleep.assert_called_once_with(2.0)

@@ -209,21 +209,27 @@ def poll_once(
                 )
             )
         except TelegramRefused as exc:
-            # Terminal policy refusal (allowlist/mode/rate-limit): ack so we do
-            # not re-process forever. Transport/query failures must NOT ack.
-            handled.append(
-                {
-                    "error": getattr(exc, "message", str(exc)),
-                    "code": getattr(exc, "code", "TELEGRAM_ERROR"),
-                    "chat_id": str(chat_id),
-                }
-            )
+            # Allowlist/mode/input refusals are terminal, so ack them. A spent
+            # rate-limit window is temporary: leave that update unacked and stop
+            # the batch so poll_forever can back off before Telegram redelivers it.
+            retryable = (getattr(exc, "details", None) or {}).get("gate") == "rate_limit"
+            error = {
+                "error": getattr(exc, "message", str(exc)),
+                "code": getattr(exc, "code", "TELEGRAM_ERROR"),
+                "chat_id": str(chat_id),
+            }
+            if retryable:
+                error["retryable"] = True
+            handled.append(error)
+            if retryable:
+                break
         except TelegramRuntimeError as exc:
             handled.append(
                 {
                     "error": getattr(exc, "message", str(exc)),
                     "code": getattr(exc, "code", "TELEGRAM_ERROR"),
                     "chat_id": str(chat_id),
+                    "retryable": True,
                 }
             )
             # Stop processing the batch: leaving next_offset at/before this
@@ -263,7 +269,7 @@ def poll_forever(
     batches = 0
     while max_iterations is None or batches < max_iterations:
         try:
-            new_offset, _ = poll_once(cfg, offset=offset)
+            new_offset, handled = poll_once(cfg, offset=offset)
             if new_offset is not None and new_offset != offset:
                 try:
                     save_offset(new_offset, offset_path)
@@ -271,6 +277,8 @@ def poll_forever(
                     # ponytail: keep polling even if disk write fails; memory offset still advances.
                     pass
                 offset = new_offset
+            if any(result.get("retryable") is True for result in handled):
+                time.sleep(sleep_on_error_sec)
             batches += 1
         except TelegramRuntimeError:
             time.sleep(sleep_on_error_sec)
