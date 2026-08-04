@@ -5,6 +5,8 @@ on:
     types: [created]
 
 # Manual, advisory PR assistance only. Automatic reviews live in pr-review.yml.
+# Owner-gated write path for "@codex apply fixes" / "@openai-code-agent apply fixes"
+# (reply to a bot comment) lives in codex-apply-fixes.yml — keep this workflow read-only.
 concurrency:
   group: codex-pr-comment-${{ github.event.issue.number || github.run_id }}
   cancel-in-progress: true
@@ -17,6 +19,8 @@ jobs:
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@codex') &&
+      !contains(github.event.comment.body, '@codex apply fixes') &&
+      !contains(github.event.comment.body, '@openai-code-agent apply fixes') &&
       github.event.comment.user.login == github.repository_owner &&
       github.actor == github.repository_owner &&
       github.triggering_actor == github.repository_owner &&
