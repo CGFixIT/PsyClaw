@@ -14,13 +14,13 @@
 # or `pip-compile` and commit the result. Current state: direct pins aligned with v1.9.0.
 
 # CRITICAL: pydantic family must stay synchronized or pip resolver explodes
-# pydantic 2.13.4 hard-pins pydantic-core==2.46.4 (exact ==, not a range), and
+# pydantic 2.13.4 hard-pins pydantic-core==2.47.0 (exact ==, not a range), and
 # 2.13.4 is the latest pydantic on PyPI — no release pairs with pydantic-core
 # 2.47.0 yet. Bumping pydantic-core alone makes `pip install -c constraints.txt`
 # unresolvable. Keep these two in lock-step; only bump pydantic-core together
 # with a compatible pydantic bump.
 pydantic==2.13.4
-pydantic-core==2.46.4
+pydantic-core==2.47.0
 # Not currently imported anywhere in source (grepped 2026-07: no `pydantic_settings`
 # or `BaseSettings` usage) and not in pyproject.toml's [project.dependencies], so
 # it is never actually pulled into an install today -- this pin only takes effect
@@ -30,20 +30,20 @@ pydantic-core==2.46.4
 pydantic-settings==2.14.2
 
 # Direct dependencies from pyproject.toml [project.dependencies] -- versions MUST match exactly
-fastapi==0.138.0
+fastapi==0.141.1
 # Constraints pin versions only; the `[standard]` extra stays in requirements.txt.
 # pip >= 26.1.2 rejects extras in a -c constraints file ("Constraints cannot have
 # extras"), which broke the verify-install gate. See pypa/pip#8210.
-uvicorn==0.49.0
+uvicorn==0.52.0
 pyyaml==6.0.3
 httpx==0.28.1
 # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
 # so legacy/no-deps paths cannot strand the app on websockets 12.x.
-websockets==15.0.1
-langgraph==1.2.6
-langchain-core==1.4.8
+websockets==17.0.1
+langgraph==1.2.10
+langchain-core==1.5.3
 chromadb==1.5.9  # CVE-2026-45829 (Critical pre-auth RCE; risk accepted ONLY for local/offline air-gapped PersistentClient embedded mode). See SECURITY.md + pip-audit.
-sentence-transformers==5.6.0
+sentence-transformers==5.6.1
 # Direct imports (retrieval/embeddings.py; gate.py/harness/server.py), promoted
 # from implicit sentence-transformers/fastapi transitives to explicit pins --
 # see pyproject.toml [project.dependencies] for why.
@@ -51,7 +51,7 @@ huggingface-hub==1.26.0
 starlette==1.3.1
 rank-bm25==0.2.2
 numpy==1.26.4
-nltk==3.10.0
+nltk==3.10.1
 
 # torch-cpu extra / embedding backend (minimum safe post CVE, CPU index via pyproject [tool.uv.sources])
 torch==2.13.0+cpu
@@ -62,9 +62,9 @@ torch==2.13.0+cpu
 # job), keeping that resolve reproducible without forcing the dep on SQLite installs.
 # NB: a -c constraints file cannot carry the [binary] extra (pip >= 26.1.2 rejects
 # extras in constraints), so the binary wheel package is pinned by its own name.
-psycopg==3.2.13
-psycopg-binary==3.2.13
-pgvector==0.4.2
+psycopg==3.3.4
+psycopg-binary==3.3.4
+pgvector==0.5.0
 
 # Optional NeMo Guardrails layer (pyproject extra: guardrails). This is not
 # installed by the default offline runtime; the constraint keeps the opt-in
@@ -77,16 +77,16 @@ nemoguardrails==0.23.0
 
 # Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
 # not installed by the default offline runtime or legacy requirements path.
-deepagents==0.6.12
-langchain==1.3.11
-langchain-openai==1.3.3
+deepagents==0.7.1
+langchain==1.3.14
+langchain-openai==1.4.1
 # Mandatory transitives of deepagents (not extras of it, not imported directly
 # by any CyClaw code -- unlike langchain-anthropic below, so these stay
 # constraints-only, not a pyproject.toml extra entry): pinned so the exact
 # versions are reproducible rather than left floating in deepagents' own
 # ranges (langchain-google-genai>=4.2.7,<5; langsmith>=0.9.3; wcmatch>=10.1).
 # Verified via a real combined-extras install, 2026-08-01.
-langchain-google-genai==4.2.7
+langchain-google-genai==4.3.2
 langsmith==0.10.15
 wcmatch==11.0
 # Mandatory transitive of deepagents (not an extra of it); pinned so the exact
@@ -94,10 +94,10 @@ wcmatch==11.0
 # Also imported directly by agentic/deepagent_github/model_adapter.py for the
 # Claude cloud provider -- the reason this one alone also gets a pyproject.toml
 # extra entry, unlike its three siblings above.
-langchain-anthropic==1.4.8
+langchain-anthropic==1.5.3
 # Optional cloud provider (pyproject extra: agentic-deepagents-cloud). Grok only
 # -- Claude rides langchain-anthropic above.
-langchain-xai==1.2.2
+langchain-xai==1.3.0
 
 # Test optional-dependencies (for CI / dev)
 pytest==9.1.1
