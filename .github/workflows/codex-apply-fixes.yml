@@ -357,8 +357,13 @@ jobs:
 
           git add -A
           # Safety: never stage secrets-ish paths if they appear.
-          git reset -- '.env' '.env.*' || true
-          git reset -- $(git diff --cached --name-only | grep -E '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true) 2>/dev/null || true
+          # Unquote-free loop (SC2046): never expand git paths unquoted.
+          git reset -- '.env' || true
+          while IFS= read -r -d '' unsafe_path; do
+            git reset -- -- "$unsafe_path" || true
+          done < <(
+            git diff --cached -z --name-only               | grep -zE '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true
+          )
 
           if git diff --cached --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
