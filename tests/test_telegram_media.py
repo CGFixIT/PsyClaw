@@ -107,7 +107,40 @@ def test_save_confirmation_requires_the_closed_explicit_form(caption: object) ->
 
 # take a moment and rethink the non indent more of oversight from before I luckily noticed - but tldr it should err on paranoid with fs access until
 # I feel like i understand telegram a lot more on api and attack vector level. this is a test function but it raises a good q for later
+#
+# UPDATE: unless windows ci check fails here (which i would want it to irl rn), this has been addressed for bow but leaving the comments as a reminder to lock cyclaw tele down or its like the most hilariously scary potential prompt injection vector. if its anything like slack this shoukd a thing
+#
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="fsconnect writes hard-refused on Windows (name-based TOCTOU; see writer._writes_refused_platform / codex #593 P1)",
+)
+def test_confirmed_private_media_executes_the_existing_fsconnect_cli(
+    tmp_path: Path,
+) -> None:
+    """Exercise the bridge's real local write boundary without Telegram network I/O."""
+    cfg = _cfg(tmp_path)
+    caption = "/save --confirm controlled local staging"
+    with (
+        patch(
+            "telegram.media.tg_client.get_file",
+            return_value={"file_path": "documents/opaque.bin", "file_size": 3},
+        ),
+        patch("telegram.media.tg_client.download_file", return_value=b"abc"),
+        patch("telegram.client.send_message", return_value={"ok": True, "result": {"message_id": 1}}),
+    ):
+        out = handle_inbound_media(
+            cfg,
+            chat_id=42,
+            chat_type="private",
+            attachment=_attachment(),
+            caption=caption,
+            update_id=991,
+        )
+    target = Path(cfg.media.fsconnect_root) / str(out["media"]["target"])
+    assert target.read_bytes() == b"abc"
+    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert caption not in audit_text
 
 
 
