@@ -21,7 +21,7 @@ from telegram.config import TelegramConfig
 from telegram.ratelimit import get_limiter
 from telegram.state import load_offset, save_offset
 from utils.errors import TelegramRefused, TelegramRuntimeError
-from utils.logger import audit_log
+from utils.logger import audit_log, hash_query
 
 # Reserved commands (no /online until T3). BotFather may append @BotName.
 _CMD_RE = re.compile(r"^/(help|status|id)(?:@\S+)?(?:\s|$)", re.IGNORECASE)
@@ -34,6 +34,8 @@ _HELP_TEXT = (
     "Anything else → local RAG via POST /query (mode=chat).\n"
     "Hybrid /online confirm is not available yet (T3)."
 )
+
+_POLL_RETRY_SLEEP_CAP_SEC = 60.0
 
 
 def send_notify(
@@ -48,7 +50,6 @@ def send_notify(
             "telegram.enabled is false",
             details={"gate": "enabled"},
         )
-    get_limiter(cfg.rate_limit.max_ops, cfg.rate_limit.window_seconds).check("tg:outbound")
     return tg_client.send_message(cfg, chat_id=chat_id, text=text)
 
 
@@ -136,7 +137,10 @@ def handle_inbound_text(
             "channel": "telegram",
             "chat_id": str(chat_id),
             "update_id": update_id,
-            "query": text,
+            # Telegram text never reaches audit_log in plaintext, regardless
+            # of the global include_query_hash opt-out.
+            "query_hash": hash_query(text),
+            "query_len": len(text),
             "mode": cfg.mode,
         },
         config_path=cfg._config_path,
@@ -212,7 +216,8 @@ def poll_once(
             # Allowlist/mode/input refusals are terminal, so ack them. A spent
             # rate-limit window is temporary: leave that update unacked and stop
             # the batch so poll_forever can back off before Telegram redelivers it.
-            retryable = (getattr(exc, "details", None) or {}).get("gate") == "rate_limit"
+            details = getattr(exc, "details", None) or {}
+            retryable = details.get("gate") == "rate_limit"
             error = {
                 "error": getattr(exc, "message", str(exc)),
                 "code": getattr(exc, "code", "TELEGRAM_ERROR"),
@@ -220,23 +225,35 @@ def poll_once(
             }
             if retryable:
                 error["retryable"] = True
+                if details.get("retry_after") is not None:
+                    error["retry_after"] = details["retry_after"]
             handled.append(error)
             if retryable:
                 break
         except TelegramRuntimeError as exc:
-            handled.append(
-                {
-                    "error": getattr(exc, "message", str(exc)),
-                    "code": getattr(exc, "code", "TELEGRAM_ERROR"),
-                    "chat_id": str(chat_id),
-                    "retryable": True,
-                }
-            )
-            # Stop processing the batch: leaving next_offset at/before this
-            # update_id means Telegram redelivers it AND everything after it on
-            # the next poll. Continuing here would let a later successful update
-            # advance next_offset past this failure, silently dropping the message.
-            break
+            details = getattr(exc, "details", None) or {}
+            if details.get("fatal") is True:
+                # API key/endpoint failures affect the whole bridge, not one
+                # message. Stop without acknowledging the current update.
+                raise
+            # Unknown legacy errors remain retryable; clients explicitly mark
+            # permanent 4xx responses false.
+            retryable = details.get("retryable") is not False
+            error = {
+                "error": getattr(exc, "message", str(exc)),
+                "code": getattr(exc, "code", "TELEGRAM_ERROR"),
+                "chat_id": str(chat_id),
+                "retryable": retryable,
+            }
+            if details.get("retry_after") is not None:
+                error["retry_after"] = details["retry_after"]
+            handled.append(error)
+            if retryable:
+                # Leave this update unacknowledged and stop the batch so it and
+                # every later update are redelivered after transient recovery.
+                break
+            # A permanent 4xx is a poison update. Acknowledge it below so one
+            # rejected message cannot wedge every later update indefinitely.
         if isinstance(uid, int):
             next_offset = uid + 1
     return next_offset, handled
@@ -277,10 +294,37 @@ def poll_forever(
                     # ponytail: keep polling even if disk write fails; memory offset still advances.
                     pass
                 offset = new_offset
-            if any(result.get("retryable") is True for result in handled):
-                time.sleep(sleep_on_error_sec)
+            retryable = [result for result in handled if result.get("retryable") is True]
+            if retryable:
+                delay = sleep_on_error_sec
+                for result in retryable:
+                    retry_after = result.get("retry_after")
+                    if (
+                        isinstance(retry_after, (int, float))
+                        and not isinstance(retry_after, bool)
+                        and retry_after >= 0
+                    ):
+                        delay = max(
+                            delay,
+                            min(float(retry_after), _POLL_RETRY_SLEEP_CAP_SEC),
+                        )
+                time.sleep(delay)
             batches += 1
-        except TelegramRuntimeError:
-            time.sleep(sleep_on_error_sec)
+        except TelegramRuntimeError as exc:
+            details = getattr(exc, "details", None) or {}
+            if details.get("retryable") is False:
+                raise
+            delay = sleep_on_error_sec
+            retry_after = details.get("retry_after")
+            if (
+                isinstance(retry_after, (int, float))
+                and not isinstance(retry_after, bool)
+                and retry_after >= 0
+            ):
+                delay = max(
+                    delay,
+                    min(float(retry_after), _POLL_RETRY_SLEEP_CAP_SEC),
+                )
+            time.sleep(delay)
             batches += 1
     return batches
