@@ -1,0 +1,430 @@
+# ==============================================================================
+# Codex / OpenAI-code-agent — owner-gated APPLY FIXES on PR bot comments
+#
+# Purpose
+#   When the repository owner *replies* to an automated/AI bot comment on an
+#   open same-repo PR with exactly one of:
+#     @codex apply fixes
+#     @openai-code-agent apply fixes
+#   this workflow runs Codex with workspace write on the PR head, applies the
+#   smallest safe fix for THAT parent bot comment, commits, and pushes.
+#
+# Security posture (non-negotiable)
+#   - Default permissions: none. Job grants contents:write + PR/issue write only
+#     on the apply-fixes path.
+#   - Owner-only: comment author, actor, and triggering_actor must all equal
+#     repository_owner.
+#   - Open same-repo PR only (no forks).
+#   - Parent comment required and must be a bot / known automation author.
+#   - Advisory @codex (without "apply fixes") stays on codex.yml (read-only).
+#   - Codex may edit the PR head checkout only; it never force-pushes and never
+#     targets main.
+# ==============================================================================
+
+name: Codex Apply Fixes (PR Reply)
+
+on:
+  # Inline review-thread replies (Gitleaks, line comments, etc.)
+  pull_request_review_comment:
+    types: [created]
+  # Conversation-tab replies (when GitHub attaches replyTo)
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: codex-apply-fixes-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  apply_fixes:
+    name: Apply owner-approved bot fixes
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Coarse if: event shape + owner + trigger phrase. Parent-bot validation is
+    # enforced in the gate step (needs API).
+    if: |
+      (
+        (
+          github.event_name == 'pull_request_review_comment' &&
+          github.event.pull_request != null &&
+          github.event.pull_request.state == 'open' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.comment.user.login == github.repository_owner &&
+          github.event.comment.in_reply_to != 0
+        ) ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.issue.pull_request != null &&
+          github.event.issue.state == 'open' &&
+          github.event.comment.user.login == github.repository_owner
+        )
+      ) &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      (
+        contains(github.event.comment.body, '@codex apply fixes') ||
+        contains(github.event.comment.body, '@openai-code-agent apply fixes')
+      )
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      changed: ${{ steps.commit_push.outputs.changed }}
+      skip_reason: ${{ steps.gate.outputs.skip_reason }}
+
+    steps:
+      - name: Gate — resolve PR + parent bot comment
+        id: gate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const body = (context.payload.comment?.body || "").trim();
+            const triggerCodex = /@codex\s+apply\s+fixes\b/i.test(body);
+            const triggerOai = /@openai-code-agent\s+apply\s+fixes\b/i.test(body);
+            if (!triggerCodex && !triggerOai) {
+              core.setOutput("skip_reason", "comment does not match apply-fixes trigger");
+              core.setFailed("No apply-fixes trigger phrase matched.");
+              return;
+            }
+            // Reject if the comment is more than a short approve + optional note
+            // after the trigger (keeps the write path intentional).
+            const stripped = body
+              .replace(/@codex\s+apply\s+fixes\b/gi, "")
+              .replace(/@openai-code-agent\s+apply\s+fixes\b/gi, "")
+              .trim();
+            if (stripped.length > 2000) {
+              core.setFailed("Apply-fixes comment is too long; keep the reply short.");
+              return;
+            }
+
+            const knownBots = new Set([
+              "github-actions[bot]",
+              "openai-codex[bot]",
+              "chatgpt-codex-connector[bot]",
+              "copilot-pull-request-reviewer[bot]",
+              "copilot[bot]",
+              "dependabot[bot]",
+              "codecov[bot]",
+              "coderabbitai[bot]",
+              "sonarcloud[bot]",
+              "gitleaks",
+            ]);
+            const isBotAuthor = (user) => {
+              if (!user) return false;
+              if (user.type === "Bot") return true;
+              const login = (user.login || "").toLowerCase();
+              if (knownBots.has(user.login) || knownBots.has(login)) return true;
+              return login.endsWith("[bot]");
+            };
+
+            let prNumber;
+            let parent = null;
+
+            if (context.eventName === "pull_request_review_comment") {
+              prNumber = context.payload.pull_request.number;
+              const parentId = context.payload.comment.in_reply_to;
+              if (!parentId) {
+                core.setFailed("Apply-fixes must be a reply to a bot review comment.");
+                return;
+              }
+              const { data } = await github.rest.pulls.getReviewComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: parentId,
+              });
+              parent = {
+                id: data.id,
+                author: data.user?.login || "",
+                author_type: data.user?.type || "",
+                body: data.body || "",
+                path: data.path || "",
+                line: data.line || data.original_line || null,
+                html_url: data.html_url || "",
+                kind: "pull_request_review_comment",
+              };
+            } else {
+              // issue_comment on a PR
+              prNumber = context.payload.issue.number;
+              // Prefer GraphQL replyTo when the UI reply attached a parent.
+              const nodeId = context.payload.comment.node_id;
+              const gql = await github.graphql(
+                `query($id:ID!) {
+                  node(id: $id) {
+                    ... on IssueComment {
+                      id
+                      replyTo {
+                        id
+                        databaseId
+                        author { login __typename }
+                        body
+                        url
+                      }
+                    }
+                  }
+                }`,
+                { id: nodeId },
+              );
+              const replyTo = gql?.node?.replyTo;
+              if (replyTo) {
+                parent = {
+                  id: replyTo.databaseId,
+                  author: replyTo.author?.login || "",
+                  author_type: replyTo.author?.__typename === "Bot" ? "Bot" : "User",
+                  body: replyTo.body || "",
+                  path: "",
+                  line: null,
+                  html_url: replyTo.url || "",
+                  kind: "issue_comment",
+                };
+              } else {
+                // Fallback: most recent prior bot issue comment on this PR.
+                const comments = await github.paginate(
+                  github.rest.issues.listComments,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    per_page: 100,
+                  },
+                );
+                const prior = [...comments]
+                  .filter((c) => c.id !== context.payload.comment.id)
+                  .reverse()
+                  .find((c) => isBotAuthor(c.user));
+                if (!prior) {
+                  core.setFailed(
+                    "Apply-fixes requires a reply to (or prior) bot comment on this PR.",
+                  );
+                  return;
+                }
+                parent = {
+                  id: prior.id,
+                  author: prior.user?.login || "",
+                  author_type: prior.user?.type || "",
+                  body: prior.body || "",
+                  path: "",
+                  line: null,
+                  html_url: prior.html_url || "",
+                  kind: "issue_comment_fallback",
+                };
+              }
+            }
+
+            if (!isBotAuthor({ login: parent.author, type: parent.author_type })) {
+              core.setFailed(
+                `Parent comment author '${parent.author}' is not a bot/automation account.`,
+              );
+              return;
+            }
+            if (!parent.body || !parent.body.trim()) {
+              core.setFailed("Parent bot comment body is empty.");
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (pr.state !== "open") {
+              core.setFailed("PR is not open.");
+              return;
+            }
+            if (pr.head.repo.full_name !== context.repo.full_name) {
+              core.setFailed("Refusing apply-fixes on fork PRs.");
+              return;
+            }
+            if (pr.user?.login !== context.repo.owner) {
+              // Owner-gated product rule: only owner-authored PRs for now.
+              core.setFailed("Apply-fixes is limited to owner-authored PRs.");
+              return;
+            }
+
+            const trigger = triggerCodex ? "@codex apply fixes" : "@openai-code-agent apply fixes";
+            core.setOutput("pr_number", String(prNumber));
+            core.setOutput("head_ref", pr.head.ref);
+            core.setOutput("head_sha", pr.head.sha);
+            core.setOutput("base_sha", pr.base.sha);
+            core.setOutput("trigger", trigger);
+            core.setOutput("parent_json", JSON.stringify(parent));
+            core.setOutput("owner_comment", body);
+            core.setOutput("skip_reason", "");
+            core.info(`Apply-fixes gated OK: PR #${prNumber} parent@${parent.author} via ${trigger}`);
+
+      - name: Checkout PR head (writable)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ steps.gate.outputs.head_ref }}
+          fetch-depth: 0
+          # Default token with contents:write can push back to the head ref.
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Write apply-fixes request context
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          PARENT_JSON: ${{ steps.gate.outputs.parent_json }}
+          OWNER_COMMENT: ${{ steps.gate.outputs.owner_comment }}
+          PR_NUMBER: ${{ steps.gate.outputs.pr_number }}
+          HEAD_REF: ${{ steps.gate.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.gate.outputs.head_sha }}
+          BASE_SHA: ${{ steps.gate.outputs.base_sha }}
+          TRIGGER: ${{ steps.gate.outputs.trigger }}
+        with:
+          script: |
+            const fs = require("fs");
+            const parent = JSON.parse(process.env.PARENT_JSON);
+            const payload = {
+              pull_request: Number(process.env.PR_NUMBER),
+              head_ref: process.env.HEAD_REF,
+              head_sha: process.env.HEAD_SHA,
+              base_sha: process.env.BASE_SHA,
+              trigger: process.env.TRIGGER,
+              owner_comment: process.env.OWNER_COMMENT,
+              parent_comment: parent.body,
+              parent_author: parent.author,
+              parent_path: parent.path || "",
+              parent_line: parent.line,
+              parent_url: parent.html_url || "",
+              parent_kind: parent.kind,
+            };
+            fs.writeFileSync(
+              ".codex-apply-fixes-request.json",
+              JSON.stringify(payload, null, 2) + "\n",
+              "utf8",
+            );
+            // Also drop a human-readable copy for the agent prompt surface.
+            fs.writeFileSync(
+              ".codex-apply-fixes-parent.md",
+              [
+                `# Parent bot comment (@${parent.author})`,
+                parent.path ? `Path: ${parent.path}${parent.line ? ":" + parent.line : ""}` : "",
+                parent.html_url || "",
+                "",
+                parent.body,
+                "",
+              ].filter(Boolean).join("\n") + "\n",
+              "utf8",
+            );
+
+      - name: Run Codex (workspace write)
+        id: run_codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56  # v1
+        with:
+          openai-api-key: ${{ secrets.CODEX }}
+          codex-version: "0.144.6"
+          prompt-file: .codex/prompts/pr-apply-fixes.md
+          working-directory: ${{ github.workspace }}
+          # Allow edits inside the checkout; still drop sudo on the runner.
+          permission-profile: ":workspace"
+          safety-strategy: drop-sudo
+
+      - name: Commit and push applied fixes
+        id: commit_push
+        shell: bash
+        env:
+          PR_NUMBER: ${{ steps.gate.outputs.pr_number }}
+          HEAD_REF: ${{ steps.gate.outputs.head_ref }}
+          TRIGGER: ${{ steps.gate.outputs.trigger }}
+        run: |
+          set -euo pipefail
+
+          # Never commit the ephemeral request files.
+          rm -f .codex-apply-fixes-request.json .codex-apply-fixes-parent.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Stay on the worktree Codex just edited. Do not reset/checkout over it.
+          if git diff --quiet && git diff --cached --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No file changes from Codex; nothing to commit."
+            exit 0
+          fi
+
+          git add -A
+          # Safety: never stage secrets-ish paths if they appear.
+          git reset -- '.env' '.env.*' || true
+          git reset -- $(git diff --cached --name-only | grep -E '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true) 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing staged after safety reset."
+            exit 0
+          fi
+
+          git commit -m "$(cat <<COMMIT
+          fix(pr): apply owner-approved bot comment fixes
+
+          Triggered by ${TRIGGER} on PR #${PR_NUMBER}.
+          Scope limited to the parent automated comment the owner replied to.
+          COMMIT
+          )"
+
+          # Fast-forward only. No force-push. If remote tip moved, fail closed.
+          if ! git push origin "HEAD:${HEAD_REF}"; then
+            echo "Push failed (branch may have moved or be protected). Not force-pushing."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Comment result on PR
+        if: always() && steps.gate.outputs.pr_number != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
+          CHANGED: ${{ steps.commit_push.outputs.changed }}
+          PR_NUMBER: ${{ steps.gate.outputs.pr_number }}
+          TRIGGER: ${{ steps.gate.outputs.trigger }}
+          JOB_STATUS: ${{ job.status }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const marker = "<!-- cyclaw-codex-apply-fixes -->";
+            const status = process.env.JOB_STATUS || "unknown";
+            const changed = process.env.CHANGED === "true";
+            const trigger = process.env.TRIGGER || "apply fixes";
+            const agentText = (process.env.CODEX_FINAL_MESSAGE || "").trim();
+            const lines = [
+              marker,
+              "## Codex apply-fixes result",
+              "",
+              `Trigger: \`${trigger}\``,
+              `Job status: **${status}**`,
+              `Branch updated: **${changed ? "yes (commit pushed)" : "no"}**`,
+              "",
+            ];
+            if (agentText) {
+              lines.push(agentText);
+            } else if (status !== "success") {
+              lines.push("_Codex produced no summary (job did not complete successfully)._");
+            } else {
+              lines.push("_Codex produced no summary._");
+            }
+            lines.push(
+              "",
+              "> Owner-gated write path. Verify the diff before merge. Advisory `@codex` (without `apply fixes`) remains read-only.",
+            );
+            let body = lines.join("\n");
+            if (body.length > 60000) {
+              body = body.slice(0, 59900) + "\n\n_(truncated)_";
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });

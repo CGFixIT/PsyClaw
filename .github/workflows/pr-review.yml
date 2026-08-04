@@ -1,5 +1,9 @@
 name: PR Review Assistant
 
+# Advisory review only (read-only). Owner-gated write path for
+# "@codex apply fixes" / "@openai-code-agent apply fixes" replies to bot
+# comments lives in codex-apply-fixes.yml.
+
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base; owner-only same-repo PRs; candidate code is never executed
     types: [opened, reopened, synchronize, ready_for_review]

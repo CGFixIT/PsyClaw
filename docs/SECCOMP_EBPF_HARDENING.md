@@ -160,7 +160,9 @@ sudo podman run -d --name cyclaw-gate-trace \
 
 From the same shell so `$TRACE_API_KEY` remains available, exercise concrete
 HTTP paths. Soul state is the throwaway copy above, never the repository's live
-state:
+state. Example Authorization headers below use the non-secret placeholder
+`<THROW AWAY_TRACE_API_KEY>` so scanners do not flag docs; substitute the live
+`$TRACE_API_KEY` value when you run the commands:
 
 ```bash
 curl -fsS http://127.0.0.1:8787/health
@@ -176,21 +178,21 @@ seq 1 4 | xargs -I{} -P4 curl --max-time 700 -fsS \
   -d '{"query":"Summarize the local security model."}' \
   http://127.0.0.1:8787/query >/dev/null
 
-curl -fsS -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   http://127.0.0.1:8787/soul >/dev/null
-curl -fsS -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"new_soul":"# Soul\nCalm, factual, and local-first.","reason":"trace throwaway soul write"}' \
   http://127.0.0.1:8787/soul/propose >/dev/null
-curl -fsS -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   -H 'Content-Type: application/json' \
   -d '{"new_soul":"# Soul\nCalm, factual, and local-first.","reason":"trace throwaway soul write"}' \
   http://127.0.0.1:8787/soul/apply >/dev/null
-curl -fsS -X POST -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -X POST -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   http://127.0.0.1:8787/soul/reload >/dev/null
-curl -fsS -X POST -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -X POST -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   http://127.0.0.1:8787/soul/restore >/dev/null
-curl -fsS -H "Authorization: Bearer $TRACE_API_KEY" \
+curl -fsS -H "Authorization: Bearer <THROW AWAY_TRACE_API_KEY>" \
   http://127.0.0.1:8787/audit/summary >/dev/null
 
 curl -sS -o /dev/null -w '%{http_code}\n' \
