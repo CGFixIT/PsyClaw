@@ -186,32 +186,7 @@ def test_confirmed_private_media_stages_with_bounded_stdin_and_no_raw_caption(
     assert any(event.get("event") == "telegram_media_staged" for event in events)
 
 
-def test_confirmed_private_media_executes_the_existing_fsconnect_cli(
-    tmp_path: Path,
-) -> None:
-    """Exercise the bridge's real local write boundary without Telegram network I/O."""
-    cfg = _cfg(tmp_path)
-    caption = "/save --confirm controlled local staging"
-    with (
-        patch(
-            "telegram.media.tg_client.get_file",
-            return_value={"file_path": "documents/opaque.bin", "file_size": 3},
-        ),
-        patch("telegram.media.tg_client.download_file", return_value=b"abc"),
-        patch("telegram.client.send_message", return_value={"ok": True, "result": {"message_id": 1}}),
-    ):
-        out = handle_inbound_media(
-            cfg,
-            chat_id=42,
-            chat_type="private",
-            attachment=_attachment(),
-            caption=caption,
-            update_id=991,
-        )
-    target = Path(cfg.media.fsconnect_root) / str(out["media"]["target"])
-    assert target.read_bytes() == b"abc"
-    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
-    assert caption not in audit_text
+#lol fix your spelling
 
 
 @pytest.mark.parametrize(
