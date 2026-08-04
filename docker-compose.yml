@@ -5,7 +5,8 @@
 #   - non-root user, no-new-privileges, all Linux capabilities dropped
 #   - read-only root filesystem with explicit writable carve-outs (tmpfs + the
 #     rw bind mounts the app actually needs)
-#   - seccomp profile applied; pid/mem/cpu limits cap blast radius / DoS
+#   - Docker's engine-maintained builtin seccomp profile is selected explicitly;
+#     pid/mem/cpu limits cap blast radius / DoS
 #   - optional Falco/eBPF detection sidecar behind the `monitoring` profile
 #     (disabled by default — `docker compose --profile monitoring up`)
 
@@ -43,11 +44,13 @@ services:
       - /tmp
     security_opt:
       - no-new-privileges:true
-      # seccomp profile (allows the rclone/agentic out-of-band subprocess set).
-      # NOTE: deploy/seccomp/gate-seccomp.json is intentionally NOT used here — it
-      # is a 16-syscall aspirational floor that cannot boot uvicorn+torch+chromadb.
-      # Tighten only after eBPF profiling (see docs/SECCOMP_EBPF_HARDENING.md).
-      - seccomp:./deploy/seccomp/sync-rclone.json
+      # Force Docker's builtin policy even when the daemon default was customized
+      # or set to unconfined. The retired repo profiles were never runtime-traced
+      # and omitted syscalls Uvicorn needs to serve HTTP. Stage 3 requires
+      # exact-image, exact-architecture traces plus replay before replacement.
+      # `builtin` requires Docker Engine 23.0 or newer.
+      # See deploy/seccomp/README.md and docs/SECCOMP_EBPF_HARDENING.md.
+      - seccomp:builtin
     # A loopback web server needs no Linux capabilities. Drop them all.
     cap_drop:
       - ALL

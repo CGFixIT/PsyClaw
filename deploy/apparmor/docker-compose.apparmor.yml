@@ -1,0 +1,5 @@
+services:
+  cyclaw:
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:cyclaw-gate
