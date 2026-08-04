@@ -53,7 +53,7 @@ root (the `<unit>` dir).
 - recent changes via commits and pr's
 - github actions workflows
 - CVE issues with dependencies?
-- verifying dependencies in requirements.txt, constraints.txt, pyproject.toml, dockerfile, etc - https://github.com/cgfixit/CyClaw/tree/main/.claude/skills/verify-deps
+- verifying dependencies in requirements.txt, constraints.txt, pyproject.toml, Docker, and CI - use `$verify-dep`
 - dependency drift across `pyproject.toml`, `requirements.txt`,
   `constraints.txt`, Docker, and CI
 - unsafe defaults, missing timeouts, secret exposure, or audit gaps

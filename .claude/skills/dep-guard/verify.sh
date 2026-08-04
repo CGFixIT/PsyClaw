@@ -4,6 +4,17 @@
 # A checker that cannot fail proves nothing — the mutation tests keep it honest.
 set -uo pipefail
 
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+  :
+elif command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
+  python3() { python "$@"; }
+elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+  python3() { py -3 "$@"; }
+else
+  echo "a working Python 3 launcher (python3, python, or py -3) is required" >&2
+  exit 1
+fi
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../../.." && pwd)"
 checker="$here/check_deps.py"
@@ -77,10 +88,8 @@ echo "mutation D (D8 CI torch drift): PASS (exit 2, D8 reported)"
 # file agrees with the real pin. Comment-only drift never breaks CI -> WARN.
 e="$(_mktree)"
 mkdir -p "$e/.github/workflows"
-real_pin="$(python3 -c "
-import re
-print(re.search(r'torch==([0-9.]+)\+cpu', open('$repo_root/constraints.txt').read()).group(1))
-")"
+real_pin="$(sed -nE 's/^torch==([0-9.]+)\+cpu.*/\1/p' "$repo_root/constraints.txt" | head -n 1)"
+[ -n "$real_pin" ] || { echo "mutation E: could not read the torch pin" >&2; rm -rf "$e"; exit 1; }
 printf 'steps:\n  - run: pip install torch==%s+cpu\n' "$real_pin" > "$e/.github/workflows/ci.yml"
 printf 'reason = "torch 9.9.9+cpu -- stale doc only"\n' > "$e/.osv-scanner.toml"
 if ! python3 "$checker" --repo-root "$e" >/tmp/depguard_d8warn.txt 2>&1; then
@@ -103,5 +112,25 @@ if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D9\]"; then
   echo "mutation F (D9 environment.yml drift): FAIL — expected exit 2 + D9, got $rc" >&2; echo "$out" >&2; exit 1
 fi
 echo "mutation F (D9 environment.yml drift): PASS (exit 2, D9 reported)"
+
+# 2g. D6 FAIL: a direct pyproject pin must not disappear from constraints.txt.
+g="$(_mktree)"
+sed -i.bak '/^httpx==/d' "$g/constraints.txt"
+out="$(python3 "$checker" --repo-root "$g" 2>&1)"; rc=$?
+rm -rf "$g"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D6\]"; then
+  echo "mutation G (D6 missing constraint): FAIL - expected exit 2 + D6, got $rc" >&2; echo "$out" >&2; exit 1
+fi
+echo "mutation G (D6 missing constraint): PASS (exit 2, D6 reported)"
+
+# 2h. D8 FAIL: Docker's fallback torch pin is as load-bearing as CI's copies.
+h="$(_mktree)"
+printf 'RUN pip install --no-cache-dir torch==9.9.9+cpu --index-url https://download.pytorch.org/whl/cpu\n' > "$h/Dockerfile"
+out="$(python3 "$checker" --repo-root "$h" 2>&1)"; rc=$?
+rm -rf "$h"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D8\]"; then
+  echo "mutation H (D8 Docker torch drift): FAIL - expected exit 2 + D8, got $rc" >&2; echo "$out" >&2; exit 1
+fi
+echo "mutation H (D8 Docker torch drift): PASS (exit 2, D8 reported)"
 
 echo "== dep-guard verify: OK =="
