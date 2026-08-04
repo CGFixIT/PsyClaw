@@ -25,6 +25,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
+import yaml  # type: ignore[import-untyped]  # project intentionally carries no PyYAML stubs
+
 from utils.errors import TelegramConfigError
 from utils.logger import _get_config
 
@@ -33,6 +35,7 @@ DEFAULT_MODE = "notify"  # "notify" (outbound only) | "chat" (2-way)
 DEFAULT_API_BASE = "https://api.telegram.org"
 DEFAULT_POLL_TIMEOUT_SEC = 30
 DEFAULT_MAX_MESSAGE_CHARS = 4000  # align with policy.prompt_filter.max_input_chars
+MAX_MESSAGE_CHARS = 4096  # Telegram Bot API text ceiling; default stays conservative
 DEFAULT_QUERY_BASE_URL = "http://127.0.0.1:8787"  # DevSkim: ignore DS162092 - loopback by design
 DEFAULT_API_KEY_ENV = "CYCLAW_API_KEY"
 DEFAULT_QUERY_TIMEOUT_SEC = 660  # match api.graph_timeout_sec
@@ -43,9 +46,11 @@ DEFAULT_ALLOW_HYBRID_CONFIRM = False  # T3 — not wired in skeleton
 _VALID_MODES = ("notify", "chat")
 # Telegram chat ids are signed 64-bit integers (user positive, groups negative).
 _CHAT_ID_RE = re.compile(r"^-?\d{1,20}$")
+_MIN_CHAT_ID = -(2**63)
+_MAX_CHAT_ID = 2**63 - 1
 # Env var names: upper snake.
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-_SHELL_METACHARS = set(";|&$`<>(){}[]!*?\"'\\\n\r\t ")
+_SHELL_METACHARS = set(";|&$`<>(){}!*?\"'\\\n\r\t ")
 
 
 def _validate_bool(value: object, field_name: str) -> None:
@@ -79,8 +84,10 @@ def _validate_positive_int(value: object, field_name: str, *, allow_zero: bool =
 def _validate_env_name(name: str, field_name: str) -> str:
     if not isinstance(name, str) or not _ENV_NAME_RE.match(name):
         raise TelegramConfigError(
-            f"{field_name} must be an UPPER_SNAKE env var name, got: {name!r}",
-            details={"received": name},
+            f"{field_name} must be an UPPER_SNAKE env var name",
+            # Never echo a malformed value: an operator may have pasted the
+            # live secret here instead of its environment-variable name.
+            details={"received_type": type(name).__name__},
         )
     return name
 
@@ -96,12 +103,20 @@ def _validate_loopback_url(url: str, field_name: str) -> str:
             f"{field_name} contains disallowed characters",
             details={"received": url},
         )
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+        _ = parsed.port
+    except ValueError as exc:
+        raise TelegramConfigError(f"{field_name} is not a valid URL") from exc
     if parsed.scheme not in ("http", "https"):
         raise TelegramConfigError(
             f"{field_name} must be http or https, got scheme={parsed.scheme!r}",
             details={"received": url},
         )
+    if parsed.username is not None or parsed.password is not None:
+        raise TelegramConfigError(f"{field_name} must not contain URL credentials")
+    if parsed.query or parsed.fragment:
+        raise TelegramConfigError(f"{field_name} must not contain a query or fragment")
     host = (parsed.hostname or "").lower()
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise TelegramConfigError(
@@ -176,17 +191,33 @@ class TelegramConfig:
         self.max_message_chars = _validate_positive_int(
             self.max_message_chars, "telegram.max_message_chars"
         )
+        if self.max_message_chars > MAX_MESSAGE_CHARS:
+            raise TelegramConfigError(
+                f"telegram.max_message_chars must be <= {MAX_MESSAGE_CHARS}",
+                details={"received": self.max_message_chars},
+            )
 
-        if not isinstance(self.api_base, str) or not self.api_base.startswith("https://"):
+        if not isinstance(self.api_base, str):
             raise TelegramConfigError(
                 "telegram.api_base must be an https URL",
-                details={"received": self.api_base},
+                details={"received_type": type(self.api_base).__name__},
             )
         if any(c in self.api_base for c in _SHELL_METACHARS):
             raise TelegramConfigError(
                 "telegram.api_base contains disallowed characters",
                 details={"received": self.api_base},
             )
+        try:
+            parsed_api = urlparse(self.api_base)
+            _ = parsed_api.port
+        except ValueError as exc:
+            raise TelegramConfigError("telegram.api_base is not a valid URL") from exc
+        if parsed_api.scheme != "https" or not parsed_api.hostname:
+            raise TelegramConfigError("telegram.api_base must be an https URL with a hostname")
+        if parsed_api.username is not None or parsed_api.password is not None:
+            raise TelegramConfigError("telegram.api_base must not contain URL credentials")
+        if parsed_api.query or parsed_api.fragment:
+            raise TelegramConfigError("telegram.api_base must not contain a query or fragment")
         self.api_base = self.api_base.rstrip("/")
 
         if not isinstance(self.allowed_chat_ids, list):
@@ -207,7 +238,13 @@ class TelegramConfig:
                     f"telegram.allowed_chat_ids entry invalid: {raw!r}",
                     details={"hint": "Telegram chat ids are signed integers."},
                 )
-            normalized.append(s)
+            numeric_id = int(s)
+            if not _MIN_CHAT_ID <= numeric_id <= _MAX_CHAT_ID:
+                raise TelegramConfigError(
+                    f"telegram.allowed_chat_ids entry is outside signed 64-bit range: {raw!r}",
+                    details={"hint": "Telegram chat ids are signed 64-bit integers."},
+                )
+            normalized.append(str(numeric_id))
         # De-dupe while preserving order.
         seen: set[str] = set()
         unique: list[str] = []
@@ -264,12 +301,23 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
     Absence of the block returns a disabled default config (enabled=False).
     Presence with invalid keys or types raises TelegramConfigError.
     """
-    raw = _get_config(config_path)
-    block = raw.get("telegram")
-    if block is None:
+    try:
+        raw = _get_config(config_path)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise TelegramConfigError(
+            "Unable to load Telegram configuration",
+            details={"error_type": type(exc).__name__},
+        ) from None
+    if not isinstance(raw, dict):
+        raise TelegramConfigError(
+            "config root must be a mapping",
+            details={"received_type": type(raw).__name__},
+        )
+    if "telegram" not in raw:
         cfg = TelegramConfig()
         cfg._config_path = config_path
         return cfg
+    block = raw["telegram"]
     if not isinstance(block, dict):
         raise TelegramConfigError(
             "telegram: block must be a mapping",
@@ -290,12 +338,13 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
     }
     unknown = set(block) - known
     if unknown:
+        unknown_display = sorted(str(key) for key in unknown)
         raise TelegramConfigError(
-            f"telegram: unknown key(s): {sorted(unknown)}",
-            details={"unknown": sorted(unknown)},
+            f"telegram: unknown key(s): {unknown_display}",
+            details={"unknown": unknown_display},
         )
 
-    rl_raw = block.get("rate_limit") or {}
+    rl_raw = block.get("rate_limit", {})
     if not isinstance(rl_raw, dict):
         raise TelegramConfigError("telegram.rate_limit must be a mapping")
     rate_limit = TelegramRateLimitConfig(
@@ -304,12 +353,13 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
     )
     unknown_rl = set(rl_raw) - {"max_ops", "window_seconds"}
     if unknown_rl:
+        unknown_display = sorted(str(key) for key in unknown_rl)
         raise TelegramConfigError(
-            f"telegram.rate_limit unknown key(s): {sorted(unknown_rl)}",
-            details={"unknown": sorted(unknown_rl)},
+            f"telegram.rate_limit unknown key(s): {unknown_display}",
+            details={"unknown": unknown_display},
         )
 
-    q_raw = block.get("query") or {}
+    q_raw = block.get("query", {})
     if not isinstance(q_raw, dict):
         raise TelegramConfigError("telegram.query must be a mapping")
     query = TelegramQueryConfig(
@@ -319,16 +369,20 @@ def load_telegram_config(config_path: str = "config.yaml") -> TelegramConfig:
     )
     unknown_q = set(q_raw) - {"base_url", "api_key_env", "timeout_sec"}
     if unknown_q:
+        unknown_display = sorted(str(key) for key in unknown_q)
         raise TelegramConfigError(
-            f"telegram.query unknown key(s): {sorted(unknown_q)}",
-            details={"unknown": sorted(unknown_q)},
+            f"telegram.query unknown key(s): {unknown_display}",
+            details={"unknown": unknown_display},
         )
 
     cfg = TelegramConfig(
         enabled=block.get("enabled", False),
         mode=block.get("mode", DEFAULT_MODE),
         bot_token_env=block.get("bot_token_env", DEFAULT_BOT_TOKEN_ENV),
-        allowed_chat_ids=list(block.get("allowed_chat_ids") or []),
+        # Preserve the configured value for __post_init__ to validate. Coercing
+        # here with list(...) turns a scalar such as "42" into ["4", "2"] and
+        # can silently weaken the fail-closed allowlist.
+        allowed_chat_ids=block.get("allowed_chat_ids", []),
         api_base=block.get("api_base", DEFAULT_API_BASE),
         poll_timeout_sec=block.get("poll_timeout_sec", DEFAULT_POLL_TIMEOUT_SEC),
         max_message_chars=block.get("max_message_chars", DEFAULT_MAX_MESSAGE_CHARS),

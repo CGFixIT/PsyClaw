@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -54,6 +55,26 @@ def test_handle_inbound_requires_chat_mode(tmp_path: Path) -> None:
     assert (exc.value.details or {}).get("gate") == "mode"
 
 
+def test_unauthorized_inbound_never_calls_cyclaw_or_telegram(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 1,
+            "message": {"chat": {"id": 999}, "text": "do not forward"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message") as send,
+    ):
+        next_offset, handled = poll_once(cfg)
+    assert next_offset == 2
+    assert handled[0]["error"]
+    query.assert_not_called()
+    send.assert_not_called()
+
+
 def test_extract_answer_query_response_fixture() -> None:
     """Align with schemas.api.QueryResponse field names (gate live shape)."""
     body = {
@@ -93,6 +114,24 @@ def test_handle_inbound_happy_path(tmp_path: Path) -> None:
     assert "pong" in out["answer"]
     assert "qwen3.6:27b" in out["answer"]
     send.assert_called_once()
+
+
+def test_handle_inbound_audit_receives_hash_not_plaintext(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    text = "private telegram text that must never enter audit plaintext"
+    with (
+        patch("telegram.runner.audit_log") as audit,
+        patch("telegram.client.post_query", return_value={"answer": "pong"}),
+        patch(
+            "telegram.client.send_message",
+            return_value={"ok": True, "result": {"message_id": 1}},
+        ),
+    ):
+        handle_inbound_text(cfg, chat_id=42, text=text, update_id=9)
+    event = audit.call_args.args[0]
+    assert "query" not in event
+    assert event["query_hash"] == hashlib.sha256(text.encode()).hexdigest()
+    assert text not in str(event)
 
 
 def test_handle_inbound_help_command(tmp_path: Path) -> None:
@@ -233,6 +272,117 @@ def test_poll_once_advances_offset_on_terminal_refusal(tmp_path: Path) -> None:
     assert handled[0]["error"]
 
 
+def test_poll_once_advances_offset_on_terminal_runtime_failure(tmp_path: Path) -> None:
+    """Permanent 4xx failures must not poison the queue for every later update."""
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "bad request"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRuntimeError(
+                "CyClaw /query returned HTTP 400",
+                details={"status": 400, "retryable": False},
+            ),
+        ),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 12
+    assert handled[0]["retryable"] is False
+
+
+@pytest.mark.parametrize("payload", [None, {"ok": True, "result": {}}])
+def test_poll_once_keeps_offset_on_invalid_send_success_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    """A protocol-glitched reply must be redelivered rather than silently lost."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    malformed = MagicMock()
+    malformed.status_code = 200
+    if payload is None:
+        malformed.json.side_effect = ValueError("truncated response")
+    else:
+        malformed.json.return_value = payload
+    http_client = MagicMock()
+    http_client.post.return_value = malformed
+
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch("telegram.client.post_query", return_value={"answer": "local"}),
+        patch("telegram.client._get_http_client", return_value=http_client),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+
+    assert next_offset is None
+    assert handled[0]["retryable"] is True
+    assert http_client.post.call_count == 1
+
+
+def test_poll_once_surfaces_send_redirect_without_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    redirect = MagicMock()
+    redirect.status_code = 302
+    redirect.json.return_value = {"ok": False}
+    http_client = MagicMock()
+    http_client.post.return_value = redirect
+
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch("telegram.client.post_query", return_value={"answer": "local"}),
+        patch("telegram.client._get_http_client", return_value=http_client),
+        pytest.raises(TelegramRuntimeError),
+    ):
+        poll_once(cfg, offset=None)
+
+    assert http_client.post.call_count == 1
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_poll_once_surfaces_bridge_fatal_http_failure_without_ack(
+    tmp_path: Path, status: int
+) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 11,
+            "message": {"chat": {"id": 42}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRuntimeError(
+                f"CyClaw /query returned HTTP {status}",
+                details={"status": status, "retryable": False, "fatal": True},
+            ),
+        ),
+    ):
+        with pytest.raises(TelegramRuntimeError):
+            poll_once(cfg, offset=None)
+
+
 def test_poll_once_does_not_advance_offset_on_rate_limit_refusal(tmp_path: Path) -> None:
     """A spent inbound budget is temporary, so Telegram must redeliver the update."""
     cfg = _cfg(tmp_path)
@@ -248,13 +398,40 @@ def test_poll_once_does_not_advance_offset_on_rate_limit_refusal(tmp_path: Path)
             "telegram.runner.handle_inbound_text",
             side_effect=TelegramRefused(
                 "rate limited",
-                details={"gate": "rate_limit"},
+                details={"gate": "rate_limit", "retry_after": 12.5},
             ),
         ),
     ):
         next_offset, handled = poll_once(cfg, offset=None)
     assert next_offset is None
     assert handled[0]["retryable"] is True
+    assert handled[0]["retry_after"] == 12.5
+
+
+def test_poll_once_mixed_batch_stops_exactly_before_transient_failure(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [
+        {"update_id": 20, "message": {"chat": {"id": 42}, "text": "first"}},
+        {"update_id": 21, "message": {"chat": {"id": 42}, "text": "second"}},
+        {"update_id": 22, "message": {"chat": {"id": 42}, "text": "third"}},
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=[
+                {"answer": "ok"},
+                TelegramRuntimeError("temporary", details={"retryable": True}),
+                {"answer": "must not run"},
+            ],
+        ) as handler,
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 21
+    assert handler.call_count == 2
+    assert handled[-1]["retryable"] is True
 
 
 def test_rate_limiter_trips() -> None:
@@ -264,6 +441,57 @@ def test_rate_limiter_trips() -> None:
     with pytest.raises(TelegramRefused) as exc:
         lim.check("k")
     assert (exc.value.details or {}).get("gate") == "rate_limit"
+    retry_after = (exc.value.details or {}).get("retry_after")
+    assert isinstance(retry_after, float)
+    assert 0 < retry_after <= 60
+
+
+def test_rate_limiter_releases_event_at_window_boundary() -> None:
+    limiter = SlidingWindowLimiter(max_ops=1, window_seconds=60)
+    with patch("telegram.ratelimit.time.monotonic", side_effect=[0.0, 60.0]):
+        limiter.check("k")
+        limiter.check("k")
+
+
+def test_rate_limiter_reserves_batch_atomically() -> None:
+    limiter = SlidingWindowLimiter(max_ops=3, window_seconds=60)
+    limiter.check("k", cost=2)
+    with pytest.raises(TelegramRefused) as exc:
+        limiter.check("k", cost=2)
+    assert (exc.value.details or {}).get("gate") == "rate_limit"
+    # Failed cost=2 admission recorded nothing, leaving the final slot usable.
+    limiter.check("k")
+
+    with pytest.raises(TelegramRefused) as capacity:
+        limiter.check("other", cost=4)
+    assert (capacity.value.details or {}).get("gate") == "rate_limit_capacity"
+
+
+def test_rate_limiter_holds_batch_capacity_and_releases_unused_slots() -> None:
+    limiter = SlidingWindowLimiter(max_ops=2, window_seconds=60)
+    reservation = limiter.reserve("k", cost=2)
+    with pytest.raises(TelegramRefused):
+        limiter.check("k")
+
+    reservation.consume()
+    reservation.close()
+    limiter.check("k")
+    with pytest.raises(TelegramRefused):
+        limiter.check("k")
+
+
+def test_rate_limiter_reserves_partial_optional_capacity() -> None:
+    limiter = SlidingWindowLimiter(max_ops=5, window_seconds=60)
+    limiter.check("k", cost=2)
+    reservation, granted = limiter.reserve_up_to("k", minimum=2, maximum=4)
+    assert granted == 3
+
+    reservation.consume()
+    reservation.consume()
+    reservation.consume()
+    reservation.close()
+    with pytest.raises(TelegramRefused):
+        limiter.check("k")
 
 
 def test_get_limiter_shared() -> None:
@@ -332,3 +560,32 @@ def test_poll_forever_backs_off_after_message_runtime_failure(tmp_path: Path) ->
     assert n == 1
     assert load_offset(offset_path) is None
     sleep.assert_called_once_with(2.5)
+
+
+def test_poll_forever_caps_sleep_while_honoring_local_429_cooldown(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with (
+        patch(
+            "telegram.runner.poll_once",
+            side_effect=TelegramRuntimeError(
+                "flood control",
+                details={"status": 429, "retry_after": 999, "retryable": True},
+            ),
+        ),
+        patch("telegram.runner.time.sleep") as sleep,
+    ):
+        assert poll_forever(cfg, max_iterations=1, sleep_on_error_sec=2.0) == 1
+    sleep.assert_called_once_with(60.0)
+
+
+def test_poll_forever_surfaces_terminal_get_updates_failure(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with patch(
+        "telegram.runner.poll_once",
+        side_effect=TelegramRuntimeError(
+            "unauthorized",
+            details={"status": 401, "retryable": False},
+        ),
+    ):
+        with pytest.raises(TelegramRuntimeError):
+            poll_forever(cfg, max_iterations=1)
