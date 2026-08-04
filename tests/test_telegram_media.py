@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import subprocess
 from pathlib import Path
@@ -101,6 +102,16 @@ def test_attachment_parser_uses_no_original_filename_and_selects_largest_photo()
 @pytest.mark.parametrize("caption", [None, "/save", "/save --confirm", "/saveevil --confirm x"])
 def test_save_confirmation_requires_the_closed_explicit_form(caption: object) -> None:
     assert save_confirmation(caption) is None
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="fsconnect writes hard-refused on Windows (name-based TOCTOU; see writer._writes_refused_platform / codex #593 P1)",
+)
+deftest_confirmed_private_media_executes_the_existing_fsconnect_cli(
+    tmp_path: Path,
+) -> None:
+    """Exercise the bridge's real local write boundary without Telegram network I/O."""
+
 
 
 def test_confirmed_private_media_stages_with_bounded_stdin_and_no_raw_caption(
