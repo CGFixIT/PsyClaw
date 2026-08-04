@@ -5,9 +5,15 @@
 # contracts; dep-guard's own verify.sh covers pyproject/constraints mutations.
 set -uo pipefail
 
-if ! command -v python3 >/dev/null 2>&1; then
-  command -v python >/dev/null 2>&1 || { echo "python3 or python is required" >&2; exit 1; }
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+  :
+elif command -v python >/dev/null 2>&1 && python -c 'import sys' >/dev/null 2>&1; then
   python3() { python "$@"; }
+elif command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+  python3() { py -3 "$@"; }
+else
+  echo "a working Python 3 launcher (python3, python, or py -3) is required" >&2
+  exit 1
 fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
