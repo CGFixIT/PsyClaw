@@ -7,7 +7,9 @@ URL hygiene, and that the package stays free of request-path imports (static).
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
+from typing import cast
 
 from telegram.config import load_telegram_config
 from utils.errors import TelegramConfigError
@@ -28,7 +30,7 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
         results.append(fail("01. Config loads and validates", exc.message))
         for n in range(2, 8):
             results.append(skip(f"{n:02d}. (skipped -- no config)", "config invalid"))
-        return finalize(results)
+        return cast(tuple[int, int, list[str]], finalize(results))
 
     # 02. Loopback query URL.
     host_ok = any(h in cfg.query.base_url for h in ("127.0.0.1", "localhost", "[::1]"))
@@ -51,11 +53,14 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
     else:
         results.append(fail("04. enabled requires allowlist", "empty allowed_chat_ids"))
 
-    # 05. Token env name is set (not the secret itself).
-    if cfg.bot_token_env:
-        results.append(ok(f"05. bot_token_env={cfg.bot_token_env}"))
+    # 05. Disabled mode needs no secret; enabled pre-flight requires the
+    # configured environment variable to contain a non-empty token.
+    if not cfg.enabled:
+        results.append(ok("05. bot token not required while disabled"))
+    elif os.environ.get(cfg.bot_token_env, "").strip():
+        results.append(ok(f"05. bot token is set via {cfg.bot_token_env}"))
     else:
-        results.append(fail("05. bot_token_env set", "empty"))
+        results.append(fail("05. bot token is set", f"{cfg.bot_token_env} is unset or empty"))
 
     # 06. Package files do not import gate/graph/mcp (static AST).
     forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
@@ -88,7 +93,7 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
             )
         )
 
-    return finalize(results)
+    return cast(tuple[int, int, list[str]], finalize(results))
 
 
 if __name__ == "__main__":

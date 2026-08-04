@@ -94,6 +94,9 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_test(args: argparse.Namespace) -> int:
     _heading("CyClaw Telegram Channel -- Self-test")
     try:
+        cfg = load_telegram_config(args.config)
+        if cfg.enabled:
+            cfg.resolve_bot_token()
         passed, total, lines = run_self_test(config_path=args.config)
     except TelegramConfigError as exc:
         _print_typed_error(exc)
@@ -139,6 +142,9 @@ def cmd_send(args: argparse.Namespace) -> int:
 
     try:
         result = send_notify(cfg, chat_id=args.chat_id, text=str(text))
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
     except TelegramRefused as exc:
         _print_typed_error(exc)
         return EXIT_FAIL
@@ -170,6 +176,11 @@ def cmd_poll(args: argparse.Namespace) -> int:
     if cfg.mode != "chat":
         _err("poll requires telegram.mode: chat (current mode refuses inbound).")
         return EXIT_ENV
+    try:
+        cfg.resolve_bot_token()
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
 
     max_iter = args.max_iterations if args.max_iterations and args.max_iterations > 0 else None
     _ok(
@@ -187,6 +198,9 @@ def cmd_poll(args: argparse.Namespace) -> int:
     except TelegramRuntimeError as exc:
         _print_typed_error(exc)
         return EXIT_FAIL
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
     return EXIT_OK
 
 

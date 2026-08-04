@@ -81,6 +81,14 @@ def test_rejects_non_loopback_query_url(tmp_path: Path) -> None:
         load_telegram_config(path)
 
 
+def test_accepts_ipv6_loopback_query_url(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {"enabled": False, "query": {"base_url": "http://[::1]:8787"}},
+    )
+    assert load_telegram_config(path).query.base_url == "http://[::1]:8787"
+
+
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
     path = _write_config(tmp_path, {"enabled": False, "not_a_real_key": True})
     with pytest.raises(TelegramConfigError):
@@ -100,6 +108,96 @@ def test_dedupes_chat_ids(tmp_path: Path) -> None:
     )
     cfg = load_telegram_config(path)
     assert cfg.allowed_chat_ids == ["1", "2"]
+
+
+@pytest.mark.parametrize("value", ["42", 42, {"42": True}, None])
+def test_rejects_non_list_allowlist(tmp_path: Path, value: object) -> None:
+    path = _write_config(tmp_path, {"enabled": False, "allowed_chat_ids": value})
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
+
+
+@pytest.mark.parametrize("field", ["rate_limit", "query"])
+@pytest.mark.parametrize("value", [False, None, ""])
+def test_rejects_non_mapping_nested_config(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = _write_config(tmp_path, {"enabled": False, field: value})
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
+
+
+def test_chat_ids_are_canonical_and_signed_64_bit(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {"enabled": True, "allowed_chat_ids": ["00042", -(2**63)]},
+    )
+    cfg = load_telegram_config(path)
+    assert cfg.allowed_chat_ids == ["42", str(-(2**63))]
+
+    bad_path = _write_config(
+        tmp_path,
+        {"enabled": True, "allowed_chat_ids": [2**63]},
+    )
+    reset_config_cache()
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(bad_path)
+
+
+def test_rejects_message_chunks_above_safe_telegram_limit(tmp_path: Path) -> None:
+    boundary_path = _write_config(
+        tmp_path,
+        {"enabled": False, "max_message_chars": 4096},
+    )
+    assert load_telegram_config(boundary_path).max_message_chars == 4096
+
+    reset_config_cache()
+    path = _write_config(tmp_path, {"enabled": False, "max_message_chars": 4097})
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(path)
+
+
+@pytest.mark.parametrize("raw", ["", "[]\n", "telegram: [\n"])
+def test_invalid_config_documents_raise_typed_error(tmp_path: Path, raw: str) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(raw, encoding="utf-8")
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(str(path))
+
+
+def test_missing_config_raises_typed_error(tmp_path: Path) -> None:
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(str(tmp_path / "missing.yaml"))
+
+
+def test_invalid_utf8_config_raises_typed_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_bytes(b"\xff")
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(str(path))
+
+
+def test_explicit_null_telegram_block_is_invalid(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("telegram: null\n", encoding="utf-8")
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(str(path))
+
+
+def test_mixed_unknown_key_types_raise_typed_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("telegram:\n  1: value\n  unknown: value\n", encoding="utf-8")
+    with pytest.raises(TelegramConfigError):
+        load_telegram_config(str(path))
+
+
+def test_invalid_env_name_does_not_echo_possible_secret(tmp_path: Path) -> None:
+    possible_token = "123456789:ABC-DEF_possible-live-token"
+    path = _write_config(tmp_path, {"enabled": False, "bot_token_env": possible_token})
+    with pytest.raises(TelegramConfigError) as exc:
+        load_telegram_config(path)
+    assert possible_token not in exc.value.message
+    assert possible_token not in str(exc.value.details)
 
 
 def test_to_public_dict_has_no_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
