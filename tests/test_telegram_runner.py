@@ -111,9 +111,20 @@ def test_handle_inbound_happy_path(tmp_path: Path) -> None:
         ) as send,
     ):
         out = handle_inbound_text(cfg, chat_id=42, text="ping", update_id=9)
-    assert "pong" in out["answer"]
-    assert "qwen3.6:27b" in out["answer"]
+    assert out["answer"] == "pong"
     send.assert_called_once()
+
+
+def test_handle_inbound_forwards_query_response_answer_verbatim(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    terminal_answer = "  exact terminal answer\nwith a deliberate final newline\n"
+    with (
+        patch("telegram.client.post_query", return_value={"answer": terminal_answer}),
+        patch("telegram.client.send_message", return_value={"ok": True}) as send,
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="query", update_id=9)
+    assert out["answer"] == terminal_answer
+    assert send.call_args.kwargs["text"] == terminal_answer
 
 
 def test_handle_inbound_audit_receives_hash_not_plaintext(tmp_path: Path) -> None:
@@ -174,6 +185,73 @@ def test_handle_inbound_status_command(tmp_path: Path) -> None:
     ):
         out = handle_inbound_text(cfg, chat_id=42, text="/status")
     assert "status=ok" in out["answer"]
+
+
+def test_online_command_stays_local_when_t3_master_switch_is_disabled(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=False)
+    with (
+        patch("telegram.runner.grant_hybrid_confirm") as grant,
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message", return_value={"ok": True}) as send,
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="/online on grok", update_id=10)
+    grant.assert_not_called()
+    query.assert_not_called()
+    send.assert_called_once()
+    assert "disabled" in out["answer"].lower()
+
+
+def test_online_command_grants_only_an_explicit_provider(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True, hybrid_confirm_ttl_sec=120)
+    with (
+        patch("telegram.runner.grant_hybrid_confirm", return_value=1120) as grant,
+        patch("telegram.runner.audit_log") as audit,
+        patch("telegram.client.send_message", return_value={"ok": True}),
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="/online on claude", update_id=10)
+    grant.assert_called_once_with(42, provider="claude", ttl_sec=120)
+    assert out.get("command") is True
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(event.get("event") == "telegram_hybrid_confirm_granted" for event in events)
+
+
+def test_online_command_does_not_silently_choose_a_provider(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    with (
+        patch("telegram.runner.grant_hybrid_confirm") as grant,
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message", return_value={"ok": True}),
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="/online on", update_id=10)
+    grant.assert_not_called()
+    query.assert_not_called()
+    assert "Usage:" in out["answer"]
+
+
+def test_claimed_hybrid_confirmation_is_forwarded_once_then_consumed(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    with (
+        patch("telegram.runner.claim_hybrid_confirm", side_effect=["grok", None]) as claim,
+        patch("telegram.runner.audit_log") as audit,
+        patch(
+            "telegram.client.post_query",
+            side_effect=[{"answer": "external"}, {"answer": "offline"}],
+        ) as query,
+        patch("telegram.client.send_message", return_value={"ok": True}),
+    ):
+        first = handle_inbound_text(cfg, chat_id=42, text="first", update_id=11)
+        second = handle_inbound_text(cfg, chat_id=42, text="second", update_id=12)
+    assert first["answer"] == "external"
+    assert second["answer"] == "offline"
+    assert claim.call_count == 2
+    first_call = query.call_args_list[0].kwargs
+    second_call = query.call_args_list[1].kwargs
+    assert first_call["user_confirmed_online"] is True
+    assert first_call["online_provider"] == "grok"
+    assert second_call["user_confirmed_online"] is False
+    assert second_call["online_provider"] is None
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(event.get("event") == "telegram_hybrid_confirm_consumed" for event in events)
 
 
 def test_poll_once_handles_text_update(tmp_path: Path) -> None:
