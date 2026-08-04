@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -22,6 +22,12 @@ from utils.logger import audit_log
 # Bot API call. Lazily created; every call still passes its own per-request
 # timeout, so per-call timeout semantics are unchanged.
 _http_client: httpx.Client | None = None
+
+# A Telegram-controlled retry_after must not stall the local bridge forever.
+# One retry is enough to honor normal Bot API flood control without turning a
+# persistent 429 into an unbounded loop; the wait itself is capped at one minute.
+_TELEGRAM_429_MAX_RETRIES: int = 1
+_TELEGRAM_RETRY_AFTER_CAP_SEC: float = 60.0
 
 
 def _get_http_client() -> httpx.Client:
@@ -114,23 +120,43 @@ def _send_one(
         "disable_notification": bool(disable_notification),
     }
     started = time.monotonic()
-    try:
-        resp = _get_http_client().post(url, json=payload, timeout=30.0)
-    except httpx.HTTPError as exc:
-        raise TelegramRuntimeError(
-            _transport_error_message("sendMessage", exc, tok),
-            details={"method": "sendMessage"},
-        ) from exc
+    for attempt in range(_TELEGRAM_429_MAX_RETRIES + 1):
+        try:
+            resp = _get_http_client().post(url, json=payload, timeout=30.0)
+        except httpx.HTTPError as exc:
+            raise TelegramRuntimeError(
+                _transport_error_message("sendMessage", exc, tok),
+                details={"method": "sendMessage"},
+            ) from exc
+
+        try:
+            raw_data = resp.json()
+        except ValueError as exc:
+            raise TelegramRuntimeError(
+                f"Telegram sendMessage returned non-JSON (HTTP {resp.status_code})",
+                details={"status": resp.status_code},
+            ) from exc
+        if not isinstance(raw_data, dict):
+            raise TelegramRuntimeError(
+                f"Telegram sendMessage returned non-object JSON (HTTP {resp.status_code})",
+                details={"status": resp.status_code},
+            )
+        data = cast(dict[str, Any], raw_data)
+
+        parameters = data.get("parameters")
+        retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        if (
+            resp.status_code == 429
+            and attempt < _TELEGRAM_429_MAX_RETRIES
+            and isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            and retry_after >= 0
+        ):
+            time.sleep(min(float(retry_after), _TELEGRAM_RETRY_AFTER_CAP_SEC))
+            continue
+        break
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    try:
-        data = resp.json()
-    except ValueError as exc:
-        raise TelegramRuntimeError(
-            f"Telegram sendMessage returned non-JSON (HTTP {resp.status_code})",
-            details={"status": resp.status_code},
-        ) from exc
-
     ok = bool(data.get("ok")) and resp.status_code == 200
     audit_log(
         {
@@ -229,20 +255,41 @@ def get_updates(
         params["offset"] = offset
     # httpx timeout must exceed Telegram long-poll timeout.
     timeout = httpx.Timeout(cfg.poll_timeout_sec + 15.0, connect=10.0)
-    try:
-        resp = _get_http_client().get(url, params=params, timeout=timeout)
-    except httpx.HTTPError as exc:
-        raise TelegramRuntimeError(
-            _transport_error_message("getUpdates", exc, tok),
-            details={"method": "getUpdates"},
-        ) from exc
-    try:
-        data = resp.json()
-    except ValueError as exc:
-        raise TelegramRuntimeError(
-            f"Telegram getUpdates returned non-JSON (HTTP {resp.status_code})",
-            details={"status": resp.status_code},
-        ) from exc
+    for attempt in range(_TELEGRAM_429_MAX_RETRIES + 1):
+        try:
+            resp = _get_http_client().get(url, params=params, timeout=timeout)
+        except httpx.HTTPError as exc:
+            raise TelegramRuntimeError(
+                _transport_error_message("getUpdates", exc, tok),
+                details={"method": "getUpdates"},
+            ) from exc
+        try:
+            raw_data = resp.json()
+        except ValueError as exc:
+            raise TelegramRuntimeError(
+                f"Telegram getUpdates returned non-JSON (HTTP {resp.status_code})",
+                details={"status": resp.status_code},
+            ) from exc
+        if not isinstance(raw_data, dict):
+            raise TelegramRuntimeError(
+                f"Telegram getUpdates returned non-object JSON (HTTP {resp.status_code})",
+                details={"status": resp.status_code},
+            )
+        data = cast(dict[str, Any], raw_data)
+
+        parameters = data.get("parameters")
+        retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        if (
+            resp.status_code == 429
+            and attempt < _TELEGRAM_429_MAX_RETRIES
+            and isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            and retry_after >= 0
+        ):
+            time.sleep(min(float(retry_after), _TELEGRAM_RETRY_AFTER_CAP_SEC))
+            continue
+        break
+
     if not data.get("ok"):
         raise TelegramRuntimeError(
             f"Telegram getUpdates failed: {data.get('description', resp.status_code)}",
