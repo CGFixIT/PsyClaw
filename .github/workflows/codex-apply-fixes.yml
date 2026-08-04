@@ -362,7 +362,8 @@ jobs:
           while IFS= read -r -d '' unsafe_path; do
             git reset -- -- "$unsafe_path" || true
           done < <(
-            git diff --cached -z --name-only               | grep -zE '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true
+            git diff --cached -z --name-only \
+              | grep -zE '(^|/)\.env(\..*)?$|\.pem$|id_rsa' || true
           )
 
           if git diff --cached --quiet; then
