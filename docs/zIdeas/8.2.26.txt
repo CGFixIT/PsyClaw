@@ -36,4 +36,10 @@ https://arxiv.org/pdf/2605.23989
 
 https://arxiv.org/pdf/2603.13247
 
-z.ai, qwen, grok build (literally cursor composer trained on kimi), 
+Minor to do:
+-Telegram
+-Give the local ai some persona but only if it’s absurd / funny - don’t really wanna get too comfortable talking to a computer with personality 
+-see if I’m just being paranoid about the soul.md either hasn’t been verified to be essentially the system prompt in chat in a while or i dunno I read something to do with sha drift detection which depending on context might make hash it but that’s an ez thing to test
+-background task scheduler
+-add more (disciplined and only things needed and worth time/money/scope creep risk) things to the harness and dashboard like that one dude on twitter that basically had a very similar tech stack but his web front end was way better - don’t copy but the dashboard is worth having for progress bars , scheduling of things, whatever “always-on” smoke and mirrors thing I might add for the local ai way later, and control panel for sure
+-okay stop now (that’s from me to me in case a robot ai coder reads this ;))
