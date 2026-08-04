@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# verify-deps verify — clean-tree pass + mutation self-test for extract_pins.py.
+# verify-deps verify — clean-tree pass + mutation self-test for verify-deps.
 # Pure stdlib; safe to run before any pip install. Exit 0 = healthy.
-# Only self-checks the one thing this skill adds beyond dep-guard (the
-# requirements.txt <-> constraints.txt comparison) — dep-guard's own
-# verify.sh already covers pyproject/constraints/environment.yml mutations.
+# It covers requirements.txt <-> constraints.txt plus environment-only install
+# contracts; dep-guard's own verify.sh covers pyproject/constraints mutations.
 set -uo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  command -v python >/dev/null 2>&1 || { echo "python3 or python is required" >&2; exit 1; }
+  python3() { python "$@"; }
+fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../../.." && pwd)"
@@ -88,6 +92,7 @@ echo "env drift mutation (E1 split tool pin): PASS (exit 2)"
 #    requirements.txt mentions extras in prose and must not trip on that.
 d="$(mktemp -d)"
 printf '# nemoguardrails lives in the guardrails extra, not here\nhttpx==0.28.1\n' > "$d/requirements.txt"
+printf 'COPY pyproject.toml constraints.txt requirements.txt ./\nRUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt || ( pip install --no-cache-dir torch==1 --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt -c constraints.txt )\n' > "$d/Dockerfile"
 out="$(python3 "$drift" --repo-root "$d" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "env drift mutation (E4 comment is not an install): FAIL — a commented package must not trip E4, got rc=$rc" >&2
@@ -102,5 +107,38 @@ if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "installs extras-only package"; th
   exit 1
 fi
 echo "env drift mutation (E4 extras leak): PASS (exit 2; commented mention correctly ignored)"
+
+# 7. --strict must reject a requirements pin omitted from constraints.txt.
+e="$(_mktree)"
+sed -i.bak '/^httpx==/d' "$e/constraints.txt"
+out="$(python3 "$extractor" --repo-root "$e" --strict 2>&1)"; rc=$?
+rm -rf "$e"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "DRIFT  httpx: requirements.txt==0.28.1 missing from constraints.txt"; then
+  echo "strict mutation (requirements missing constraint): FAIL - expected exit 2 + DRIFT line, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "strict mutation (requirements missing constraint): PASS (exit 2)"
+
+# 8. The clean tree must also satisfy strict import/environment checks.
+out="$(python3 "$drift" --repo-root "$repo_root" --strict 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "strict environment clean tree: FAIL - expected exit 0, got $rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "strict environment clean tree: PASS (exit 0)"
+
+# 9. Docker must retain both constrained install paths and CPU-wheel routing.
+f="$(mktemp -d)"
+printf 'COPY pyproject.toml constraints.txt requirements.txt ./\nRUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt\n' > "$f/Dockerfile"
+out="$(python3 "$drift" --repo-root "$f" 2>&1)"; rc=$?
+rm -rf "$f"
+if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[E5\]"; then
+  echo "environment mutation (E5 Docker contract): FAIL - expected exit 2 + E5 line, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "environment mutation (E5 Docker contract): PASS (exit 2)"
 
 echo "== verify-deps verify: OK =="

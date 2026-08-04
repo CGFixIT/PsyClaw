@@ -35,9 +35,14 @@ When uncertain, choose the higher tier.
 - Never commit or push directly to `main`. Use a short-lived feature branch,
   prefer conventional commit messages, and open draft PRs by default.
 - Never force-push after a rebase without explicit user approval.
-- If another open branch touches a shared file such as CI, config, manifests, or
-  repo instructions, trial-merge or rebase locally before opening or updating
-  the PR.
+- Before parallel or related PRs, map each shared file (especially CI, config,
+  manifests, Docker, and repo instructions) to its planned chunks. Consolidate
+  related shared-file edits into one PR whenever practical. Otherwise stack the
+  child branch from the parent, set the child's GitHub base to the parent, merge
+  parent-first, then rebase the child onto fresh `origin/main` and rerun its
+  checks. Trial-merge overlapping branches in an isolated worktree before
+  opening or updating either PR; verify both changes survive and no conflict
+  markers remain.
 - Prefer local `git` for branches, commits, rebases, and pushes. Use GitHub
   tools for PR metadata, comments, and checks; use `gh` only when needed and
   verified to be the real CLI.
@@ -73,6 +78,10 @@ When uncertain, choose the higher tier.
   say that, not a substitute for it.
 - Before drafting a new PR, fetch `origin/main` again and confirm the branch is
   still current.
+- At the end of implementation, rebase the feature branch onto the latest
+  `origin/main` before push/draft and rerun affected checks. After draft-PR CI
+  is green, fetch again; if `main` moved, rebase, rerun checks and CI, then
+  recommend merge. Never force-with-lease without explicit approval.
 
 ## CI Follow-Up
 
