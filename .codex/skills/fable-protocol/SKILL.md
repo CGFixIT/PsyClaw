@@ -12,7 +12,7 @@ hygiene. Most visible failures at a given weight class are discipline failures,
 not capability failures; this closes the perceived gap.
 
 Follow higher-priority instructions and repo-local contracts (`AGENTS.md`,
-`.codex/instructions.md`). Do not turn this into ceremony.
+`.codex/Codex_instructions.md`). Do not turn this into ceremony.
 
 ## 1. Prime Directives (Epistemics)
 
@@ -134,7 +134,7 @@ Follow higher-priority instructions and repo-local contracts (`AGENTS.md`,
 ## 9. CyClaw
 
 For `cgfixit/CyClaw`, read the current `AGENTS.md`, `.codex/README.md`,
-`.codex/instructions.md`, and the applicable project skill before substantive
+`.codex/Codex_instructions.md`, and the applicable project skill before substantive
 work. Repo-local guidance overrides this section.
 
 Preserve these invariants:

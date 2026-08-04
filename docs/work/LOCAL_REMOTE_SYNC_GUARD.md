@@ -89,6 +89,11 @@ These are the behavioral rules the hook reinforces; they hold regardless:
    already represented upstream or genuinely disposable (e.g. preserve it on a
    throwaway branch first — exactly how the Codacy work was saved this session).
 4. **Identity is pinned per-repo,** so new commits are verifiable by default.
+5. **Rebase a feature PR twice at completion.** At the end of implementation,
+   fetch `origin/main`, rebase the PR branch onto it, and rerun the affected
+   checks before push/drafting. Once draft-PR CI is green, fetch again; if main
+   moved, rebase onto its latest commit, rerun checks and CI, and only then
+   recommend merge. Force-with-lease remains an explicit human decision.
 
 ---
 

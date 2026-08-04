@@ -13,6 +13,7 @@
 #       manifest -- the class dep-guard structurally cannot see, because it
 #       reads manifests and never reads imports
 #   E4  the install-surface SCOPE contract (which surface may carry extras)
+#   E5  the Docker build's dependency-install contract
 #
 # Pure stdlib, no network, no install required -- same constraints dep-guard
 # and extract_pins.py hold, so this runs in a fresh clone before pip does.
@@ -157,7 +158,7 @@ _IMPORT_ALLOWLIST = {
     "pyodbc",
 }
 _FIRST_PARTY = {
-    "utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness",
+    "utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram",
     "gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "tests", "conftest",
 }
 # import name -> PyPI distribution name, for the cases where they differ by more
@@ -260,12 +261,42 @@ def check_install_surface_scope() -> None:
                "version ceiling, not drift")
 
 
+# --- E5: Docker consumes the legacy constrained install surface ----------------
+def check_docker_install_contract() -> None:
+    """Keep Docker on the documented requirements.txt + constraints.txt path."""
+    print("E5 Docker build uses the constrained legacy install surface")
+    dockerfile = REPO / "Dockerfile"
+    if not dockerfile.is_file():
+        fail("E5", "Dockerfile not found; CyClaw's container install surface is unverifiable")
+        return
+
+    text = dockerfile.read_text(encoding="utf-8")
+    required = {
+        "copies dependency manifests": "COPY pyproject.toml constraints.txt requirements.txt ./",
+        "uses constrained uv install": "uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt",
+        "uses constrained pip fallback": "pip install --no-cache-dir -r requirements.txt -c constraints.txt",
+    }
+    missing = [label for label, fragment in required.items() if fragment not in text]
+    cpu_torch = re.search(
+        r"pip\s+install\s+--no-cache-dir\s+torch==\S+\s+--index-url\s+"
+        r"https://download\.pytorch\.org/whl/cpu",
+        text,
+    )
+    if not cpu_torch:
+        missing.append("installs fallback CPU torch from the PyTorch CPU index")
+    if missing:
+        fail("E5", "Dockerfile dependency contract missing: " + "; ".join(missing))
+    else:
+        ok("E5", "Docker copies manifests and uses requirements.txt + constraints.txt in both install paths")
+
+
 def main() -> int:
     print("== verify-deps: environment-dependency drift (outside the pin manifests) ==")
     check_workflow_tool_pins()
     check_python_version()
     check_undeclared_imports()
     check_install_surface_scope()
+    check_docker_install_contract()
     print()
     print(f"{len(failures)} failure(s), {len(warnings)} warning(s)")
     if "--strict" in sys.argv and warnings and not failures:

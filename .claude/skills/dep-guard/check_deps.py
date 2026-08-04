@@ -217,16 +217,19 @@ def run_checks(py_reqs: list[Req], con_reqs: list[Req]) -> None:
     for name, py_req in py_by_name.items():
         py_v = _pin(py_req.spec)
         con_req = con_by_name.get(name)
-        if py_v is None or con_req is None:
+        if py_v is None:
+            continue
+        if con_req is None:
+            mismatches.append(f"{name}: pyproject=={py_v} missing from constraints.txt")
             continue
         con_v = _pin(con_req.spec)
-        if con_v is not None and con_v != py_v:
-            mismatches.append(f"{name}: pyproject=={py_v} vs constraints=={con_v}")
+        if con_v != py_v:
+            mismatches.append(f"{name}: pyproject=={py_v} vs constraints=={con_req.spec or 'unversioned'}")
     if mismatches:
         fail("D6", "constraints.txt contradicts pyproject (its header says they MUST match): "
                    + "; ".join(mismatches))
     else:
-        ok("D6", "every package pinned in both files agrees on version")
+        ok("D6", "every exact pyproject pin is constrained at the same version")
 
     # ── D7 chromadb CVE posture (advisory) ──────────────────────────────────
     print("D7 chromadb pin (risk-accepted CVE, advisory)")
@@ -263,8 +266,12 @@ _TORCH_PROSE_VERSION_RE = re.compile(r"torch\s+(\d+\.\d+\.\d+)\+cpu")
 # Executable install scripts that hardcode the pin as `torch==X.Y.Z+cpu`.
 # The 2026-07-17 drift didn't stop at workflows: these two scripts kept
 # INSTALLING 2.12.1+cpu after the manifest moved to 2.13.0+cpu, reproducing
-# the double-fetch failure outside CI -- so they FAIL like the workflows.
+# the double-fetch failure outside CI -- so every executable install path FAILS
+# like the workflows.
 _TORCH_SCRIPT_FILES = (
+    "Dockerfile",
+    "macos/install-cyclaw.sh",
+    "powershell/Install-CyClaw.ps1",
     ".claude/skills/CyClaw-Sandbox/verify.sh",
     ".codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py",
 )
@@ -293,7 +300,7 @@ def run_ci_pin_checks(root: Path, torch_pin: str | None) -> None:
     torch_pin is the exact version from constraints.txt/pyproject.toml (no
     +cpu suffix, e.g. "2.13.0"); None if torch isn't pinned there at all.
     """
-    print("D8 CI-hardcoded torch pins agree with the manifest pin")
+    print("D8 hardcoded torch pins agree with the manifest pin")
     if torch_pin is None:
         info("D8", "torch not pinned in pyproject/constraints -- skipping CI cross-check")
         return

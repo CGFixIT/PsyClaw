@@ -77,6 +77,9 @@ Skills:
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
   to load repository invariants, architecture, test expectations, and canonical
   reference docs.
+- `.codex/skills/verify-dep/` - use before changing dependencies, install
+  manifests, Docker/Compose/deploy files, dependency CI, or a release install
+  path to reconcile selected install profiles and supply-chain controls.
 - `.codex/skills/cyclaw-run-cyclaw/` - use when asked to prepare, start, run,
   smoke-test, or interact with the local FastAPI RAG server.
 - `.codex/skills/cyclaw-sandbox-test/` - use for a fresh-main local sandbox
@@ -261,9 +264,9 @@ keeping close to this file:
   narrower local check.
 - For dependency or CI changes, compare `pyproject.toml`, `requirements.txt`,
   `constraints.txt`, `Dockerfile`, and `environment.yml` for drift.
-  `.claude/skills/dep-guard/check_deps.py` (stdlib-only, runs without
-  installing anything) does this deterministically for pin agreement; there is
-  no `.codex/`-side equivalent yet.
+  Use `.codex/skills/verify-dep/`: it invokes the maintained stdlib-only
+  checkers before any install and distinguishes selected profiles from genuine
+  drift, including Docker and platform-specific Torch behavior.
 - Report exactly what ran, what failed, and what remains unverified — every
   response, not just PR bodies.
 - GitHub App / connector permissions observed during Codex setup: `admin`,
