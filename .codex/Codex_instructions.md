@@ -24,28 +24,67 @@ When uncertain, choose the higher tier.
 
 ## Git And PR Workflow
 
-- Before any branch, commit, push, rebase, or PR update meant for GitHub, fetch
-  the current remote base: `git fetch origin main --prune`.
-- Work from fresh `origin/main`. If the branch no longer contains the latest
-  `origin/main`, rebase onto `origin/main`, rerun the relevant checks, then
-  push.
-- Do not open or update a PR from a stale branch. Check remote-main freshness
-  again before the first remote commit and again before drafting the PR if the
-  local session was long or `main` likely moved.
-- Never commit or push directly to `main`. Use a short-lived feature branch,
-  prefer conventional commit messages, and open draft PRs by default.
-- Never force-push after a rebase without explicit user approval.
-- Before parallel or related PRs, map each shared file (especially CI, config,
-  manifests, Docker, and repo instructions) to its planned chunks. Consolidate
-  related shared-file edits into one PR whenever practical. Otherwise stack the
-  child branch from the parent, set the child's GitHub base to the parent, merge
-  parent-first, then rebase the child onto fresh `origin/main` and rerun its
-  checks. Trial-merge overlapping branches in an isolated worktree before
-  opening or updating either PR; verify both changes survive and no conflict
-  markers remain.
-- Prefer local `git` for branches, commits, rebases, and pushes. Use GitHub
-  tools for PR metadata, comments, and checks; use `gh` only when needed and
-  verified to be the real CLI.
+### Session And Branch Lifecycle
+
+1. Before creating a branch, committing, pushing, rebasing, or updating a PR,
+   fetch the remote base: `git fetch origin main --prune`.
+2. Start from fresh `origin/main`, never by resetting an unknown or dirty
+   checkout. Use an isolated clone or worktree when the current checkout is
+   not clean.
+3. Record the feature branch, its GitHub base, the intended merge predecessor,
+   and the current `origin/main` SHA in the task/PR notes. Never commit or push
+   directly to `main`; use short-lived, conventionally named feature branches
+   and draft PRs by default.
+4. Make the smallest coherent change, run the relevant checks, then commit.
+5. Immediately before first push/draft, fetch again. If the branch no longer
+   contains current `origin/main`, rebase it, inspect every conflict
+   semantically, rerun affected checks, and commit any deliberate resolution.
+   Never resolve with blind `ours`/`theirs`.
+6. Trial the planned merge order in an isolated worktree before publishing
+   related branches. After each trial merge, inspect that both intended hunks
+   survive, no conflict markers remain, and changed YAML/JSON/shell/Python still
+   validates.
+7. Push only after that rebase and trial. The tracked pre-push hook checks
+   naming and fresh-`origin/main` ancestry; install it once per clone with
+   `bash scripts/install-githooks.sh`.
+8. Create or update the draft PR using the repository template, monitor CI, and
+   treat an inherited red `main` separately from a branch-caused failure.
+9. When PR CI is green, fetch `origin/main` one final time. If it moved,
+   rebase, rerun local checks, update the PR only with explicit
+   force-with-lease approval, wait for fresh CI, then recommend merge. If it did
+   not move, record that no-op freshness check before recommending merge.
+
+Never force-push after a rebase without explicit user approval. Prefer local
+`git` for branches, commits, rebases, and pushes; use GitHub tools for PR
+metadata, comments, and checks, and use `gh` only after verifying it is the
+real authenticated CLI.
+
+### Multiple Related PRs (Claude CyClaw-Optimize Step 3.5)
+
+Before branching, map every planned `file -> chunks` and flag files touched by
+more than one PR, especially workflows, manifests, Docker/Compose, config, and
+agent instructions.
+
+- **Consolidate** when related changes share a file or cannot be reviewed or
+  validated independently. One PR is safer than artificial parallelism.
+- **Stack** only when the child genuinely depends on the parent: create the
+  child from the parent branch, set its GitHub base to the parent PR, validate
+  parent-first, merge parent first, then rebase the child onto fresh
+  `origin/main`, change its GitHub base to `main`, and rerun its checks.
+- **Trial chronological merges** from fresh `origin/main` in an isolated
+  worktree: oldest/predecessor first, inspect, then the next candidate. A clean
+  Git merge is not proof that both semantic changes remain.
+- **Resolve surgically.** Read both sides and the surrounding code, preserve
+  both compatible hunks, and add targeted validation for the combined result.
+  Stop and ask when the two changes imply different behavior or security policy.
+
+### PR Comment Apply-Fixes Boundary
+
+`.github/workflows/codex-apply-fixes.yml` is an owner-gated write path for a
+specific qualifying bot comment. The phrases `@codex apply fixes` and
+`@openai-code-agent apply fixes` are not broad authorization: inspect the
+resulting PR-head diff, rerun/review CI, and merge only through the normal human
+decision. Advisory `@codex` requests remain read-only.
 
 ## Local Verification Before Commit
 

@@ -66,14 +66,17 @@ trivial questions, apply its defaults silently and keep the response small.
 ## Codex Skills And Routines Map
 
 Use this map to choose the narrowest reusable Codex workflow before opening
-large docs or making edits. **This is the canonical copy** — `.codex/README.md`
-points back here rather than duplicating the list.
+large docs or making edits. This is authoritative for triggers;
+`.codex/README.md` mirrors the inventory for discovery. Update both when a
+skill, routine, checklist, or prompt is added or retired.
 
 Skills:
 
 - `.codex/skills/fable-protocol/` - use at the start of every substantive repo
   task as the session-start discipline layer for premise testing, uncertainty,
   findings-before-writes, security review, and shipping-first prioritization.
+- `.codex/skills/doc-sync/` - use after architecture, configuration, skill, or
+  command changes to reconcile code-derived facts with CyClaw documentation.
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
   to load repository invariants, architecture, test expectations, and canonical
   reference docs.
@@ -93,8 +96,10 @@ Skills:
 - `.codex/skills/cyclaw-command-check-soul/` - use to validate
   `data/personality/soul.md` presence, hash, readability, and drift without
   mutating it.
-- `.codex/skills/refactor/` - use for the combined architecture-cleanup and
-  speed-optimization loop with tracker, measurement, self-review, and commits.
+- `.codex/skills/OTel-Hardening/` - use to re-verify that telemetry-kill
+  switches remain ahead of dependency imports and block phone-home paths.
+- `.codex/skills/refactor/` - use for one focused, behavior-preserving
+  architecture or measured-performance improvement; do not publish unless asked.
 - `.codex/skills/cyclaw-optimize/` - use when asked to scan `main` for
   optimization opportunities and open focused draft PRs.
 
@@ -115,6 +120,14 @@ Routines:
 - `.codex/routines/security-review.md` - assess auth, secrets, telemetry,
   network exposure, LangGraph routing, retrieval boundaries, dependencies, or
   optional-layer changes.
+
+Supporting assets:
+
+- Checklists: `.codex/checklists/pre-commit.md`, `pre-pr.md`, and
+  `regression-risk.md`.
+- Prompt templates: `.codex/prompts/issue-triage.md`, `implementation-plan.md`,
+  `review-diff.md`, `release-notes.md`, `pr-agent.md`, `pr-review.md`, and
+  `pr-apply-fixes.md`.
 
 ## Current Product And PMF Posture
 
@@ -146,13 +159,10 @@ python -m pip install --upgrade "pip>=26.1.2"
 uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 ```
 
-The `--extra-index-url` is required, not cosmetic: `uv pip install` is uv's
-pip-compatible interface, which does **not** honor `pyproject.toml`'s
-`[tool.uv.sources]`/`[[tool.uv.index]]` CPU-wheel routing the way `uv sync`
-would — without it, resolution fails outright (`no version of
-torch==2.13.0+cpu`, since the `+cpu` local-version wheel only exists on that
-index, not on PyPI). Verified by dry-run against this repo's actual
-`pyproject.toml`/`constraints.txt` before writing this down.
+The `--extra-index-url` is required, not cosmetic: the `+cpu` Torch wheel only
+exists on the PyTorch CPU index, not PyPI. This repository currently has no
+project-level uv source or index routing; keep the explicit index on `uv pip`
+and pip commands that resolve the Linux/Windows CPU profile.
 
 Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
@@ -285,6 +295,16 @@ keeping close to this file:
 - `.github/workflows/claude.yml` already grants `contents: write`,
   `pull-requests: write`, `issues: write`, and `id-token: write` for the
   existing Claude PR-comment workflow.
+- `.github/workflows/codex-apply-fixes.yml` is a separate, owner-gated write
+  path: an owner reply containing `@codex apply fixes` (or
+  `@openai-code-agent apply fixes`) to a qualifying bot comment can update only
+  an open same-repository, owner-authored PR head. Advisory `@codex` remains
+  read-only; every generated diff and its CI still need human review before
+  merge.
+- `bash scripts/install-githooks.sh` enables this clone's tracked hooks. The
+  pre-push hook refuses a feature-branch push unless it contains fresh
+  `origin/main`; it complements, but cannot replace, the documented shared-file
+  mapping, trial merge, review, and CI gates.
 - Do not edit open PR branches unless the user clearly asked or the repo's
   documented CI-failure policy applies.
 - For PR reviews, lead with findings and file/line references; keep

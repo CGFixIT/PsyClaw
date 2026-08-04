@@ -6,4 +6,4 @@ cd "$root"
 chmod +x .githooks/pre-commit .githooks/pre-push
 git config core.hooksPath .githooks
 echo "core.hooksPath=$(git config core.hooksPath)"
-echo "Installed CyClaw git hooks (grok/<feature> branch naming)."
+echo "Installed CyClaw git hooks (branch naming and fresh-origin/main pre-push gate)."

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enforce documented multi-vendor branch naming on push.
+# Enforce documented multi-vendor branch naming and fresh-main ancestry on push.
 # Canonical feature prefixes: utils.agent_identity.ALLOWED_BRANCH_PREFIXES
 # (CLAUDE.md §5, Kimi section, .github/PULL_REQUEST_TEMPLATE.md).
 set -euo pipefail
@@ -14,8 +14,37 @@ allowed_branch() {
   esac
 }
 
-fail=0
+requires_fresh_main() {
+  case "$1" in
+    main|master|develop) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+local_refs=()
+local_shas=()
+remote_refs=()
+
 while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -n "$local_ref" ]] || continue
+  local_refs+=("$local_ref")
+  local_shas+=("$local_sha")
+  remote_refs+=("$remote_ref")
+done
+
+if ! git fetch origin main --prune; then
+  printf '%s\n' \
+    'pre-push: refused push because origin/main could not be refreshed.' \
+    '  Restore network/authentication and re-run: git fetch origin main --prune' \
+    >&2
+  exit 1
+fi
+
+fail=0
+for i in "${!local_refs[@]}"; do
+  local_ref="${local_refs[$i]}"
+  local_sha="${local_shas[$i]}"
+  remote_ref="${remote_refs[$i]}"
   # skip branch deletes
   if [[ "$local_sha" =~ ^0+$ ]]; then
     continue
@@ -30,6 +59,19 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         "  Also allowed: main | master | develop | dependabot/* | renovate/* |" \
         "                 release/* | hotfix/*" \
         "  Rename:  git branch -m <prefix>/<feature> && git push -u origin HEAD" \
+        >&2
+      fail=1
+    fi
+
+    if requires_fresh_main "$branch" && ! git merge-base --is-ancestor origin/main "$local_sha"; then
+      printf '%s\n' \
+        "pre-push: refused push of stale branch '${branch}'" \
+        '  Rebase on fresh main, inspect conflicts, and rerun affected checks:' \
+        '  git fetch origin main --prune' \
+        '  git rebase origin/main' \
+        '  <run validation>' \
+        '  git push' \
+        '  Use --force-with-lease only with explicit approval after a prior push.' \
         >&2
       fail=1
     fi
