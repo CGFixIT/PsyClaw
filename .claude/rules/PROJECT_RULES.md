@@ -49,7 +49,7 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 
 ### Testing
 
-- **Coverage Target:** 80% minimum (measured across `gate`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`, `utils`, `sync`, `agentic`)
+- **Coverage Target:** 80% minimum (measured across `gate`, `gate_ops`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`, `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`)
 - **Test Command:** `GROK_API_KEY=dummy pytest tests/ -q --tb=short`
 - **No Live Services:** All external deps mocked via `tests/conftest.py`
 - **Exit Codes:** Respect exit code conventions (0=success, 2=operation failed, 3=env/config error, 4=write refused)
@@ -60,17 +60,23 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 
 ### Never Import Into Core Paths
 
-The following modules **must never** import `agentic/`, `sync/`, or each other:
+The following modules **must never** import `agentic/`, `sync/`, `guardrails/`,
+`harness/`, `telegram/`, or each other:
 - `gate.py` — FastAPI server entry
 - `graph.py` — LangGraph security topology
 - `mcp_hybrid_server.py` — MCP server
 
-Rationale: Architectural isolation preserves the five security invariants.
+Rationale: architectural isolation preserves I6 (module isolation), the sixth
+of CyClaw's six security invariants — see `CLAUDE.md` §3. The five listed
+above under "Security Invariants (Enforced by Graph Topology)" are the ones
+graph topology enforces; this one is enforced by import structure instead,
+which is why it gets its own section rather than a sixth numbered entry there.
 
 ### Out-of-Band Execution
 
 - **`agentic/`** — Run via `python -m agentic.cli`. Reads GitHub, proposes/applies skills, governs write gate.
 - **`sync/`** — Run via `python -m sync.cli`. Dropbox corpus sync via `rclone`.
+- **`telegram/`** — Run via `python -m telegram.cli`. Optional notify/chat channel, shipped `enabled: false`; inbound chat text only ever reaches the RAG pipeline via loopback `POST /query`, never a direct call into `graph.py`.
 
 ---
 
