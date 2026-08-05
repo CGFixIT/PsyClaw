@@ -49,7 +49,7 @@ echo "mutation A (D2 numpy<2): PASS (exit 2, D2 reported)"
 
 # 2b. D4 FAIL: give constraints.txt uvicorn a [standard] extra.
 b="$(_mktree)"
-sed -i.bak 's/^uvicorn==0.49.0/uvicorn[standard]==0.49.0/' "$b/constraints.txt"
+sed -i.bak 's/^uvicorn==0.51.0/uvicorn[standard]==0.51.0/' "$b/constraints.txt"
 out="$(python3 "$checker" --repo-root "$b" 2>&1)"; rc=$?
 rm -rf "$b"
 if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[D4\]"; then

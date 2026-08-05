@@ -55,7 +55,7 @@ drift-shaped question is the reverse: a package installed by a surface but
 *unpinned* in `constraints.txt`.
 
 **`environment.yml` deliberately diverges from the pip pins, twice.** It carries
-`fastapi=0.115.9` where the pip path is `0.138.0`, and
+`fastapi=0.115.9` where the pip path is `0.139.2`, and
 `opentelemetry-exporter-otlp-proto-grpc>=1.42` where the pip path has no such
 line. Both are conda-forge *packaging* constraints (chromadb=1.5.9's conda build
 hard-pins fastapi; its OTel floor is a 2022-era range that solves into a
@@ -139,7 +139,7 @@ versions from a fresh-venv install, not guessed. `huggingface_hub` is also
 mirrored into `environment.yml`; `starlette` deliberately is not, because
 `environment.yml`'s `fastapi` is pinned older (`0.115.9`, forced by
 conda-forge's `chromadb` build — see the comment there) than the pip path's
-`0.138.0`, and forcing the pip-resolved `starlette==1.3.1` alongside it could
+`0.139.2`, and forcing the pip-resolved `starlette==1.3.1` alongside it could
 easily demand a pairing `fastapi==0.115.9` was never built against. Any name
 this check reports going forward is a new finding, not a known one.
 
