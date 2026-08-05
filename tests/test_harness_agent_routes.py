@@ -137,7 +137,7 @@ def test_duplicated_constants_match_their_agentic_originals():
 
 
 def test_harness_plan_limit_holds_a_truncated_agentic_plan():
-    """A plan emitted by the CLI must fit through the browser handoff path.
+    # A plan emitted by the CLI must fit through the browser handoff path.
 
     Harness cannot import agentic at runtime (I6), so the intentional duplicate
     is checked here. ``generate_plan`` appends its fixed marker after the 6k
