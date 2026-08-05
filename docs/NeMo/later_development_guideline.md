@@ -9,6 +9,15 @@ related:
   - docs/NeMo/README.md
 ---
 
+**Status banner (2026-08-04):** Phases **1?3 and 4a are implemented** on main
+(input rail + output grounding on `local_llm`, both via
+`utils/guardrail_bridge.py`, still `guardrails.enabled: false` by default).
+This guideline remains the **historical contract and decision log**. Prefer
+[`README.md`](./README.md) for current status. Body below still mentions LM
+Studio in places because it was written against an earlier local-LLM default;
+shipped CyClaw uses **Ollama** at `http://127.0.0.1:11434/v1` and
+`qwen3.6:27b` (see `config.yaml` `models.local_llm` / `guardrails.base_url`).
+
 ## Summary
 
 This document is the development contract for CyClaw's **NeMo Guardrails** layer.

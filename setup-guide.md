@@ -3,9 +3,9 @@
 **v1.9.0 | Offline-First | Ollama | ~15 min**
 Verified 2026-07-29 against `main`; macOS path re-verified 2026-08-02.
 
-This is the canonical setup guide (`docs/SETUP.md` now points here). For the
+This is the canonical setup guide (`docs/work/SETUP.md` and `docs/! How-To-Guides/setup-guide.md` redirect here). For the
 full architecture tour — agentic layer, filesystem/SQL connectors, NeMo
-Guardrails, the coding harness, and the security model — see
+Guardrails, the coding harness, Telegram channel design, and the security model — see
 [`README.md`](README.md). This guide covers what's needed to get the core RAG
 gateway running, plus how to launch the harness console beside it and exercise
 every REST endpoint from a terminal.
@@ -669,17 +669,15 @@ several opt-in, disabled-by-default, out-of-band layers — none of them
 required to get the server above running, and none of them ever imported into
 the request path: a GitHub-context/governed-skills **agentic layer**, a
 local/SMB **filesystem connector** and read-only **SQL connector**, an
-optional **NeMo Guardrails** content-safety layer, and a separate
-**coding-harness** console on `127.0.0.1:8790` (Windows via `powershell/`,
-macOS/Linux via `macos/` — same Python app, different install glue). See
-README's own section for each — [Agentic Layer](README.md#agentic-layer-v160),
-[Filesystem & SQL Connectors](README.md#filesystem--sql-connectors-v18),
-[NeMo Guardrails](README.md#nemo-guardrails-v18),
-[Coding Harness Console](README.md#coding-harness-console-v19). A
-Docker/`docker-compose` deployment path also exists (`Dockerfile`,
-`docker-compose.yml`) with a hardened container posture — see
-[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for what it does and doesn't
-cover.
+optional **NeMo Guardrails** content-safety layer (Phase 2 input + Phase 4a
+output grounding when enabled), a separate **coding-harness** console on
+`127.0.0.1:8790` (Windows via `powershell/`, macOS/Linux via `macos/` — same
+Python app, different install glue), and an out-of-band **Telegram** channel
+(`python -m telegram.cli`, default disabled — design:
+[`docs/channels/TELEGRAM_DESIGN.md`](docs/channels/TELEGRAM_DESIGN.md)). See
+README for product overview and
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for security scope. A
+Docker/`docker-compose` path also exists (`Dockerfile`, `docker-compose.yml`).
 
 ---
 
@@ -704,4 +702,4 @@ cover.
 ---
 
 *Built by [Chris Grady](https://cgfixit.com) · Repo: [github.com/CGFixIT/CyClaw](https://github.com/CGFixIT/CyClaw)*
-*v1.9.0, Python 3.12 verified — last accuracy pass 2026-07-29*
+*v1.9.0 package train, Python 3.12 — last docs accuracy pass 2026-08-04 (NeMo phase status, Telegram pointer; install steps last re-verified 2026-07-29 / macOS 2026-08-02)*

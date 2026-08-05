@@ -26,11 +26,11 @@ this file's condensed summaries of them still stand alongside the (now
 relocated, lightly refreshed) originals — treat both as intentionally
 coexisting, not as drift. The 17th file,
 `docs/NeMo/phase3_implementation_plan.md`, was deliberately **left in place,
-not moved**: it is still cited by exact file:line from `remaining_work.md`'s
-still-open item #2 and from a new `docs/NeMo/phase4_implementation_plan.md`
-design doc on an unmerged branch/PR, and relocating it now would break live
-cross-references from in-flight work that has not landed yet. Revisit that
-exclusion once phase4 merges and item #2 closes.
+not moved** (cross-refs from remaining_work / phase plans). **Update
+2026-08-04:** Phase 4a (`guardrail_output` grounding on `local_llm`) has
+landed on main; the phase4 design lives at
+`docs/NeMo/!phase4_implementation_plan.md` with a status banner reflecting
+shipped 4a vs open 4b (soul-leak). Phase3 stays in `docs/NeMo/` for history.
 
 **Follow-up from the prior "before deletion" list — completed 2026-08-02**
 (tracked here so it isn't lost):
@@ -876,7 +876,7 @@ This is not a quiet UI addition — it reaches directly into Invariant I3 (tripl
 
 Per CLAUDE.md §7, this sits in the High tier (editing something adjacent to a security invariant) — it needs a design pass and explicit user sign-off before code, not a default "safe convenience layer" framing as the source doc suggests at online-llm-grok-claude.md:157.
 
-**Stale reference flagged:** the doc pins `grok.model: "grok-4.3"` (online-llm-grok-claude.md:20,39). Current `config.yaml:87` ships `grok-4.5` as `models.grok.model` (`grok-4.3` is noted only as a still-resolvable prior default in that line's own comment, kept available if cost or the larger context window matters more than currency). The doc's `claude.model: "claude-sonnet-5"` (online-llm-grok-claude.md:26,45) does still match `config.yaml:98`. Per CLAUDE.md §1, code/config is the source of truth — treat the grok model string in this doc as stale.
+**Stale-reference note (resolved 2026-08-04 in docs/work/online-llm-grok-claude.md):** examples now use shipped grok-4.5 / claude-sonnet-5. grok-4.3 remains a valid optional pin per config.yaml comments.
 
 ### docs/work/PSYCLAW_FEATURE_IDEAS.md (moved from docs/PSYCLAW_FEATURE_IDEAS.md) — vertical-market hypotheses
 

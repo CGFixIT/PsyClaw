@@ -1,20 +1,27 @@
 # NeMo Phase 4 — query-path output rail (`guardrail_output`) design
 
-**Status: DESIGN ONLY. Not approved, not scheduled, no code written against it.**
-This document answers the open question `docs/NeMo/phase3_implementation_plan.md`
-left standing at `:261-263` ("Do the query-path output rails ever get built?
-Priority: low") and the parallel entry in `remaining_work.md` item #2. It exists
-so an owner can approve, amend, or reject a concrete design in one sitting,
-instead of the decision being re-litigated from scratch next time someone reads
-that open question. **Touches zero files.** `graph.py`, `guardrails/`, and
-`utils/guardrail_bridge.py` are all High risk tier (`CLAUDE.md` §7 — graph-edge
-change) and require separate, explicit owner sign-off before any of the code
-below is written, exactly as the Phase 2 precedent (`phase2_implementation_plan.md`)
-was reviewed before its code PR.
+**Status (updated 2026-08-04):** **Phase 4a SHIPPED** on main — graph node
+`guardrail_output` is wired via `utils/guardrail_bridge.py`, grounding-only,
+scoped to the `local_llm` answer path, still opt-in behind
+`guardrails.enabled`. Body below is the **original design contract** kept for
+history and for open Decision 2 (soul-leak / Phase 4b). Do **not** treat the
+banner that used to say "DESIGN ONLY / no code written" as current.
 
-Written as of `main` @ `8b19822` (2026-08-02), after Phase 2 (input rail wired,
-`remaining_work.md` item #1) and Phase 3A (scanner consolidation) had both
-already landed.
+Still open relative to this design doc:
+
+- Full `check_soul_leak` implementation (config may list the flow name; offline
+  floor does not fully activate it — see `config.yaml` comments).
+- Any widening of output-rail scope beyond `local_llm` (Phase 4a deliberately
+  left external fallbacks and offline-best-effort unrailed for grounding).
+
+This document originally answered the open question
+`docs/NeMo/phase3_implementation_plan.md` left standing ("Do the query-path
+output rails ever get built?") so an owner could approve a concrete design.
+Phase 4a was that approval path; residual work is 4b / false-positive sweeps,
+not a blank-slate redesign.
+
+Written as of `main` @ `8b19822` (2026-08-02) for the design text; status line
+above refreshed 2026-08-04 against live `graph.py` + `utils/guardrail_bridge.py`.
 
 ---
 

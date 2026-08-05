@@ -9,6 +9,11 @@ related:
   - graph.py
 ---
 
+**Status (2026-08-04):** **SHIPPED.** `guardrail_input` is on the live graph
+(via `utils/guardrail_bridge.py`); still opt-in / pass-through when
+`guardrails.enabled: false`. This file remains the historical implementation
+contract — not a to-do list.
+
 ## Summary
 
 This document is the reviewed implementation contract for **Phase 2** of the NeMo
