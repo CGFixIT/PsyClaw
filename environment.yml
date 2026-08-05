@@ -23,14 +23,14 @@ dependencies:
   # solve failure -- "fastapi=0.138.0 is not installable because it conflicts
   # with any installable versions previously reported"). This is a conda-forge
   # packaging constraint, not a CyClaw choice; the pip path stays on
-  # fastapi==0.138.0 (pyproject.toml/constraints.txt) since PyPI's chromadb
+  # fastapi==0.139.2 (pyproject.toml/constraints.txt) since PyPI's chromadb
   # 1.5.9 carries no such pin. Re-check this pin if chromadb is ever bumped here.
   - fastapi=0.115.9
-  - uvicorn=0.49.0
+  - uvicorn=0.51.0
   - pydantic=2.13.4
   - pyyaml=6.0.3
   - httpx=0.28.1
-  - langchain-core=1.4.8
+  - langchain-core=1.5.0
   - chromadb=1.5.9  # Note: Use embedded/PersistentClient only. See SECURITY.md
   #
   # Second deliberate exception, same shape as fastapi above: a conda-forge
@@ -75,7 +75,7 @@ dependencies:
   # NOT mirrored here. Third deliberate exception, same shape as the fastapi one
   # above: starlette is fastapi's own core dependency, and this file's fastapi is
   # already pinned to the older 0.115.9 that conda-forge's chromadb=1.5.9 build
-  # forces, not the pip path's 0.138.0. Forcing starlette=1.3.1 alongside
+  # forces, not the pip path's 0.139.2. Forcing starlette=1.3.1 alongside
   # fastapi=0.115.9 would very likely demand a version pairing fastapi 0.115.9
   # never declares support for and break the conda solve -- unverified here (no
   # mamba/conda available to test-solve). Left as fastapi's own implicit
@@ -90,7 +90,7 @@ dependencies:
   - bandit=1.9.4
   - pytest-cov=7.1.0
   - pip:
-      - langgraph==1.2.6
+      - langgraph==1.2.9
       - rank-bm25==0.2.2
       - websockets==15.0.1
 
