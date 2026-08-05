@@ -248,16 +248,21 @@ as T1.
 
 1. Only exact `/online on <grok|claude>` can grant consent. `/online on` and
    any ambiguous form return usage instead of silently choosing a provider.
-2. The grant stores only `confirm_until` and provider in
+2. **Private chat only** (issue #792). Groups/supergroups share one `chat_id`
+   across senders; T3 grant and claim both refuse non-`private` types so one
+   member cannot arm external fallback for another. Multi-user ACLs remain a
+   non-goal — use a 1:1 DM with the bot.
+3. The grant stores only `confirm_until` and provider in
    `data/telegram/session_{chat_id}.json`; chat ids are canonical signed 64-bit
    integers and per-session file locking plus atomic replacement protects the
    one-shot claim across poller processes.
-3. The next non-command text claims and deletes that state **before** the
-   `/query` call. It can set `user_confirmed_online: true` and the selected
-   `online_provider` only when unexpired and the master switch remains enabled.
-   A failed query still spends the claim; there is no sticky “always online”.
-4. Grant and consume are separately audited without message text or secrets.
-5. CyClaw's existing `mode=hybrid` and enabled-provider checks remain the final
+4. The next non-command **private** text claims and deletes that state
+   **before** the `/query` call. It can set `user_confirmed_online: true` and
+   the selected `online_provider` only when unexpired and the master switch
+   remains enabled. A failed query still spends the claim; there is no sticky
+   “always online”.
+5. Grant, refuse, and consume are audited without message text or secrets.
+6. CyClaw's existing `mode=hybrid` and enabled-provider checks remain the final
    authority. The Telegram bridge cannot make an offline configuration use an
    external provider.
 

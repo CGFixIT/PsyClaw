@@ -33,7 +33,8 @@ _HELP_TEXT = (
     "/help — this text\n"
     "/status — loopback CyClaw /health\n"
     "/id — your chat id\n"
-    "/online on <grok|claude> — one explicit external fallback for your next message\n"
+    "/online on <grok|claude> — one explicit external fallback for your next "
+    "private-chat message only\n"
     "Anything else → local RAG via POST /query (mode=chat).\n"
     "Media staging requires a private-chat photo/document captioned /save --confirm <reason>."
 )
@@ -79,10 +80,17 @@ def _extract_answer(query_response: dict[str, Any]) -> str:
     return "(no answer field in /query response)"
 
 
+def _is_private_chat(chat_type: str) -> bool:
+    # Telegram private DMs only. Groups/supergroups/channels share one chat_id
+    # across senders — T3 consent must not be chat-scoped there (issue #792).
+    return chat_type == "private"
+
+
 def _dispatch_command(
     cfg: TelegramConfig,
     *,
     chat_id: int | str,
+    chat_type: str,
     text: str,
 ) -> str | None:
     """Return reply text for reserved commands, or None if not a command."""
@@ -97,20 +105,43 @@ def _dispatch_command(
     if cmd == "status":
         return tg_client.fetch_loopback_health(cfg)
     if cmd == "online":
-        return _online_command(cfg, chat_id=chat_id, text=text)
+        return _online_command(cfg, chat_id=chat_id, chat_type=chat_type, text=text)
     if cmd == "save":
         return "Attach a photo or document with caption: /save --confirm <reason>"
     return None
 
 
-def _online_command(cfg: TelegramConfig, *, chat_id: int | str, text: str) -> str:
+def _online_command(
+    cfg: TelegramConfig,
+    *,
+    chat_id: int | str,
+    chat_type: str,
+    text: str,
+) -> str:
     """Grant one short-lived, provider-specific T3 consent without a core import."""
     if not cfg.allow_hybrid_confirm:
         return "Hybrid confirmation is disabled by telegram.allow_hybrid_confirm."
+    if not _is_private_chat(chat_type):
+        # ponytail: refuse groups rather than bind sender ids — multi-user ACLs
+        # are a design non-goal; private DM is the single-operator path.
+        audit_log(
+            {
+                "event": "telegram_hybrid_confirm_refused",
+                "channel": "telegram",
+                "chat_id": str(chat_id),
+                "chat_type": chat_type,
+                "gate": "private_chat_only",
+            },
+            config_path=cfg._config_path,
+        )
+        return (
+            "Hybrid confirmation (/online) is private-chat only. "
+            "Use a 1:1 DM with the bot, not a group."
+        )
     match = _ONLINE_CMD_RE.fullmatch(text.strip())
     args = match.group("args").split() if match and match.group("args") else []
     if len(args) != 2 or args[0].lower() != "on" or args[1].lower() not in {"grok", "claude"}:
-        return "Usage: /online on <grok|claude> (one next message only)."
+        return "Usage: /online on <grok|claude> (one next private-chat message only)."
     provider = args[1].lower()
     confirm_until = grant_hybrid_confirm(
         chat_id,
@@ -122,6 +153,7 @@ def _online_command(cfg: TelegramConfig, *, chat_id: int | str, text: str) -> st
             "event": "telegram_hybrid_confirm_granted",
             "channel": "telegram",
             "chat_id": str(chat_id),
+            "chat_type": "private",
             "provider": provider,
             "ttl_sec": cfg.hybrid_confirm_ttl_sec,
             "confirm_until": confirm_until,
@@ -129,8 +161,8 @@ def _online_command(cfg: TelegramConfig, *, chat_id: int | str, text: str) -> st
         config_path=cfg._config_path,
     )
     return (
-        f"One {provider} confirmation is armed for your next non-command message "
-        f"for up to {cfg.hybrid_confirm_ttl_sec} seconds."
+        f"One {provider} confirmation is armed for your next non-command private "
+        f"message for up to {cfg.hybrid_confirm_ttl_sec} seconds."
     )
 
 
@@ -140,8 +172,13 @@ def handle_inbound_text(
     chat_id: int | str,
     text: str,
     update_id: int | None = None,
+    chat_type: str = "private",
 ) -> dict[str, Any]:
-    """T2: allowlisted inbound text → command or POST /query → reply via Bot API."""
+    """T2: allowlisted inbound text → command or POST /query → reply via Bot API.
+
+    ``chat_type`` defaults to ``private`` for unit callers; the poll loop always
+    passes Telegram's real type. T3 hybrid consent is private-chat only.
+    """
     if not cfg.enabled:
         raise TelegramRefused("telegram.enabled is false", details={"gate": "enabled"})
     if cfg.mode != "chat":
@@ -184,13 +221,15 @@ def handle_inbound_text(
         config_path=cfg._config_path,
     )
 
-    cmd_reply = _dispatch_command(cfg, chat_id=chat_id, text=text)
+    cmd_reply = _dispatch_command(cfg, chat_id=chat_id, chat_type=chat_type, text=text)
     if cmd_reply is not None:
         outbound = tg_client.send_message(cfg, chat_id=chat_id, text=cmd_reply)
         return {"command": True, "outbound": outbound, "answer": cmd_reply}
 
+    # T3: only claim consent in a private chat so a group peer cannot spend
+    # another member's /online grant (or any stale chat-scoped session file).
     online_provider = None
-    if cfg.allow_hybrid_confirm:
+    if cfg.allow_hybrid_confirm and _is_private_chat(chat_type):
         online_provider = claim_hybrid_confirm(chat_id)
     if online_provider is not None:
         audit_log(
@@ -198,6 +237,7 @@ def handle_inbound_text(
                 "event": "telegram_hybrid_confirm_consumed",
                 "channel": "telegram",
                 "chat_id": str(chat_id),
+                "chat_type": "private",
                 "update_id": update_id,
                 "provider": online_provider,
                 "query_hash": hash_query(text),
@@ -296,8 +336,8 @@ def handle_inbound_media(
     return {"media": staged, "outbound": outbound, "answer": answer}
 
 
-def _message_from_update(update: dict[str, Any]) -> tuple[int | str, str] | None:
-    """Return (chat_id, text) for a text message update, else None."""
+def _message_from_update(update: dict[str, Any]) -> tuple[int | str, str, str] | None:
+    """Return (chat_id, text, chat_type) for a text message update, else None."""
     msg = update.get("message") or update.get("edited_message")
     if not isinstance(msg, dict):
         return None
@@ -306,7 +346,10 @@ def _message_from_update(update: dict[str, Any]) -> tuple[int | str, str] | None
     text = msg.get("text")
     if chat_id is None or not isinstance(text, str) or not text.strip():
         return None
-    return chat_id, text.strip()
+    # Missing/unknown type fails closed for T3 (not treated as private).
+    raw_type = chat.get("type")
+    chat_type = raw_type if isinstance(raw_type, str) else ""
+    return chat_id, text.strip(), chat_type
 
 
 def _media_from_update(
@@ -359,13 +402,14 @@ def poll_once(
             continue
         try:
             if parsed_text is not None:
-                chat_id, text = parsed_text
+                chat_id, text, chat_type = parsed_text
                 handled.append(
                     handle_inbound_text(
                         cfg,
                         chat_id=chat_id,
                         text=text,
                         update_id=uid if isinstance(uid, int) else None,
+                        chat_type=chat_type,
                     )
                 )
             else:
