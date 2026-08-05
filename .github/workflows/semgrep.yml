@@ -12,9 +12,12 @@ on:
     - cron: '20 3 * * 3'
   workflow_dispatch:
 
+# Workflow-level grant stays read-only; the SARIF-upload permission is declared
+# per-job below. zizmor's excessive-permissions audit flags a workflow-level
+# `security-events: write` because every future job in this workflow would
+# inherit it silently -- see trivy.yml/pr-template-check.yml for the same shape.
 permissions:
   contents: read
-  security-events: write
 
 concurrency:
   group: semgrep-${{ github.workflow }}-${{ github.ref }}
@@ -23,6 +26,9 @@ concurrency:
 jobs:
   semgrep:
     name: Semgrep OSS Scan
+    permissions:
+      contents: read
+      security-events: write  # upload SARIF
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
