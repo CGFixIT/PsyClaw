@@ -536,7 +536,7 @@
                             <span class="insight-number">Insight #${idx + 1}</span>
                             <span class="insight-score">Relevance: ${insight.score.toFixed(2)}</span>
                         </div>
-                        <div class="insight-keywords">Matched concepts: ${insight.keywords.join(', ')}</div>
+                        <div class="insight-keywords">Matched concepts: ${escapeHtml(insight.keywords.join(', '))}</div>
                         <div class="insight-text">${escapeHtml(insight.text)}</div>
                     `;
                     insightsList.appendChild(item);
