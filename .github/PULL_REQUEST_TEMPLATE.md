@@ -10,6 +10,7 @@ Hooks and `utils/agent_identity.py` enforce this allowlist; casual / generic nam
 | Grok Build | `grok/<feature>` | `grok/pr-template-branch-rules` |
 | Kimi / Kimi Code | `kimi/<feature>` | `kimi/docs-sync` |
 | CyClaw direct / MCP | `CyClaw/<feature>-<YYYYMMDD>` or `cyclaw/<feature>` | `CyClaw/harness-timeout-20260805` |
+| Unknown / harness default | `agent/<feature>` | `agent/harness-browser-parity` |
 
 Rules for agents:
 1. Pick the prefix that matches **the tool that is creating the branch**, not a generic label.
