@@ -496,6 +496,26 @@ def test_a_shim_timeout_is_a_504_that_does_not_echo_the_argv(cfg, monkeypatch):
     assert "leak me" not in resp.text
 
 
+def test_a_shim_os_error_is_a_redacted_502(cfg, monkeypatch):
+    """ops_runner._write_body/_write_checks_file raise a bare OSError (disk
+    full, unwritable temp dir) before run_agentic_op ever spawns the CLI --
+    neither the OpsError nor the TimeoutExpired except above catches that, so
+    it used to escape as an unhandled 500 the console's api() helper can't
+    parse at all.
+    """
+    def _disk_full(_action: str, **_kwargs):
+        raise OSError("[Errno 28] No space left on device: '/tmp/cyclaw_skill_abc.md'")
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _disk_full)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert detail["code"] == "SHIM_IO_ERROR"
+    assert detail["message"].startswith("real-repo-run shim failed:")
+
+
 # --- the ok=false-inside-a-200 contract -------------------------------------
 
 
