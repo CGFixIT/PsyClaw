@@ -61,6 +61,18 @@ python -m agentic.cli apply-skill   --name deploy --desc "..." --body-file s.md 
 # Real-repo coding pipeline -- clone, plan/patch/verify, human-gated commit (see §9):
 python -m agentic.cli real-repo-run --repo --instruction "..." --checks-file checks.json \
     --branch claude/topic --commit-message "..." --reason "..." --confirm
+
+# OPTIONAL: get a plan from a capable model FIRST, review it, then have the
+# LOCAL model implement it across iterations -- see §9's "Two-stage: plan with
+# cloud, implement locally" for why this is a separate step, not a flag on
+# real-repo-run itself:
+python -m agentic.cli real-repo-run-plan --repo --instruction "..." \
+    --provider grok --confirm-online --out plan.md
+# Review/edit plan.md by hand, THEN feed it to a run that omits --provider --
+# see §9 for what happens if you don't omit it:
+python -m agentic.cli real-repo-run --repo --instruction "..." --checks-file checks.json \
+    --branch claude/topic --commit-message "..." --reason "..." --plan-file plan.md --confirm
+
 python -m agentic.cli real-repo-run-status --run-id <id>
 python -m agentic.cli real-repo-run-decide --run-id <id> --decision approve   # or reject
 # Escalations past the local commit -- each its own decision, both disarmed by default:
@@ -136,6 +148,36 @@ path that can, and remains disarmed). Reachable via `agentic.cli`'s
 `real-repo-run`/`real-repo-run-status`/`real-repo-run-decide` subcommands and,
 authenticated, via the harness's `POST /api/agent/run` /
 `GET /api/agent/runs/{id}` / `POST /api/agent/runs/{id}/decision` routes.
+
+**Two-stage: plan with cloud, implement locally.** `real-repo-run-plan`
+(`agentic/real_repo_loop.py`'s `generate_plan`) is a separate, one-shot
+subcommand: it asks a model for a short implementation plan (files to touch,
+one-line rationale each — never code) and prints or writes it, with **no
+clone, no iteration, no write of any kind**. The design rationale, stated in
+`generate_plan`'s own docstring: a capable (typically cloud) model reasons
+about the approach *once*; a human reads and approves the result; a cheaper
+local model then implements it across however many iterations that takes.
+Pass the approved plan to `real-repo-run` via `--plan-file` and it is folded
+into every iteration's prompt ahead of any GitHub context.
+
+**`--provider`/`--confirm-online` mean two different things depending on
+which subcommand carries them** — this is easy to get backwards:
+- On `real-repo-run-plan`, `--provider` drives *only* the one-shot plan call.
+- On `real-repo-run` itself, `--provider` drives *every iteration of the
+  whole loop* — the cloud model proposes every patch attempt, not just the
+  plan. `real-repo-run` and `real-repo-run-plan` each read `--provider`
+  independently; there is no cross-check between them.
+
+To get "cloud plans, local Qwen implements": pass `--provider`/
+`--confirm-online` to `real-repo-run-plan` only, and **omit `--provider`
+entirely on the follow-up `real-repo-run` call**. Passing `--provider` to
+*both* is allowed and does something real (the plan text still reaches the
+prompt) but silently defeats the two-stage economics above — the cloud model
+is now billed on every `--max-iterations` attempt, not once, with no warning
+from the CLI either way. As of this writing this whole two-stage recipe is
+CLI-only: the harness console's `/api/agent/run` has no `--provider`/
+`--plan-file` equivalent, so drive this step from a terminal even if you
+otherwise use the console for the run itself.
 
 **The DeepAgents-graph path, retired (owner decision, 2026-07-31)**
 (`agentic/deepagent_github/builder.py`'s `create_deep_agent` integration,
