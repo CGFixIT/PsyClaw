@@ -1,7 +1,7 @@
 # CyClaw Sync — Rclone Dropbox Corpus Integration
 
 **Module:** `sync/` (Dropbox corpus sync, v1.4.0 cycle)
-**Status:** Out-of-band, audit-logged, **zero new Python dependencies**, no FastAPI surface.
+**Status:** Out-of-band, audit-logged, **zero new Python dependencies**. Not a graph node; core modules never import `sync/`.
 
 CyClaw's sync module mirrors a Dropbox folder into your local `data/corpus/`
 without weakening any of CyClaw's security invariants. It is a thin Python
@@ -9,10 +9,11 @@ wrapper around the `rclone` binary, runs as a **separate process** (cron /
 systemd timer / launchd / Task Scheduler), and emits per-file audit events into
 the same `logs/audit.jsonl` the gateway uses.
 
-> **Sync is NOT a graph node and NOT a FastAPI endpoint.** It is invoked **only**
-> via `python -m sync.cli`. CyClaw's request path — `gate.py`, `graph.py`,
-> `mcp_hybrid_server.py` — never imports anything from `sync/`. There is no new
-> listener, no new route, and no new dependency.
+> **Sync is NOT a graph node and is never imported by `gate.py` / `graph.py` /
+> `mcp_hybrid_server.py`.** Primary invocation is `python -m sync.cli`.
+> Optionally, authenticated loopback `POST /ops/sync` (`gate_ops.py`) reaches
+> the same CLI only through `utils/ops_runner.py` as an argv-list subprocess —
+> still no in-process `import sync`, no public listener, and no new Python dependency.
 
 ---
 
@@ -53,8 +54,8 @@ the audit log, or any argv.
 | **Hardened exclude list** | Model weights, indices, caches, venvs, logs, secrets, `.git`, and the soul DB (`*.db*`) are all excluded by default. See `sync/filters.py`. |
 | **`max_delete: 20`** | rclone aborts the run if more than 20 deletions would occur. Tune up only when you understand exactly why. |
 | **Per-file SHA-256 audit** | Every added/modified file under `data/corpus/` gets a SHA-256 hash logged in `logs/audit.jsonl`. |
-| **No gateway surface** | No FastAPI endpoint, no socket, no listener, no graph node/edge. The only outbound call is `rclone` → Dropbox, operator-initiated, out-of-band. |
-| **Zero new deps** | stdlib + existing `pyyaml`/`utils.*` only. `rclone` is an external binary, installed out-of-band like LM Studio. |
+| **No in-process gateway import** | No graph node/edge; `sync/` is never imported by the core three. Optional `POST /ops/sync` is an API-key-gated subprocess shim only (`utils/ops_runner.py`). The only outbound call is still `rclone` → Dropbox. |
+| **Zero new deps** | stdlib + existing `pyyaml`/`utils.*` only. `rclone` is an external binary, installed out-of-band like Ollama. |
 
 If an old config still sets `include_soul: true`, `python -m sync.cli setup` prints a
 `[WARN]` noting the flag has no effect — soul data is never mirrored, because the

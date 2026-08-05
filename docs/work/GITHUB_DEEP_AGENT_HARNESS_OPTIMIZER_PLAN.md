@@ -35,7 +35,9 @@ The target architecture adds two out-of-band features under `agentic/`:
   evaluates candidate improvements to allowed harness surfaces using visible
   train cases and hidden holdout cases.
 - `agentic/deepagent_github/`: an optional LangChain Deep Agents-backed local
-  GitHub coding harness that can use LM Studio and scoped CyClaw tool wrappers.
+  GitHub coding harness that was designed for a local OpenAI-compatible
+  proposer (originally described as LM Studio; shipped config uses **Ollama**
+  / `openai_compatible` only) and scoped CyClaw tool wrappers.
 
 Both features remain disabled by default and must not be imported by `gate.py`,
 `graph.py`, `mcp_hybrid_server.py`, or the core request path. `agentic.enabled`

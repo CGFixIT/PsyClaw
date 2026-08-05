@@ -1,12 +1,34 @@
 # CyClaw LangChain Deep Agentic Harness — Status and Roadmap
 
-Date: 2026-07-11. Status: living status/roadmap record for the out-of-band
-LangChain Deep Agents harness (`agentic/deepagent_github/` +
-`agentic/harness_optimizer/`).
+**Status (updated 2026-08-05): HISTORICAL.** This file is a dated
+(2026-07-11) status/roadmap snapshot for the **retired** LangChain Deep
+Agents harness surface (`agentic/deepagent_github/` +
+`agentic/harness_optimizer/`). It is **not** the operator guide for coding
+loops today and must not be used as a copy-paste config cookbook.
+
+### Read this first (current code wins)
+
+| Question | Authoritative answer today |
+|---|---|
+| Live real-repo coding path? | `agentic/real_repo_loop.py` + harness `/api/agent/*` (still heavily gated / disarmed by default) |
+| DeepAgents subgraph future work? | **No** — owner retired further development 2026-07-31 (see `GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` retirement banner and `docs/THREAT_MODEL.md` fifth amendment) |
+| Local model provider default? | **Ollama** at `http://127.0.0.1:11434/v1`, model `qwen3.6:27b` (`config.yaml` `models.local_llm` and `agentic.deepagent_github`) |
+| Is `provider: "lmstudio"` still valid for deepagent_github? | **No** — `agentic/config.py` accepts only `"ollama"` or `"openai_compatible"`. LM Studio in diagrams below is **historical** design text only |
+| Shipped DeepAgents defaults? | `deepagent_github.enabled: false`, `allow_deepagents_dependency: false`, cloud providers off |
+
+Body below is preserved as the 2026-07-11 decision log and review notes. Where
+it says "living roadmap," "LM Studio," `localhost:1234`, or `grok-4.3`, treat
+those as **as-of-that-date** statements unless a later in-body
+`[Correction …]` note updates them. Prefer `config.yaml` + the retirement
+docs over any diagram in this file.
+
+Original header (archival): Date 2026-07-11. Status was recorded as a
+living status/roadmap for the out-of-band LangChain Deep Agents harness
+(`agentic/deepagent_github/` + `agentic/harness_optimizer/`).
 
 ## Purpose and provenance
 
-This document records where the CyClaw agentic harness stands as of
+This document records where the CyClaw agentic harness stood as of
 2026-07-11, the owner decisions that shape phases 6-9 and beyond, a review
 checklist against draft PR #515 (the phases 6-9 implementation of record), a
 source-verified reference for the real `deepagents` package API, the design
@@ -18,13 +40,14 @@ Authority relationships (deliberate, to avoid drift):
 
 - `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` (moved from
   `docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` on 2026-08-02)
-  remains the canonical **design plan** for the two harness features. This
-  document does not restate its design authority; it records **status,
-  decisions, review findings, and roadmap** on top of it.
+  remains the canonical **historical design plan** for the two harness
+  features (with its own retirement banner). This document does not restate
+  its design authority; it records **status, decisions, review findings, and
+  roadmap** on top of it as of 2026-07-11.
 - `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` (moved from
   `docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md` on 2026-08-02; added by
-  draft PR #515) becomes the authoritative **implemented-controls**
-  description once #515 merges.
+  draft PR #515) is the authoritative **what phases 6-9 implemented** record
+  (also marked retired/superseded for future work after #515 landed).
 - `config.yaml` owns every tunable number cited here. Where a number appears
   below, it is sourced from `config.yaml`, `pyproject.toml`, or the named PR
   diff — never invented.

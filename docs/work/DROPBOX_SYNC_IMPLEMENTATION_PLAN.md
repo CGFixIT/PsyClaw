@@ -1,10 +1,12 @@
 # CyClaw Dropbox Corpus Sync — Implementation Planning Guide
 
-**Status:** **Implemented** (banner added 2026-07-19) — shipped as the out-of-band `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`), drivable from the terminal's Sync Console (`POST /ops/sync`) and covered by `tests/test_sync_*.py`. This document is the original planning guide, kept for design rationale; shipped behavior is documented in `Dropbox_Sync_Guide.md`.
+**Status:** **Implemented** (banner added 2026-07-19) — shipped as the out-of-band `sync/` package (`sync/cli.py`, `sync/runner.py`, `sync/scheduler.py`), drivable from the terminal's Sync Console (`POST /ops/sync`) and covered by `tests/test_sync_*.py`. This document is the original planning guide, kept for design rationale; shipped behavior is documented in `docs/SYNC_README.md` and `docs/! How-To-Guides/Dropbox_Sync_Guide.md`.
 **Target:** `main` (via feature branch → reviewed PR)
 **Author:** Planning synthesis (Claude) from the PsyClaw `sync/` prior art + two research passes
 **Scope item:** README roadmap v1.4.0 ("Dropbox/cloud corpus sync") / v1.5.0 ("test Dropbox corpus sync integration")
 **Date:** 2026-06-20
+
+> **Post-implementation honesty (2026-08-05).** Early drafts of this plan said "no FastAPI route." That was true of the *package* boundary (I6: core never imports `sync/`) and remains true of graph topology. It is **not** true of the whole product surface after the terminal Sync Console landed: `POST /ops/sync` is real, authenticated, loopback-only, and subprocess-only. Do not copy the old "no FastAPI endpoint" checklist language into new designs without that distinction.
 
 ---
 
@@ -14,7 +16,8 @@ Add an **out-of-band Dropbox → local corpus sync** as a standalone `sync/` Pyt
 
 It:
 - adds **zero** new Python dependencies (stdlib + existing `pyyaml`, `utils.logger`, `utils.errors`),
-- adds **no** FastAPI endpoint and **no** LangGraph node/edge,
+- adds **no** LangGraph node/edge and **no** in-process import of `sync/` from `gate.py`/`graph.py`/`mcp_hybrid_server.py`,
+- *post-ship addition:* optional authenticated loopback `POST /ops/sync` (`gate_ops.py`) may invoke the same CLI only via `utils/ops_runner.py` as an argv-list subprocess — still not an in-process `import sync`,
 - writes only to the local filesystem (default: `data/corpus/`) and appends to `logs/audit.jsonl` via the existing `utils.logger.audit_log()`,
 - defaults to **one-way pull** (`rclone copy`, which never deletes), with `bisync` available but discouraged,
 - keeps the Dropbox refresh token **entirely inside `rclone.conf`** — CyClaw's process never sees it,
@@ -55,7 +58,7 @@ These are derived from CyClaw's README "five security invariants" + security mod
 3. **Triple-Gated External preserved.** Sync is unrelated to the Grok fallback path. The only outbound network call is `rclone` → Dropbox, **operator-initiated, out-of-band**, never triggered by a user query. No new inbound listener.
 4. **Audit Convergence preserved.** Sync emits its own events through the *same* `audit_log()` into the *same* `logs/audit.jsonl`. It does not alter or bypass the graph's `audit_logger` node.
 5. **Soul Governance preserved.** `data/personality/**` is **excluded by default** from sync. A synced file can never overwrite `soul.md` or `cyclaw_soul.db` and thereby bypass the `apply_evolution()` injection scan behind `POST /soul/apply`. **This is the single most important path-safety rule.** Opt-in (`include_soul: true`) is loud and discouraged.
-6. **Loopback/no-listener posture preserved.** Sync adds no socket, no `Depends`, no route. `rclone` makes an *outbound* HTTPS call only; there is no inbound surface.
+6. **Loopback/no-listener posture preserved.** The `sync/` package itself adds no socket and no inbound Dropbox listener. `rclone` makes an *outbound* HTTPS call only. **Post-implementation note (2026-08-05):** terminal Sync Console later gained `POST /ops/sync` on the existing loopback gateway (`gate_ops.py`), which is API-key gated and only shells out to `python -m sync.cli` — it does not import `sync/` into the request path and does not open a public listener.
 7. **Zero-telemetry posture preserved.** `rclone` has no LangSmith/Chroma/OTel surface, but the subprocess must run with no remote-control (`--rc`), no usage reporting, and inherit CyClaw's clean env. (`gate.py`'s telemetry-kill block is request-path only; sync sets its own minimal clean env for the child.)
 8. **Minimal-deps posture preserved.** **Zero** new entries in `requirements.txt` / `constraints.txt` / `pyproject.toml` dependencies. `rclone` is an external binary installed out-of-band, the same way the local LLM already is (this doc originally cited LM Studio at `127.0.0.1:1234`; the shipped local model is now served by Ollama at `http://127.0.0.1:11434/v1` — `config.yaml`'s `models.local_llm.base_url` — corrected 2026-08-02, no change to the underlying "external binary, zero new deps" argument).
 
@@ -375,8 +378,8 @@ To keep review tractable, land in small reviewed PRs on the feature branch:
 
 ## 15. Definition of done
 
-- [ ] `sync/` package added; **no** import of it in `gate.py`/`graph.py`/`mcp_hybrid_server.py` (grep-verified in CI or review).
-- [ ] No FastAPI route, no listener, no graph node/edge added.
+- [x] `sync/` package added; **no** import of it in `gate.py`/`graph.py`/`mcp_hybrid_server.py` (grep-verified in CI or review).
+- [x] No graph node/edge; no inbound Dropbox listener. **Amended after ship:** loopback `POST /ops/sync` exists as an API-key-gated subprocess shim (`gate_ops.py` → `utils/ops_runner.py` → `python -m sync.cli`); still no in-process `import sync` on the request path. See status banner.
 - [ ] Zero new entries in `requirements.txt` / `constraints.txt` / `pyproject` dependencies.
 - [ ] `config.yaml` `sync:` block additive; no existing key changed; no secret in it.
 - [ ] `data/personality/**` excluded by default; `include_soul` opt-in is loud.
