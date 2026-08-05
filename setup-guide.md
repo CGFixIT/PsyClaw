@@ -528,6 +528,12 @@ a large model, not less — a bigger model does not raise `num_ctx` for you.
 Full detail, including the per-session `/set parameter num_ctx` alternative:
 [`OLLAMA_SETUP.md`](OLLAMA_SETUP.md).
 
+**Driving `agentic/real_repo_loop.py`** (`real-repo-run`/`real-repo-run-plan`,
+or the harness console's `/api/agent/run`) against the same Ollama instance
+needs more headroom than the formula above — that pathway's per-iteration
+prompt can legitimately run several times larger. See OLLAMA_SETUP.md's
+["The agentic real-repo coding loop needs more headroom than that"](OLLAMA_SETUP.md#the-agentic-real-repo-coding-loop-needs-more-headroom-than-that).
+
 The shipped `local_llm.timeout_sec: 600` and `max_tokens: 3000` are sized for a
 dense ~27B model (see `CLAUDE.md`'s load-bearing-numbers table), so they already
 match the default above — no timeout tuning needed. `timeout_sec` must stay

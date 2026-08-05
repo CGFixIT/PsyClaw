@@ -48,6 +48,17 @@ def _is_loopback(url: str) -> bool:
     return (urlparse(url).hostname or "") in _LOOPBACK_HOSTS
 
 
+def _token_count(raw_count: object) -> int:
+    """Best-effort int for one usage counter; malformed values degrade to 0."""
+    # A helper rather than inline in _parse_chat_response: WPS229 caps try
+    # bodies at one statement and WPS210/WPS231 cap that function's locals
+    # and complexity, so the degrade-to-0 guard has to live here.
+    try:
+        return int(raw_count or 0)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return 0
+
+
 def _parse_chat_response(resp: httpx.Response, fallback_model: str) -> ChatResult:
     """Extract body text + token usage, or raise a typed error."""
     try:
@@ -65,12 +76,17 @@ def _parse_chat_response(resp: httpx.Response, fallback_model: str) -> ChatResul
     body_text = body.get("content")
     if not isinstance(body_text, str):
         raise HarnessLLMError("malformed response from model server")
-    usage = parsed.get("usage") or {}
+    # usage is cosmetic (console token tally) — a proxy sending a non-dict
+    # usage block or non-numeric counts must degrade the tally to 0, not turn
+    # a good answer into the unparseable 500 the guards above exist to prevent
+    usage = parsed.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
     return ChatResult(
         body_text=body_text,
         model=str(parsed.get("model", fallback_model)),
-        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        prompt_tokens=_token_count(usage.get("prompt_tokens")),
+        completion_tokens=_token_count(usage.get("completion_tokens")),
     )
 
 
