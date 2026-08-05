@@ -137,6 +137,7 @@ subsystems.
 | `agentic/deepagent_github/` | Two subsystems: the live one (`RepoWorkspaceTools`: clone/read/write_file/commit/push, jailed via `agentic/fsconnect/pathsafe.ScopedRoots`; `chat_client.py`/`model_adapter.py`, the cloud-provider planner `real_repo_loop.py` uses) and the **retired** one (`builder.py`'s DeepAgents subgraph — owner decision 2026-07-31, no further development planned, superseded by `real_repo_loop.py`; code/tests/CI kept, not deleted — see `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`'s retirement note). Both gated `false`/disarmed by default |
 | `guardrails/` | Optional NeMo Guardrails; soft-imported, disabled by default. Phase 2 wires an offline input rail into `graph.py`'s `guardrail_input` node when `enabled: true`; Phase 4 adds an offline output (grounding) rail via `guardrail_output`, scoped to the `local_llm` answer only — both via `utils/guardrail_bridge.py`, still opt-in, still never imported directly by `gate.py`/`graph.py` |
 | `harness/` | Out-of-band coding harness (`cyclaw-harness` / `python -m harness.server`): grok-build-style slash-command console on 127.0.0.1:8790, `%USERPROFILE%\.CyClaw` home on Windows (`~/.CyClaw` on macOS/Linux), reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. Launched via `powershell/` (Windows) or `macos/` (macOS/Linux) — two OS-native script trees, not a shared abstraction, since the harness Python code itself carries no platform branch. See `docs/HARNESS_POWERSHELL.md` and `docs/HARNESS_MACOS.md` |
+| `telegram/` | Out-of-band Telegram channel (`python -m telegram.cli`), shipped `enabled: false`. Outbound notify (`mode: notify`) and, when configured, long-poll inbound chat (`mode: chat`) via the Telegram Bot API; inbound text only ever becomes an answer through HTTP `POST /query` on loopback — never a direct call into `graph.py`. `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import it (I6). T3 hybrid-confirm consent (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online`, and only via the exact `/online on <grok|claude>` command — core's triple gate remains the final authority. T4 media staging (default off) writes only through the existing `agentic/fsconnect` write path. See `docs/channels/TELEGRAM_DESIGN.md` and `docs/THREAT_MODEL.md`'s seventh amendment |
 
 ### Load-bearing numbers (all from `config.yaml`/`pyproject.toml` — do not invent)
 
@@ -563,7 +564,7 @@ python3 .claude/skills/injection-redteam/redteam.py
 
 CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
 `gate`, `gate_ops`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
-`utils`, `sync`, `agentic`, `guardrails`, `harness`. `tests/conftest.py` mocks
+`utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
 discoverable in `tests/` (~100 files, auto-collected by pytest).
 
@@ -606,8 +607,12 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 
 `/verification-specialist`, `/code-explorer`,
 `/general-purpose`, `/documentation-guide`, `/next-action-suggestion`,
-`/conversation-summary`, `/session-title`, `/tool-summary`, and the memory
-skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`).
+`/session-title`, `/tool-summary`, and the memory
+skills (`/memory-extraction`, `/memory-consolidation`, `/memory-orchestrator`)
+are each a `.claude/skills/*/SKILL.md` entry. `/conversation-summary` plays the
+same session-continuation role but is wired as `.claude/commands/conversation-summary.md`
+(a slash command), not a SKILL.md-backed skill — listed here for discoverability, not
+because it's a 33rd skill directory.
 `/python-coding-agent` auto-loads via the SessionStart hook; its Planning Mode
 covers pre-implementation design (formerly a separate `solution-architect`
 skill, folded in since both need the same CyClaw-specific grounding).
