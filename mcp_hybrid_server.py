@@ -231,12 +231,23 @@ def main():
                 continue
             try:
                 msg = json.loads(line)
+            except json.JSONDecodeError as e:
+                err = _error(None, -32700, f"Parse error: {str(e)}")
+                sys.stdout.write(json.dumps(err) + "\n")
+                sys.stdout.flush()
+                continue
+            try:
                 response = handle_message(msg, retriever)
                 if response is not None:
                     sys.stdout.write(json.dumps(response) + "\n")
                     sys.stdout.flush()
-            except json.JSONDecodeError as e:
-                err = _error(None, -32700, f"Parse error: {str(e)}")
+            except Exception as e:
+                # A bug in one message's handling must not kill the process for
+                # every message after it — same privacy-redaction contract as
+                # _handle_search's own except Exception branch above.
+                msg_id = msg.get("id") if isinstance(msg, dict) else None
+                safe_err = redact_sensitive(str(e))
+                err = _error(msg_id, -32000, f"Internal error: {safe_err}")
                 sys.stdout.write(json.dumps(err) + "\n")
                 sys.stdout.flush()
     finally:

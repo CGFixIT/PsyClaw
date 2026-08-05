@@ -631,6 +631,46 @@ def test_main_stdio_loop_contract(monkeypatch, capsys, retriever):
     retriever.close.assert_called_once()
 
 
+def test_main_survives_unexpected_handle_message_exception(monkeypatch, capsys, retriever):
+    """A bug inside handle_message() for one message must not kill the process
+    for every message after it -- only the misbehaving message gets a -32000
+    reply; the loop keeps running and the retriever still closes on EOF."""
+    secret = "sk-" + "a" * 40  # matches default policy.privacy.redact_secrets_like
+    reset_config_cache()
+    lines = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+    ]
+    monkeypatch.setattr(mcp_hybrid_server, "HybridRetriever", MagicMock(return_value=retriever))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(lines) + "\n"))
+
+    real_handle_message = mcp_hybrid_server.handle_message
+
+    def _boom_on_second_call(msg, retriever):
+        if msg.get("id") == 2:
+            raise RuntimeError(f"unexpected bug, token={secret}")
+        return real_handle_message(msg, retriever)
+
+    monkeypatch.setattr(mcp_hybrid_server, "handle_message", _boom_on_second_call)
+
+    mcp_hybrid_server.main()
+
+    out_lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert len(out_lines) == 3, f"expected 3 reply lines, got: {out_lines}"
+    assert out_lines[0]["id"] == 1 and "result" in out_lines[0]
+    assert out_lines[1]["id"] == 2
+    assert out_lines[1]["error"]["code"] == -32000
+    assert "Internal error" in out_lines[1]["error"]["message"]
+    # The exception string is redacted before it leaves the process, same
+    # privacy contract as _handle_search's own except Exception branch.
+    assert secret not in out_lines[1]["error"]["message"]
+    assert "[REDACTED_SECRET]" in out_lines[1]["error"]["message"]
+    assert out_lines[2]["id"] == 3 and "result" in out_lines[2]
+    retriever.close.assert_called_once()
+    reset_config_cache()
+
+
 def test_main_closes_retriever_even_when_loop_raises(monkeypatch, retriever):
     """The finally-close contract: an unexpected error inside the loop must not
     leak the retriever's ChromaDB/BM25 handles."""
