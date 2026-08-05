@@ -196,3 +196,15 @@ def test_session_id_is_url_encoded_on_every_interpolated_path():
         "static/harness.html interpolates a session id into a URL without "
         f"encodeURIComponent(): {sorted(set(interpolations))}"
     )
+
+
+def test_pending_agent_diff_is_shown_before_approval():
+    """The browser's human gate must display the backend-rendered diff first."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("function showAgentRecord(rec)")
+    end = html.index("/* ── slash commands ── */", start)
+    body = html[start:end]
+
+    assert "'candidate diff\\n' + rec.diff" in body
+    assert body.index("rec.diff") < body.index("/agent approve ")
+    assert "diff not loaded — inspect with /agent status " in body
