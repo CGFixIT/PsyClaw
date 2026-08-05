@@ -418,19 +418,36 @@ def stage_attachment(
             "Telegram file resolution returned no download path",
             details={"method": "getFile", "retryable": True},
         )
-    data = tg_client.download_file(cfg, file_path=file_path, max_bytes=cap)
-    if len(data) > cap:
-        raise TelegramRefused(
-            "Telegram attachment exceeds the configured download cap",
-            details={"gate": "max_download_bytes"},
+    # After telegram_media_stage_requested, poll_once will ACK non-rate-limit
+    # TelegramRefused as terminal. Audit a refused/failed terminal event before
+    # re-raising so security-sensitive download/write denials are not silent
+    # (issue #793).
+    try:
+        data = tg_client.download_file(cfg, file_path=file_path, max_bytes=cap)
+        if len(data) > cap:
+            raise TelegramRefused(
+                "Telegram attachment exceeds the configured download cap",
+                details={"gate": "max_download_bytes"},
+            )
+        target = _safe_target(update_id, attachment)
+        _run_fsconnect_write(
+            cfg,
+            target=target,
+            data=data,
+            confirmation_hash=confirmation_hash,
         )
-    target = _safe_target(update_id, attachment)
-    _run_fsconnect_write(
-        cfg,
-        target=target,
-        data=data,
-        confirmation_hash=confirmation_hash,
-    )
+    except TelegramRefused as exc:
+        gate = (exc.details or {}).get("gate", "media_download")
+        if not isinstance(gate, str) or not gate.strip():
+            gate = "media_download"
+        _audit_refusal(
+            cfg,
+            chat_id=chat_id,
+            update_id=update_id,
+            gate=gate,
+            kind=attachment.kind,
+        )
+        raise
     data_hash = hashlib.sha256(data).hexdigest()
     audit_log(
         {
