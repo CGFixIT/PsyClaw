@@ -227,6 +227,63 @@ ollama run qwen3.6:27b
 The config.yaml formula: `Ollama num_ctx >= max_context_tokens + max_tokens + ~1500 headroom`
 With defaults: `4000 + 3000 + 1500 = 8500`, so `10000-12288` is the safe range.
 
+### The agentic real-repo coding loop needs more headroom than that
+
+The formula above is derived only from the `/query` RAG path's budget
+(`retrieval.max_context_tokens` + `models.local_llm.max_tokens`). It is **not**
+enough by itself if you also drive `agentic/real_repo_loop.py` (the
+`real-repo-run` / `real-repo-run-plan` CLI subcommands, or the harness
+console's `/api/agent/run`) against the same Ollama instance — that pathway's
+per-iteration prompt can legitimately be several times larger, and the
+"0% processing" stall applies to it identically.
+
+Summing the loop's own documented per-component caps (`agentic/real_repo_loop.py`):
+a declared plan folded into the prompt (`_MAX_PLAN_CHARS`, 6,000 chars), existing
+files read for edit-in-place context (`_MAX_TOTAL_READ_CHARS`, 12,000 chars),
+prior-iteration verification feedback (`_MAX_FEEDBACK_TOTAL_CHARS`, at least
+4,000 chars once check output is included), quoted GitHub PR/issue context
+capped in `agentic/cli.py` (8,000 chars), the fixed system prompt (~900 chars),
+and an instruction up to 8,192 chars via the harness route (`harness/schemas.py`)
+— the worst case is roughly **39,000–40,000 characters of INPUT alone for one
+iteration**, before reserving any output budget. At this project's own
+~4-chars/token convention (see the formula above), that is approximately
+**9,750–10,000 input tokens** — which by itself can already approach or exceed
+the 10,000–12,288 window recommended above, a number sized only for the
+smaller RAG-path formula.
+
+This is arithmetic over the loop's own stated caps, not a number CyClaw states
+anywhere as a recommendation — treat it as a floor to reason from, not a
+guarantee. Real invocations are usually much smaller (a short instruction, no
+`read_paths`, no plan file); the worst case only bites when you actually use
+several of these inputs together (e.g. a declared plan **and** several
+`read_paths` **and** a PR/issue's context on the same run).
+
+If you use `real-repo-run`/`real-repo-run-plan` with `read_paths`, a declared
+plan, or GitHub context, don't just clear the RAG-path minimum — size for the
+larger pathway instead:
+
+```bash
+export OLLAMA_CONTEXT_LENGTH=24576   # or higher; measure for your actual usage
+ollama serve
+```
+
+Neither proposer client (`agentic/harness_optimizer/model_adapter.py`'s
+`LocalProposerClient`, used by default, or
+`agentic/deepagent_github/chat_client.py`'s `ChatModelProposerClient`, used
+with `--provider`) sends `num_ctx` in its own request — exactly like the RAG
+path, this is 100% an out-of-band, operator-set Ollama setting, and neither
+client can request a bigger window for a single large call on your behalf.
+
+**On Apple Silicon specifically** (e.g. a Mac with 48GB of unified memory): a
+larger `num_ctx` grows Ollama's KV-cache, and unlike a discrete-GPU box, that
+cache shares the *same* memory pool as the model weights, CyClaw's own Python
+process (ChromaDB + embeddings + FastAPI), the OS, and anything else you have
+open — there is no separate VRAM budget to fall back on. This repo does not
+ship a measured GB-per-context-length figure for `qwen3.6:27b` to cite here,
+so don't guess at a number: watch actual usage (Activity Monitor, or
+`ollama ps` for the running model's reported size) after raising `num_ctx`,
+rather than maximizing it up front on the assumption that more is free.
+
 ---
 
 ## Troubleshooting
