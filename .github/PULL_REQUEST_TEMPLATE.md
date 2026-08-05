@@ -1,13 +1,23 @@
-## Note: when initiated pr draft from grok build, kimi/kimi code, or codex use preferred branch naming conventions:
-> claude code: claude/{feature}
-> 
-> codex: codex/{feature}
-> 
-> grok build: grok/{feature}
-> 
-> kimi or kimi code: kimi/{feature}
-> 
-> CyClaw (directly or via mcp connector ): CyClaw/{feature}-{date} 
+## Branch naming (required for agent-opened PRs)
+
+Before opening a PR, create the head branch with the **driver-matched** prefix.
+Hooks and `utils/agent_identity.py` enforce this allowlist; casual / generic names are not a substitute.
+
+| Driver | Branch pattern | Example |
+|--------|----------------|---------|
+| Claude Code | `claude/<feature>` | `claude/telegram-media-audit` |
+| Codex | `codex/<feature>` | `codex/verify-dep-guard` |
+| Grok Build | `grok/<feature>` | `grok/pr-template-branch-rules` |
+| Kimi / Kimi Code | `kimi/<feature>` | `kimi/docs-sync` |
+| CyClaw direct / MCP | `CyClaw/<feature>-<YYYYMMDD>` or `cyclaw/<feature>` | `CyClaw/harness-timeout-20260805` |
+
+Rules for agents:
+1. Pick the prefix that matches **the tool that is creating the branch**, not a generic label.
+2. Do **not** default to `agent/` when the driver is known (Claude → `claude/`, Grok → `grok/`, etc.).
+3. `<feature>` must be short, kebab-case, and describe the change (no spaces, no leading `-`).
+4. If the branch name is wrong, rename **before** push: `git branch -m <prefix>/<feature>`.
+
+Also allowed by hooks (non-feature): `main`, `dependabot/*`, `renovate/*`, `release/*`, `hotfix/*`.
 
 ## Title
 **Use this format:**  
@@ -82,7 +92,7 @@ If this is a relatively large, complex, or core-path change, kick off the discus
 - Explicit before/after invariant matrix
 - Sandbox validation diff or key evidence
 - Any compensating controls or observability added
-- a mature technical and eli5 version description of whats changed and whats at risk and where to monitor
+- A technical summary plus a plain-language (ELI5) summary of what changed, what is at risk, and where to monitor
 
 **Examples of what good "Further comments" look like for core changes:**
 - "No change to graph topology or entry points. RAG-first and audit convergence remain enforced by edges only."
@@ -91,8 +101,9 @@ If this is a relatively large, complex, or core-path change, kick off the discus
 
 ---
 
-**Notes for contributors (especially solo maintainer PRs):**
+**Notes for contributors (including solo maintainer / multi-agent PRs):**
 - Core invariant or governance changes require the strongest evidence.
-- Out-of-band layers (agentic/, sync/, .claude/) can use a lighter path but still need Benefits + Risks + relevant checklist items.
-- Docs-only or audit PRs can skip some technical items but must still complete Benefits / Risks.
-- The goal is production-grade discipline without unnecessary ceremony. Brutal honesty on impact is expected and appreciated.
+- Out-of-band layers (`agentic/`, `sync/`, harness, `.claude/`) may use a lighter checklist, but still need Benefits + Risks + the relevant items.
+- Docs-only or audit PRs may skip some technical checklist rows; Benefits and Risks remain required.
+- Prefer squash-and-merge. The final squashed commit message is the permanent record; keep intermediate agent WIP out of `main`.
+- Be blunt about impact: if invariants, offline posture, or audit behavior are affected, say so explicitly.
