@@ -4,7 +4,7 @@
 # macOS (Apple Silicon arm64) and Linux, bash or zsh.
 # - RAG gateway (gate.py / static/terminal.html): 127.0.0.1:8787
 # - Coding harness control plane:               127.0.0.1:8790
-# Uses the per-user venv under ~/CyClaw/venv and the repo at $CYCLAW_REPO
+# Uses the per-user venv under ~/.CyClaw/venv and the repo at $CYCLAW_REPO
 # (or ~/.CyClaw/repo). Ctrl+C stops both servers.
 #
 # Usage:
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-HOME_DIR="${CYCLAW_HOME:-$HOME/CyClaw}"
+HOME_DIR="${CYCLAW_HOME:-$HOME/.CyClaw}"
 if [ -n "$REPO_OVERRIDE" ]; then
   REPO_DIR="$REPO_OVERRIDE"
 else

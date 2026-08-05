@@ -662,6 +662,18 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise _err(_HTTP_BAD_REQUEST, AgenticError(redact_sensitive(str(exc)))) from exc
         except subprocess.TimeoutExpired as exc:
             raise _timeout_err(action, exc) from exc
+        except OSError as exc:
+            # ops_runner._write_body / _write_checks_file raise a bare OSError
+            # (disk full, unwritable temp dir) before run_agentic_op ever
+            # spawns the CLI -- neither of the two excepts above catches that,
+            # so it used to escape as an unhandled 500 the console's api()
+            # helper can't parse. 502: the shim's own environment failed, the
+            # same class of "dependency, not the request, is broken" as the
+            # HarnessLLMError -> 502 mapping in /api/chat.
+            raise _err(
+                _HTTP_BAD_GATEWAY,
+                AgenticError(f"{action} shim failed: {redact_sensitive(str(exc))}", code="SHIM_IO_ERROR"),
+            ) from exc
 
     @app.get("/api/agent/checks")
     def agent_checks() -> dict:
