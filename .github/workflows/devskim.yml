@@ -14,9 +14,12 @@ on:
     # Every Sunday at 03:11 UTC
     - cron: "11 3 * * 0"
 
+# Workflow-level grant stays read-only; the SARIF-upload permission is declared
+# per-job below. zizmor's excessive-permissions audit flags a workflow-level
+# `security-events: write` because every future job in this workflow would
+# inherit it silently -- see trivy.yml/pr-template-check.yml for the same shape.
 permissions:
   contents: read          # checkout
-  security-events: write  # upload SARIF
 
 # Cancel superseded in-progress runs on the same branch to save CI minutes;
 # pushes to main are exempt so main keeps a complete scan history.
@@ -28,6 +31,9 @@ jobs:
   devskim:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write  # upload SARIF
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
