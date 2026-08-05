@@ -208,6 +208,26 @@ const stream = $('stream'), input = $('input'), sendBtn = $('send'), apiKeyInput
 const agentPlanInput = $('agentPlanFile');
 const MAX_AGENT_PLAN_CHARS = 6100;
 const MAX_AGENT_PLAN_BYTES = 25000;
+/* Mirrors harness.schemas._MAX_READ_FILES and the clone-jail path rules in
+   utils.repo_paths.canonical_repo_relative_path (keep in sync via console contract tests). */
+const MAX_AGENT_READ_FILES = 8;
+const MAX_AGENT_READ_FILE_LEN = 1024;
+function isSafeRepoRelativePath(raw) {
+  if (typeof raw !== 'string' || !raw || raw.length > MAX_AGENT_READ_FILE_LEN || raw.indexOf('\0') !== -1) return false;
+  const normalized = raw.replace(/\\/g, '/');
+  if (normalized.charAt(0) === '/' || normalized.charAt(0) === '-') return false;
+  if (/^[A-Za-z]:/.test(raw) || normalized.indexOf('://') !== -1) return false;
+  const parts = normalized.split('/').filter(part => part !== '' && part !== '.');
+  if (!parts.length) return false;
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === '..' || parts[i].indexOf(':') !== -1) return false;
+  }
+  return true;
+}
+function canonicalRepoRelativePath(raw) {
+  if (!isSafeRepoRelativePath(raw)) return null;
+  return raw.replace(/\\/g, '/').split('/').filter(part => part !== '' && part !== '.').join('/');
+}
 /* Substituted server-side into the meta tag at serve time (harness/server.py's
    console() route) -- the literal placeholder below never reaches a browser. */
 const csrfMeta = document.querySelector('meta[name="csrf-token"]');
@@ -632,11 +652,18 @@ async function runSlash(line) {
             sys('declared read files cleared');
           } else if (!path) {
             sys('usage: /agent read <repo-relative-path>  (or /agent read clear)');
-          } else if (pendingAgentRun.read_files.includes(path)) {
-            sys('read path is already declared: ' + path);
           } else {
-            pendingAgentRun.read_files.push(path);
-            sys('declared read path: ' + path);
+            const canonical = canonicalRepoRelativePath(path);
+            if (!canonical) {
+              sys('refused read path (must be repo-relative: no absolute, .., drive, or flag-like names): ' + path);
+            } else if (pendingAgentRun.read_files.includes(canonical)) {
+              sys('read path is already declared: ' + canonical);
+            } else if (pendingAgentRun.read_files.length >= MAX_AGENT_READ_FILES) {
+              sys('at most ' + MAX_AGENT_READ_FILES + ' read paths can be staged; drop one with /agent read clear or confirm with the current list');
+            } else {
+              pendingAgentRun.read_files.push(canonical);
+              sys('declared read path: ' + canonical);
+            }
           }
           showPendingAgentRun();
         } else if (sub === 'cancel') {
@@ -646,13 +673,23 @@ async function runSlash(line) {
           if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
           const why = rest.slice(1).join(' ').trim();
           if (!why) { sys('a reason is required: /agent confirm <why you are doing this>'); break; }
-          const body = Object.assign({}, pendingAgentRun, { reason: why, confirm: true });
-          pendingAgentRun = null;
+          /* Keep the staged proposal until the server accepts the run. Clearing
+             first made a 422 (e.g. over-cap read_files) destroy the instruction,
+             plan, checks, and paths with no recovery short of re-staging. */
+          const stagedRun = pendingAgentRun;
+          const body = Object.assign({}, stagedRun, { reason: why, confirm: true });
           sendBtn.disabled = true;
           sys('cloning, planning, patching and verifying — this blocks for up to 15 minutes…');
           try {
             const rec = agentRecord(await api('/api/agent/run', 'POST', body));
+            if (pendingAgentRun === stagedRun) pendingAgentRun = null;
             if (rec) showAgentRecord(rec);
+          } catch (err) {
+            if (pendingAgentRun === null || pendingAgentRun === stagedRun) {
+              pendingAgentRun = stagedRun;
+            }
+            sys('confirm failed — staged run kept. Fix the request or /agent cancel. (' + err.message + ')');
+            showPendingAgentRun();
           } finally {
             sendBtn.disabled = false;
           }

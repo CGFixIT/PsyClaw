@@ -278,10 +278,52 @@ def test_run_defaults_to_the_default_profile_when_checks_is_omitted(client, call
     {"plan": "x" * (HARNESS_MAX_PLAN_CHARS + 1)},
     {"read_files": ["file.py"] * 9},
     {"read_files": ["safe.py\x00not-safe.py"]},
+    {"read_files": ["/etc/passwd"]},
+    {"read_files": ["../README.md"]},
+    {"read_files": ["C:\\Windows\\system32\\config"]},
+    {"read_files": ["-evil"]},
+    {"read_files": ["foo/../../etc/passwd"]},
 ])
 def test_run_rejects_invalid_browser_plan_or_read_paths_before_the_shim(client, calls, body):
     assert client.post(_RUN, json={**_VALID_BODY, **body}).status_code == 422
     assert calls == []
+
+
+def test_run_canonicalizes_safe_read_paths_before_the_shim(client, calls):
+    resp = client.post(_RUN, json={
+        **_VALID_BODY,
+        "read_files": ["./src/parser.py", "src//parser.py", "tests/test_parser.py"],
+    })
+    assert resp.status_code == 200
+    assert calls[0][1]["read_files"] == ["src/parser.py", "tests/test_parser.py"]
+
+
+def test_control_plane_path_rules_match_agentic_jail():
+    # I6: harness/utils must not import agentic at runtime; this test is the
+    # deliberate drift check so browser-accepted paths stay jail-acceptable.
+    from agentic.deepagent_github.repo_workspace import canonical_repo_path
+    from utils.repo_paths import canonical_repo_relative_path
+
+    samples = [
+        "src/a.py",
+        "./src/a.py",
+        "src//a.py",
+        r".\conftest.py",
+        "foo/bar/baz.py",
+        "/etc/passwd",
+        "../README.md",
+        "foo/../../etc/passwd",
+        "-flag",
+        "C:\\temp\\x",
+        "safe.py\x00no",
+        "",
+        "foo/bar:baz",
+        "a" * 2000,
+    ]
+    for sample in samples:
+        left = canonical_repo_relative_path(sample)
+        right = canonical_repo_path(sample)
+        assert left == right, (sample, left, right)
 
 
 def test_confirm_is_not_defaulted_on(client, calls):

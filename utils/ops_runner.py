@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import _get_config, redact_sensitive
+from utils.repo_paths import canonical_repo_relative_path
 
 # Repo root = parent of utils/. The CLIs run as ``python -m sync.cli`` /
 # ``agentic.cli``; running with cwd=repo-root puts the ``sync`` / ``agentic``
@@ -355,10 +356,7 @@ def run_agentic_op(
     via ``--checks-file`` (never interpolated into argv, mirroring
     ``body``/``--body-file`` above) — never defaulted, since guessing a
     verification command for an arbitrary configured repo is exactly what
-    this whole path exists to avoid. An optional browser-supplied ``plan`` is
-    materialized into a temporary ``--plan-file`` so the CLI retains ownership
-    of plan scanning and hashing; ``read_files`` travel as repeatable
-    ``--read-file=<path>`` arguments and are resolved only inside the clone.
+    this whole path exists to avoid.
     ``real-repo-run-status``/
     ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
     requires ``decision`` (``"approve"`` or ``"reject"``), validated here
@@ -406,11 +404,18 @@ def run_agentic_op(
             raise OpsError("real-repo-run requires a non-empty reason")
         if plan is not None and (not isinstance(plan, str) or not plan.strip()):
             raise OpsError("real-repo-run plan must not be blank")
-        if read_files is not None and (
-            not isinstance(read_files, list)
-            or any(not isinstance(path, str) or not path or "\x00" in path for path in read_files)
-        ):
-            raise OpsError("real-repo-run read_files must contain non-empty paths without NUL bytes")
+        # Browser plan text is written to a temp --plan-file (CLI owns scan/hash);
+        # never treated as a server filesystem path. read_files are --read-file
+        # names only — resolved inside the fresh jailed clone, never the host.
+        if read_files is not None:
+            if not isinstance(read_files, list):
+                raise OpsError("real-repo-run read_files must be a list of repo-relative paths")
+            for path in read_files:
+                if not isinstance(path, str) or canonical_repo_relative_path(path) is None:
+                    raise OpsError(
+                        "real-repo-run read_files must contain non-empty repo-relative "
+                        "paths without NUL bytes, traversal, or absolute/drive forms"
+                    )
     if action in {
         "real-repo-run-status", "real-repo-run-decide", "real-repo-run-push", "real-repo-run-publish",
         "real-repo-run-discard",

@@ -341,6 +341,9 @@ def test_real_repo_run_requires_its_fields(kwargs, match) -> None:
         ({"plan": "   "}, "plan"),
         ({"read_files": ["safe.py\x00not-safe.py"]}, "read_files"),
         ({"read_files": "safe.py"}, "read_files"),
+        ({"read_files": ["/etc/passwd"]}, "read_files"),
+        ({"read_files": ["../secret"]}, "read_files"),
+        ({"read_files": ["-flag"]}, "read_files"),
     ],
 )
 def test_real_repo_run_rejects_invalid_optional_browser_values(optional, match) -> None:

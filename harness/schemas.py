@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from harness.agent_policy import BRANCH_NAME_RE, DEFAULT_CHECK_PROFILE
+from utils.repo_paths import canonical_repo_relative_path
 
 _MAX_MESSAGE_LEN = 32768
 _MAX_TITLE_LEN = 200
@@ -116,18 +117,38 @@ class AgentRunRequest(_ForbidModel):
 
     @field_validator("plan")
     @classmethod
-    def _plan_is_not_blank(cls, value: str | None) -> str | None:
-        if plan_text is not None and not value.strip():
+    def _plan_is_not_blank(cls, plan_text: str | None) -> str | None:
+        if plan_text is not None and not plan_text.strip():
             raise ValueError("plan must not be blank")
         return plan_text
 
     @field_validator("read_files")
     @classmethod
-    def _read_files_are_bounded_text(cls, values: list[str]) -> list[str]:
-        for path in read_paths:
-            if not path or len(path) > _MAX_READ_FILE_LEN or "\x00" in path:
-                raise ValueError("read_files must contain non-empty bounded paths without NUL bytes")
-        return read_paths
+    def _read_files_are_safe_repo_relative(cls, read_paths: list[str]) -> list[str]:
+        # Align with the clone jail (utils.repo_paths / agentic canonical_repo_path):
+        # reject absolutes, traversal, drive-qualified, flag-like, and overlong
+        # names here so /agent confirm never 422s after the console staged junk
+        # the jailed reader would only skip later.
+        if len(read_paths) > _MAX_READ_FILES:
+            raise ValueError(f"read_files allows at most {_MAX_READ_FILES} paths")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in read_paths:
+            if not isinstance(raw, str) or len(raw) > _MAX_READ_FILE_LEN:
+                raise ValueError(
+                    "read_files must contain non-empty bounded repo-relative paths "
+                    "without NUL bytes, traversal, or absolute/drive forms"
+                )
+            canonical = canonical_repo_relative_path(raw)
+            if canonical is None:
+                raise ValueError(
+                    "read_files must contain non-empty bounded repo-relative paths "
+                    "without NUL bytes, traversal, or absolute/drive forms"
+                )
+            if canonical not in seen:
+                seen.add(canonical)
+                cleaned.append(canonical)
+        return cleaned
 
 
 class AgentDecisionRequest(_ForbidModel):
