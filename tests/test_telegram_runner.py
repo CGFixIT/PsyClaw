@@ -228,6 +228,78 @@ def test_online_command_does_not_silently_choose_a_provider(tmp_path: Path) -> N
     assert "Usage:" in out["answer"]
 
 
+def test_online_command_refuses_non_private_chats(tmp_path: Path) -> None:
+    """Issue #792: group chat_id must not arm T3 for every participant."""
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True, allowed_chat_ids=["-100123"])
+    with (
+        patch("telegram.runner.grant_hybrid_confirm") as grant,
+        patch("telegram.runner.audit_log") as audit,
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message", return_value={"ok": True}),
+    ):
+        out = handle_inbound_text(
+            cfg,
+            chat_id=-100123,
+            text="/online on grok",
+            update_id=10,
+            chat_type="supergroup",
+        )
+    grant.assert_not_called()
+    query.assert_not_called()
+    assert "private-chat only" in out["answer"].lower() or "private" in out["answer"].lower()
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(
+        event.get("event") == "telegram_hybrid_confirm_refused"
+        and event.get("gate") == "private_chat_only"
+        for event in events
+    )
+
+
+def test_group_text_never_claims_hybrid_confirmation(tmp_path: Path) -> None:
+    """Stale chat-scoped session files must not apply to group traffic."""
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True, allowed_chat_ids=["-100123"])
+    with (
+        patch("telegram.runner.claim_hybrid_confirm", return_value="grok") as claim,
+        patch(
+            "telegram.client.post_query",
+            return_value={"answer": "local only"},
+        ) as query,
+        patch("telegram.client.send_message", return_value={"ok": True}),
+    ):
+        out = handle_inbound_text(
+            cfg,
+            chat_id=-100123,
+            text="should stay offline",
+            update_id=11,
+            chat_type="group",
+        )
+    claim.assert_not_called()
+    assert out["answer"] == "local only"
+    assert query.call_args.kwargs["user_confirmed_online"] is False
+    assert query.call_args.kwargs["online_provider"] is None
+
+
+def test_poll_once_passes_chat_type_into_text_handler(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [
+        {
+            "update_id": 5,
+            "message": {"chat": {"id": 42, "type": "private"}, "text": "hello"},
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            return_value={"answer": "ok"},
+        ) as handler,
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 6
+    assert handled == [{"answer": "ok"}]
+    assert handler.call_args.kwargs["chat_type"] == "private"
+
+
 def test_claimed_hybrid_confirmation_is_forwarded_once_then_consumed(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
     with (
