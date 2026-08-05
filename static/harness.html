@@ -423,8 +423,12 @@ function showAgentRecord(rec) {
     ['pull request', rec.pr_url || '—'],
     ['error', rec.error || '—'],
   ], ['field', 'value']));
-  if (rec.status === 'pending_decision')
-    sys('awaiting your decision — /agent approve ' + rec.run_id + '   or   /agent reject ' + rec.run_id);
+  if (rec.status === 'pending_decision' && rec.diff) {
+    sys('candidate diff\n' + rec.diff);
+    sys('diff shown above — /agent approve ' + rec.run_id + '   or   /agent reject ' + rec.run_id);
+  } else if (rec.status === 'pending_decision') {
+    sys('diff not loaded — inspect with /agent status ' + rec.run_id + ' before deciding');
+  }
   // Each escalation past approve is its own decision, so the console offers
   // the next one rather than performing it. Both are disarmed on a shipped
   // checkout (allow_git_write_tools / EXECUTION_ENABLED) — the prompt is the
