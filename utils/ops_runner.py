@@ -253,17 +253,17 @@ def _maybe_json(text: str) -> Any:
         return None
 
 
-def _write_body(body: str) -> str:
-    """Persist a skill body to a temp file so it is passed via --body-file, never argv."""
+def _write_body(body: str, *, prefix: str = "cyclaw_skill_") -> str:
+    """Persist caller-supplied text to a temporary file, never an argv value."""
     handle = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", prefix="cyclaw_skill_", delete=False, encoding="utf-8"
+        mode="w", suffix=".md", prefix=prefix, delete=False, encoding="utf-8"
     )
     try:
         handle.write(body)
     except (OSError, UnicodeError):
         # The file already exists on disk; run_agentic_op only unlinks the name
         # we RETURN, so a write failure here (disk full, un-encodable body) would
-        # orphan a cyclaw_skill_*.md. Close first (Windows can't unlink an open
+        # orphan a cyclaw_*.md. Close first (Windows can't unlink an open
         # file), then remove it, before the exception propagates.
         handle.close()
         Path(handle.name).unlink(missing_ok=True)
@@ -329,6 +329,8 @@ def run_agentic_op(
     confirm: bool = False,
     instruction: str | None = None,
     checks: list[dict] | None = None,
+    plan: str | None = None,
+    read_files: list[str] | None = None,
     branch: str | None = None,
     commit_message: str | None = None,
     max_iterations: int | None = None,
@@ -353,7 +355,11 @@ def run_agentic_op(
     via ``--checks-file`` (never interpolated into argv, mirroring
     ``body``/``--body-file`` above) — never defaulted, since guessing a
     verification command for an arbitrary configured repo is exactly what
-    this whole path exists to avoid. ``real-repo-run-status``/
+    this whole path exists to avoid. An optional browser-supplied ``plan`` is
+    materialized into a temporary ``--plan-file`` so the CLI retains ownership
+    of plan scanning and hashing; ``read_files`` travel as repeatable
+    ``--read-file=<path>`` arguments and are resolved only inside the clone.
+    ``real-repo-run-status``/
     ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
     requires ``decision`` (``"approve"`` or ``"reject"``), validated here
     before the subprocess launch even though the CLI's own ``argparse``
@@ -379,8 +385,9 @@ def run_agentic_op(
     Validation raises happen before the subprocess launch. All ``proc`` usage
     lives INSIDE the try so there is no post-``finally`` reference to an unbound
     name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
-    cleans up the temp body-file/checks-file and the exception propagates before
-    any result is read. Both are unlinked on every exit path (return or raise).
+    cleans up the temp body-file/checks-file/plan-file and the exception
+    propagates before any result is read. All are unlinked on every exit path
+    (return or raise).
     """
     if action not in _AGENTIC_ACTIONS:
         raise OpsError(f"Unknown agentic action: {action!r}")
@@ -397,6 +404,13 @@ def run_agentic_op(
             raise OpsError("real-repo-run requires both branch and commit_message")
         if not (reason and reason.strip()):
             raise OpsError("real-repo-run requires a non-empty reason")
+        if plan is not None and (not isinstance(plan, str) or not plan.strip()):
+            raise OpsError("real-repo-run plan must not be blank")
+        if read_files is not None and (
+            not isinstance(read_files, list)
+            or any(not isinstance(path, str) or not path or "\x00" in path for path in read_files)
+        ):
+            raise OpsError("real-repo-run read_files must contain non-empty paths without NUL bytes")
     if action in {
         "real-repo-run-status", "real-repo-run-decide", "real-repo-run-push", "real-repo-run-publish",
         "real-repo-run-discard",
@@ -413,6 +427,7 @@ def run_agentic_op(
     argv = [sys.executable, "-m", "agentic.cli", "--config", str(_CONFIG_PATH), action]
     body_file: str | None = None
     checks_file: str | None = None
+    plan_file: str | None = None
     try:
         if action == "context":
             if pr is not None:
@@ -453,6 +468,11 @@ def run_agentic_op(
                 f"--commit-message={commit_message}",
                 f"--reason={reason}",
             ]
+            if plan:
+                plan_file = _write_body(plan, prefix="cyclaw_plan_")
+                argv += ["--plan-file", plan_file]
+            for read_file in read_files or ():
+                argv.append(f"--read-file={read_file}")
             if max_iterations:
                 argv += ["--max-iterations", str(max_iterations)]
             if confirm:
@@ -491,6 +511,8 @@ def run_agentic_op(
             Path(body_file).unlink(missing_ok=True)
         if checks_file:
             Path(checks_file).unlink(missing_ok=True)
+        if plan_file:
+            Path(plan_file).unlink(missing_ok=True)
 
 
 def run_fsconnect_op(

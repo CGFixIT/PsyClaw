@@ -197,6 +197,7 @@
       </div>
     </div>
   </div>
+  <input id="agentPlanFile" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
 
 <script>
 'use strict';
@@ -204,6 +205,9 @@
    through textContent or the table() builder (createElement + textContent). */
 const $ = id => document.getElementById(id);
 const stream = $('stream'), input = $('input'), sendBtn = $('send'), apiKeyInput = $('apiKey');
+const agentPlanInput = $('agentPlanFile');
+const MAX_AGENT_PLAN_CHARS = 6100;
+const MAX_AGENT_PLAN_BYTES = 25000;
 /* Substituted server-side into the meta tag at serve time (harness/server.py's
    console() route) -- the literal placeholder below never reaches a browser. */
 const csrfMeta = document.querySelector('meta[name="csrf-token"]');
@@ -366,9 +370,8 @@ const COMMANDS = [
   ['/tools', 'tool registry'],
   ['/connectors', 'connector catalog'],
   ['/github', 'agentic GitHub status'],
-  ['/agent run|confirm|cancel', 'stage and start a real-repo coding run'],
+  ['/agent run|plan|read|checks|confirm|cancel', 'stage and start a real-repo coding run'],
   ['/agent status|approve|reject <id>', 'inspect or decide a pending run'],
-  ['/agent checks', 'available verification profiles'],
   ['/harness', 'harness optimizer runs'],
   ['/tokens', 'token tally'],
   ['/status', 'server status'],
@@ -410,6 +413,47 @@ function agentRecord(r) {
   }
   return r.parsed;
 }
+function showPendingAgentRun() {
+  if (!pendingAgentRun) return;
+  sys(table([
+    ['branch', pendingAgentRun.branch],
+    ['instruction', pendingAgentRun.instruction],
+    ['commit message', pendingAgentRun.commit_message],
+    ['plan', pendingAgentRun.plan ? 'loaded (' + pendingAgentRun.plan.length + ' chars)' : 'none'],
+    ['read files', pendingAgentRun.read_files.join(', ') || 'none'],
+    ['checks', pendingAgentRun.checks.join(', ')],
+  ], ['field', 'value']));
+}
+
+agentPlanInput.addEventListener('change', () => {
+  const file = agentPlanInput.files && agentPlanInput.files[0];
+  const stagedRun = pendingAgentRun;
+  agentPlanInput.value = '';
+  if (!file || !stagedRun) return;
+  if (file.size > MAX_AGENT_PLAN_BYTES) {
+    sys('plan file is too large; keep reviewed plans below ' + MAX_AGENT_PLAN_CHARS + ' characters');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => sys('could not read the selected plan file');
+  reader.onload = () => {
+    if (pendingAgentRun !== stagedRun) {
+      sys('staged run changed before the plan loaded; select it again for the current run');
+      return;
+    }
+    const plan = typeof reader.result === 'string' ? reader.result : '';
+    if (!plan.trim()) { sys('plan file is empty'); return; }
+    if (plan.length > MAX_AGENT_PLAN_CHARS) {
+      sys('plan is too long; keep reviewed plans below ' + MAX_AGENT_PLAN_CHARS + ' characters');
+      return;
+    }
+    pendingAgentRun.plan = plan;
+    sys('reviewed plan loaded; reselect it after any local edit.\n' + plan);
+    showPendingAgentRun();
+  };
+  reader.readAsText(file);
+});
+
 function showAgentRecord(rec) {
   sys(table([
     ['run id', rec.run_id],
@@ -537,7 +581,21 @@ async function runSlash(line) {
         const sub = rest[0] || 'help';
         if (sub === 'checks') {
           const r = await api('/api/agent/checks');
-          sys(table(r.profiles.map(p => [p.name, p.description]), ['profile', 'what it runs']));
+          if (rest.length === 1) {
+            sys(table(r.profiles.map(p => [p.name, p.description]), ['profile', 'what it runs']));
+          } else if (!pendingAgentRun) {
+            sys('nothing staged — start with /agent run before selecting checks');
+          } else {
+            const requested = rest.slice(1).join(' ').split(/[\s,]+/).filter(Boolean);
+            const available = new Set(r.profiles.map(p => p.name));
+            const unknown = requested.filter(name => !available.has(name));
+            if (unknown.length) {
+              sys('unknown profile(s): ' + unknown.join(', ') + '; run /agent checks to list valid names');
+            } else {
+              pendingAgentRun.checks = requested;
+              showPendingAgentRun();
+            }
+          }
         } else if (sub === 'run') {
           const branch = rest[1] || '';
           const instruction = rest.slice(2).join(' ').trim();
@@ -550,14 +608,37 @@ async function runSlash(line) {
             instruction: instruction,
             commit_message: instruction.slice(0, 72),
             checks: ['pytest'],
+            plan: null,
+            read_files: [],
           };
-          sys(table([
-            ['branch', pendingAgentRun.branch],
-            ['instruction', pendingAgentRun.instruction],
-            ['commit message', pendingAgentRun.commit_message],
-            ['checks', pendingAgentRun.checks.join(', ')],
-          ], ['field', 'value']));
-          sys('nothing has run yet. Authorize with:  /agent confirm <why you are doing this>');
+          showPendingAgentRun();
+          sys('nothing has run yet. Optionally use /agent plan, /agent read, or /agent checks <profile ...>; then authorize with:  /agent confirm <why you are doing this>');
+        } else if (sub === 'plan') {
+          if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
+          if (rest[1] === 'clear' && rest.length === 2) {
+            pendingAgentRun.plan = null;
+            sys('staged plan cleared');
+            showPendingAgentRun();
+          } else if (rest.length > 1) {
+            sys('usage: /agent plan  (or /agent plan clear)');
+          } else {
+            agentPlanInput.click();
+          }
+        } else if (sub === 'read') {
+          if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
+          const path = rest.slice(1).join(' ').trim();
+          if (path === 'clear') {
+            pendingAgentRun.read_files = [];
+            sys('declared read files cleared');
+          } else if (!path) {
+            sys('usage: /agent read <repo-relative-path>  (or /agent read clear)');
+          } else if (pendingAgentRun.read_files.includes(path)) {
+            sys('read path is already declared: ' + path);
+          } else {
+            pendingAgentRun.read_files.push(path);
+            sys('declared read path: ' + path);
+          }
+          showPendingAgentRun();
         } else if (sub === 'cancel') {
           pendingAgentRun = null;
           sys('staged run discarded');
@@ -607,6 +688,10 @@ async function runSlash(line) {
         } else {
           sys(table([
             ['/agent run claude/<topic> <task>', 'stage a run (sends nothing)'],
+            ['/agent plan [clear]', 'load or clear a reviewed local plan for the staged run'],
+            ['/agent read <repo-relative-path>', 'declare an existing file for the staged coder context'],
+            ['/agent read clear', 'clear declared read paths'],
+            ['/agent checks [profile ...]', 'list or choose allow-listed verification profiles'],
             ['/agent confirm <reason>', 'authorize and start the staged run'],
             ['/agent cancel', 'discard the staged run'],
             ['/agent status <run id>', 'read a run record'],
@@ -615,7 +700,6 @@ async function runSlash(line) {
             ['/agent push <run id>', 'push an approved branch to origin (disarmed by default)'],
             ['/agent publish <run id> <why>', 'open a draft PR for a pushed run (disarmed by default)'],
             ['/agent discard <run id>', 'reclaim the clone of a decided run from disk'],
-            ['/agent checks', 'list verification profiles'],
           ], ['command', 'action']));
         }
         break;

@@ -40,6 +40,7 @@ from harness.agent_policy import (
 )
 from harness.config import HarnessConfig
 from harness.ollama import HarnessChatClient
+from harness.schemas import _MAX_PLAN_CHARS as HARNESS_MAX_PLAN_CHARS
 from utils.ops_runner import OpsError, run_agentic_op
 
 _KEY = "harness-agent-test-key"
@@ -133,6 +134,20 @@ def test_duplicated_constants_match_their_agentic_originals():
 
     assert RUN_ID_RE.pattern == producer_run_id.pattern
     assert BRANCH_NAME_RE.pattern == producer_branch.pattern
+
+
+def test_harness_plan_limit_holds_a_truncated_agentic_plan():
+    """A plan emitted by the CLI must fit through the browser handoff path.
+
+    Harness cannot import agentic at runtime (I6), so the intentional duplicate
+    is checked here. ``generate_plan`` appends its fixed marker after the 6k
+    body limit, which is why equality would reject a valid generated plan.
+    """
+    from agentic.real_repo_loop import _MAX_PLAN_CHARS as agentic_plan_chars
+    from harness.schemas import _MAX_PLAN_CHARS as harness_plan_chars
+
+    marker = f"\n... [plan truncated at {agentic_plan_chars} chars]"
+    assert harness_plan_chars >= agentic_plan_chars + len(marker)
 
 
 def test_check_profile_argv_matches_the_executors_own_commands():
@@ -234,21 +249,39 @@ def test_checks_listing_is_open_and_lists_every_profile(cfg, calls):
 
 
 def test_run_forwards_the_resolved_profile_not_the_name(client, calls):
-    resp = client.post(_RUN, json=_VALID_BODY)
+    plan = "Review the parser change before testing it."
+    read_files = ["src/parser.py", "tests/test_parser.py"]
+    resp = client.post(_RUN, json={
+        **_VALID_BODY, "checks": ["pytest", "ruff"], "plan": plan, "read_files": read_files,
+    })
     assert resp.status_code == 200
     action, kwargs = calls[0]
     assert action == "real-repo-run"
-    assert kwargs["checks"] == [{"name": "pytest", "argv": resolve_check_profiles(["pytest"])[0]["argv"]}]
+    assert kwargs["checks"] == resolve_check_profiles(["pytest", "ruff"])
     assert kwargs["instruction"] == _VALID_BODY["instruction"]
     assert kwargs["branch"] == _VALID_BODY["branch"]
     assert kwargs["commit_message"] == _VALID_BODY["commit_message"]
     assert kwargs["reason"] == _VALID_BODY["reason"]
     assert kwargs["confirm"] is True
+    assert kwargs["plan"] == plan
+    assert kwargs["read_files"] == read_files
 
 
 def test_run_defaults_to_the_default_profile_when_checks_is_omitted(client, calls):
     client.post(_RUN, json=_VALID_BODY)
     assert [c["name"] for c in calls[0][1]["checks"]] == [DEFAULT_CHECK_PROFILE]
+    assert calls[0][1]["plan"] is None
+    assert calls[0][1]["read_files"] == []
+
+
+@pytest.mark.parametrize("body", [
+    {"plan": "x" * (HARNESS_MAX_PLAN_CHARS + 1)},
+    {"read_files": ["file.py"] * 9},
+    {"read_files": ["safe.py\x00not-safe.py"]},
+])
+def test_run_rejects_invalid_browser_plan_or_read_paths_before_the_shim(client, calls, body):
+    assert client.post(_RUN, json={**_VALID_BODY, **body}).status_code == 422
+    assert calls == []
 
 
 def test_confirm_is_not_defaulted_on(client, calls):
