@@ -813,11 +813,11 @@
 <!-- MAIN -->
 <div class="main">
   <div class="soul-toolbar">
-    <button class="toolbar-btn" id="soulToggleBtn" onclick="toggleSoulPanel()" aria-label="Toggle Soul Console (Escape to close)">Soul Console</button>
-    <button class="toolbar-btn" id="syncToggleBtn" onclick="toggleSyncPanel()" aria-label="Toggle Sync Console (Escape to close)">Sync Console</button>
-    <button class="toolbar-btn" id="agenticToggleBtn" onclick="toggleAgenticPanel()" aria-label="Toggle Agentic Console (Escape to close)">Agentic Console</button>
-    <button class="toolbar-btn" id="fsToggleBtn" onclick="toggleFsPanel()" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
-    <button class="toolbar-btn" id="sqlToggleBtn" onclick="toggleSqlPanel()" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
+    <button class="toolbar-btn" id="soulToggleBtn" aria-label="Toggle Soul Console (Escape to close)">Soul Console</button>
+    <button class="toolbar-btn" id="syncToggleBtn" aria-label="Toggle Sync Console (Escape to close)">Sync Console</button>
+    <button class="toolbar-btn" id="agenticToggleBtn" aria-label="Toggle Agentic Console (Escape to close)">Agentic Console</button>
+    <button class="toolbar-btn" id="fsToggleBtn" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
+    <button class="toolbar-btn" id="sqlToggleBtn" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
     <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
     <input class="api-key-input" id="apiKeyInput" type="password" placeholder="API key (optional)" autocomplete="off">
   </div>
@@ -833,11 +833,11 @@
     <textarea class="soul-editor" id="soulEditor" placeholder="soul.md content will load here..."></textarea>
     <input class="soul-reason" id="soulReason" type="text" placeholder="reason for change, e.g. tighten tone or update identity constraints">
     <div class="soul-actions">
-      <button class="soul-btn" onclick="loadSoul()">Load</button>
-      <button class="soul-btn" onclick="reloadSoul()">Reload Disk</button>
-      <button class="soul-btn" onclick="restoreSoul()">Restore .bak</button>
-      <button class="soul-btn" onclick="proposeSoulEvolution()">Propose</button>
-      <button class="soul-btn apply" onclick="applySoulEvolution()">Apply</button>
+      <button class="soul-btn" id="loadSoulBtn">Load</button>
+      <button class="soul-btn" id="reloadSoulBtn">Reload Disk</button>
+      <button class="soul-btn" id="restoreSoulBtn">Restore .bak</button>
+      <button class="soul-btn" id="proposeSoulEvolutionBtn">Propose</button>
+      <button class="soul-btn apply" id="applySoulEvolutionBtn">Apply</button>
     </div>
     <div class="soul-status" id="soulStatus"></div>
     <div class="proposal-box" id="proposalBox">
@@ -859,11 +859,11 @@
       </div>
     </div>
     <div class="soul-actions">
-      <button class="soul-btn" onclick="syncStatusCmd()">Status</button>
-      <button class="soul-btn" onclick="syncDryRun()">Dry-Run</button>
-      <button class="soul-btn apply" onclick="syncPull()">Pull Now</button>
-      <button class="soul-btn" onclick="syncScheduleOn()">Schedule On</button>
-      <button class="soul-btn" onclick="syncScheduleOff()">Schedule Off</button>
+      <button class="soul-btn" id="syncStatusBtn">Status</button>
+      <button class="soul-btn" id="syncDryRunBtn">Dry-Run</button>
+      <button class="soul-btn apply" id="syncPullBtn">Pull Now</button>
+      <button class="soul-btn" id="syncScheduleOnBtn">Schedule On</button>
+      <button class="soul-btn" id="syncScheduleOffBtn">Schedule Off</button>
     </div>
     <div class="soul-status" id="syncStatus"></div>
     <div class="proposal-box" id="syncBox">
@@ -886,20 +886,20 @@
     <div class="soul-actions">
       <input class="soul-reason" id="agenticNum" type="text" inputmode="numeric"
              placeholder="PR / Issue # (for Fetch Context)" style="max-width:260px;">
-      <button class="soul-btn" onclick="agenticContextPR()">Fetch PR</button>
-      <button class="soul-btn" onclick="agenticContextIssue()">Fetch Issue</button>
-      <button class="soul-btn" onclick="agenticStatusCmd()">Status</button>
-      <button class="soul-btn" onclick="agenticRegistryHealth()">Registry Health</button>
+      <button class="soul-btn" id="agenticContextPRBtn">Fetch PR</button>
+      <button class="soul-btn" id="agenticContextIssueBtn">Fetch Issue</button>
+      <button class="soul-btn" id="agenticStatusBtn">Status</button>
+      <button class="soul-btn" id="agenticRegistryHealthBtn">Registry Health</button>
     </div>
     <input class="soul-reason" id="agenticName" type="text" placeholder="skill name (for propose / apply)">
     <input class="soul-reason" id="agenticDesc" type="text" placeholder="skill description">
     <textarea class="soul-editor" id="agenticBody" placeholder="skill body (markdown)..." style="min-height:120px;"></textarea>
-    <input class="soul-reason" id="agenticReason" type="text" oninput="refreshAgenticGates()"
+    <input class="soul-reason" id="agenticReason" type="text"
            placeholder="reason for change (required to apply a skill)">
     <div class="soul-actions">
-      <button class="soul-btn" onclick="agenticPropose()">Propose Skill</button>
-      <label class="gate-confirm-label"><input type="checkbox" id="agenticConfirm" onchange="refreshAgenticGates()"> --confirm</label>
-      <button class="soul-btn apply" id="agenticApplyBtn" onclick="agenticApply()" disabled>Apply Skill (writes disabled)</button>
+      <button class="soul-btn" id="agenticProposeBtn">Propose Skill</button>
+      <label class="gate-confirm-label"><input type="checkbox" id="agenticConfirm"> --confirm</label>
+      <button class="soul-btn apply" id="agenticApplyBtn" disabled>Apply Skill (writes disabled)</button>
     </div>
     <!-- 4-gate checklist: Apply stays disabled until all four show ✓. Gates 1-2
          (mode=write, writes_enabled) come from the route's config block; gates 3-4
@@ -934,15 +934,15 @@
       <input class="soul-reason" id="fsPath" type="text" placeholder="relative path" style="max-width:300px;" maxlength="4096">
     </div>
     <div class="soul-actions">
-      <button class="soul-btn" onclick="fsStatusCmd()">Status</button>
-      <button class="soul-btn" onclick="fsListCmd()">List</button>
-      <button class="soul-btn" onclick="fsReadCmd()">Read</button>
-      <button class="soul-btn" onclick="fsStatCmd()">Stat</button>
+      <button class="soul-btn" id="fsStatusBtn">Status</button>
+      <button class="soul-btn" id="fsListBtn">List</button>
+      <button class="soul-btn" id="fsReadBtn">Read</button>
+      <button class="soul-btn" id="fsStatBtn">Stat</button>
     </div>
     <div class="soul-actions">
       <input class="soul-reason" id="fsPattern" type="text" placeholder="pattern (grep/glob)" style="max-width:300px;" maxlength="4096">
-      <button class="soul-btn" onclick="fsGrepCmd()">Grep</button>
-      <button class="soul-btn" onclick="fsGlobCmd()">Glob</button>
+      <button class="soul-btn" id="fsGrepBtn">Grep</button>
+      <button class="soul-btn" id="fsGlobBtn">Glob</button>
     </div>
     <div class="soul-status" id="fsStatus"></div>
     <div class="proposal-box" id="fsBox">
@@ -963,18 +963,18 @@
       </div>
     </div>
     <div class="soul-actions">
-      <button class="soul-btn" onclick="sqlStatusCmd()">Status</button>
-      <button class="soul-btn" onclick="sqlSchemaCmd()">Schema</button>
+      <button class="soul-btn" id="sqlStatusBtn">Status</button>
+      <button class="soul-btn" id="sqlSchemaBtn">Schema</button>
     </div>
     <div class="soul-actions">
       <input class="soul-reason" id="sqlTable" type="text" placeholder="schema.table (for preview / count)" style="max-width:300px;">
-      <button class="soul-btn" onclick="sqlPreviewCmd()">Preview</button>
-      <button class="soul-btn" onclick="sqlCountCmd()">Count</button>
+      <button class="soul-btn" id="sqlPreviewBtn">Preview</button>
+      <button class="soul-btn" id="sqlCountBtn">Count</button>
     </div>
     <textarea class="soul-editor" id="sqlQuery" placeholder="SELECT ... (read-only query)" style="min-height:80px;"></textarea>
     <div class="soul-actions">
-      <button class="soul-btn" onclick="sqlRunCmd()">Run Query</button>
-      <button class="soul-btn" onclick="sqlExplainCmd()">Explain</button>
+      <button class="soul-btn" id="sqlRunBtn">Run Query</button>
+      <button class="soul-btn" id="sqlExplainBtn">Explain</button>
       <select class="compact-select" id="sqlFmt">
         <option value="json">JSON</option>
         <option value="csv">CSV</option>
@@ -1010,7 +1010,7 @@
       placeholder="query the vault..."
       rows="1"></textarea>
   </div>
-  <button class="send-btn" id="sendBtn" onclick="submitQuery()">Send</button>
+  <button class="send-btn" id="sendBtn">Send</button>
 </div>
 
 <!-- FOOTER -->
@@ -2005,6 +2005,53 @@ function scheduleHealthCheck() {
 }
 checkHealth();
 input.focus();
+
+// Toolbar/panel/send button wiring — addEventListener instead of an inline
+// event-handler attribute, so gate.py's CSP can drop 'unsafe-inline' from
+// script-src (see _SecurityHeadersMiddleware). Every element below already
+// existed with a static id or gained one for this; none carry interpolated
+// data, so this is a mechanical move, not a behavior change.
+document.getElementById('soulToggleBtn').addEventListener('click', toggleSoulPanel);
+document.getElementById('syncToggleBtn').addEventListener('click', toggleSyncPanel);
+document.getElementById('agenticToggleBtn').addEventListener('click', toggleAgenticPanel);
+document.getElementById('fsToggleBtn').addEventListener('click', toggleFsPanel);
+document.getElementById('sqlToggleBtn').addEventListener('click', toggleSqlPanel);
+document.getElementById('loadSoulBtn').addEventListener('click', loadSoul);
+document.getElementById('reloadSoulBtn').addEventListener('click', reloadSoul);
+document.getElementById('restoreSoulBtn').addEventListener('click', restoreSoul);
+document.getElementById('proposeSoulEvolutionBtn').addEventListener('click', proposeSoulEvolution);
+document.getElementById('applySoulEvolutionBtn').addEventListener('click', applySoulEvolution);
+document.getElementById('syncStatusBtn').addEventListener('click', syncStatusCmd);
+document.getElementById('syncDryRunBtn').addEventListener('click', syncDryRun);
+document.getElementById('syncPullBtn').addEventListener('click', syncPull);
+document.getElementById('syncScheduleOnBtn').addEventListener('click', syncScheduleOn);
+document.getElementById('syncScheduleOffBtn').addEventListener('click', syncScheduleOff);
+document.getElementById('agenticContextPRBtn').addEventListener('click', agenticContextPR);
+document.getElementById('agenticContextIssueBtn').addEventListener('click', agenticContextIssue);
+document.getElementById('agenticStatusBtn').addEventListener('click', agenticStatusCmd);
+document.getElementById('agenticRegistryHealthBtn').addEventListener('click', agenticRegistryHealth);
+document.getElementById('agenticProposeBtn').addEventListener('click', agenticPropose);
+document.getElementById('agenticApplyBtn').addEventListener('click', agenticApply);
+document.getElementById('fsStatusBtn').addEventListener('click', fsStatusCmd);
+document.getElementById('fsListBtn').addEventListener('click', fsListCmd);
+document.getElementById('fsReadBtn').addEventListener('click', fsReadCmd);
+document.getElementById('fsStatBtn').addEventListener('click', fsStatCmd);
+document.getElementById('fsGrepBtn').addEventListener('click', fsGrepCmd);
+document.getElementById('fsGlobBtn').addEventListener('click', fsGlobCmd);
+document.getElementById('sqlStatusBtn').addEventListener('click', sqlStatusCmd);
+document.getElementById('sqlSchemaBtn').addEventListener('click', sqlSchemaCmd);
+document.getElementById('sqlPreviewBtn').addEventListener('click', sqlPreviewCmd);
+document.getElementById('sqlCountBtn').addEventListener('click', sqlCountCmd);
+document.getElementById('sqlRunBtn').addEventListener('click', sqlRunCmd);
+document.getElementById('sqlExplainBtn').addEventListener('click', sqlExplainCmd);
+// submitQuery(confirmedOnline, onlineProvider) treats any non-null first
+// argument as "user already confirmed" -- addEventListener passes the click's
+// PointerEvent as that argument, so a bare `submitQuery` reference here would
+// silently take the wrong branch and never send a plain query. Call with no
+// arguments, matching the original onclick="submitQuery()" contract.
+document.getElementById('sendBtn').addEventListener('click', () => submitQuery());
+document.getElementById('agenticReason').addEventListener('input', refreshAgenticGates);
+document.getElementById('agenticConfirm').addEventListener('change', refreshAgenticGates);
 </script>
 </body>
 </html>

@@ -423,7 +423,7 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'none'; script-src 'self' 'unsafe-inline'; "
+            "default-src 'none'; script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "connect-src 'self'; font-src 'self'; base-uri 'none'; "
             "form-action 'none'; frame-ancestors 'none'"
