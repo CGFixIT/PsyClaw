@@ -508,6 +508,14 @@ CyClaw/
 │   ├── prompts.py              # system prompt from ponytail + karpathy skills (+ soul, read-only)
 │   ├── registry_view.py        # merged skills/tools/connectors view (AST-parses MCP tools)
 │   └── schemas.py              # request models
+├── telegram/                   # (v1.9) optional Telegram channel (out-of-band), shipped enabled: false
+│   ├── cli.py
+│   ├── client.py               # Bot API client — outbound notify + long-poll inbound chat
+│   ├── config.py               # loads config.yaml's `telegram:` block
+│   ├── runner.py                # long-poll loop; answers via loopback POST /query only
+│   ├── state.py                 # T3 hybrid-confirm consent state (default off)
+│   ├── media.py                 # T4 attachment staging via agentic/fsconnect (default off)
+│   └── ratelimit.py
 ├── powershell/                 # Windows installer/launcher for the harness
 │   ├── Install-CyClaw.ps1      # home + venv + PATH shim + profile function
 │   ├── Invoke-CyClaw.ps1
