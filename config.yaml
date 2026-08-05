@@ -699,7 +699,13 @@ guardrails:
   hallucination_threshold: 0.18  # [0..1] token-overlap floor below which an answer is flagged ungrounded
   input_rails:                   # mirror guardrails/config/config.yml -> rails.input.flows
     - check_injection
-    - check_jailbreak
+    - check_jailbreak            # NOT ENFORCED BY THE OFFLINE FLOOR -- model-assisted only
+                                # (NeMo self_check_input prompt, guardrails/config/rails.co's
+                                # "check jailbreak" flow). guardrails/integration.py's
+                                # _offline_checks() only implements check_injection and
+                                # check_soul_mutation; listing it here activates it solely on
+                                # a live NeMo Colang run, same silent-skip shape as
+                                # check_soul_leak below.
     - check_soul_mutation
   output_rails:                  # mirror guardrails/config/config.yml -> rails.output.flows
     - check_grounding
