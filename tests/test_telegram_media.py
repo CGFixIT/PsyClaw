@@ -12,7 +12,12 @@ import pytest
 import yaml
 
 from telegram.config import load_telegram_config
-from telegram.media import MediaAttachment, attachment_from_message, save_confirmation
+from telegram.media import (
+    MediaAttachment,
+    attachment_from_message,
+    save_confirmation,
+    stage_attachment,
+)
 from telegram.runner import handle_inbound_media, poll_once
 from utils.errors import TelegramRefused
 from utils.logger import reset_config_cache
@@ -307,6 +312,79 @@ def test_oversize_media_is_refused_before_get_file(tmp_path: Path) -> None:
     assert (exc.value.details or {}).get("gate") == "max_download_bytes"
     get_file.assert_not_called()
     run.assert_not_called()
+
+
+def test_download_refusal_after_stage_requested_emits_terminal_audit(tmp_path: Path) -> None:
+    """Issue #793: stream oversize after stage_requested must log telegram_media_refused."""
+    cfg = _cfg(tmp_path)
+    with (
+        patch(
+            "telegram.media.tg_client.get_file",
+            return_value={"file_path": "documents/opaque.bin", "file_size": 10},
+        ),
+        patch(
+            "telegram.media.tg_client.download_file",
+            side_effect=TelegramRefused(
+                "Telegram file exceeds the configured download cap",
+                details={"gate": "max_download_bytes"},
+            ),
+        ) as download,
+        patch("telegram.media.subprocess.run") as run,
+        patch("telegram.media.audit_log") as audit,
+        pytest.raises(TelegramRefused) as exc,
+    ):
+        stage_attachment(
+            cfg,
+            chat_id=42,
+            chat_type="private",
+            update_id=77,
+            attachment=_attachment(),
+            confirmation="operator confirmed",
+        )
+    download.assert_called_once()
+    run.assert_not_called()
+    assert (exc.value.details or {}).get("gate") == "max_download_bytes"
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(event.get("event") == "telegram_media_stage_requested" for event in events)
+    assert any(
+        event.get("event") == "telegram_media_refused"
+        and event.get("gate") == "max_download_bytes"
+        and event.get("update_id") == 77
+        for event in events
+    )
+    assert not any(event.get("event") == "telegram_media_staged" for event in events)
+
+
+def test_fsconnect_refuse_after_download_emits_terminal_audit(tmp_path: Path) -> None:
+    """Issue #793: post-download fsconnect gate refusal also needs a terminal audit."""
+    cfg = _cfg(tmp_path)
+    refused = MagicMock(returncode=4, stdout=b"", stderr=b"refused")
+    with (
+        patch(
+            "telegram.media.tg_client.get_file",
+            return_value={"file_path": "documents/opaque.bin", "file_size": 3},
+        ),
+        patch("telegram.media.tg_client.download_file", return_value=b"abc"),
+        patch("telegram.media.subprocess.run", return_value=refused),
+        patch("telegram.media.audit_log") as audit,
+        pytest.raises(TelegramRefused) as exc,
+    ):
+        stage_attachment(
+            cfg,
+            chat_id=42,
+            chat_type="private",
+            update_id=78,
+            attachment=_attachment(),
+            confirmation="operator confirmed",
+        )
+    assert (exc.value.details or {}).get("gate") == "fsconnect_write"
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(event.get("event") == "telegram_media_stage_requested" for event in events)
+    assert any(
+        event.get("event") == "telegram_media_refused"
+        and event.get("gate") == "fsconnect_write"
+        for event in events
+    )
 
 
 def test_poll_once_routes_a_confirmed_document_to_the_media_handler(tmp_path: Path) -> None:
