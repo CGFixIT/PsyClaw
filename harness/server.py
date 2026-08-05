@@ -39,7 +39,7 @@ import secrets
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
 from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -50,7 +50,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
-from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig
+from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
@@ -437,9 +437,17 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     # token differs per instance) rather than per request. app.state also
     # carries the raw token for tests that need to attach it without a page
     # fetch -- see tests/test_harness_auth.py.
-    console_html = (_STATIC / "harness.html").read_text(encoding="utf-8").replace(
-        _CSRF_PLACEHOLDER, csrf_token
-    )
+    # A trimmed checkout (e.g. a sparse or partial clone) can lack the static
+    # console asset; surface that as the typed config error the entry points
+    # already report cleanly, not a bare FileNotFoundError traceback.
+    try:
+        console_source = (_STATIC / "harness.html").read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise HarnessConfigError(
+            "static/harness.html is missing — incomplete checkout?",
+            details={"path": str(_STATIC / "harness.html")},
+        ) from exc
+    console_html = console_source.replace(_CSRF_PLACEHOLDER, csrf_token)
     app.state.csrf_token = csrf_token
 
     @app.get("/", response_class=HTMLResponse)
@@ -842,7 +850,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             json_files = [
                 entry for entry in accepted.glob("*.json") if entry.is_file()
             ]
-            json_files.sort(key=os.path.getmtime, reverse=True)
+            # Tolerate a file deleted between the glob and the sort: getmtime
+            # would otherwise raise OSError straight out of this route as a
+            # bare 500. Same race guard SessionStore.list() carries for the
+            # byte-identical glob -> mtime-sort pattern in harness/sessions.py.
+            with suppress(OSError):
+                json_files.sort(key=os.path.getmtime, reverse=True)
             for path in json_files[:_MAX_RUNS]:
                 runs.append({"run_id": path.stem, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
@@ -894,7 +907,12 @@ def main() -> None:
     if host not in _LOOPBACK_HOSTS:
         sys.exit("harness binds loopback only (threat model: single-operator)")
     port_env = os.environ.get("CYCLAW_HARNESS_PORT", "").strip()
-    port = int(port_env) if port_env.isdigit() else cfg.port
+    if port_env and not port_env.isdigit():
+        # fail closed like the range check below: a typo'd override used to be
+        # silently discarded, so the harness bound the stored port instead of
+        # the one the operator asked for
+        sys.exit(f"CYCLAW_HARNESS_PORT is not a port number: {port_env}")
+    port = int(port_env) if port_env else cfg.port
     if not _MIN_USER_PORT <= port <= _MAX_PORT:
         # same bounds config.py applies to the stored port; without this the env
         # override accepts 0 (ephemeral bind — console link breaks) or >65535
