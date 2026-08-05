@@ -1,1 +1,13 @@
-coming soon
+CyClaw deployment guide — use the canonical setup doc, not this stub.
+
+  Repo root:  setup-guide.md
+  Under docs: docs/! How-To-Guides/setup-guide.md  (same content when in sync)
+
+Also useful:
+
+  docs/THREAT_MODEL.md          security scope and control surface
+  docs/SYNC_README.md           Dropbox/rclone corpus sync
+  docs/HARNESS_POWERSHELL.md    Windows coding harness (127.0.0.1:8790)
+  docs/HARNESS_MACOS.md         macOS/Linux coding harness
+  docs/channels/TELEGRAM_DESIGN.md  out-of-band Telegram channel (default-off)
+  docs/online-llm/readme.md     optional Grok/Claude hybrid fallback

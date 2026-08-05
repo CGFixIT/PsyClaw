@@ -52,6 +52,8 @@ Grok has its own provider switch:
 models:
   grok:
     enabled: false
+    base_url: "https://api.x.ai/v1"
+    model: "grok-4.5"   # shipped default; pin grok-4.3 only if you prefer cost/window
 ```
 
 Claude has its own provider switch:
@@ -63,6 +65,9 @@ models:
     base_url: "https://api.anthropic.com/v1"
     model: "claude-sonnet-5"
 ```
+
+Model ids drift; re-check `config.yaml` and the vendor model catalogs before
+enabling either provider in production.
 
 Privacy defaults stay conservative:
 

@@ -2,13 +2,10 @@
 
 **Status**: Verified against current main branch HEAD `ce1e07a1add713f881beb34eb132b4c4d82c0944` (Jul 9, 2026) and recent Claude parity work (#445–#449, #435 retrieval error surfacing, redaction standardization, shared fallback helper).
 
-**[Correction 2026-08-02].** The `grok.model: "grok-4.3"` example in the two
-config blocks below (`:20`, `:39`) is stale as an illustration of the shipped
-default: `config.yaml`'s `models.grok.model` now ships `grok-4.5`. `grok-4.3`
-still resolves as a valid xAI model id (kept available per that config key's
-own comment, for cost or context-window tradeoffs) — it is not broken, just no
-longer what a fresh clone ships. The `claude.model: "claude-sonnet-5"` example
-still matches `config.yaml` exactly; no correction needed there.
+**Models (verified 2026-08-04 against `config.yaml`):** shipped defaults are
+`grok.model: "grok-4.5"` and `claude.model: "claude-sonnet-5"`. `grok-4.3` still
+resolves as a valid xAI model id (cost / longer context tradeoff) but is **not**
+what a fresh clone ships — examples below use the current defaults.
 
 CyClaw supports **optional external LLM fallbacks** (Grok via xAI and Claude via Anthropic) **only in hybrid mode** when the RAG score is low (vault miss) **and** the user explicitly confirms. This is intentionally gated for safety, cost control, and to preserve the RAG-first + offline-first invariants.
 
@@ -25,7 +22,7 @@ models:
   grok:
     enabled: true          # <-- change from false
     base_url: "https://api.x.ai/v1"
-    model: "grok-4.3"
+    model: "grok-4.5"
     # ... rest of retry/timeout/max_tokens unchanged
 
   claude:
@@ -44,7 +41,7 @@ models:
 -    enabled: false
 +    enabled: true
      base_url: "https://api.x.ai/v1"
-     model: "grok-4.3"
+     model: "grok-4.5"
      ...
    claude:
 -    enabled: false

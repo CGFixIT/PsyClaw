@@ -725,7 +725,7 @@ guardrails:
     - persona
 
 # ===========================
-# Telegram channel (out-of-band)  [v0.1 — skeleton]
+# Telegram channel (out-of-band)  [v0.1 — T0–T3 code + partial T4; default disabled]
 # ===========================
 # Absence of this block, or enabled: false, disables the Telegram channel entirely.
 # Runs strictly via `python -m telegram.cli` — never imported by gate.py, graph.py,
