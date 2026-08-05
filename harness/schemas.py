@@ -117,17 +117,17 @@ class AgentRunRequest(_ForbidModel):
     @field_validator("plan")
     @classmethod
     def _plan_is_not_blank(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
+        if plan_text is not None and not value.strip():
             raise ValueError("plan must not be blank")
-        return value
+        return plan_text
 
     @field_validator("read_files")
     @classmethod
     def _read_files_are_bounded_text(cls, values: list[str]) -> list[str]:
-        for path in values:
+        for path in read_paths:
             if not path or len(path) > _MAX_READ_FILE_LEN or "\x00" in path:
                 raise ValueError("read_files must contain non-empty bounded paths without NUL bytes")
-        return values
+        return read_paths
 
 
 class AgentDecisionRequest(_ForbidModel):
