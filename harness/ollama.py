@@ -65,12 +65,22 @@ def _parse_chat_response(resp: httpx.Response, fallback_model: str) -> ChatResul
     body_text = body.get("content")
     if not isinstance(body_text, str):
         raise HarnessLLMError("malformed response from model server")
-    usage = parsed.get("usage") or {}
+    # usage is cosmetic (console token tally) — a proxy sending a non-dict
+    # usage block or non-numeric counts must degrade the tally to 0, not turn
+    # a good answer into the unparseable 500 the guards above exist to prevent
+    usage = parsed.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    try:
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        prompt_tokens = completion_tokens = 0
     return ChatResult(
         body_text=body_text,
         model=str(parsed.get("model", fallback_model)),
-        prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-        completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
     )
 
 
