@@ -136,17 +136,18 @@ def test_main_defaults_to_stored_port(cfg, _uvicorn_recorder, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "usage",
+    ("usage", "expected_prompt", "expected_completion"),
     [
-        "none",  # non-dict usage: .get() used to AttributeError -> bare 500
-        {"prompt_tokens": "abc", "completion_tokens": 5},  # int() used to ValueError
-        {"prompt_tokens": None},
-        None,
+        ("none", 0, 0),  # non-dict usage: .get() used to AttributeError -> bare 500
+        ({"prompt_tokens": "abc", "completion_tokens": 5}, 0, 5),  # int() used to ValueError
+        ({"prompt_tokens": None}, 0, 0),
+        (None, 0, 0),
     ],
 )
-def test_chat_survives_malformed_usage_block(usage):
-    """Token tallies are cosmetic: a proxy sending a malformed usage block must
-    degrade the counts to 0, never turn a good answer into a 500."""
+def test_chat_survives_malformed_usage_block(usage, expected_prompt, expected_completion):
+    """Token tallies are cosmetic: a malformed field in a proxy's usage block
+    must degrade that count to 0, never turn a good answer into a 500 — and a
+    still-valid sibling field keeps its real value."""
     chat = _chat_client(
         {
             "model": "qwen3.6:27b",
@@ -156,5 +157,5 @@ def test_chat_survives_malformed_usage_block(usage):
     )
     result = chat.chat(system_prompt="s", messages=[{"role": "user", "content": "hi"}])
     assert result.body_text == "hello"
-    assert result.prompt_tokens == 0
-    assert result.completion_tokens == 0
+    assert result.prompt_tokens == expected_prompt
+    assert result.completion_tokens == expected_completion
