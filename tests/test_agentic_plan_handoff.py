@@ -45,12 +45,14 @@ class _StubClient:
         self.content = content
         self.system_prompts: list[str] = []
         self.user_prompts: list[str] = []
+        self.max_tokens: list[int] = []
         self.closed = False
 
     def invoke(self, *, system_prompt, user_prompt, max_tokens=2048, temperature=0.0,
                 config_path="config.yaml", cfg=None):
         self.system_prompts.append(system_prompt)
         self.user_prompts.append(user_prompt)
+        self.max_tokens.append(max_tokens)
         return LocalProposerResponse(content=self.content, model="stub")
 
     def close(self) -> None:
@@ -63,6 +65,17 @@ class _StubClient:
 def test_generate_plan_returns_the_models_text(audit_cfg) -> None:
     client = _StubClient()
     assert generate_plan(client, instruction="do a thing", cfg=audit_cfg) == _PLAN_TEXT
+
+
+def test_generate_plan_forwards_the_completion_budget(audit_cfg) -> None:
+    client = _StubClient()
+    generate_plan(client, instruction="do a thing", max_tokens=3072, cfg=audit_cfg)
+    assert client.max_tokens == [3072]
+
+
+def test_generate_plan_rejects_an_invalid_completion_budget(audit_cfg) -> None:
+    with pytest.raises(AgenticError, match="max_tokens"):
+        generate_plan(_StubClient(), instruction="do a thing", max_tokens=0, cfg=audit_cfg)
 
 
 def test_generate_plan_uses_the_plan_prompt_not_the_coder_prompt(audit_cfg) -> None:
@@ -225,6 +238,25 @@ def test_plan_command_prints_a_plan_and_creates_no_run(cfg_path, tmp_path, monke
     assert _PLAN_TEXT in capsys.readouterr().out
     runs_dir = tmp_path / "data" / "workspaces" / "runs"
     assert not runs_dir.exists() or not list(runs_dir.glob("*.json"))
+
+
+def test_plan_command_threads_the_configured_completion_budget(cfg_path, monkeypatch, capsys) -> None:
+    captured: list[int] = []
+
+    def fake_invoke(self, **kwargs):
+        captured.append(kwargs["max_tokens"])
+        return LocalProposerResponse(content=_PLAN_TEXT, model="local-test-model")
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", fake_invoke)
+    src = yaml.safe_load(Path(cfg_path).read_text(encoding="utf-8"))
+    src["agentic"]["deepagent_github"]["planner_max_tokens"] = 3072
+    Path(cfg_path).write_text(yaml.safe_dump(src), encoding="utf-8")
+    from utils.logger import reset_config_cache
+
+    reset_config_cache()
+    assert main(["--config", cfg_path, "real-repo-run-plan", "--repo", "--instruction", "do a thing"]) == EXIT_OK
+    capsys.readouterr()
+    assert captured == [3072]
 
 
 def test_plan_command_writes_to_out_file(cfg_path, tmp_path, monkeypatch) -> None:

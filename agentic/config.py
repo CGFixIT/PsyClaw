@@ -89,6 +89,9 @@ DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 # up to 8k chars of GitHub context + up to 4k chars of prior-iteration
 # feedback) is comparably large.
 DEFAULT_PLANNER_TIMEOUT_SEC = 600
+# Completion budget for each local/cloud proposer call. Keep the existing
+# implicit client default so this new operator control is rollout-neutral.
+DEFAULT_PLANNER_MAX_TOKENS = 2048
 
 _VALID_MODES = ("read", "write")
 # Post-Ollama migration: "lmstudio" is retired as a provider id. Use "ollama"
@@ -218,6 +221,7 @@ class DeepAgentGitHubConfig:
     max_write_budget_bytes: int = DEFAULT_MAX_WRITE_BUDGET_BYTES
     max_handoff_chars: int = DEFAULT_MAX_HANDOFF_CHARS
     planner_timeout_sec: int = DEFAULT_PLANNER_TIMEOUT_SEC
+    planner_max_tokens: int = DEFAULT_PLANNER_MAX_TOKENS
     # The escape hatch for agentic.harness_optimizer.governance.inspect_code_shape.
     # Defaults ON (fail safe). It exists because that scanner is a HEURISTIC that
     # hard-blocks an iteration, and a heuristic gate with no recourse is a broken
@@ -318,6 +322,13 @@ class DeepAgentGitHubConfig:
             raise AgenticConfigError(
                 "agentic.deepagent_github.planner_timeout_sec must be a positive integer",
                 details={"received": self.planner_timeout_sec},
+            )
+        if not isinstance(self.planner_max_tokens, int) or isinstance(
+            self.planner_max_tokens, bool
+        ) or self.planner_max_tokens <= 0:
+            raise AgenticConfigError(
+                "agentic.deepagent_github.planner_max_tokens must be a positive integer",
+                details={"received": self.planner_max_tokens},
             )
 
     def _coerce_providers(self) -> None:

@@ -190,6 +190,26 @@ def test_deepagent_config_accepts_a_custom_planner_timeout_sec(tmp_path: Path) -
     assert cfg.deepagent_github.planner_timeout_sec == 900
 
 
+def test_deepagent_config_defaults_planner_max_tokens(tmp_path: Path) -> None:
+    from agentic.config import DEFAULT_PLANNER_MAX_TOKENS
+
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+    assert cfg.deepagent_github.planner_max_tokens == DEFAULT_PLANNER_MAX_TOKENS
+
+
+@pytest.mark.parametrize("bad", [0, -1, "2048", 1.5, True])
+def test_deepagent_config_rejects_invalid_planner_max_tokens(tmp_path: Path, bad) -> None:
+    block = _base_block(deepagent_github={"planner_max_tokens": bad})
+    with pytest.raises(AgenticConfigError):
+        load_agentic_config(_write_config(tmp_path, block))
+
+
+def test_deepagent_config_accepts_a_custom_planner_max_tokens(tmp_path: Path) -> None:
+    block = _base_block(deepagent_github={"planner_max_tokens": 3072})
+    cfg = load_agentic_config(_write_config(tmp_path, block))
+    assert cfg.deepagent_github.planner_max_tokens == 3072
+
+
 def test_deepagent_config_rejects_shell_metachar_model(tmp_path: Path) -> None:
     block = _base_block(deepagent_github={"model": "good;bad"})
     with pytest.raises(AgenticConfigError):

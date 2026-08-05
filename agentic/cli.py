@@ -616,6 +616,7 @@ def cmd_real_repo_run_plan(args: argparse.Namespace) -> int:
             client,
             instruction=args.instruction,
             context=context_text or "",
+            max_tokens=cfg.deepagent_github.planner_max_tokens,
             config_path=args.config,
             cfg=app_cfg,
         )
@@ -850,6 +851,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             branch_name=args.branch,
             commit_message=args.commit_message,
             max_iterations=args.max_iterations,
+            max_tokens=cfg.deepagent_github.planner_max_tokens,
             reason=args.reason,
             confirm=args.confirm,
             context=context_text,

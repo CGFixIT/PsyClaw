@@ -934,6 +934,7 @@ agentic:
     workspace_root: "data/agentic/workspaces"
     max_write_budget_bytes: 100000
     max_handoff_chars: 200000           # outbound-prompt cap for cloud egress
+    planner_max_tokens: 2048             # real-repo completion cap; keep it within Ollama num_ctx
     allow_cloud_providers: false        # gate 3 of the cloud chain
     providers:
       grok:   { enabled: false, model: "grok-4.5" }
