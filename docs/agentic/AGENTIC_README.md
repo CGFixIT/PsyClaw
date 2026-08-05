@@ -1,5 +1,12 @@
 # CyClaw Agentic Layer — User Guide (v0.1, experimental)
 
+**Status (2026-08-04):** Still experimental / default-off. Beyond the original
+GitHub-context + skills-registry surface, this layer also owns
+`real_repo_loop`, fsconnect/sqlconnect CLIs, and (retired but retained)
+`deepagent_github` subgraph code — see §9 and
+`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`. Primary invocation remains
+`python -m agentic.cli` (or authenticated harness/`/ops/*` subprocess shims).
+
 An **opt-in, out-of-band** layer that gives CyClaw read-only GitHub context and a
 governed local skills registry. It runs strictly as `python -m agentic.cli` and is
 **never imported** by the gateway, graph, or MCP server — so it cannot affect

@@ -1,10 +1,27 @@
 # CyClaw Telegram Channel — Design & Phase Plan
 
-**Status:** T0–T3 code is shipped with mocked verification; T4 has a bounded
-staging path and remains rollout-partial. The channel is default **disabled**.
-**Date:** 2026-08-04
+**Status:** T0–T3 **code** is shipped and unit-tested (mocked Bot API / loopback
+assumptions). T4 has a bounded staging path and remains **rollout-partial**.
+The channel ships default **disabled**. Live operator validation of T1/T2 has
+**not** been recorded in-repo.
+**Date:** 2026-08-04 (stage review + next-path section 2026-08-04)
 **Invariant posture:** Out-of-band only (I6). Never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py`.  
 **Companion:** Threat-model amendment in `docs/THREAT_MODEL.md` §5 (seventh amendment).
+
+### Where we are (honest stage map)
+
+| Phase | Code | Live operator validation | Recommended next action |
+|---|---|---|---|
+| **T0** Skeleton | Done | N/A (self-test only) | None |
+| **T1** Notify | Done | **Pending** | First live step: bot + allowlist + one `send` |
+| **T2** Chat long-poll | Done | **Pending** (blocked on T1 env) | After T1 works: `mode: chat` + `poll` |
+| **T3** Hybrid confirm | Done (default-off) | **Pending** (needs T2 + hybrid config) | Optional; only after T2 is boring |
+| **T4** Media → fsconnect | **Partial** | **Pending** | Optional / high risk; needs design answers first |
+| **§6 Scheduler** | Not a `telegram/` task | — | Separate package; uses T1 as notify sink |
+
+**Bottom line:** You are **not** stuck waiting on missing T2 or T3 source.
+The real next stage is **operator rollout of T1 → T2**, plus answering a short
+decision list (§11) before anyone writes more T4 or scheduler code.
 
 ---
 
@@ -46,12 +63,12 @@ Phone (Telegram cloud)
 └───────────────────────────┘
 ```
 
-### Package layout (skeleton)
+### Package layout (current tree)
 
 | Path | Role | Phase |
 |---|---|---|
 | `telegram/__init__.py` | Public exports + telemetry-kill | T0 |
-| `telegram/config.py` | `TelegramConfig` + `load_telegram_config` | T0 |
+| `telegram/config.py` | `TelegramConfig` + `load_telegram_config` | T0–T4 |
 | `telegram/client.py` | Bot API + `/query` HTTP + chunking + bounded file download | T1–T4 |
 | `telegram/runner.py` | `send_notify`, text/media handlers, `poll_*`, commands | T1–T4 |
 | `telegram/state.py` | Persistent getUpdates offset + one-shot T3 consent state | T2–T3 |
@@ -62,6 +79,11 @@ Phone (Telegram cloud)
 | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-*.plist` | Health notify + poll KeepAlive (disabled templates) | T1–T2 |
 | `tests/test_telegram_isolation.py` | I6 regression | T0 |
 | `tests/test_telegram_config.py` | Config validation | T0 |
+| `tests/test_telegram_client.py` | Bot API / chunking / query client | T1–T4 |
+| `tests/test_telegram_runner.py` | Notify, chat, commands, poll, T3 consume | T1–T3 |
+| `tests/test_telegram_state.py` | Offset + hybrid session state | T2–T3 |
+| `tests/test_telegram_cli.py` | CLI wiring | T0–T2 |
+| `tests/test_telegram_media.py` | T4 staging gates + fsconnect CLI path | T4 |
 
 ### Config block (`config.yaml`)
 
@@ -102,7 +124,7 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 | **I2 Topology=policy** | No Telegram-specific graph nodes or LLM routing |
 | **I3 Triple-gate** | Normal payload sends `user_confirmed_online: false`; T3 can send true only after an explicit, one-shot, provider-specific consent claim, while the core gates remain unchanged |
 | **I4 Audit** | `telegram_inbound` / `telegram_outbound` / `telegram_query` via `utils.logger.audit_log` |
-| **I5 Soul** | No soul endpoints exposed through the bot in T0–T2 |
+| **I5 Soul** | No soul endpoints exposed through the bot in T0–T4 |
 | **I6 Isolation** | Package never imported by core; pytest + invariant-guard list `telegram` |
 
 ---
@@ -113,15 +135,17 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 2. **Token in env** — `TELEGRAM_BOT_TOKEN` (or configured name). Audit stores only a 12-char SHA-256 fingerprint.
 3. **Loopback `/query` only** — `telegram.query.base_url` host must be `127.0.0.1` / `localhost` / `::1`.
 4. **No silent hybrid** — only exact `/online on <grok|claude>` can arm one request; a bare `/online on` is refused rather than selecting a provider.
-5. **Rate limit knobs** — present in config (enforcement loop is T2 hardening; see below).
+5. **Rate limit** — process-local sliding window on outbound + inbound
+   (`telegram/ratelimit.py`). Multi-process sqlite limiter remains deferred
+   (YAGNI) until more than one poller is real.
 6. **Threat model** — Telegram cloud sees message plaintext. Branding must say *local inference*, not *E2E private channel*.
 7. **T4 media gates** — only an allowlisted private chat with `/save --confirm <reason>` can stage an attachment. The bridge requires all fsconnect write, strict-root, scan, injection-block, and persistent write-rate-limit gates before it contacts Telegram's file service; its root must be absolute, explicit, outside the repo/corpus, and not overlap a read root. It uses the fsconnect CLI, never an in-process import, and does not auto-index.
 
 ---
 
-## 5. Phase plan (detailed instructions for finishing the skeleton)
+## 5. Phase plan
 
-### T0 — Skeleton (THIS PR) — DONE when merged
+### T0 — Skeleton — DONE
 
 **Done means:**
 
@@ -372,15 +396,26 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 
 ---
 
-## 8. Acceptance checklist for reviewers
+## 8. Acceptance checklist
 
-- [ ] `python -m telegram.cli test` passes with default config (disabled)
-- [ ] `pytest tests/test_telegram_isolation.py tests/test_telegram_config.py tests/test_telegram_state.py tests/test_telegram_media.py` green
-- [ ] `python .claude/skills/invariant-guard/check_invariants.py` still green (I6 includes `telegram`)
-- [ ] No new imports of `telegram` from `gate.py` / `graph.py` / `mcp_hybrid_server.py` / `gate_ops.py`
-- [ ] Threat-model amendment present
-- [ ] Default `enabled: false` and empty allowlist safe when disabled
-- [ ] Draft PR — do not merge until human has read §5 T1/T2 and threat model
+### Code / CI (automated; expected green on current main)
+
+- [x] `python -m telegram.cli test` passes with default config (disabled)
+- [x] Full telegram unit suite green under `GROK_API_KEY=dummy` (isolation,
+      config, state, media, runner, client, cli — one skip is fine if env-gated)
+- [x] `telegram` in invariant-guard `OUT_OF_BAND_PKGS`; no core imports of `telegram`
+- [x] Threat-model seventh amendment present
+- [x] Default `enabled: false`, empty allowlist legal only while disabled
+
+### Live operator (not done in-repo — this is the real gate)
+
+- [ ] BotFather bot + `TELEGRAM_BOT_TOKEN` set only in env (never in git)
+- [ ] Own chat id discovered and in `allowed_chat_ids`
+- [ ] T1: `python -m telegram.cli send …` delivers to phone
+- [ ] T2: with server + Ollama up, `mode: chat` + `poll` answers offline RAG
+- [ ] Non-allowlisted chat is refused; audit shows hashed/inbound/outbound events
+- [ ] T3 (optional): only after app `mode=hybrid` + provider enabled + `allow_hybrid_confirm`
+- [ ] T4 (optional): only after §11 answers and a disposable fsconnect root
 
 ---
 
@@ -390,8 +425,9 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 2. Ollama: `qwen3.6:27b`, `num_ctx` ≥ budget in `config.yaml` comments.
 3. Keep embeddings on CPU (`EMBED_DEVICE`) for deterministic retrieval.
 4. Run CyClaw loopback server.
-5. Enable Telegram T1 first; live with notify for a few days before `mode: chat`.
+5. Enable Telegram **T1 first**; live with notify for a few days before `mode: chat`.
 6. Poll process: separate from uvicorn so a stuck `/query` does not kill the web UI (or vice versa).
+7. Prefer launchd templates under `macos/LaunchAgents/` only after manual T1/T2 work.
 
 ---
 
@@ -402,3 +438,68 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 | 2026-08-03 | Initial design + skeleton package (T0) |
 | 2026-08-03 | T1/T2 residual: offset file, commands, chunking, launchd templates |
 | 2026-08-04 | T3 explicit one-shot provider consent; T4 default-off, private-chat fsconnect CLI staging; T4 intentionally remains partial (no auto-index or live operator validation). |
+| 2026-08-04 | Stage review: code is at T0–T3 + partial T4; next work is operator T1→T2 live validation and §11 decisions — not more T2/T3 skeleton. |
+
+---
+
+## 11. Open operator decisions (answer before more code)
+
+These are the questions that block useful next engineering. Prefer short
+answers; leave blank only if the feature stays off forever.
+
+### A. Rollout priority (pick one primary path)
+
+1. **T1 live notify only** — bot token, chat id, one successful `send`, optional
+   health-failure notify. No chat mode yet.
+2. **T1 then T2 chat** — after notify works, enable `mode: chat` + long-poll and
+   verify offline RAG from the phone.
+3. **Skip live Telegram for now** — leave channel disabled; work elsewhere
+   (scheduler design, portfolio docs, other CyClaw work).
+
+### B. T1 prerequisites (fill when choosing A.1 or A.2)
+
+| Item | Your answer |
+|---|---|
+| Bot exists via BotFather? | yes / no |
+| Where will `TELEGRAM_BOT_TOKEN` live? (env only — never commit) | e.g. user env / launchd plist env / secret store |
+| Chat id of the **only** trusted phone? | (numeric; discover via `/id` after bot is messaged once, or `@userinfobot`) |
+| Host for first enablement? | Windows box / MacBook M5 / both |
+| Notify failure sink desired? | manual only / health launchd / nightly sync wrapper later |
+
+### C. T2 chat posture
+
+| Item | Your answer |
+|---|---|
+| Local Ollama model ready for long answers? | yes / no / which model |
+| CyClaw loopback server always-on while polling? | yes / only when I start it |
+| Typing indicator (`sendChatAction`)? | defer (default) / want it soon |
+| Multi-process pollers? | no (default) / maybe later (would unlock sqlite rate limiter work) |
+
+### D. T3 hybrid from Telegram (optional)
+
+| Item | Your answer |
+|---|---|
+| Do you want phone-side one-shot Grok/Claude escalate? | no for now / yes later / yes soon |
+| Will core `app.mode` be `hybrid` with a provider enabled when testing? | yes / no |
+| OK that a failed `/query` still **consumes** the one-shot consent? | yes (current) / revisit design |
+
+### E. T4 media (high risk — default stay off)
+
+| Item | Your answer |
+|---|---|
+| Need photo/document → disk at all? | no / yes staging only / yes then into corpus |
+| Disposable absolute fsconnect writable root path? | (path outside repo + corpus) |
+| Auto-reindex after stage? | **never** (current) / later explicit CLI only |
+| Replay policy if fsconnect writes but Telegram ack fails? | refuse re-download / allow idempotent overwrite / design later |
+
+### F. Scheduler (§6) coupling
+
+| Item | Your answer |
+|---|---|
+| Want T1 wired as failure notify for sync/health before any `scheduler/` package? | yes shell/launchd only / wait for scheduler package / not needed |
+
+### Recommended default if you only answer one thing
+
+Ship **A.1 → A.2** on the Mac or Windows host you use daily: enable notify,
+prove one message, then turn on chat. Leave T3/T4/media master switches false
+until T2 is boring for at least a few days.
