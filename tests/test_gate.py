@@ -410,6 +410,19 @@ class TestSecurityResponseHeaders:
         assert "frame-ancestors 'none'" in csp
         assert "script-src 'self'" in csp
 
+    def test_csp_script_src_has_no_unsafe_inline(self, client):
+        """terminal.html's toolbar/panel buttons now wire via addEventListener
+        (static/terminal.html) instead of inline onclick="..." attributes, so
+        script-src no longer needs 'unsafe-inline' -- keeping it around would
+        blunt every innerHTML-escaping mitigation in that file if one were
+        ever bypassed. style-src still carries it (unrelated: CSS, not JS)."""
+        test_client, _ = client
+        resp = test_client.post("/query", json={"query": "test"})
+        csp = resp.headers.get("content-security-policy", "")
+        script_src = next(part for part in csp.split(";") if part.strip().startswith("script-src"))
+        assert "unsafe-inline" not in script_src
+        assert "style-src 'self' 'unsafe-inline'" in csp
+
     def test_static_page_has_cache_control(self, client):
         test_client, _ = client
         resp = test_client.get("/")
