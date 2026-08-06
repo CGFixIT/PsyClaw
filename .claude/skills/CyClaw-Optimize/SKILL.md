@@ -1,6 +1,6 @@
 ---
 name: CyClaw-Optimize
-description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open focused, reviewable pull requests for each. Use when asked to optimize CyClaw, find competitive/trade-bot advantages, harden CI, audit for risk, propose improvements, or open optimization PRs against main.
+description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open a small set of focused, reviewable pull requests only when each chunk earns its keep (not a fixed PR quota). Use when asked to optimize CyClaw, find competitive/trade-bot advantages, harden CI, audit for risk, propose improvements, or open optimization PRs against main.
 ---
 
 # CyClaw-Optimize
@@ -15,9 +15,13 @@ security, financial risk / oversight in assumptions, auditability, and
 maintainability.
 
 **What this skill does:** drives a time-boxed scan of the **main** branch,
-groups findings into ~5 small/medium PR-sized chunks, and opens one focused
-pull request per chunk **against a working branch cut from `main`** — never
-committing to `main` directly. A human decides when to merge/close.
+groups findings into a **small set of reviewable PR-sized chunks** (about 1–4
+when several independent fixes earn their keep — **a guideline, not a quota**;
+do not invent low-value PRs to hit a number), and opens one focused pull request
+per kept chunk on a branch cut from the **topology base** Step 3.5 assigns —
+never committing to `main` directly. A human decides when to merge/close.
+Prefer merging this session's drafts **lowest PR number → highest**, parent
+before child when stacked.
 
 **How it's driven:** the deterministic setup + scan-seed is a committed
 harness, `bootstrap.sh`. The scan itself is a read-only subagent. PR dedup and
@@ -68,7 +72,7 @@ structure):
 > pins, missing imports); readability/auditability anywhere. Return 6–10
 > DISTINCT findings, each with: title, file path(s) + line numbers, one-line
 > description, category, effort (small/medium). End with a suggested grouping
-> into ~5 PR-sized chunks. Cite real code — do not invent.
+> into a small set of PR-sized chunks (only as many as earn a PR — not a fixed five). Cite real code — do not invent.
 
 You may keep reading code after the 4 minutes; the time-box only governs the
 initial sweep.
@@ -89,14 +93,18 @@ mcp__github__list_pull_requests(owner="CGFixIT", repo="CyClaw", state="open")
 > it into context. This session it showed 2 open PRs (#175, #176), both
 > dependency/pinning chores, so no overlap with the scan findings.
 
-### Step 3 — Select ~5 focus areas and announce them
+### Step 3 — Select focus areas and announce them
 
-From the deduped findings, choose ~5 PR-sized chunks. Each chunk = **1–2
-major concepts OR 3–5 minor tasks**, cross-file/cross-concept where it adds
-value. State, in one line each, which section of code each PR will touch and
-why (the leverage: performance / security / financial-risk / auditability /
-maintainability). Prefer chunks that are independently reviewable and easily
-restorable through GitHub.
+From the deduped findings, choose only the PR-sized chunks that clearly earn
+their keep. **Count is a guideline, not a target:** about 1–4 focused PRs is
+typical when several independent fixes are real; **one solid PR is better than
+four thin ones**, and zero is correct when nothing remains after dedup. Never
+split or invent work just to fill a slot. Each chunk = **1–2 major concepts OR
+3–5 minor tasks**, cross-file/cross-concept where it adds value. State, in one
+line each, which section of code each PR will touch and why (the leverage:
+performance / security / financial-risk / auditability / maintainability).
+Prefer chunks that are independently reviewable and easily restorable through
+GitHub — subject to Step 3.5 when they share files.
 
 ### Step 3.5 — Plan branch topology for shared files (prevents merge-loss / conflicts)
 
@@ -144,10 +152,22 @@ git checkout main && git branch -D _trial
 > markers — so no consolidation/stacking was needed. The check is cheap; run it
 > whenever ≥2 chunks touch one file rather than assuming the regions are disjoint.
 
+**Session merge order:** plan chunks so humans can merge this run's drafts from
+**lowest PR number → highest**, with stack **parents always before children**.
+That order is the universal default for the rest of this skill (Step 4+), whether
+a given PR's GitHub `base` is `main` or a parent branch.
+
 ### Step 4 — One focused PR per chunk
 
-For each chunk, on its own working branch (cut from `origin/main` by default —
-but see **Step 3.5** when the chunk shares a file with another chunk):
+Work chunks in **planned merge order** (see Step 3.5): parent / lower-order
+first, then children. For each chunk, use its **topology base** — not a blanket
+assumption that every branch starts at `main`:
+
+| Topology (Step 3.5) | Cut branch from | GitHub PR `base` |
+|---|---|---|
+| Independent (no shared-file dependency on another chunk in this run) | `origin/main` | `main` |
+| Stacked on an earlier chunk | that earlier chunk's branch | that earlier branch (not `main`) until the parent merges |
+| Consolidated | whatever branch owns the shared-file edits | same as that branch's topology |
 
 1. Make the focused change(s). Keep the diff minimal and on-topic; avoid
    touching unrelated files (CLAUDE.md operating contract).
@@ -163,7 +183,10 @@ but see **Step 3.5** when the chunk shares a file with another chunk):
    On network failure only, retry up to 4× with exponential backoff
    (2s, 4s, 8s, 16s).
 4. Open a **draft** PR via MCP with a clear title and a body covering: the
-   change, its benefit, and any risk to monitor.
+   change, its benefit, risk to monitor, and **merge topology** (independent /
+   stacked-on `<parent-branch or #N>` / consolidated; planned merge order).
+
+   Independent chunk (only when Step 3.5 says it has no stack parent):
 
    ```text
    mcp__github__create_pull_request(
@@ -171,8 +194,26 @@ but see **Step 3.5** when the chunk shares a file with another chunk):
      base="main", head="<branch-name>",
      draft=true,
      title="<concise title>",
-     body="## What\n...\n## Why / benefit\n...\n## Risk to monitor\n...")
+     body="## What\n...\n## Why / benefit\n...\n## Risk to monitor\n...\n## Merge topology\n- independent\n- merge order: ...")
    ```
+
+   Stacked child (PR `base` must be the **parent branch**, not `main`):
+
+   ```text
+   mcp__github__create_pull_request(
+     owner="CGFixIT", repo="CyClaw",
+     base="<parent-branch-name>", head="<child-branch-name>",
+     draft=true,
+     title="<concise title>",
+     body="## What\n...\n## Why / benefit\n...\n## Risk to monitor\n...\n## Merge topology\n- stacked on <parent-branch> / #<parent-PR>\n- merge parent first, then this PR")
+   ```
+
+**Merge order for this skill run:** after drafts exist, prefer merging **lowest
+PR number → highest** among the PRs this session opened, except where Step 3.5
+stacking requires **parent before child** (parent may have the lower number if
+you opened in order; if not, parent-first wins over number order). When a parent
+lands on `main` (often via squash), refresh each open child onto current
+`origin/main` (or retarget base to `main` after rebase) before merging the next.
 
 If, after scanning, no clear optimization opportunities remain (all covered by
 open PRs or out of scope), **confirm that briefly and stop** — do not
@@ -206,12 +247,14 @@ Optionally run `/code-review` on the diff before opening the PR.
 
 When **CyClaw-Optimize** is invoked, the user pre-authorises creation and push
 of per-chunk branches named `agent/cyclaw-optimize-<topic>` (or the env
-override of `CYCLAW_AGENT_BRANCH_PREFIX`) cut from `origin/main`. Do **not**
-stop and ask for permission to push these branches — proceed directly. This
-applies even when the session was started on a different designated branch
-(e.g. `agent/<name>` from a session-start hook). Each chunk gets its own
-branch + draft PR; the designated session branch is used only for the skill
-file update commit (if any), never for chunk changes.
+override of `CYCLAW_AGENT_BRANCH_PREFIX`), each cut from the **topology base**
+Step 3.5 assigned (session start / first independent chunk from `origin/main`;
+stacked children from their parent branch). Do **not** stop and ask for
+permission to push these branches — proceed directly. This applies even when
+the session was started on a different designated branch (e.g. `agent/<name>`
+from a session-start hook). Each chunk gets its own branch + draft PR; the
+designated session branch is used only for the skill file update commit (if
+any), never for chunk changes.
 
 ---
 
@@ -246,25 +289,30 @@ file update commit (if any), never for chunk changes.
 - **The 4-minute box is for the initial sweep only** — keep reading code
   afterward to confirm each finding before it becomes a PR.
 - **Shared-file PRs can collide.** When ≥2 chunks edit one file (most often
-  `.github/workflows/ci.yml`, `config.yaml`, the dependency manifests, or
-  `CLAUDE.md`), branches all cut from `origin/main` will *conflict* if their
-  edits touch the same/adjacent lines — and a sloppy conflict resolution drops
-  one side. See **Step 3.5**: consolidate the shared-file edits into one PR, or
-  stack the later branch on the earlier one, and always trial-merge the pair
-  before opening the PRs.
-- **A broken `main` poisons every child PR.** If `main` itself is red (e.g. a
-  bad committed data file or a failing test landed earlier), *every* branch cut
-  from it inherits those failures, so the optimize PRs show red CI for reasons
-  unrelated to their own diffs. Land the root-cause fix PR first, then rebase /
-  re-run the rest. Diagnose a child PR's CI red against `main`'s own state before
-  assuming the PR caused it.
+  `.github/workflows/ci.yml`, `config.yaml`, the dependency manifests,
+  `CLAUDE.md`, or other hotspots from Step 3.5), cutting every branch from the
+  same base without consolidating or stacking will *conflict* if their edits
+  touch the same/adjacent lines — and a sloppy conflict resolution drops one
+  side. See **Step 3.5**: consolidate the shared-file edits into one PR, or
+  stack the later branch on the earlier one, trial-merge the pair before
+  opening, and merge in **session order** (prefer lowest PR number → highest,
+  with stack parents always before children). After a parent lands, refresh
+  open children onto the updated base before merging the next.
+- **A broken `main` poisons every PR whose base ultimately includes it.** If
+  `main` itself is red (e.g. a bad committed data file or a failing test landed
+  earlier), *every* branch that incorporates that tip inherits those failures,
+  so the optimize PRs show red CI for reasons unrelated to their own diffs. Land
+  the root-cause fix PR first (lowest-order / first in the merge queue), then
+  refresh / re-run the rest. Diagnose a child PR's CI red against `main`'s own
+  state before assuming the PR caused it.
 
 ---
 
-## Example output (this session's scan, for shape — re-scan; do not reuse blindly)
+## Example output (illustrative scan shape — re-scan; do not reuse blindly)
 
-The Step-1 subagent returned 10 grounded findings and proposed this grouping
-(real file paths, current `main`):
+The Step-1 subagent returned several grounded findings and proposed a small
+grouping (real file paths, then-current `main`). **Five is not a quota** — keep
+only chunks that still look high-leverage after dedup:
 
 1. **Test-coverage completeness** — add `gate`, `retrieval.{hybrid_search,
    indexer,stemmer}`, `utils.personality_db`, and `agentic.*` to `--cov` in
@@ -281,7 +329,10 @@ The Step-1 subagent returned 10 grounded findings and proposed this grouping
    details; verify the current xAI `grok-4` model name in `config.yaml`; add a
    platform-detection fallback in `sync/scheduler.py`. *(security/robustness,
    small)*
-5. **Docs** — record the action-pinning rationale and the grok model-name
-   monitoring note. *(maintainability, small)*
 
-Each is independently reviewable and small/medium — exactly the target shape.
+(Docs-only follow-ups can wait or ride with a related chunk — do not open a
+fifth PR just to host a monitoring note.)
+
+Each kept chunk is independently reviewable and small/medium. Shared-file
+pairs still follow Step 3.5; merge this session's drafts **low PR number →
+high**, parent-before-child when stacked.
