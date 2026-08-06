@@ -337,11 +337,14 @@ Rules for multi-agent CyClaw work:
 5. **Squash at merge.** Prefer squash-and-merge so agent WIP commits never
    become permanent history on `main`. Write one clear final commit message.
 
-Quick stale-clone test after fetch:
+Quick stale-clone test after fetch (works for local `main` or any feature
+branch — it asks "does my current checkout already contain everything on
+`origin/main`", not the reverse, so a healthy feature branch with its own
+commits still reports OK):
 
 ```bash
-git merge-base --is-ancestor HEAD origin/main \
-  && echo "OK: linear, pull is fine" \
+git merge-base --is-ancestor origin/main HEAD \
+  && echo "OK: current branch already contains origin/main" \
   || echo "REWRITE/DIVERGED: hard-reset or re-clone"
 ```
 
