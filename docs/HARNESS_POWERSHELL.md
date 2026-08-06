@@ -83,9 +83,11 @@ Slash commands (type `/help` in the console):
 | `/model [use <name>]` | show / select the local model |
 | `/skills`, `/tools`, `/connectors` | merged registry views |
 | `/github` | agentic GitHub status (read-only subprocess) |
-| `/agent run\|confirm\|cancel` | stage, authorize, or discard a real-repo coding run |
+| `/agent run\|plan\|read\|confirm\|cancel` | stage, refine, authorize, or discard a real-repo coding run |
 | `/agent status\|approve\|reject <id>` | read a run record, or decide a pending one |
-| `/agent checks` | list the selectable verification profiles |
+| `/agent plan [clear]` | load or clear a reviewed local `.md` / `.txt` plan for the staged run |
+| `/agent read <repo-relative-path>` | declare an existing cloned-repo file for coder context (`clear` removes all) |
+| `/agent checks [profile ...]` | list or choose allow-listed verification profiles for the staged run |
 | `/harness` | harness optimizer runs |
 | `/tokens` | per-session token tally |
 | `/status` | server status |
@@ -112,15 +114,20 @@ worth knowing before you treat either as an off switch:
 
 1. `/agent run claude/<topic> <what the agent should do>` stages a proposal and
    prints it. Nothing is sent.
-2. `/agent confirm <reason>` authorizes it. This is the request that clones the
+2. Optionally, `/agent plan` opens the browser's native picker for a reviewed
+   local plan. The console retains only the selected text, never a server-side
+   path; reselect the file after editing it. `/agent read <repo-relative-path>`
+   declares existing clone content the coder may see, and `/agent checks pytest ruff`
+   replaces the default profile list. These values stay staged until confirmation.
+3. `/agent confirm <reason>` authorizes it. This is the request that clones the
    repo, asks the local model for a patch, and runs the selected verification
    profile against the result. **It blocks for up to 15 minutes** — the run
    record is written only when the run ends, so there is no intermediate
    progress to poll for, and the run id first exists in that response.
-3. On success the run stops *before committing* and reports
+4. On success the run stops *before committing* and reports
    `status: pending_decision`. `/agent approve <id>` is what actually commits;
    `/agent reject <id>` discards the clone. Neither pushes.
-4. Escalating past the local commit is two further, separate decisions —
+5. Escalating past the local commit is two further, separate decisions —
    deliberately not folded into approve, and each its own route:
    `/agent push <id>` puts the branch on origin, and
    `/agent publish <id> <why>` opens a draft PR. **Both refuse on a shipped
@@ -128,7 +135,7 @@ worth knowing before you treat either as an off switch:
    `false`) and publish needs `agentic/writer.py`'s `EXECUTION_ENABLED`, a
    hardcoded `False` no config file can flip. Arming either is the filed
    checklist in `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, not a toggle.
-5. `/agent discard <id>` reclaims the clone. It is the only step that frees
+6. `/agent discard <id>` reclaims the clone. It is the only step that frees
    disk: an approved run keeps its clone on purpose (push and publish still
    need it) and nothing reclaims it automatically, so a console session that
    only ever approves accumulates one full repository clone per run.

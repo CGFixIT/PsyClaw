@@ -732,6 +732,8 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 reason=req.reason,
                 confirm=req.confirm,
                 max_iterations=req.max_iterations,
+                plan=req.plan,
+                read_files=req.read_files,
                 pr=req.pr,
                 issue=req.issue,
             ),

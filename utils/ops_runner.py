@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import _get_config, redact_sensitive
+from utils.repo_paths import canonical_repo_relative_path
 
 # Repo root = parent of utils/. The CLIs run as ``python -m sync.cli`` /
 # ``agentic.cli``; running with cwd=repo-root puts the ``sync`` / ``agentic``
@@ -253,17 +254,17 @@ def _maybe_json(text: str) -> Any:
         return None
 
 
-def _write_body(body: str) -> str:
-    """Persist a skill body to a temp file so it is passed via --body-file, never argv."""
+def _write_body(body: str, *, prefix: str = "cyclaw_skill_") -> str:
+    """Persist caller-supplied text to a temporary file, never an argv value."""
     handle = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", prefix="cyclaw_skill_", delete=False, encoding="utf-8"
+        mode="w", suffix=".md", prefix=prefix, delete=False, encoding="utf-8"
     )
     try:
         handle.write(body)
     except (OSError, UnicodeError):
         # The file already exists on disk; run_agentic_op only unlinks the name
         # we RETURN, so a write failure here (disk full, un-encodable body) would
-        # orphan a cyclaw_skill_*.md. Close first (Windows can't unlink an open
+        # orphan a cyclaw_*.md. Close first (Windows can't unlink an open
         # file), then remove it, before the exception propagates.
         handle.close()
         Path(handle.name).unlink(missing_ok=True)
@@ -329,59 +330,61 @@ def run_agentic_op(
     confirm: bool = False,
     instruction: str | None = None,
     checks: list[dict] | None = None,
+    plan: str | None = None,
+    read_files: list[str] | None = None,
     branch: str | None = None,
     commit_message: str | None = None,
     max_iterations: int | None = None,
     run_id: str | None = None,
     decision: str | None = None,
 ) -> OpsResult:
-    """Invoke ``python -m agentic.cli <action>`` and normalize the result.
-
-    ``context`` takes an optional ``--pr`` / ``--issue`` selector (defaults to
-    ``--repo``). ``propose-skill`` / ``apply-skill`` require ``name`` + ``desc``;
-    ``apply-skill`` additionally requires a non-empty ``reason`` (the registry
-    governance gate) and only adds ``--confirm`` when the caller set it — calling
-    apply without confirm reaches the CLI's own refusal path (exit 4), which is
-    surfaced verbatim rather than masked.
-
-    ``real-repo-run`` requires ``instruction``/``checks``/``branch``/
-    ``commit_message``/``reason`` and takes the same optional ``--pr``/
-    ``--issue`` selector as ``context``. Like ``apply-skill``, ``confirm`` is
-    only forwarded when the caller set it — omitting it reaches the CLI's own
-    refusal path (exit 4), not a silent default. ``checks`` is a
-    JSON-serializable list of check dicts, written to a temp file and passed
-    via ``--checks-file`` (never interpolated into argv, mirroring
-    ``body``/``--body-file`` above) — never defaulted, since guessing a
-    verification command for an arbitrary configured repo is exactly what
-    this whole path exists to avoid. ``real-repo-run-status``/
-    ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
-    requires ``decision`` (``"approve"`` or ``"reject"``), validated here
-    before the subprocess launch even though the CLI's own ``argparse``
-    ``choices=`` would also catch a bad value.
-
-    ``real-repo-run-push`` and ``real-repo-run-publish`` are the two escalation
-    steps past an approved run, each its own decision (see the CLI's own
-    docstrings for why they are separate subcommands rather than flags on
-    ``decide``). Both require ``run_id``; ``publish`` additionally requires a
-    non-empty ``reason`` and only appends ``--confirm`` when the caller set it,
-    reaching the CLI's own refusal path (exit 4) otherwise -- the same
-    "no anonymous mutations" shape as ``apply-skill``. Neither can succeed on a
-    shipped checkout: push needs ``allow_git_write_tools`` and publish needs
-    ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded ``False``.
-
-    ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided run's
-    clone from disk. It is the ONLY reclamation path: an approved run's clone
-    is deliberately retained past its decision (push/publish need it), so
-    without this action a console-driven operator accumulates one full repo
-    clone per approved run with no way to free any of them. The CLI refuses a
-    still-``pending_decision`` run itself.
-
-    Validation raises happen before the subprocess launch. All ``proc`` usage
-    lives INSIDE the try so there is no post-``finally`` reference to an unbound
-    name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
-    cleans up the temp body-file/checks-file and the exception propagates before
-    any result is read. Both are unlinked on every exit path (return or raise).
-    """
+    """Invoke ``python -m agentic.cli <action>`` and normalize the result."""
+    # ``context`` takes an optional ``--pr`` / ``--issue`` selector (defaults to
+    # ``--repo``). ``propose-skill`` / ``apply-skill`` require ``name`` + ``desc``;
+    # ``apply-skill`` additionally requires a non-empty ``reason`` (the registry
+    # governance gate) and only adds ``--confirm`` when the caller set it —
+    # calling apply without confirm reaches the CLI's own refusal path (exit
+    # 4), which is surfaced verbatim rather than masked.
+    #
+    # ``real-repo-run`` requires ``instruction``/``checks``/``branch``/
+    # ``commit_message``/``reason`` and takes the same optional ``--pr``/
+    # ``--issue`` selector as ``context``. Like ``apply-skill``, ``confirm`` is
+    # only forwarded when the caller set it — omitting it reaches the CLI's own
+    # refusal path (exit 4), not a silent default. ``checks`` is a
+    # JSON-serializable list of check dicts, written to a temp file and passed
+    # via ``--checks-file`` (never interpolated into argv, mirroring
+    # ``body``/``--body-file`` above) — never defaulted, since guessing a
+    # verification command for an arbitrary configured repo is exactly what
+    # this whole path exists to avoid. ``real-repo-run-status``/
+    # ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
+    # requires ``decision`` (``"approve"`` or ``"reject"``), validated here
+    # before the subprocess launch even though the CLI's own ``argparse``
+    # ``choices=`` would also catch a bad value.
+    #
+    # ``real-repo-run-push`` and ``real-repo-run-publish`` are the two
+    # escalation steps past an approved run, each its own decision (see the
+    # CLI's own docstrings for why they are separate subcommands rather than
+    # flags on ``decide``). Both require ``run_id``; ``publish`` additionally
+    # requires a non-empty ``reason`` and only appends ``--confirm`` when the
+    # caller set it, reaching the CLI's own refusal path (exit 4) otherwise --
+    # the same "no anonymous mutations" shape as ``apply-skill``. Neither can
+    # succeed on a shipped checkout: push needs ``allow_git_write_tools`` and
+    # publish needs ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded
+    # ``False``.
+    #
+    # ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided
+    # run's clone from disk. It is the ONLY reclamation path: an approved
+    # run's clone is deliberately retained past its decision (push/publish
+    # need it), so without this action a console-driven operator accumulates
+    # one full repo clone per approved run with no way to free any of them.
+    # The CLI refuses a still-``pending_decision`` run itself.
+    #
+    # Validation raises happen before the subprocess launch. All ``proc``
+    # usage lives INSIDE the try so there is no post-``finally`` reference to
+    # an unbound name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``),
+    # the ``finally`` cleans up the temp body-file/checks-file/plan-file and
+    # the exception propagates before any result is read. All are unlinked on
+    # every exit path (return or raise).
     if action not in _AGENTIC_ACTIONS:
         raise OpsError(f"Unknown agentic action: {action!r}")
     if action in {"propose-skill", "apply-skill"} and (not name or not desc):
@@ -397,6 +400,20 @@ def run_agentic_op(
             raise OpsError("real-repo-run requires both branch and commit_message")
         if not (reason and reason.strip()):
             raise OpsError("real-repo-run requires a non-empty reason")
+        if plan is not None and (not isinstance(plan, str) or not plan.strip()):
+            raise OpsError("real-repo-run plan must not be blank")
+        # Browser plan text is written to a temp --plan-file (CLI owns scan/hash);
+        # never treated as a server filesystem path. read_files are --read-file
+        # names only — resolved inside the fresh jailed clone, never the host.
+        if read_files is not None:
+            if not isinstance(read_files, list):
+                raise OpsError("real-repo-run read_files must be a list of repo-relative paths")
+            for path in read_files:
+                if not isinstance(path, str) or canonical_repo_relative_path(path) is None:
+                    raise OpsError(
+                        "real-repo-run read_files must contain non-empty repo-relative "
+                        "paths without NUL bytes, traversal, or absolute/drive forms"
+                    )
     if action in {
         "real-repo-run-status", "real-repo-run-decide", "real-repo-run-push", "real-repo-run-publish",
         "real-repo-run-discard",
@@ -413,6 +430,7 @@ def run_agentic_op(
     argv = [sys.executable, "-m", "agentic.cli", "--config", str(_CONFIG_PATH), action]
     body_file: str | None = None
     checks_file: str | None = None
+    plan_file: str | None = None
     try:
         if action == "context":
             if pr is not None:
@@ -453,6 +471,11 @@ def run_agentic_op(
                 f"--commit-message={commit_message}",
                 f"--reason={reason}",
             ]
+            if plan:
+                plan_file = _write_body(plan, prefix="cyclaw_plan_")
+                argv += ["--plan-file", plan_file]
+            for read_file in read_files or ():
+                argv.append(f"--read-file={read_file}")
             if max_iterations:
                 argv += ["--max-iterations", str(max_iterations)]
             if confirm:
@@ -491,6 +514,8 @@ def run_agentic_op(
             Path(body_file).unlink(missing_ok=True)
         if checks_file:
             Path(checks_file).unlink(missing_ok=True)
+        if plan_file:
+            Path(plan_file).unlink(missing_ok=True)
 
 
 def run_fsconnect_op(

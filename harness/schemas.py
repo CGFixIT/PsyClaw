@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from harness.agent_policy import BRANCH_NAME_RE, DEFAULT_CHECK_PROFILE
+from utils.repo_paths import canonical_repo_relative_path
 
 _MAX_MESSAGE_LEN = 32768
 _MAX_TITLE_LEN = 200
@@ -21,7 +22,43 @@ _MAX_REASON_LEN = 1000
 _MAX_COMMIT_MESSAGE_LEN = 500
 _MAX_BRANCH_LEN = 88  # longest allowlisted prefix + '/' + topic (1+79)
 _MAX_CHECK_PROFILES = 8
+_MAX_READ_FILES = 8
+_MAX_READ_FILE_LEN = 1024
+# The agentic planner caps its generated body at 6,000 characters, then adds a
+# fixed truncation marker. Keep enough room for that legitimate reviewed output
+# without turning the browser request into an unbounded prompt transport.
+_MAX_PLAN_CHARS = 6_100
 _MAX_ITERATIONS_CEILING = 10
+
+
+_READ_PATH_ERR = (
+    "read_files must contain non-empty bounded repo-relative paths "
+    "without NUL bytes, traversal, or absolute/drive forms"
+)
+
+
+def _one_safe_read_path(raw: object) -> str:
+    # One entry → canonical form, or ValueError (jail-aligned).
+    if not isinstance(raw, str) or len(raw) > _MAX_READ_FILE_LEN:
+        raise ValueError(_READ_PATH_ERR)
+    canonical = canonical_repo_relative_path(raw)
+    if canonical is None:
+        raise ValueError(_READ_PATH_ERR)
+    return canonical
+
+
+def _canonicalize_read_paths(read_paths: list[str]) -> list[str]:
+    # Shared by AgentRunRequest: reject jail-unsafe names, dedupe canonical forms.
+    if len(read_paths) > _MAX_READ_FILES:
+        raise ValueError(f"read_files allows at most {_MAX_READ_FILES} paths")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in read_paths:
+        canonical = _one_safe_read_path(raw)
+        if canonical not in seen:
+            seen.add(canonical)
+            cleaned.append(canonical)
+    return cleaned
 
 
 class _ForbidModel(BaseModel, extra="forbid"):
@@ -81,6 +118,13 @@ class AgentRunRequest(_ForbidModel):
         min_length=1,
         max_length=_MAX_CHECK_PROFILES,
     )
+    # Browser clients supply plan TEXT selected from their own filesystem, not
+    # a server-side path. The shim materializes that text briefly for the CLI's
+    # existing --plan-file scanner and deletes it on every exit path.
+    plan: str | None = Field(default=None, min_length=1, max_length=_MAX_PLAN_CHARS)
+    # This is a declared list, never a browse/read API: the CLI resolves each
+    # path only inside the fresh jailed clone before showing it to the coder.
+    read_files: list[str] = Field(default_factory=list, max_length=_MAX_READ_FILES)
     # ge=1 rather than gt=0 so 0 is a validation error, not a silently-dropped
     # value: run_agentic_op gates --max-iterations on truthiness, so 0 would
     # fall through to the CLI default of 3 rather than doing what it says.
@@ -100,6 +144,19 @@ class AgentRunRequest(_ForbidModel):
         if self.pr is not None and self.issue is not None:
             raise ValueError("pass at most one of pr / issue")
         return self
+
+    @field_validator("plan")
+    @classmethod
+    def _plan_is_not_blank(cls, plan_text: str | None) -> str | None:
+        if plan_text is not None and not plan_text.strip():
+            raise ValueError("plan must not be blank")
+        return plan_text
+
+    @field_validator("read_files")
+    @classmethod
+    def _read_files_are_safe_repo_relative(cls, read_paths: list[str]) -> list[str]:
+        # Align with the clone jail so confirm never 422s on staged junk.
+        return _canonicalize_read_paths(read_paths)
 
 
 class AgentDecisionRequest(_ForbidModel):

@@ -199,7 +199,7 @@ def test_session_id_is_url_encoded_on_every_interpolated_path():
 
 
 def test_pending_agent_diff_is_shown_before_approval():
-    """The browser's human gate must display the backend-rendered diff first."""
+    # The browser human gate must display the backend-rendered diff first.
     html = _HARNESS_HTML.read_text(encoding="utf-8")
     start = html.index("function showAgentRecord(rec)")
     end = html.index("/* ── slash commands ── */", start)
@@ -208,3 +208,33 @@ def test_pending_agent_diff_is_shown_before_approval():
     assert "'candidate diff\\n' + rec.diff" in body
     assert body.index("rec.diff") < body.index("/agent approve ")
     assert "diff not loaded — inspect with /agent status " in body
+
+
+def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
+    # Console must stage reviewed plan/read/checks, cap reads, and keep the
+    # staged run when confirm fails (422) instead of wiping operator state.
+    from harness.schemas import _MAX_PLAN_CHARS, _MAX_READ_FILES
+
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    helper_start = html.index("function showPendingAgentRun()")
+    helper_end = html.index("function showAgentRecord(rec)", helper_start)
+    helper = html[helper_start:helper_end]
+
+    assert "agentPlanInput.addEventListener('change'" in helper
+    assert f"const MAX_AGENT_PLAN_CHARS = {_MAX_PLAN_CHARS};" in html
+    assert f"const MAX_AGENT_READ_FILES = {_MAX_READ_FILES};" in html
+    assert "function isSafeRepoRelativePath(" in html
+    assert "function canonicalRepoRelativePath(" in html
+    assert "pendingAgentRun.plan = plan" in helper
+    assert "pendingAgentRun !== stagedRun" in helper
+
+    commands_start = html.index("case 'agent':")
+    commands_end = html.index("case 'harness':", commands_start)
+    commands = html[commands_start:commands_end]
+    assert "read_files: []" in commands
+    assert "pendingAgentRun.read_files.push(canonical)" in commands
+    assert "read_files.length >= MAX_AGENT_READ_FILES" in commands
+    assert "pendingAgentRun.checks = requested" in commands
+    assert "Object.assign({}, stagedRun, { reason: why, confirm: true })" in commands
+    assert "confirm failed — staged run kept" in commands
+    assert "pendingAgentRun = stagedRun" in commands

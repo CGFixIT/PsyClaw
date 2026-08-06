@@ -335,15 +335,45 @@ def test_real_repo_run_requires_its_fields(kwargs, match) -> None:
         run_agentic_op("real-repo-run", **kwargs)
 
 
-def test_real_repo_run_argv_shape_and_checks_file_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("optional", "match"),
+    [
+        ({"plan": "   "}, "plan"),
+        ({"read_files": ["safe.py\x00not-safe.py"]}, "read_files"),
+        ({"read_files": "safe.py"}, "read_files"),
+        ({"read_files": ["/etc/passwd"]}, "read_files"),
+        ({"read_files": ["../secret"]}, "read_files"),
+        ({"read_files": ["-flag"]}, "read_files"),
+    ],
+)
+def test_real_repo_run_rejects_invalid_optional_browser_values(optional, match) -> None:
+    with pytest.raises(OpsError, match=match):
+        run_agentic_op(
+            "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
+            branch="agent/x", commit_message="m", reason="r", **optional,
+        )
+
+
+def test_real_repo_run_argv_shape_and_temp_file_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
-    runner, captured = _fake_run(returncode=0, stdout='{"status": "pending_decision"}')
+    captured: list[list[str]] = []
+    captured_plan: list[str] = []
+
+    def runner(argv, *, timeout_sec=None):
+        del timeout_sec
+        captured.append(argv)
+        plan_path = Path(argv[argv.index("--plan-file") + 1])
+        captured_plan.append(plan_path.read_text(encoding="utf-8"))
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout='{"status": "pending_decision"}', stderr="")
+
     monkeypatch.setattr(ops_runner, "_run", runner)
     checks = [{"name": "pytest", "argv": ["python", "-m", "pytest"]}]
+    plan = "Review this candidate before applying it."
     res = run_agentic_op(
         "real-repo-run", instruction="add a marker", checks=checks, branch="agent/topic",
         commit_message="add marker", reason="test run", confirm=True, max_iterations=5,
+        plan=plan, read_files=["src/marker.py", "tests/test_marker.py"],
     )
     argv = captured[0]
     assert "--repo" in argv  # default target when pr/issue omitted
@@ -356,7 +386,12 @@ def test_real_repo_run_argv_shape_and_checks_file_cleanup(monkeypatch: pytest.Mo
 
     assert "--checks-file" in argv
     checks_path = argv[argv.index("--checks-file") + 1]
+    plan_path = argv[argv.index("--plan-file") + 1]
     assert not Path(checks_path).exists()  # cleaned up after the run
+    assert captured_plan == [plan]
+    assert not Path(plan_path).exists()  # the reviewed plan is not retained by the shim
+    assert "--read-file=src/marker.py" in argv
+    assert "--read-file=tests/test_marker.py" in argv
     assert res.parsed == {"status": "pending_decision"}
 
 
@@ -472,7 +507,7 @@ def test_real_repo_run_budget_falls_back_on_unreadable_config(monkeypatch: pytes
     assert ops_runner._real_repo_run_timeout_sec(1, 1) > 0  # noqa: SLF001
 
 
-def test_real_repo_run_checks_file_cleaned_up_when_run_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_real_repo_run_temp_files_are_cleaned_up_when_run_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
     captured_argv: list[list[str]] = []
@@ -485,11 +520,13 @@ def test_real_repo_run_checks_file_cleaned_up_when_run_raises(monkeypatch: pytes
     with pytest.raises(subprocess.TimeoutExpired):
         run_agentic_op(
             "real-repo-run", instruction="x", checks=[{"name": "x", "argv": ["y"]}],
-            branch="agent/x", commit_message="m", reason="r",
+            branch="agent/x", commit_message="m", reason="r", plan="reviewed plan",
         )
     argv = captured_argv[0]
     checks_path = argv[argv.index("--checks-file") + 1]
+    plan_path = argv[argv.index("--plan-file") + 1]
     assert not Path(checks_path).exists()
+    assert not Path(plan_path).exists()
 
 
 def test_real_repo_run_status_requires_run_id() -> None:
