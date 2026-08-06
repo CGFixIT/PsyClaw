@@ -282,6 +282,8 @@ def test_run_defaults_to_the_default_profile_when_checks_is_omitted(client, call
     {"read_files": ["C:\\Windows\\system32\\config"]},
     {"read_files": ["-evil"]},
     {"read_files": ["foo/../../etc/passwd"]},
+    {"read_files": ["README.md."]},
+    {"read_files": ["trailing space "]},
 ])
 def test_run_rejects_invalid_browser_plan_or_read_paths_before_the_shim(client, calls, body):
     assert client.post(_RUN, json={**_VALID_BODY, **body}).status_code == 422
@@ -323,6 +325,28 @@ def test_control_plane_path_rules_match_agentic_jail():
         left = canonical_repo_relative_path(sample)
         right = canonical_repo_path(sample)
         assert left == right, (sample, left, right)
+
+
+def test_read_path_rules_reject_what_the_scoped_reader_jail_rejects():
+    # canonical_repo_path (compared above) is the WRITE jail's source of
+    # truth. harness's declared read_files instead flow through
+    # RepoWorkspaceTools.read_file -> ScopedRoots.read_bytes ->
+    # split_components, which additionally rejects a trailing space or dot
+    # in a path component (Windows silently strips them, so "README.md."
+    # and "README.md" would open the same file). Without this check here
+    # too, a declared path like "README.md." would validate at this layer,
+    # get staged and confirmed, and then
+    # agentic.real_repo_loop._render_existing_files would catch the
+    # reader's AgenticError and silently omit it -- the operator's
+    # confirmed run proceeding without the context they explicitly declared.
+    from agentic.fsconnect.pathsafe import FsPathError, split_components
+    from utils.repo_paths import canonical_repo_relative_path
+
+    samples = ["README.md.", "trailing space ", "dir./file.py", "a.b. /c"]
+    for sample in samples:
+        assert canonical_repo_relative_path(sample) is None, sample
+        with pytest.raises(FsPathError):
+            split_components(sample)
 
 
 def test_confirm_is_not_defaulted_on(client, calls):

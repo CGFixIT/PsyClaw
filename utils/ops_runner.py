@@ -338,55 +338,53 @@ def run_agentic_op(
     run_id: str | None = None,
     decision: str | None = None,
 ) -> OpsResult:
-    """Invoke ``python -m agentic.cli <action>`` and normalize the result.
-
-    ``context`` takes an optional ``--pr`` / ``--issue`` selector (defaults to
-    ``--repo``). ``propose-skill`` / ``apply-skill`` require ``name`` + ``desc``;
-    ``apply-skill`` additionally requires a non-empty ``reason`` (the registry
-    governance gate) and only adds ``--confirm`` when the caller set it — calling
-    apply without confirm reaches the CLI's own refusal path (exit 4), which is
-    surfaced verbatim rather than masked.
-
-    ``real-repo-run`` requires ``instruction``/``checks``/``branch``/
-    ``commit_message``/``reason`` and takes the same optional ``--pr``/
-    ``--issue`` selector as ``context``. Like ``apply-skill``, ``confirm`` is
-    only forwarded when the caller set it — omitting it reaches the CLI's own
-    refusal path (exit 4), not a silent default. ``checks`` is a
-    JSON-serializable list of check dicts, written to a temp file and passed
-    via ``--checks-file`` (never interpolated into argv, mirroring
-    ``body``/``--body-file`` above) — never defaulted, since guessing a
-    verification command for an arbitrary configured repo is exactly what
-    this whole path exists to avoid.
-    ``real-repo-run-status``/
-    ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
-    requires ``decision`` (``"approve"`` or ``"reject"``), validated here
-    before the subprocess launch even though the CLI's own ``argparse``
-    ``choices=`` would also catch a bad value.
-
-    ``real-repo-run-push`` and ``real-repo-run-publish`` are the two escalation
-    steps past an approved run, each its own decision (see the CLI's own
-    docstrings for why they are separate subcommands rather than flags on
-    ``decide``). Both require ``run_id``; ``publish`` additionally requires a
-    non-empty ``reason`` and only appends ``--confirm`` when the caller set it,
-    reaching the CLI's own refusal path (exit 4) otherwise -- the same
-    "no anonymous mutations" shape as ``apply-skill``. Neither can succeed on a
-    shipped checkout: push needs ``allow_git_write_tools`` and publish needs
-    ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded ``False``.
-
-    ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided run's
-    clone from disk. It is the ONLY reclamation path: an approved run's clone
-    is deliberately retained past its decision (push/publish need it), so
-    without this action a console-driven operator accumulates one full repo
-    clone per approved run with no way to free any of them. The CLI refuses a
-    still-``pending_decision`` run itself.
-
-    Validation raises happen before the subprocess launch. All ``proc`` usage
-    lives INSIDE the try so there is no post-``finally`` reference to an unbound
-    name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``), the ``finally``
-    cleans up the temp body-file/checks-file/plan-file and the exception
-    propagates before any result is read. All are unlinked on every exit path
-    (return or raise).
-    """
+    """Invoke ``python -m agentic.cli <action>`` and normalize the result."""
+    # ``context`` takes an optional ``--pr`` / ``--issue`` selector (defaults to
+    # ``--repo``). ``propose-skill`` / ``apply-skill`` require ``name`` + ``desc``;
+    # ``apply-skill`` additionally requires a non-empty ``reason`` (the registry
+    # governance gate) and only adds ``--confirm`` when the caller set it —
+    # calling apply without confirm reaches the CLI's own refusal path (exit
+    # 4), which is surfaced verbatim rather than masked.
+    #
+    # ``real-repo-run`` requires ``instruction``/``checks``/``branch``/
+    # ``commit_message``/``reason`` and takes the same optional ``--pr``/
+    # ``--issue`` selector as ``context``. Like ``apply-skill``, ``confirm`` is
+    # only forwarded when the caller set it — omitting it reaches the CLI's own
+    # refusal path (exit 4), not a silent default. ``checks`` is a
+    # JSON-serializable list of check dicts, written to a temp file and passed
+    # via ``--checks-file`` (never interpolated into argv, mirroring
+    # ``body``/``--body-file`` above) — never defaulted, since guessing a
+    # verification command for an arbitrary configured repo is exactly what
+    # this whole path exists to avoid. ``real-repo-run-status``/
+    # ``real-repo-run-decide`` require ``run_id``; ``decide`` additionally
+    # requires ``decision`` (``"approve"`` or ``"reject"``), validated here
+    # before the subprocess launch even though the CLI's own ``argparse``
+    # ``choices=`` would also catch a bad value.
+    #
+    # ``real-repo-run-push`` and ``real-repo-run-publish`` are the two
+    # escalation steps past an approved run, each its own decision (see the
+    # CLI's own docstrings for why they are separate subcommands rather than
+    # flags on ``decide``). Both require ``run_id``; ``publish`` additionally
+    # requires a non-empty ``reason`` and only appends ``--confirm`` when the
+    # caller set it, reaching the CLI's own refusal path (exit 4) otherwise --
+    # the same "no anonymous mutations" shape as ``apply-skill``. Neither can
+    # succeed on a shipped checkout: push needs ``allow_git_write_tools`` and
+    # publish needs ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded
+    # ``False``.
+    #
+    # ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided
+    # run's clone from disk. It is the ONLY reclamation path: an approved
+    # run's clone is deliberately retained past its decision (push/publish
+    # need it), so without this action a console-driven operator accumulates
+    # one full repo clone per approved run with no way to free any of them.
+    # The CLI refuses a still-``pending_decision`` run itself.
+    #
+    # Validation raises happen before the subprocess launch. All ``proc``
+    # usage lives INSIDE the try so there is no post-``finally`` reference to
+    # an unbound name: if ``_run`` raises (e.g. ``subprocess.TimeoutExpired``),
+    # the ``finally`` cleans up the temp body-file/checks-file/plan-file and
+    # the exception propagates before any result is read. All are unlinked on
+    # every exit path (return or raise).
     if action not in _AGENTIC_ACTIONS:
         raise OpsError(f"Unknown agentic action: {action!r}")
     if action in {"propose-skill", "apply-skill"} and (not name or not desc):

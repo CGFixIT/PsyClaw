@@ -682,8 +682,13 @@ async function runSlash(line) {
           sys('cloning, planning, patching and verifying — this blocks for up to 15 minutes…');
           try {
             const rec = agentRecord(await api('/api/agent/run', 'POST', body));
-            if (pendingAgentRun === stagedRun) pendingAgentRun = null;
-            if (rec) showAgentRecord(rec);
+            /* agentRecord() returns null (not a throw) on ok=false or an
+               unparsed response, so only clear the staged run once a real
+               record confirms the server actually accepted it. */
+            if (rec) {
+              if (pendingAgentRun === stagedRun) pendingAgentRun = null;
+              showAgentRecord(rec);
+            }
           } catch (err) {
             if (pendingAgentRun === null || pendingAgentRun === stagedRun) {
               pendingAgentRun = stagedRun;
@@ -804,6 +809,12 @@ async function sendChat(text) {
 }
 
 async function onSend() {
+  /* sendBtn.disabled is the console's existing in-flight signal (see
+     sendChat and /agent confirm above); the Enter-key handler below calls
+     onSend() directly and bypasses the button's own disabled state, so a
+     second Enter during a blocking /agent confirm launched a concurrent
+     clone/model/verification run for the same staged proposal. */
+  if (sendBtn.disabled) return;
   const text = input.value.trim();
   if (!text) return;
   input.value = '';

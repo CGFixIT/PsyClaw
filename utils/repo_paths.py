@@ -20,25 +20,34 @@ from pathlib import PureWindowsPath
 
 
 def canonical_repo_relative_path(target: str) -> str | None:
-    """Return ``target``'s canonical repo-relative form, or ``None`` if unsafe.
-
-    Same acceptance contract as ``agentic``'s ``canonical_repo_path``:
-
-    * empty / non-str / NUL → reject
-    * absolute (POSIX or Windows drive-qualified) → reject
-    * leading ``-`` (flag injection into argv) → reject
-    * ``..`` segment or ``:`` in a segment → reject
-    * empty / ``.`` segments dropped; remaining parts joined with ``/``
-
-    Returns ``None`` rather than a "cleaned" string for rejectable inputs so
-    ``/etc/passwd`` never becomes ``etc/passwd``.
-    """
+    # Return target's canonical repo-relative form, or None if unsafe.
+    #
+    # Base contract matches agentic's canonical_repo_path (the write-path
+    # jail): empty/non-str/NUL, absolute (POSIX or Windows drive-qualified),
+    # leading "-" (flag injection into argv), a ".." segment, or ":" in a
+    # segment are all rejected; empty/"." segments are dropped and the rest
+    # joined with "/".
+    #
+    # PLUS one stricter rule the write jail does not need but the read jail
+    # does: a segment with a trailing space or dot is rejected outright,
+    # rather than accepted and silently reinterpreted. The actual read path
+    # for harness's declared read_files is RepoWorkspaceTools.read_file ->
+    # ScopedRoots.read_bytes -> split_components, which raises on exactly
+    # this (Windows silently strips trailing dots/spaces from a path
+    # component, so "README.md." and "README.md" would open the same file).
+    # Without this check, a path like "README.md." would validate here, get
+    # staged and confirmed, and then _render_existing_files would catch the
+    # reader's AgenticError and silently omit it -- the operator's confirmed
+    # run would proceed without context they explicitly declared.
+    #
+    # Returns None rather than a "cleaned" string for rejectable inputs so
+    # /etc/passwd never becomes etc/passwd.
     if not isinstance(target, str) or not target or "\x00" in target:
         return None
     normalized = target.replace("\\", "/")
     if normalized.startswith(("/", "-")) or PureWindowsPath(target).is_absolute():
         return None
     parts = tuple(part for part in normalized.split("/") if part not in {"", "."})
-    if not parts or any(part == ".." or ":" in part for part in parts):
+    if not parts or any(part == ".." or ":" in part or part != part.rstrip(" .") for part in parts):
         return None
     return "/".join(parts)
