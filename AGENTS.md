@@ -324,7 +324,10 @@ forks.
 Rules for multi-agent CyClaw work:
 
 1. **One source of truth.** Always `git fetch origin` first. Current
-   `origin/main` is the only tip that counts.
+   `origin/main` is the only tip that counts — in a single-branch or sparse
+   clone, `remote.origin.fetch` may map only the checked-out branch, so a
+   plain `git fetch origin` silently leaves `origin/main` missing; the
+   snippet below fetches it explicitly rather than assuming it is present.
 2. **Start from fresh main.** Before any agent opens a new PR branch, update
    local `main` (or hand the agent a branch that already contains current
    `origin/main`). Do not let an agent clone an old tip and invent work from it.
@@ -343,9 +346,10 @@ branch — it asks "does my current checkout already contain everything on
 commits still reports OK):
 
 ```bash
+git fetch origin main:refs/remotes/origin/main
 git merge-base --is-ancestor origin/main HEAD \
   && echo "OK: current branch already contains origin/main" \
-  || echo "REWRITE/DIVERGED: hard-reset or re-clone"
+  || echo "does not contain current origin/main -- see recovery below"
 ```
 
 If branches have diverged, refuse merge "fixes." Do not discard work blindly:
