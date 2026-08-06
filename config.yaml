@@ -517,6 +517,9 @@ agentic:
     # Was hardcoded at 30s with no override before this key existed -- a hard,
     # unrecoverable, first-iteration failure for any real local-model completion.
     planner_timeout_sec: 600
+    # Reserved completion tokens for each real-repo plan/coding call. Keep
+    # prompt + this budget below Ollama num_ctx; raise only after measuring.
+    planner_max_tokens: 2048
     allow_deepagents_dependency: false           # extras must be installed explicitly
     # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
     # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push

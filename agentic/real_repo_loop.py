@@ -131,10 +131,9 @@ class ProposerClient(Protocol):
     without lying about what type it claims to be, and so mypy can check the
     substitution rather than only trusting a duck-typed hope.
 
-    Keyword-only, matching every real call site in this loop -- ``max_tokens``/
-    ``temperature`` are declared with defaults because this loop never passes
-    them explicitly, so a conforming implementation must supply its own
-    sensible values, not rely on the loop to.
+    Keyword-only, matching every real call site in this loop. ``max_tokens``/
+    ``temperature`` retain conservative defaults for direct callers; the CLI
+    passes its validated completion budget explicitly.
 
     ``temperature`` is ``float | None`` rather than ``float`` so an
     implementation can drop the parameter entirely: Anthropic rejects a
@@ -624,6 +623,7 @@ def generate_plan(
     *,
     instruction: str,
     context: str = "",
+    max_tokens: int = 2048,
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> str:
@@ -649,6 +649,8 @@ def generate_plan(
     """
     if not isinstance(instruction, str) or not instruction.strip():
         raise AgenticError("plan instruction must be a non-empty string")
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+        raise AgenticError("max_tokens must be a positive integer", details={"received": max_tokens})
 
     quoted_context = f"{_UNTRUSTED_OPEN}\n{_defuse_fence(context)}\n{_UNTRUSTED_CLOSE}" if context else ""
     user_prompt = "\n\n".join(
@@ -662,6 +664,7 @@ def generate_plan(
     response = client.invoke(
         system_prompt=PLAN_SYSTEM_PROMPT,
         user_prompt=user_prompt,
+        max_tokens=max_tokens,
         config_path=config_path,
         cfg=cfg,
     )
@@ -689,6 +692,7 @@ def run_real_repo_loop(
     max_iterations: int,
     reason: str,
     confirm: bool,
+    max_tokens: int = 2048,
     context: str | None = None,
     read_paths: Sequence[str] = (),
     protected_write_paths: Sequence[str] = (),
@@ -775,6 +779,8 @@ def run_real_repo_loop(
         raise AgenticError("loop instruction must be a non-empty string")
     if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or max_iterations <= 0:
         raise AgenticError("max_iterations must be a positive integer", details={"received": max_iterations})
+    if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+        raise AgenticError("max_tokens must be a positive integer", details={"received": max_tokens})
     if not checks:
         raise AgenticError("checks must not be empty -- an empty check list vacuously accepts every candidate")
 
@@ -815,6 +821,7 @@ def run_real_repo_loop(
         response = client.invoke(
             system_prompt=PLANNER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
+            max_tokens=max_tokens,
             config_path=config_path,
             cfg=cfg,
         )
