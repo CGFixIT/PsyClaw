@@ -348,7 +348,17 @@ git merge-base --is-ancestor origin/main HEAD \
   || echo "REWRITE/DIVERGED: hard-reset or re-clone"
 ```
 
-If branches have diverged, refuse merge "fixes." Reset to remote truth:
+If branches have diverged, refuse merge "fixes." Do not discard work blindly:
+
+- **On a feature branch that is simply behind** (the common case — an agent
+  branch cut before a later merge landed on `main`): rebase it onto fresh
+  `origin/main`, resolve any conflicts, and rerun the check above. Resetting
+  `main` does not touch the feature branch, so switching back to it after a
+  `main` reset fails the same check and the pre-push gate still refuses it.
+- **On local `main` itself**, and only after confirming there is no unique
+  local work to lose (`git status --short` is clean and
+  `git log origin/main..main` prints nothing — otherwise stash or branch off
+  first): reset to remote truth.
 
 ```bash
 git checkout main
