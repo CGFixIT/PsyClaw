@@ -314,6 +314,62 @@ keeping close to this file:
 - Do not invent commands; mark unknowns as needs verification (see the Build
   And Run Commands note on Docker above for how to phrase that).
 
+## Multi-Agent PR Coordination
+
+Multiple coding agents (Grok, Claude, Codex, Kimi, Copilot, etc.) often open
+parallel PRs without shared state. That is a coordination failure mode, not a
+mystery merge problem. Treat agents as parallel workers on possibly stale
+forks.
+
+Rules for multi-agent CyClaw work:
+
+1. **One source of truth.** Always `git fetch origin` first. Current
+   `origin/main` is the only tip that counts — in a single-branch or sparse
+   clone, `remote.origin.fetch` may map only the checked-out branch, so a
+   plain `git fetch origin` silently leaves `origin/main` missing; the
+   snippet below fetches it explicitly rather than assuming it is present.
+2. **Start from fresh main.** Before any agent opens a new PR branch, update
+   local `main` (or hand the agent a branch that already contains current
+   `origin/main`). Do not let an agent clone an old tip and invent work from it.
+3. **After any history rewrite or force-push.** Assume every local clone and
+   every agent workspace is dirty until it is hard-reset or re-cloned onto the
+   new remote tips.
+4. **Stack or isolate.** Either stack PRs deliberately (`A` → `B` → `C`) or keep
+   concurrent agent PRs on non-overlapping paths. Do not let three agents edit
+   the same files blind.
+5. **Squash at merge.** Prefer squash-and-merge so agent WIP commits never
+   become permanent history on `main`. Write one clear final commit message.
+
+Quick stale-clone test after fetch (works for local `main` or any feature
+branch — it asks "does my current checkout already contain everything on
+`origin/main`", not the reverse, so a healthy feature branch with its own
+commits still reports OK):
+
+```bash
+git fetch origin main:refs/remotes/origin/main
+git merge-base --is-ancestor origin/main HEAD \
+  && echo "OK: current branch already contains origin/main" \
+  || echo "does not contain current origin/main -- see recovery below"
+```
+
+If branches have diverged, refuse merge "fixes." Do not discard work blindly:
+
+- **On a feature branch that is simply behind** (the common case — an agent
+  branch cut before a later merge landed on `main`): rebase it onto fresh
+  `origin/main`, resolve any conflicts, and rerun the check above. Resetting
+  `main` does not touch the feature branch, so switching back to it after a
+  `main` reset fails the same check and the pre-push gate still refuses it.
+- **On local `main` itself**, and only after confirming there is no unique
+  local work to lose (`git status --short` is clean and
+  `git log origin/main..main` prints nothing — otherwise stash or branch off
+  first): reset to remote truth.
+
+```bash
+git checkout main
+git fetch origin
+git reset --hard origin/main
+```
+
 ## Known Gotchas
 
 Covered by `CLAUDE.md` §4 (torch-first install order, `data/personality/soul.md`/`index/`/`logs/` expected at boot, `/soul/*` fail-closed without `CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should mock it). Two with no `CLAUDE.md` equivalent:
