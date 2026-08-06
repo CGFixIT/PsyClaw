@@ -31,6 +31,22 @@ _MAX_PLAN_CHARS = 6_100
 _MAX_ITERATIONS_CEILING = 10
 
 
+_READ_PATH_ERR = (
+    "read_files must contain non-empty bounded repo-relative paths "
+    "without NUL bytes, traversal, or absolute/drive forms"
+)
+
+
+def _one_safe_read_path(raw: object) -> str:
+    # One entry → canonical form, or ValueError (jail-aligned).
+    if not isinstance(raw, str) or len(raw) > _MAX_READ_FILE_LEN:
+        raise ValueError(_READ_PATH_ERR)
+    canonical = canonical_repo_relative_path(raw)
+    if canonical is None:
+        raise ValueError(_READ_PATH_ERR)
+    return canonical
+
+
 def _canonicalize_read_paths(read_paths: list[str]) -> list[str]:
     # Shared by AgentRunRequest: reject jail-unsafe names, dedupe canonical forms.
     if len(read_paths) > _MAX_READ_FILES:
@@ -38,17 +54,7 @@ def _canonicalize_read_paths(read_paths: list[str]) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
     for raw in read_paths:
-        if not isinstance(raw, str) or len(raw) > _MAX_READ_FILE_LEN:
-            raise ValueError(
-                "read_files must contain non-empty bounded repo-relative paths "
-                "without NUL bytes, traversal, or absolute/drive forms"
-            )
-        canonical = canonical_repo_relative_path(raw)
-        if canonical is None:
-            raise ValueError(
-                "read_files must contain non-empty bounded repo-relative paths "
-                "without NUL bytes, traversal, or absolute/drive forms"
-            )
+        canonical = _one_safe_read_path(raw)
         if canonical not in seen:
             seen.add(canonical)
             cleaned.append(canonical)
