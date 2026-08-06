@@ -142,8 +142,6 @@ def test_harness_plan_limit_holds_a_truncated_agentic_plan():
     # Harness cannot import agentic at runtime (I6), so the intentional duplicate
     # is checked here. ``generate_plan`` appends its fixed marker after the 6k
     # body limit, which is why equality would reject a valid generated plan.
-    
-    #
     from agentic.real_repo_loop import _MAX_PLAN_CHARS as agentic_plan_chars
     from harness.schemas import _MAX_PLAN_CHARS as harness_plan_chars
 
