@@ -795,12 +795,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def agent_run_publish(run_id: str, req: AgentPublishRequest) -> dict:
         """Open a draft PR for an already-pushed run. The most gated route in this app.
 
-        Reaches ``agentic/writer.py``'s six-gate chain, whose first gate
-        (``EXECUTION_ENABLED``) is a hardcoded ``False`` in source that no
-        config file and no request body can flip -- so on a shipped checkout
-        this route always refuses, by design. Arming it is the filed-checklist
-        operator procedure in ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``, not
-        a runtime toggle.
+        Reaches ``agentic/writer.py``'s six-gate chain. That chain's first gate
+        (``EXECUTION_ENABLED``) ships ``True`` following the operator
+        enablement of 2026-08-07 -- it is NO LONGER the backstop this docstring
+        once described. What refuses on a shipped checkout is gate 0,
+        ``agentic.enabled`` (ships ``false``), plus the per-call
+        ``reason``/``confirm`` this route's own body must carry. Once an
+        operator turns the layer on, this route can open a real draft PR.
+
+        Read that plainly: this is a network-reachable path to a GitHub
+        mutation, held by one config boolean. The route-level guard chain
+        (rate limit -> same-origin -> API key -> CSRF token) is what keeps it
+        to an authenticated, same-origin, local caller. See
+        ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` for the full chain and the
+        ``CYCLAW_AGENTIC_WRITE_DISABLE`` rollback.
         """
         checked = _validated_run_id(run_id)
         return _agentic_call(

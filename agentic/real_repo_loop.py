@@ -74,14 +74,16 @@ authenticated agent-run routes (``harness/server.py``, via
 ``RepoWorkspaceTools.push_branch``/``agentic.writer.execute_write`` (this
 module itself still does not -- that orchestration lives in ``agentic.cli``,
 not here, since it is a decide-time escalation the CLI layer chooses, not
-part of the loop's own plan/patch/verify/commit contract). Both remain
-disarmed on a shipped checkout: push needs
-``deepagent_github.allow_git_write_tools`` (ships ``false``), and publish
-needs ``agentic.writer.EXECUTION_ENABLED`` (a hardcoded ``False`` in source,
-not a config value) in addition to its own four gates. Arming either is a
-separate, deliberate operator act -- see
-``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` -- not a side effect of this
-wiring existing.
+part of the loop's own plan/patch/verify/commit contract). Both remain gated
+on a shipped checkout, but by different things than they once were: push needs
+``deepagent_github.allow_git_write_tools`` (still ships ``false``), while
+publish's code-level gate ``agentic.writer.EXECUTION_ENABLED`` ships ``True``
+since the operator enablement of 2026-08-07 -- so publish is held by the layer
+master switch (``agentic.enabled``, ships ``false``) and its own per-call
+``reason``/``confirm``, not by that constant. Arming either is a separate,
+deliberate operator act -- see ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``,
+including the ``CYCLAW_AGENTIC_WRITE_DISABLE`` rollback -- not a side effect of
+this wiring existing.
 """
 
 from __future__ import annotations

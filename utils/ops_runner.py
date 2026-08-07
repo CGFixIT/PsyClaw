@@ -368,9 +368,11 @@ def run_agentic_op(
     # requires a non-empty ``reason`` and only appends ``--confirm`` when the
     # caller set it, reaching the CLI's own refusal path (exit 4) otherwise --
     # the same "no anonymous mutations" shape as ``apply-skill``. Neither can
-    # succeed on a shipped checkout: push needs ``allow_git_write_tools`` and
-    # publish needs ``agentic/writer.py``'s ``EXECUTION_ENABLED``, a hardcoded
-    # ``False``.
+    # succeed on a shipped checkout, though not for the reason this comment
+    # once gave: push needs ``allow_git_write_tools`` (ships ``false``), while
+    # publish's ``agentic/writer.py`` gate ``EXECUTION_ENABLED`` ships ``True``
+    # since 2026-08-07 -- what refuses publish now is ``agentic.enabled``
+    # (ships ``false``) plus the per-call reason/confirm above.
     #
     # ``real-repo-run-discard`` requires ``run_id`` and reclaims a decided
     # run's clone from disk. It is the ONLY reclamation path: an approved

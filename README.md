@@ -45,9 +45,9 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
-9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — both still shipped disarmed
+9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
 10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
-11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and every gate ships closed (the draft-PR step behind a hardcoded `EXECUTION_ENABLED = False` that no config file can flip)
+11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
 
 ---
 
@@ -473,7 +473,7 @@ CyClaw/
 │   ├── context.py
 │   ├── gh_client.py
 │   ├── registry.py
-│   ├── writer.py               # gh pr create --draft, implemented but shipped disarmed
+│   ├── writer.py               # gh pr create --draft; armed flag, held by agentic.enabled
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
 │   │   ├── client.py           # scoped reads (fs_list/stat/read/grep)
@@ -601,10 +601,13 @@ CyClaw now includes a **concise, governed agentic layer** for local operator wor
 - reads only in normal operation
 - no GitHub token is stored or forwarded by CyClaw
 - `gh` is invoked as an argv list, not via shell execution
-- the GitHub write path (`gh pr create --draft`) is IMPLEMENTED but shipped
-  DISARMED: `EXECUTION_ENABLED` is a hardcoded `False` in `agentic/writer.py`
-  that no config file can flip, plus four config/per-call gates. Arming it is a
-  filed-checklist operator procedure (`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`)
+- the GitHub write path (`gh pr create --draft`) is IMPLEMENTED and its
+  code-level gate `EXECUTION_ENABLED` ships `True` (operator-signed
+  2026-08-07). The layer master switch `agentic.enabled` still ships `false`,
+  so a default checkout cannot open a PR — that switch, plus a per-call
+  `reason` and `confirm`, is what refuses now. Procedure and the
+  `CYCLAW_AGENTIC_WRITE_DISABLE` rollback:
+  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`
 - all agentic reads, refusals, and registry changes are audit logged
 
 ### Enable it
@@ -940,11 +943,13 @@ agentic:
       claude: { enabled: false, model: "claude-sonnet-5" }
 ```
 
-Opening a PR additionally requires `agentic.mode: "write"`, `writes_enabled: true`,
-**and** flipping `EXECUTION_ENABLED` in `agentic/writer.py` — a hardcoded `False`
-that is deliberately not config-reachable. Arming it is a filed-checklist
-procedure with a sign-off line, not a toggle:
-[`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
+Opening a PR requires `agentic.mode: "write"` and `writes_enabled: true` (both
+now ship open), `agentic/writer.py`'s `EXECUTION_ENABLED` (ships `True` since
+the signed enablement of 2026-08-07), **and** `agentic.enabled: true` — the
+master switch that still ships `false` and is what actually refuses on a
+default checkout — plus a per-call `reason` and `confirm`. The filed checklist,
+the arming procedure, and the `CYCLAW_AGENTIC_WRITE_DISABLE` rollback are all
+in [`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
 
 ### Commands
 
@@ -1045,7 +1050,7 @@ of the three commands above for cloud, after the image's own install step.
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
 | Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |
 | Soul writes | Explicit human reason string + enforced write-boundary scan + atomic write |
-| Agentic writes | `pr_create` implemented, shipped disarmed behind six gates (one of them a source constant); `pr_comment`/`issue_comment` remain plan-only |
+| Agentic writes | `pr_create` implemented; the source constant and two config gates ship open since 2026-08-07, so `agentic.enabled` (ships `false`) plus per-call reason/confirm is what refuses. `pr_comment`/`issue_comment` remain plan-only |
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |

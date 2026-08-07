@@ -18,7 +18,8 @@ Subcommands:
     real-repo-run-push    Push an approved run's branch to origin (its own
                           decision; gated on allow_git_write_tools).
     real-repo-run-publish Open a draft PR for a pushed run (its own decision;
-                          ships permanently disarmed by EXECUTION_ENABLED).
+                          EXECUTION_ENABLED ships armed, so the layer master
+                          switch agentic.enabled is what still holds it).
     real-repo-run-discard Reclaim a decided (or orphaned) run's clone from disk.
     test           Run the pre-flight self-test.
 
@@ -1088,14 +1089,15 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     necessarily a separate process from the one that ran the loop.
 
     ``--push``/``--publish`` are additive escalations past the local commit
-    ``finalize_real_repo_change`` already performs, each still disarmed by
+    ``finalize_real_repo_change`` already performs, each still gated by
     default: ``--push`` reaches a real remote
     (``RepoWorkspaceTools.push_branch``, gated on
     ``deepagent_github.allow_git_write_tools``, ships ``false``); ``--publish``
-    additionally opens a draft PR via ``agentic.writer.execute_write``, which
-    refuses unconditionally today regardless of any config --
-    ``EXECUTION_ENABLED`` is a hardcoded ``False`` in ``agentic/writer.py``,
-    not a value ``config.yaml`` can flip. Wiring the call (this commit) and
+    additionally opens a draft PR via ``agentic.writer.execute_write``. That
+    executor's own code-level gate ``EXECUTION_ENABLED`` ships ``True`` since
+    the operator enablement of 2026-08-07, so what refuses on a shipped
+    checkout is the layer master switch (``agentic.enabled``, ships ``false``)
+    plus the per-call ``reason``/``confirm``. Wiring the call and
     arming it (a signed, filed-checklist procedure --
     ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``) are deliberately separate
     acts.
@@ -1288,10 +1290,13 @@ def cmd_real_repo_run_publish(args: argparse.Namespace) -> int:
     """Open a draft PR for an already-pushed run. Its own decision point.
 
     The most gated command in this CLI: it reaches ``agentic.writer``'s own
-    six-gate chain, whose first gate (``EXECUTION_ENABLED``) is a hardcoded
-    ``False`` in source that no config file can flip. On a shipped checkout
-    this command always refuses, by design -- arming it is the filed-checklist
-    operator procedure in ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``.
+    six-gate chain. That chain's first gate (``EXECUTION_ENABLED``) ships
+    ``True`` following the operator enablement of 2026-08-07, so on a shipped
+    checkout what refuses is gate 0 -- ``agentic.enabled``, still ``false`` --
+    together with the per-call ``reason``/``confirm`` below. An operator who
+    turns the layer on has armed this command; see
+    ``docs/agentic/GITHUB_WRITE_ENABLEMENT.md`` for the full chain and for the
+    ``CYCLAW_AGENTIC_WRITE_DISABLE`` rollback.
 
     ``--reason`` and ``--confirm`` are this command's own, not inherited from
     the run's earlier ``--reason``/``--confirm``: opening a pull request under
@@ -1553,8 +1558,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_run_decide.add_argument(
         "--publish", action="store_true",
         help="With --push: also open a draft PR (agentic.writer.execute_write). "
-             "Requires --reason and --confirm-publish. Ships permanently disarmed "
-             "(EXECUTION_ENABLED is a hardcoded False, not a config value).",
+             "Requires --reason and --confirm-publish. EXECUTION_ENABLED ships True "
+             "(armed 2026-08-07); agentic.enabled (ships false) is what still refuses.",
     )
     p_run_decide.add_argument("--reason", help="Human reason string, required with --publish.")
     p_run_decide.add_argument(
@@ -1573,7 +1578,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run_publish = sub.add_parser(
         "real-repo-run-publish",
-        help="Open a draft PR for an already-pushed run (ships permanently disarmed).",
+        help="Open a draft PR for an already-pushed run (held by agentic.enabled, ships false).",
     )
     p_run_publish.add_argument("--run-id", required=True)
     p_run_publish.add_argument("--reason", required=True, help="Human reason string (required).")
