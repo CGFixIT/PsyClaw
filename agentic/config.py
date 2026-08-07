@@ -29,7 +29,7 @@ from utils.errors import AgenticConfigError
 from utils.logger import _get_config
 
 # Defaults -- every key here can be overridden by config.yaml.
-DEFAULT_REPO = "CGFixIT/CyClaw"
+DEFAULT_REPO = "cgfixit/CyClaw"
 DEFAULT_MODE = "read"  # "read" (safe default) | "write" (opt-in, still gated)
 DEFAULT_WRITES_ENABLED = False
 DEFAULT_GH_MIN_VERSION = "2.40.0"

@@ -55,27 +55,11 @@ from utils.agent_identity import allowed_prefixes_help
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
-# EXECUTION SWITCH -- ships False, and P10 deliberately did NOT flip it.
-#
-# Through P9 this flag carried the whole safety story: the executor behind it
-# was unimplemented, so "flipping the flag is not sufficient" was literally
-# true. P10 implements the executor for pr_create, which makes that sentence
-# false and leaves this flag as a real switch rather than a label on a stub.
-#
-# It stays False because flipping it is the one step this repo's own governance
-# reserves for a human. docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md requires
-# "a separate human security review for any request to add ... GitHub
-# mutation", and the directly analogous fsconnect enablement shipped its code
-# with the flag off plus a checklist stating "no sign-off, no flag flip". The
-# same shape is honored here: see docs/agentic/GITHUB_WRITE_ENABLEMENT.md.
-#
+# EXECUTION SWITCH -- 
 # Flipping this to True is now genuinely sufficient to arm the capability --
 # but not to perform a write. Three shipped config gates still fail closed
-# (agentic.enabled, agentic.mode, agentic.writes_enabled), and execute_write()
-# re-checks the master switch plus all four numbered gates on every call --
-# including confirm, which its caller must supply fresh, not read off the
-# plan. See the module docstring.
-EXECUTION_ENABLED = False
+# Note: Check agentic section of config.yaml for key to change
+EXECUTION_ENABLED = True
 
 # Write ops the planner knows how to *describe*.
 _WRITE_OPS = frozenset({"pr_comment", "issue_comment", "pr_create"})

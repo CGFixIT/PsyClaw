@@ -13,12 +13,7 @@ one hardcoded reindex call, plus the environment scrub that call never needed
 **Not wired to anything in this change.** No CLI subcommand, no route, no call
 from ``harness_optimizer``'s ``decide_candidate`` (which gains a new,
 ``False``-by-default keyword this module's report can eventually feed, but
-nothing in this change passes it). There is no live caller yet: the planner
-and git-write-in-a-jailed-clone phases that would produce something for this
-to verify do not exist. Shipping the capability now, independently tested, and
-deferring the wiring is the same call made for ``RepoWorkspaceTools`` (P5),
-the injection scanner (P1), and the ``deepagent-plan`` CLI probe (P4) earlier
-in this effort -- each landed before its consumer did.
+nothing in this change passes it).
 
 **Containment is best-effort software, not a hard boundary -- say this plainly
 to anyone who reads this module or the threat-model amendment it ships with.**

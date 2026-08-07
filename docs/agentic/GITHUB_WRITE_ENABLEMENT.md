@@ -182,22 +182,22 @@ an unauthorized change.*
       replayable `confirm`, no channel attribution, shared rate-limit bucket)
       remain accepted as-is — this fix is scoped to the one gap named above,
       not a general re-opening of the checklist.
-- [ ] **B. Draft-only.** `_build_write_argv`'s `pr_create` branch still ends in
+- [x] **B. Draft-only.** `_build_write_argv`'s `pr_create` branch still ends in
       `--draft`, and `tests/test_agentic_writer.py` still asserts the argv as an
       exact list. That assertion is the only thing pinning draft-ness.
-- [ ] **C. Head branch is explicit.** `--head` is required and constrained to
+- [x] **C. Head branch is explicit.** `--head` is required and constrained to
       `claude/*`. Without it `gh` infers the head from the process's working
       directory, which on the ops_runner path is the operator's own checkout.
-- [ ] **D. Repo targeting.** `execute_write` refuses a plan whose `repo` differs
+- [x] **D. Repo targeting.** `execute_write` refuses a plan whose `repo` differs
       from the configured one. The config is authoritative; the plan is advisory.
-- [ ] **E. Plan integrity.** `execute_write` rebuilds the argv from the plan's
+- [x] **E. Plan integrity.** `execute_write` rebuilds the argv from the plan's
       own `params` and refuses on mismatch with `would_run`. It never executes
       the list it was handed.
-- [ ] **F. No retry.** A write is attempted exactly once. A timeout is reported
+- [x] **F. No retry.** A write is attempted exactly once. A timeout is reported
       as INDETERMINATE rather than retried, because both of `run_read`'s retry
       branches fire after the request has already left the machine and could
       duplicate an accepted mutation.
-- [ ] **G. Push scoping.** `push_branch` rejects every branch outside
+- [x] **G. Push scoping.** `push_branch` rejects every branch outside
       `claude/*`, enforced by test rather than convention — nothing else in the
       repo statically prevents a push elsewhere.
 - [x] **H. Known gap, decided 2026-08-01: accepted.** `agentic/executor`'s verification
@@ -233,7 +233,7 @@ an unauthorized change.*
       untouched, rather than an argv denylist (bypassable by a wrapper script
       or differently-named binary, and out of scope for a module whose
       containment model already assumes operator-authored local execution).
-- [ ] **I. Blast radius understood.** With the flag on and gates 2–3 open, this
+- [x] **I. Blast radius understood.** With the flag on and gates 2–3 open, this
       code can push a `claude/*` branch and open a draft PR against the
       configured repo, as the authenticated `gh` identity. It cannot push to
       `main`, cannot force-push, and cannot delete anything.
@@ -244,20 +244,20 @@ an unauthorized change.*
       radius per invocation is unchanged (one draft PR, one `claude/*` branch);
       what changed is who can invoke it and from where. Rate-limiting applies
       to the route, but a rate limit bounds frequency, not authority.
-- [ ] **J. Master switch enforced in code, not just the CLI.**
+- [x] **J. Master switch enforced in code, not just the CLI.**
       `_require_gates()` checks `agentic.enabled` first, ahead of every other
       gate. A direct call into `plan_write()`/`execute_write()` — bypassing the
       CLI's own `_disabled_noop()` — cannot skip it. (This was NOT true before
       an external review caught the gap; see the gate-chain section above.)
-- [ ] **K. Confirm is never inherited from a plan.** `execute_write()` requires
+- [x] **K. Confirm is never inherited from a plan.** `execute_write()` requires
       its own caller to supply a fresh `confirm=True`; it neither reads a
       `confirm` field off the plan (none exists) nor manufactures one
       internally. (Also not true before the same review.)
 
 ### Verification record — 2026-07-31 (agent-performed, not a sign-off)
+Note for agents: ^ Re-check this (if needed or potentially helpful) after human verification and sign off and Write enabled in config on 8.7.2-2026 if needed next explicit request or /doc-sync run
 
-Every item above was re-checked against the code as it stands at this date,
-because item A's own void-and-re-run clause had fired. Method and result:
+Method and 7.31.2026 result:
 
 | Item | Method | Result |
 |---|---|---|
@@ -285,10 +285,11 @@ scope, decided 2026-08-01). Recording those decisions is not the same act as
 signing this checklist — the sign-off line below, and the arming itself
 (steps 5–7), remain the operator's own, separate, explicit action.
 
-**Sign-off:** ______________________  **Date:** ____________
+**Sign-off:** CG  **Date:** 8.7.2026
 
 *(no sign-off, no flag flip — this verification record is evidence for a
 signature, never a substitute for one)*
+^lol why did you even need that but it was helpful for me to better understand blast radius
 
 ---
 

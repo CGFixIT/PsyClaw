@@ -1,10 +1,6 @@
-# ==============================================================================
-# CyClaw Configuration — Single source of truth
-# ==============================================================================
-# NOTE: LAN IP in allowed_origins (10.0.0.112) is intentional.
-# gate.py binds to 127.0.0.1:8787 only. The CORS origin list allows
-# the local network browser client to hit the API. This is a personal
-# home-lab tool — not internet-exposed.
+# ================================================================================
+# CyClaw Configuration — Single source of truth agentic/config.py/etc are fallback
+# ================================================================================
 #
 # PROMPT FILTER UPDATE (2026-06):
 # Expanded banned_patterns from 13 → 32 curated high-signal regex
@@ -18,13 +14,13 @@
 # Sources: Original + OWASP LLM01 + agent-security-super-skill red flags
 # + documented memory poisoning / indirect injection patterns.
 # All compiled with re.IGNORECASE. \s+ for whitespace tolerance (corpus-safe).
-# ==============================================================================
+# ================================================================================
 
 app:
   name: "cyclaw"
   env: "local"
-  mode: "offline"  # "offline" | "hybrid"
-  debug: false
+  mode: "hybrid"  # "offline" | "hybrid"
+  debug: true
 
 models:
   local_llm:
@@ -34,7 +30,6 @@ models:
     # no Authorization header is sent. Only set this if you have configured Ollama
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-#    api_key: "your-ollama-key"
     model: "qwen3.6:27b"
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
@@ -46,7 +41,7 @@ models:
     # RECOMMENDED Ollama context length (via num_ctx): 10000-12288 (10k-12k).
     # With max_context_tokens=4000 + max_tokens=3000 that is 7000 + headroom -> fits.
     max_tokens: 3000
-    temperature: 0.3
+    temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
     # is expected to host -- which, since the default above became qwen3.6:27b,
     # is now the shipped default itself rather than a headroom allowance for a
@@ -96,7 +91,7 @@ models:
     # CYCLAW_EMBED_CACHE_SIZE env var if a deployment needs a different
     # memory/hit-rate trade-off.
   grok:
-    enabled: false
+    enabled: true
     base_url: "https://api.x.ai/v1"
     model: "grok-4.5"   # current xAI flagship (verified 2026-07-20 against https://docs.x.ai/developers/models). Tradeoff vs the previous default grok-4.3: newer + faster, but ~60%/140% pricier per input/output token ($2.00/$6.00 vs $1.25/$2.50 per Mtok) and a 500k context vs 1M. grok-4.3 still resolves — pin it here instead if cost or the longer window matters more than currency. grok is disabled by default and only reachable through the triple gate anyway.
     timeout_sec: 30
@@ -107,7 +102,7 @@ models:
       backoff_base_sec: 1.0 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (1s, 2s)
       backoff_max_sec: 30.0 # hard ceiling on a single backoff sleep; guards against a mis-tuned base/retries blocking the worker
   claude:
-    enabled: false
+    enabled: true
     base_url: "https://api.anthropic.com/v1"
     model: "claude-sonnet-5"   # current Claude 5 family Sonnet alias (verified 2026-07); second external fallback (PR #441). Check https://docs.anthropic.com/en/docs/about-claude/models before enabling — same drift risk as the grok model id above
     anthropic_version: "2023-06-01"
@@ -484,8 +479,8 @@ sync:
 agentic:
   enabled: false                 # off by default; CLI no-ops (exit 0) while false
   repo: "CGFixIT/CyClaw"         # validated: owner/name, no shell metacharacters
-  mode: "read"                   # "read" (safe default) | "write" (opt-in, still gated)
-  writes_enabled: false          # second flag; writes need mode=write AND this AND reason AND confirm
+  mode: "write"                  # "read" (safe default) | "write" (opt-in, still gated)
+  writes_enabled: true           # second flag; writes need mode=write AND this AND reason AND confirm
   gh_min_version: "2.40.0"       # `gh` version floor (X.Y.Z)
   gh_timeout_sec: 30             # wall-clock ceiling per gh read subprocess
   gh_retries: 2                  # extra attempts on a TRANSIENT gh failure (timeout/5xx/429); deterministic errors fail fast
@@ -498,7 +493,7 @@ agentic:
     - issue_list
     - repo_view
   # Config for the real-repo coding pipeline (agentic/real_repo_loop.py) and,
-  # separately, the now-retired Deep Agents graph. Still never imported by the
+  # separately, the now-retired (for now, will revisit deep agent within the real repo loop later) Deep Agents graph. Still never imported by the
   # core request path. NOT "phase 1 config only" any more: every key below is
   # read on the shipped `real-repo-run` path -- workspace_root, enabled, model,
   # base_url, protected_write_paths and max_write_budget_bytes by agentic/cli.py,
@@ -550,7 +545,8 @@ agentic:
       - "pyproject.toml"
       - "setup.cfg"
       - "pytest.ini"
-      - ".claude/skills/"
+      - ".claude/"
+      - ".codex/"
     max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
     # Blocks an iteration whose proposed file content is shaped like an
     # exfiltration, a reverse shell, an obfuscated exec, or a pipe-to-shell
@@ -579,10 +575,10 @@ agentic:
     allow_cloud_providers: false
     providers:
       grok:
-        enabled: false
+        enabled: true
         model: "grok-4.5"                        # cite models.grok.model; re-verify at enable time
       claude:
-        enabled: false
+        enabled: true
         model: "claude-sonnet-5"                 # cite models.claude.model; same drift warning
   # Governed harness optimizer. Candidate application records only a versioned local
   # artifact after all deterministic gates plus an explicit human reason/confirmation;
@@ -732,6 +728,7 @@ guardrails:
     - system prompt
     - your instructions
     - persona
+    - short-term memory
 
 # ===========================
 # Telegram channel (out-of-band)  [v0.1 — T0–T3 code + partial T4; default disabled]
