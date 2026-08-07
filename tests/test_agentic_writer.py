@@ -57,6 +57,7 @@ def _config_path(tmp_path: Path) -> str:
     return str(tmp_path / "config.yaml")
 
 
+@pytest.mark.uses_shipped_execution_flag
 def test_execution_ships_armed():
     """Operator-signed enablement: EXECUTION_ENABLED ships True.
 

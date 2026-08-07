@@ -141,6 +141,14 @@ filterwarnings = [
     # AttributeError (observed 2026-07-19). Message-only parses in both lanes.
     'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.',
 ]
+markers = [
+    # Opt out of conftest's _disarm_agentic_write_execution autouse fixture, which
+    # forces agentic.writer.EXECUTION_ENABLED False for the whole suite so a
+    # mis-stubbed test cannot reach a real `gh pr create` (gh is preinstalled on
+    # GitHub Actions runners). Only tests that are ABOUT the shipped armed posture
+    # should carry this, and they own their own stubbing.
+    "uses_shipped_execution_flag: test reads the real shipped EXECUTION_ENABLED value",
+]
 
 [tool.coverage.run]
 source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram"]
