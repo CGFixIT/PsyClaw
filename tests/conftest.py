@@ -62,6 +62,35 @@ TEST_CONFIG = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _disarm_agentic_write_execution(request, monkeypatch):
+    # Structural backstop against the unit lane opening a real pull request.
+    #
+    # agentic/writer.py's EXECUTION_ENABLED ships True (operator enablement,
+    # 2026-08-07), and the real-repo CLI fixtures copy the shipped config.yaml
+    # -- which now carries mode: "write" + writes_enabled: true -- and then set
+    # enabled = True to exercise the pipeline. The only remaining thing between
+    # a mis-stubbed test and a live `gh pr create --repo cgfixit/CyClaw` is
+    # whether that individual test remembered to stub or monkeypatch. `gh` is
+    # absent from most dev containers but IS preinstalled on GitHub Actions
+    # runners, so "it didn't fire locally" is not evidence.
+    #
+    # Before the flag was armed this role was played by a source constant that
+    # no test could accidentally satisfy. This fixture restores that property
+    # at the suite level rather than leaving it to per-test discipline.
+    #
+    # Tests that are ABOUT the armed posture opt out with:
+    #     @pytest.mark.uses_shipped_execution_flag
+    # and are then responsible for their own stubbing.
+    if request.node.get_closest_marker("uses_shipped_execution_flag"):
+        return
+    try:
+        import agentic.writer as _writer
+    except ImportError:  # agentic extras absent -- nothing to disarm
+        return
+    monkeypatch.setattr(_writer, "EXECUTION_ENABLED", False)
+
+
 @pytest.fixture
 def test_config(tmp_path):
     # Deep-copy so each test gets a fully independent config tree. The old

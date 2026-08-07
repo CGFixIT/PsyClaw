@@ -656,3 +656,75 @@ class TestFallbackRequireUserConfirmIsUnwired:
         src = (_REPO_ROOT / "graph.py").read_text(encoding="utf-8")
         assert 'if confirmed is None:' in src
         assert 'return "audit_logger"' in src
+
+
+class TestShippedCoreConfigContract:
+    """Pins the SHIPPED config.yaml's core posture keys.
+
+    TestShippedAgenticConfigContract (tests/test_agentic_config.py) pins the
+    agentic block against the real file, and it earns its keep: it is what
+    would catch an accidental `agentic.enabled: true`. The core request path
+    had no equivalent, and the gap is not hypothetical -- the operator commit
+    of 2026-08-07 flipped app.mode, app.debug, and BOTH models.<provider>
+    .enabled in the shipped file and no test broke, because no test read those
+    keys from it.
+
+    That matters specifically for I3. Per INVARIANTS.md, two of the triple
+    gate's three conditions (mode == "hybrid", <provider>.enabled) are NOT
+    enforced in graph.py at all -- they live in gate.py's client construction,
+    and TestExternalCallGateConstructionHalf above pins that the graph does not
+    read them. So a change to these config values silently changes what the
+    graph can reach, with the graph-side tests still green. This class is that
+    tripwire.
+
+    These assertions pin the CURRENT posture, armed included. They are not a
+    claim that the armed values are the safe ones -- they are a claim that
+    changing them should be deliberate and visible in a diff.
+    """
+
+    @staticmethod
+    def _cfg() -> dict:
+        return yaml.safe_load((_REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+    def test_app_mode_and_provider_enables_are_pinned(self):
+        # I3 gates 1 and 2. Shipped armed since 2026-08-07 (see
+        # docs/THREAT_MODEL.md's eighth amendment). If you are changing these,
+        # change the amendment too.
+        cfg = self._cfg()
+        assert cfg["app"]["mode"] == "hybrid"
+        assert cfg["models"]["grok"]["enabled"] is True
+        assert cfg["models"]["claude"]["enabled"] is True
+
+    def test_local_context_is_never_shipped_to_a_provider(self):
+        # The load-bearing pair. Unlike the enables above, flipping either of
+        # these is a genuine data-exfiltration change: it would send retrieved
+        # local corpus content to x.ai / Anthropic instead of the bare query.
+        # graph.py reads these per-provider at _external_fallback_node.
+        fb = self._cfg()["policy"]["fallback"]
+        assert fb["send_local_context_to_grok"] is False
+        assert fb["send_local_context_to_claude"] is False
+
+    def test_health_does_not_probe_providers_by_default(self):
+        # /health carries neither auth nor a rate limit, so provider probing
+        # there is operator-triggerable third-party egress on the operator's
+        # own key. Must stay opt-in.
+        assert self._cfg()["api"].get("health_probe_external_providers", False) is False
+
+    def test_app_debug_is_pinned_and_currently_inert(self):
+        # app.debug ships true but is read by NO non-test code path (verified
+        # by grep across gate.py, graph.py, utils/, llm/, harness/). It is
+        # pinned here for a specific reason: if someone later wires it to
+        # something real -- traceback echo, log level, FastAPI(debug=True) --
+        # that change would land ALREADY SWITCHED ON in the shipped config,
+        # and would be reviewed as "add a debug flag" with an assumed
+        # off-by-default blast radius. This assertion forces that wiring to
+        # confront the shipped value in the same diff.
+        cfg = self._cfg()
+        assert cfg["app"]["debug"] is True
+        for fname in ("gate.py", "graph.py"):
+            src = (_REPO_ROOT / fname).read_text(encoding="utf-8")
+            assert 'cfg["app"]["debug"]' not in src and "cfg['app']['debug']" not in src, (
+                f"{fname} now reads app.debug — it ships true, so decide whether "
+                "that is the default you want and update this test's docstring "
+                "and docs/THREAT_MODEL.md's eighth amendment to match"
+            )

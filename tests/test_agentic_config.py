@@ -390,9 +390,21 @@ class TestShippedAgenticConfigContract:
         assert set(cfg.providers) == {"grok", "claude"}
         for name, provider in cfg.providers.items():
             assert provider.enabled is True, name
-            # cloud_provider() still returns None while deepagent package flag
-            # is off / no keys — only the config flags are pinned here.
-            assert provider.model  # non-empty model id pinned in config
+            assert provider.model, name  # non-empty model id pinned in config
+            # cloud_provider() IS gate 3/4. It reads allow_cloud_providers and
+            # provider.enabled and nothing else -- not deepagent_github.enabled,
+            # not an API key (agentic/config.py). Both of its inputs now ship
+            # true, so it hands back a live provider on a shipped checkout.
+            #
+            # This assertion previously read `is None` and was deleted (not
+            # inverted) when the shipped config was armed, justified by a
+            # comment claiming cloud_provider() still returns None "while the
+            # deepagent package flag is off / no keys". That was factually
+            # wrong about the method. Restored in the true direction so the
+            # shipped behaviour of a live gate is pinned rather than unstated:
+            # agentic/cli.py branches on `cloud_provider(...) is None` in three
+            # places, so this is the return value those branches actually see.
+            assert cfg.cloud_provider(name) is not None, name
 
     def test_harness_optimizer_shipped_gates_disabled(self) -> None:
         cfg = self._load().harness_optimizer
@@ -434,10 +446,12 @@ def test_cli_subcommand_surface_is_pinned() -> None:
     are separate SUBCOMMANDS rather than flags on `real-repo-run-decide`
     because `require_pending_decision` correctly treats an approved run as
     terminal -- an approve-then-push sequence through the decide command could
-    never reach the push. Both ship unable to succeed: push needs
-    `deepagent_github.allow_git_write_tools` (false) and publish needs
-    `agentic/writer.py`'s `EXECUTION_ENABLED`, a hardcoded False no config can
-    flip. See `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
+    never reach the push. Both ship unable to succeed, though by different
+    gates since the 2026-08-07 enablement: push needs
+    `deepagent_github.allow_git_write_tools` (still false), while publish's
+    `agentic/writer.py` gate `EXECUTION_ENABLED` now ships True -- publish is
+    held by `agentic.enabled` (false) plus its per-call reason/confirm.
+    See `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
 
     `real-repo-run-plan` was added deliberately too: the first half of the
     two-stage split, where a capable (typically cloud) model reasons about the

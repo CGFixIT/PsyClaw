@@ -1068,9 +1068,12 @@ def test_publish_records_an_indeterminate_timeout_so_a_retry_cannot_duplicate_th
     def timing_out(*args, **kwargs):
         raise AgenticError("gh pr_create timed out", details={"indeterminate": True})
 
-    # plan_write must be stubbed too: on a shipped checkout it refuses first
-    # (agentic.mode is "read"), so execute_write would never be reached and
-    # this would test the mode gate rather than the timeout handling.
+    # plan_write must be stubbed too. The original reason -- "on a shipped
+    # checkout it refuses first (agentic.mode is 'read')" -- expired when
+    # config.yaml began shipping mode: "write" on 2026-08-07. The stub is now
+    # load-bearing for a different and sharper reason: unstubbed, plan_write
+    # would build a real plan and this test would reach a real `gh pr create`
+    # on any machine with gh on PATH, which includes GitHub Actions runners.
     monkeypatch.setattr(writer_mod, "plan_write", lambda *a, **k: {"op": "pr_create"})
     monkeypatch.setattr(writer_mod, "execute_write", timing_out)
     code = main([
