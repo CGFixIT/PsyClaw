@@ -131,10 +131,13 @@ worth knowing before you treat either as an off switch:
    deliberately not folded into approve, and each its own route:
    `/agent push <id>` puts the branch on origin, and
    `/agent publish <id> <why>` opens a draft PR. **Both refuse on a shipped
-   checkout:** push needs `deepagent_github.allow_git_write_tools` (ships
-   `false`) and publish needs `agentic/writer.py`'s `EXECUTION_ENABLED`, a
-   hardcoded `False` no config file can flip. Arming either is the filed
-   checklist in `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, not a toggle.
+   checkout, but not for the same reason:** push needs
+   `deepagent_github.allow_git_write_tools` (ships `false`), while publish's
+   code-level gate `EXECUTION_ENABLED` ships `True` since the operator
+   enablement of 2026-08-07 — publish is held by `agentic.enabled` (ships
+   `false`) plus its per-call reason/confirm. See the filed checklist in
+   `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`, including the
+   `CYCLAW_AGENTIC_WRITE_DISABLE` rollback.
 6. `/agent discard <id>` reclaims the clone. It is the only step that frees
    disk: an approved run keeps its clone on purpose (push and publish still
    need it) and nothing reclaims it automatically, so a console session that

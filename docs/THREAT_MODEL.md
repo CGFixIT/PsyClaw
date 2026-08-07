@@ -32,8 +32,8 @@ consolidates the threat-model assumptions previously scattered across
 | Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
-| LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider, off by default). |
-| Outbound model egress | **Two planes, both off by default.** The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **This chain now has two consumers, not one, with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation — egress IS recorded there. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through `sanitize_handoff`; that path's egress is NOT recorded, and remains out-of-scope follow-on work. |
+| LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider). **Since 2026-08-07 the shipped `config.yaml` satisfies two of those three gates** — `app.mode: "hybrid"` and both `models.grok.enabled` / `models.claude.enabled` are `true`. The third, `user_confirmed_online`, is per-request and cannot be pre-set by config. See the eighth amendment in §5. |
+| Outbound model egress | **Two planes. Neither is "off by default" any more — see the eighth amendment in §5.** Core plane: two of its three gates ship satisfied (`app.mode: "hybrid"`, both providers `enabled: true`); only the per-request `user_confirmed_online` still stands. Agentic plane: `allow_cloud_providers` and both `providers.<name>.enabled` ship `true`; `agentic.enabled`, `deepagent_github.enabled`, the API-key env var, and `--confirm-online` still stand. The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **This chain now has two consumers, not one, with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation — egress IS recorded there. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through `sanitize_handoff`; that path's egress is NOT recorded, and remains out-of-scope follow-on work. |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -131,7 +131,26 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
   assumed.
 - **Provider-side retention of anything sent to Grok or Claude.** Once bytes reach
   a provider, retention and processing are governed by that provider's agreement,
-  not by CyClaw. This is why every egress path ends in a per-use human confirmation.
+  not by CyClaw. This is why every egress path on the **answer** path ends in a
+  per-use confirmation.
+
+  Two qualifiers, both added 2026-08-07 after an audit found the older
+  unqualified sentence ("every egress path ends in a per-use human
+  confirmation") to be false as written:
+
+  1. **`/health`'s provider-liveness probes are not on the answer path** and
+     never consult `user_confirmed_online`. They are governed by
+     `api.health_probe_external_providers` instead, which ships `false` — so a
+     default checkout makes no such call — but when an operator opts in, that
+     egress is triggered by an unauthenticated, unrate-limited route.
+  2. **`user_confirmed_online` is a self-asserted request field**, not a
+     server-enforced human act. `/query` is unauthenticated and the flag is a
+     declared field on `QueryRequest`, so any local process can set it in a
+     single POST. The confirmation pause is real in the graph
+     (`user_gate_router`) and a genuine UX affordance in `terminal.html`, but
+     it is a **client-side convention**, not a control that survives a hostile
+     or automated local caller. Treat "a human confirmed this" as an assumption
+     of the single-trusted-operator model, not as an enforced property.
 
 ---
 
@@ -142,14 +161,16 @@ touch fs/sql." For the shipped CyClaw model that control remains conditional,
 not because execution risk was removed, but because the operator, host, target
 repository, and explicitly enabled workload are trusted and single-tenant:
 
-- **GitHub writes are implemented but disarmed** (amended by P10 — see the
-  fourth amendment in §5). `agentic/writer.py` ships `EXECUTION_ENABLED = False`,
-  and `execute_write()` refuses on that flag before anything else. It is no
-  longer `NotImplementedError` behind the flag: the `pr_create` path is
-  implemented. What holds the line on a shipped checkout is the flag plus three
-  independent `config.yaml` gates (`agentic.enabled`, `agentic.mode`,
-  `agentic.writes_enabled`), all failing closed, and `execute_write()` re-runs
-  the full gate on every call rather than trusting the plan it is handed.
+- **GitHub writes are implemented and the code-level flag is armed** (amended by
+  P10, then by the operator enablement of 2026-08-07 — see the fourth and
+  eighth amendments in §5). `agentic/writer.py` ships `EXECUTION_ENABLED = True`
+  and `agentic.mode`/`agentic.writes_enabled` ship open. What holds the line on
+  a shipped checkout is now a **single** config gate — `agentic.enabled`, which
+  ships `false` — plus the per-call `reason` and `confirm`, which are supplied
+  by the same caller that requests the write. `execute_write()` re-runs the full
+  gate on every call rather than trusting the plan it is handed, and
+  `agentic.enabled` is checked first, ahead of everything else. A rollback that
+  needs no source edit is available via `CYCLAW_AGENTIC_WRITE_DISABLE`.
 - **SQL is read-only-guarded.** `agentic/sqlconnect/client.py` rejects every
   non-`SELECT` statement (and comments, and multi-statements) before execution.
 - **Filesystem writes are triple-gated and off by default.** `writes_enabled`
@@ -329,8 +350,9 @@ narrower and more precise reason than "nothing executes":
   child environment, but files or credential helpers beneath `HOME` are not
   made unreachable.
 - **What this does NOT change:** GitHub writes remain unreachable on a shipped
-  checkout (see the fourth amendment below, which supersedes the phrase
-  "hard-killed" without changing the shipped posture), SQL is still
+  checkout — though as of 2026-08-07 that is held by `agentic.enabled: false`
+  alone rather than by four independent gates (see the fourth and eighth
+  amendments below), SQL is still
   read-only-guarded, and filesystem writes are still triple-gated. The executor
   itself never chooses WHAT to run — the argv is fixed, non-attacker-chosen,
   operator- or config-supplied — but correcting an earlier overclaim: it does
@@ -347,12 +369,16 @@ narrower and more precise reason than "nothing executes":
   `RepoWorkspaceTools.push_branch()` can push one `claude/` branch to origin.
   The sentence "GitHub writes are hard-killed" was true of the code and is no
   longer; the §5 bullet above has been rewritten rather than left standing.
-- **What did NOT change: the shipped posture.** `EXECUTION_ENABLED` is still
-  `False`, and `agentic.enabled` / `agentic.mode` / `agentic.writes_enabled`
-  still ship closed. Six independent gates, any one of which refuses (see
-  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`'s gate-chain table). P10
-  deliberately did not flip the flag — arming it is a filed-checklist operator
-  procedure, matching how the analogous fsconnect write enablement was handled.
+- **What did NOT change at P10 time: the shipped posture.** `EXECUTION_ENABLED`
+  was still `False`, and `agentic.enabled` / `agentic.mode` /
+  `agentic.writes_enabled` still shipped closed. Six independent gates, any one
+  of which refuses (see `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`'s gate-chain
+  table). P10 deliberately did not flip the flag — arming it is a
+  filed-checklist operator procedure, matching how the analogous fsconnect write
+  enablement was handled.
+  **Superseded 2026-08-07:** the checklist was signed and the flag and config
+  gates were opened. See the eighth amendment. This bullet is retained as the
+  P10-era record, not as a description of the current tree.
 - **What is gated, exactly.** `execute_write()` checks `agentic.enabled` first
   -- an external review caught that this master switch was, until then,
   enforced only by the CLI's own disabled-no-op, not by `_require_gates()`
@@ -450,10 +476,13 @@ not attacker-chosen at the command level.
   guards (`require_approved_for_push`, `require_pushed_for_publish`), and the
   six write gates themselves. The per-invocation blast radius is unchanged —
   one `claude/*` branch, one draft PR, no force-push, no delete.
-- **What did NOT change: the shipped posture.** `EXECUTION_ENABLED` is still a
-  hardcoded `False` that no config file can flip, and
-  `allow_git_write_tools`/`agentic.enabled`/`mode`/`writes_enabled` all still
-  ship closed. Nothing here arms anything.
+- **What did NOT change at the time of this amendment: the shipped posture.**
+  `EXECUTION_ENABLED` was still a hardcoded `False` that no config file could
+  flip, and `allow_git_write_tools`/`agentic.enabled`/`mode`/`writes_enabled`
+  all still shipped closed. Nothing in *that* amendment armed anything.
+  **Superseded 2026-08-07** — the flag, `mode`, and `writes_enabled` are now
+  open; `allow_git_write_tools` and `agentic.enabled` still ship `false`. See
+  the eighth amendment.
 - **This is the checklist's own trigger, and it fired.**
   `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` item A said that if reachability
   ever changed the checklist was void and had to be re-run. It was re-run on
@@ -508,6 +537,74 @@ not attacker-chosen at the command level.
   in-process scheduler inside `gate.py`. T4 remains rollout-partial pending a
   disposable-root live validation and a separately reviewed replay/ingest
   policy.
+
+### Eighth amendment — the operator armed the write path and hybrid mode (2026-08-07)
+
+**This amendment supersedes every "ships disarmed / off by default" statement
+about the GitHub write path and the external providers elsewhere in this
+document.** Where an earlier amendment says the posture did not change, it is
+describing its own point in time and is retained as a historical record.
+
+- **What happened.** The operator signed
+  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`'s security-review checklist
+  (`Sign-off: CG, 8.7.2026`) and, in the same commit, opened the write and
+  hybrid gates. A follow-up PR reconciled the config so it validates and
+  updated the tests that pinned the disarmed posture.
+- **Core plane (I3), now two of three gates open.** `app.mode: "hybrid"` and
+  both `models.grok.enabled` / `models.claude.enabled` ship `true`. Only
+  `user_confirmed_online` remains, and it is a per-request field — see §4's
+  qualifier: it is self-asserted by the caller on an unauthenticated `/query`,
+  so it is a single-trusted-operator assumption, not an enforced control. An
+  unset `GROK_API_KEY` / `ANTHROPIC_API_KEY` still fails the path closed
+  (`is_available()` is presence-only, so a placeholder key such as the
+  documented `GROK_API_KEY=dummy` satisfies it and the request still leaves
+  the box before auth fails).
+- **What is NOT sent.** Unchanged and still verified: `send_local_context_to_grok`
+  and `send_local_context_to_claude` both ship `false`, so retrieved local
+  context is excluded; the soul/identity block is never forwarded; the outbound
+  payload is the query text only, capped at 8000 chars per provider.
+- **Agentic plane.** `EXECUTION_ENABLED` ships `True`; `agentic.mode: "write"`
+  and `agentic.writes_enabled: true` ship open; `allow_cloud_providers` and both
+  `providers.<name>.enabled` ship `true`. Still closed: `agentic.enabled`,
+  `deepagent_github.enabled`, `allow_git_write_tools`, `allow_github_writes`,
+  `allow_filesystem_write_tools`, `allow_shell_execution`.
+- **Gate depth on a GitHub mutation collapsed from six to three.**
+  `agentic.enabled`, plus the per-call `reason` and `confirm` — and the latter
+  two are supplied by the same request that asks for the write. **`agentic.enabled`
+  is now the only standing barrier not self-attested by the caller.** Treat
+  flipping `config.yaml`'s `agentic.enabled` as a High-tier change: it is no
+  longer "turn on the read-only agentic CLI."
+- **Rollback.** `CYCLAW_AGENTIC_WRITE_DISABLE=1` closes the code-level gate with
+  no source edit. Disable-only by construction (AND-ed with `EXECUTION_ENABLED`,
+  never OR-ed), so it cannot arm a build that ships disarmed.
+- **Item H's sharpening is real but not yet live.** The checklist's accepted
+  executor-argv gap (a `--checks-file` entry invoking `git push` reaches the
+  operator's `HOME`-resident credential helper, bypassing `push_branch`'s
+  `claude/*` scoping) requires `agentic.enabled` **and**
+  `deepagent_github.enabled` **and** `allow_git_write_tools` — all still
+  `false`, so the executor is unreachable today. What changed is that arming
+  step 2 (`gh auth setup-git`) puts the ambient credential on the operator's
+  machine permanently, where no in-repo control can see it. Before: two
+  barriers. After: one. The harness HTTP path is unaffected — it sends check
+  *profile names* against a fixed four-entry allowlist and never raw argv, so
+  this remains a local-CLI-only gap.
+- **A `--checks-file` is now a credential-bearing artifact.** It is parsed into
+  arbitrary argv with no allowlist and executed with `HOME` present. Never
+  accept one from a model, a PR diff, an issue body, or a corpus document.
+- **`/health` egress.** `/health` carries neither auth nor a rate limit, and
+  under `mode: hybrid` its provider-liveness probes were authenticated outbound
+  calls any local process — or any page in the operator's browser, `GET` being
+  CORS-simple — could trigger. Those probes are now opt-in via
+  `api.health_probe_external_providers`, which ships `false`.
+- **"Safe by default" is no longer an automated guarantee.** `invariant-guard`
+  passes 33/33 because I1–I6 and G1–G5 are structural and none encodes a
+  shipped-default posture. `config-guard` does emit `C9 WARN` for the hybrid
+  posture, but its `verify.sh` invokes it without `--strict` and no CI workflow
+  runs it — so nothing can fail a build on a posture regression.
+- **The rollback story is inverted.** Armed is now the shipped default, so
+  disarming is the deviation: three tests pin the armed state, and a plain
+  `git revert` of the flag fails CI. The `CYCLAW_AGENTIC_WRITE_DISABLE` switch
+  exists precisely so a safety action does not have to fight the test suite.
 
 ---
 

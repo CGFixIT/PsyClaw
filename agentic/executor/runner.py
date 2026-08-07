@@ -10,10 +10,11 @@ exit code. This is that same shape, generalized to a list of checks instead of
 one hardcoded reindex call, plus the environment scrub that call never needed
 (it always ran against the repo's own config, not a model-authored diff).
 
-**Not wired to anything in this change.** No CLI subcommand, no route, no call
-from ``harness_optimizer``'s ``decide_candidate`` (which gains a new,
-``False``-by-default keyword this module's report can eventually feed, but
-nothing in this change passes it).
+**Live caller:** ``agentic/real_repo_loop.py`` calls :func:`run_verification`
+as the verify step of its plan/patch/verify loop. (This module originally
+shipped unwired and said so; ``harness_optimizer``'s ``decide_candidate`` still
+does not consume its report, but the "no live caller" half of that note has
+been false since the real-repo loop landed.)
 
 **Containment is best-effort software, not a hard boundary -- say this plainly
 to anyone who reads this module or the threat-model amendment it ships with.**
@@ -227,7 +228,7 @@ def default_checks(repo_root: Path | None = None) -> tuple[Check, ...]:
 
     These are CyClaw-specific defaults, not something ``run_verification``
     itself assumes -- the shipped ``agentic.repo`` default IS
-    ``"CGFixIT/CyClaw"`` (config.yaml), so the harness's own first target is
+    ``"cgfixit/CyClaw"`` (config.yaml), so the harness's own first target is
     its own repository, and these are exactly the three commands
     ``CLAUDE.md``'s own quality bar names. ``repo_root`` locates
     ``invariant-guard``'s script inside the worktree being verified (it must

@@ -509,11 +509,13 @@ roadmap, checked against the current tree:
    (`agentic/executor/`, argv-list checks, scrubbed env, per-check timeout —
    "soft sandbox, not a kernel boundary"), with GitHub push/PR reachable via
    `real-repo-run-decide --push/--publish` or standalone subcommands. Per
-   `config.yaml:468-508`, it remains gated off by default —
-   `agentic.enabled: false`, `deepagent_github.enabled: false`,
-   `allow_github_writes: false`, and `EXECUTION_ENABLED` hardcoded `False` in
-   code, not just config — consistent with the plan's own precondition that
-   this step needed explicit sign-off before arming. See
+   `config.yaml`, it remains gated off by default — `agentic.enabled: false`,
+   `deepagent_github.enabled: false`, `allow_github_writes: false`,
+   `allow_git_write_tools: false`. The plan's precondition that this step
+   needed explicit sign-off before arming was met on 2026-08-07: the checklist
+   was signed and `EXECUTION_ENABLED`, `agentic.mode`, and
+   `agentic.writes_enabled` were opened, leaving `agentic.enabled` as the
+   master switch that still refuses. See
    `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` for the enablement path.
 4. "Optional: surface registry skills to the operator tooling (still
    read-only at runtime)." Best read as **still open** as a discrete
