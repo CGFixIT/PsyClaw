@@ -238,6 +238,80 @@ def test_executor_refused_when_kill_switch_off(monkeypatch, tmp_path: Path):
     )
 
 
+def test_env_kill_switch_refuses_pr_create(monkeypatch, tmp_path: Path):
+    """CYCLAW_AGENTIC_WRITE_DISABLE closes the gate with EXECUTION_ENABLED True.
+
+    Deliberately uses pr_create, not issue_comment: pr_create is the only member
+    of _EXECUTABLE_WRITE_OPS, so it is the only op that would otherwise reach
+    subprocess.run. A kill-switch test on a non-executable op proves the switch
+    reports first, not that it stops a real mutation.
+    """
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
+    plan = plan_write(_write_cfg(), "pr_create", "ship it", confirm=True,
+                      config_path=_config_path(tmp_path), head="agent/topic", title="t", body="b")
+    monkeypatch.setattr("agentic.writer._DISABLED_BY_ENV", True)
+    with pytest.raises(AgenticWriteRefused) as exc:
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
+    assert exc.value.details.get("failed_gate") == "execution_enabled"
+    # The message must name the env var, or an operator who exported it is left
+    # reading "EXECUTION_ENABLED is False" against a source file that says True.
+    assert "CYCLAW_AGENTIC_WRITE_DISABLE" in str(exc.value)
+    assert any(
+        event.get("event") == "agentic_write_execution_blocked"
+        and event.get("gate") == "execution_enabled"
+        for event in _audit_events(tmp_path)
+    )
+
+
+def test_env_kill_switch_is_disable_only(monkeypatch):
+    """The switch is AND-ed, never OR-ed: it can close the gate but never open it.
+
+    That asymmetry is the whole reason it is safe to read an arming decision
+    from the environment at all -- a hostile or accidental env var must not be
+    able to arm a build whose source ships disarmed.
+    """
+    from agentic import writer
+
+    monkeypatch.setattr(writer, "EXECUTION_ENABLED", False)
+    monkeypatch.setattr(writer, "_DISABLED_BY_ENV", False)
+    assert writer._execution_enabled() is False  # env "off" cannot arm a False flag
+
+    monkeypatch.setattr(writer, "EXECUTION_ENABLED", True)
+    monkeypatch.setattr(writer, "_DISABLED_BY_ENV", True)
+    assert writer._execution_enabled() is False  # env kill beats an armed flag
+
+    monkeypatch.setattr(writer, "EXECUTION_ENABLED", True)
+    monkeypatch.setattr(writer, "_DISABLED_BY_ENV", False)
+    assert writer._execution_enabled() is True  # only both-open is open
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True),
+     (" 1 ", True), ("0", False), ("false", False), ("", False), ("maybe", False)],
+)
+def test_env_kill_switch_parses_at_import(monkeypatch, value, expected):
+    """The env var is read once at import, so prove the parse with a real reload.
+
+    Monkeypatching _DISABLED_BY_ENV (as the tests above do) exercises the gate
+    but never the parsing. Only a reload with the variable actually set proves
+    an operator exporting it gets the behavior the docstring promises.
+    """
+    import importlib
+
+    from agentic import writer
+
+    monkeypatch.setenv("CYCLAW_AGENTIC_WRITE_DISABLE", value)
+    try:
+        reloaded = importlib.reload(writer)
+        assert reloaded._DISABLED_BY_ENV is expected
+    finally:
+        # Restore the module to the ambient environment so later tests in this
+        # session see the real import-time state, not this parametrization's.
+        monkeypatch.delenv("CYCLAW_AGENTIC_WRITE_DISABLE", raising=False)
+        importlib.reload(writer)
+
+
 def test_arming_the_flag_is_not_sufficient_without_the_config_gates(monkeypatch, tmp_path: Path):
     """The replacement for test_executor_unimplemented_even_with_flag_flipped.
 

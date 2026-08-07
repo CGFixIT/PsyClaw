@@ -1,8 +1,10 @@
 """Health checks for external dependencies.
 
 Checks Ollama, and optionally Grok and/or Claude when their respective
-mode==hybrid + <provider>.enabled gates are on. Embeddings are local
-sentence-transformers.
+mode==hybrid + <provider>.enabled gates are on AND the operator has opted into
+outbound provider probing via api.health_probe_external_providers (ships false).
+That third condition exists because /health is unauthenticated: see the comment
+in check_all. Embeddings are local sentence-transformers.
 """
 
 
@@ -130,6 +132,17 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
         return [HealthStatus(name="config", healthy=False, error=f"config load failed: {_safe_error(exc)}")]
 
+    # /health is the one route that carries neither auth nor a rate limit, and it
+    # has five unauthenticated consumers (the web console, the Docker
+    # healthcheck, the telegram health plist, macos/invoke-cyclaw.sh, and the
+    # sandbox smoke script). Probing Grok/Claude from here therefore turns an
+    # open endpoint into an authenticated outbound call to a third party on the
+    # operator's own API key -- reachable by any local process, and triggerable
+    # cross-origin by any page the operator's browser loads, since GET is a
+    # CORS-simple request. Off by default: an operator who wants provider
+    # liveness reported here opts in explicitly and accepts that egress.
+    probe_external = bool(cfg.get("api", {}).get("health_probe_external_providers", False))
+
     results = []
     # Resolve the same local backend LocalLLMClient uses (primary Ollama, or
     # LM Studio when models.local_llm.fallback is enabled and primary is down).
@@ -163,7 +176,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
             headers=local_headers,
             expect_model=local_model if local_model else None,
         ))
-    if (cfg["app"]["mode"] == "hybrid" and
+    if (probe_external and cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled", False)):
         grok_base = cfg["models"]["grok"]["base_url"]
         # xAI's /v1/models is an authenticated endpoint: without a Bearer token it
@@ -189,7 +202,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
                 name="grok_api", healthy=False,
                 error="GROK_API_KEY not set (hybrid mode enabled but no API key)",
             ))
-    if (cfg["app"]["mode"] == "hybrid" and
+    if (probe_external and cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("claude", {}).get("enabled", False)):
         claude_cfg = cfg["models"]["claude"]
         # .strip() matches llm/client.py:543 -- see the GROK_API_KEY note above.

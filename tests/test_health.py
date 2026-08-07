@@ -32,7 +32,12 @@ _HOST_MODELS = "http://host/models"  # DevSkim: ignore DS137138
 
 
 def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
-               claude_enabled=False, claude_model=None, local_model=None):
+               claude_enabled=False, claude_model=None, local_model=None,
+               probe_external=False):
+    # probe_external defaults False to mirror the shipped api.health_probe_
+    # external_providers, exactly as mode defaults to the shipped "offline":
+    # a test that wants an outbound provider probe opts in, so the opt-in is
+    # visible at every call site rather than inherited silently.
     grok_cfg = {"enabled": grok_enabled, "base_url": "https://api.x.ai/v1"}
     if grok_model is not None:
         grok_cfg["model"] = grok_model
@@ -45,6 +50,7 @@ def _write_cfg(tmp_path, *, mode="offline", grok_enabled=False, grok_model=None,
         local_llm["model"] = local_model
     cfg = {
         "app": {"mode": mode},
+        "api": {"health_probe_external_providers": probe_external},
         "models": {
             "local_llm": local_llm,
             "grok": grok_cfg,
@@ -189,8 +195,56 @@ class TestCheckAll:
         ollama = next(s for s in statuses if s.name == "ollama")
         assert ollama.healthy is True
 
+    def test_hybrid_does_not_probe_providers_unless_opted_in(self, tmp_path, monkeypatch):
+        """/health carries neither auth nor a rate limit, so probing a provider
+        from there is an authenticated outbound call any local process -- or any
+        page in the operator's browser, GET being CORS-simple -- can trigger on
+        the operator's own API key. With api.health_probe_external_providers
+        false (the shipped default), a fully hybrid config with BOTH providers
+        enabled and BOTH keys present must still make zero outbound provider
+        calls. This is the security property, not a performance one."""
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, claude_enabled=True)
+        probed = []
+
+        def record(url, **kw):
+            probed.append(url)
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", record)
+        monkeypatch.setenv("GROK_API_KEY", "test-key-123")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
+        statuses = health.check_all(cfg_path)
+
+        names = {s.name for s in statuses}
+        assert "grok_api" not in names
+        assert "claude_api" not in names
+        assert names == {"ollama", "embeddings_local"}
+        # The only egress is the loopback Ollama probe; nothing left the box.
+        assert not [u for u in probed if "x.ai" in u or "anthropic" in u]
+        # Opting out must not make /health permanently "degraded" -- that would
+        # push operators to turn probing back on just to silence a red status.
+        assert all(s.healthy for s in statuses)
+
+    def test_probe_opt_in_is_off_when_api_block_is_absent(self, tmp_path, monkeypatch):
+        """A config predating this key (no api block at all) must default to the
+        safe posture, not to probing. `.get("api", {})` is what guarantees it."""
+        cfg = {
+            "app": {"mode": "hybrid"},
+            "models": {
+                "local_llm": {"base_url": _OLLAMA_BASE},
+                "grok": {"enabled": True, "base_url": "https://api.x.ai/v1"},
+            },
+        }
+        p = tmp_path / "config.yaml"
+        with open(p, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f)
+        monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
+        monkeypatch.setenv("GROK_API_KEY", "test-key-123")
+        statuses = health.check_all(str(p))
+        assert "grok_api" not in {s.name for s in statuses}
+
     def test_hybrid_without_key_reports_key_not_set(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, probe_external=True)
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         monkeypatch.delenv("GROK_API_KEY", raising=False)
         statuses = health.check_all(cfg_path)
@@ -222,7 +276,7 @@ class TestCheckAll:
         assert "ollama" in names
 
     def test_hybrid_claude_without_key_reports_key_not_set(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, probe_external=True)
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         statuses = health.check_all(cfg_path)
@@ -231,7 +285,7 @@ class TestCheckAll:
         assert "ANTHROPIC_API_KEY not set" in claude.error
 
     def test_hybrid_with_key_pings_grok_with_bearer_auth(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, probe_external=True)
         seen = {}
 
         def fake_get(url, **kw):
@@ -249,7 +303,7 @@ class TestCheckAll:
         assert seen["url"].endswith("/models")
 
     def test_hybrid_with_key_pings_claude_with_anthropic_headers(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5", probe_external=True)
         seen = {}
 
         def fake_get(url, **kw):
@@ -269,7 +323,7 @@ class TestCheckAll:
         assert seen["url"] == "https://api.anthropic.com/v1/models"
 
     def test_hybrid_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4.3")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4.3", probe_external=True)
         monkeypatch.setattr(
             health, "_http_get", lambda url, **kw: _ModelsResp(["grok-4.3", "grok-4.3-mini"])
         )
@@ -283,7 +337,7 @@ class TestCheckAll:
         # lists (xAI retired grok-beta/grok-4). Without this, the rot surfaces
         # only as a runtime 4xx on the first live fallback — after the user
         # already confirmed the escalation.
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4", probe_external=True)
         monkeypatch.setattr(
             health, "_http_get", lambda url, **kw: _ModelsResp(["grok-4.3", "grok-4.3-mini"])
         )
@@ -298,7 +352,7 @@ class TestCheckAll:
         # An up endpoint with an odd/unparseable body must never fail the
         # availability probe — the model check is best-effort, not a new
         # failure mode. (_OKResp.json() raises by design.)
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4.3")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", grok_enabled=True, grok_model="grok-4.3", probe_external=True)
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         monkeypatch.setenv("GROK_API_KEY", "test-key-123")
         statuses = health.check_all(cfg_path)
@@ -311,7 +365,7 @@ class TestCheckAll:
     # provider block) — mirrored here so a stale Claude pin gets the same
     # protection a stale Grok pin already has.
     def test_hybrid_claude_configured_model_present_is_healthy(self, tmp_path, monkeypatch):
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5", probe_external=True)
         monkeypatch.setattr(
             health, "_http_get", lambda url, **kw: _ModelsResp(["claude-sonnet-5", "claude-opus-4-8"])
         )
@@ -325,7 +379,7 @@ class TestCheckAll:
         # for the Claude provider block: a superseded/renamed model pin the
         # provider no longer lists should surface here, not only as a runtime
         # 4xx on the first live fallback after the user already confirmed it.
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-2.1")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-2.1", probe_external=True)
         monkeypatch.setattr(
             health, "_http_get", lambda url, **kw: _ModelsResp(["claude-sonnet-5", "claude-opus-4-8"])
         )
@@ -339,7 +393,7 @@ class TestCheckAll:
     def test_hybrid_unparseable_models_body_stays_healthy_claude(self, tmp_path, monkeypatch):
         # Mirrors the Grok unparseable-body case: an odd/unparseable body on an
         # up Claude endpoint must never fail the availability probe.
-        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5")
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", claude_enabled=True, claude_model="claude-sonnet-5", probe_external=True)
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-123")
         statuses = health.check_all(cfg_path)

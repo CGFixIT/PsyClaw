@@ -115,6 +115,31 @@ reversible by editing one line back.
 7. **Rehearse the rollback before you rely on it:** set it back to `False` and
    confirm `execute_write` refuses with `failed_gate: "execution_enabled"`.
 
+## Rollback without a source edit
+
+Now that `EXECUTION_ENABLED` ships `True`, editing it back to `False` also means
+editing the tests that pin the armed posture — which puts a safety action in
+tension with the "never weaken a test" rule. Exporting the kill switch avoids
+that entirely:
+
+```bash
+export CYCLAW_AGENTIC_WRITE_DISABLE=1     # 1 / true / yes / on
+```
+
+`execute_write` then refuses with `failed_gate: "execution_enabled"` and a
+message naming the env var, and the refusal is audited as
+`agentic_write_execution_blocked` exactly as the flag rollback is.
+
+It is **disable-only**: `agentic/writer.py` AND-s it with `EXECUTION_ENABLED`
+rather than OR-ing, so it can close the gate but never open one that ships
+closed. That asymmetry is what makes reading this from the environment safe —
+an accidental or hostile env var cannot arm a disarmed build.
+
+It is read **once at import**, so a long-running harness process picks it up on
+restart; a per-call re-read would let the gate flip underneath an in-flight
+write. For a permanent rollback, still edit the flag (and its tests) — the env
+var is the fast, no-diff path, not a replacement for the decision.
+
 ---
 
 ## Security review checklist
