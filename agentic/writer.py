@@ -20,6 +20,12 @@ The shipped ``config.yaml`` opens gates 1 and 2 but leaves gate 0 closed
 (``agentic.enabled: false``), so the CLI no-ops until an operator enables the
 layer. Per-call reason + confirm remain mandatory on every mutation.
 
+ROLLBACK WITHOUT A SOURCE EDIT. Exporting ``CYCLAW_AGENTIC_WRITE_DISABLE=1``
+closes the code-level gate regardless of ``EXECUTION_ENABLED``. It is
+disable-only: it is AND-ed with the flag, never OR-ed, so it cannot arm a build
+that ships disarmed. See the constant's own comment for why that asymmetry is
+what makes reading this from the environment safe.
+
 WHY :func:`execute_write` RE-RUNS THE GATE. The gate lives in both
 :func:`plan_write` and :func:`execute_write`. The executor takes the config
 AND a fresh ``confirm`` and re-runs the master switch plus all four gates
@@ -34,6 +40,7 @@ Any gate failure raises ``AgenticWriteRefused`` and is audited.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess  # nosec B404 - argv-list only, no shell, absolute binary, fixed subcommand
 
@@ -49,6 +56,35 @@ from utils.logger import audit_log
 # Rollback: set False here and confirm execute_write refuses with
 # failed_gate: "execution_enabled".
 EXECUTION_ENABLED = True
+
+# Operator rollback that costs no source edit. Since the flag above now ships
+# True, reverting it means editing this file AND the tests that pin the armed
+# posture -- which puts a safety action in tension with "never weaken a test".
+# This env var restores a rollback that fights neither: export it and the gate
+# closes.
+#
+# DISABLE-ONLY BY CONSTRUCTION. It is AND-ed with EXECUTION_ENABLED in
+# _execution_enabled() below, so it can only ever turn a write path OFF, never
+# on. That asymmetry is what makes reading an arming decision from the
+# environment safe at all: a hostile or accidental env var cannot arm a build
+# whose source ships disarmed.
+#
+# Read once at import, matching every other module-level constant here: a
+# long-running harness picks up the change on restart, and a per-call re-read
+# would let the gate flip underneath an in-flight write.
+_WRITE_DISABLE_ENV = "CYCLAW_AGENTIC_WRITE_DISABLE"
+_DISABLED_BY_ENV = os.environ.get(_WRITE_DISABLE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _execution_enabled() -> bool:
+    """The code-level execution gate: the shipped flag AND the env kill switch.
+
+    Reads ``EXECUTION_ENABLED`` as a module global rather than closing over it,
+    so ``monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", False)`` keeps
+    working exactly as it did before the env switch existed.
+    """
+    return EXECUTION_ENABLED and not _DISABLED_BY_ENV
+
 
 # Write ops the planner knows how to *describe*.
 _WRITE_OPS = frozenset({"pr_comment", "issue_comment", "pr_create"})
@@ -300,14 +336,18 @@ def execute_write(
     is reported as such rather than retried into a duplicate PR.
     """
     op = plan.get("op") if isinstance(plan, dict) else None
-    if not EXECUTION_ENABLED:
+    if not _execution_enabled():
+        # Name which of the two closed it, so an operator who exported the env
+        # var is not left reading "EXECUTION_ENABLED is False" against a source
+        # file that plainly says True.
+        why = f"{_WRITE_DISABLE_ENV} is set" if _DISABLED_BY_ENV else "EXECUTION_ENABLED is False"
         audit_log({
             "event": "agentic_write_execution_blocked",
             "op": op,
             "gate": "execution_enabled",
         }, config_path)
         raise AgenticWriteRefused(
-            "Agentic write execution is disabled (EXECUTION_ENABLED is False)",
+            f"Agentic write execution is disabled ({why})",
             details={"failed_gate": "execution_enabled", "op": op},
         )
     if not isinstance(plan, dict) or not isinstance(op, str):

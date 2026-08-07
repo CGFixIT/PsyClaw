@@ -119,7 +119,7 @@ subsystems.
 | `utils/personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL` |
 | `utils/logger.py` | Audit JSONL; SHA-256 query hashing, recursive PII redaction |
 | `utils/ratelimit.py` | Per-IP rate limiting; in-memory / SQLite / Postgres |
-| `utils/health.py` | `check_all()` behind `/health`; skips Grok/Claude probes when their key is unset |
+| `utils/health.py` | `check_all()` behind `/health`; probes Grok/Claude only when `api.health_probe_external_providers` is true (ships **false** — `/health` is unauthenticated and unrate-limited, so probing there is operator-triggerable third-party egress), and even then skips a provider whose key is unset |
 | `utils/errors.py` | Typed exception hierarchy rooted at `RAGError` |
 | `utils/config_validation.py` | Boot-time config validation; fails fast |
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |

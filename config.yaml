@@ -360,6 +360,17 @@ api:
   # Keeping the inner LLM timeout the one that fires first means the operator sees
   # the diagnostic LLM error, not a generic 504.
   graph_timeout_sec: 660  # Must exceed models.local_llm.timeout_sec (600) — the 60s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
+  # Whether GET /health probes the external providers (Grok, Claude) for
+  # liveness. Ships FALSE, and that default is a security choice, not a
+  # performance one: /health is the only route with neither auth nor a rate
+  # limit, so probing from there turns an open endpoint into an authenticated
+  # outbound call to a third party on your own API key — triggerable by any
+  # local process, and cross-origin by any page your browser loads (GET is a
+  # CORS-simple request). With this false, /health reports local health only and
+  # makes zero outbound calls; app.mode and the per-provider enabled flags are
+  # unaffected, and the /query triple gate is untouched either way. Turn it on
+  # only if you want provider liveness in /health and accept that egress.
+  health_probe_external_providers: false
   rate_limit:
     max_requests: 60       # per-IP request ceiling within the window
     window_seconds: 60     # sliding-window length in seconds
