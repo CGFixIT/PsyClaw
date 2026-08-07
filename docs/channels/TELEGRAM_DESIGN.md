@@ -1,10 +1,11 @@
 # CyClaw Telegram Channel — Design & Phase Plan
 
-**Status:** T0–T3 **code** is shipped and unit-tested (mocked Bot API / loopback
-assumptions). T4 has a bounded staging path and remains **rollout-partial**.
-The channel ships default **disabled**. Live operator validation of T1/T2 has
-**not** been recorded in-repo.
-**Date:** 2026-08-04 (stage review + next-path section 2026-08-04)
+**Status:** T0–T2 **code** is shipped and unit-tested (mocked Bot API / loopback
+assumptions). T3 is implemented and default-off, but needs one fail-closed state
+fix before live use. T4 has a bounded staging path and remains
+**rollout-partial**. The channel ships default **disabled**. Live operator
+validation of T1/T2 has **not** been recorded in-repo.
+**Date:** 2026-08-07 (fresh-main code/plan parity review)
 **Invariant posture:** Out-of-band only (I6). Never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py`.  
 **Companion:** Threat-model amendment in `docs/THREAT_MODEL.md` §5 (seventh amendment).
 
@@ -15,13 +16,18 @@ The channel ships default **disabled**. Live operator validation of T1/T2 has
 | **T0** Skeleton | Done | N/A (self-test only) | None |
 | **T1** Notify | Done | **Pending** | First live step: bot + allowlist + one `send` |
 | **T2** Chat long-poll | Done | **Pending** (blocked on T1 env) | After T1 works: `mode: chat` + `poll` |
-| **T3** Hybrid confirm | Done (default-off) | **Pending** (needs T2 + hybrid config) | Optional; only after T2 is boring |
-| **T4** Media → fsconnect | **Partial** | **Pending** | Optional / high risk; needs design answers first |
+| **T3** Hybrid confirm | Implemented (default-off); fail-closed state fix required | **Pending** (needs T2 + operator opt-in) | Fix state deletion; then optional after T2 is boring |
+| **T4** Media → fsconnect | **Partial** (POSIX only) | **Pending** | Optional / high risk; needs design answers first |
 | **§6 Scheduler** | Not a `telegram/` task | — | Separate package; uses T1 as notify sink |
 
-**Bottom line:** You are **not** stuck waiting on missing T2 or T3 source.
-The real next stage is **operator rollout of T1 → T2**, plus answering a short
-decision list (§11) before anyone writes more T4 or scheduler code.
+**Bottom line:** T1 → manual T2 validation can proceed without more feature
+code. T3 stays off until its state-consumption failure is fixed. Answer the
+short decision list (§11) before more T4 or scheduler code.
+
+Current `main` ships core `app.mode: hybrid` and both provider enable flags on.
+That does not arm Telegram T3: `allow_hybrid_confirm` remains false, each
+request still needs one-shot consent, and provider credentials are still
+required.
 
 ---
 
@@ -122,7 +128,7 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 |---|---|
 | **I1 RAG-first** | Answers only via `POST /query` → graph entry `retrieve` |
 | **I2 Topology=policy** | No Telegram-specific graph nodes or LLM routing |
-| **I3 Triple-gate** | Normal payload sends `user_confirmed_online: false`; T3 can send true only after an explicit, one-shot, provider-specific consent claim, while the core gates remain unchanged |
+| **I3 Triple-gate** | Normal payload sends `user_confirmed_online: false`; T3 is intended to send true only after an explicit, one-shot, provider-specific consent claim while core gates remain unchanged. Live T3 is blocked on the fail-closed deletion fix in §5. |
 | **I4 Audit** | `telegram_inbound` / `telegram_outbound` / `telegram_query` via `utils.logger.audit_log` |
 | **I5 Soul** | No soul endpoints exposed through the bot in T0–T4 |
 | **I6 Isolation** | Package never imported by core; pytest + invariant-guard list `telegram` |
@@ -134,12 +140,12 @@ variables. Never commit tokens. Never put tokens in `config.yaml`.
 1. **Allowlist** — `allowed_chat_ids` empty while `enabled: true` is a **config load error**. Non-allowlisted inbound is refused and audited.
 2. **Token in env** — `TELEGRAM_BOT_TOKEN` (or configured name). Audit stores only a 12-char SHA-256 fingerprint.
 3. **Loopback `/query` only** — `telegram.query.base_url` host must be `127.0.0.1` / `localhost` / `::1`.
-4. **No silent hybrid** — only exact `/online on <grok|claude>` can arm one request; a bare `/online on` is refused rather than selecting a provider.
+4. **No silent hybrid** — only exact `/online on <grok|claude>` can arm consent; a bare `/online on` is refused rather than selecting a provider. Live use stays blocked until failed session deletion is fail-closed.
 5. **Rate limit** — process-local sliding window on outbound + inbound
    (`telegram/ratelimit.py`). Multi-process sqlite limiter remains deferred
    (YAGNI) until more than one poller is real.
 6. **Threat model** — Telegram cloud sees message plaintext. Branding must say *local inference*, not *E2E private channel*.
-7. **T4 media gates** — only an allowlisted private chat with `/save --confirm <reason>` can stage an attachment. The bridge requires all fsconnect write, strict-root, scan, injection-block, and persistent write-rate-limit gates before it contacts Telegram's file service; its root must be absolute, explicit, outside the repo/corpus, and not overlap a read root. It uses the fsconnect CLI, never an in-process import, and does not auto-index.
+7. **T4 media gates** — only an allowlisted private chat with `/save --confirm <reason>` can stage an attachment. The bridge checks configured fsconnect write, strict-root, scan, injection-block, and persistent write-rate-limit gates before it contacts Telegram's file service; its root must be absolute, explicit, outside the repo/corpus, and not overlap a read root. The unresolved exception is host capability: fsconnect's Windows refusal occurs later, so T4 must remain off there until Telegram rejects the request before download. It uses the fsconnect CLI, never an in-process import, and does not auto-index.
 
 ---
 
@@ -173,8 +179,11 @@ environment token.
 
 **Operator checklist**
 
-1. Create a bot with BotFather; put token in `TELEGRAM_BOT_TOKEN`.
-2. Message the bot once; resolve your chat id (`@userinfobot` or `getUpdates` once).
+1. Create a bot with BotFather; put the token in `TELEGRAM_BOT_TOKEN`. For
+   unattended launchd, prefer a Keychain/runtime wrapper or an operator-only
+   `0600` secret file; do not paste the token into the plist.
+2. Send `/help` to the bot once; resolve your chat id from this bot's own
+   `getUpdates` response. Do not disclose it to a third-party bot.
 3. Set in `config.yaml`:
    ```yaml
    telegram:
@@ -190,7 +199,7 @@ environment token.
 
    ```
 
-**Code still to harden (T1 follow-ups)**
+**Follow-up disposition**
 
 | Item | File(s) | Status / instructions |
 |---|---|---|
@@ -226,23 +235,31 @@ as T1.
      enabled: true
      mode: chat
      allowed_chat_ids: ["YOUR_CHAT_ID"]
-   query:
-     # inherits defaults — keep base_url loopback
+     query:
+       # inherits defaults — keep base_url loopback
    ```
 4. `export CYCLAW_API_KEY=…` if soul/ops require it (and if `/query` is keyed in your deploy).
 5. Run in a dedicated terminal or launchd:
    ```bash
    python -m telegram.cli poll
    ```
+6. Use a private 1:1 bot chat for the first rollout. The current allowlist is
+   chat-scoped, so allowlisting a group grants query access to every member.
+7. Run exactly one poller per bot token. Stop a manual `poll` process before
+   loading the KeepAlive LaunchAgent; offset and rate-limit state do not
+   coordinate concurrent pollers.
+8. On the first run with no saved offset, expect queued updates to be handled.
+   Use a fresh/controlled DM and send only the documented `/help` command;
+   `/start` is not a CyClaw command.
 
-**Code still to build / harden**
+**Follow-up disposition**
 
 | Item | File(s) | Status / instructions |
 |---|---|---|
 | Answer field normalization | `telegram/runner.py::_extract_answer` | **Shipped.** Prefers `QueryResponse.answer` / `model_used`; unit test with full response-shaped fixture. |
 | Streaming / typing indicator | `telegram/client.py` | **Deferred (optional).** `sendChatAction` typing while `/query` runs. Do not change graph timeouts. |
 | Concurrent updates | `telegram/runner.py` | **Shipped sequential.** One in-flight `/query` per poll batch; parallelism out of scope until a worker queue exists **outside** gate. |
-| Offset persistence | `telegram/state.py` | **Shipped.** Atomic `data/telegram/offset.json`; `poll_forever` loads/saves; still respects no-ack-on-`TelegramRuntimeError`. |
+| Offset persistence | `telegram/state.py` | **Shipped, with a pre-unattended gap.** Atomic `data/telegram/offset.json`; `poll_forever` loads/saves and respects no-ack-on-`TelegramRuntimeError`. A save failure is currently ignored while the in-memory offset advances, so a host restart can replay completed work. Make this failure explicit/fail-closed (or audited degraded mode) and add a restart-replay regression before launchd rollout. |
 | Command namespace | `telegram/runner.py` | **Shipped.** `/help`, `/status` (loopback `/health` only), `/id`, and T3 `/online`; `/save` only explains the T4 confirmation form when sent without an attachment. |
 | Injection double-check | optional | `/query` already runs the sanitizer. Do not reimplement. |
 | launchd plist | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-poll.plist` | **Shipped (template).** KeepAlive + ThrottleInterval; log path documented in plist header. |
@@ -267,6 +284,9 @@ as T1.
 - Telegram consent is the **user_confirmed_online** signal for **one** request
   only (default TTL 120s; hard cap 300s).
 - `allow_hybrid_confirm: true` is a master switch and defaults false.
+- Current `main` already permits core hybrid routing and enables both provider
+  blocks. Telegram T3 still needs the master switch, one-shot command, provider
+  credentials, and all core runtime gates.
 
 **Implemented behavior**
 
@@ -280,26 +300,46 @@ as T1.
    `data/telegram/session_{chat_id}.json`; chat ids are canonical signed 64-bit
    integers and per-session file locking plus atomic replacement protects the
    one-shot claim across poller processes.
-4. The next non-command **private** text claims and deletes that state
-   **before** the `/query` call. It can set `user_confirmed_online: true` and
-   the selected `online_provider` only when unexpired and the master switch
-   remains enabled. A failed query still spends the claim; there is no sticky
-   “always online”.
+4. On the ordinary path, the next non-command **private** text claims and
+   deletes that state **before** the `/query` call. It can set
+   `user_confirmed_online: true` and the selected `online_provider` only when
+   unexpired and the master switch remains enabled. Once deletion succeeds, a
+   failed query or Telegram reply does not restore the claim; there is no
+   sticky “always online”.
 5. Grant, refuse, and consume are audited without message text or secrets.
 6. CyClaw's existing `mode=hybrid` and enabled-provider checks remain the final
    authority. The Telegram bridge cannot make an offline configuration use an
    external provider.
 
+**Required before live T3:** `claim_hybrid_confirm` currently suppresses an
+`OSError` while deleting the session file and can still return the provider.
+That can leave a supposedly one-shot grant reusable until expiry. Fail closed
+without issuing `/query`, audit the retryable state error, and add an
+unlink-failure regression test. Keep `allow_hybrid_confirm: false` until this
+lands.
+
+**Delivery/replay semantics:** Telegram long-polling is at-least-once. A
+retryable `/query` or reply failure leaves an update eligible for redelivery,
+and a host restart after an ignored offset-save failure can replay completed
+work. T2 may therefore repeat a query. After the T3 fix, a successfully deleted
+claim stays consumed and a replay cannot repeat the online escalation.
+
 **Verification:** state, runner, client, and isolation tests cover expiry,
 single-use consumption, disabled/ambiguous command refusals, exact query
-payloads, and audit redaction. Live validation is deferred until the T1/T2
-operator checklist has a configured bot.
+payloads, and audit redaction on normal paths. Live validation is deferred
+until the blocker above is fixed and T1/T2 has a configured bot.
 
 ---
 
 ### T4 — Media → fsconnect (optional, high risk) — PARTIAL
 
-**Goal:** Photo/document from Telegram staged into an fsconnect writable root, optional reindex.
+**Goal:** Stage a Telegram photo/document as an opaque artifact for operator
+review. T4 does not directly create an indexable corpus file.
+
+**Platform boundary:** T4 writes are supported only on POSIX/macOS/Linux because
+fsconnect hard-refuses Windows writes. The current Telegram preflight discovers
+that refusal only after Bot API file resolution/download; a pre-download
+platform gate is required before T4 can be called complete.
 
 **Safe subset implemented**
 
@@ -320,19 +360,25 @@ operator checklist has a configured bot.
   or Bot API file path. It derives an opaque deterministic target and invokes
   `python -m agentic.fsconnect.cli ... write --confirm` using fixed argv and
   stdin. There is no direct `agentic.fsconnect` import in `telegram/`.
-- It does **not** reindex, write `data/corpus`, or expose a voice/STT path.
-  The operator must separately use the existing fsconnect/index workflow after
-  reviewing staged material.
+- It stores documents as `.bin` and photos as `.jpg`. Neither extension is in
+  fsconnect's default index allowlist. It does **not** reindex, write
+  `data/corpus`, or expose a voice/STT path.
+- Any later corpus promotion must verify the real type, safely extract and scan
+  content, copy/rename it to an approved extension, and invoke the existing
+  index workflow explicitly. Photos would require separately approved OCR;
+  no OCR or automatic ingestion is planned.
 
 **Remaining work before T4 may be called complete**
 
-- Live, operator-controlled Bot API and fsconnect CLI validation with a
-  disposable writable root.
+- Reject unsupported hosts before `getFile` or download, with a regression test.
+- Live, operator-controlled Bot API and fsconnect CLI validation on macOS/Linux
+  with a disposable writable root.
 - A separately reviewed, explicit reindex/ingest workflow if staged attachments
-  should become RAG corpus content. Automatic corpus ingestion remains out of
-  scope.
-- Replay-aware staging policy for the unlikely case where fsconnect succeeds
-  but the Telegram acknowledgement fails and Telegram redelivers the update.
+  should become RAG corpus content, including binary extraction/rescan.
+  Automatic corpus ingestion remains out of scope.
+- Replay-aware staging policy covering both acknowledgement failure after an
+  applied write and host restart after offset-persistence failure. Never use a
+  blind overwrite as replay recovery.
 
 **Verification:** Bot API calls are mocked in unit tests; one test executes the
 real local fsconnect CLI against a temporary dedicated root and confirms that
@@ -348,6 +394,9 @@ routing is introduced here.
 ---
 
 ## 6. Background scheduler (related, separate package)
+
+**Deferred under the current feature freeze.** Reuse the shipped LaunchAgent
+templates; do not create `scheduler/` without an explicit operator need.
 
 Telegram T1 is the **notify sink** for jobs. The scheduler itself must remain out-of-band (same shape as `sync.scheduler` / launchd), **not** asyncio tasks inside `gate.py`.
 
@@ -398,7 +447,7 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 
 ## 8. Acceptance checklist
 
-### Code / CI (automated; expected green on current main)
+### Code / CI (current coverage plus pre-live gaps)
 
 - [x] `python -m telegram.cli test` passes with default config (disabled)
 - [x] Full telegram unit suite green under `GROK_API_KEY=dummy` (isolation,
@@ -406,6 +455,8 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 - [x] `telegram` in invariant-guard `OUT_OF_BAND_PKGS`; no core imports of `telegram`
 - [x] Threat-model seventh amendment present
 - [x] Default `enabled: false`, empty allowlist legal only while disabled
+- [ ] T3: session-file deletion failure refuses the request and cannot reuse consent
+- [ ] T2 unattended: offset-save failure is explicit/audited and restart replay is tested
 
 ### Live operator (not done in-repo — this is the real gate)
 
@@ -413,9 +464,10 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 - [ ] Own chat id discovered and in `allowed_chat_ids`
 - [ ] T1: `python -m telegram.cli send …` delivers to phone
 - [ ] T2: with server + Ollama up, `mode: chat` + `poll` answers offline RAG
+- [ ] T2 uses one private DM and exactly one poller; manual poll is stopped before launchd
 - [ ] Non-allowlisted chat is refused; audit shows hashed/inbound/outbound events
-- [ ] T3 (optional): only after app `mode=hybrid` + provider enabled + `allow_hybrid_confirm`
-- [ ] T4 (optional): only after §11 answers and a disposable fsconnect root
+- [ ] T3 (optional): only after the fail-closed state fix, provider credentials, and `allow_hybrid_confirm`
+- [ ] T4 (optional): only on macOS/Linux after §11 answers and a disposable fsconnect root
 
 ---
 
@@ -426,8 +478,8 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 3. Keep embeddings on CPU (`EMBED_DEVICE`) for deterministic retrieval.
 4. Run CyClaw loopback server.
 5. Enable Telegram **T1 first**; live with notify for a few days before `mode: chat`.
-6. Poll process: separate from uvicorn so a stuck `/query` does not kill the web UI (or vice versa).
-7. Prefer launchd templates under `macos/LaunchAgents/` only after manual T1/T2 work.
+6. Poll process: separate from uvicorn so a stuck `/query` does not kill the web UI (or vice versa), but run exactly one poller per bot token.
+7. Prefer launchd templates under `macos/LaunchAgents/` only after manual T1/T2 work and the offset-save failure is no longer silent. Keep the token out of plaintext plist values.
 
 ---
 
@@ -439,6 +491,8 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 | 2026-08-03 | T1/T2 residual: offset file, commands, chunking, launchd templates |
 | 2026-08-04 | T3 explicit one-shot provider consent; T4 default-off, private-chat fsconnect CLI staging; T4 intentionally remains partial (no auto-index or live operator validation). |
 | 2026-08-04 | Stage review: code is at T0–T3 + partial T4; next work is operator T1→T2 live validation and §11 decisions — not more T2/T3 skeleton. |
+| 2026-08-05 | PRs #799–#801 made T3 private-chat-only, converged terminal T4 refusal audits, and recorded rollout-partial stage truth/operator decisions. |
+| 2026-08-07 | Fresh-main parity review: corrected current hybrid posture and T2 config example; added T3 fail-closed deletion blocker, T2 single-poller/replay limits, and T4 POSIX/opaque-staging constraints. |
 
 ---
 
@@ -461,8 +515,8 @@ answers; leave blank only if the feature stays off forever.
 | Item | Your answer |
 |---|---|
 | Bot exists via BotFather? | yes / no |
-| Where will `TELEGRAM_BOT_TOKEN` live? (env only — never commit) | e.g. user env / launchd plist env / secret store |
-| Chat id of the **only** trusted phone? | (numeric; discover via `/id` after bot is messaged once, or `@userinfobot`) |
+| Where will `TELEGRAM_BOT_TOKEN` live? (never commit or inline in plist) | Keychain/runtime wrapper / operator-only `0600` secret file / other secret store |
+| Chat id of the **only** trusted phone? | (numeric; bootstrap from this bot's own `getUpdates`; `/id` only confirms after allowlisting) |
 | Host for first enablement? | Windows box / MacBook M5 / both |
 | Notify failure sink desired? | manual only / health launchd / nightly sync wrapper later |
 
@@ -472,25 +526,29 @@ answers; leave blank only if the feature stays off forever.
 |---|---|
 | Local Ollama model ready for long answers? | yes / no / which model |
 | CyClaw loopback server always-on while polling? | yes / only when I start it |
+| First chat scope? | private DM (recommended) / allowlisted group (trust every member) |
 | Typing indicator (`sendChatAction`)? | defer (default) / want it soon |
-| Multi-process pollers? | no (default) / maybe later (would unlock sqlite rate limiter work) |
+| Multi-process pollers? | no (required by current design) |
+| Unattended launchd before offset-save failure is explicit? | no (recommended) / accept duplicate-work risk |
 
 ### D. T3 hybrid from Telegram (optional)
 
 | Item | Your answer |
 |---|---|
 | Do you want phone-side one-shot Grok/Claude escalate? | no for now / yes later / yes soon |
-| Will core `app.mode` be `hybrid` with a provider enabled when testing? | yes / no |
-| OK that a failed `/query` still **consumes** the one-shot consent? | yes (current) / revisit design |
+| Current main ships `app.mode: hybrid` and provider enables on; keep that posture for testing? | yes with credentials / change before test |
+| Require the fail-closed state-deletion patch before T3? | **yes (required)** |
+| OK that downstream failure still **consumes** a successfully deleted one-shot consent? | yes (current) / revisit design |
 
 ### E. T4 media (high risk — default stay off)
 
 | Item | Your answer |
 |---|---|
 | Need photo/document → disk at all? | no / yes staging only / yes then into corpus |
-| Disposable absolute fsconnect writable root path? | (path outside repo + corpus) |
+| Supported host and disposable absolute fsconnect writable root? | macOS/Linux only; path outside repo + corpus |
+| Explicit type validation/extraction before corpus promotion? | required / leave staging-only |
 | Auto-reindex after stage? | **never** (current) / later explicit CLI only |
-| Replay policy if fsconnect writes but Telegram ack fails? | refuse re-download / allow idempotent overwrite / design later |
+| Replay policy after applied write or lost offset? | durable receipt + re-ack (recommended) / design later / leave T4 off |
 
 ### F. Scheduler (§6) coupling
 
@@ -500,6 +558,7 @@ answers; leave blank only if the feature stays off forever.
 
 ### Recommended default if you only answer one thing
 
-Ship **A.1 → A.2** on the Mac or Windows host you use daily: enable notify,
-prove one message, then turn on chat. Leave T3/T4/media master switches false
-until T2 is boring for at least a few days.
+Ship **A.1 → A.2** in a private DM on the host you use daily: enable notify,
+prove one message, then run one manual chat poller. Do not load the KeepAlive
+poller until offset-save failures are explicit. Leave T3/T4/media master
+switches false until their listed blockers are fixed; T4 is macOS/Linux only.
