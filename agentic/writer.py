@@ -1,39 +1,27 @@
-"""GitHub WRITE gate for the agentic layer -- implemented, shipped disarmed.
+"""GitHub WRITE gate for the agentic layer -- implemented and ARMED.
 
-Until P10 this module could not mutate GitHub state at all: ``execute_write``
-was a stub that raised ``NotImplementedError``. It is now implemented for
-exactly one operation (``pr_create``, always ``--draft``), behind the same gate
-this module has always documented. ``pr_comment`` and ``issue_comment`` remain
-plan-only: they are describable but not executable, and reaching them through
-:func:`execute_write` is a typed refusal, not a silent no-op.
+``execute_write`` is implemented for exactly one operation (``pr_create``, always
+``--draft``), behind the gate chain this module documents. ``pr_comment`` and
+``issue_comment`` remain plan-only: they are describable but not executable, and
+reaching them through :func:`execute_write` is a typed refusal, not a silent no-op.
 
-The capability ships DISARMED. ``EXECUTION_ENABLED`` is still ``False`` -- see
-its comment for why P10 implemented the executor without flipping it -- and
-three independent ``config.yaml`` gates fail closed on a shipped checkout. Arming
-it is a documented operator procedure, not a code change:
-``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``.
-
-The gate is the out-of-band analogue of CyClaw's "Triple-Gated External Access"
-invariant for the Grok path. A write is permitted only when the master switch
-and all four numbered gates hold:
+``EXECUTION_ENABLED`` ships ``True`` after the operator enablement checklist
+(``docs/agentic/GITHUB_WRITE_ENABLEMENT.md``). That is NOT enough to write on its
+own. A write is permitted only when the master switch and all four numbered gates
+hold:
 
     0. cfg.enabled is True             (the agentic layer's own master switch)
     1. cfg.mode == "write"              (operator put the layer in write mode)
-    2. cfg.writes_enabled is True       (explicit second flag, defaults False)
+    2. cfg.writes_enabled is True       (explicit second flag)
     3. a non-empty human ``reason``     (governance: no anonymous mutations)
     4. confirm is True                  (explicit per-call confirmation)
 
-are satisfied simultaneously. The shipped ``config.yaml`` fails 0, 1, and 2
-independently (``agentic.enabled: false``, ``mode: "read"``,
-``writes_enabled: false``), so enabling a write is three deliberate operator
-edits, not one.
+The shipped ``config.yaml`` opens gates 1 and 2 but leaves gate 0 closed
+(``agentic.enabled: false``), so the CLI no-ops until an operator enables the
+layer. Per-call reason + confirm remain mandatory on every mutation.
 
-WHY :func:`execute_write` RE-RUNS THE GATE. Before P10 the gate lived only in
-:func:`plan_write`, and :func:`execute_write` took a plain ``dict`` and checked
-nothing but ``EXECUTION_ENABLED``. That was sound only while the flag was a
-hard ``False`` -- with it flipped, "holding a plan dict" would have BECOME the
-authority to write, and a plan is just data: it can be built by hand, come back
-from JSON, or cross a process boundary. So the executor now takes the config
+WHY :func:`execute_write` RE-RUNS THE GATE. The gate lives in both
+:func:`plan_write` and :func:`execute_write`. The executor takes the config
 AND a fresh ``confirm`` and re-runs the master switch plus all four gates
 itself, and rebuilds the argv from the plan's semantic fields rather than
 executing the ``would_run`` list it was handed. A tampered ``would_run`` is
@@ -55,10 +43,11 @@ from utils.agent_identity import allowed_prefixes_help
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
-# EXECUTION SWITCH -- 
-# Flipping this to True is now genuinely sufficient to arm the capability --
-# but not to perform a write. Three shipped config gates still fail closed
-# Note: Check agentic section of config.yaml for key to change
+# EXECUTION SWITCH -- ARMED (operator-signed enablement; see
+# docs/agentic/GITHUB_WRITE_ENABLEMENT.md). True alone is not enough to write:
+# agentic.enabled, mode, writes_enabled, reason, and confirm still fail closed.
+# Rollback: set False here and confirm execute_write refuses with
+# failed_gate: "execution_enabled".
 EXECUTION_ENABLED = True
 
 # Write ops the planner knows how to *describe*.

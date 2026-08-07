@@ -158,6 +158,8 @@ def test_ungated_provider_is_refused(tmp_path, monkeypatch, capsys):
     src["agentic"]["enabled"] = True
     src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_cloud_providers"] = True
+    # Explicit: only gate 4 closed for this provider (shipped config may enable both).
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
     reset_config_cache()

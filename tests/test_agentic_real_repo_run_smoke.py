@@ -187,6 +187,9 @@ def smoke_config(tmp_path, monkeypatch, instant_model_server):
     src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
     src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    src["agentic"]["deepagent_github"]["allow_cloud_providers"] = False
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = False
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     src["agentic"]["deepagent_github"]["base_url"] = instant_model_server
     src["agentic"]["deepagent_github"]["model"] = "local-test-model"
     path = tmp_path / "config.yaml"

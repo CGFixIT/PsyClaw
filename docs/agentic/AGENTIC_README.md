@@ -14,15 +14,13 @@ retrieval, routing, or the MCP surface. **Disabled by default.**
 
 > Security posture in one line: reads are local metadata via the `gh` CLI
 > (argv-list, no shell, audited, no token forwarded by CyClaw); **GitHub writes
-> are implemented (`gh pr create --draft`) but shipped disarmed** by
-> `EXECUTION_ENABLED = False` plus config gates (§5) — this replaced an
-> earlier "stub, never executes" description once P10 landed real execution
-> behind the flag. A separate, real plan → patch → verify → commit pipeline
-> (`agentic/real_repo_loop.py`, wired to `real-repo-run`/the harness's
-> `/api/agent/run`) DOES commit to a locally-cloned repo when governed and
-> confirmed — see `docs/THREAT_MODEL.md`'s third/fifth amendments for the
-> full, current picture; this doc's §5/§9 below are being kept in sync with
-> it but may lag a landed change briefly.
+> are implemented (`gh pr create --draft`) and ARMED** (`EXECUTION_ENABLED = True`,
+> `mode: write`, `writes_enabled: true`) but the layer master switch
+> (`agentic.enabled`) still ships false — enable the layer, then supply reason +
+> confirm per call. A separate plan → patch → verify → commit pipeline
+> (`agentic/real_repo_loop.py`) can commit inside a jailed clone when governed —
+> push/PR still need their own gates. See §5 and
+> `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
 
 ## 1. Prerequisites
 - The GitHub CLI `gh` ≥ the configured floor (default `2.40.0`), authenticated
@@ -33,10 +31,10 @@ retrieval, routing, or the MCP surface. **Disabled by default.**
 Edit the `agentic:` block in `config.yaml`:
 ```yaml
 agentic:
-  enabled: true                  # default false
-  repo: "CGFixIT/CyClaw"         # owner/name
-  mode: "read"                   # keep "read"; "write" only dry-runs in v0.1
-  writes_enabled: false
+  enabled: true                  # default false — flip this to turn the layer on
+  repo: "cgfixit/CyClaw"         # owner/name
+  mode: "write"                  # ships write; still needs enabled + reason + confirm
+  writes_enabled: true
   gh_min_version: "2.40.0"
   registry_path: "data/agentic/skills_registry.json"
   allowed_read_ops: [pr_view, pr_list, pr_diff, issue_view, issue_list, repo_view]
@@ -91,23 +89,20 @@ python -m agentic.cli deepagent-plan --repo --instruction "..."
 | 3 | config / environment problem (gh missing or too old, config invalid) |
 | 4 | a write/apply was refused by the gate (e.g. missing `--confirm`) |
 
-## 5. The write gate (why nothing is published on a shipped checkout)
+## 5. The write gate (what still blocks a PR on a shipped checkout)
 `agentic/writer.py` requires **all** of: `agentic.enabled`, `mode == "write"`,
 `writes_enabled: true`, a non-empty human `reason`, and per-call `confirm` --
-five gates, re-checked on every call against the live config (an earlier
-version was caught manufacturing `confirm=True` internally on a re-check;
-fixed). A sixth, `EXECUTION_ENABLED` (code, not config, `agentic/writer.py`),
-is checked first and ships `False`.
+five gates, re-checked on every call against the live config. A sixth,
+`EXECUTION_ENABLED` (code, not config), is checked first and ships `True`
+(armed 2026-08-07). The default checkout still cannot publish because
+`agentic.enabled` ships `false` (CLI no-ops) and every mutation still needs a
+fresh reason + confirm.
 
 With any gate closed, `execute_write()` refuses via a typed
-`AgenticWriteRefused` -- it does NOT raise `NotImplementedError` and it is not
-a stub: `pr_create` is a real, tested implementation (`gh pr create --repo …
---draft`, run via `subprocess.run`). Even with the six gates armed, only
-`pr_create` executes; `pr_comment`/`issue_comment` remain describable via
-`plan_write` but refuse at execution. Arming `EXECUTION_ENABLED` is a
-filed-checklist operator procedure, not a code change --
-`docs/agentic/GITHUB_WRITE_ENABLEMENT.md` is the enablement doc, and its
-status banner is the current source of truth for whether it's armed.
+`AgenticWriteRefused`. `pr_create` is a real, tested implementation
+(`gh pr create --repo … --draft`). Only `pr_create` executes;
+`pr_comment`/`issue_comment` remain plan-only. Source of truth for arming:
+`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`.
 
 ## 6. Auditing
 Every read, refusal, and registry change emits a JSONL event via the same

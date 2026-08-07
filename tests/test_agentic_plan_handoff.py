@@ -207,6 +207,9 @@ def cfg_path(tmp_path, monkeypatch):
     src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
     src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    src["agentic"]["deepagent_github"]["allow_cloud_providers"] = False
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = False
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     src["agentic"]["deepagent_github"]["model"] = "local-test-model"
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
@@ -358,6 +361,9 @@ def test_plan_command_refuses_an_instruction_matching_the_operators_own_banned_p
     src["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
     src["agentic"]["enabled"] = True
     src["agentic"]["deepagent_github"]["enabled"] = True
+    src["agentic"]["deepagent_github"]["allow_cloud_providers"] = False
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = False
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     src["agentic"]["deepagent_github"]["model"] = "local-test-model"
     src["policy"]["prompt_filter"]["banned_patterns"].append(r"launch\s+the\s+marmots")
     cfg_path_local = tmp_path / "config.yaml"

@@ -352,37 +352,47 @@ class TestShippedAgenticConfigContract:
 
     Every other test in this file constructs its own tmp_path config, which
     proves the loader/validator works but never confirms the real repo config
-    actually ships every gate disabled. Mirrors the real-file-read pattern in
-    tests/test_due_diligence_invariants.py (yaml.safe_load against the repo's
-    own config.yaml) and tests/test_sanitizer.py's TestShippedConfigContract.
+    matches the intended operator-armed posture. Mirrors the real-file-read
+    pattern in tests/test_due_diligence_invariants.py and
+    tests/test_sanitizer.py's TestShippedConfigContract.
+
+    Posture (operator-signed 2026-08-07): write gates + cloud providers open in
+    config, EXECUTION_ENABLED True in code, but agentic.enabled still false so
+    the layer no-ops until an operator flips the master switch. deepagent_github
+    tooling gates (shell, git write tools, github writes via deepagent tools)
+    stay closed — only the writer pr_create path is armed.
     """
 
     @staticmethod
     def _load() -> AgenticConfig:
         return load_agentic_config(str(REPO_ROOT / "config.yaml"))
 
-    def test_master_switch_disabled(self) -> None:
+    def test_master_switch_disabled_write_gates_open(self) -> None:
+        """Layer off by default; write mode + writes_enabled already armed."""
         cfg = self._load()
         assert cfg.enabled is False
-        assert cfg.mode == "read"
-        assert cfg.writes_enabled is False
+        assert cfg.mode == "write"
+        assert cfg.writes_enabled is True
+        assert cfg.repo == "cgfixit/CyClaw"
 
-    def test_deepagent_github_shipped_gates_disabled(self) -> None:
+    def test_deepagent_github_shipped_gates(self) -> None:
         cfg = self._load().deepagent_github
+        # Coding-loop package itself stays off until explicitly enabled.
         assert cfg.enabled is False
         assert cfg.allow_deepagents_dependency is False
         assert cfg.allow_filesystem_write_tools is False
         assert cfg.allow_shell_execution is False
         assert cfg.allow_github_writes is False
         assert cfg.allow_git_write_tools is False
-        # Gate 3 of the cloud chain -- the agentic analog of app.mode: "hybrid".
-        assert cfg.allow_cloud_providers is False
-        # Gate 4, per provider. Both must ship false, and cloud_provider() must
-        # refuse to hand either back while gate 3 is off.
+        # Cloud chain: master gate open + per-provider flags open (still needs
+        # agentic.enabled, deepagent_github.enabled, API keys, --confirm-online).
+        assert cfg.allow_cloud_providers is True
         assert set(cfg.providers) == {"grok", "claude"}
         for name, provider in cfg.providers.items():
-            assert provider.enabled is False, name
-            assert cfg.cloud_provider(name) is None, name
+            assert provider.enabled is True, name
+            # cloud_provider() still returns None while deepagent package flag
+            # is off / no keys — only the config flags are pinned here.
+            assert provider.model  # non-empty model id pinned in config
 
     def test_harness_optimizer_shipped_gates_disabled(self) -> None:
         cfg = self._load().harness_optimizer

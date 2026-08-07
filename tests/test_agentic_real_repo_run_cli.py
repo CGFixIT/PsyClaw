@@ -50,6 +50,12 @@ def cfg_path(tmp_path, monkeypatch):
     src["agentic"]["deepagent_github"]["enabled"] = True
     src["agentic"]["deepagent_github"]["allow_git_write_tools"] = True
     src["agentic"]["deepagent_github"]["workspace_root"] = str(tmp_path / "data" / "workspaces")
+    # Local-only baseline: shipped config may have cloud providers open, but
+    # this fixture pins the cloud chain closed so local-path tests stay
+    # deterministic (and keep allow_cloud + provider enables consistent).
+    src["agentic"]["deepagent_github"]["allow_cloud_providers"] = False
+    src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = False
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     # Ships "" in config.yaml; a real armed deployment must set this or every
     # run fails inside the first planner call, after a full context fetch and
     # clone already ran (see the eager check in cmd_real_repo_run).
@@ -83,8 +89,13 @@ def cloud_cfg_path(tmp_path, monkeypatch):
     src["agentic"]["deepagent_github"]["allow_cloud_providers"] = True
     src["agentic"]["deepagent_github"]["providers"]["grok"]["enabled"] = True
     src["agentic"]["deepagent_github"]["providers"]["grok"]["model"] = "grok-test-model"
+    # claude stays whatever the copy has; keep it consistent with the master gate
+    src["agentic"]["deepagent_github"]["providers"]["claude"]["enabled"] = False
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(src), encoding="utf-8")
+    # Gate 5: most cloud tests need a key present. Tests that assert missing-key
+    # refusal explicitly delenv GROK_API_KEY.
+    monkeypatch.setenv("GROK_API_KEY", "test-not-a-real-key")
     reset_config_cache()
     yield str(path)
     reset_config_cache()
@@ -944,12 +955,11 @@ def test_decide_push_lands_a_real_ref_on_a_real_remote(tmp_path, cfg_path, check
 def test_decide_publish_is_still_refused_by_the_hardcoded_execution_flag(
     tmp_path, cfg_path, checks_file, monkeypatch, capsys,
 ):
-    """The whole point of "wire it, still disarmed": EXECUTION_ENABLED is a
-    Python constant in agentic/writer.py, not a config value -- no combination
-    of config.yaml or CLI flags can make --publish succeed on a shipped
-    checkout. Push (a config-gated, non-GitHub-API action) still lands first,
-    proving the refusal is specific to publish, not a side effect of push
-    having failed."""
+    """Kill-switch rollback: with EXECUTION_ENABLED forced False, --publish
+    refuses even after a real push. The constant is code, not config -- config
+    gates alone cannot re-arm it. (Shipped checkout is armed; this proves
+    rollback still works.)"""
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", False)
     _use_real_origin_remote(tmp_path, monkeypatch)
     monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
     _run_start(cfg_path, checks_file)
@@ -1165,9 +1175,10 @@ def test_publish_subcommand_requires_confirm(tmp_path, cfg_path, checks_file, mo
 def test_publish_subcommand_is_still_refused_by_the_hardcoded_execution_flag(
     tmp_path, cfg_path, checks_file, monkeypatch, capsys,
 ):
-    """Same disarmed guarantee as the decide --publish path, reached the other
-    way: fully approved, really pushed, correct reason and confirm -- and still
-    refused, because EXECUTION_ENABLED is source, not config."""
+    """Same kill-switch rollback as decide --publish, via the standalone
+    publish subcommand: fully approved, really pushed, correct reason and
+    confirm -- still refused when EXECUTION_ENABLED is forced False."""
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", False)
     _use_real_origin_remote(tmp_path, monkeypatch)
     monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
     _run_start(cfg_path, checks_file)
