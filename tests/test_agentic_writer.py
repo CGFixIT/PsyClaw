@@ -1,7 +1,8 @@
-"""Tests for agentic.writer -- the disabled/stubbed write gate.
+"""Tests for agentic.writer -- the armed write gate.
 
-Proves the triple-gate refuses every under-satisfied request, that a fully gated
-request still only DRY-RUNS (never executes), and that the executor is unwired.
+Proves the gate chain refuses every under-satisfied request, that plan_write
+only dry-runs (never executes), that EXECUTION_ENABLED ships armed, and that
+the kill switch still refuses when flipped back to False.
 """
 
 from __future__ import annotations
@@ -56,17 +57,15 @@ def _config_path(tmp_path: Path) -> str:
     return str(tmp_path / "config.yaml")
 
 
-def test_execution_ships_disarmed():
-    """P10 implemented the executor but deliberately did NOT arm it.
+def test_execution_ships_armed():
+    """Operator-signed enablement: EXECUTION_ENABLED ships True.
 
-    This assertion did not change meaning: the flag still ships False. What
-    changed is why it matters. Before P10 it was one of two things stopping a
-    write (the other being an unimplemented executor); now it is a real switch
-    in front of working code, so it ships off pending the human security review
-    docs/agentic/DEEP_AGENT_HARNESS_PHASES_6_9.md requires for a GitHub
-    mutation. See docs/agentic/GITHUB_WRITE_ENABLEMENT.md.
+    Arming the flag is not sufficient to mutate GitHub on its own — agentic.enabled,
+    mode, writes_enabled, reason, and confirm still fail closed. See
+    docs/agentic/GITHUB_WRITE_ENABLEMENT.md. Kill-switch rollback is covered by
+    test_executor_refused_when_kill_switch_off.
     """
-    assert EXECUTION_ENABLED is False
+    assert EXECUTION_ENABLED is True
 
 
 def test_master_switch_refuses_plan_write_when_agentic_disabled(tmp_path: Path):
@@ -200,7 +199,7 @@ def test_full_gate_pr_create_returns_dryrun_only():
         "pr",
         "create",
         "--repo",
-        "CGFixIT/CyClaw",
+        "cgfixit/CyClaw",
         "--head",
         "agent/fix-thing",
         "--base",
@@ -213,10 +212,13 @@ def test_full_gate_pr_create_returns_dryrun_only():
     ]
 
 
-def test_executor_refused_by_kill_switch(tmp_path: Path):
-    # EXECUTION_ENABLED is False (shipped state), so even a fully gate-satisfied
-    # plan is refused at the execution boundary -- the kill switch is enforced,
-    # not merely documented. Unchanged by P10 except for the required cfg.
+def test_executor_refused_when_kill_switch_off(monkeypatch, tmp_path: Path):
+    """Rollback path: flipping EXECUTION_ENABLED back to False must refuse.
+
+    Shipped state is armed (True). This test monkeypatches False to prove the
+    kill switch still works when an operator rolls back.
+    """
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", False)
     plan = plan_write(
         _write_cfg(),
         "issue_comment",
@@ -247,7 +249,7 @@ def test_arming_the_flag_is_not_sufficient_without_the_config_gates(monkeypatch,
 
     Here the flag is armed, a fresh confirm=True is supplied, and a fully
     gate-satisfied plan is supplied -- but the config handed to the executor
-    is a SHIPPED-DEFAULT config (mode=read, writes_enabled=False) with the
+    is a config with write gates closed (mode=read, writes_enabled=False) with the
     master switch on, so this isolates gate 1 specifically. It refuses there.
     """
     monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)

@@ -471,15 +471,15 @@ sync:
 # Absence of this block, or enabled: false, disables the agentic layer entirely.
 # It runs strictly via `python -m agentic.cli` — never imported by gate.py,
 # graph.py, or the MCP server. Reads use the `gh` CLI (argv-list, no shell, no
-# token forwarded by CyClaw). The GitHub write path is IMPLEMENTED but shipped
-# DISARMED: agentic/writer.py's EXECUTION_ENABLED is False, and the mode /
-# writes_enabled gates below fail closed independently, so nothing here can open
-# a pull request as shipped. Arming it is a filed-checklist operator procedure —
-# see docs/agentic/GITHUB_WRITE_ENABLEMENT.md.
+# token forwarded by CyClaw). The GitHub write path is IMPLEMENTED and ARMED at the code flag
+# (agentic/writer.py EXECUTION_ENABLED=True) with mode/writes_enabled open
+# below. The layer master switch (agentic.enabled) still ships false so the
+# CLI no-ops until you opt in. Per-call reason + confirm still required.
+# See docs/agentic/GITHUB_WRITE_ENABLEMENT.md for the full gate chain.
 agentic:
   enabled: false                 # off by default; CLI no-ops (exit 0) while false
-  repo: "CGFixIT/CyClaw"         # validated: owner/name, no shell metacharacters
-  mode: "write"                  # "read" (safe default) | "write" (opt-in, still gated)
+  repo: "cgfixit/CyClaw"         # validated: owner/name, no shell metacharacters
+  mode: "write"                  # "read" | "write" (armed; still needs enabled + reason + confirm)
   writes_enabled: true           # second flag; writes need mode=write AND this AND reason AND confirm
   gh_min_version: "2.40.0"       # `gh` version floor (X.Y.Z)
   gh_timeout_sec: 30             # wall-clock ceiling per gh read subprocess
@@ -572,7 +572,7 @@ agentic:
     # allow_cloud_providers, providers.<name>.enabled, the provider's API key env
     # var, and a per-run --confirm-online). Setting a provider enabled: true while
     # allow_cloud_providers is false is a CONFIG ERROR, not a silent no-op.
-    allow_cloud_providers: false
+    allow_cloud_providers: true
     providers:
       grok:
         enabled: true

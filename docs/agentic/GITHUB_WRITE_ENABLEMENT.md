@@ -1,9 +1,11 @@
 # GitHub Write Enablement — procedure and security review
 
-**Status: NOT ENABLED.** `agentic/writer.py` ships `EXECUTION_ENABLED = False`
-and `config.yaml` ships three further gates closed. Nothing in this repository
-can open a pull request today. This document is the procedure for changing
-that, and the checklist that must be filed first.
+**Status: ARMED (operator-signed 2026-08-07).** `agentic/writer.py` ships
+`EXECUTION_ENABLED = True`, and `config.yaml` ships `mode: write` +
+`writes_enabled: true`. The layer master switch (`agentic.enabled`) still ships
+`false`, so the CLI no-ops until an operator enables it. Per-call `reason` +
+`confirm` remain mandatory. This document remains the procedure and rollback
+checklist.
 
 > **Checklist re-run in progress (2026-07-31), decisions recorded
 > (2026-08-01).** Item A's void-and-re-run clause fired: `execute_write` is
@@ -22,12 +24,10 @@ that, and the checklist that must be filed first.
 >   targeted fix (e.g. overriding the executor's git credential helper) is
 >   required before signing.
 >
-> **The status above is still unchanged and still requires an actual
-> signature and date on the line below before it changes.** Recording a
-> decision on what the checklist SAYS is not the same act as signing it —
-> the sign-off line, and the arming steps (procedure steps 5–7, including
-> flipping `EXECUTION_ENABLED`), remain the operator's own, separate, explicit
-> action.
+> **Signed and armed 2026-08-07 (CG).** Checklist items A/H remain accepted as
+> recorded. Remaining live gates: `agentic.enabled` (still false by default),
+> per-call reason + confirm, and the deepagent tooling flags
+> (`allow_git_write_tools` / `allow_github_writes` still false).
 
 It is the GitHub analogue of `FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md` +
 `FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`, and exists for the same reason: the
@@ -45,9 +45,9 @@ mutation, or source-tree application." A GitHub mutation is the literal trigger.
 branch to origin. Both are fully tested, including against a real local git
 remote.
 
-**Deliberately not shipped:** the flag flip. P10 implemented the capability and
-left it disarmed, because arming it is the step this repo reserves for a human
-with a filed checklist — not for the change that builds the machinery.
+**Later armed (2026-08-07):** the flag flip and config write gates. P10 built the
+machinery disarmed; the operator checklist was signed and gates 1–3 were opened.
+Gate 0 (`agentic.enabled`) remains the opt-in that actually turns the CLI on.
 
 ---
 
@@ -58,9 +58,9 @@ A write requires **all six** of these. Five are config or per-call; one is code.
 | # | Gate | Where | Ships as | Fails closed? |
 |---|---|---|---|---|
 | 0 | `agentic.enabled` (the layer's master switch) | `config.yaml` | `false` | yes |
-| 1 | `EXECUTION_ENABLED` | `agentic/writer.py` | `False` | yes |
-| 2 | `agentic.mode == "write"` | `config.yaml` | `"read"` | yes |
-| 3 | `agentic.writes_enabled` | `config.yaml` | `false` | yes |
+| 1 | `EXECUTION_ENABLED` | `agentic/writer.py` | `True` (armed) | yes (if set False) |
+| 2 | `agentic.mode == "write"` | `config.yaml` | `"write"` | yes |
+| 3 | `agentic.writes_enabled` | `config.yaml` | `true` | yes |
 | 4 | a non-empty human `reason` | per call | — | yes |
 | 5 | `confirm is True` | per call | — | yes |
 
@@ -273,8 +273,9 @@ Method and 7.31.2026 result:
 | J | Confirmed `_require_gates` checks `agentic.enabled` first | Holds |
 | K | Confirmed `execute_write(confirm=...)` is keyword-required and `plan_write` stores no `confirm` key | Holds |
 
-Runtime state at verification: `EXECUTION_ENABLED is False`,
-`_EXECUTABLE_WRITE_OPS == {"pr_create"}`.
+Runtime state at verification (pre-arm 2026-07-31): `EXECUTION_ENABLED is False`,
+`_EXECUTABLE_WRITE_OPS == {"pr_create"}`. Post-arm (2026-08-07): `EXECUTION_ENABLED is True`;
+executable ops unchanged.
 
 Steps 1, 2, 3, 5, 6 and 7 of the enablement procedure are **not** performed
 here and cannot be: steps 1–2 read the operator's own `gh`/git credential
@@ -287,9 +288,9 @@ signing this checklist — the sign-off line below, and the arming itself
 
 **Sign-off:** CG  **Date:** 8.7.2026
 
-*(no sign-off, no flag flip — this verification record is evidence for a
-signature, never a substitute for one)*
-^lol why did you even need that but it was helpful for me to better understand blast radius
+Armed the same day: `EXECUTION_ENABLED=True`, `mode: write`, `writes_enabled: true`,
+cloud providers gated open (`allow_cloud_providers: true` + provider enables).
+`agentic.enabled` remains false until the operator turns the layer on.
 
 ---
 
