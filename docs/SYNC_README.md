@@ -173,9 +173,22 @@ python -m sync.cli test
 pytest tests/test_sync_*.py
 ```
 
-With rclone absent, `python -m sync.cli test` / `status` exits **3** with
+With rclone absent, `python -m sync.cli setup` exits **3** with
 `RCLONE_NOT_INSTALLED` — that clean failure is itself the not-installed path
-working as intended.
+working as intended. The other two subcommands differ, and measured rather than
+assumed: `test` exits **2** (the self-test reports "7/8 passed" with the rclone
+point failed — it ran and failed, which is exit 2's meaning), and `status`
+exits **0**, printing `[ERR] rclone binary not found on PATH` and continuing,
+because `status` is an informational report rather than a health gate. Do not
+read `status` exiting 0 as "sync is healthy"; read the report.
+
+An unreadable or malformed `config.yaml` exits **3**. That is worth stating
+because it used to exit **1**, which this table already spends on the
+max-delete/max-transfer safety fuse — so `POST /ops/sync` labelled a missing
+config file as `safety_abort` and the console announced a tripped deletion fuse.
+`load_sync_config` now converts those load failures to `SYNC_CONFIG_INVALID`,
+and `sync/cli.py::main` has a dispatch-point handler so nothing else can escape
+the table either.
 
 ---
 

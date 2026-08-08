@@ -125,3 +125,31 @@ def test_selftest_bad_config(tmp_path):
     path.write_text(yaml.safe_dump(doc), encoding="utf-8")
     passed, total, lines = run_self_test(str(path))
     assert total == 5 and passed == total - 1
+
+
+# ── exit codes are an API ────────────────────────────────────────────────────
+
+def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
+    """Dispatch-point handler, matching agentic/cli.py::main (#824).
+
+    utils/ops_runner.py's _SQLCONNECT_LABELS maps 0/2/3 and reports everything
+    else as "unknown". Narrow on purpose: a genuine bug still raises rather than
+    being flattened into a tidy exit 2.
+    """
+    from utils.errors import (
+        SqlConnectConfigError,
+        SqlConnectRuntimeError,
+        SqlDriverNotInstalledError,
+    )
+
+    for exc, want in [
+        (SqlConnectConfigError("bad cfg"), cli.EXIT_ENV),
+        (SqlDriverNotInstalledError("no driver"), cli.EXIT_ENV),
+        (SqlConnectRuntimeError("failed"), cli.EXIT_FAIL),
+    ]:
+        monkeypatch.setattr(cli, "cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
+        assert cli.main(["status"]) == want
+
+    monkeypatch.setattr(cli, "cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
+    with pytest.raises(RuntimeError, match="a real bug"):
+        cli.main(["status"])

@@ -420,9 +420,22 @@ class ScopedRoots:
                 os.fsync(f.fileno())
             os.replace(tmp, leaf, src_dir_fd=pfd, dst_dir_fd=pfd)
             self._fsync_dir(pfd)
-        except BaseException:
+        except BaseException as exc:
             with suppress(OSError):
                 os.unlink(tmp, dir_fd=pfd)
+            # An OSError from the write/replace/fsync becomes a typed error, the
+            # same way the os.open three lines above already does. Without this
+            # the commonest case -- os.replace onto an existing DIRECTORY, i.e.
+            # one mistyped --path -- escaped as a raw IsADirectoryError, which is
+            # outside the 0/2/3/4 exit contract AND left an
+            # fsconnect_write_intent with no matching _applied, the exact shape
+            # writer.py's docstring defines as the crash/tamper signal.
+            # BaseException is kept so KeyboardInterrupt still unlinks the temp.
+            if isinstance(exc, OSError):
+                raise FsConnectRuntimeError(
+                    "could not complete atomic write",
+                    details={"errno": exc.errno, "strerror": exc.strerror},
+                ) from exc
             raise
 
     @staticmethod
