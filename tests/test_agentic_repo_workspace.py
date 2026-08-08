@@ -1199,6 +1199,13 @@ def test_write_file_refuses_an_in_clone_symlink_onto_a_protected_path(tmp_path, 
                 "the write must be recorded at its resolved destination, or "
                 "protected_write_paths never sees it"
             )
+            # The bytes really do land on the protected file -- which is why
+            # reporting the resolved path is the whole fix. Recording the
+            # declared name would leave this content change invisible to the
+            # gate and to the human reading changed_files.
+            landed = (worktree / "tests" / "test_x.py").read_text(encoding="utf-8")
+            assert landed != original
+            assert landed == "def test_real(): assert False\n"
 
 
 def test_write_file_refuses_an_intermediate_symlink_directory(tmp_path, monkeypatch):
@@ -1218,6 +1225,9 @@ def test_write_file_refuses_an_intermediate_symlink_directory(tmp_path, monkeypa
             assert result["target"] == "tests/test_x.py", (
                 "an intermediate symlink directory must also report the resolved path"
             )
+            landed = (worktree / "tests" / "test_x.py").read_text(encoding="utf-8")
+            assert landed != original
+            assert landed == "def test_real(): assert False\n"
 
 
 def test_write_file_still_accepts_ordinary_paths(tmp_path, monkeypatch):
