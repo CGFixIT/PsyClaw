@@ -596,11 +596,28 @@ describing its own point in time and is retained as a historical record.
   calls any local process — or any page in the operator's browser, `GET` being
   CORS-simple — could trigger. Those probes are now opt-in via
   `api.health_probe_external_providers`, which ships `false`.
-- **"Safe by default" is no longer an automated guarantee.** `invariant-guard`
-  passes 33/33 because I1–I6 and G1–G5 are structural and none encodes a
-  shipped-default posture. `config-guard` does emit `C9 WARN` for the hybrid
-  posture, but its `verify.sh` invokes it without `--strict` and no CI workflow
-  runs it — so nothing can fail a build on a posture regression.
+- **A posture regression cannot fail a build, though a config *error* can.**
+  `invariant-guard` passes 33/33 because I1–I6 and G1–G5 are structural and none
+  encodes a shipped-default posture. `config-guard` **is** build-blocking:
+  `ci.yml`'s `discover-skills` job finds every `.claude/skills/*/verify.sh` by
+  `find` and runs them as the `verify-skills` matrix, and `config-guard`'s
+  `verify.sh` runs the checker against the real shipped `config.yaml` and fails
+  the job on a non-zero exit. So C1–C8/C10/C11 **failures** do block a merge.
+  What does not block is a **warning**: `C9` (external/online posture), `C7`
+  (RRF-scale `min_score`) and `C12` (context arithmetic) exit 0, and `--strict`
+  — which promotes warnings to failures — is used only inside `verify.sh`'s own
+  mutation self-test, never against the shipped file. Wiring `--strict` against
+  the real config would fail immediately and for the wrong reason: the hybrid
+  posture is deliberate, so `C9` would have to be silenced to go green, which is
+  the same "resolve a fail-closed objection by removing the objection" pattern
+  this amendment warns about two bullets down. The honest statement is that the
+  posture warning is advisory by design.
+
+  *(Corrected 2026-08-07. This bullet previously said "no CI workflow runs it",
+  which was wrong — the wiring is dynamic, so grepping the workflows for
+  `config-guard` finds nothing and the literal search misleads. The conclusion
+  it drew about posture regressions happened to be right for a different
+  reason.)*
 - **The rollback story is inverted.** Armed is now the shipped default, so
   disarming is the deviation: three tests pin the armed state, and a plain
   `git revert` of the flag fails CI. The `CYCLAW_AGENTIC_WRITE_DISABLE` switch
