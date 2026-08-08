@@ -338,12 +338,32 @@ class SkillRegistry:
         whose canonical text contains injection patterns raises
         ``PromptInjectionError`` before any write -- closing the skill-poisoning
         vector. The write is atomic (tmp + os.replace).
+
+        The master switch (``agentic.enabled``) is checked here, ahead of the
+        mode/writes_enabled pair, for the same reason ``agentic/writer.py``'s
+        ``_require_gates`` checks it: ``agentic/cli.py``'s ``cmd_apply_skill``
+        already tests it before calling in, so the CLI was the only barrier and
+        a direct ``SkillRegistry(...).apply_skill(...)`` wrote the registry
+        while the layer read as off. That is reachable today -- the shipped
+        posture is ``mode: write`` + ``writes_enabled: true`` held back by
+        ``enabled: false`` alone, so the master switch is the ONLY thing
+        standing between an in-process caller and a registry write.
+
+        ``enabled`` is attached dynamically by ``load_agentic_config`` and is
+        never an ``AgenticConfig`` dataclass field, so a hand-constructed
+        config has none; ``getattr(..., False)`` is the fail-closed default for
+        that case, matching writer.py's handling of the identical situation.
         """
         self._validate_spec(spec)
         if not (isinstance(reason, str) and reason.strip()):
             raise SkillRegistryError(
                 "apply_skill requires a non-empty human reason",
                 details={"name": spec.get("name")},
+            )
+        if not getattr(self.agentic_cfg, "enabled", False):
+            raise SkillRegistryError(
+                "apply_skill requires agentic.enabled=true",
+                details={"name": spec.get("name"), "failed_gate": "enabled"},
             )
         if not (self.agentic_cfg.is_write_mode and self.agentic_cfg.writes_enabled):
             raise SkillRegistryError(

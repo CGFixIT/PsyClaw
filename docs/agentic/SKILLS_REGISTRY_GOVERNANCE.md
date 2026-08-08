@@ -31,6 +31,14 @@ registry generalizes the soul governance pattern to a second surface.
    switch: while the layer is disabled they no-op (exit 0) and never construct a
    registry, so a write can never occur — even through the API-key-gated
    `POST /ops/agentic` console — while the operator believes the layer is off.
+   That master-switch check is enforced **inside `apply_skill` itself**, not only
+   in the CLI subcommand that calls it. The distinction matters on a shipped
+   checkout: the posture is `mode: write` + `writes_enabled: true` held back by
+   `enabled: false` alone, so the master switch is the only thing standing
+   between an in-process caller and a registry write — and "reachable only via
+   the CLI" is a statement about today's call graph, not a control. This mirrors
+   `agentic/writer.py`'s `_require_gates`, which checks the same switch ahead of
+   its four numbered gates for the same reason.
 2. **Injection gate at the write boundary.** `apply_skill(scan=True)` scans the
    canonical `name\ndescription\nbody` against the **same** pattern set the query
    path uses; a match raises `PromptInjectionError` *before any write* and audits

@@ -27,6 +27,19 @@ from utils.logger import reset_config_cache
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _agentic_cfg(*, enabled: bool = True, **kwargs) -> AgenticConfig:
+    # load_agentic_config attaches `enabled` as a plain attribute rather than a
+    # dataclass field (deliberately -- see writer.py's _require_gates docstring:
+    # a field would leak into to_dict/argv), so a directly constructed
+    # AgenticConfig has none and apply_skill's master-switch gate fails closed.
+    # Tests that mean "the layer is on" have to say so, the same way a real
+    # config.yaml does.
+    cfg = AgenticConfig(**kwargs)
+    cfg.enabled = enabled
+    return cfg
+
+
 # A cfg dict whose banned_patterns drive the registry's injection scanner.
 SCAN_CFG = {
     "logging": {"audit_fields": {}},
@@ -49,7 +62,7 @@ def reg(tmp_path: Path):
     reset_config_cache()
     from utils.logger import _get_config
     cfg = _get_config(str(cfg_path))
-    ac = AgenticConfig(registry_path=rel, mode="write", writes_enabled=True)
+    ac = _agentic_cfg(registry_path=rel, mode="write", writes_enabled=True)
     registry = SkillRegistry(cfg, ac)
     yield registry
     reset_config_cache()
@@ -72,7 +85,7 @@ def _lock_dir(registry: SkillRegistry) -> Path:
 def _twin(registry: SkillRegistry) -> SkillRegistry:
     """A second SkillRegistry over the SAME file -- simulates another process."""
     rel = str(Path(registry.registry_path).relative_to(REPO_ROOT))
-    return SkillRegistry(registry.cfg, AgenticConfig(registry_path=rel, mode="write", writes_enabled=True))
+    return SkillRegistry(registry.cfg, _agentic_cfg(registry_path=rel, mode="write", writes_enabled=True))
 
 
 def test_propose_never_writes(reg):
@@ -134,17 +147,57 @@ def test_apply_requires_write_mode_and_writes_enabled(tmp_path):
     cfg_doc["logging"] = {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}
     target = (REPO_ROOT / rel).resolve()
     try:
-        read_mode = SkillRegistry(cfg_doc, AgenticConfig(registry_path=rel, mode="read", writes_enabled=False))
+        read_mode = SkillRegistry(cfg_doc, _agentic_cfg(registry_path=rel, mode="read", writes_enabled=False))
         with pytest.raises(SkillRegistryError, match="write"):
             read_mode.apply_skill(_spec(), reason="blocked")
 
         write_mode_disabled = SkillRegistry(
-            cfg_doc, AgenticConfig(registry_path=rel, mode="write", writes_enabled=False)
+            cfg_doc, _agentic_cfg(registry_path=rel, mode="write", writes_enabled=False)
         )
         with pytest.raises(SkillRegistryError, match="writes_enabled"):
             write_mode_disabled.apply_skill(_spec(), reason="blocked")
 
         assert not target.exists()
+    finally:
+        reset_config_cache()
+        if target.exists():
+            target.unlink()
+
+
+def test_apply_requires_the_agentic_master_switch(tmp_path):
+    """agentic.enabled must gate a direct apply_skill call, not just the CLI.
+
+    agentic/cli.py's cmd_apply_skill checks agentic.enabled before calling in,
+    so the CLI was the only barrier: an in-process
+    SkillRegistry(...).apply_skill(...) wrote the registry while the layer read
+    as off. That is not theoretical on a shipped checkout -- the posture is
+    mode="write" + writes_enabled=True held back by enabled=False alone, so the
+    master switch is the ONLY gate standing in the way. agentic/writer.py's
+    _require_gates was given exactly this check for exactly this reason; the
+    registry has the same shape and never got it.
+
+    Both the explicitly-disabled case and the attribute-absent case (a
+    hand-constructed AgenticConfig, which load_agentic_config would have
+    decorated) must refuse, because `enabled` is not a dataclass field.
+    """
+    rel = f"data/agentic/_pytest_{uuid.uuid4().hex}.json"
+    cfg_doc = dict(SCAN_CFG)
+    cfg_doc["logging"] = {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}
+    target = (REPO_ROOT / rel).resolve()
+    try:
+        # Everything else armed exactly as the shipped config.yaml has it.
+        disabled = SkillRegistry(
+            cfg_doc, _agentic_cfg(enabled=False, registry_path=rel, mode="write", writes_enabled=True)
+        )
+        with pytest.raises(SkillRegistryError, match="agentic.enabled"):
+            disabled.apply_skill(_spec(), reason="master switch is off")
+
+        bare = AgenticConfig(registry_path=rel, mode="write", writes_enabled=True)
+        assert not hasattr(bare, "enabled"), "enabled must stay a dynamic attribute, not a field"
+        with pytest.raises(SkillRegistryError, match="agentic.enabled"):
+            SkillRegistry(cfg_doc, bare).apply_skill(_spec(), reason="no enabled attribute at all")
+
+        assert not target.exists(), "a refused apply must not create the registry file"
     finally:
         reset_config_cache()
         if target.exists():
@@ -233,7 +286,7 @@ def test_propose_scores_proposed_body_not_stored(reg):
 def test_reload_sees_persisted_skill(reg):
     reg.apply_skill(_spec(), reason="persist")
     # A fresh registry over the same path must see the applied skill.
-    reg2 = SkillRegistry(reg.cfg, AgenticConfig(
+    reg2 = SkillRegistry(reg.cfg, _agentic_cfg(
         registry_path=str(Path(reg.registry_path).relative_to(REPO_ROOT)),
         mode="write",
         writes_enabled=True,
@@ -252,7 +305,7 @@ def _registry_with_cfg(tmp_path: Path, cfg_doc: dict) -> SkillRegistry:
     reset_config_cache()
     from utils.logger import _get_config
     cfg = _get_config(str(cfg_path))
-    return SkillRegistry(cfg, AgenticConfig(registry_path=rel, mode="write", writes_enabled=True))
+    return SkillRegistry(cfg, _agentic_cfg(registry_path=rel, mode="write", writes_enabled=True))
 
 
 def test_owasp_baseline_is_the_floor_with_no_prompt_filter(tmp_path):

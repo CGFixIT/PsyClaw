@@ -1165,6 +1165,10 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
             commit_message=record.commit_message,
             changed_files=record.changed_files,
             decision=args.decision,
+            # Read fresh from config here, not from the run record: the point
+            # of re-checking is that the policy may have been tightened since
+            # the run was proposed.
+            protected_write_paths=cfg.deepagent_github.protected_write_paths,
             config_path=args.config,
             cfg=app_cfg,
         )

@@ -167,6 +167,7 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
             commit_message=result.commit_message,
             changed_files=result.iterations[-1].changed_files,
             decision="approve",
+            protected_write_paths=(),
         )
         assert outcome == {"status": "approved", "branch": "agent/fixture-topic"}
 
@@ -205,6 +206,7 @@ def test_loop_accepts_pending_then_reject_never_commits(tmp_path, monkeypatch):
             commit_message=result.commit_message,
             changed_files=result.iterations[-1].changed_files,
             decision="reject",
+            protected_write_paths=(),
         )
         assert outcome == {"status": "rejected", "branch": "agent/fixture-topic"}
 
@@ -228,7 +230,60 @@ def test_finalize_rejects_an_invalid_decision_value(tmp_path, monkeypatch):
                 commit_message="x",
                 changed_files=("a.txt",),
                 decision="maybe",  # type: ignore[arg-type]
+                protected_write_paths=(),
             )
+
+
+def test_finalize_rechecks_protected_paths_against_the_policy_in_force_now(tmp_path, monkeypatch):
+    """A persisted changed_files list is not the list the diff-scope gate cleared.
+
+    run_real_repo_loop checks proposed paths against protected_write_paths at
+    proposal time, but the record then sits on disk until a separate process
+    runs the decide command. The realistic way the two diverge is not an
+    attacker: it is the operator tightening protected_write_paths in config.yaml
+    between the run and the decision -- the policy is meant to be edited. The
+    commit a human approves should be scoped by the policy in force now.
+
+    cmd_real_repo_run_decide already re-validates branch_name and
+    commit_message off the same record and says why in its own comment;
+    changed_files is the third primitive and had no equivalent.
+
+    The refusal must land before git is touched, so a rejected record leaves no
+    branch behind for a retry to collide with.
+    """
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        (tools.worktree / "a.txt").write_text("changed\n", encoding="utf-8")
+        (tools.worktree / "conftest.py").write_text("# judge\n", encoding="utf-8")
+
+        with pytest.raises(AgenticWriteRefused, match="protected"):
+            finalize_real_repo_change(
+                tools,
+                branch_name="agent/tightened-policy",
+                commit_message="should not land",
+                changed_files=["a.txt", "conftest.py"],
+                decision="approve",
+                # conftest.py was NOT protected when the run was proposed.
+                protected_write_paths=("conftest.py",),
+            )
+
+        git_bin = shutil.which("git")
+        branches = subprocess.run(
+            [git_bin, "branch", "--list", "agent/tightened-policy"],
+            cwd=str(tools.worktree), capture_output=True, text=True, check=True,
+        ).stdout
+        assert branches.strip() == "", "refusal must precede checkout_branch, leaving no branch behind"
+
+        # The same record under the policy that was actually in force still
+        # commits -- the gate scopes, it does not block everything.
+        outcome = finalize_real_repo_change(
+            tools,
+            branch_name="agent/original-policy",
+            commit_message="lands fine",
+            changed_files=["a.txt", "conftest.py"],
+            decision="approve",
+            protected_write_paths=(),
+        )
+        assert outcome == {"status": "approved", "branch": "agent/original-policy"}
 
 
 def test_finalize_works_from_reconstructed_primitives_not_just_a_live_result(tmp_path, monkeypatch):
@@ -243,6 +298,7 @@ def test_finalize_works_from_reconstructed_primitives_not_just_a_live_result(tmp
             commit_message="reconstructed commit",
             changed_files=["a.txt"],
             decision="approve",
+            protected_write_paths=(),
         )
         assert outcome == {"status": "approved", "branch": "agent/reconstructed"}
         git_bin = shutil.which("git")
@@ -346,6 +402,7 @@ def test_accepted_result_reports_files_from_every_iteration_not_just_the_last(tm
             commit_message=result.commit_message,
             changed_files=result.changed_files,
             decision="approve",
+            protected_write_paths=(),
         )
         assert outcome == {"status": "approved", "branch": "agent/two-files"}
 

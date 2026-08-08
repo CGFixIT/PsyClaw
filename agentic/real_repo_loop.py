@@ -1001,6 +1001,7 @@ def finalize_real_repo_change(
     commit_message: str,
     changed_files: Sequence[str],
     decision: Literal["approve", "reject"],
+    protected_write_paths: Sequence[str],
     config_path: str = "config.yaml",
     cfg: dict | None = None,
 ) -> dict:
@@ -1024,6 +1025,26 @@ def finalize_real_repo_change(
     a live dataclass instance. Both shapes hand this function the same three
     primitives either way.
 
+    ``protected_write_paths`` is required rather than defaulted because the
+    ``changed_files`` above are read back from that persisted JSON record, and
+    a persisted list is not the list the diff-scope gate cleared. ``run_real_repo_loop``
+    checks every proposed path against the protected prefixes at proposal time,
+    but between that check and this call the record sits on disk across a
+    separate process invocation, during which two ordinary things can happen:
+    the operator tightens ``protected_write_paths`` in ``config.yaml`` (the
+    likely case -- the policy is meant to be edited), or the record is edited or
+    corrupted. ``cmd_real_repo_run_decide`` already re-validates
+    ``branch_name``/``commit_message`` off the same record for the same reason
+    and says so in its own comment; ``changed_files`` is the third primitive and
+    had no equivalent. Re-checking here means the commit a human approves is
+    scoped by the policy in force *now*, not the policy that happened to be in
+    force when the model proposed. A default of ``()`` would have made every
+    existing caller silently skip the check, so there is none.
+
+    Containment is a separate, already-closed concern: ``tools.add`` routes each
+    path through ``_validate_write_path``, so nothing here can stage outside the
+    clone. This gate is about *policy* scope, not the jail.
+
     ``decision="reject"`` is an audited no-op: it does not touch git at all.
     The caller is responsible for eventually discarding the clone (e.g.
     ``tools.close()``); this function only records the human's decision.
@@ -1038,6 +1059,27 @@ def finalize_real_repo_change(
     )
     if decision == "reject":
         return {"status": "rejected", "branch": branch_name}
+
+    # Refuse before touching git at all, so a record that fails this check
+    # leaves no branch behind for a retry to trip over.
+    out_of_scope = tuple(
+        path for path in changed_files if _matches_protected_path(path, protected_write_paths)
+    )
+    if out_of_scope:
+        audit_log(
+            {
+                "event": "agentic_real_repo_change_refused",
+                "branch": branch_name,
+                "gate": "protected_write_paths",
+                "paths": list(out_of_scope),
+            },
+            config_path=config_path,
+            cfg=cfg,
+        )
+        raise AgenticWriteRefused(
+            "refusing to stage protected paths recorded for this run: " + ", ".join(out_of_scope),
+            details={"branch": branch_name, "protected_paths": list(out_of_scope)},
+        )
 
     tools.checkout_branch(branch_name)
     tools.add(list(changed_files))

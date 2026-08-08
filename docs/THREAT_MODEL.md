@@ -335,7 +335,18 @@ narrower and more precise reason than "nothing executes":
   while the approved commit silently omitted it.
   `RealRepoLoopResult.changed_files` now unions every iteration's writes, and
   `cmd_real_repo_run`/`finalize_real_repo_change` use that union rather than
-  the last iteration's own list.
+  the last iteration's own list. That union is then re-checked against
+  `protected_write_paths` inside `finalize_real_repo_change` before anything is
+  staged, because the list it receives comes back off a persisted JSON record
+  rather than from the in-memory result the diff-scope gate cleared. The gap
+  they can drift through is ordinary rather than adversarial: the decide command
+  is a separate process invocation, so an operator who tightens
+  `protected_write_paths` between the run and the decision would otherwise have
+  the commit scoped by the policy that applied when the model proposed. The
+  parameter is required, not defaulted, so no caller can skip it silently.
+  Containment is a separate and already-closed concern — `tools.add` routes each
+  path through `_validate_write_path`, so nothing can be staged outside the
+  clone regardless.
 - **The residual risk this changes is real and is named, not hidden.** A
   hostile test file (for example a `conftest.py` with a direct network or file
   operation) can run arbitrary code with the executor subprocess's privileges.
