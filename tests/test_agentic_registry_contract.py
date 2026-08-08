@@ -158,10 +158,15 @@ def governed_registry(tmp_path: Path):
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml.safe_dump(cfg_doc), encoding="utf-8")
     reset_config_cache()
-    registry = SkillRegistry(
-        _get_config(str(cfg_path)),
-        AgenticConfig(registry_path=rel, mode="write", writes_enabled=True),
-    )
+    # apply_skill also gates on the agentic.enabled master switch, which
+    # load_agentic_config attaches as a plain attribute rather than a dataclass
+    # field -- so a directly constructed AgenticConfig has none and fails
+    # closed. This fixture drives the governed WRITE path, so it has to arm the
+    # switch the way a real config.yaml would. (The read-mode registry above
+    # never writes and deliberately leaves it unset.)
+    agentic_cfg = AgenticConfig(registry_path=rel, mode="write", writes_enabled=True)
+    agentic_cfg.enabled = True
+    registry = SkillRegistry(_get_config(str(cfg_path)), agentic_cfg)
     yield registry, target
     close_audit_handles()
     reset_config_cache()
