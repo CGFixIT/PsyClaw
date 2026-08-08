@@ -166,9 +166,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one subcommand, mapping typed failures onto the exit-code API.
+
+    Exit codes are an API here: utils/ops_runner.py maps the documented set to
+    ok/failed/env_config and everything else to "unknown".
+    Most subcommands convert their own failures, but a handler at the dispatch
+    point covers the whole class rather than the call sites known today --
+    the same fix agentic/cli.py::main received in #824.
+
+    Deliberately narrow: only the typed hierarchy is classified, so a genuine
+    bug still surfaces as a traceback instead of being flattened into a tidy
+    exit 2.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except SqlConnectConfigError as exc:
+        _err(f"Config error: {exc.message}")
+        return EXIT_ENV
+    except SqlDriverNotInstalledError as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except SqlConnectError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":

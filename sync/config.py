@@ -28,6 +28,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import yaml
+
 from utils.errors import SyncConfigError
 from utils.logger import _get_config, resolve_config_path
 
@@ -380,7 +382,26 @@ def load_sync_config(config_path: str = "config.yaml") -> RcloneConfig:
     Safety booleans must be real YAML booleans -- a quoted ``"false"`` is
     truthy in Python and would fail the gate OPEN.
     """
-    cfg = _get_config(config_path) or {}
+    # Converted rather than left bare, mirroring telegram/config.py's
+    # load_telegram_config. Without this an unreadable or malformed config.yaml
+    # escapes as OSError/YAMLError, and a non-mapping root as AttributeError on
+    # the .get below -- none of which is a SyncError, so all three walked past
+    # every caller's handler and exited 1. For sync that collides with a real
+    # code: EXIT_SAFETY is 1, so utils/ops_runner.py labels it "safety_abort"
+    # and the console reports a tripped max-delete fuse for what is actually a
+    # missing file.
+    try:
+        cfg = _get_config(config_path) or {}
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise SyncConfigError(
+            "unable to load sync configuration",
+            details={"path": config_path, "error_type": type(exc).__name__},
+        ) from None
+    if not isinstance(cfg, dict):
+        raise SyncConfigError(
+            "config root must be a mapping",
+            details={"path": config_path, "received_type": type(cfg).__name__},
+        )
 
     block = cfg.get("sync")
     if not block:

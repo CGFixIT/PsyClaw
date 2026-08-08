@@ -403,10 +403,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one subcommand, mapping typed failures onto the exit-code API.
+
+    Exit codes are an API here: utils/ops_runner.py maps the documented set to
+    ok/failed/env_config and everything else to "unknown". For sync that is sharper than
+    elsewhere: EXIT_SAFETY is 1, so an uncaught traceback does not merely land
+    outside the set, it COLLIDES with the max-delete fuse and the console
+    reports a tripped safety abort for what is actually a config problem.
+    Most subcommands convert their own failures, but a handler at the dispatch
+    point covers the whole class rather than the call sites known today --
+    the same fix agentic/cli.py::main received in #824.
+
+    Deliberately narrow: only the typed hierarchy is classified, so a genuine
+    bug still surfaces as a traceback instead of being flattened into a tidy
+    exit 2.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
-    func = args.func
-    return int(func(args))
+    try:
+        return int(args.func(args))
+    except SyncConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    except (RcloneNotInstalledError, RcloneVersionError) as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    except SyncError as exc:
+        _print_typed_error(exc)
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":
