@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import json
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -31,8 +32,12 @@ _AUTH = {"Authorization": f"Bearer {_KEY}"}
 # if the request got past the dependency chain.
 GUARDED = [
     ("post", "/api/sessions", {"title": "t"}),
-    # The single-session read returns full message content (unlike the list
-    # route's title-only summaries, which is why that one stays in OPEN below).
+    # The single-session read returns full message content. The list route is
+    # open instead because its summaries carry NO message content -- a property
+    # test_open_session_listing_carries_no_message_content below now enforces,
+    # rather than leaving it to this comment. It used to be asserted here and
+    # false in the code: Session.summary() carried `last_excerpt`, the first 80
+    # characters of the last message, so the "title-only" claim did not hold.
     ("get", "/api/sessions/does-not-exist", None),
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
     ("post", "/api/soul", {"enabled": True}),
@@ -360,3 +365,45 @@ def test_matches_gate_auth_semantics():
     # Both compare encoded bytes, not str -- see the non-ASCII test above.
     assert 'encode("utf-8")' in src
     assert 'encode("utf-8")' in gate_src
+
+
+def test_open_session_listing_carries_no_message_content(tmp_path):
+    """GET /api/sessions is in OPEN, so its payload must contain no chat content.
+
+    The exemption for this route is argued on the grounds that it serves
+    summaries only, while GET /api/sessions/{id} is guarded precisely because
+    it returns full messages. That argument was load-bearing and unenforced:
+    Session.summary() carried `last_excerpt` -- the first 80 characters of
+    messages[-1], i.e. the assistant's reply after any completed exchange -- so
+    any local process could read conversation content out of every session by
+    polling one unauthenticated endpoint, with no key, no origin check, no CSRF
+    token and no rate limit.
+
+    Asserting on the real message text (rather than on the absence of one field
+    name) means re-adding an excerpt under any other key fails here too.
+    """
+    from harness.sessions import Message, Session
+
+    secret = "SECRET-ANSWER revenue target is 4.2M and the headcount freeze runs to Q4"
+    session = Session(session_id="c11f67fd89ea", title="Quarterly plan",
+                      created_ts=0.0, model="qwen3.6:27b")
+    session.messages.append(Message(role="user", text="what is our Q3 revenue target?"))
+    session.messages.append(Message(role="assistant", text=secret))
+
+    summary = session.summary()
+    blob = json.dumps(summary)
+    for probe in (secret, secret[:40], "revenue target", "headcount freeze"):
+        assert probe not in blob, f"session listing leaks message content: {probe!r}"
+    # The fields the console actually needs are still there.
+    assert summary["session_id"] == "c11f67fd89ea"
+    assert summary["title"] == "Quarterly plan"
+    assert summary["message_count"] == 2
+
+    # summarize_json is the path the listing route really takes; it must agree.
+    from_json = Session.summarize_json(json.loads(json.dumps({
+        "session_id": "c11f67fd89ea", "title": "Quarterly plan", "created_ts": 0.0,
+        "model": "qwen3.6:27b",
+        "messages": [{"role": "user", "text": "q"}, {"role": "assistant", "text": secret}],
+    })))
+    assert secret not in json.dumps(from_json)
+    assert from_json["message_count"] == 2

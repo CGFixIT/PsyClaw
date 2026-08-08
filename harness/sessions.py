@@ -29,7 +29,6 @@ _ID_RE = re.compile(r"^[0-9a-f]{12}$")
 _SESSION_ID_CHARS = 12
 _MAX_MESSAGES = 500  # bound per-session growth; oldest turns drop off first
 _TITLE_TS_FORMAT = "%Y-%m-%d %H:%M"
-_EXCERPT_CHARS = 80
 _SID_KEY = "session_id"
 # Everything get() must map to SessionStoreError so list() can skip corrupt
 # files instead of 500-ing the console listing: OSError/JSONDecodeError from
@@ -95,16 +94,28 @@ class Session:
     tally: TokenTally = field(default_factory=TokenTally)
 
     def summary(self) -> dict:
-        last = ""
-        if self.messages:
-            last = self.messages[-1].text[:_EXCERPT_CHARS]
+        # Deliberately carries NO message content. summary() is what
+        # `GET /api/sessions` returns, and that route is one of the six in
+        # harness/server.py's OPEN set -- no API key, no origin check, no CSRF
+        # token, no rate limit. tests/test_harness_auth.py justifies the
+        # exemption on the grounds that the list route serves "title-only
+        # summaries", and that the single-session read is guarded precisely
+        # because it "returns full message content".
+        #
+        # That justification was not true of the code. This dict used to carry
+        # `last_excerpt` -- the first 80 characters of messages[-1], i.e. the
+        # assistant's reply after any completed exchange -- so an unauthenticated
+        # caller on loopback could read conversation content out of every
+        # session by polling one open endpoint. Nothing consumed the field:
+        # static/harness.html never referenced it, no test asserted it, and no
+        # other module read it. It was removed rather than guarded so the route
+        # matches the contract its own exemption is argued from.
         return {
             _SID_KEY: self.session_id,
             "title": self.title,
             "created_ts": self.created_ts,
             "model": self.model,
             "message_count": len(self.messages),
-            "last_excerpt": last,
             "tokens": asdict(self.tally) | {"total": self.tally.total},
         }
 
@@ -112,13 +123,15 @@ class Session:
     def summarize_json(cls, parsed: dict) -> dict:
         """Summary for the listing path, without a Message per stored turn.
 
-        summary() needs the turn count and an excerpt of the final turn, so
-        only that one message is constructed and the real count is restored
-        afterwards. Routing through summary() rather than rebuilding the dict
-        keeps the two listing paths from drifting apart.
+        summary() needs only the turn count now that it carries no excerpt, so
+        no stored message has to be constructed at all -- check_all still runs,
+        because rejecting a non-Message-shaped turn is what makes get()'s
+        corrupt-file verdict and this listing agree. Routing through summary()
+        rather than rebuilding the dict keeps the two listing paths from
+        drifting apart.
         """
         raw = Message.check_all(parsed.get(_MSGS_KEY) or [])
-        summary = _session_from_dict({**parsed, _MSGS_KEY: raw[-1:]}).summary()
+        summary = _session_from_dict({**parsed, _MSGS_KEY: []}).summary()
         summary["message_count"] = len(raw)
         return summary
 
