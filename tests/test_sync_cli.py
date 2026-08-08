@@ -424,16 +424,14 @@ def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
     Narrow on purpose: only the typed hierarchy is classified, so a real bug
     still raises rather than being flattened into a tidy exit 2.
     """
-    import sync.cli as sync_cli
-
     for exc, want in [
         (SyncConfigError("bad"), EXIT_ENV),
         (RcloneNotInstalledError("absent"), EXIT_ENV),
         (SyncRuntimeError("failed"), EXIT_FAIL),
     ]:
-        monkeypatch.setattr(sync_cli, "cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
+        monkeypatch.setattr("sync.cli.cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
         assert main(["status"]) == want
 
-    monkeypatch.setattr(sync_cli, "cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
+    monkeypatch.setattr("sync.cli.cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
     with pytest.raises(RuntimeError, match="a real bug"):
         main(["status"])

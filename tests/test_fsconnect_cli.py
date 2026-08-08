@@ -207,11 +207,7 @@ def test_atomic_write_onto_a_directory_is_typed_not_a_raw_oserror(tmp_path):
 
     root = tmp_path / "root"
     (root / "adir").mkdir(parents=True)
-    scoped = ScopedRoots([str(root)])
-    try:
-        with pytest.raises(FsConnectError) as excinfo:
-            scoped.write_bytes("adir", b"PWN", root=str(root), overwrite=True)
-    finally:
-        scoped.close()
+    with ScopedRoots([str(root)]) as scoped, pytest.raises(FsConnectError) as excinfo:
+        scoped.write_bytes("adir", b"PWN", root=str(root), overwrite=True)
     assert "atomic write" in str(excinfo.value)
     assert (root / "adir").is_dir(), "the directory must be left untouched"
