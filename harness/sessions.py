@@ -51,6 +51,22 @@ class SessionStoreError(AgenticError):
         super().__init__(message, code=code, details=details)
 
 
+# A write that could not land is a different thing from a session that was never
+# there, and the caller has to be able to tell them apart: "unknown session" is a
+# 404 the operator caused, while "could not persist" is a 502 the server owns.
+# Both used to carry the default HARNESS_SESSION_ERROR, so harness/server.py
+# mapped a full disk to "unknown session" and the operator went looking for a
+# session id that was perfectly valid.
+PERSIST_ERROR_CODE = "HARNESS_SESSION_PERSIST_ERROR"
+
+
+class SessionPersistError(SessionStoreError):
+    """The store could not write. Distinct from an unknown/unreadable session."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code=PERSIST_ERROR_CODE, details=details)
+
+
 @dataclass
 class TokenTally:
     """Cumulative Ollama usage counters for one session."""
@@ -254,4 +270,4 @@ class SessionStore:
         try:
             _atomic_write_json(_session_path(self._dir, session.session_id), payload)
         except (OSError, TypeError, ValueError) as exc:
-            raise SessionStoreError("could not persist session") from exc
+            raise SessionPersistError("could not persist session") from exc

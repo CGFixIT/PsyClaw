@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 
+from unittest.mock import patch
+
 import httpx
 import pytest
 import uvicorn
@@ -159,3 +161,106 @@ def test_chat_survives_malformed_usage_block(usage, expected_prompt, expected_co
     assert result.body_text == "hello"
     assert result.prompt_tokens == expected_prompt
     assert result.completion_tokens == expected_completion
+
+
+# -- persist failures must not escape as unparseable 500s -------------------------
+# SessionStoreError used to carry one code for two unrelated failures: "unknown
+# session" (the operator's bad id) and "could not persist" (the server's disk).
+# Callers mapped it to 404 or, at two sites, did not catch it at all. So a full
+# disk reported as "unknown session" for a perfectly valid id, and two routes
+# returned text/plain 500s that static/harness.html's fetch helper cannot parse
+# into an error envelope.
+
+def _guarded_headers(app) -> dict:
+    return {
+        "Authorization": f"Bearer {_TEST_KEY}",
+        "Origin": "http://127.0.0.1:8790",  # DevSkim: ignore DS162092,DS137138 - loopback console origin
+        "x-cyclaw-csrf": app.state.csrf_token,
+        "Content-Type": "application/json",
+    }
+
+
+@pytest.mark.parametrize(
+    "target, call",
+    [
+        ("create", lambda c, h, sid: c.post("/api/sessions", json={"title": "x"}, headers=h)),
+        ("_write", lambda c, h, sid: c.post(f"/api/sessions/{sid}/rename", json={"title": "n"}, headers=h)),
+        ("record_exchange", lambda c, h, sid: c.post("/api/chat", json={"message": "hi"}, headers=h)),
+    ],
+)
+def test_persist_failure_is_a_typed_502_not_a_bare_500(cfg, monkeypatch, target, call):
+    """Every write path reports a persist failure as a parseable 502.
+
+    create and record_exchange previously sat outside any try at all; rename was
+    caught but mapped to 404.
+    """
+    from harness.sessions import SessionPersistError
+
+    app = create_app(cfg, chat_client=_chat_client(
+        {"choices": [{"message": {"content": "ok"}}], "model": "m",
+         "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+    ))
+    client = TestClient(app, base_url="http://127.0.0.1:8790")  # DevSkim: ignore DS162092,DS137138 - loopback test host
+    headers = _guarded_headers(app)
+    sid = client.post("/api/sessions", json={"title": "real"}, headers=headers).json()["session_id"]
+
+    monkeypatch.setattr(
+        "harness.sessions.SessionStore." + target,
+        lambda *a, **k: (_ for _ in ()).throw(SessionPersistError("could not persist session")),
+    )
+    resp = call(client, headers, sid)
+    assert resp.status_code == 502, f"{target}: got {resp.status_code}"
+    assert resp.headers["content-type"].startswith("application/json"), "console must be able to parse it"
+    assert resp.json()["detail"]["code"] == "HARNESS_SESSION_PERSIST_ERROR"
+
+
+def test_unknown_session_is_still_404_and_distinguishable(cfg):
+    """The split has to cut both ways, or it just moves the confusion."""
+    app = create_app(cfg, chat_client=_chat_client({"choices": [{"message": {"content": "x"}}]}))
+    client = TestClient(app, base_url="http://127.0.0.1:8790")  # DevSkim: ignore DS162092,DS137138 - loopback test host
+    resp = client.get("/api/sessions/aaaaaaaaaaaa", headers=_guarded_headers(app))
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "HARNESS_SESSION_ERROR"
+
+
+def test_console_page_is_not_cacheable(cfg):
+    """The page embeds the per-process CSRF token in a <meta> tag.
+
+    A cached copy outlives the process that minted it, so after a harness
+    restart the browser replays a stale token and every guarded POST 403s with
+    CSRF_TOKEN_INVALID until a hard reload. gate.py already sends this header on
+    its own console.
+    """
+    app = create_app(cfg, chat_client=_chat_client({"choices": [{"message": {"content": "x"}}]}))
+    client = TestClient(app, base_url="http://127.0.0.1:8790")  # DevSkim: ignore DS162092,DS137138 - loopback test host
+    resp = client.get("/")
+    assert "no-store" in resp.headers.get("cache-control", "")
+
+
+def test_store_write_actually_raises_the_persist_type(tmp_path):
+    """The store must PRODUCE the distinct type, not just have callers map it.
+
+    The route tests above inject SessionPersistError directly, so they prove the
+    mapping and nothing about the source. Without this, reverting _write to the
+    base SessionStoreError would leave every one of them green while a real disk
+    failure went back to reporting as "unknown session" / 404.
+    """
+    from harness.sessions import PERSIST_ERROR_CODE, SessionPersistError, SessionStore
+
+    store = SessionStore(tmp_path / "sessions")
+    session = store.create(model="m", title="t")
+    # Make the real write fail the way a full or read-only disk would.
+    with patch("harness.sessions._atomic_write_json", side_effect=OSError("No space left on device")):
+        with pytest.raises(SessionPersistError) as excinfo:
+            store.rename(session.session_id, "new title")
+    assert excinfo.value.code == PERSIST_ERROR_CODE
+
+
+def test_unknown_session_does_not_use_the_persist_code(tmp_path):
+    """The other half of the split, from the real store rather than a mock."""
+    from harness.sessions import PERSIST_ERROR_CODE, SessionStoreError, SessionStore
+
+    store = SessionStore(tmp_path / "sessions")
+    with pytest.raises(SessionStoreError) as excinfo:
+        store.get("aaaaaaaaaaaa")
+    assert excinfo.value.code != PERSIST_ERROR_CODE

@@ -64,7 +64,7 @@ from harness.schemas import (
     SessionCreateRequest,
     SoulToggleRequest,
 )
-from harness.sessions import SessionStore, SessionStoreError, TokenTally
+from harness.sessions import SessionPersistError, SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
@@ -457,6 +457,12 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             headers={
                 "Content-Security-Policy": "frame-ancestors 'none'",
                 "X-Frame-Options": "DENY",
+                # This page carries the per-process CSRF token in a <meta> tag,
+                # so a cached copy outlives the process that minted it: after a
+                # harness restart the browser replays the stale token and every
+                # guarded POST 403s with CSRF_TOKEN_INVALID until a hard reload.
+                # gate.py already sends exactly this on its own console.
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             },
         )
 
@@ -497,13 +503,22 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
 
     @app.post("/api/sessions", status_code=_HTTP_CREATED, dependencies=guarded)
     def create_session(req: SessionCreateRequest) -> dict:
-        session = store.create(model=_current_model(), title=req.title)
+        # Guarded because store.create writes: unguarded, a persist failure left
+        # the route as an unhandled 500 in text/plain, which the console's fetch
+        # helper cannot parse into an error envelope at all.
+        try:
+            session = store.create(model=_current_model(), title=req.title)
+        except SessionPersistError as exc:
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         return session.summary()
 
     @app.get("/api/sessions/{session_id}", dependencies=guarded)
     def get_session(session_id: str) -> dict:
         try:
             session = store.get(session_id)
+        except SessionPersistError as exc:
+            # A write that could not land is the server's fault, not a bad id.
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
             raise _err(_HTTP_NOT_FOUND, exc) from exc
         messages = [
@@ -516,6 +531,9 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
+        except SessionPersistError as exc:
+            # A write that could not land is the server's fault, not a bad id.
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
             raise _err(_HTTP_NOT_FOUND, exc) from exc
 
@@ -544,6 +562,9 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 session = store.get(req.session_id)
             else:
                 session = store.create(model=_current_model())
+        except SessionPersistError as exc:
+            # A write that could not land is the server's fault, not a bad id.
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
             raise _err(_HTTP_NOT_FOUND, exc) from exc
 
@@ -572,16 +593,22 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         except HarnessLLMError as exc:
             raise _err(_HTTP_BAD_GATEWAY, exc) from exc
 
-        updated = store.record_exchange(
-            session.session_id,
-            user_text=req.message,
-            assistant_text=reply.body_text,
-            model=reply.model,
-            usage=TokenTally(
-                prompt_tokens=reply.prompt_tokens,
-                completion_tokens=reply.completion_tokens,
-            ),
-        )
+        # Guarded because the model call has ALREADY succeeded by this point --
+        # an unguarded persist failure here threw away a completed (and possibly
+        # slow, possibly expensive) reply as an unparseable text/plain 500.
+        try:
+            updated = store.record_exchange(
+                session.session_id,
+                user_text=req.message,
+                assistant_text=reply.body_text,
+                model=reply.model,
+                usage=TokenTally(
+                    prompt_tokens=reply.prompt_tokens,
+                    completion_tokens=reply.completion_tokens,
+                ),
+            )
+        except SessionStoreError as exc:
+            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         return {
             "session_id": session.session_id,
             "reply": reply.body_text,
