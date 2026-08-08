@@ -390,6 +390,25 @@ api:
     # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
     # explicitly to opt rate-limiting into Postgres.
     # database_url: null
+  # Stage 1 config surface for docs/AUTHENTICATION_DESIGN.md §5/§7. NOT wired
+  # to uvicorn yet -- that is Stage 4 (cyclaw-gen-cert + ssl_certfile/
+  # ssl_keyfile). Today this key participates ONLY in gate.py's loopback bind
+  # guard (_auth_and_tls_enabled), alongside auth.enabled below. Setting it
+  # true does not put TLS on the socket. Leave false.
+  tls:
+    enabled: false
+
+# Stage 1 of docs/AUTHENTICATION_DESIGN.md. This flag has NO effect on any
+# request path yet -- nothing checks it except gate.py's loopback bind guard
+# (_auth_and_tls_enabled), which treats "auth.enabled AND api.tls.enabled" as
+# permission for a non-loopback bind (design §7), so a LAN operator is not
+# stuck carrying CYCLAW_ALLOW_NON_LOOPBACK_BIND forever once real enforcement
+# ships. Setting this true today does NOT put a credential in front of
+# /query -- that needs Stage 2 (sessions/login) and Stage 3 (route
+# enforcement), neither of which exists yet. Leave false until those stages
+# ship; see the design doc before turning this (and api.tls.enabled) on.
+auth:
+  enabled: false
 
 logging:
   level: "INFO"

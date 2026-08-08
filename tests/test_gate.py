@@ -1013,6 +1013,12 @@ class TestLoopbackBindGuard:
         assert gate._is_loopback_host(host) is True
         assert gate._require_loopback_bind(host) is True
 
+    def test_shipped_config_leaves_auth_and_tls_both_off(self):
+        """The two flags this guard's new path reads must ship false, or the
+        default posture silently changes for every existing install."""
+        import gate
+        assert gate._auth_and_tls_enabled() is False
+
     @pytest.mark.parametrize(
         "host",
         ["0.0.0.0", "", "::", "10.0.0.112", "192.168.1.5", "example.com"],  # noqa: S104 - asserting the refusal
@@ -1040,6 +1046,57 @@ class TestLoopbackBindGuard:
         import gate
         monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, value)
         assert gate._require_loopback_bind("0.0.0.0") is False  # noqa: S104 - asserting the refusal
+
+    def test_auth_and_tls_both_enabled_allows_a_non_loopback_bind(self, monkeypatch):
+        """The durable path docs/AUTHENTICATION_DESIGN.md §7 designs toward: once
+        both flags are on, a LAN bind no longer needs the env-var escape hatch."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate, "cfg", {"auth": {"enabled": True}, "api": {"tls": {"enabled": True}}}
+        )
+        assert gate._auth_and_tls_enabled() is True
+        assert gate._require_loopback_bind("10.0.0.50") is True
+
+    @pytest.mark.parametrize(
+        "cfg_value",
+        [
+            {},
+            {"auth": {"enabled": True}},  # TLS missing
+            {"api": {"tls": {"enabled": True}}},  # auth missing
+            {"auth": {"enabled": True}, "api": {"tls": {"enabled": False}}},
+            {"auth": {"enabled": False}, "api": {"tls": {"enabled": True}}},
+            {"auth": "not-a-dict", "api": {"tls": {"enabled": True}}},
+            {"auth": {"enabled": True}, "api": {"tls": "not-a-dict"}},
+            {"auth": {"enabled": True}, "api": "not-a-dict"},
+        ],
+    )
+    def test_one_flag_alone_or_malformed_config_is_not_enough(self, cfg_value, monkeypatch):
+        """Either flag missing, false, or a malformed shape must fail closed —
+        this is a config read backing a security decision, not a display value."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(gate, "cfg", cfg_value)
+        assert gate._auth_and_tls_enabled() is False
+        assert gate._require_loopback_bind("10.0.0.50") is False  # noqa: S104 - asserting the refusal
+
+    def test_main_allows_a_lan_bind_when_auth_and_tls_are_both_configured(self, monkeypatch):
+        """End-to-end through main(): config alone, no env var, reaches _serve."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {
+                "auth": {"enabled": True},
+                "api": {"host": "10.0.0.50", "port": 8787, "tls": {"enabled": True}},
+            },
+        )
+        with patch.object(gate, "_is_port_in_use", return_value=False), \
+             patch.object(gate, "_serve") as serve, \
+             patch.object(gate, "_hold_console"):
+            gate.main()
+        serve.assert_called_once_with("10.0.0.50", 8787)
 
     def test_main_refuses_before_probing_the_port(self, monkeypatch):
         """A non-loopback host must be rejected on its own terms.

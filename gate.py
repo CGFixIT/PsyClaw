@@ -805,6 +805,32 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+def _auth_and_tls_enabled() -> bool:
+    """True when config.yaml's ``auth.enabled`` and ``api.tls.enabled`` are both set.
+
+    This is a config READ, not a safety guarantee. It backs
+    docs/AUTHENTICATION_DESIGN.md §7's rule -- "a non-loopback bind is allowed
+    when authentication is enabled and TLS is enabled" -- but as of this
+    commit that rule's two halves are both still unbuilt: nothing on the
+    request path checks ``auth.enabled`` (that is Stage 2/3 of the design),
+    and nothing wires ``api.tls.*`` into ``uvicorn.run`` (that is Stage 4).
+    Both keys default false, so this returns False on every shipped config
+    today regardless. Once an operator sets both true, treat it as "I intend
+    to finish those stages," not as "those stages are finished" -- the
+    boolean alone does not put a credential in front of ``/query`` or put TLS
+    on the socket.
+
+    Reads fail closed on any malformed shape (a non-dict ``auth``/``api.tls``)
+    rather than raising, matching the rest of this module's config access.
+    """
+    auth_cfg = cfg.get("auth") or {}
+    api_cfg = cfg.get("api") or {}
+    tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
+    auth_on = bool(auth_cfg.get("enabled")) if isinstance(auth_cfg, dict) else False
+    tls_on = bool(tls_cfg.get("enabled")) if isinstance(tls_cfg, dict) else False
+    return auth_on and tls_on
+
+
 def _require_loopback_bind(host: str) -> bool:
     """Refuse to serve on a non-loopback address unless explicitly opted in.
 
@@ -828,9 +854,27 @@ def _require_loopback_bind(host: str) -> bool:
     the documented entry points (``python gate.py`` / ``cyclaw-server``), not
     every conceivable way to import the app.
 
+    Three ways past loopback, checked in this order: (1) auth+TLS both
+    configured -- the durable path docs/AUTHENTICATION_DESIGN.md §7 designs
+    toward, so a LAN operator is not stuck carrying an env var forever once
+    those stages ship; (2) the env var below -- a deliberate escape hatch for
+    someone fronting CyClaw with their own reverse proxy/auth today; (3)
+    neither -- refuse. See ``_auth_and_tls_enabled`` for why (1) is not yet a
+    completed safety story on its own.
+
     Returns True when it is safe to proceed.
     """
     if _is_loopback_host(host):
+        return True
+    if _auth_and_tls_enabled():
+        logger.warning(
+            "Binding %s — beyond loopback, allowed because auth.enabled and "
+            "api.tls.enabled are both set. This reflects config intent, not a "
+            "finished guarantee: confirm docs/AUTHENTICATION_DESIGN.md's "
+            "Stage 2/3 (request-path enforcement) and Stage 4 (TLS wiring) "
+            "have actually shipped before treating %s as protected.",
+            host, host,
+        )
         return True
     if os.environ.get(_ALLOW_NON_LOOPBACK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
         logger.warning(
@@ -848,8 +892,13 @@ def _require_loopback_bind(host: str) -> bool:
         "single-operator and loopback-bound.\n"
         "\n"
         "Set api.host back to 127.0.0.1 in config.yaml.\n"  # DevSkim: ignore DS162092 - loopback host by design
-        f"If the exposure is deliberate, set {_ALLOW_NON_LOOPBACK_ENV}=1 and put your\n"
-        "own authentication in front of it first.\n",
+        "\n"
+        "Once docs/AUTHENTICATION_DESIGN.md's request-path enforcement and TLS\n"
+        "wiring have shipped, set BOTH auth.enabled and api.tls.enabled to true\n"
+        "and this bind is allowed without an override -- see that document for\n"
+        "what still has to exist before those flags mean anything.\n"
+        f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
+        "put your own authentication in front of it first.\n",
         file=sys.stderr,
     )
     return False
