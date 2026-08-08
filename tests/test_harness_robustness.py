@@ -194,7 +194,7 @@ def test_persist_failure_is_a_typed_502_not_a_bare_500(cfg, monkeypatch, target,
     create and record_exchange previously sat outside any try at all; rename was
     caught but mapped to 404.
     """
-    from harness.sessions import SessionPersistError
+    from harness.sessions import PERSIST_ERROR_CODE, SessionStoreError
 
     app = create_app(cfg, chat_client=_chat_client(
         {"choices": [{"message": {"content": "ok"}}], "model": "m",
@@ -206,7 +206,9 @@ def test_persist_failure_is_a_typed_502_not_a_bare_500(cfg, monkeypatch, target,
 
     monkeypatch.setattr(
         "harness.sessions.SessionStore." + target,
-        lambda *a, **k: (_ for _ in ()).throw(SessionPersistError("could not persist session")),
+        lambda *a, **k: (_ for _ in ()).throw(
+            SessionStoreError("could not persist session", code=PERSIST_ERROR_CODE)
+        ),
     )
     resp = call(client, headers, sid)
     assert resp.status_code == 502, f"{target}: got {resp.status_code}"
@@ -240,18 +242,18 @@ def test_console_page_is_not_cacheable(cfg):
 def test_store_write_actually_raises_the_persist_type(tmp_path):
     """The store must PRODUCE the distinct type, not just have callers map it.
 
-    The route tests above inject SessionPersistError directly, so they prove the
-    mapping and nothing about the source. Without this, reverting _write to the
-    base SessionStoreError would leave every one of them green while a real disk
-    failure went back to reporting as "unknown session" / 404.
+    The route tests above inject the persist code directly, so they prove the
+    mapping and nothing about the source. Without this, dropping the code= from
+    _write would leave every one of them green while a real disk failure went
+    back to reporting as "unknown session" / 404.
     """
-    from harness.sessions import PERSIST_ERROR_CODE, SessionPersistError, SessionStore
+    from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError
 
     store = SessionStore(tmp_path / "sessions")
     session = store.create(model="m", title="t")
     # Make the real write fail the way a full or read-only disk would.
     with patch("harness.sessions._atomic_write_json", side_effect=OSError("No space left on device")):
-        with pytest.raises(SessionPersistError) as excinfo:
+        with pytest.raises(SessionStoreError) as excinfo:
             store.rename(session.session_id, "new title")
     assert excinfo.value.code == PERSIST_ERROR_CODE
 

@@ -52,19 +52,18 @@ class SessionStoreError(AgenticError):
 
 
 # A write that could not land is a different thing from a session that was never
-# there, and the caller has to be able to tell them apart: "unknown session" is a
-# 404 the operator caused, while "could not persist" is a 502 the server owns.
-# Both used to carry the default HARNESS_SESSION_ERROR, so harness/server.py
-# mapped a full disk to "unknown session" and the operator went looking for a
-# session id that was perfectly valid.
+# there, and the caller has to tell them apart: "unknown session" is a 404 the
+# operator caused, while "could not persist" is a 502 the server owns. Both used
+# to carry the default HARNESS_SESSION_ERROR, so harness/server.py mapped a full
+# disk to "unknown session" and sent the operator looking for a session id that
+# was perfectly valid.
+#
+# A distinguishing CODE rather than a subclass: AgenticError already carries one,
+# every caller that only wants "something went wrong with the store" keeps its
+# existing `except SessionStoreError`, and harness/sessions.py is at WPS202's
+# 7-module-member ceiling, so a new class would not fit without restructuring
+# code this change has no business touching.
 PERSIST_ERROR_CODE = "HARNESS_SESSION_PERSIST_ERROR"
-
-
-class SessionPersistError(SessionStoreError):
-    """The store could not write. Distinct from an unknown/unreadable session."""
-
-    def __init__(self, message: str, details: dict | None = None):
-        super().__init__(message, code=PERSIST_ERROR_CODE, details=details)
 
 
 @dataclass
@@ -270,4 +269,4 @@ class SessionStore:
         try:
             _atomic_write_json(_session_path(self._dir, session.session_id), payload)
         except (OSError, TypeError, ValueError) as exc:
-            raise SessionPersistError("could not persist session") from exc
+            raise SessionStoreError("could not persist session", code=PERSIST_ERROR_CODE) from exc

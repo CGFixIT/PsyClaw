@@ -64,7 +64,7 @@ from harness.schemas import (
     SessionCreateRequest,
     SoulToggleRequest,
 )
-from harness.sessions import SessionPersistError, SessionStore, SessionStoreError, TokenTally
+from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError, TokenTally
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
@@ -508,7 +508,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         # helper cannot parse into an error envelope at all.
         try:
             session = store.create(model=_current_model(), title=req.title)
-        except SessionPersistError as exc:
+        except SessionStoreError as exc:
             raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         return session.summary()
 
@@ -516,11 +516,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def get_session(session_id: str) -> dict:
         try:
             session = store.get(session_id)
-        except SessionPersistError as exc:
-            # A write that could not land is the server's fault, not a bad id.
-            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
-            raise _err(_HTTP_NOT_FOUND, exc) from exc
+            # A write that could not land is the server's fault, not a bad id.
+            status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
+            raise _err(status, exc) from exc
         messages = [
             {"role": msg.role, "content": msg.text, "ts": msg.ts}
             for msg in session.messages
@@ -531,11 +530,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     def rename_session(session_id: str, req: RenameRequest) -> dict:
         try:
             return store.rename(session_id, req.title).summary()
-        except SessionPersistError as exc:
-            # A write that could not land is the server's fault, not a bad id.
-            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
-            raise _err(_HTTP_NOT_FOUND, exc) from exc
+            # A write that could not land is the server's fault, not a bad id.
+            status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
+            raise _err(status, exc) from exc
 
     # -- soul / model toggles (harness-local; soul.md itself untouched) --
     @app.get("/api/soul")
@@ -562,11 +560,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
                 session = store.get(req.session_id)
             else:
                 session = store.create(model=_current_model())
-        except SessionPersistError as exc:
-            # A write that could not land is the server's fault, not a bad id.
-            raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         except SessionStoreError as exc:
-            raise _err(_HTTP_NOT_FOUND, exc) from exc
+            # A write that could not land is the server's fault, not a bad id.
+            status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
+            raise _err(status, exc) from exc
 
         system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled)
         history = [
