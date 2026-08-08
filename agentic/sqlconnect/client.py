@@ -199,6 +199,27 @@ def _is_escape_string_prefix(emitted: list[str]) -> bool:
     return len(emitted) < 2 or emitted[-2] not in _IDENT_CHARS
 
 
+def _is_unicode_escape_prefix(emitted: list[str]) -> bool:
+    """True if the unquoted text so far ends in a standalone ``U&``/``u&`` token.
+
+    Postgres spells a unicode-escaped identifier ``U&"pg_\\0072ead_file"`` and a
+    unicode-escaped string ``U&'...'``. Its lexer un-escapes those into a plain
+    identifier/literal *before* the grammar runs, so the escaped spelling resolves
+    to exactly the same built-in as the plain one -- while ``_FORBIDDEN_FN_RE``,
+    which scans the raw identifier text, sees ``pg_\\0072ead_file`` and does not
+    match ``pg_read_\\w+``. Every forbidden side-effect function was reachable that
+    way, verified against a live PostgreSQL.
+
+    Same shape as ``_is_escape_string_prefix``: ``emitted`` holds only characters
+    seen OUTSIDE a quoted region, and the character before the ``U`` must not be
+    an identifier character, so a column named ``fooU`` followed by a string does
+    not trip this.
+    """
+    if len(emitted) < 2 or emitted[-1] != "&" or emitted[-2] not in {"U", "u"}:
+        return False
+    return len(emitted) < 3 or emitted[-3] not in _IDENT_CHARS
+
+
 def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
     """Blank out every quoted region so the structural guards scan only real SQL.
 
@@ -224,6 +245,18 @@ def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
             if char == "'" and _is_escape_string_prefix(out):
                 raise SqlConnectError(
                     "escape-string literals (E'...') are not allowed in read-only queries",
+                    code="SQLCONNECT_BAD_QUERY",
+                )
+            # Refused outright rather than decoded, matching the E'...' rule
+            # directly above and this module's "rejecting beats parsing" posture.
+            # Decoding would mean reimplementing Postgres's UIDENT rules exactly --
+            # \XXXX and \+XXXXXX forms, surrogate pairs, and a UESCAPE clause that
+            # redefines the escape character -- and any gap in that decoder is a
+            # fresh bypass. A read-only preview never needs a unicode-escaped name.
+            if _is_unicode_escape_prefix(out):
+                raise SqlConnectError(
+                    "unicode-escaped identifiers/literals (U&\"...\") are not allowed "
+                    "in read-only queries",
                     code="SQLCONNECT_BAD_QUERY",
                 )
             end = _skip_simple_quote(sql, cursor, char)
