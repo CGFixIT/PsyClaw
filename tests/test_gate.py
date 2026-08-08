@@ -459,6 +459,56 @@ class TestSecurityResponseHeaders:
             "Move the code to a file under static/ and load it with <script src=...>."
         )
 
+    def test_no_static_page_relies_on_inline_script(self, client):
+        """Widen the check above from "/" to every page the static mount serves.
+
+        The test above only fetches "/", which is terminal.html. gate.py mounts
+        the whole static/ directory, so extractor.html was served under the same
+        strict CSP with the same inline-script defect and stayed invisible --
+        fixing one page did not prove the other was fixed. Walking the directory
+        means a newly added page with an inline block fails here rather than
+        shipping inert.
+
+        harness.html is the one deliberate exemption. It lives in static/ but its
+        working home is harness/server.py on :8790, which sends a different (much
+        looser) CSP, and it is only reachable here as a side effect of mounting
+        the directory. Externalizing its script is a real follow-up -- four test
+        modules parse that file by line position and would need retargeting -- so
+        it is named explicitly rather than silently skipped. The set is asserted,
+        not just consulted, so a second exemption cannot be added by accident.
+        """
+        from pathlib import Path
+
+        test_client, _ = client
+        static_dir = Path(__file__).resolve().parent.parent / "static"
+        exempt = {"harness.html"}
+        pages = sorted(p.name for p in static_dir.glob("*.html"))
+        assert exempt <= set(pages), f"exemption names a file that no longer exists: {exempt - set(pages)}"
+
+        offenders = {}
+        for name in pages:
+            if name in exempt:
+                continue
+            resp = test_client.get(f"/static/{name}")
+            assert resp.status_code == 200, f"/static/{name} did not serve: {resp.status_code}"
+            csp = resp.headers.get("content-security-policy", "")
+            script_src = next(
+                (part for part in csp.split(";") if part.strip().startswith("script-src")), ""
+            )
+            if "unsafe-inline" in script_src or "nonce-" in script_src or "sha256-" in script_src:
+                continue
+            # Same IGNORECASE-guarded pattern as the "/" test above; see its
+            # comment for why the case-insensitivity is load-bearing.
+            inline = re.findall(r"<script(?![^>]*\bsrc\s*=)[^>]*>", resp.text, re.IGNORECASE)
+            if inline:
+                offenders[name] = inline
+
+        assert not offenders, (
+            f"static pages served under a strict script-src still carry inline <script> "
+            f"blocks the browser will block: {offenders}. Move the code to a .js file "
+            "beside the page and load it with <script src=...>."
+        )
+
     def test_static_page_has_cache_control(self, client):
         test_client, _ = client
         resp = test_client.get("/")

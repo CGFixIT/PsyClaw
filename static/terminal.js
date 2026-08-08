@@ -95,6 +95,10 @@ input.addEventListener('input', () => {
 });
 
 input.addEventListener('keydown', (e) => {
+  // An IME (CJK, and any other composition-based input) fires Enter to commit
+  // the candidate that is still being composed. Sending on that Enter submits a
+  // half-typed query and eats the keystroke the operator meant for the IME.
+  if (e.isComposing) return;
   // Enter sends; Shift+Enter inserts a newline. Ctrl/Cmd+Enter is kept as a
   // power-user alias for send. Shift is the only modifier that suppresses send.
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -144,6 +148,18 @@ async function checkHealth() {
 }
 
 async function submitQuery(confirmedOnline = null, onlineProvider = null) {
+  // sendBtn.disabled is this console's in-flight signal (set below, cleared in
+  // finally). The button itself can't be clicked while disabled, but the Enter
+  // key handler and the confirm-gate buttons call here directly and bypass it.
+  // A second entry mid-flight overwrites the single global activeQueryController,
+  // which strands the first query's abort handle, leaves the second query
+  // uncancellable by Esc, and makes its deadline timer fire against a nulled
+  // global. Guarding the funnel — not just the key handler — also covers the
+  // case where Enter starts query #2 while an earlier confirm prompt is still
+  // on screen and clickable. Returning before the input is cleared keeps the
+  // operator's typed text.
+  if (sendBtn.disabled) return;
+
   const query = confirmedOnline !== null ? pendingConfirmQuery : input.value.trim();
   if (!query) return;
 

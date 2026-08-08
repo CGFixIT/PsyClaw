@@ -106,3 +106,44 @@ def test_console_endpoint_accepts_console_method(path):
         f"console calls {method} {path} but the route only allows "
         f"{sorted(routes[path])} — the console would get a 405 at runtime"
     )
+
+
+def test_submit_query_refuses_to_start_while_one_is_in_flight():
+    """submitQuery must bail on re-entry, not just decline a second button click.
+
+    sendBtn.disabled is the in-flight signal, and a disabled button emits no
+    click — but the Enter-key handler and the confirm-gate buttons call
+    submitQuery() directly and never consult it. A second entry overwrites the
+    single global activeQueryController, so the first query's abort handle is
+    lost, Esc can no longer cancel the second one (its handler sees the nulled
+    global), and the second one's deadline timer dereferences that null.
+
+    The guard belongs at the top of submitQuery — before the input is cleared,
+    so a refused send does not eat the operator's text — because the confirm
+    buttons stay clickable while a later query is running. static/harness.html
+    carries the same guard in onSend() for the same reason.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function submitQuery(", 1)
+    assert len(body) == 2, "submitQuery is no longer declared as expected; update this test"
+    after = body[1]
+    guard = "if (sendBtn.disabled) return;"
+    assert guard in after, f"submitQuery does not re-entry-guard on {guard!r}"
+    # It has to run before the input is cleared, or a refused send still wipes
+    # what the operator typed.
+    assert after.index(guard) < after.index("input.value = ''"), (
+        "the in-flight guard must precede the input reset inside submitQuery"
+    )
+
+
+def test_enter_handler_ignores_ime_composition():
+    """Enter also commits an IME candidate. Sending on that keystroke submits a
+    half-composed query and swallows the key the operator meant for the IME."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    handler = js.split("input.addEventListener('keydown'", 1)
+    assert len(handler) == 2, "the keydown handler moved; update this test"
+    after = handler[1]
+    assert "if (e.isComposing) return;" in after
+    assert after.index("if (e.isComposing) return;") < after.index("e.key === 'Enter'"), (
+        "the composition check must precede the Enter branch"
+    )
