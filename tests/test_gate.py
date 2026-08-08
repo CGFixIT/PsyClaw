@@ -448,7 +448,11 @@ class TestSecurityResponseHeaders:
         if "unsafe-inline" in script_src or "nonce-" in script_src or "sha256-" in script_src:
             pytest.skip("script-src permits inline scripts; the pairing this test guards does not apply")
         # An inline block is <script> or <script type=...> with no src attribute.
-        inline = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>", resp.text)
+        # IGNORECASE is load-bearing, not cosmetic: HTML tag and attribute names
+        # are case-insensitive, so <SCRIPT> and SRC= are the same tag to a browser
+        # and would otherwise slip past this guard while still being executed
+        # (or blocked). Flagged by CodeQL's "bad HTML filtering regexp" rule.
+        inline = re.findall(r"<script(?![^>]*\bsrc\s*=)[^>]*>", resp.text, re.IGNORECASE)
         assert not inline, (
             f"script-src is strict ({script_src.strip()!r}) but the page serves "
             f"{len(inline)} inline <script> block(s) that the browser will block: {inline}. "
