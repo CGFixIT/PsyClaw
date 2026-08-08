@@ -461,15 +461,32 @@ class RepoWorkspaceTools:
                     tool, "git path does not exist in the clone", target=target, error_type=type(exc).__name__,
                 )
         else:
-            ancestor = candidate
-            while True:
-                try:
-                    resolved = ancestor.resolve(strict=True)
-                    break
-                except OSError:
-                    if ancestor.parent == ancestor:  # pragma: no cover - dest_resolved always exists first
-                        self._deny_git(tool, "git path escaped the clone root", target=target)
-                    ancestor = ancestor.parent
+            # Non-strict resolve FIRST, and only fall back to the ancestor walk
+            # if that fails. This ordering is the fix for a reproduced jail
+            # escape: a DANGLING leaf symlink (docs/notes.md -> an absent
+            # /outside/file) makes resolve(strict=True) raise, so the walk fell
+            # back to docs/ -- legitimately inside the clone -- and containment
+            # passed. write_file then called write_text, which FOLLOWS the link,
+            # and model-authored bytes landed outside the clone.
+            #
+            # resolve(strict=False) follows the link to its target path even
+            # when that target does not exist, so the containment check below
+            # now sees where the write will actually LAND rather than where its
+            # nearest existing ancestor happens to sit. The ancestor walk stays
+            # for the ordinary case it was written for -- a brand-new file under
+            # brand-new directories, where nothing along the path exists yet.
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                ancestor = candidate
+                while True:
+                    try:
+                        resolved = ancestor.resolve(strict=True)
+                        break
+                    except OSError:
+                        if ancestor.parent == ancestor:  # pragma: no cover - dest_resolved always exists first
+                            self._deny_git(tool, "git path escaped the clone root", target=target)
+                        ancestor = ancestor.parent
         if resolved != dest_resolved and dest_resolved not in resolved.parents:
             self._deny_git(tool, "git path escaped the clone root", target=target)
         # The segment check above inspects the REQUESTED name; this inspects
@@ -485,7 +502,27 @@ class RepoWorkspaceTools:
         git_dir = (dest_resolved / ".git").resolve()
         if resolved == git_dir or git_dir in resolved.parents:
             self._deny_git(tool, "git path may not touch the clone's .git directory", target=target)
-        return "/".join(parts)
+        # Report where the write LANDS, not what it was SPELLED. Symlinks make
+        # those different, and every downstream gate reads this return value:
+        # write_file records it in changed_files, and
+        # decide_real_repo_candidate matches changed_files against
+        # protected_write_paths. Returning the declared name was a reproduced
+        # bypass -- an in-clone symlink (docs/notes.md -> ../tests/test_x.py)
+        # is not protected under its declared name, resolves inside the clone
+        # so containment passes, and the write lands on the very test file that
+        # judges the candidate. Exactly the reward-hack that list exists to stop.
+        #
+        # This deliberately does NOT refuse symlinks: an in-repo symlink to an
+        # ordinary directory is legitimate and stays writable (see
+        # test_write_file_allows_a_symlink_to_an_ordinary_directory). It only
+        # makes the recorded path honest, so the existing gates judge the real
+        # destination. A link to somewhere harmless is still allowed; a link
+        # onto a protected path is now caught by the gate that already exists.
+        try:
+            landed = resolved.relative_to(dest_resolved)
+        except ValueError:  # pragma: no cover - containment above already refused
+            self._deny_git(tool, "git path escaped the clone root", target=target)
+        return "/".join(landed.parts) if landed.parts else "/".join(parts)
 
     def _run_git(
         self,

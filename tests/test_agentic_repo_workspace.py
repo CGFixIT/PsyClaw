@@ -833,6 +833,15 @@ def test_write_file_refuses_a_symlink_that_points_at_the_git_directory(tmp_path,
 def test_write_file_allows_a_symlink_to_an_ordinary_directory(tmp_path, monkeypatch):
     # The resolved-path guard must reject .git specifically, not every symlink:
     # an in-repo symlink to a normal directory is ordinary and stays writable.
+    #
+    # The reported `target` is the RESOLVED path, not the spelled one. That
+    # changed when the resolved path became what downstream gates judge:
+    # write_file records `target` in changed_files, and
+    # decide_real_repo_candidate matches changed_files against
+    # protected_write_paths, so reporting the spelled name let an in-clone
+    # symlink land a write on a protected path under an unprotected alias.
+    # Here the destination is harmless, so the write is still allowed -- only
+    # the bookkeeping is now honest about where the bytes went.
     fake = _fake_clone_populating_git_repo(files={"real/keep.txt": "x\n"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
         with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
@@ -840,7 +849,8 @@ def test_write_file_allows_a_symlink_to_an_ordinary_directory(tmp_path, monkeypa
                 (Path(tools.worktree) / "link").symlink_to("real")
             except (OSError, NotImplementedError) as exc:
                 pytest.skip(f"symlink creation unavailable on this host: {exc}")
-            assert tools.write_file("link/new.txt", "ok\n")["target"] == "link/new.txt"
+            assert tools.write_file("link/new.txt", "ok\n")["target"] == "real/new.txt"
+            assert (Path(tools.worktree) / "real" / "new.txt").read_text(encoding="utf-8") == "ok\n"
 
 
 @pytest.mark.parametrize("target", [".gitattributes", ".gitignore", ".gitmodules", "docs/.gitkeep"])
@@ -1128,3 +1138,95 @@ def test_canonical_repo_path_returns_none_rather_than_laundering_an_unsafe_path(
 
 def test_canonical_repo_path_rejects_a_non_string():
     assert canonical_repo_path(None) is None  # type: ignore[arg-type]
+
+
+def test_write_file_refuses_a_dangling_symlink_escaping_the_clone(tmp_path, monkeypatch):
+    """A DANGLING leaf symlink escaped the jail entirely. Reproduced before the fix.
+
+    _validate_write_path's ancestor walk exists to resolve a path that does not
+    exist yet. When the leaf is a symlink whose target is ABSENT,
+    resolve(strict=True) raises, the walk falls back to the parent directory --
+    legitimately inside the clone -- and containment passes. write_file then
+    calls write_text, which FOLLOWS the link, so model-authored bytes land at
+    the target, outside the clone.
+
+    real_repo_loop's "already exists, never shown you" backstop cannot catch it
+    either: stat_file goes through ScopedRoots, whose O_NOFOLLOW turns any
+    symlink into an error the caller reads as "does not exist yet -- a create,
+    always allowed".
+    """
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            worktree = Path(tools.worktree)
+            outside = tmp_path / "OUTSIDE.txt"
+            (worktree / "docs").mkdir(exist_ok=True)
+            try:
+                (worktree / "docs" / "notes.md").symlink_to(outside)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
+            with pytest.raises(AgenticError, match="escaped the clone root"):
+                tools.write_file("docs/notes.md", "PWNED\n")
+            assert not outside.exists(), "model-authored bytes escaped the clone"
+
+
+def test_write_file_refuses_an_in_clone_symlink_onto_a_protected_path(tmp_path, monkeypatch):
+    """The protected-path gate is checked on the DECLARED name, so a symlink
+    redirected a write onto the tests that judge the candidate.
+
+    decide_real_repo_candidate checks changed_files against
+    protected_write_paths using the path the model asked for. An in-clone
+    symlink (docs/notes.md -> ../tests/test_x.py) is never protected under its
+    declared name, resolves inside the clone so containment passes, and the
+    write lands on the test file. That is exactly the reward-hack
+    protected_write_paths exists to close.
+    """
+    fake = _fake_clone_populating_git_repo(files={"tests/test_x.py": "def test_real(): assert True\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            worktree = Path(tools.worktree)
+            (worktree / "docs").mkdir(exist_ok=True)
+            original = (worktree / "tests" / "test_x.py").read_text(encoding="utf-8")
+            try:
+                (worktree / "docs" / "notes.md").symlink_to(Path("..") / "tests" / "test_x.py")
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
+            # Not refused -- it resolves inside the clone, which is legitimate.
+            # What matters is that it is REPORTED as where it landed, so the
+            # protected-path gate downstream sees tests/, not docs/.
+            result = tools.write_file("docs/notes.md", "def test_real(): assert False\n")
+            assert result["target"] == "tests/test_x.py", (
+                "the write must be recorded at its resolved destination, or "
+                "protected_write_paths never sees it"
+            )
+
+
+def test_write_file_refuses_an_intermediate_symlink_directory(tmp_path, monkeypatch):
+    """Every segment is checked, not just the leaf: docs -> tests is the same
+    bypass one directory up, and the leaf itself is then an ordinary name."""
+    fake = _fake_clone_populating_git_repo(files={"tests/test_x.py": "def test_real(): assert True\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            worktree = Path(tools.worktree)
+            (worktree / "docs").mkdir(exist_ok=True)
+            original = (worktree / "tests" / "test_x.py").read_text(encoding="utf-8")
+            try:
+                (worktree / "docs" / "linkdir").symlink_to(Path("..") / "tests", target_is_directory=True)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlink creation unavailable on this host: {exc}")
+            result = tools.write_file("docs/linkdir/test_x.py", "def test_real(): assert False\n")
+            assert result["target"] == "tests/test_x.py", (
+                "an intermediate symlink directory must also report the resolved path"
+            )
+
+
+def test_write_file_still_accepts_ordinary_paths(tmp_path, monkeypatch):
+    """The symlink refusal must not cost the normal create/overwrite path."""
+    fake = _fake_clone_populating_git_repo(files={"real/ok.md": "original\n"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            tools.write_file("real/ok.md", "overwritten\n")
+            tools.write_file("real/brand_new.md", "created\n")
+            worktree = Path(tools.worktree)
+            assert (worktree / "real" / "ok.md").read_text(encoding="utf-8") == "overwritten\n"
+            assert (worktree / "real" / "brand_new.md").read_text(encoding="utf-8") == "created\n"

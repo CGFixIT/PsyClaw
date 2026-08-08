@@ -556,6 +556,17 @@ agentic:
       - "pyproject.toml"
       - "setup.cfg"
       - "pytest.ini"
+      # ruff reads .ruff.toml / ruff.toml at HIGHER precedence than the
+      # [tool.ruff] table in pyproject.toml, so protecting pyproject.toml alone
+      # left the lint check trivially neuterable: a candidate that CREATES
+      # .ruff.toml with an empty `select` makes the operator's own `ruff`
+      # verification pass vacuously while pyproject.toml sits untouched and the
+      # diff shows one small new file. tox.ini and noxfile.py are here for the
+      # same reason -- both can redefine how a declared check actually runs.
+      - ".ruff.toml"
+      - "ruff.toml"
+      - "tox.ini"
+      - "noxfile.py"
       - ".claude/"
       - ".codex/"
     max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
