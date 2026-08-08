@@ -6,6 +6,14 @@ name: Claude Code (PR Comments)
 # It does NOT participate in core governance, invariants, or agentic paths.
 # add comment write to pr ability for when i @ it
 
+# Deny-by-default at the workflow level. Every job below already declares the
+# narrow set it needs, so this changes no current behaviour -- it changes what
+# happens NEXT: a job added later without its own permissions block inherits
+# this empty set and fails closed, instead of silently inheriting whatever the
+# repository default happens to be. The other 16 workflows already carry a
+# top-level block; this brings the last five in line.
+permissions: {}
+
 on:
   issue_comment:
     types: [created]
