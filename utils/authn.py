@@ -176,13 +176,21 @@ def verify_password(password: str, record: str) -> tuple[bool, bool]:
             dklen=len(expected),
             maxmem=max(_SCRYPT_MAXMEM, n * r * 128 * 4),
         )
-    except (ValueError, MemoryError):
+    except (ValueError, MemoryError, OverflowError):
         # This is the ONLY validity check on the stored parameters, deliberately.
         # scrypt itself rejects n that is not a power of two greater than one,
         # r/p below one, and dklen of zero -- so an explicit pre-check ahead of
         # this was verified redundant in both directions and removed rather than
         # left as dead weight. It also stops a record claiming an absurd n from
         # becoming a memory-exhaustion lever on an unauthenticated route.
+        #
+        # OverflowError specifically: n/r/p cross into C long territory before
+        # scrypt's own ValueError checks run. On LLP64 platforms (Windows) a C
+        # long is 32 bits even in a 64-bit build, so a record claiming an n like
+        # 2**40 overflows there and raises OverflowError instead of ValueError --
+        # confirmed by this suite's own Windows CI leg, which failed here before
+        # this except-clause covered it. 64-bit Linux/macOS never hit this path
+        # (their C long is 64 bits), which is why it surfaced only on one leg.
         #
         # The dklen=0 case is the one worth naming. compare_digest(b"", b"") is
         # True, so a record with an empty stored hash would authenticate any
