@@ -94,10 +94,21 @@ decision.
 | POST | `/ops/agentic` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/fsconnect` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/sqlconnect` | **API key** | rate-limited; subprocess shim |
+| POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
+| POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
+| GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; 503 when `auth.enabled` is false |
 
 The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 `utils/ops_runner.py` (a `subprocess.run([...])` shim). They never import those
 subsystems.
+
+The three `/auth/*` endpoints are Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
+(`gate_auth.py`, registered the same way `gate_ops.py` registers `/ops/*`).
+They exist regardless of `auth.enabled` — every handler checks the flag first
+and returns 503 rather than 404, so a route's mere presence never discloses
+whether the feature is on. **Stage 3 (enforcing a credential on `/query` and
+the console) has not landed** — these routes build sessions/login/logout/
+device tokens only; nothing yet requires a credential to reach `/query`.
 
 ### Key modules
 
@@ -106,6 +117,7 @@ subsystems.
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
+| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is exported for Stage 3 to attach to `/query` (not yet wired) |
 | `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
@@ -125,6 +137,10 @@ subsystems.
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |
 | `utils/guardrail_bridge.py` | Inversion shim: builds the `guardrail_input` and `guardrail_output` nodes' callables, or `None` for either when disabled; the only module through which `graph.py` reaches `guardrails/` (never a direct import) |
 | `utils/auth.py` | Harness-only API-key auth: fail-closed on unset `CYCLAW_API_KEY`, `hmac.compare_digest` on UTF-8 bytes. `gate.py` keeps its own separate copy (see §4's mypy/CI trap) — never refactored onto this module |
+| `utils/authn.py` | **Not `utils/auth.py` above** — per-user authentication primitives (`docs/AUTHENTICATION_DESIGN.md`): scrypt password hash/verify, per-account lockout arithmetic, session/CSRF/device-token id generation. Pure functions, no DB, no HTTP |
+| `utils/authn_store.py` | SQLite/Postgres backend for `users`/`sessions`/`device_tokens`, mirroring `utils/personality_db.py`'s `connect()` pattern; own `CYCLAW_AUTH_DB_URL` env var, deliberately not shared with personality's `CYCLAW_DB_URL` |
+| `utils/authn_manager.py` | `AuthManager` — ties `utils/authn.py` + `utils/authn_store.py` together: bootstrap, login/logout, session validation, device-token CRUD. No HTTP awareness; `gate_auth.py` is the only caller that knows about cookies/headers/status codes |
+| `utils/authn_cli.py` | `cyclaw-user` console script (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/`token revoke`), local-only by construction (no HTTP route reaches it) |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
 | `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`) |
 | `mcp_hybrid_server.py` | MCP server: `hybrid_search` only, no LLM, `sampling: None` |

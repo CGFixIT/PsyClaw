@@ -122,6 +122,7 @@ jobs:
           -v \
           --cov=gate \
           --cov=gate_ops \
+          --cov=gate_auth \
           --cov=graph \
           --cov=mcp_hybrid_server \
           --cov=metrics \

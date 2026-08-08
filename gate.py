@@ -88,7 +88,9 @@ from utils.errors import (
 from utils.guardrail_bridge import build_input_guard, build_output_guard
 from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
+from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
+from gate_auth import register_auth_routes
 from metrics import summarize_audit
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -133,6 +135,7 @@ def require_api_key(
 # survive restarts; leaving it null preserves the original in-memory behavior.
 from fastapi import Request
 from utils.config_validation import (
+    validate_auth_config,
     validate_boot_timeout_config,
     validate_fallback_confirm_placeholder,
     validate_personality_config,
@@ -154,6 +157,7 @@ with open(_BASE_DIR / "config.yaml", encoding="utf-8") as _cfg_f:
 # of a clear ConfigError at boot.
 validate_retrieval_config(cfg)
 validate_personality_config(cfg)
+validate_auth_config(cfg)
 _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds
@@ -304,6 +308,7 @@ async def lifespan(app: FastAPI):
         ("claude", claude),
         ("rate_limiter", _rate_limiter),
         ("personality", personality),
+        ("auth_manager", auth_manager),
         ("retriever", retriever),
     ]:
         if _obj is not None:
@@ -499,6 +504,35 @@ def _confirm_choices(providers: list[str]) -> str:
 personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
+
+# Stage 2 of docs/AUTHENTICATION_DESIGN.md. auth_manager stays None (the
+# request path below never constructs it) unless auth.enabled is true --
+# matching every other CyClaw subsystem's disabled-by-default convention.
+# gate_auth.py's routes always exist regardless (see its own docstring for
+# why), but every handler checks for None first and returns 503.
+auth_manager = None
+if cfg.get("auth", {}).get("enabled", False):
+    auth_manager = AuthManager(cfg)
+    # bootstrap_if_empty() is a no-op on every boot after the first: it only
+    # ever acts when the users table is genuinely empty. The password is
+    # returned exactly once here and never persisted in plaintext or logged
+    # -- only hash_password()'s output reaches the database. This is why
+    # auth.enabled defaults false: turning it on is the one moment an
+    # operator MUST be watching this console output.
+    _bootstrap_password = auth_manager.bootstrap_if_empty()
+    if _bootstrap_password:
+        print(
+            f"\n{'=' * 70}\n"
+            f"CyClaw authentication is now enabled. A first account was created:\n"
+            f"\n"
+            f"    username: {BOOTSTRAP_USERNAME}\n"
+            f"    password: {_bootstrap_password}\n"
+            f"\n"
+            f"This password is shown ONCE and is not stored anywhere in plaintext.\n"
+            f"Save it now, then log in and consider `cyclaw-user passwd "
+            f"{BOOTSTRAP_USERNAME}` to set your own.\n"
+            f"{'=' * 70}\n"
+        )
 
 # Phase 2 NeMo Guardrails offline input rail (docs/NeMo/phase2_implementation_plan.md).
 # build_input_guard returns None when guardrails.enabled is false (the shipped
@@ -773,6 +807,19 @@ register_ops_routes(
     enforce_rate_limit=_enforce_rate_limit,
     sanitize_error=_sanitize_error,
     require_api_key=require_api_key,
+)
+
+# Stage 2 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
+# /auth/whoami. Same registration-function shape as register_ops_routes
+# above, for the same reason -- gate_auth never imports anything gate.py
+# doesn't already inject into it. auth_manager is None when auth.enabled is
+# false; every handler in gate_auth.py checks for that and returns 503.
+register_auth_routes(
+    app,
+    cfg=cfg,
+    audit=_audit,
+    enforce_rate_limit=_enforce_rate_limit,
+    auth_manager=auth_manager,
 )
 
 

@@ -288,6 +288,65 @@ class TelegramRuntimeError(TelegramError):
         super().__init__(message, code="TELEGRAM_RUNTIME_ERROR", details=details)
 
 
+class AuthError(RAGError):
+    """Base error for the per-user authentication layer
+    (docs/AUTHENTICATION_DESIGN.md). Stage 1 primitives live in utils/authn.py,
+    the store in utils/authn_store.py, and the manager tying them together in
+    utils/authn_manager.py -- all reachable from gate.py, unlike the
+    out-of-band hierarchies above, since this IS core request-path auth.
+    """
+
+    def __init__(self, message: str, code: str = "AUTH_ERROR", details: dict | None = None):
+        super().__init__(message, code=code, details=details)
+
+
+class AuthConfigError(AuthError):
+    """The auth: block in config.yaml is missing or invalid."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="AUTH_CONFIG_INVALID", details=details)
+
+
+class AuthLoginFailed(AuthError):
+    """Invalid username or password.
+
+    Deliberately the SAME error, message, and status for an unknown username,
+    a wrong password, and a disabled account -- distinguishing any of them
+    would let a caller enumerate valid usernames or account state.
+    """
+
+    def __init__(self, message: str = "invalid username or password", details: dict | None = None):
+        super().__init__(message, code="AUTH_LOGIN_FAILED", details=details)
+
+
+class AuthAccountLocked(AuthError):
+    """Too many consecutive failures; locked out until retry_after_sec elapses.
+
+    A distinct error from AuthLoginFailed on purpose: the client needs the
+    retry delay to back off correctly, the same reason the existing per-IP
+    rate limiter's 429 carries a concrete number rather than a generic denial.
+    """
+
+    def __init__(self, message: str, retry_after_sec: float, details: dict | None = None):
+        full_details = {**(details or {}), "retry_after_sec": retry_after_sec}
+        super().__init__(message, code="AUTH_ACCOUNT_LOCKED", details=full_details)
+        self.retry_after_sec = retry_after_sec
+
+
+class AuthUserExists(AuthError):
+    """create_user was called with a username that already has a row."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="AUTH_USER_EXISTS", details=details)
+
+
+class AuthUserNotFound(AuthError):
+    """An admin operation (disable/enable/passwd/token) targeted an unknown user."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="AUTH_USER_NOT_FOUND", details=details)
+
+
 @dataclass
 class HealthStatus:
     name: str

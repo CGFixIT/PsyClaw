@@ -240,3 +240,51 @@ def new_session_id() -> str:
     """32 random bytes, base64url. Same primitive and size the harness console
     already uses for its per-process CSRF token."""
     return secrets.token_urlsafe(32)
+
+
+def new_csrf_token() -> str:
+    """32 random bytes, base64url -- same shape as new_session_id/harness's CSRF
+    token, kept as its own name because it is minted per-session, not per-id."""
+    return secrets.token_urlsafe(32)
+
+
+# Bearer device tokens are already high-entropy random values (unlike a
+# human-chosen password), so they are stored as a plain SHA-256 hash rather
+# than run through scrypt: there is no offline-guessing risk to slow down, and
+# scrypt's ~0.1s cost per verification would needlessly tax every bearer-token
+# request. This mirrors how GitHub/GitLab store personal access tokens.
+def new_device_token() -> str:
+    """32 random bytes, base64url. Returned to the caller ONCE at creation time;
+    only its hash (see hash_token) is ever stored."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 hex digest of a bearer token, for at-rest storage and lookup.
+
+    Unlike password verification, this is a plain hash-and-look-up rather than
+    an ``hmac.compare_digest`` comparison: the token itself is 32 random bytes
+    (256 bits of entropy), so the thing protecting it is the difficulty of
+    guessing it in the first place, not the constant-time-ness of comparing a
+    hash the caller must already possess the preimage of. This is the same
+    approach GitHub/GitLab use for personal access tokens.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# 18 raw bytes -> 24 base64url chars: comfortably above _MIN_PASSWORD_LEN (12)
+# with margin for the bootstrap operator to see and retype it once, and short
+# enough to read off a terminal without wrapping.
+_BOOTSTRAP_PASSWORD_BYTES = 18
+
+
+def generate_bootstrap_password() -> str:
+    """A random strong password for the auto-generated first-run account.
+
+    Printed once to the local console by the caller and never stored in
+    plaintext or logged -- only hash_password()'s output is persisted. This
+    exists so CyClaw never ships a fixed, guessable default credential
+    (docs/AUTHENTICATION_DESIGN.md §9/§10): every install's first password is
+    unique and generated locally, on that machine, at first boot.
+    """
+    return secrets.token_urlsafe(_BOOTSTRAP_PASSWORD_BYTES)

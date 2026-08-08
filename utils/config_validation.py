@@ -155,3 +155,45 @@ def validate_personality_config(cfg: dict[str, Any]) -> None:
                 f"personality.soul_max_chars must be a positive integer, got: {soul_max_chars!r}",
                 details={"received": soul_max_chars},
             )
+
+
+def validate_auth_config(cfg: dict[str, Any]) -> None:
+    """Validate ``cfg['auth']`` when the subsystem is enabled.
+
+    Checks:
+      * ``session.idle_timeout_sec`` / ``session.absolute_timeout_sec`` are
+        positive numbers;
+      * ``idle_timeout_sec <= absolute_timeout_sec`` -- otherwise the idle
+        window can never be the one that expires a session first, which is a
+        config mistake worth catching at boot rather than discovering that a
+        "12h idle" setting silently never applies.
+
+    No-op when ``auth.enabled`` is false or the block is absent (Stage 1/2's
+    shipped-disabled default).
+    """
+    auth = cfg.get("auth")
+    if not isinstance(auth, dict) or not auth.get("enabled", False):
+        return
+
+    session = auth.get("session", {})
+    if not isinstance(session, dict):
+        raise ConfigError(
+            f"auth.session must be a mapping, got: {type(session).__name__}",
+            details={"received_type": type(session).__name__},
+        )
+
+    idle = session.get("idle_timeout_sec", 43200)
+    absolute = session.get("absolute_timeout_sec", 604800)
+    for name, val in (("idle_timeout_sec", idle), ("absolute_timeout_sec", absolute)):
+        if not _is_real_number(val) or val <= 0:
+            raise ConfigError(
+                f"auth.session.{name} must be a positive number, got: {val!r}",
+                details={"received": val, "key": name},
+            )
+    if idle > absolute:
+        raise ConfigError(
+            f"auth.session.idle_timeout_sec ({idle}) must be <= "
+            f"absolute_timeout_sec ({absolute}) -- otherwise the idle window "
+            "can never be the one that expires a session",
+            details={"idle_timeout_sec": idle, "absolute_timeout_sec": absolute},
+        )

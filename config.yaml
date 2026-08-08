@@ -398,17 +398,39 @@ api:
   tls:
     enabled: false
 
-# Stage 1 of docs/AUTHENTICATION_DESIGN.md. This flag has NO effect on any
-# request path yet -- nothing checks it except gate.py's loopback bind guard
-# (_auth_and_tls_enabled), which treats "auth.enabled AND api.tls.enabled" as
-# permission for a non-loopback bind (design §7), so a LAN operator is not
-# stuck carrying CYCLAW_ALLOW_NON_LOOPBACK_BIND forever once real enforcement
-# ships. Setting this true today does NOT put a credential in front of
-# /query -- that needs Stage 2 (sessions/login) and Stage 3 (route
-# enforcement), neither of which exists yet. Leave false until those stages
-# ship; see the design doc before turning this (and api.tls.enabled) on.
+# Per-user authentication (docs/AUTHENTICATION_DESIGN.md). Ships false, like
+# every other CyClaw subsystem (agentic/telegram/guardrails). Stage 2 wires
+# /auth/login, /auth/logout, /auth/whoami, sessions, and per-device bearer
+# tokens (utils/authn_manager.AuthManager) -- but Stage 3 (enforcing a
+# credential on /query and the console) has NOT landed yet, so setting this
+# true today creates the account/session machinery and gates gate.py's
+# loopback bind guard (_auth_and_tls_enabled, alongside api.tls.enabled
+# below) WITHOUT yet requiring a credential to use /query. Read the design
+# doc before enabling this on a non-loopback bind.
+#
+# Turning this on for the first time with no existing accounts creates one:
+# username "admin", a random one-time password printed ONCE to the server's
+# console at boot (never logged, never stored in plaintext). Manage accounts
+# after that with the local-only `cyclaw-user` CLI (add/list/disable/enable/
+# passwd/token) -- see utils/authn_cli.py. No account exists until you turn
+# this on; nothing is ever created automatically.
 auth:
   enabled: false
+  # SQLite by default (relative paths anchor to the repo root, matching
+  # personality.db_path's convention). Postgres via this key set to a
+  # postgresql:// DSN, or the CYCLAW_AUTH_DB_URL env var -- deliberately its
+  # OWN env var, not the personality subsystem's CYCLAW_DB_URL: see
+  # utils/authn_store.py's module docstring for why sharing it would be a
+  # surprising cross-subsystem coupling for the higher-sensitivity auth data.
+  db_path: "data/auth/cyclaw_auth.db"
+  # database_url: null
+  session:
+    # Confirmed 2026-08-08 (docs/AUTHENTICATION_DESIGN.md §10.2): 12h idle /
+    # 7d absolute, both configurable. A session dies from EITHER limit,
+    # whichever is reached first -- idle_timeout_sec resets on every valid
+    # use (a rolling window); absolute_timeout_sec does not.
+    idle_timeout_sec: 43200
+    absolute_timeout_sec: 604800
 
 logging:
   level: "INFO"

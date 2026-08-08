@@ -1,0 +1,380 @@
+"""Tests for utils/authn_manager.py -- Stage 2 of docs/AUTHENTICATION_DESIGN.md.
+
+AuthManager has no HTTP awareness, so these tests exercise it directly
+against a real SQLite DB in tmp_path rather than mocking the store: the
+login/lockout/session-expiry logic is exactly the part that must not be
+faked out, since a mock would hide the DB round-trip bugs a real backend
+would catch.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from utils.authn import PasswordPolicyError
+from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
+from utils.errors import AuthAccountLocked, AuthLoginFailed, AuthUserExists, AuthUserNotFound
+
+_GOOD_PASSWORD = "correct horse battery staple"
+
+
+@pytest.fixture
+def manager(tmp_path):
+    m = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "auth.db")}})
+    yield m
+    m.close()
+
+
+@pytest.fixture
+def fast_manager(tmp_path):
+    """A manager with a short idle timeout, for expiry tests without a real sleep."""
+    m = AuthManager({
+        "auth": {
+            "enabled": True,
+            "db_path": str(tmp_path / "auth_fast.db"),
+            "session": {"idle_timeout_sec": 5, "absolute_timeout_sec": 1000},
+        }
+    })
+    yield m
+    m.close()
+
+
+class TestBootstrap:
+    def test_bootstrap_creates_the_first_account(self, manager):
+        password = manager.bootstrap_if_empty()
+        assert password is not None
+        assert len(password) >= 20
+        users = manager.list_users()
+        assert [u.username for u in users] == [BOOTSTRAP_USERNAME]
+
+    def test_bootstrap_is_a_noop_once_any_user_exists(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        assert manager.bootstrap_if_empty() is None
+        # Still just the one account -- bootstrap did not also create "admin".
+        assert [u.username for u in manager.list_users()] == ["alice"]
+
+    def test_bootstrap_password_actually_logs_in(self, manager):
+        password = manager.bootstrap_if_empty()
+        result = manager.login(BOOTSTRAP_USERNAME, password)
+        assert result.username == BOOTSTRAP_USERNAME
+
+    def test_two_bootstrap_passwords_are_different(self, tmp_path):
+        """A fixed default password would be exactly the shortcut
+        docs/AUTHENTICATION_DESIGN.md §9/§10 was written to avoid."""
+        m1 = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "a.db")}})
+        m2 = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "b.db")}})
+        try:
+            assert m1.bootstrap_if_empty() != m2.bootstrap_if_empty()
+        finally:
+            m1.close()
+            m2.close()
+
+
+class TestAccounts:
+    def test_create_and_list(self, manager):
+        canonical = manager.create_user("Alice", _GOOD_PASSWORD)
+        assert canonical == "alice"  # canonicalized to lowercase
+        users = manager.list_users()
+        assert len(users) == 1
+        assert users[0].username == "alice"
+        assert users[0].disabled is False
+        assert users[0].failed_count == 0
+
+    def test_duplicate_create_is_refused(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        with pytest.raises(AuthUserExists):
+            manager.create_user("alice", "a different password entirely")
+
+    def test_duplicate_create_is_case_insensitive(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        with pytest.raises(AuthUserExists):
+            manager.create_user("Alice", "a different password entirely")
+
+    def test_create_enforces_password_policy(self, manager):
+        with pytest.raises(PasswordPolicyError):
+            manager.create_user("alice", "short")
+
+    def test_create_enforces_username_policy(self, manager):
+        with pytest.raises(PasswordPolicyError):
+            manager.create_user("-flag", _GOOD_PASSWORD)
+
+    def test_disable_and_enable(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.disable_user("alice")
+        assert manager.list_users()[0].disabled is True
+        manager.enable_user("alice")
+        assert manager.list_users()[0].disabled is False
+
+    def test_disable_unknown_user_raises(self, manager):
+        with pytest.raises(AuthUserNotFound):
+            manager.disable_user("nobody")
+
+    def test_set_password_then_login_with_new_password(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.set_password("alice", "a brand new password here")
+        result = manager.login("alice", "a brand new password here")
+        assert result.username == "alice"
+        with pytest.raises(AuthLoginFailed):
+            manager.login("alice", _GOOD_PASSWORD)
+
+    def test_set_password_unknown_user_raises(self, manager):
+        with pytest.raises(AuthUserNotFound):
+            manager.set_password("nobody", _GOOD_PASSWORD)
+
+
+class TestLogin:
+    def test_success_creates_a_session(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        assert result.username == "alice"
+        assert result.session_id
+        assert result.csrf_token
+        assert result.session_id != result.csrf_token
+
+    def test_wrong_password_raises_login_failed(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        with pytest.raises(AuthLoginFailed):
+            manager.login("alice", "definitely the wrong password")
+
+    def test_unknown_username_raises_the_same_error_as_wrong_password(self, manager):
+        """Unknown-user and wrong-password must be indistinguishable to the
+        caller -- distinguishing them would let a caller enumerate valid
+        usernames. Same exception TYPE, same generic message."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        try:
+            manager.login("alice", "wrong password entirely here")
+        except AuthLoginFailed as exc:
+            wrong_password_message = str(exc)
+        try:
+            manager.login("nosuchuser", "wrong password entirely here")
+        except AuthLoginFailed as exc:
+            unknown_user_message = str(exc)
+        assert wrong_password_message == unknown_user_message
+
+    def test_disabled_account_raises_login_failed_not_a_distinct_error(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.disable_user("alice")
+        with pytest.raises(AuthLoginFailed):
+            manager.login("alice", _GOOD_PASSWORD)
+
+    def test_successful_login_resets_failure_count(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(3):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", "wrong")
+        assert manager.list_users()[0].failed_count == 3
+        manager.login("alice", _GOOD_PASSWORD)
+        assert manager.list_users()[0].failed_count == 0
+
+    def test_username_is_case_insensitive_at_login(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("ALICE", _GOOD_PASSWORD)
+        assert result.username == "alice"
+
+    @pytest.mark.parametrize("bad", [None, 123, ["a", "b"]])
+    def test_non_string_password_fails_closed_without_raising_typeerror(self, manager, bad):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        with pytest.raises(AuthLoginFailed):
+            manager.login("alice", bad)
+
+    def test_login_transparently_rehashes_a_weak_stored_record(self, manager):
+        """Raising the work factor later must not force a password reset: a
+        login against an outdated record succeeds AND the row is upgraded to
+        current parameters on that same login, matching utils/authn.py's
+        verify_password contract at the manager level, not just the
+        primitive's own return value."""
+        import base64
+        import hashlib
+
+        salt = b"0123456789abcdef"
+        weak_derived = hashlib.scrypt(_GOOD_PASSWORD.encode(), salt=salt, n=2**10, r=8, p=1, dklen=32)
+        weak_record = "$".join((
+            "scrypt", "1024", "8", "1",
+            base64.b64encode(salt).decode(), base64.b64encode(weak_derived).decode(),
+        ))
+        now = manager._now()
+        with manager._lock:
+            manager.conn.execute(
+                manager._sql_insert_user, ("alice", weak_record, now, 0, None, 0, None)
+            )
+            manager.conn.commit()
+
+        manager.login("alice", _GOOD_PASSWORD)
+
+        row = manager.conn.execute(manager._sql_get_user, ("alice",)).fetchone()
+        assert row["password_hash"] != weak_record
+        assert row["password_hash"].split("$")[1] == "16384"  # current _SCRYPT_N
+        # And the upgraded record still authenticates.
+        result = manager.login("alice", _GOOD_PASSWORD)
+        assert result.username == "alice"
+
+
+class TestLockout:
+    def test_locks_after_five_consecutive_failures(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(5):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", "wrong")
+        with pytest.raises(AuthAccountLocked) as excinfo:
+            manager.login("alice", _GOOD_PASSWORD)
+        assert excinfo.value.retry_after_sec > 0
+
+    def test_correct_password_is_still_refused_while_locked(self, manager):
+        """The lockout must not be bypassable by finally guessing right --
+        that would make the lockout decorative."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(6):
+            with pytest.raises((AuthLoginFailed, AuthAccountLocked)):
+                manager.login("alice", "wrong")
+        with pytest.raises(AuthAccountLocked):
+            manager.login("alice", _GOOD_PASSWORD)
+
+    def test_lockout_clears_after_the_delay_elapses(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(5):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", "wrong")
+        real_now = manager._now
+        manager._now = lambda: real_now() + 3.0  # past the 2s delay at failure #5
+        try:
+            result = manager.login("alice", _GOOD_PASSWORD)
+            assert result.username == "alice"
+        finally:
+            manager._now = real_now
+
+
+class TestSessions:
+    def test_validate_session_returns_the_username(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        info = manager.validate_session(result.session_id)
+        assert info is not None
+        assert info.username == "alice"
+        assert info.csrf_token == result.csrf_token
+
+    def test_unknown_session_id_is_invalid(self, manager):
+        assert manager.validate_session("not-a-real-session-id") is None
+
+    @pytest.mark.parametrize("bad", [None, "", 123])
+    def test_malformed_session_id_fails_closed(self, manager, bad):
+        assert manager.validate_session(bad) is None
+
+    def test_logout_revokes_the_session(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        assert manager.logout(result.session_id) is True
+        assert manager.validate_session(result.session_id) is None
+
+    def test_logout_is_not_an_error_when_already_revoked(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        manager.logout(result.session_id)
+        assert manager.logout(result.session_id) is False
+
+    def test_logout_of_unknown_session_returns_false_not_raise(self, manager):
+        assert manager.logout("not-a-real-session-id") is False
+
+    @pytest.mark.parametrize("bad", [None, "", 123])
+    def test_logout_of_a_malformed_id_fails_closed_without_a_db_round_trip(self, manager, bad):
+        assert manager.logout(bad) is False
+
+    def test_session_expires_after_the_idle_window(self, fast_manager):
+        fast_manager.create_user("alice", _GOOD_PASSWORD)
+        result = fast_manager.login("alice", _GOOD_PASSWORD)
+        real_now = fast_manager._now
+        fast_manager._now = lambda: real_now() + 10  # idle_timeout_sec is 5
+        try:
+            assert fast_manager.validate_session(result.session_id) is None
+        finally:
+            fast_manager._now = real_now
+
+    def test_valid_use_slides_the_idle_window_forward(self, fast_manager):
+        """The idle timeout is a ROLLING window: touching the session inside
+        the window must push the deadline forward, not just check it once."""
+        fast_manager.create_user("alice", _GOOD_PASSWORD)
+        result = fast_manager.login("alice", _GOOD_PASSWORD)
+        real_now = fast_manager._now
+        # Touch at t+3 (inside the 5s idle window) -- resets last_seen_ts to t+3.
+        fast_manager._now = lambda: real_now() + 3
+        assert fast_manager.validate_session(result.session_id) is not None
+        # Now at t+7: 4s since the touch at t+3, still inside 5s -> still valid.
+        fast_manager._now = lambda: real_now() + 7
+        try:
+            assert fast_manager.validate_session(result.session_id) is not None
+        finally:
+            fast_manager._now = real_now
+
+    def test_session_expires_at_the_absolute_ceiling_even_with_activity(self, tmp_path):
+        """absolute_timeout_sec must fire even if the session is kept alive
+        by continuous activity -- otherwise it is not actually an absolute
+        ceiling, just a second idle timeout."""
+        m = AuthManager({
+            "auth": {
+                "enabled": True,
+                "db_path": str(tmp_path / "abs.db"),
+                "session": {"idle_timeout_sec": 100000, "absolute_timeout_sec": 5},
+            }
+        })
+        try:
+            m.create_user("alice", _GOOD_PASSWORD)
+            result = m.login("alice", _GOOD_PASSWORD)
+            real_now = m._now
+            m._now = lambda: real_now() + 10  # past the 5s absolute ceiling
+            assert m.validate_session(result.session_id) is None
+        finally:
+            m.close()
+
+
+class TestDeviceTokens:
+    def test_create_and_verify(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        token = manager.create_device_token("alice", "laptop")
+        assert manager.verify_device_token(token) == "alice"
+
+    def test_token_for_unknown_user_raises(self, manager):
+        with pytest.raises(AuthUserNotFound):
+            manager.create_device_token("nobody", "laptop")
+
+    def test_bad_token_verifies_to_none(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_device_token("alice", "laptop")
+        assert manager.verify_device_token("not-a-real-token-at-all") is None
+
+    @pytest.mark.parametrize("bad", [None, "", 123])
+    def test_malformed_token_fails_closed(self, manager, bad):
+        assert manager.verify_device_token(bad) is None
+
+    def test_revoked_token_no_longer_verifies(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        token = manager.create_device_token("alice", "laptop")
+        assert manager.revoke_device_token("alice", "laptop") is True
+        assert manager.verify_device_token(token) is None
+
+    def test_revoking_twice_returns_false_the_second_time(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_device_token("alice", "laptop")
+        manager.revoke_device_token("alice", "laptop")
+        assert manager.revoke_device_token("alice", "laptop") is False
+
+    def test_list_device_tokens_never_exposes_the_token_or_its_hash(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        token = manager.create_device_token("alice", "laptop")
+        listed = manager.list_device_tokens("alice")
+        assert len(listed) == 1
+        assert listed[0].label == "laptop"
+        assert listed[0].revoked is False
+        rendered = repr(listed[0])
+        assert token not in rendered
+
+    def test_two_users_tokens_do_not_collide(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_user("bob", "another good password here")
+        token_a = manager.create_device_token("alice", "laptop")
+        token_b = manager.create_device_token("bob", "laptop")
+        assert token_a != token_b
+        assert manager.verify_device_token(token_a) == "alice"
+        assert manager.verify_device_token(token_b) == "bob"
+        # Revoking bob's "laptop" token must not touch alice's identically-labelled one.
+        manager.revoke_device_token("bob", "laptop")
+        assert manager.verify_device_token(token_a) == "alice"
+        assert manager.verify_device_token(token_b) is None

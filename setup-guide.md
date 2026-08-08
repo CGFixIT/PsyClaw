@@ -387,6 +387,40 @@ curl -s -X POST http://127.0.0.1:8787/query \
 `online_provider` accepts only `"grok"` or `"claude"`. The request model is
 `extra='forbid'`, so a typo'd field name returns `422`, not a silent ignore.
 
+### Authentication routes (`/auth/*`, off by default)
+
+Per-user authentication (`docs/AUTHENTICATION_DESIGN.md`), separate from the
+single shared `CYCLAW_API_KEY` above. Ships `auth.enabled: false` in
+`config.yaml` — every route below returns `503` until you turn it on. Stage 2
+only: sessions, login/logout, and per-device bearer tokens exist, but
+**nothing yet requires a credential to reach `/query`** (that is Stage 3).
+
+| Route | Method | What it does |
+|---|---|---|
+| `/auth/login` | POST | `{"username", "password"}` → sets an `HttpOnly` session cookie and returns a CSRF token |
+| `/auth/logout` | POST | requires the session cookie **and** the CSRF token in an `X-CyClaw-CSRF` header; revokes the session |
+| `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
+
+Turning `auth.enabled` on for the first time with no existing accounts
+creates one — username `admin`, a random one-time password printed **once**
+to the server's own console at boot. Manage accounts after that with the
+local-only `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/
+`token create`/`token list`/`token revoke`) — it never runs over HTTP.
+
+```bash
+# Log in — save the cookie jar and read the csrf_token out of the response.
+curl -s -c cookies.txt -X POST http://127.0.0.1:8787/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"the-one-time-password"}' | python3 -m json.tool
+
+# Who am I, using the saved session cookie.
+curl -s -b cookies.txt http://127.0.0.1:8787/auth/whoami | python3 -m json.tool
+
+# Log out — the CSRF token from the login response is required here.
+curl -s -b cookies.txt -X POST http://127.0.0.1:8787/auth/logout \
+  -H "X-CyClaw-CSRF: the-csrf-token-from-login" | python3 -m json.tool
+```
+
 ### Authenticated routes (Bearer `CYCLAW_API_KEY`)
 
 All of these return `401` when the key is missing **or** when `CYCLAW_API_KEY`
@@ -447,6 +481,7 @@ endpoints, is read-only.
 | `401` | missing/invalid `CYCLAW_API_KEY` (or it is unset server-side) |
 | `404` | on a `/soul/*` route: `personality.enabled` is `false` in `config.yaml` |
 | `422` | request body failed Pydantic validation — usually a misspelled field, since the models forbid extras |
+| `423` | `/auth/login` only: account temporarily locked from too many failed attempts — `retry_after_sec` in the response body |
 | `429` | rate limit — 60 requests/min per IP |
 | `503` | `INDEX_NOT_FOUND` — run `python -m retrieval.indexer` |
 | `504` | the graph exceeded `api.graph_timeout_sec` (660s) |
