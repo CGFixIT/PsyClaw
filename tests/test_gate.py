@@ -9,6 +9,8 @@ Tests the HTTP layer including:
 """
 
 import copy
+import re
+
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi.testclient import TestClient
@@ -422,6 +424,40 @@ class TestSecurityResponseHeaders:
         script_src = next(part for part in csp.split(";") if part.strip().startswith("script-src"))
         assert "unsafe-inline" not in script_src
         assert "style-src 'self' 'unsafe-inline'" in csp
+
+    def test_served_html_has_no_inline_script_under_strict_csp(self, client):
+        """The CSP and the page it protects must actually agree.
+
+        Regression for a real outage: #794 removed terminal.html's inline
+        onclick="..." attributes and dropped 'unsafe-inline' from script-src --
+        but left the whole ~1000-line console in an inline <script> block.
+        script-src 'self' allows same-origin script FILES; it does not allow
+        inline blocks, which need 'unsafe-inline', a nonce, or a hash. So every
+        CSP-enforcing browser silently blocked the entire console (the page
+        still rendered, because style-src does carry 'unsafe-inline').
+
+        test_csp_script_src_has_no_unsafe_inline above asserts the header alone,
+        which is why it stayed green through that outage. This asserts the pair:
+        given a strict script-src, the served markup must not contain an inline
+        script. Either side changing alone now fails here.
+        """
+        test_client, _ = client
+        resp = test_client.get("/")
+        csp = resp.headers.get("content-security-policy", "")
+        script_src = next(part for part in csp.split(";") if part.strip().startswith("script-src"))
+        if "unsafe-inline" in script_src or "nonce-" in script_src or "sha256-" in script_src:
+            pytest.skip("script-src permits inline scripts; the pairing this test guards does not apply")
+        # An inline block is <script> or <script type=...> with no src attribute.
+        # IGNORECASE is load-bearing, not cosmetic: HTML tag and attribute names
+        # are case-insensitive, so <SCRIPT> and SRC= are the same tag to a browser
+        # and would otherwise slip past this guard while still being executed
+        # (or blocked). Flagged by CodeQL's "bad HTML filtering regexp" rule.
+        inline = re.findall(r"<script(?![^>]*\bsrc\s*=)[^>]*>", resp.text, re.IGNORECASE)
+        assert not inline, (
+            f"script-src is strict ({script_src.strip()!r}) but the page serves "
+            f"{len(inline)} inline <script> block(s) that the browser will block: {inline}. "
+            "Move the code to a file under static/ and load it with <script src=...>."
+        )
 
     def test_static_page_has_cache_control(self, client):
         test_client, _ = client
