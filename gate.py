@@ -776,6 +776,85 @@ register_ops_routes(
 )
 
 
+_ALLOW_NON_LOOPBACK_ENV = "CYCLAW_ALLOW_NON_LOOPBACK_BIND"
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True if binding ``host`` reaches only this machine.
+
+    ``import ipaddress`` is local for the same reason ``_is_port_in_use``'s
+    ``import socket`` is: this runs once at startup and the module-level import
+    block above is deliberately ordered around the telemetry-kill guard.
+
+    Accepts the whole 127.0.0.0/8 range and ``::1`` rather than only the literal
+    "127.0.0.1", so ``127.0.0.2`` is not refused for no reason. That makes it a
+    superset of config-guard's C4 literal set -- anything C4 accepts, this
+    accepts. An empty host is NOT loopback: uvicorn reads "" as all interfaces.
+    """
+    import ipaddress
+
+    if not host:
+        return False
+    if host == "localhost":  # DevSkim: ignore DS162092,DS137138 - loopback name by design
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # A hostname we cannot resolve to a literal address. Refuse rather than
+        # guess -- resolving it here would make the bind decision depend on DNS.
+        return False
+
+
+def _require_loopback_bind(host: str) -> bool:
+    """Refuse to serve on a non-loopback address unless explicitly opted in.
+
+    docs/THREAT_MODEL.md scopes CyClaw as single-operator and loopback-bound,
+    and `.claude/skills/config-guard/check_config.py`'s C4 already fails a
+    non-loopback ``api.host``. But C4 is a CI check: it only ever sees config
+    that was committed and pushed. An operator who edits ``api.host`` in their
+    working copy and runs ``python gate.py`` reaches no check at all, and the
+    consequence is not subtle -- ``/query``, ``/health``, ``/`` and ``/static/*``
+    carry no authentication, so a non-loopback bind publishes the whole corpus
+    (via answers) and the local model to anything that can route to the port.
+    ``security.allowed_hosts`` is not a backstop here either: it ships with real
+    LAN addresses alongside the loopback names, so TrustedHostMiddleware would
+    admit those Hosts rather than reject them.
+
+    This is the runtime half of that same rule. It gates ``main()`` only -- the
+    container's ``CMD`` runs ``uvicorn gate:app --host 0.0.0.0`` directly and
+    never calls this, which is correct: there the bind is in-container and
+    docker-compose owns exposure by publishing ``127.0.0.1:8787:8787``. Running
+    uvicorn by hand outside a container likewise bypasses this; the guard covers
+    the documented entry points (``python gate.py`` / ``cyclaw-server``), not
+    every conceivable way to import the app.
+
+    Returns True when it is safe to proceed.
+    """
+    if _is_loopback_host(host):
+        return True
+    if os.environ.get(_ALLOW_NON_LOOPBACK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.warning(
+            "Binding %s — beyond loopback, allowed only because %s is set. "
+            "CyClaw has no authentication on /query, /health, / or /static/*.",
+            host, _ALLOW_NON_LOOPBACK_ENV,
+        )
+        return True
+    print(
+        f"\nRefusing to start: api.host is {host!r}, which is not a loopback address.\n"
+        "\n"
+        "CyClaw serves /query, /health, / and /static/* with no authentication, so\n"
+        "binding beyond loopback exposes your corpus and your local model to every\n"
+        "host that can reach this port. docs/THREAT_MODEL.md scopes CyClaw as\n"
+        "single-operator and loopback-bound.\n"
+        "\n"
+        "Set api.host back to 127.0.0.1 in config.yaml.\n"  # DevSkim: ignore DS162092 - loopback host by design
+        f"If the exposure is deliberate, set {_ALLOW_NON_LOOPBACK_ENV}=1 and put your\n"
+        "own authentication in front of it first.\n",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _is_port_in_use(host: str, port: int) -> bool:
     """Return True if a TCP listener already holds ``host:port``.
 
@@ -831,6 +910,12 @@ def main() -> None:
     api_cfg = cfg.get("api", {})
     host = api_cfg.get("host", "127.0.0.1")  # DevSkim: ignore DS162092 - loopback-only binding by design
     port = api_cfg.get("port", 8787)
+
+    # Before the port probe, not after: a non-loopback host should be refused on
+    # its own terms, not reported as "something is already listening".
+    if not _require_loopback_bind(host):
+        _hold_console()
+        return
 
     if _is_port_in_use(host, port):
         print(

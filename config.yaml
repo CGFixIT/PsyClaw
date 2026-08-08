@@ -346,6 +346,13 @@ policy:
       - "xai-[a-zA-Z0-9]{20,}"       # xAI (Grok) API keys
 
 api:
+  # Enforced at runtime, not just documented: gate.py's main() refuses to serve
+  # on a non-loopback address, because /query, /health, / and /static/* carry no
+  # authentication. Set CYCLAW_ALLOW_NON_LOOPBACK_BIND=1 to override, and put
+  # your own auth in front of CyClaw before you do. config-guard's C4 asserts the
+  # same rule statically, but only against committed config -- this covers the
+  # working copy. The container is unaffected (its CMD binds 0.0.0.0 inside the
+  # network namespace and docker-compose publishes 127.0.0.1:8787:8787).
   host: "127.0.0.1"  # DevSkim: ignore DS162092 - loopback-only binding by design
   port: 8787
   # Overall server-side deadline for one /query (retrieval + graph + LLM). The

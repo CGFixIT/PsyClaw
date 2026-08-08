@@ -991,3 +991,98 @@ class TestProxyHeaderTrust:
         assert cmd_lines, "Dockerfile has no CMD line"
         assert any("--no-proxy-headers" in ln for ln in cmd_lines), \
             "Dockerfile CMD must pass --no-proxy-headers to match gate._serve"
+
+
+class TestLoopbackBindGuard:
+    """docs/THREAT_MODEL.md scopes CyClaw as single-operator and loopback-bound,
+    and config-guard's C4 already fails a non-loopback api.host — but C4 is a CI
+    check and only ever sees committed config. An operator who edits api.host in
+    a working copy and runs `python gate.py` previously reached no check at all,
+    and /query, /health, / and /static/* carry no authentication, so the bind
+    address is the only thing standing between the corpus and the network.
+
+    security.allowed_hosts is not a backstop: it ships with real LAN addresses
+    beside the loopback names, so TrustedHostMiddleware admits those Hosts.
+    test_shipped_allowed_hosts_are_not_a_backstop below pins that fact, because
+    it is the reason this guard has to exist at the bind rather than the header.
+    """
+
+    @pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "localhost", "::1"])
+    def test_loopback_hosts_are_allowed(self, host):
+        import gate
+        assert gate._is_loopback_host(host) is True
+        assert gate._require_loopback_bind(host) is True
+
+    @pytest.mark.parametrize(
+        "host",
+        ["0.0.0.0", "", "::", "10.0.0.112", "192.168.1.5", "example.com"],  # noqa: S104 - asserting the refusal
+    )
+    def test_non_loopback_hosts_are_refused(self, host, monkeypatch):
+        # An empty host is refused deliberately: uvicorn reads "" as all interfaces.
+        # A bare hostname is refused rather than resolved — making the bind decision
+        # depend on DNS would be worse than refusing.
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        assert gate._is_loopback_host(host) is False
+        assert gate._require_loopback_bind(host) is False
+
+    def test_explicit_env_opt_in_allows_a_non_loopback_bind(self, monkeypatch):
+        # The escape hatch has to work, or an operator who genuinely fronts CyClaw
+        # with their own auth is stuck. It is opt-IN (default deny), the inverse of
+        # agentic/writer.py's disable-only switch, because here the risky state is
+        # the non-default one.
+        import gate
+        monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, "1")
+        assert gate._require_loopback_bind("0.0.0.0") is True  # noqa: S104 - asserting the opt-in
+
+    @pytest.mark.parametrize("value", ["", "0", "no", "false", "off", "maybe"])
+    def test_unset_or_falsey_env_still_refuses(self, value, monkeypatch):
+        import gate
+        monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, value)
+        assert gate._require_loopback_bind("0.0.0.0") is False  # noqa: S104 - asserting the refusal
+
+    def test_main_refuses_before_probing_the_port(self, monkeypatch):
+        """A non-loopback host must be rejected on its own terms.
+
+        If the guard ran after _is_port_in_use, an exposed bind whose port
+        happened to be busy would report "CyClaw may already be running" — the
+        wrong diagnosis for the more serious problem.
+        """
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(gate, "cfg", {"api": {"host": "0.0.0.0", "port": 8787}})  # noqa: S104 - asserting the refusal
+        with patch.object(gate, "_is_port_in_use") as port_probe, \
+             patch.object(gate, "_serve") as serve, \
+             patch.object(gate, "_hold_console"):
+            gate.main()
+        serve.assert_not_called()
+        port_probe.assert_not_called()
+
+    def test_main_still_serves_on_a_loopback_host(self, monkeypatch):
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"api": {"host": "127.0.0.1", "port": 8787}})
+        with patch.object(gate, "_is_port_in_use", return_value=False), \
+             patch.object(gate, "_serve") as serve, \
+             patch.object(gate, "_hold_console"):
+            gate.main()
+        serve.assert_called_once_with("127.0.0.1", 8787)
+
+    def test_shipped_allowed_hosts_are_not_a_backstop(self):
+        """Why the guard belongs at the bind, not at the Host header.
+
+        The shipped security.allowed_hosts carries real LAN addresses next to the
+        loopback names, so TrustedHostMiddleware would admit a LAN Host rather
+        than reject it. If that list is ever reduced to loopback only, this test
+        should be updated, not deleted — the guard is still the right control.
+        """
+        import yaml
+        from pathlib import Path
+        cfg_doc = yaml.safe_load(
+            (Path(__file__).resolve().parent.parent / "config.yaml").read_text(encoding="utf-8")
+        )
+        allowed = cfg_doc.get("security", {}).get("allowed_hosts", [])
+        non_loopback = [h for h in allowed if h not in ("127.0.0.1", "localhost", "::1")]
+        assert non_loopback, (
+            "allowed_hosts is now loopback-only, so the Host header would reject LAN "
+            "callers too. Update this test's rationale rather than removing the bind guard."
+        )
