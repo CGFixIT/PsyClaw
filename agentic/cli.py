@@ -490,9 +490,21 @@ def _load_checks_file(path: str) -> tuple[Check, ...]:
         if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
             raise AgenticError("check 'argv' must be a non-empty list of strings", details={"path": path})
         kwargs: dict[str, int] = {}
-        if "timeout_sec" in entry:
-            kwargs["timeout_sec"] = int(entry["timeout_sec"])
-        checks.append(Check(entry["name"], tuple(argv), **kwargs))
+        # int() on operator-supplied JSON, and Check's own __post_init__, both
+        # raise bare ValueError/TypeError. Outside this conversion they escape
+        # every `except AgenticError` between here and main(), so a checks file
+        # with `"timeout_sec": "soon"` produced a traceback and exit 1 -- a code
+        # that is not in the documented 0/2/3/4 set and that
+        # utils/ops_runner.py's _AGENTIC_LABELS maps to "unknown".
+        try:
+            if "timeout_sec" in entry:
+                kwargs["timeout_sec"] = int(entry["timeout_sec"])
+            checks.append(Check(entry["name"], tuple(argv), **kwargs))
+        except (ValueError, TypeError) as exc:
+            raise AgenticError(
+                f"invalid check entry: {exc}",
+                details={"path": path, "entry": entry},
+            ) from exc
     return tuple(checks)
 
 
@@ -1602,9 +1614,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one subcommand, mapping typed failures onto the exit-code API.
+
+    Exit codes are an API here: utils/ops_runner.py's ``_AGENTIC_LABELS`` maps
+    0/2/3/4 to ok/failed/env_config/write_refused and everything else to
+    ``"unknown"``, and ``/ops/agentic`` reports that label to the console.
+    Most subcommands convert their own failures, but not all reach a handler --
+    thirteen ``save_run`` call sites and one ``Path(...).write_text`` sit
+    outside any ``try``. ``real_repo_run_store.save_run``'s own comment says its
+    OSError-to-AgenticError conversion exists so the failure will not "escape
+    past every caller's ``except AgenticError`` in agentic/cli.py, reach main()
+    uncaught, and exit 1" -- which is precisely what happened at those sites,
+    because there was no handler here to land in.
+
+    Catching at the dispatch point fixes the whole class rather than the sites
+    found today. Deliberately narrow: only the typed hierarchy is caught, so a
+    genuine bug still surfaces as a traceback instead of being flattened into a
+    tidy exit 2. ``AgenticWriteRefused`` is matched first because it is a
+    subclass of ``AgenticError`` and carries its own code.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except AgenticWriteRefused as exc:
+        _err(exc.message)
+        return EXIT_REFUSED
+    except AgenticConfigError as exc:
+        _err(exc.message)
+        return EXIT_ENV
+    except AgenticError as exc:
+        _err(exc.message)
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":

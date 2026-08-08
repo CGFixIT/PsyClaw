@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from agentic import cli
+from utils.errors import AgenticConfigError, AgenticError, AgenticWriteRefused
 from utils.logger import reset_config_cache
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -123,3 +124,90 @@ def test_apply_skill_disabled_does_not_write(tmp_path, capsys):
 def test_unknown_subcommand_errors(tmp_path):
     with pytest.raises(SystemExit):
         cli.main(["--config", _write_config(tmp_path, enabled=True), "bogus"])
+
+
+# ── exit codes are an API, so every failure must land in the documented set ──
+# utils/ops_runner.py's _AGENTIC_LABELS maps 0/2/3/4 to
+# ok/failed/env_config/write_refused and EVERYTHING ELSE to "unknown", which is
+# what /ops/agentic then reports to the console. An untyped exception escaping
+# to a traceback exits 1 and lands in that "unknown" bucket.
+
+@pytest.mark.parametrize(
+    "entry, why",
+    [
+        ({"name": "lint", "argv": ["ruff"], "timeout_sec": "soon"}, "non-numeric timeout_sec"),
+        ({"name": "lint", "argv": ["ruff"], "timeout_sec": None}, "null timeout_sec"),
+        ({"name": "lint", "argv": ["ruff"], "timeout_sec": [30]}, "list timeout_sec"),
+        ({"name": "", "argv": ["ruff"]}, "empty name reaches Check.__post_init__"),
+    ],
+)
+def test_bad_checks_file_entry_raises_a_typed_error(tmp_path, entry, why):
+    """int() and Check.__post_init__ both raise bare ValueError/TypeError.
+
+    Those escape every `except AgenticError` between _load_checks_file and
+    main(), so an operator-supplied checks file could exit 1 with a traceback.
+    The checks file is operator input, not model output -- a typo in it is an
+    ordinary mistake, and it should report as a failure rather than a crash.
+    """
+    import json
+
+    path = tmp_path / "checks.json"
+    path.write_text(json.dumps([entry]), encoding="utf-8")
+    with pytest.raises(AgenticError) as excinfo:
+        cli._load_checks_file(str(path))
+    assert "invalid check entry" in excinfo.value.message, why
+
+
+def test_valid_checks_file_entry_still_loads(tmp_path):
+    """Mutation guard: the conversion above must not swallow good input."""
+    import json
+
+    path = tmp_path / "checks.json"
+    path.write_text(json.dumps([{"name": "lint", "argv": ["ruff", "check"], "timeout_sec": 30}]),
+                    encoding="utf-8")
+    checks = cli._load_checks_file(str(path))
+    assert len(checks) == 1
+    assert checks[0].name == "lint"
+    assert checks[0].argv == ("ruff", "check")
+    assert checks[0].timeout_sec == 30
+
+
+@pytest.mark.parametrize(
+    "exc, expected",
+    [
+        (AgenticError("persist failed"), cli.EXIT_FAIL),
+        (AgenticWriteRefused("refused"), cli.EXIT_REFUSED),
+        (AgenticConfigError("bad config"), cli.EXIT_ENV),
+    ],
+)
+def test_main_maps_typed_errors_onto_documented_exit_codes(tmp_path, exc, expected, monkeypatch):
+    """A typed error escaping a subcommand must not become exit 1.
+
+    Thirteen save_run call sites and one Path.write_text sit outside any try in
+    this module. real_repo_run_store.save_run's own comment states its
+    OSError-to-AgenticError conversion exists so the failure will not "escape
+    past every caller's `except AgenticError` in agentic/cli.py, reach main()
+    uncaught, and exit 1" -- which is exactly what happened, because main() had
+    no handler to land in. Catching at the dispatch point covers the whole
+    class rather than the sites that happen to be known today.
+    """
+    def boom(_args):
+        raise exc
+
+    monkeypatch.setattr(cli, "cmd_status", boom)
+    assert cli.main(["--config", _write_config(tmp_path, enabled=True), "status"]) == expected
+
+
+def test_main_does_not_mask_an_untyped_bug(tmp_path, monkeypatch):
+    """The handler is deliberately narrow.
+
+    Catching bare Exception would turn a genuine bug into a tidy exit 2 and
+    hide it. Only the typed hierarchy is classified; anything else still
+    surfaces as a traceback.
+    """
+    def bug(_args):
+        raise RuntimeError("a real bug, not an operational failure")
+
+    monkeypatch.setattr(cli, "cmd_status", bug)
+    with pytest.raises(RuntimeError, match="a real bug"):
+        cli.main(["--config", _write_config(tmp_path, enabled=True), "status"])

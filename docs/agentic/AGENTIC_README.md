@@ -89,6 +89,16 @@ python -m agentic.cli deepagent-plan --repo --instruction "..."
 | 3 | config / environment problem (gh missing or too old, config invalid) |
 | 4 | a write/apply was refused by the gate (e.g. missing `--confirm`) |
 
+This set is closed, and `main()` is what closes it: it catches
+`AgenticWriteRefused` → 4, `AgenticConfigError` → 3, and any other
+`AgenticError` → 2 at the dispatch point, so a subcommand that raises without
+its own handler still exits inside the table. That matters because
+`utils/ops_runner.py`'s `_AGENTIC_LABELS` maps exactly these four codes and
+reports everything else as `"unknown"` to the `/ops/agentic` caller — an
+uncaught error exiting 1 was indistinguishable from a signal or an interpreter
+crash. The handler is deliberately limited to the typed hierarchy: a genuine
+bug still raises a traceback rather than being flattened into a tidy exit 2.
+
 ## 5. The write gate (what still blocks a PR on a shipped checkout)
 `agentic/writer.py` requires **all** of: `agentic.enabled`, `mode == "write"`,
 `writes_enabled: true`, a non-empty human `reason`, and per-call `confirm` --
