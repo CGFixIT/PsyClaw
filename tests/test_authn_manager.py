@@ -109,6 +109,55 @@ class TestAccounts:
         with pytest.raises(AuthUserNotFound):
             manager.disable_user("nobody")
 
+    def test_disable_revokes_the_users_live_session(self, manager):
+        """docs/AUTHENTICATION_DESIGN.md §3 adversary #3: a device that was
+        trusted and no longer should be. Disable must kill the session NOW,
+        not merely block future logins."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        assert manager.validate_session(result.session_id) is not None
+        manager.disable_user("alice")
+        assert manager.validate_session(result.session_id) is None
+
+    def test_disable_revokes_the_users_device_tokens(self, manager):
+        """Device tokens have no expiry column -- without an explicit
+        cascade a disabled user's token would authenticate forever."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        token = manager.create_device_token("alice", "laptop")
+        assert manager.verify_device_token(token) == "alice"
+        manager.disable_user("alice")
+        assert manager.verify_device_token(token) is None
+
+    def test_disable_does_not_touch_another_users_session_or_token(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_user("bob", "another good password entirely")
+        alice_session = manager.login("alice", _GOOD_PASSWORD)
+        bob_session = manager.login("bob", "another good password entirely")
+        bob_token = manager.create_device_token("bob", "phone")
+        manager.disable_user("alice")
+        assert manager.validate_session(bob_session.session_id) is not None
+        assert manager.verify_device_token(bob_token) == "bob"
+        assert manager.validate_session(alice_session.session_id) is None
+
+    def test_re_enabling_does_not_resurrect_a_revoked_session(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        manager.disable_user("alice")
+        manager.enable_user("alice")
+        assert manager.validate_session(result.session_id) is None
+
+    def test_disabled_users_session_check_survives_bypassing_the_cascade(self, manager):
+        """Defense in depth: even if a session row existed for a disabled
+        user WITHOUT going through disable_user()'s cascade (e.g. a future
+        code path that forgets to call it, or a row inserted directly),
+        validate_session must still refuse it via the users.disabled join."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        with manager._lock:
+            manager.conn.execute(manager._sql_set_disabled, (1, "alice"))
+            manager.conn.commit()
+        assert manager.validate_session(result.session_id) is None
+
     def test_set_password_then_login_with_new_password(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         manager.set_password("alice", "a brand new password here")
@@ -120,6 +169,22 @@ class TestAccounts:
     def test_set_password_unknown_user_raises(self, manager):
         with pytest.raises(AuthUserNotFound):
             manager.set_password("nobody", _GOOD_PASSWORD)
+
+    def test_set_password_revokes_the_users_live_session(self, manager):
+        """A password change is a re-authenticate-everywhere signal -- if it
+        was prompted by a suspected leak, an old session must not survive."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        manager.set_password("alice", "a completely different password")
+        assert manager.validate_session(result.session_id) is None
+
+    def test_set_password_does_not_revoke_device_tokens(self, manager):
+        """Device tokens are an independent credential, not derived from the
+        password -- a password change alone is not evidence they leaked too."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        token = manager.create_device_token("alice", "laptop")
+        manager.set_password("alice", "a completely different password")
+        assert manager.verify_device_token(token) == "alice"
 
 
 class TestLogin:

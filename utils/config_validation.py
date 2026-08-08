@@ -169,10 +169,22 @@ def validate_auth_config(cfg: dict[str, Any]) -> None:
         "12h idle" setting silently never applies.
 
     No-op when ``auth.enabled`` is false or the block is absent (Stage 1/2's
-    shipped-disabled default).
+    shipped-disabled default). A PRESENT but malformed ``auth`` block (not a
+    mapping at all -- e.g. ``auth: "banana"``) always raises, even with
+    enabled defaulting false, because gate.py's own ``cfg.get("auth",
+    {}).get("enabled", False)`` has no isinstance guard: without this check
+    running first, that construction crashes with an unhandled AttributeError
+    instead of this module's own clear, typed ConfigError.
     """
     auth = cfg.get("auth")
-    if not isinstance(auth, dict) or not auth.get("enabled", False):
+    if auth is None:
+        return
+    if not isinstance(auth, dict):
+        raise ConfigError(
+            f"config.auth must be a mapping, got: {type(auth).__name__}",
+            details={"received_type": type(auth).__name__},
+        )
+    if not auth.get("enabled", False):
         return
 
     session = auth.get("session", {})

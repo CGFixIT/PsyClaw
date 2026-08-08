@@ -22,6 +22,7 @@ and the console; only ``/auth/whoami`` calls it in this module today.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from collections.abc import Awaitable, Callable
@@ -73,6 +74,19 @@ def register_auth_routes(
     # is the one serving HTTPS, which is what a browser's Secure flag means.
     tls_enabled = bool((tls_cfg or {}).get("enabled")) if isinstance(tls_cfg, dict) else False
     allowed_hosts = cfg.get("security", {}).get("allowed_hosts", ["127.0.0.1", "localhost"])
+    # A browser's Origin header is scheme+host+PORT, not host alone.
+    # allowed_hosts / TrustedHostMiddleware both deliberately ignore port
+    # (gate.py's own comment: "Host matching ignores port") because the Host
+    # header can't disambiguate a reverse proxy from the app port -- but a
+    # same-origin check exists precisely to catch "same host, different
+    # port", so it must not inherit that same laxity: on the LAN deployment
+    # this module's own docstring says gate.py may be reached from, any OTHER
+    # service sharing this host/IP on a different port would otherwise sail
+    # through as "same-origin". 8787 (or whatever api.port is set to) is
+    # never a scheme default, so a genuine same-origin request's Origin
+    # header always states the port explicitly.
+    expected_port = api_cfg.get("port", 8787) if isinstance(api_cfg, dict) else 8787
+    expected_scheme = "https" if tls_enabled else "http"
 
     def _enforce_same_origin(request: Request) -> None:
         """Reject a browser-initiated cross-site request to a state-changing
@@ -94,13 +108,21 @@ def register_auth_routes(
                 detail={_CODE_KEY: "CROSS_SITE_BLOCKED", _MESSAGE_KEY: "Cross-site request rejected", _DETAILS_KEY: {}},
             )
         origin = request.headers.get("origin")
-        if origin is not None and urlparse(origin).hostname not in allowed_hosts:
+        if origin is None:
+            return
+        parsed = urlparse(origin)
+        same_origin = (
+            parsed.hostname in allowed_hosts
+            and parsed.port == expected_port
+            and parsed.scheme == expected_scheme
+        )
+        if not same_origin:
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
                     _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
                     _MESSAGE_KEY: "Cross-origin request rejected",
-                    _DETAILS_KEY: {"origin_host": urlparse(origin).hostname},
+                    _DETAILS_KEY: {"origin_host": parsed.hostname},
                 },
             )
 
@@ -173,7 +195,16 @@ def register_auth_routes(
         manager = _require_enabled()
         client_ip = request.client.host if request.client else "unknown"
         try:
-            login_result = manager.login(req.username, req.password)
+            # manager.login() is synchronous and blocking: scrypt hashing
+            # (~0.1s by design, see utils/authn.py) plus a SQLite round-trip.
+            # gate.py's uvicorn.run() carries no `workers=`, so this is a
+            # single-process, single-event-loop deployment -- calling it
+            # directly here would stall every other in-flight request
+            # (/query included) for the duration of every login attempt.
+            # asyncio.to_thread matches the pattern gate.py's own _audit and
+            # _check_rate_limit_async already establish for exactly this
+            # class of call.
+            login_result = await asyncio.to_thread(manager.login, req.username, req.password)
         except AuthAccountLocked as exc:
             await audit({_EVENT_KEY: "auth_login_locked", "ip": client_ip})
             raise HTTPException(
@@ -208,11 +239,14 @@ def register_auth_routes(
     @app.post("/auth/logout", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_logout(response: Response, session: SessionInfo = Depends(_enforce_csrf)) -> dict[str, bool]:
         manager = _require_enabled()
-        manager.logout(session.session_id)
+        # Same reasoning as auth_login above: manager.logout() is a blocking
+        # SQLite call and this handler is `async def`, so it must be
+        # off-loaded rather than run directly on the event loop.
+        await asyncio.to_thread(manager.logout, session.session_id)
         response.delete_cookie(key=_SESSION_COOKIE, path="/")
         await audit({_EVENT_KEY: "auth_logout", "username": session.username})
         return {"ok": True}
 
-    @app.get("/auth/whoami", dependencies=[Depends(enforce_rate_limit)])
+    @app.get("/auth/whoami", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_whoami(username: str = Depends(require_session_or_token)) -> AuthWhoamiResponse:
         return AuthWhoamiResponse(username=username)

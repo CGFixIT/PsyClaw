@@ -69,7 +69,8 @@ except PackageNotFoundError:
 import logging
 import yaml
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from graph import build_graph, GraphState
@@ -338,6 +339,33 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+@app.exception_handler(RequestValidationError)
+async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Re-emit FastAPI's 422 without ever echoing the value that failed.
+
+    FastAPI's default handler puts each error's raw submitted value under
+    ``detail[].input`` -- harmless for /query's query text, but /auth/login's
+    ``password`` field turns a merely too-long or wrong-type password into a
+    verbatim disclosure in the 422 response body (and a malformed/non-JSON
+    body echoes the WHOLE raw request, username+password included, the same
+    way). Mirrors harness/server.py's ``_validation_error_response``, which
+    solved the identical problem for that app: report only the field
+    location, never the value. Applies to every route (there is no way to
+    scope a FastAPI exception handler to one path), but only ever REMOVES
+    information from the existing default body -- no other route's tests
+    assert anything more specific than the 422 status code.
+    """
+    fields = []
+    for err in exc.errors():
+        loc = err.get("loc") or ()
+        fields.append(".".join(str(part) for part in loc) or "unknown field")
+    named = ", ".join(fields) or "unknown field"
+    return JSONResponse(
+        status_code=422,
+        content={"error": f"request body failed validation: {named}", "code": "VALIDATION_ERROR"},
+    )
+
 
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 

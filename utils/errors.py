@@ -325,6 +325,21 @@ class AuthAccountLocked(AuthError):
     A distinct error from AuthLoginFailed on purpose: the client needs the
     retry delay to back off correctly, the same reason the existing per-IP
     rate limiter's 429 carries a concrete number rather than a generic denial.
+
+    Accepted, known tradeoff: being distinct is itself a small username-
+    enumeration signal -- only an account that EXISTS accumulates
+    failed_count and can ever transition from AuthLoginFailed (401) to this
+    (423), so five failed attempts against a genuine username eventually
+    look different from five against a nonexistent one, even though any
+    single attempt's response is identical either way (AuthManager.login's
+    unknown-username path pays the same scrypt cost via _DUMMY_RECORD). This
+    is deliberate, not an oversight: the alternative -- returning 401 forever
+    regardless of lockout state -- would deny the legitimate caller the
+    retry-delay information they need, for a channel that costs an attacker
+    five real attempts per username just to open one bit of information
+    (exists / does not exist), against a system whose real secret is the
+    password, not the username's existence. The same tradeoff every major
+    login system with visible lockout UX makes.
     """
 
     def __init__(self, message: str, retry_after_sec: float, details: dict | None = None):

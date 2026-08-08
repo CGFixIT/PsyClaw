@@ -21,11 +21,13 @@ from utils.authn_manager import AuthManager
 
 _GOOD_PASSWORD = "correct horse battery staple"
 _ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+_PORT = 8787
+_SAME_ORIGIN = f"http://localhost:{_PORT}"
 
 
-def _cfg(tls_enabled=False):
+def _cfg(tls_enabled=False, port=_PORT):
     return {
-        "api": {"tls": {"enabled": tls_enabled}},
+        "api": {"tls": {"enabled": tls_enabled}, "port": port},
         "security": {"allowed_hosts": _ALLOWED_HOSTS},
     }
 
@@ -205,7 +207,52 @@ class TestSameOrigin:
         r = _client(manager).post(
             "/auth/login",
             json={"username": username, "password": password},
+            headers={"origin": _SAME_ORIGIN},
+        )
+        assert r.status_code == 200
+
+    def test_same_host_different_port_is_rejected(self, manager, user):
+        """A browser's Origin is scheme+host+port; allowed_hosts and
+        TrustedHostMiddleware both deliberately ignore port (gate.py's own
+        documented reason), so without this the same-origin check would too
+        -- letting any OTHER service on this host/IP but a different port
+        pass as 'same-origin' on the LAN deployment this module targets."""
+        username, password = user
+        r = _client(manager).post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": "http://localhost:9999"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+    def test_origin_without_an_explicit_port_is_rejected(self, manager, user):
+        """CyClaw's port (8787) is never a scheme default, so a genuine
+        same-origin request's Origin header always states it explicitly --
+        one lacking a port is not this app, regardless of hostname."""
+        username, password = user
+        r = _client(manager).post(
+            "/auth/login",
+            json={"username": username, "password": password},
             headers={"origin": "http://localhost"},
+        )
+        assert r.status_code == 403
+
+    def test_same_host_and_port_but_https_is_rejected_when_tls_is_off(self, manager, user):
+        username, password = user
+        r = _client(manager, cfg=_cfg(tls_enabled=False)).post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": f"https://localhost:{_PORT}"},
+        )
+        assert r.status_code == 403
+
+    def test_https_origin_is_accepted_when_tls_is_on(self, manager, user):
+        username, password = user
+        r = _client(manager, cfg=_cfg(tls_enabled=True)).post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": f"https://localhost:{_PORT}"},
         )
         assert r.status_code == 200
 
@@ -315,6 +362,25 @@ class TestWhoami:
         r = client.get("/auth/whoami")  # deliberately no X-CyClaw-CSRF header
         assert r.status_code == 200
 
+    def test_whoami_rejects_a_cross_site_request(self, manager, user):
+        """/auth/whoami was the only one of the three /auth/* routes that
+        omitted the same-origin check, so a page explicitly marked
+        cross-site could still confirm a victim's login state (username) via
+        their ambient session cookie. Now consistent with login/logout."""
+        username, password = user
+        client = _client(manager)
+        client.post("/auth/login", json={"username": username, "password": password})
+        r = client.get("/auth/whoami", headers={"sec-fetch-site": "cross-site"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_whoami_still_works_with_a_same_origin_header(self, manager, user):
+        username, password = user
+        client = _client(manager)
+        client.post("/auth/login", json={"username": username, "password": password})
+        r = client.get("/auth/whoami", headers={"origin": _SAME_ORIGIN})
+        assert r.status_code == 200
+
 
 class TestRateLimitOrdering:
     """Mirrors gate.py's own TestFailedAuthDoesNotBypassRateLimit convention:
@@ -358,3 +424,19 @@ def test_csrf_comparison_uses_a_timing_safe_compare():
 
     src = (Path(__file__).resolve().parent.parent / "gate_auth.py").read_text(encoding="utf-8")
     assert "hmac.compare_digest(supplied.encode" in src
+
+
+def test_login_and_logout_run_the_blocking_manager_call_on_a_worker_thread():
+    """auth_login/auth_logout are `async def` route handlers; a blocking
+    scrypt-hash + SQLite call inside one runs directly on gate.py's single
+    event loop (uvicorn.run carries no workers=), stalling every other
+    in-flight request -- including /query -- for the duration. Whether the
+    event loop actually stalls cannot be pinned reliably by a behavioural
+    test (TestClient's own concurrency model doesn't guarantee two calls
+    share one loop), so this pins the fix at the source instead -- same
+    reasoning as the CSRF timing-safe-compare pin above."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "gate_auth.py").read_text(encoding="utf-8")
+    assert "await asyncio.to_thread(manager.login" in src
+    assert "await asyncio.to_thread(manager.logout" in src

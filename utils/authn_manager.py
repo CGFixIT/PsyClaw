@@ -86,6 +86,22 @@ class DeviceTokenSummary:
 # the ~0.1s scrypt cost entirely for a nonexistent user would be a measurable
 # side channel. The fixed salt is fine: this record is never meant to
 # authenticate anything, only to cost the same as one that could.
+#
+# Known, accepted limitation: this equalizes cost against TODAY's policy
+# constants, not against whatever a specific stored row actually used.
+# verify_password() derives its cost from the n/r/p embedded IN the record
+# (that is precisely what lets needs_rehash raise the work factor later
+# without forcing a password reset) -- so the moment a future release raises
+# _SCRYPT_N/_SCRYPT_R/_SCRYPT_P, any account that has not logged in since
+# that bump (and so has not yet been transparently rehashed) becomes
+# CHEAPER to verify than this freshly-recompiled dummy, reopening a
+# username-timing gap for that account specifically until its next
+# successful login. Not exploitable today (no bump has ever happened, so
+# every stored record and this dummy use identical parameters) and not
+# fixed here: doing so requires the dummy's cost to track the CURRENT
+# minimum cost actually stored across the user table, which needs a
+# DB read on every login attempt for a risk that does not exist yet. If
+# _SCRYPT_N/R/P are ever raised, revisit this before shipping that change.
 _DUMMY_RECORD = authn.hash_password("dummy-timing-equalization-password", salt=b"\x00" * 16)
 
 
@@ -133,18 +149,36 @@ class AuthManager:
             "INSERT INTO sessions (session_id, username, csrf_token, created_ts, last_seen_ts, expires_ts) "
             f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
         )
-        self._sql_get_session = f"SELECT * FROM sessions WHERE session_id = {ph}"
+        # JOINed against users.disabled as defense-in-depth: a disabled
+        # account's sessions are also bulk-revoked by _set_disabled below, but
+        # this means a session/token cannot authenticate for a disabled user
+        # through ANY path, including one that someday bypasses that cascade
+        # (e.g. a row inserted directly, or a future code path that forgets
+        # to call disable_user()). Belt and suspenders, not a replacement.
+        self._sql_get_session = (
+            "SELECT s.* FROM sessions s JOIN users u ON s.username = u.username "
+            f"WHERE s.session_id = {ph} AND u.disabled = 0"
+        )
         self._sql_touch_session = f"UPDATE sessions SET last_seen_ts = {ph} WHERE session_id = {ph}"
         self._sql_revoke_session = f"UPDATE sessions SET revoked = 1 WHERE session_id = {ph} AND revoked = 0"
+        self._sql_revoke_sessions_for_user = (
+            f"UPDATE sessions SET revoked = 1 WHERE username = {ph} AND revoked = 0"
+        )
         self._sql_insert_token = (
             "INSERT INTO device_tokens (token_hash, username, label, created_ts, last_used_ts, revoked) "
             f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
         )
-        self._sql_get_token = f"SELECT * FROM device_tokens WHERE token_hash = {ph}"
+        self._sql_get_token = (
+            "SELECT t.* FROM device_tokens t JOIN users u ON t.username = u.username "
+            f"WHERE t.token_hash = {ph} AND u.disabled = 0"
+        )
         self._sql_touch_token = f"UPDATE device_tokens SET last_used_ts = {ph} WHERE token_hash = {ph}"
         self._sql_list_tokens = f"SELECT * FROM device_tokens WHERE username = {ph} ORDER BY created_ts"
         self._sql_revoke_token = (
             f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND label = {ph} AND revoked = 0"
+        )
+        self._sql_revoke_tokens_for_user = (
+            f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND revoked = 0"
         )
 
     def _ensure_schema(self) -> None:
@@ -220,6 +254,17 @@ class AuthManager:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         with self._lock:
             cur = self.conn.execute(self._sql_set_disabled, (int(disabled), canonical))
+            if disabled and cur.rowcount:
+                # A disabled account must lose every live credential
+                # immediately, not just future logins -- otherwise an
+                # already-issued session keeps working for up to its own 7-day
+                # absolute expiry, and a device token (which has no expiry at
+                # all) keeps working forever. This is
+                # docs/AUTHENTICATION_DESIGN.md §3's adversary #3 ("a device
+                # that was trusted and no longer should be"); revocation
+                # exists to answer it NOW, not eventually.
+                self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
+                self.conn.execute(self._sql_revoke_tokens_for_user, (canonical,))
             self.conn.commit()
             if not cur.rowcount:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
@@ -235,6 +280,16 @@ class AuthManager:
         record = authn.hash_password(password)  # raises PasswordPolicyError if invalid
         with self._lock:
             cur = self.conn.execute(self._sql_set_password, (record, canonical))
+            if cur.rowcount:
+                # A password change is a strong signal to force
+                # re-authentication everywhere: if it was prompted by a
+                # suspected leak, an attacker holding an already-issued
+                # session must not get to keep using it. Device tokens are
+                # deliberately NOT revoked here -- they are an independent
+                # credential the user created on purpose, not derived from
+                # the password, so a password change alone is not evidence
+                # they are compromised too.
+                self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
             self.conn.commit()
             if not cur.rowcount:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})

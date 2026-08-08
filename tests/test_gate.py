@@ -314,6 +314,56 @@ class TestQueryEndpoint:
         assert resp.json()["retrieval_mode"] == "none"
 
 
+class TestValidationErrorNeverEchoesTheSubmittedValue:
+    """FastAPI's default RequestValidationError handler puts each error's raw
+    submitted value under detail[].input -- harmless for /query's query text,
+    but /auth/login's password field turns a merely too-long or wrong-type
+    password into a verbatim disclosure in the 422 body. gate.py's own
+    _on_validation_error handler (mirroring harness/server.py's identical
+    fix) reports only the field location, never the value. This class runs
+    the auth-specific case through the REAL gate.app -- pure Pydantic
+    validation happens before the route body, so auth.enabled being false in
+    the test config does not skip it."""
+
+    def test_oversized_query_body_is_not_echoed(self, client):
+        test_client, _ = client
+        needle = "MARKER_" + "z" * 100
+        resp = test_client.post("/query", json={"query": needle * 700})  # past max_length=65536
+        assert resp.status_code == 422
+        assert needle not in resp.text
+
+    def test_auth_login_oversized_password_is_not_echoed(self, client):
+        test_client, _ = client
+        secret = "SUPER_SECRET_PASSWORD_" + "x" * 2000  # past AuthLoginRequest's max_length=1024
+        resp = test_client.post("/auth/login", json={"username": "a", "password": secret})
+        assert resp.status_code == 422
+        assert "SUPER_SECRET_PASSWORD" not in resp.text
+        assert resp.json()["code"] == "VALIDATION_ERROR"
+
+    def test_auth_login_wrong_type_password_is_not_echoed(self, client):
+        """strict=True on AuthLoginRequest rejects a non-string password
+        outright (no int->str coercion) -- confirm THAT rejection path also
+        never echoes the value."""
+        test_client, _ = client
+        resp = test_client.post("/auth/login", json={"username": "a", "password": 1234567890})
+        assert resp.status_code == 422
+        assert "1234567890" not in resp.text
+
+    def test_malformed_non_json_body_is_not_echoed(self, client):
+        """A wrong/missing Content-Type still reaches Pydantic's json_invalid
+        error, whose `input` is the ENTIRE raw body -- confirm that path is
+        covered too, not just per-field errors."""
+        test_client, _ = client
+        secret = "SUPER_SECRET_PASSWORD_marker"
+        resp = test_client.post(
+            "/auth/login",
+            content=f'{{"username": "a", "password": "{secret}"'.encode(),  # deliberately truncated/invalid JSON
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 422
+        assert secret not in resp.text
+
+
 class TestHealthEndpoint:
     def test_health_returns_status(self, client):
         test_client, _ = client
