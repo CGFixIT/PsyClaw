@@ -18,7 +18,18 @@ from fastapi.routing import APIRoute
 
 import gate
 
-_TERMINAL_HTML = Path(gate.__file__).resolve().parent / "static" / "terminal.html"
+_STATIC = Path(gate.__file__).resolve().parent / "static"
+_TERMINAL_HTML = _STATIC / "terminal.html"
+# The console's behaviour lives in terminal.js since the CSP fix: script-src 'self'
+# blocks an inline <script>, so the code had to move out of the markup. These are
+# contract tests about what the CONSOLE does, not about which file holds it, so
+# read both and assert against the pair. Splitting the console further only means
+# adding the new file here.
+_TERMINAL_JS = _STATIC / "terminal.js"
+
+
+def _console_source() -> str:
+    return _TERMINAL_HTML.read_text(encoding="utf-8") + "\n" + _TERMINAL_JS.read_text(encoding="utf-8")
 
 # Paths the console calls with POST (everything else it calls with GET).
 _POST_PATHS = {
@@ -28,7 +39,7 @@ _POST_PATHS = {
 
 
 def _console_paths() -> set[str]:
-    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    html = _console_source()
     # Direct fetch targets: `${API}/health`, `${API}/soul/reload`, ...
     paths = set(re.findall(r"\$\{API\}(/[A-Za-z0-9_/-]+)", html))
     # Indirect ops targets: callOps('/ops/sync', {...}) -> fetch(`${API}${path}`)
@@ -44,7 +55,7 @@ def test_console_path_extraction_is_not_empty():
     """Regex-rot guard: if terminal.html's fetch idiom changes and extraction
     breaks, this fails loudly instead of the per-path tests passing vacuously."""
     paths = _console_paths()
-    assert len(paths) >= 10, f"extracted only {sorted(paths)} from terminal.html"
+    assert len(paths) >= 10, f"extracted only {sorted(paths)} from terminal.html + terminal.js"
     assert "/health" in paths
     assert "/query" in paths
     assert any(p.startswith("/ops/") for p in paths)
@@ -57,7 +68,7 @@ def test_online_confirm_buttons_send_explicit_provider():
     # the contract instead of the old shape: both provider names are still
     # wired, and the click still passes an explicit provider rather than a bare
     # `true` (which the graph would default to grok).
-    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    html = _console_source()
     assert "grok:" in html and "claude:" in html
     assert "handleConfirm(true, id, provider)" in html
     assert "body.online_provider = onlineProvider" in html
@@ -70,7 +81,7 @@ def test_confirm_buttons_are_gated_on_server_declared_availability():
     offline answer labelled as a cloud answer. The console reads the server's
     available_providers list, and defaults to the empty (offline-only) list so
     a response without the field fails closed."""
-    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    html = _console_source()
     assert "data.available_providers" in html
     assert "availableProviders = []" in html, "the default must be offline-only, not both providers"
     assert "for (const provider of availableProviders)" in html
