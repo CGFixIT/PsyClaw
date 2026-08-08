@@ -28,7 +28,7 @@ consolidates the threat-model assumptions previously scattered across
 
 | Assumption | Value |
 |---|---|
-| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. |
+| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` unless `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is set — see the ninth amendment in §5 for why that was previously a convention rather than a control. |
 | Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
@@ -664,6 +664,61 @@ Python-only `/ops` children remain possible and inherit the same profile. It is
 not process-role isolation; optional services need their own profiles. Stage 5
 criteria and the full operator procedure are in
 [`docs/SECCOMP_EBPF_HARDENING.md`](./SECCOMP_EBPF_HARDENING.md).
+
+### Ninth amendment — the loopback bind is now a control, not a convention (2026-08-08)
+
+The scope table in §1 has always said host exposure is *"exclusively
+`127.0.0.1:8787` — never a non-loopback host interface."* Until this amendment,
+nothing in the running system enforced that sentence.
+
+**What was actually true.** `gate.py`'s `main()` read `api.host` from
+`config.yaml` and passed it straight to `uvicorn.run`. `utils/config_validation.py`
+— the boot-time validator whose whole job is to fail fast — never referenced
+`host` at all. So a one-word edit in a working copy was sufficient to publish the
+server to the network, and nothing at startup objected.
+
+**Why the other layers did not catch it.**
+`.claude/skills/config-guard/check_config.py`'s C4 does fail a non-loopback
+`api.host`, and it is build-blocking in CI — but CI only ever sees config that was
+committed and pushed. An operator editing their working copy and running
+`python gate.py` reached no check. `security.allowed_hosts` is not a backstop
+either: it ships as
+`['127.0.0.1', 'localhost', '10.0.0.112', '10.0.0.111']`, so
+`TrustedHostMiddleware` **admits** those LAN Hosts rather than rejecting them —
+verified by probing the middleware directly with the shipped list.
+
+**Why it matters here specifically.** `/query`, `/health`, `/` and `/static/*`
+carry no authentication. A non-loopback bind therefore exposes the corpus (via
+answers), the soul-informed system prompt, and the local model's compute to
+anything that can route to the port. That is not a subtle degradation of the
+threat model; it is a different threat model.
+
+**The control.** `main()` now calls `_require_loopback_bind()` before it probes
+the port or serves, and refuses with an actionable message. The whole of
+`127.0.0.0/8` and `::1` are accepted (a superset of C4's literal list — anything
+C4 allows, this allows); an empty host is refused because uvicorn reads it as all
+interfaces, and an unresolvable hostname is refused rather than resolved, so the
+bind decision never depends on DNS. `CYCLAW_ALLOW_NON_LOOPBACK_BIND=1` is the
+explicit opt-out, and it logs a warning naming the unauthenticated routes. Note
+the polarity: this is opt-**in** to the risky state, the inverse of
+`agentic/writer.py`'s disable-only kill switch, because here the dangerous
+configuration is the non-default one.
+
+**The boundary, stated precisely rather than overclaimed.** The guard covers the
+documented entry points — `python gate.py` and the `cyclaw-server` console script.
+It does **not** cover `uvicorn gate:app --host 0.0.0.0` run by hand, and it
+deliberately does not cover the container, whose `CMD` is exactly that: there the
+bind is inside the network namespace and `docker-compose.yml` owns exposure by
+publishing `127.0.0.1:8787:8787`. Anyone invoking uvicorn directly has stepped
+outside the supported launch path and owns the resulting exposure.
+
+**Provenance.** The operator wrote this concern down first, in
+`docs/zIdeas/note.txt`: *"curl requests or powershell api commands can still query
+cyclaw if on same lan - need to add authentication before truly considering this
+secure."* The note was investigated on the assumption the loopback bind refuted
+it. It did not. This amendment closes the configuration half; **authentication on
+the query path remains genuinely absent and is still the open item the note
+names.**
 
 ---
 
