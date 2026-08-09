@@ -210,17 +210,20 @@ class TestLogin:
     def test_unknown_username_raises_the_same_error_as_wrong_password(self, manager):
         """Unknown-user and wrong-password must be indistinguishable to the
         caller -- distinguishing them would let a caller enumerate valid
-        usernames. Same exception TYPE, same generic message."""
+        usernames. Same exception TYPE, same generic message.
+
+        pytest.raises, not try/except: a bare try/except only assigns the
+        message INSIDE the except block, so if login() ever stopped raising
+        (e.g. a bug let a wrong password through), the test would crash with
+        an unrelated NameError on the final assert instead of clearly
+        reporting that the expected exception never came.
+        """
         manager.create_user("alice", _GOOD_PASSWORD)
-        try:
+        with pytest.raises(AuthLoginFailed) as wrong_password_exc:
             manager.login("alice", "wrong password entirely here")
-        except AuthLoginFailed as exc:
-            wrong_password_message = str(exc)
-        try:
+        with pytest.raises(AuthLoginFailed) as unknown_user_exc:
             manager.login("nosuchuser", "wrong password entirely here")
-        except AuthLoginFailed as exc:
-            unknown_user_message = str(exc)
-        assert wrong_password_message == unknown_user_message
+        assert str(wrong_password_exc.value) == str(unknown_user_exc.value)
 
     def test_disabled_account_raises_login_failed_not_a_distinct_error(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)

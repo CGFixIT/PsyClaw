@@ -142,5 +142,5 @@ def ddl_indexes() -> list[str]:
         # tokens, not on history. Partial unique indexes are supported by both
         # backends this module targets (SQLite 3.8+, Postgres).
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_live_label "
-        "ON device_tokens(username, label) WHERE revoked = 0",
+        + "ON device_tokens(username, label) WHERE revoked = 0",
     ]
