@@ -707,8 +707,10 @@ class TestRetryBehavior:
         assert no_sleep == [5.0]
         client.close()
 
-    @pytest.mark.parametrize("bad", ["", "later", "-3", "Wed, 21 Oct 2026 07:28:00 GMT"])
-    def test_unparseable_retry_after_falls_back_to_backoff(self, tmp_path, monkeypatch, no_sleep, bad):
+    @pytest.mark.parametrize(
+        "bad", ["", "later", "-3", "nan", "inf", "-inf", "Wed, 21 Oct 2026 07:28:00 GMT"]
+    )
+    def test_invalid_retry_after_falls_back_to_backoff(self, tmp_path, monkeypatch, no_sleep, bad):
         # The HTTP-date form is legal per RFC 9110 but neither vendor documents
         # it, so it deliberately falls through to the computed backoff rather
         # than adding a clock-skew dependency to the retry path.

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from collections.abc import Callable
@@ -133,7 +134,7 @@ def _retry_after_delay(resp: httpx.Response, backoff_max: float) -> float | None
     # ignoring the header spent the whole retry budget on requests that could
     # not succeed, and counted every one against the org's rate limit.
     #
-    # Returns None when the header is absent or unparseable, so the caller
+    # Returns None when the header is absent or invalid, so the caller
     # keeps its exponential backoff. Clamped to backoff_max for the same reason
     # that ceiling exists at all: a misbehaving or hostile upstream must not be
     # able to park a worker thread for an arbitrary duration. Ollama is
@@ -149,7 +150,7 @@ def _retry_after_delay(resp: httpx.Response, backoff_max: float) -> float | None
         seconds = float(raw.strip())
     except (TypeError, ValueError):
         return None
-    if seconds < 0:
+    if not math.isfinite(seconds) or seconds < 0:
         return None
     return min(seconds, backoff_max)
 
