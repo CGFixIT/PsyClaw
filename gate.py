@@ -776,6 +776,206 @@ register_ops_routes(
 )
 
 
+_ALLOW_NON_LOOPBACK_ENV = "CYCLAW_ALLOW_NON_LOOPBACK_BIND"
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True if binding ``host`` reaches only this machine.
+
+    ``import ipaddress`` is local for the same reason ``_is_port_in_use``'s
+    ``import socket`` is: this runs once at startup and the module-level import
+    block above is deliberately ordered around the telemetry-kill guard.
+
+    Accepts the whole 127.0.0.0/8 range and ``::1`` rather than only the literal
+    "127.0.0.1", so ``127.0.0.2`` is not refused for no reason. That makes it a
+    superset of config-guard's C4 literal set -- anything C4 accepts, this
+    accepts. An empty host is NOT loopback: uvicorn reads "" as all interfaces.
+    """
+    import ipaddress
+
+    if not host:
+        return False
+    if host == "localhost":  # DevSkim: ignore DS162092,DS137138 - loopback name by design
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # A hostname we cannot resolve to a literal address. Refuse rather than
+        # guess -- resolving it here would make the bind decision depend on DNS.
+        return False
+
+
+def _flag_is_true(section: object, key: str) -> bool:
+    """True only when ``section[key]`` is the literal boolean ``True``.
+
+    Deliberately NOT ``bool(...)``. This backs a security gate, and every
+    non-empty string is truthy in Python -- so an operator who writes
+    ``enabled: "false"`` in config.yaml (quoted, which YAML parses as the
+    STRING "false", not the boolean) would otherwise read as enabled and open
+    the gate they were trying to keep shut. Unquoted ``true``/``yes``/``on``
+    all parse to the literal ``True`` PyYAML gives us here, so the ordinary
+    ways of writing it still work; anything else fails closed.
+    """
+    if not isinstance(section, dict):
+        return False
+    value = section.get(key)
+    if value is not True and value is not False and value is not None:
+        logger.warning(
+            "config: %s is %r (%s), not a boolean -- treating it as OFF. "
+            "Write it unquoted (%s: true) if you meant to enable it.",
+            key, value, type(value).__name__, key,
+        )
+    return value is True
+
+
+def _auth_and_tls_enabled() -> bool:
+    """True when config.yaml's ``auth.enabled`` and ``api.tls.enabled`` are both set.
+
+    A config READ of operator INTENT, not a safety guarantee -- which is
+    exactly why ``_require_loopback_bind`` does not act on it alone. It backs
+    docs/AUTHENTICATION_DESIGN.md §7's rule ("a non-loopback bind is allowed
+    when authentication is enabled and TLS is enabled"), but a boolean in a
+    file does not put a credential in front of ``/query`` (Stage 3) or TLS on
+    the socket (Stage 4). ``_request_path_enforcement_active`` is the half
+    that checks whether the intent was actually delivered.
+
+    Reads fail closed on any malformed shape (a non-dict ``auth``/``api.tls``)
+    rather than raising, matching the rest of this module's config access.
+    """
+    api_cfg = cfg.get("api") or {}
+    tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
+    return _flag_is_true(cfg.get("auth") or {}, "enabled") and _flag_is_true(tls_cfg, "enabled")
+
+
+# gate_auth.register_auth_routes exports this dependency for Stage 3 to attach
+# to /query. Matched by NAME rather than by identity because it is a closure
+# built inside that function and gate.py never holds a reference to it -- the
+# same name-matching approach .claude/skills/invariant-guard uses to assert
+# structural properties it cannot import.
+_AUTH_DEPENDENCY_NAME = "require_session_or_token"
+
+
+def _request_path_enforcement_active() -> bool:
+    """True when ``/query`` actually carries an authentication dependency.
+
+    A capability probe, not a config read, and the reason the auth+TLS bind
+    path is safe to have landed before Stage 3 exists. ``auth.enabled: true``
+    states an intention; this answers whether the intention was delivered. As
+    of this commit Stage 3 has not shipped -- ``/query`` is registered with no
+    ``dependencies=[...]`` -- so this returns False and the auth+TLS route
+    past loopback cannot open, no matter what the two booleans say. It starts
+    returning True on its own the moment Stage 3 attaches the dependency; no
+    edit here is required, and none should be made to force it.
+    """
+    for route in app.routes:
+        if getattr(route, "path", None) != "/query":
+            continue
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            return False
+        return _AUTH_DEPENDENCY_NAME in _dependant_call_names(dependant)
+    return False
+
+
+def _dependant_call_names(root: object) -> set[str]:
+    """Every callable name in a FastAPI dependant tree, including nested ones.
+
+    Iterative rather than recursive: a dependency graph is operator-shaped
+    data, and a stack cannot blow the interpreter's recursion limit on a
+    deeply nested one.
+    """
+    names: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        name = getattr(getattr(node, "call", None), "__name__", None)
+        if name:
+            names.add(name)
+        stack.extend(getattr(node, "dependencies", []))
+    return names
+
+
+def _require_loopback_bind(host: str) -> bool:
+    """Refuse to serve on a non-loopback address unless explicitly opted in.
+
+    docs/THREAT_MODEL.md scopes CyClaw as single-operator and loopback-bound,
+    and `.claude/skills/config-guard/check_config.py`'s C4 already fails a
+    non-loopback ``api.host``. But C4 is a CI check: it only ever sees config
+    that was committed and pushed. An operator who edits ``api.host`` in their
+    working copy and runs ``python gate.py`` reaches no check at all, and the
+    consequence is not subtle -- ``/query``, ``/health``, ``/`` and ``/static/*``
+    carry no authentication, so a non-loopback bind publishes the whole corpus
+    (via answers) and the local model to anything that can route to the port.
+    ``security.allowed_hosts`` is not a backstop here either: it ships with real
+    LAN addresses alongside the loopback names, so TrustedHostMiddleware would
+    admit those Hosts rather than reject them.
+
+    This is the runtime half of that same rule. It gates ``main()`` only -- the
+    container's ``CMD`` runs ``uvicorn gate:app --host 0.0.0.0`` directly and
+    never calls this, which is correct: there the bind is in-container and
+    docker-compose owns exposure by publishing ``127.0.0.1:8787:8787``. Running
+    uvicorn by hand outside a container likewise bypasses this; the guard covers
+    the documented entry points (``python gate.py`` / ``cyclaw-server``), not
+    every conceivable way to import the app.
+
+    Three ways past loopback, checked in this order: (1) auth+TLS configured
+    AND the request path demonstrably enforcing a credential -- the durable
+    path docs/AUTHENTICATION_DESIGN.md §7 designs toward, so a LAN operator is
+    not stuck carrying an env var forever once those stages ship; (2) the env
+    var below -- a deliberate escape hatch for someone fronting CyClaw with
+    their own reverse proxy/auth today; (3) neither -- refuse.
+
+    (1) deliberately requires BOTH the config flags and
+    ``_request_path_enforcement_active``. The flags alone are a statement of
+    intent, and a warning is not a control: an operator who sets
+    ``auth.enabled: true`` reasonably believes they turned authentication on,
+    which is precisely the belief that must not be allowed to open a LAN bind
+    while Stage 3 leaves ``/query`` unauthenticated. Checking the delivered
+    capability instead means this route past loopback simply cannot open
+    today, and opens by itself when the stage that makes it true ships.
+
+    Returns True when it is safe to proceed.
+    """
+    if _is_loopback_host(host):
+        return True
+    if _auth_and_tls_enabled() and _request_path_enforcement_active():
+        logger.warning(
+            "Binding %s — beyond loopback, allowed because auth.enabled and "
+            "api.tls.enabled are both set and /query enforces a credential. "
+            "Confirm docs/AUTHENTICATION_DESIGN.md's Stage 4 (TLS wiring into "
+            "uvicorn) has also shipped before treating traffic to %s as "
+            "encrypted; this guard can prove the credential, not the socket.",
+            host, host,
+        )
+        return True
+    if os.environ.get(_ALLOW_NON_LOOPBACK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.warning(
+            "Binding %s — beyond loopback, allowed only because %s is set. "
+            "CyClaw has no authentication on /query, /health, / or /static/*.",
+            host, _ALLOW_NON_LOOPBACK_ENV,
+        )
+        return True
+    print(
+        f"\nRefusing to start: api.host is {host!r}, which is not a loopback address.\n"
+        "\n"
+        "CyClaw serves /query, /health, / and /static/* with no authentication, so\n"
+        "binding beyond loopback exposes your corpus and your local model to every\n"
+        "host that can reach this port. docs/THREAT_MODEL.md scopes CyClaw as\n"
+        "single-operator and loopback-bound.\n"
+        "\n"
+        "Set api.host back to 127.0.0.1 in config.yaml.\n"  # DevSkim: ignore DS162092 - loopback host by design
+        "\n"
+        "Setting auth.enabled and api.tls.enabled to true is not enough on its\n"
+        "own: this guard also checks that /query actually enforces a credential,\n"
+        "which docs/AUTHENTICATION_DESIGN.md's Stage 3 has not yet delivered. Once\n"
+        "it has, those two flags allow this bind with no override needed.\n"
+        f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
+        "put your own authentication in front of it first.\n",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _is_port_in_use(host: str, port: int) -> bool:
     """Return True if a TCP listener already holds ``host:port``.
 
@@ -831,6 +1031,12 @@ def main() -> None:
     api_cfg = cfg.get("api", {})
     host = api_cfg.get("host", "127.0.0.1")  # DevSkim: ignore DS162092 - loopback-only binding by design
     port = api_cfg.get("port", 8787)
+
+    # Before the port probe, not after: a non-loopback host should be refused on
+    # its own terms, not reported as "something is already listening".
+    if not _require_loopback_bind(host):
+        _hold_console()
+        return
 
     if _is_port_in_use(host, port):
         print(
