@@ -2,6 +2,10 @@
 # Enforce documented multi-vendor branch naming and fresh-main ancestry on push.
 # Canonical feature prefixes: utils.agent_identity.ALLOWED_BRANCH_PREFIXES
 # (CLAUDE.md §5, Kimi section, .github/PULL_REQUEST_TEMPLATE.md).
+
+## Note: Critical pr description requirement:
+# -Always fill out and utilize this template: .github/PULL_REQUEST_TEMPLATE.md fully when opening a PR
+
 set -euo pipefail
 
 allowed_branch() {
