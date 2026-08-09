@@ -1,5 +1,8 @@
 # CyClaw Telegram Channel — Design & Phase Plan
 
+> quick verification after token and bot created and config flipped
+> python -m telegram.cli send --chat-id YOUR_CHAT_ID --text "CyClaw notify OK" --prompt-token
+
 **Status:** T0–T3 **code** is shipped and unit-tested (mocked Bot API / loopback
 assumptions), including fail-closed T2 offset persistence and T3 one-shot state
 consumption. T4 has a bounded staging path and remains **rollout-partial**. The
