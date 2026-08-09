@@ -1,27 +1,29 @@
 # CyClaw requirements (legacy compatibility surface — kept in sync with
 # pyproject.toml/constraints.txt by dep-guard)
-# Still consumed by the Dockerfile and legacy CI/tools; prefer pyproject.toml + uv for new work.
-# Pins below are synced with pyproject.toml [project.dependencies], the torch CPU
-# extra, and CI test/dev tools used by the legacy requirements path.
+# Still consumed by the Dockerfile and legacy CI/tools.
+# Pins below are synced with pyproject.toml [project.dependencies] and CI
+# test/dev tools used by the legacy requirements path.
 # Always install with constraints for full alignment:
-#   Preferred: uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
-#   Legacy/CI: pip install -r requirements.txt -c constraints.txt
+#   pip install -r requirements.txt -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
+# (matches CLAUDE.md §8's documented install flow: torch first, then this file)
 #
-# The --extra-index-url on the uv line is required: `uv pip install` (uv's
-# pip-compatible interface) does not honor pyproject.toml's [tool.uv.sources]
-# CPU-wheel routing, so torch==...+cpu (below) can't resolve without it —
-# verified via dry-run, 2026-07.
+# pyproject.toml currently has NEITHER a `torch-cpu` extra NOR a
+# [tool.uv.sources] CPU-wheel-routing table -- both were referenced here
+# previously but do not exist in the file (verified 2026-08-09). This is the
+# only install path this repo actually documents/tests today; an `uv pip
+# install -e .` flow would not pull in torch at all until that pyproject.toml
+# config is restored, which is separate follow-up work, not assumed here.
 #
 # See SECURITY.md for exact Chroma CVE-2026-45829 justification (local/offline air-gap only).
 # Docker support added in feature/CyClaw-Agent for production reproducibility.
 # constraints.txt now expanded with all direct pins + pydantic family + torch for hermetic gate.
 #
-# torch is the CPU build (not a pyproject base dep — it is the `torch-cpu` extra),
-# pinned here so that `pip install -r requirements.txt` AND GitHub's Automatic
-# Dependency Submission resolve the CPU wheel from the PyTorch index instead of the
-# default CUDA build — keeping spurious nvidia-* CUDA packages out of the dependency
-# graph. The +cpu local-version wheel exists only on the PyTorch CPU index, so it
-# cannot be satisfied from PyPI (no dependency-confusion exposure).
+# torch is the CPU build, pinned here so that `pip install -r requirements.txt`
+# AND GitHub's Automatic Dependency Submission resolve the CPU wheel from the
+# PyTorch index instead of the default CUDA build — keeping spurious nvidia-*
+# CUDA packages out of the dependency graph. The +cpu local-version wheel
+# exists only on the PyTorch CPU index, so it cannot be satisfied from PyPI
+# (no dependency-confusion exposure).
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.13.0+cpu
 

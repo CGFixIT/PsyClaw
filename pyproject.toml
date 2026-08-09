@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "cyclaw"
 version = "1.9.0"
 description = "Offline-first RAG server with graph-enforced security routing"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi==0.139.2",
     "uvicorn[standard]==0.51.0",

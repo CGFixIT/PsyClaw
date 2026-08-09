@@ -156,13 +156,20 @@ Preferred local setup (uv-based, when uv is available):
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
-uv pip install -e . -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
+uv pip install torch==2.13.0+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+uv pip install -e . -c constraints.txt
 ```
 
-The `--extra-index-url` is required, not cosmetic: the `+cpu` Torch wheel only
-exists on the PyTorch CPU index, not PyPI. This repository currently has no
-project-level uv source or index routing; keep the explicit index on `uv pip`
-and pip commands that resolve the Linux/Windows CPU profile.
+Torch must be installed as its own explicit step, torch-first, matching the
+Legacy/CI fallback below: `pyproject.toml` has no `torch-cpu` extra and no
+`[project.dependencies]` entry for torch at all (verified 2026-08-09), so a
+bare `uv pip install -e .` never requests it -- `-c constraints.txt` only
+caps the version of a package that's already being pulled in, it does not
+request one on its own. The `--extra-index-url` on the torch line is
+required, not cosmetic: the `+cpu` Torch wheel only exists on the PyTorch CPU
+index, not PyPI. This repository currently has no project-level uv source or
+index routing (`[tool.uv.sources]`/`[[tool.uv.index]]`); keep the explicit
+index on any `uv pip`/pip command that needs the CPU profile.
 
 Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
