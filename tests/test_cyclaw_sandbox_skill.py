@@ -135,6 +135,7 @@ def test_runner_keeps_cpu_torch_profile_off_macos(tmp_path: Path, monkeypatch: p
         return runner.Result(name, "PASS", "")
 
     monkeypatch.setattr(runner.sys, "platform", "win32")
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
     monkeypatch.setattr(runner, "_run", fake_run)
     args = SimpleNamespace(skip_install=False, skip_index=True, index_timeout=1)
 
