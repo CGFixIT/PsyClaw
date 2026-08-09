@@ -701,8 +701,10 @@ either: it ships as
 `TrustedHostMiddleware` **admits** those LAN Hosts rather than rejecting them —
 verified by probing the middleware directly with the shipped list.
 
-**Why it matters here specifically.** `/query`, `/health`, `/` and `/static/*`
-carry no authentication. A non-loopback bind therefore exposes the corpus (via
+**Why it matters here specifically.** `/query`, `/health`, `/`, `/static/*`,
+and `/auth/login` carry no authentication (`/auth/login` necessarily so -- a
+caller has no credential yet to present; it is still rate-limited and
+same-origin-checked). A non-loopback bind therefore exposes the corpus (via
 answers), the soul-informed system prompt, and the local model's compute to
 anything that can route to the port. That is not a subtle degradation of the
 threat model; it is a different threat model.
