@@ -151,7 +151,7 @@ rising eval-awareness (~6% of rollouts).
 
 ### 8.3 Flagship: CyClaw (github.com/cgfixit/CyClaw), v1.9.0
 Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
-  - 9-node LangGraph state machine; FastAPI on 127.0.0.1:8787 (loopback only)
+  - 10-node LangGraph state machine; FastAPI on 127.0.0.1:8787 (loopback only)
   - Hybrid retrieval: ChromaDB + BM25 with RRF fusion (k=60); embeddings all-MiniLM-L6-v2
   - Local inference: Ollama (qwen3.6:27b) — migrated off LM Studio; triple-gated
     fallback to Grok and/or Claude (selected per-query via `online_provider`),
