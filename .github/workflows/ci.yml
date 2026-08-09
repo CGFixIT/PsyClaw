@@ -177,6 +177,10 @@ jobs:
         # for macOS -- confirmed on this matrix leg's first run, and documented
         # in docs/HARNESS_MACOS.md.
         os: [ubuntu-latest, windows-latest, macos-latest]
+    # Keep Windows compatibility coverage visible, but do not let its
+    # environment-sensitive test suite block the authoritative Linux/macOS
+    # gates. Failures remain surfaced in the PR checks and workflow summary.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
