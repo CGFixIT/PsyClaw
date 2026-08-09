@@ -18,6 +18,26 @@ from retrieval.hybrid_search import HybridRetriever, SearchResult, _mps_risk_pre
 from retrieval.vector_store import parse_stem_tags
 from utils.errors import EmbeddingServiceError, IndexNotFoundError
 
+def _bind_hybrid_helpers(fake: SimpleNamespace) -> SimpleNamespace:
+    """Attach real HybridRetriever helpers used by hybrid_search on fakes.
+
+    Tests call HybridRetriever.hybrid_search unbound against a lightweight
+    SimpleNamespace (no full __init__). Bind every self._helper hybrid_search
+    invokes so degrade/fusion path tests stay focused on the legs under test.
+    """
+    import types
+
+    fake._normalize_single_path = types.MethodType(
+        HybridRetriever._normalize_single_path, fake
+    )
+    fake._maybe_fuse_memory = types.MethodType(
+        HybridRetriever._maybe_fuse_memory, fake
+    )
+    # Memory fusion is config-gated; fakes without cfg must default off.
+    if not hasattr(fake, "cfg"):
+        fake.cfg = {}
+    return fake
+
 
 class TestRRFFusion:
     """Test Reciprocal Rank Fusion math independently."""
@@ -39,11 +59,11 @@ class TestRRFFusion:
         # Chunk 0 ranks first in BOTH legs; chunk 1 is semantic-only (rank 1).
         sem = [hit("semantic", 0, 0.91), hit("semantic", 1, 0.80)]
         kw = [hit("keyword", 0, 5.2)]
-        fake = SimpleNamespace(
+        fake = _bind_hybrid_helpers(SimpleNamespace(
             rrf_k=60, top_k_semantic=5, top_k_keyword=5,
             semantic_search=lambda q: sem,
             keyword_search=lambda q: kw,
-        )
+        ))
         out = HybridRetriever.hybrid_search(fake, "q")
 
         by_id = {r.chunk_id: r for r in out}
@@ -138,11 +158,11 @@ class TestFusionReturnsFullUnion:
         # 5 semantic + 5 keyword chunks with NO overlap -> a 10-chunk union.
         sem = [self._hit("semantic", i) for i in range(5)]
         kw = [self._hit("keyword", i) for i in range(5, 10)]
-        fake = SimpleNamespace(
+        fake = _bind_hybrid_helpers(SimpleNamespace(
             rrf_k=60, top_k_semantic=5, top_k_keyword=5,
             semantic_search=lambda q: sem,
             keyword_search=lambda q: kw,
-        )
+        ))
         out = HybridRetriever.hybrid_search(fake, "q")
         # Pre-fix this returned only 5 (max(5, 5)); the other 5 were dropped.
         assert len(out) == 10
@@ -163,22 +183,16 @@ class TestHybridDegradePaths:
     def test_semantic_failure_falls_back_to_normalized_keyword(self) -> None:
         # EmbeddingServiceError on semantic must not crash hybrid_search; BM25
         # hits are rebased via _normalize_single_path (raw 9.9 would clear min_score).
-        import types
-
         kw = [self._hit("keyword", 0, score=9.9), self._hit("keyword", 1, score=0.5)]
 
         def boom_sem(_q: str) -> list[SearchResult]:
             raise EmbeddingServiceError("embedder offline")
 
-        fake = SimpleNamespace(
+        fake = _bind_hybrid_helpers(SimpleNamespace(
             rrf_k=60, top_k_semantic=5, top_k_keyword=5,
             semantic_search=boom_sem,
             keyword_search=lambda q: kw,
-        )
-        # Bind the real instance method so hybrid_search's self._normalize_* works.
-        fake._normalize_single_path = types.MethodType(
-            HybridRetriever._normalize_single_path, fake
-        )
+        ))
         with patch("retrieval.hybrid_search.audit_log") as audit:
             out = HybridRetriever.hybrid_search(fake, "q")
         assert len(out) == 2
@@ -197,11 +211,11 @@ class TestHybridDegradePaths:
         def boom_kw(_q: str) -> list[SearchResult]:
             raise ValueError("corrupt bm25 meta")
 
-        fake = SimpleNamespace(
+        fake = _bind_hybrid_helpers(SimpleNamespace(
             rrf_k=60, top_k_semantic=5, top_k_keyword=5,
             semantic_search=lambda q: sem,
             keyword_search=boom_kw,
-        )
+        ))
         with patch("retrieval.hybrid_search.audit_log") as audit:
             out = HybridRetriever.hybrid_search(fake, "q")
         assert len(out) == 1
@@ -219,11 +233,11 @@ class TestHybridDegradePaths:
         def boom_kw(_q: str) -> list[SearchResult]:
             raise TypeError("bad shape")
 
-        fake = SimpleNamespace(
+        fake = _bind_hybrid_helpers(SimpleNamespace(
             rrf_k=60, top_k_semantic=5, top_k_keyword=5,
             semantic_search=boom_sem,
             keyword_search=boom_kw,
-        )
+        ))
         with patch("retrieval.hybrid_search.audit_log"):
             out = HybridRetriever.hybrid_search(fake, "q")
         assert out == []

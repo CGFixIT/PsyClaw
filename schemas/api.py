@@ -167,3 +167,29 @@ class AuthLoginResponse(BaseModel):
 class AuthWhoamiResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     username: str
+
+# --- Memory subsystem (docs/memory/) -------------------------------------------
+# Propose/apply mirrors soul governance: non-empty reason, closed action Literal,
+# extra='forbid' + strict=True. Content caps match memory.facts.max_content_chars.
+class MemoryProposeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    action: Literal["add_fact", "update_fact", "deactivate_fact"]
+    content: str | None = Field(default=None, max_length=8192)
+    fact_id: int | None = Field(default=None, ge=1)
+    category: str = Field(default="general", max_length=64)
+    tags: list[str] = Field(default_factory=list, max_length=32)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    reason: str = Field(min_length=1, max_length=4096)
+
+
+class MemoryApplyRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    proposal_id: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=4096)
+
+
+class MemoryRejectRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    proposal_id: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=4096)
+

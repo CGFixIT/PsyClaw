@@ -92,6 +92,7 @@ from utils.personality import PersonalityManager
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
 from gate_auth import register_auth_routes
+from gate_memory import register_memory_routes
 from metrics import summarize_audit
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -869,6 +870,16 @@ register_auth_routes(
     audit=_audit,
     enforce_rate_limit=_enforce_rate_limit,
     auth_manager=auth_manager,
+)
+
+# Optional memory admin surface (default-off). gate_memory lazy-imports memory.*
+# inside handlers only — same registration-injection shape as ops/auth.
+register_memory_routes(
+    app,
+    cfg=cfg,
+    audit=_audit,
+    enforce_rate_limit=_enforce_rate_limit,
+    require_api_key=require_api_key,
 )
 
 

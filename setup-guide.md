@@ -446,10 +446,23 @@ is unset on the server — fail-closed in both directions.
 | `/ops/agentic` | POST | agentic-layer shim |
 | `/ops/fsconnect` | POST | filesystem-connector shim |
 | `/ops/sqlconnect` | POST | SQL-connector shim |
+| `/memory/status` | GET | memory flags + counts (200 even when off) |
+| `/memory/facts` | GET | list active facts (404 if master off) |
+| `/memory/episodes` | GET | list staged episodes (404 if master off) |
+| `/memory/proposals` | GET | list proposals (404 if propose/apply off) |
+| `/memory/propose` | POST | stage a fact mutation; **requires a `reason`** |
+| `/memory/apply` | POST | apply a pending proposal; reason + injection scan |
+| `/memory/reject` | POST | reject a pending proposal; **requires a `reason`** |
+| `/query/export/html` | GET | offline HTML dump of episodes/facts (404 if export off) |
+
+Memory routes ship **default-off** (`memory.enabled: false` in `config.yaml`).
+See `docs/memory/README.md` for progressive enablement. `/memory/status` is the
+safe probe; propose/apply mutate the facts store and need a non-empty `reason`.
 
 ```bash
 curl -s -H "$AUTH" http://127.0.0.1:8787/soul | python3 -m json.tool
 curl -s -H "$AUTH" http://127.0.0.1:8787/audit/summary | python3 -m json.tool
+curl -s -H "$AUTH" http://127.0.0.1:8787/memory/status | python3 -m json.tool
 
 # Dry-run a soul change — scans and reports, writes nothing.
 curl -s -X POST http://127.0.0.1:8787/soul/propose \

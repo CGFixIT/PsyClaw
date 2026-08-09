@@ -98,6 +98,14 @@ decision.
 | POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
 | POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
 | GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; 503 when `auth.enabled` is false |
+| GET | `/memory/status` | **API key** | rate-limited; always 200 + flags (default-off memory) |
+| GET | `/memory/facts` | **API key** | rate-limited; 404 when `memory.enabled` is false |
+| GET | `/memory/episodes` | **API key** | rate-limited; 404 when `memory.enabled` is false |
+| GET | `/memory/proposals` | **API key** | rate-limited; 404 when propose/apply off |
+| POST | `/memory/propose` | **API key** | rate-limited; requires non-empty `reason` |
+| POST | `/memory/apply` | **API key** | rate-limited; reason + injection scan on apply |
+| POST | `/memory/reject` | **API key** | rate-limited; requires non-empty `reason` |
+| GET | `/query/export/html` | **API key** | rate-limited; 404 when `export_html.enabled` is false |
 
 The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 `utils/ops_runner.py` (a `subprocess.run([...])` shim). They never import those
@@ -111,6 +119,14 @@ whether the feature is on. **Stage 3 (enforcing a credential on `/query` and
 the console) has not landed** — these routes build sessions/login/logout/
 device tokens only; nothing yet requires a credential to reach `/query`.
 
+The `/memory/*` and `/query/export/html` endpoints are the optional memory
+subsystem (`gate_memory.py` + package `memory/`, plan in
+`docs/memory/IMPLEMENTATION_PLAN.md`). Every `memory:` switch ships **false** —
+handlers return 404 (or 200 + `enabled: false` for `/memory/status`) until an
+operator enables them. Mutating routes require Bearer `CYCLAW_API_KEY` and a
+non-empty `reason`, with injection scan on apply (parallel to soul I5, not
+overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
+
 ### Key modules
 
 | Path | Role |
@@ -119,6 +135,8 @@ device tokens only; nothing yet requires a credential to reach `/query`.
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
 | `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is the closure Stage 3 will need to attach to `/query` -- gate.py locates it by name (`_AUTH_DEPENDENCY_NAME`), not by importing it (not yet wired) |
+| `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
+| `memory/` | Optional facts + episodes SQLite+FTS5 store with propose/apply governance and optional retrieval fusion (all switches false in shipped `config.yaml`) |
 | `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
