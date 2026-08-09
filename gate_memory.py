@@ -43,10 +43,7 @@ def register_memory_routes(
         m = _mem()
         return m.get("enabled") is True and (m.get("export_html") or {}).get("enabled") is True
 
-    @app.get(
-        "/memory/status",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.get("/memory/status", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_status(request: Request) -> dict[str, Any]:
         # Prefer 200 + flags so consoles can probe without treating disabled as error.
         from memory.mirror import status_dict  # lazy
@@ -55,10 +52,7 @@ def register_memory_routes(
         await audit({"event": "memory_status", "enabled": status.get("enabled")})
         return status
 
-    @app.get(
-        "/memory/facts",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.get("/memory/facts", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_facts(request: Request, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         if not _master_on():
             raise HTTPException(status_code=404, detail="Memory system not enabled")
@@ -67,10 +61,7 @@ def register_memory_routes(
         facts = list_facts(cfg, active_only=True, limit=min(limit, 500), offset=max(offset, 0))
         return {"facts": [asdict(f) for f in facts]}
 
-    @app.get(
-        "/memory/episodes",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.get("/memory/episodes", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_episodes(request: Request, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         if not _master_on():
             raise HTTPException(status_code=404, detail="Memory system not enabled")
@@ -79,10 +70,7 @@ def register_memory_routes(
         eps = list_episodes(cfg, limit=min(limit, 500), offset=max(offset, 0))
         return {"episodes": [asdict(e) for e in eps]}
 
-    @app.get(
-        "/memory/proposals",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.get("/memory/proposals", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_proposals(request: Request, status: str = "pending") -> dict[str, Any]:
         if not _propose_on():
             raise HTTPException(status_code=404, detail="Memory propose/apply not enabled")
@@ -92,10 +80,7 @@ def register_memory_routes(
         props = list_proposals(cfg, status=None if st == "all" else st, limit=100)
         return {"proposals": [asdict(p) for p in props]}
 
-    @app.post(
-        "/memory/propose",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.post("/memory/propose", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_propose(request: Request, req: MemoryProposeRequest) -> dict[str, Any]:
         if not _propose_on():
             raise HTTPException(status_code=404, detail="Memory propose/apply not enabled")
@@ -126,10 +111,7 @@ def register_memory_routes(
         })
         return asdict(prop)
 
-    @app.post(
-        "/memory/apply",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.post("/memory/apply", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_apply(request: Request, req: MemoryApplyRequest) -> dict[str, Any]:
         if not _propose_on():
             raise HTTPException(status_code=404, detail="Memory propose/apply not enabled")
@@ -158,10 +140,7 @@ def register_memory_routes(
         })
         return result
 
-    @app.post(
-        "/memory/reject",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-    )
+    @app.post("/memory/reject", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def memory_reject(request: Request, req: MemoryRejectRequest) -> dict[str, Any]:
         if not _propose_on():
             raise HTTPException(status_code=404, detail="Memory propose/apply not enabled")
@@ -176,11 +155,7 @@ def register_memory_routes(
         await audit({"event": "memory_reject", "proposal_id": req.proposal_id})
         return asdict(prop)
 
-    @app.get(
-        "/query/export/html",
-        dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
-        response_class=HTMLResponse,
-    )
+    @app.get("/query/export/html", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)], response_class=HTMLResponse)
     async def query_export_html(request: Request) -> HTMLResponse:
         if not _export_on():
             raise HTTPException(status_code=404, detail="Memory HTML export not enabled")

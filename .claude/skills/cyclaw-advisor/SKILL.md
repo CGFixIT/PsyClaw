@@ -87,6 +87,21 @@ constants):
   today this store can exist populated while `/query` itself stays
   unauthenticated — note that gap explicitly if asked to assess the current
   auth posture, don't assume enabling accounts already gates query access.
+- **Optional memory subsystem (`memory/`, `gate_memory.py`, `docs/memory/`) is
+  a new personal-data surface when enabled.** Ships fully default-off
+  (`memory.enabled` and every sub-switch false). When on: (1) **episodes**
+  stage query hashes + redacted answer summaries into
+  `data/memory/cyclaw_memory.db` (raw query only if
+  `episodes.store_raw_query: true` — default false; uses the same
+  `hash_query` / `redact_sensitive` path as audit); (2) **facts** are
+  human-approved via propose/apply (API key + non-empty reason + apply-path
+  injection scan — parallel to soul I5, not soul itself); (3) optional FTS
+  fusion can inject approved facts into retrieval. Consolidation and
+  auto-fact extraction from RAG/LLM output are **not** implemented — flag
+  any PR that would auto-write facts from untrusted corpus/LLM text as a
+  memory-poisoning / zombie-agent risk. Data-mapping exercises that enable
+  memory must list this DB alongside auth, personality, and the two log
+  streams.
 - **External fallback (Grok/Claude) is triple-gated** (invariant I3) and,
   per `policy.fallback.send_local_context_to_grok`/`_claude` (default
   `false`), does not forward retrieved local context off-box unless

@@ -1,7 +1,7 @@
 """Invariant guard: the agentic layer must stay out of the request path.
 
 The whole security argument for the agentic layer is that it is out-of-band --
-exactly like sync/. If gate.py, gate_ops.py, gate_auth.py, graph.py, or
+exactly like sync/. If gate.py, gate_ops.py, gate_auth.py, gate_memory.py, graph.py, or
 mcp_hybrid_server.py ever imported ``agentic``, the layer would be coupled
 into the request path and could (in principle) influence retrieval, routing,
 or the MCP surface. This test fails loudly if that coupling is ever
@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REQUEST_PATH_MODULES = ["gate.py", "gate_ops.py", "gate_auth.py", "graph.py", "mcp_hybrid_server.py"]
+REQUEST_PATH_MODULES = ["gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py", "graph.py", "mcp_hybrid_server.py"]
 
 
 def _imports(source: str) -> set[str]:
@@ -63,7 +63,7 @@ def test_guard_flags_planted_agentic_import(tmp_path, planted_source):
 def test_reverse_guard_flags_planted_request_path_import(tmp_path):
     # Symmetric negative self-test for test_agentic_does_not_import_request_path:
     # a planted agentic-side module importing gate/graph must trip the forbidden set.
-    forbidden = {"gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server"}
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     planted = tmp_path / "agentic_probe.py"
     planted.write_text("import gate\nfrom graph import build_graph\n", encoding="utf-8")
     leaked = forbidden & _imports(planted.read_text(encoding="utf-8"))
@@ -82,7 +82,7 @@ def test_agentic_does_not_import_request_path():
     # check_invariants.py's I6 check missed it too, closed alongside this).
     # Keep the two directions' module lists in sync when a new request-path
     # module is added.
-    forbidden = {"gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server"}
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     scanned = 0
     for py in (REPO_ROOT / "agentic").rglob("*.py"):
         scanned += 1
