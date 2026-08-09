@@ -86,6 +86,33 @@ class TestHashAndVerify:
         assert verify_password(bad, hash_password(_GOOD)) == (False, False)
         assert verify_password(_GOOD, bad) == (False, False)
 
+    def test_truncated_hash_fails_closed_even_for_the_correct_password(self):
+        """A record whose stored hash is shorter than current policy's dklen
+        must be rejected outright, not merely resistant to guessing. Before
+        this check existed, verify_password used ``dklen=len(expected)`` --
+        so a record truncated to e.g. 1 byte made hmac.compare_digest match
+        against a ~1/256-sized search space instead of the full 32-byte key.
+        The correct password against such a record must now fail closed."""
+        salt = b"0123456789abcdef"
+        derived = hashlib.scrypt(_GOOD.encode(), salt=salt, n=2**14, r=8, p=1, dklen=1)
+        record = "$".join(
+            ("scrypt", "16384", "8", "1", base64.b64encode(salt).decode(), base64.b64encode(derived).decode())
+        )
+        assert verify_password(_GOOD, record) == (False, False)
+
+    def test_parameters_above_current_policy_fail_closed_even_for_the_correct_password(self):
+        """A record claiming n/r/p ABOVE current policy must be rejected
+        outright, not merely resistant to guessing -- hash_password() never
+        writes ahead of current policy, so a stronger-than-policy record is
+        forged or corrupted, and unbounded n/r previously let
+        maxmem=max(_SCRYPT_MAXMEM, n*r*128*4) grow with the stored record."""
+        salt = b"0123456789abcdef"
+        derived = hashlib.scrypt(_GOOD.encode(), salt=salt, n=2**15, r=8, p=1, dklen=32, maxmem=2**26)
+        record = "$".join(
+            ("scrypt", str(2**15), "8", "1", base64.b64encode(salt).decode(), base64.b64encode(derived).decode())
+        )
+        assert verify_password(_GOOD, record) == (False, False)
+
     def test_weaker_stored_parameters_request_a_rehash(self):
         """Raising the work factor later must not force a password reset: a
         login against an outdated record succeeds AND reports needs_rehash."""

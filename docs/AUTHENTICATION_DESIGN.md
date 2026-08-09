@@ -237,8 +237,8 @@ Each stage is independently reviewable and leaves the tree working.
 
 | Stage | Content | Risk |
 |---|---|---|
-| **1** | This document + `utils/authn.py` (scrypt hash/verify, account store, lockout state) + `cyclaw-user` CLI (`add`/`list`/`disable`/`passwd`) + tests. **No request path touched.** | None — nothing calls it yet |
-| **2** | Session store, `/auth/login`, `/auth/logout`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` |
+| **1** | This document + `utils/authn.py` (scrypt hash/verify, lockout arithmetic) + tests. Pure functions only — no database, no HTTP, no CLI. **No request path touched.** | None — nothing calls it yet |
+| **2** | Account store (`utils/authn_store.py`), `AuthManager` (`utils/authn_manager.py`), `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/`token`), session store, `/auth/login`, `/auth/logout`, `/auth/whoami`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` |
 | **3** | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
 | **4** | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
 | **5** | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition |
