@@ -2,6 +2,9 @@
 # Block commits on branches outside the documented multi-vendor allowlist.
 # Canonical feature prefixes: utils.agent_identity.ALLOWED_BRANCH_PREFIXES
 # (+ PR template / CLAUDE.md §5 / Kimi section).
+
+## Note: Critical pr description requirement:
+# -Always fill out and utilize this template: .github/PULL_REQUEST_TEMPLATE.md fully when opening a PR
 set -euo pipefail
 
 branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
