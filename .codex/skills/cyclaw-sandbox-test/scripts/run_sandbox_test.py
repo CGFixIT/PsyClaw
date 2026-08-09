@@ -249,10 +249,13 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
                     temp = Path(temp_dir)
                     requirements = temp / "requirements.txt"
                     constraints = temp / "constraints.txt"
+                    source_requirements = (repo / "requirements.txt").read_text(encoding="utf-8").splitlines(
+                        keepends=True
+                    )
                     requirements.write_text(
                         "".join(
                             line
-                            for line in (repo / "requirements.txt").read_text(encoding="utf-8").splitlines(keepends=True)
+                            for line in source_requirements
                             if not line.startswith("torch==")
                             and not line.startswith("--extra-index-url https://download.pytorch.org")
                         ),
