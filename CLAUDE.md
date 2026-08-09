@@ -598,8 +598,8 @@ python3 .claude/skills/injection-redteam/redteam.py
 ```
 
 CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
-`gate`, `gate_ops`, `gate_auth`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
-`utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`. `tests/conftest.py` mocks
+`gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
+`utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
 discoverable in `tests/` (~100 files, auto-collected by pytest).
 
