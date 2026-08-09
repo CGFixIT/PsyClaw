@@ -306,6 +306,30 @@ def test_test_subcommand_some_fail_exit_2():
         assert main(["test"]) == EXIT_FAIL
 
 
+def test_test_subcommand_unloadable_config_exit_env():
+    # Regression: an unloadable config.yaml (run_self_test's own check 01
+    # fails, every other check is skipped for lack of a config) is an
+    # env/config error, not an ordinary check failure -- must NOT return the
+    # same EXIT_FAIL an ordinary failed check would.
+    lines = [
+        "  [FAIL] 01. Config loads and validates: bad yaml",
+        "  [SKIP] 02. (skipped -- no config): config invalid",
+    ]
+    with patch("sync.selftest.run_self_test", return_value=(1, 2, lines)):
+        assert main(["test"]) == EXIT_ENV
+
+
+def test_test_subcommand_ordinary_failure_still_exit_2_not_env():
+    # A FAIL on some check OTHER than 01 (config loaded fine, something else
+    # is wrong) must still be the ordinary EXIT_FAIL, not EXIT_ENV.
+    lines = [
+        "  [OK  ] 01. Config loads and validates",
+        "  [FAIL] 02. local_path is absolute: got relative",
+    ]
+    with patch("sync.selftest.run_self_test", return_value=(1, 2, lines)):
+        assert main(["test"]) == EXIT_FAIL
+
+
 # ---------------------------------------------------------------------------
 # schedule / unschedule -- lazily-imported get_scheduler is patched on sync.cli
 # ---------------------------------------------------------------------------
