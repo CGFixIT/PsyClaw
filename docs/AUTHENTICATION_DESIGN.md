@@ -145,10 +145,15 @@ verification that succeeds against outdated parameters transparently re-hashes.
 
 ### 4.2 Account store
 
-Mirrors `utils/personality_db.py` exactly: **SQLite by default**, Postgres via
-`CYCLAW_AUTH_DB_URL` (deliberately separate from `personality_db`'s
-`CYCLAW_DB_URL` to avoid comingling auth and personality data), `CREATE TABLE IF NOT EXISTS`, umask-safe file creation. No new
-storage technology.
+Follows the same pattern as `utils/personality_db.py`: **SQLite by default**,
+Postgres via either `auth.database_url` in `config.yaml` or the
+`CYCLAW_AUTH_DB_URL` env var, `CREATE TABLE IF NOT EXISTS`, umask-safe file
+creation. No new storage technology. One deliberate deviation from an exact
+mirror: the env var is `CYCLAW_AUTH_DB_URL`, not the shared `CYCLAW_DB_URL`
+personality uses — auth data (password hashes, session ids, device-token
+hashes) is higher-sensitivity, and a shared env var would silently comingle
+the two into whatever database an operator pointed `CYCLAW_DB_URL` at for a
+different subsystem.
 
 ```
 users(username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
