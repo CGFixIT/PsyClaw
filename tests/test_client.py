@@ -945,6 +945,57 @@ class TestResolveLocalBackend:
         assert kwargs["json"]["model"] == "lmstudio-model"
         client.close()
 
+    def test_fallback_backend_does_not_inherit_primarys_api_key(self, monkeypatch, tmp_path):
+        # Regression: self.api_key used to fall back to llm_cfg.get("api_key")
+        # (the PRIMARY's key) whenever resolved.api_key was empty -- so a
+        # fallback backend with no api_key of its own would silently send the
+        # primary's credential to the fallback's base_url instead.
+        monkeypatch.setattr(
+            "llm.client._probe_openai_models",
+            lambda base_url, **kw: "1234" in base_url,
+        )
+        monkeypatch.setattr("utils.logger.audit_log", lambda *a, **k: None)
+        path = _write_config(
+            tmp_path,
+            local_llm_extra={
+                "provider": "ollama",
+                "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                "model": "qwen3.6:27b",
+                "api_key": "primary-secret",
+                "fallback": {
+                    "enabled": True,
+                    "provider": "lmstudio",
+                    "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                    "model": "lmstudio-model",
+                    # deliberately no api_key here
+                },
+            },
+        )
+        client = LocalLLMClient(path)
+        assert client.backend_source == "fallback"
+        assert client.api_key == ""
+        client.close()
+
+    def test_primary_backend_still_uses_its_own_api_key(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **kw: True)
+        path = _write_config(
+            tmp_path,
+            local_llm_extra={
+                "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                "model": "qwen3.6:27b",
+                "api_key": "primary-secret",
+                "fallback": {
+                    "enabled": True,
+                    "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                    "model": "x",
+                },
+            },
+        )
+        client = LocalLLMClient(path)
+        assert client.backend_source == "primary"
+        assert client.api_key == "primary-secret"
+        client.close()
+
     def test_both_probes_fail_still_uses_primary(self, monkeypatch):
         monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: False)
         llm_cfg = {

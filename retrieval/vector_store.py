@@ -154,7 +154,7 @@ class _ChromaReader:
         )
         try:
             self._collection = client.get_collection(collection_name)
-        except Exception as e:
+        except chromadb.errors.NotFoundError as e:
             raise IndexNotFoundError(
                 f"Collection '{collection_name}' not found in ChromaDB: {e}"
             ) from e
@@ -290,6 +290,12 @@ class _PgVectorReader(_PgVectorBase):
         conn = self._connection()
         exists = conn.execute("SELECT to_regclass(%s)", (_PG_TABLE,)).fetchone()[0]
         if exists is None:
+            # __init__ never returns to the caller on this path, so nothing
+            # else can reach self.close() to release the connection just
+            # opened by self._connection() above -- close it here before
+            # raising, matching _ChromaReader's fail-clean-on-construction
+            # behavior (that reader never opens a resource it doesn't return).
+            self.close()
             raise IndexNotFoundError(
                 f"pgvector table '{_PG_TABLE}' not found. Run: python -m retrieval.indexer"
             )

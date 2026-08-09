@@ -145,9 +145,17 @@ class RateLimiter:
             self._pg_connection().execute(self._ddl())
             return
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
+        # `with sqlite3.connect(...) as conn:` only manages the transaction
+        # (commit on success / rollback on exception) -- it does NOT close the
+        # connection, so the object would otherwise sit until CPython's
+        # refcounting GC reaps it. Cheap in practice on CPython, but explicit
+        # is safer than relying on interpreter-specific GC timing.
+        conn = sqlite3.connect(self._db_path)
+        try:
             conn.execute(self._ddl())
             conn.commit()
+        finally:
+            conn.close()
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -156,8 +164,11 @@ class RateLimiter:
             cur = self._pg_connection().execute("SELECT ip, timestamps, last_sweep FROM rate_hits")
             rows = cur.fetchall()
         else:
-            with sqlite3.connect(self._db_path) as conn:
+            conn = sqlite3.connect(self._db_path)
+            try:
                 rows = conn.execute("SELECT ip, timestamps, last_sweep FROM rate_hits").fetchall()
+            finally:
+                conn.close()
         for ip, ts_json, last_sweep in rows:
             try:
                 self._hits[ip] = json.loads(ts_json)
@@ -188,9 +199,12 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
-        with sqlite3.connect(self._db_path) as conn:
+        conn = sqlite3.connect(self._db_path)
+        try:
             conn.execute(self._upsert_sql(), params)
             conn.commit()
+        finally:
+            conn.close()
 
     # --------------------------------------------------------------------- logic
     def _sweep(self, now: float) -> None:

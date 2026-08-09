@@ -470,10 +470,15 @@ class LocalLLMClient:
         self.temperature = llm_cfg["temperature"]
         self.timeout = llm_cfg["timeout_sec"]
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(llm_cfg)
-        # Coerce to a stripped str so a bare YAML number (parsed as int) or an
-        # accidental whitespace value can't produce a malformed header. Empty /
-        # whitespace-only -> "" -> no Authorization header is sent (see generate).
-        self.api_key = resolved.api_key or str(llm_cfg.get("api_key") or "").strip()
+        # resolved.api_key is already the correct per-backend key -- primary_key
+        # or the fallback's own key, whichever resolve_local_backend() selected
+        # (both already stripped) -- and defaults to "" (never None), so no
+        # Authorization header is sent when empty (see generate). Do NOT fall
+        # back to llm_cfg.get("api_key") here: that is the PRIMARY's key, and
+        # when backend_source == "fallback" this would send it to the
+        # fallback's base_url whenever the fallback has no api_key of its own
+        # configured -- a real backend/credential mismatch, not a convenience.
+        self.api_key = resolved.api_key
         self._client = httpx.Client(timeout=self.timeout)
         self._label = _provider_label(self.provider)
 
