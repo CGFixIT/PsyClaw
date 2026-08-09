@@ -277,6 +277,7 @@ class AuthManager:
         with self._lock:
             existing = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
             if existing is not None:
+                self._end_read_txn()
                 raise AuthUserExists(f"user already exists: {canonical}", details={"username": canonical})
             self.conn.execute(self._sql_insert_user, (canonical, record, now, 0, None, 0, None))
             self.conn.commit()
@@ -477,6 +478,7 @@ class AuthManager:
         with self._lock:
             row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
             if row is None:
+                self._end_read_txn()
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
             # revoke_device_token() matches on (username, label) and revokes
             # every match, so a second live token under the same label would
@@ -484,6 +486,7 @@ class AuthManager:
             # "one label, one live token" holds; the label frees up again the
             # moment its token is revoked.
             if self.conn.execute(self._sql_get_live_token_by_label, (canonical, label)).fetchone():
+                self._end_read_txn()
                 raise AuthTokenLabelExists(
                     f"a live token labelled {label!r} already exists for {canonical}",
                     details={"username": canonical, "label": label},

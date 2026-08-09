@@ -103,6 +103,20 @@ class TestAccounts:
         with pytest.raises(AuthUserExists):
             manager.create_user("Alice", "a different password entirely")
 
+    def test_duplicate_create_closes_its_read_transaction(self, manager, monkeypatch):
+        """create_user()'s existing-user rejection used to raise AuthUserExists
+        without closing the implicit transaction its existence-check SELECT
+        opened (Postgres, autocommit=False -- see _end_read_txn's docstring),
+        leaving the long-lived server connection idle-in-transaction after
+        every rejected `cyclaw-user add` of an already-existing username. Same
+        class of gap as login()'s unknown-username/locked-account paths."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        calls = []
+        monkeypatch.setattr(manager, "_end_read_txn", lambda: calls.append(1))
+        with pytest.raises(AuthUserExists):
+            manager.create_user("alice", "a different password entirely")
+        assert calls == [1]
+
     def test_create_enforces_password_policy(self, manager):
         with pytest.raises(PasswordPolicyError):
             manager.create_user("alice", "short")
@@ -471,6 +485,16 @@ class TestDeviceTokens:
         with pytest.raises(AuthUserNotFound):
             manager.create_device_token("nobody", "laptop")
 
+    def test_token_for_unknown_user_closes_its_read_transaction(self, manager, monkeypatch):
+        """Same class of gap as login()'s unknown-username path: the SELECT
+        create_device_token() runs to check the user exists must not leave a
+        Postgres connection idle-in-transaction when it raises."""
+        calls = []
+        monkeypatch.setattr(manager, "_end_read_txn", lambda: calls.append(1))
+        with pytest.raises(AuthUserNotFound):
+            manager.create_device_token("nobody", "laptop")
+        assert calls == [1]
+
     def test_bad_token_verifies_to_none(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         manager.create_device_token("alice", "laptop")
@@ -510,6 +534,16 @@ class TestDeviceTokens:
         manager.create_device_token("alice", "laptop")
         with pytest.raises(AuthTokenLabelExists):
             manager.create_device_token("alice", "laptop")
+
+    def test_duplicate_label_closes_its_read_transaction(self, manager, monkeypatch):
+        """Same class of gap on the duplicate-label rejection path."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_device_token("alice", "laptop")
+        calls = []
+        monkeypatch.setattr(manager, "_end_read_txn", lambda: calls.append(1))
+        with pytest.raises(AuthTokenLabelExists):
+            manager.create_device_token("alice", "laptop")
+        assert calls == [1]
 
     def test_a_label_is_reusable_once_its_token_is_revoked(self, manager):
         """The constraint is on LIVE tokens, not on history: replacing a lost
