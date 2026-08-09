@@ -390,11 +390,14 @@ api:
     # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
     # explicitly to opt rate-limiting into Postgres.
     # database_url: null
-  # Stage 1 config surface for docs/AUTHENTICATION_DESIGN.md §5/§7. NOT wired
-  # to uvicorn yet -- that is Stage 4 (cyclaw-gen-cert + ssl_certfile/
-  # ssl_keyfile). Today this key participates ONLY in gate.py's loopback bind
-  # guard (_auth_and_tls_enabled), alongside auth.enabled below. Setting it
-  # true does not put TLS on the socket. Leave false.
+  # NOT wired to uvicorn: nothing here reaches ssl_certfile/ssl_keyfile, so
+  # setting this true does not put TLS on the socket. Today this key
+  # participates ONLY in gate.py's loopback bind guard (_auth_and_tls_enabled),
+  # alongside auth.enabled below. Must be the literal boolean true -- a quoted
+  # "true" is a string, and gate.py deliberately reads it as OFF rather than
+  # letting stray quotes decide a security gate. Leave false.
+  # Background: docs/AUTHENTICATION_DESIGN.md §5/§7 (that doc lands with the
+  # authentication work; this comment stands on its own without it).
   tls:
     enabled: false
 
@@ -403,10 +406,18 @@ api:
 # /auth/login, /auth/logout, /auth/whoami, sessions, and per-device bearer
 # tokens (utils/authn_manager.AuthManager) -- but Stage 3 (enforcing a
 # credential on /query and the console) has NOT landed yet, so setting this
-# true today creates the account/session machinery and gates gate.py's
-# loopback bind guard (_auth_and_tls_enabled, alongside api.tls.enabled
-# below) WITHOUT yet requiring a credential to use /query. Read the design
-# doc before enabling this on a non-loopback bind.
+# true today creates the account/session machinery WITHOUT yet requiring a
+# credential to use /query.
+#
+# It also participates in gate.py's loopback bind guard, alongside
+# api.tls.enabled below: a non-loopback bind is allowed only when BOTH flags
+# are the literal boolean true (a quoted "true" is a string and reads as OFF
+# -- gate.py does not let stray quotes decide a security gate) AND /query is
+# demonstrably carrying an authentication dependency, checked at runtime
+# rather than assumed. That third condition is what stops these two flags
+# alone from opening a LAN bind while Stage 3 leaves /query unauthenticated;
+# it starts passing by itself once Stage 3 ships. Read the design doc before
+# enabling this on a non-loopback bind.
 #
 # Turning this on for the first time with no existing accounts creates one:
 # username "admin", a random one-time password printed ONCE to the server's
