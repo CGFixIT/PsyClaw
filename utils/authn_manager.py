@@ -151,9 +151,16 @@ class AuthManager:
         )
         self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
         self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
-        self._sql_login_success = (
+        # A single conditional UPDATE, not a read-then-write pair: it both
+        # verifies the row is still exactly what login() checked (password
+        # hash, disabled, lockout) AND claims it -- in one statement, so
+        # there is no gap between "check" and "act" for a concurrent writer
+        # to land in. See login()'s own comment for why a bare re-SELECT
+        # (the previous approach) still left a narrower but real window.
+        self._sql_claim_login = (
             f"UPDATE users SET last_login_ts = {ph}, failed_count = 0, locked_until_ts = NULL "
-            f"WHERE username = {ph}"
+            f"WHERE username = {ph} AND password_hash = {ph} AND disabled = 0 "
+            f"AND (locked_until_ts IS NULL OR locked_until_ts <= {ph})"
         )
         self._sql_login_failure = (
             f"UPDATE users SET failed_count = {ph}, locked_until_ts = {ph} WHERE username = {ph}"
@@ -417,30 +424,33 @@ class AuthManager:
             if row["disabled"] or not ok:
                 self._record_failure_locked(canonical, row["failed_count"], now)
                 raise AuthLoginFailed()
-            # Re-check immediately before minting a session. verify_password()
+            # Claim the row atomically before minting a session -- a single
+            # conditional UPDATE, not a read-then-write pair. verify_password()
             # above costs ~0.1s (scrypt), and self._lock only serializes calls
             # made through THIS AuthManager instance -- it does nothing against
             # a concurrent `cyclaw-user passwd`/`disable` from a SEPARATE
             # process, which opens its own AuthManager and its own DB
-            # connection. Without this recheck, a login that already read the
-            # OLD row into `row` could still mint a session after a password
-            # rotation or disable meant to cut this credential off
-            # immediately -- the same "revoke NOW, not eventually" promise
-            # set_password()/_set_disabled() make for already-issued
-            # sessions. Both backends see the concurrent write here: Postgres
-            # because a second SELECT inside the still-open READ COMMITTED
-            # transaction (the default -- see _end_read_txn()'s docstring)
-            # observes any other transaction's already-committed change, and
-            # SQLite because a bare SELECT opens no transaction of its own,
-            # so it simply reads whatever is currently committed.
-            current = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
-            stale = (
-                current is None
-                or current["disabled"]
-                or current["password_hash"] != row["password_hash"]
-                or authn.is_locked(current["locked_until_ts"], now=now)
+            # connection. A bare re-SELECT here (the previous approach) closes
+            # most of that window but not all of it: a concurrent
+            # set_password()'s revoke-sessions-for-user can still run, find
+            # nothing (this call's session doesn't exist yet), and commit
+            # BEFORE this call's session INSERT lands -- so the new session
+            # would survive a password rotation that was specifically meant to
+            # cut it off immediately, the same "revoke NOW, not eventually"
+            # promise set_password()/_set_disabled() make for already-issued
+            # sessions. A single UPDATE closes this for real: it is the first
+            # write in this transaction, so whichever of this call or a
+            # concurrent set_password()/_set_disabled() reaches the row's lock
+            # first forces the other to wait until it commits -- the loser
+            # then re-evaluates its own WHERE clause against the winner's
+            # already-committed state, so a losing login() sees rowcount == 0
+            # (fails closed) and a losing set_password() (should this call win
+            # the race) sees the just-created session once it proceeds, and
+            # revokes it as usual.
+            claimed = self.conn.execute(
+                self._sql_claim_login, (now, canonical, row["password_hash"], now)
             )
-            if stale:
+            if not claimed.rowcount:
                 # Deliberately NOT routed through _record_failure_locked(): the
                 # credential presented was correct at the moment it was
                 # checked. This is "the account changed out from under us",
@@ -453,7 +463,6 @@ class AuthManager:
                 raise AuthLoginFailed()
             if needs_rehash:
                 self.conn.execute(self._sql_set_password, (authn.hash_password(password), canonical))
-            self.conn.execute(self._sql_login_success, (now, canonical))
             result = self._create_session_locked(canonical, now)
             self.conn.commit()
             return result

@@ -386,6 +386,63 @@ class TestLoginTransactionAndRaceSafety:
             manager_a.close()
             manager_b.close()
 
+    def test_account_locked_by_a_concurrent_process_mid_verification_does_not_mint_a_session(
+        self, tmp_path, monkeypatch
+    ):
+        """A THIRD variant of the same race: the account gets locked out by a
+        concurrent process's failed attempts (not this login's own -- those
+        never reach _record_failure_locked, since this one is using the
+        correct password) while THIS login's verify_password() is still
+        running. The claim's WHERE clause re-checks locked_until_ts, not
+        just password_hash/disabled, so this must fail closed too."""
+        db_path = str(tmp_path / "race4.db")
+        manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        try:
+            manager_a.create_user("alice", _GOOD_PASSWORD)
+            real_verify = importlib.import_module("utils.authn").verify_password
+            locked = {"done": False}
+
+            def racing_verify(password, record):
+                if not locked["done"] and record != _DUMMY_RECORD:
+                    locked["done"] = True
+                    # Five concurrent wrong-password attempts from a
+                    # separate process/connection -- enough to trip the
+                    # lockout ceiling on their own.
+                    for _ in range(5):
+                        with pytest.raises(AuthLoginFailed):
+                            manager_b.login("alice", "wrong wrong wrong")
+                return real_verify(password, record)
+
+            monkeypatch.setattr("utils.authn_manager.authn.verify_password", racing_verify)
+
+            with pytest.raises((AuthLoginFailed, AuthAccountLocked)):
+                manager_a.login("alice", _GOOD_PASSWORD)
+        finally:
+            manager_a.close()
+            manager_b.close()
+
+    def test_claim_gates_on_the_exact_hash_that_was_verified_not_just_the_username(self, manager):
+        """Direct unit test of the CAS claim's WHERE clause, no race
+        simulation needed: mutate the stored hash out from under a manager
+        that already has a stale `row` in hand, and confirm the claim -- not
+        a subsequent write -- is what blocks the session."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        row = manager.conn.execute(manager._sql_get_user, ("alice",)).fetchone()
+        stale_hash = row["password_hash"]
+
+        # Simulate "the row changed after this hash was captured" directly,
+        # without going through set_password (which would also revoke
+        # sessions -- irrelevant here, this is testing the claim itself).
+        manager.conn.execute(manager._sql_set_password, ("scrypt$1$1$1$AA==$AA==", "alice"))
+        manager.conn.commit()
+
+        claimed = manager.conn.execute(
+            manager._sql_claim_login, (manager._now(), "alice", stale_hash, manager._now())
+        )
+        assert claimed.rowcount == 0
+        manager.conn.commit()
+
     def test_stale_recheck_does_not_count_toward_lockout(self, tmp_path, monkeypatch):
         """The recheck failure is "the account changed out from under us",
         not "a wrong guess" -- it must not be routed through
