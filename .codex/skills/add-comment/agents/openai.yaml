@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add CyClaw Comments"
+  short_description: "Comment-only readability improvements"
+  default_prompt: "Use $add-comment to add precise WHY comments to a bounded CyClaw module without changing executable behavior."

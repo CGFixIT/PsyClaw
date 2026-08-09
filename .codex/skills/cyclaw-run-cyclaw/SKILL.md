@@ -5,7 +5,7 @@ description: Prepare, index, start, and verify the local CyClaw FastAPI RAG serv
 
 # Run CyClaw
 
-Use current commands from `AGENTS.md`, `docs/SETUP.md`, and active CI. Ask for
+Use current commands from `AGENTS.md`, `setup-guide.md`, and active CI. Ask for
 approval before network installs or long-running server processes when the
 active environment requires it.
 
@@ -15,9 +15,9 @@ active environment requires it.
 2. Install CPU torch before the remaining dependencies. Prefer the current
    `pyproject.toml`/uv path; use `requirements.txt` only for the documented
    compatibility path.
-3. Ensure `data/personality/soul.md` exists. Never overwrite or invent soul
-   content when an existing file is missing; report the blocker unless the user
-   explicitly authorizes a local scaffold.
+3. Check `data/personality/soul.md` for governance/identity drift. CyClaw will
+   default-initialize the documented file at startup if it is absent; never
+   overwrite it or invent custom soul content without an explicit human reason.
 4. Set `GROK_API_KEY` to a non-secret dummy value for offline checks in the
    active shell. Do not enable Grok or Claude in `config.yaml`.
 

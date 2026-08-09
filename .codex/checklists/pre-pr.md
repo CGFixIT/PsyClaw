@@ -4,6 +4,8 @@
 - Confirm no existing Claude/Copilot/Codex instructions were overwritten unintentionally.
 - Confirm Codex guidance links to canonical repo files instead of carrying
   duplicate instruction snapshots.
+- Follow the fresh-main, shared-file overlap/trial-merge, PR-template, and
+  post-push CI gates in `.codex/Codex_instructions.md`.
 - Run the lightest meaningful verification from `AGENTS.md`.
 - For broad changes, mirror the relevant command sequence in `.github/workflows/ci.yml`.
 - Check optional-layer isolation: `sync/`, `agentic/`, and `guardrails/` should not become required by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`.

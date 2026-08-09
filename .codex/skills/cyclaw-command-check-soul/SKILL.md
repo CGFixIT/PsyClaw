@@ -17,7 +17,9 @@ baseline hash or mutate `soul.md` without an explicit human reason.
 
 1. Read `AGENTS.md` and preserve the soul governance invariant.
 2. Check whether `data/personality/soul.md` exists.
-3. If missing, stop and report that the server will fail to start without it.
+3. If missing, report governance/identity drift: `PersonalityManager` will
+   default-initialize the documented soul at startup, but do not silently
+   create custom soul content during a read-only check.
 4. Compute the current SHA-256 and file size.
 5. Inspect `utils/personality.py` and related tests for any stored baseline hash
    or expected integrity value.

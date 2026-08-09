@@ -4,13 +4,16 @@ You are Codex applying **owner-approved** fixes on a CyClaw pull request branch.
 
 ## When this runs
 
-The repository owner replied to an automated/AI bot comment with either:
+The repository owner issued either trigger below for a qualifying automated/AI
+bot comment:
 
 - `@codex apply fixes`
 - `@openai-code-agent apply fixes`
 
-That reply is an explicit, human-gated instruction to implement the smallest safe
-fix for **that bot comment only**. Do not expand scope.
+The workflow binds a reply to its exact parent; an issue-comment fallback can
+select the most recent prior qualifying bot comment. This is an explicit,
+human-gated instruction to implement the smallest safe fix for **that selected
+bot comment only**. Do not expand scope.
 
 ## Inputs (read these first)
 
@@ -22,8 +25,8 @@ Working directory is a checkout of the PR **head** branch (writable).
    - `parent_comment` — full body of the bot comment being replied to
    - `parent_author`, `parent_path`, `parent_line` (when available)
    - `trigger` — which mention string was used
-2. Repository authority (this checkout): `AGENTS.md`, `CLAUDE.md` §3 (six
-   invariants), `docs/THREAT_MODEL.md`, `.codex/Codex_instructions.md`,
+2. Repository authority (this checkout): `AGENTS.md`, `$fable-protocol`, the
+   full `CLAUDE.md`, `docs/THREAT_MODEL.md`, `.codex/Codex_instructions.md`,
    `.github/copilot-instructions.md`, and active CI contracts.
 
 ## Mission
@@ -49,8 +52,8 @@ Working directory is a checkout of the PR **head** branch (writable).
   grant least privilege; owner-only human gates for write paths; never execute
   untrusted PR code as a merge gate authority.
 - Prefer conventional commit messages; keep commits scoped to the approved fix.
-- Branch naming elsewhere uses `grok/*` for new Grok work; this run stays on the
-  existing PR head ref and must not rename it.
+- This run stays on the existing PR head ref. Do not create or rename a branch
+  while applying approved fixes.
 
 ## Output contract
 

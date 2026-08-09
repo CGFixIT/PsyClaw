@@ -1,0 +1,4 @@
+interface:
+  display_name: "Refactor CyClaw Architecture"
+  short_description: "Measured, behavior-preserving structure cleanup"
+  default_prompt: "Use $architecture-refactor to make one evidence-backed CyClaw architecture improvement and verify behavior before opening a draft PR."

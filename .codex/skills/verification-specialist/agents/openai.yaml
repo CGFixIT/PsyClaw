@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Verification Specialist"
+  short_description: "Independent evidence-backed verification"
+  default_prompt: "Use $verification-specialist to verify a CyClaw change with executed commands, adversarial coverage, and an explicit verdict."

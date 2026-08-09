@@ -1,71 +1,58 @@
 ---
 name: cyclaw-optimize
-description: Find and implement evidence-backed CyClaw improvements in reliability, security, performance, auditability, CI, packaging, or documentation. Use when working in CGFixIT/CyClaw and the user asks to optimize the repository or publish a focused optimization PR.
+description: Find and implement one current, evidence-backed CyClaw improvement in reliability, security, performance, auditability, CI, packaging, or documentation. Use when working in CGFixIT/CyClaw and the user asks to optimize the repository or publish a focused optimization PR.
 ---
 
-# CyClaw Optimize
+# Optimize CyClaw
 
-Optimize current code, not historical findings. Stop when no concrete,
-deduplicated improvement justifies a change. If nothing else just run speed and arcitecture refactors but exhaust all options first
-**Persona:** You are a modern AI engineer specializing in Python and extremely
-familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
-LangGraph 9-node security topology (`graph.py`), ChromaDB + BM25 hybrid
-retrieval, local LLM via Ollama with a triple-gated Grok (xAI) and/or Claude
-fallback, the MCP hybrid server, the `agentic/` GitHub layer, and the
-out-of-band `sync/` Dropbox pipeline. You read code for leverage: performance,
-security, financial risk / oversight in assumptions, auditability, and
-maintainability.
-
-**What this skill does:** drives a time-boxed scan of the **main** branch,
-groups findings into ~5 small/medium PR-sized chunks, and opens one focused
-pull request per chunk **against a working branch cut from `main`** — never
-committing to `main` directly. A human decides when to merge/close.
-
-**How it's driven:** the deterministic setup + scan-seed is a committed
-harness, `bootstrap.sh`. The scan itself is a read-only subagent. PR dedup and
-PR creation are GitHub MCP tool calls. Paths below are relative to the repo
-root (the `<unit>` dir).
-
+Optimize the current repository state, not a remembered finding. The successful
+outcome is one small, demonstrated improvement or a clear no-change conclusion;
+do not manufacture architecture or speed work.
 
 ## Workflow
 
-1. Read `AGENTS.md`, `.codex/skills/cyclaw-project-guidance/SKILL.md`, and the
-   files and tests that own the requested scope.
-2. Fetch `origin/main` before branch or PR work. Preserve unrelated worktree
-   changes and never force-reset a checkout.
-3. Inspect current code, configuration, tests, workflows, and docs. Prefer
-   exact drift, broken behavior, measurable waste, or missing verification over
-   speculative refactors.
-4. List open PRs and remove candidates already covered there.
-5. Rank remaining candidates by impact, evidence, effort, and regression risk.
-6. Select one reviewable concern. If none is worthwhile, report that and stop.
-7. Trace callers and tests, make the smallest root-cause change, and preserve
-   CyClaw's security invariants and optional-layer isolation.
-8. Run the narrowest meaningful checks from current CI or subsystem tests.
-9. Inspect the final diff. Commit, push, and open a draft PR only when the user
-   requested publication.
+1. Read `AGENTS.md`, `CLAUDE.md`,
+   `.codex/skills/cyclaw-project-guidance/SKILL.md`, and the affected source,
+   tests, workflows, and docs.
+2. Fetch `origin/main`. Preserve an unrelated or divergent checkout by using a
+   clean isolated clone/worktree; never reset it to begin an optimization.
+3. Do a time-boxed, read-only sweep for concrete defects, measurable waste,
+   stale contracts, missing regression coverage, dependency/config drift, or
+   security gaps. Trace relevant callers before retaining a candidate.
+4. Check current open PRs and recent changes. Drop candidates already covered,
+   inherited from a known-red base, or dependent on an unapproved product or
+   security-policy decision.
+5. Rank the remaining candidates by evidence, impact, effort, and regression
+   risk. Select the smallest one whose benefit can be verified. If none clears
+   that bar, report the evidence and stop.
+6. Map `file -> planned change` before branching. Consolidate related shared
+   file edits into one PR; only stack branches when a later change truly
+   depends on an earlier one. Trial any multi-PR merge order in isolation.
+7. Make one root-cause change. Reuse existing patterns and dependencies; avoid
+   speculative abstraction, unrelated cleanup, and new tunables.
+8. Add or update the smallest regression test, run relevant static/runtime
+   checks, inspect the final diff, and document residual risk.
+9. Commit, push, and open a draft PR only when the user authorized publishing.
+   Monitor its CI to a terminal state and address branch-caused failures.
 
-## High-Signal Areas
+## High-signal areas
 
-- drift among code, `config.yaml`, docs, tests, and workflows
-- optional modules imported into `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
-- folders like agentic/*, sync/*, guardrails/*, tests/*, etc
-- recent changes via commits and pr's
-- github actions workflows
-- CVE issues with dependencies?
-- verifying dependencies in requirements.txt, constraints.txt, pyproject.toml, Docker, and CI - use `$verify-dep`
-- dependency drift across `pyproject.toml`, `requirements.txt`,
-  `constraints.txt`, Docker, and CI
-- unsafe defaults, missing timeouts, secret exposure, or audit gaps
-- Windows and Linux command paths that no longer match the repository
-- performance claims without repeatable before/after measurements
-- security claims without repeatable before/after measurements
+- drift among source, `config.yaml`, manifests, docs, tests, and workflows
+- core-path optional-module isolation, auth, audit, retry/cancellation, and
+  loopback/network boundaries
+- dependency/install profile contracts through `$dep-guard` or `$verify-dep`
+- sanitizer and adversarial input coverage through `$injection-redteam`
+- invariant-sensitive behavior through `$invariant-guard`
+- measurable hot paths with repeatable before/after evidence
 
 ## Guardrails
 
-- Never weaken RAG-first routing, graph policy, external-provider gates, audit
-  convergence, soul governance, auth, or loopback defaults for optimization.
-- Do not add dependencies or abstractions without a demonstrated need.
-- Keep shared-file conflict risk explicit and check overlapping PRs before push.
-- Do not create multiple PRs when one focused PR resolves the selected concern.
-- Report checks run, failures, skipped coverage, and residual risk.
+- Preserve RAG-first retrieval, topology-as-policy, triple-gated external
+  fallback, audit convergence, soul governance, module isolation, auth, and
+  loopback defaults.
+- Do not add a dependency, configuration switch, or general abstraction without
+  a demonstrated need.
+- Do not use a green unit suite as proof of live integrations, hostile input,
+  cancellation, or platform behavior that was not exercised.
+- Keep local, pushed, draft-PR, CI, and merge state distinct. Never push to
+  `main`, force-push, or merge without explicit authorization.

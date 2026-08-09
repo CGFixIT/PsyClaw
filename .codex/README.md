@@ -32,7 +32,13 @@ in the same change.
 | Skill | Use it for |
 | --- | --- |
 | `fable-protocol` | Evidence-first reasoning and hostile self-review on substantive work. |
+| `add-comment` | Add bounded WHY comments without changing executable behavior. |
+| `architecture-refactor` | Make one measured, behavior-preserving architecture cleanup. |
+| `dep-guard` | Run the maintained dependency-contract checkers before install changes. |
 | `doc-sync` | Reconcile code-derived facts and CyClaw documentation after structural changes. |
+| `invariant-guard` | Check CyClaw's six security invariants after sensitive changes. |
+| `injection-redteam` | Probe sanitizer regressions and adversarial bypasses. |
+| `verification-specialist` | Independently verify a change with executed evidence and a verdict. |
 | `cyclaw-project-guidance` | Load CyClaw invariants, architecture, and canonical references before substantial work. |
 | `verify-dep` | Reconcile dependency/install profiles, Docker, platform installers, and supply-chain checks. |
 | `cyclaw-run-cyclaw` | Prepare, index, start, and verify the local RAG gateway. |
@@ -41,7 +47,7 @@ in the same change.
 | `cyclaw-command-run` | Focused endpoint and local-runtime smoke checks. |
 | `cyclaw-command-audit` | Privacy-safe audit-log analysis. |
 | `cyclaw-command-check-soul` | Read-only soul presence, hash, readability, and drift checks. |
-| `OTel-Hardening` | Re-verify telemetry-kill wiring and dependency phone-home controls. |
+| `otel-hardening` | Re-verify telemetry-kill wiring and dependency phone-home controls. |
 | `refactor` | Behavior-preserving structural or measured performance work. |
 | `cyclaw-optimize` | Evidence-backed, focused optimization PRs. |
 
@@ -81,11 +87,11 @@ Use checklists as lightweight reminders, not as a substitute for reading the rel
 
 - Advisory PR comments route through `.github/workflows/codex.yml`; they are
   read-only review assistance, not merge approval.
-- `.github/workflows/codex-apply-fixes.yml` is the owner-gated write path.
-  Only an owner reply containing `@codex apply fixes` or
-  `@openai-code-agent apply fixes` to a qualifying bot comment may update an
-  eligible same-repository PR head. Inspect the generated diff and its CI before
-  merging.
+- `.github/workflows/codex-apply-fixes.yml` is the owner-gated write path. An
+  owner `@codex apply fixes` or `@openai-code-agent apply fixes` trigger binds
+  to a qualifying bot comment; a reply uses its exact parent, while the
+  issue-comment fallback uses the most recent prior qualifying bot comment.
+  Inspect the generated diff and its CI before merging.
 - Install the tracked per-clone hooks with `bash scripts/install-githooks.sh`.
   The pre-push hook enforces branch naming and fresh-`origin/main` ancestry for
   feature branches. It does not replace the multi-PR mapping, isolated trial

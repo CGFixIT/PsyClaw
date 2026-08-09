@@ -4,15 +4,19 @@
 
 Use this for auth, secrets, telemetry, network exposure, LangGraph routing, retrieval trust boundaries, dependency CVEs, or agentic/sync/guardrails changes.
 
-## Inputs To Ask For
+## Inputs To Establish
 
 - Threat model or change scope.
 - Deployment mode: local, Docker, hybrid, sync enabled, agentic enabled, Postgres enabled.
 - Whether a written report or code fix is expected.
 
+Infer these from the request and repository first; ask only when a material
+security-policy or irreversible deployment choice remains.
+
 ## Workflow
 
-1. Read `AGENTS.md`, `docs/THREAT_MODEL.md`, and `.github/SECURITY.md`.
+1. Read `AGENTS.md`, `$fable-protocol`, `docs/THREAT_MODEL.md`, and
+   `.github/SECURITY.md`.
 2. Identify which CyClaw invariants are in scope.
 3. Inspect configuration defaults and env var handling.
 4. Check for secrets, unsafe logging, network exposure, trust boundary crossings, and optional-layer imports into core paths.

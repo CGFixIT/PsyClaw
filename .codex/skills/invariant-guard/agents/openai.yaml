@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Invariant Guard"
+  short_description: "Validate CyClaw's six security invariants"
+  default_prompt: "Use $invariant-guard to validate CyClaw's six security invariants after a security-sensitive change or before publishing it."
