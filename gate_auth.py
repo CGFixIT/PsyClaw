@@ -111,8 +111,27 @@ def register_auth_routes(
         if origin is None:
             return
         parsed = urlparse(origin)
+        # The host comparison is against THIS request's own Host header, not
+        # against the allow-list. allowed_hosts ships with two distinct LAN
+        # machines (10.0.0.111 and 10.0.0.112) alongside the loopback names, so
+        # an allow-list membership test would call a page served by one of them
+        # "same-origin" with a CyClaw running on the other -- which is exactly
+        # the "another device on the LAN" adversary
+        # docs/AUTHENTICATION_DESIGN.md §3 names, and it would reach /auth/login
+        # (the one auth route with no CSRF token to fall back on, since a
+        # session does not exist yet) as a login-CSRF. request.url.hostname is
+        # the Host header when the client sent a well-formed one and the bound
+        # server address otherwise, so it is the actual origin of this request.
+        #
+        # allow-list membership is kept as a second, independent condition. It
+        # is not redundant: TrustedHostMiddleware honours a "*" entry by
+        # skipping Host validation entirely, and an Origin of "null" parses to
+        # hostname None -- both cases fail this condition rather than matching
+        # an equally-unvalidated Host.
         same_origin = (
-            parsed.hostname in allowed_hosts
+            parsed.hostname is not None
+            and parsed.hostname == request.url.hostname
+            and parsed.hostname in allowed_hosts
             and parsed.port == expected_port
             and parsed.scheme == expected_scheme
         )

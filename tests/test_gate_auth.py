@@ -226,6 +226,31 @@ class TestSameOrigin:
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
+    def test_a_different_allow_listed_host_is_not_same_origin(self, manager, user):
+        """Same-origin means the Origin names THIS request's own host, not
+        merely some host on the allow-list.
+
+        The shipped config.yaml allow-lists two distinct LAN machines
+        (10.0.0.111 and 10.0.0.112) alongside the loopback names, so an
+        allow-list membership test would call a page served by one of them
+        'same-origin' with a CyClaw running on the other. That is the
+        'another device on the LAN' adversary docs/AUTHENTICATION_DESIGN.md §3
+        names, and /auth/login is the one auth route with no CSRF token to
+        fall back on, since a session does not exist yet -- so it lands as a
+        login-CSRF. This test uses the 127.0.0.1/localhost pair the fixtures
+        already allow-list, which has the identical shape: the request's Host
+        is localhost, the Origin claims 127.0.0.1, both are allow-listed, the
+        port and scheme match, and it still must be rejected.
+        """
+        username, password = user
+        r = _client(manager).post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": f"http://127.0.0.1:{_PORT}"},  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
     def test_origin_without_an_explicit_port_is_rejected(self, manager, user):
         """CyClaw's port (8787) is never a scheme default, so a genuine
         same-origin request's Origin header always states it explicitly --

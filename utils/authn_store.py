@@ -130,4 +130,17 @@ def ddl_indexes() -> list[str]:
     return [
         "CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions(username)",
         "CREATE INDEX IF NOT EXISTS idx_device_tokens_username ON device_tokens(username)",
+        # A label is the only handle `cyclaw-user token revoke` has, and it
+        # matches on (username, label) -- so two LIVE tokens sharing a label
+        # would both die on one revoke, with no way to target either. This
+        # makes that unrepresentable at the storage layer, which the
+        # application-level check in AuthManager.create_device_token cannot do
+        # alone: the server and the CLI are separate processes holding
+        # separate connections to the same file, so an in-process lock does
+        # not order them. PARTIAL (WHERE revoked = 0) so a label becomes
+        # reusable once its token is revoked -- the constraint is on live
+        # tokens, not on history. Partial unique indexes are supported by both
+        # backends this module targets (SQLite 3.8+, Postgres).
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_live_label "
+        "ON device_tokens(username, label) WHERE revoked = 0",
     ]

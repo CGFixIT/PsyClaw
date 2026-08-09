@@ -20,7 +20,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from utils import authn, authn_store
-from utils.errors import AuthAccountLocked, AuthLoginFailed, AuthUserExists, AuthUserNotFound
+from utils.errors import (
+    AuthAccountLocked,
+    AuthLoginFailed,
+    AuthTokenLabelExists,
+    AuthUserExists,
+    AuthUserNotFound,
+)
 
 logger = logging.getLogger("cyclaw.authn_manager")
 
@@ -144,6 +150,9 @@ class AuthManager:
         self._sql_login_failure = (
             f"UPDATE users SET failed_count = {ph}, locked_until_ts = {ph} WHERE username = {ph}"
         )
+        self._sql_reset_lockout = (
+            f"UPDATE users SET failed_count = 0, locked_until_ts = NULL WHERE username = {ph}"
+        )
         self._sql_list_users = "SELECT * FROM users ORDER BY username"
         self._sql_insert_session = (
             "INSERT INTO sessions (session_id, username, csrf_token, created_ts, last_seen_ts, expires_ts) "
@@ -174,6 +183,9 @@ class AuthManager:
         )
         self._sql_touch_token = f"UPDATE device_tokens SET last_used_ts = {ph} WHERE token_hash = {ph}"
         self._sql_list_tokens = f"SELECT * FROM device_tokens WHERE username = {ph} ORDER BY created_ts"
+        self._sql_get_live_token_by_label = (
+            f"SELECT token_hash FROM device_tokens WHERE username = {ph} AND label = {ph} AND revoked = 0"
+        )
         self._sql_revoke_token = (
             f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND label = {ph} AND revoked = 0"
         )
@@ -290,6 +302,18 @@ class AuthManager:
                 # the password, so a password change alone is not evidence
                 # they are compromised too.
                 self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
+                # Clearing the lockout is what makes the CLI an actual recovery
+                # path. login() checks is_locked() BEFORE verifying the
+                # password, so without this a `cyclaw-user passwd` on a locked
+                # account leaves the owner getting 423 with their brand-new
+                # correct password until the 15-minute ceiling drains --
+                # and docs/AUTHENTICATION_DESIGN.md §9 names exactly this local
+                # CLI as the mitigation for lockout-as-denial-of-service.
+                # It is also the right semantics on its own: the counter
+                # measures failed guesses against a credential that no longer
+                # exists, so carrying it forward only punishes the owner for
+                # the attacker's guesses.
+                self.conn.execute(self._sql_reset_lockout, (canonical,))
             self.conn.commit()
             if not cur.rowcount:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
@@ -395,6 +419,16 @@ class AuthManager:
             row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
             if row is None:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
+            # revoke_device_token() matches on (username, label) and revokes
+            # every match, so a second live token under the same label would
+            # be un-targetable -- revoking either kills both. Refuse here so
+            # "one label, one live token" holds; the label frees up again the
+            # moment its token is revoked.
+            if self.conn.execute(self._sql_get_live_token_by_label, (canonical, label)).fetchone():
+                raise AuthTokenLabelExists(
+                    f"a live token labelled {label!r} already exists for {canonical}",
+                    details={"username": canonical, "label": label},
+                )
             token = authn.new_device_token()
             token_hash = authn.hash_token(token)
             now = self._now()

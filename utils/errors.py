@@ -362,6 +362,20 @@ class AuthUserNotFound(AuthError):
         super().__init__(message, code="AUTH_USER_NOT_FOUND", details=details)
 
 
+class AuthTokenLabelExists(AuthError):
+    """create_device_token was called with a label the account already has live.
+
+    A label is the ONLY handle the CLI offers for revoking a device token, so
+    two live tokens sharing one would make `token revoke` ambiguous -- it
+    matches on (username, label) and would kill both, with no way to target
+    one. Refusing the duplicate at creation keeps "one label, one token" true.
+    Labels are reusable after revocation; only LIVE ones must be distinct.
+    """
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="AUTH_TOKEN_LABEL_EXISTS", details=details)
+
+
 @dataclass
 class HealthStatus:
     name: str

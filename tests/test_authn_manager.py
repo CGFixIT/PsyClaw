@@ -13,7 +13,13 @@ import pytest
 
 from utils.authn import PasswordPolicyError
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
-from utils.errors import AuthAccountLocked, AuthLoginFailed, AuthUserExists, AuthUserNotFound
+from utils.errors import (
+    AuthAccountLocked,
+    AuthLoginFailed,
+    AuthTokenLabelExists,
+    AuthUserExists,
+    AuthUserNotFound,
+)
 
 _GOOD_PASSWORD = "correct horse battery staple"
 
@@ -294,6 +300,22 @@ class TestLockout:
         with pytest.raises(AuthAccountLocked):
             manager.login("alice", _GOOD_PASSWORD)
 
+    def test_set_password_clears_an_active_lockout(self, manager):
+        """docs/AUTHENTICATION_DESIGN.md §9 names the local `cyclaw-user` CLI
+        as the mitigation for lockout-as-denial-of-service. login() checks
+        is_locked() BEFORE verifying the password, so unless a password reset
+        also clears the lockout that mitigation does not actually work -- the
+        owner keeps getting 423 with their brand-new correct password until
+        the 15-minute ceiling drains."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(5):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", "wrong")
+        with pytest.raises(AuthAccountLocked):
+            manager.login("alice", _GOOD_PASSWORD)
+        manager.set_password("alice", "a completely different password")
+        assert manager.login("alice", "a completely different password").username == "alice"
+
     def test_lockout_clears_after_the_delay_elapses(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         for _ in range(5):
@@ -430,6 +452,25 @@ class TestDeviceTokens:
         assert listed[0].revoked is False
         rendered = repr(listed[0])
         assert token not in rendered
+
+    def test_a_second_live_token_cannot_reuse_a_label(self, manager):
+        """A label is the only handle `cyclaw-user token revoke` offers, and
+        it revokes every (username, label) match -- so two live tokens sharing
+        a label would both die on one revoke, with no way to target either."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_device_token("alice", "laptop")
+        with pytest.raises(AuthTokenLabelExists):
+            manager.create_device_token("alice", "laptop")
+
+    def test_a_label_is_reusable_once_its_token_is_revoked(self, manager):
+        """The constraint is on LIVE tokens, not on history: replacing a lost
+        device's token with a new one under the same name is the normal case."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        first = manager.create_device_token("alice", "laptop")
+        manager.revoke_device_token("alice", "laptop")
+        second = manager.create_device_token("alice", "laptop")
+        assert manager.verify_device_token(first) is None
+        assert manager.verify_device_token(second) == "alice"
 
     def test_two_users_tokens_do_not_collide(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
