@@ -21,6 +21,14 @@ from sync.runner import build_bisync_argv, build_pull_argv, check_rclone_version
 from utils.errors import RcloneNotInstalledError, RcloneTimeoutError, RcloneVersionError, SyncConfigError
 from utils.selftest import fail, finalize, ok, skip
 
+# Exported so sync/cli.py's cmd_test can detect this specific failure (a
+# totally unloadable config.yaml, an env/config error) without run_self_test
+# having to change its shared (passed, total, output_lines) return shape --
+# that shape is also used by agentic/, agentic/sqlconnect/, agentic/fsconnect/,
+# telegram/, and guardrails/'s own selftest modules, so widening it here would
+# ripple across every one of them for a fix scoped to this module alone.
+CONFIG_CHECK_LABEL = "01. Config loads and validates"
+
 
 def run_self_test(
     config_path: str = "config.yaml",
@@ -33,9 +41,9 @@ def run_self_test(
     # 1. config.yaml exists, parses, and validates.
     try:
         cfg = load_sync_config(config_path)
-        results.append(ok("01. Config loads and validates"))
+        results.append(ok(CONFIG_CHECK_LABEL))
     except SyncConfigError as exc:
-        results.append(fail("01. Config loads and validates", exc.message))
+        results.append(fail(CONFIG_CHECK_LABEL, exc.message))
         # Cannot continue without a config; the rest are skipped.
         for n in range(2, 9):
             results.append(skip(f"{n:02d}. (skipped -- no config)", "config invalid"))

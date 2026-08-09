@@ -282,13 +282,24 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_test(args: argparse.Namespace) -> int:
     """Run the pre-flight self-test."""
-    from sync.selftest import run_self_test
+    from sync.selftest import CONFIG_CHECK_LABEL, run_self_test
 
     passed, total, lines = run_self_test(args.config, dry_run=True)
     _heading(f"Self-test: {passed}/{total} passed")
     for line in lines:
         print(line)
-    return EXIT_OK if passed == total else EXIT_FAIL
+    if passed == total:
+        return EXIT_OK
+    # An unloadable config.yaml is an env/config error (EXIT_ENV), same as
+    # cmd_setup/cmd_sync/cmd_status already return for that class of failure
+    # -- not an ordinary check failure (EXIT_FAIL). run_self_test's first
+    # result is always this specific check (see its own "1. config.yaml
+    # exists, parses, and validates" comment), so a FAIL there means every
+    # other check was skipped for lack of a config, not that they ran and
+    # found real problems.
+    if lines and lines[0].startswith(f"  [FAIL] {CONFIG_CHECK_LABEL}"):
+        return EXIT_ENV
+    return EXIT_FAIL
 
 
 def cmd_schedule(args: argparse.Namespace) -> int:
