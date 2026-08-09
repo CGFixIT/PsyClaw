@@ -40,6 +40,9 @@ data/personality/*.db
 data/personality/*.db-shm
 data/personality/*.db-wal
 data/personality/soul.md.bak
+data/auth/*.db
+data/auth/*.db-shm
+data/auth/*.db-wal
 # Telegram poller state (getUpdates offset) — never commit runtime offset
 data/telegram/
 

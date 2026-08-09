@@ -69,7 +69,8 @@ except PackageNotFoundError:
 import logging
 import yaml
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from graph import build_graph, GraphState
@@ -88,7 +89,9 @@ from utils.errors import (
 from utils.guardrail_bridge import build_input_guard, build_output_guard
 from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
+from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
+from gate_auth import register_auth_routes
 from metrics import summarize_audit
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -133,6 +136,7 @@ def require_api_key(
 # survive restarts; leaving it null preserves the original in-memory behavior.
 from fastapi import Request
 from utils.config_validation import (
+    validate_auth_config,
     validate_boot_timeout_config,
     validate_fallback_confirm_placeholder,
     validate_personality_config,
@@ -154,6 +158,7 @@ with open(_BASE_DIR / "config.yaml", encoding="utf-8") as _cfg_f:
 # of a clear ConfigError at boot.
 validate_retrieval_config(cfg)
 validate_personality_config(cfg)
+validate_auth_config(cfg)
 _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds
@@ -304,6 +309,7 @@ async def lifespan(app: FastAPI):
         ("claude", claude),
         ("rate_limiter", _rate_limiter),
         ("personality", personality),
+        ("auth_manager", auth_manager),
         ("retriever", retriever),
     ]:
         if _obj is not None:
@@ -333,6 +339,33 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+@app.exception_handler(RequestValidationError)
+async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Re-emit FastAPI's 422 without ever echoing the value that failed.
+
+    FastAPI's default handler puts each error's raw submitted value under
+    ``detail[].input`` -- harmless for /query's query text, but /auth/login's
+    ``password`` field turns a merely too-long or wrong-type password into a
+    verbatim disclosure in the 422 response body (and a malformed/non-JSON
+    body echoes the WHOLE raw request, username+password included, the same
+    way). Mirrors harness/server.py's ``_validation_error_response``, which
+    solved the identical problem for that app: report only the field
+    location, never the value. Applies to every route (there is no way to
+    scope a FastAPI exception handler to one path), but only ever REMOVES
+    information from the existing default body -- no other route's tests
+    assert anything more specific than the 422 status code.
+    """
+    fields = []
+    for err in exc.errors():
+        loc = err.get("loc") or ()
+        fields.append(".".join(str(part) for part in loc) or "unknown field")
+    named = ", ".join(fields) or "unknown field"
+    return JSONResponse(
+        status_code=422,
+        content={"error": f"request body failed validation: {named}", "code": "VALIDATION_ERROR"},
+    )
+
 
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 
@@ -499,6 +532,56 @@ def _confirm_choices(providers: list[str]) -> str:
 personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
+
+def _boot_auth_enabled(auth_cfg: object) -> bool:
+    """True only when ``auth_cfg["enabled"]`` is the literal boolean ``True``.
+
+    A standalone, testable twin of ``_flag_is_true`` below (used by the bind
+    guard): that helper can't be called from here because it is defined
+    later in this file for the bind guard, and this runs at MODULE IMPORT
+    TIME, before it exists. Deliberately NOT truthy `.get("enabled", False)`:
+    every non-empty string is truthy, so a config carrying `enabled: "false"`
+    (quoted, which YAML parses as the STRING "false") would otherwise
+    construct the AuthManager, create the auth database, and bootstrap +
+    print a first account's password -- while `_flag_is_true` reads the SAME
+    key strictly and reports it OFF, leaving the server in a state where
+    auth is simultaneously "on" (accounts exist, routes work) and "off" (no
+    non-loopback bind was ever intended).
+    """
+    return isinstance(auth_cfg, dict) and auth_cfg.get("enabled") is True
+
+
+# Stage 2 of docs/AUTHENTICATION_DESIGN.md. auth_manager stays None (the
+# request path below never constructs it) unless auth.enabled is true --
+# matching every other CyClaw subsystem's disabled-by-default convention.
+# gate_auth.py's routes always exist regardless (see its own docstring for
+# why), but every handler checks for None first and returns 503.
+auth_manager = None
+if _boot_auth_enabled(cfg.get("auth")):
+    auth_manager = AuthManager(cfg)
+    # bootstrap_if_empty() is a no-op on every boot after the first: it only
+    # ever acts when the users table is genuinely empty. No credential
+    # appears in this banner on purpose: an earlier version printed a
+    # generated one-time password here, and CodeQL rightly flagged it
+    # (alert #1057) -- a service's stdout is not ephemeral (systemd journal,
+    # Docker log driver, any log shipper all persist it). The account is
+    # created with an unusable placeholder hash instead (see
+    # bootstrap_if_empty's docstring), so there is no secret to show: the
+    # operator sets the first real password locally, off any output channel,
+    # via getpass.
+    if auth_manager.bootstrap_if_empty():
+        print(
+            f"\n{'=' * 70}\n"
+            f"CyClaw authentication is now enabled. A first account was created:\n"
+            f"\n"
+            f"    username: {BOOTSTRAP_USERNAME}\n"
+            f"\n"
+            f"It cannot be logged into yet: no password is set (and none was\n"
+            f"generated anywhere visible). Set one now, on this machine:\n"
+            f"\n"
+            f"    cyclaw-user passwd {BOOTSTRAP_USERNAME}\n"
+            f"{'=' * 70}\n"
+        )
 
 # Phase 2 NeMo Guardrails offline input rail (docs/NeMo/phase2_implementation_plan.md).
 # build_input_guard returns None when guardrails.enabled is false (the shipped
@@ -773,6 +856,19 @@ register_ops_routes(
     enforce_rate_limit=_enforce_rate_limit,
     sanitize_error=_sanitize_error,
     require_api_key=require_api_key,
+)
+
+# Stage 2 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
+# /auth/whoami. Same registration-function shape as register_ops_routes
+# above, for the same reason -- gate_auth never imports anything gate.py
+# doesn't already inject into it. auth_manager is None when auth.enabled is
+# false; every handler in gate_auth.py checks for that and returns 503.
+register_auth_routes(
+    app,
+    cfg=cfg,
+    audit=_audit,
+    enforce_rate_limit=_enforce_rate_limit,
+    auth_manager=auth_manager,
 )
 
 

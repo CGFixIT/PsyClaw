@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from utils.config_validation import (
+    validate_auth_config,
     validate_boot_timeout_config,
     validate_fallback_confirm_placeholder,
     validate_personality_config,
@@ -205,3 +206,93 @@ def test_fallback_confirm_true_ok():
 def test_fallback_confirm_absent_ok():
     validate_fallback_confirm_placeholder({"policy": {"fallback": {}}})
     validate_fallback_confirm_placeholder({})
+
+
+# ── validate_auth_config ──────────────────────────────────────────────────
+
+
+def _valid_auth() -> dict:
+    return {"auth": {"enabled": True, "session": {"idle_timeout_sec": 43200, "absolute_timeout_sec": 604800}}}
+
+
+def test_auth_shipped_defaults_pass():
+    validate_auth_config(_valid_auth())
+
+
+def test_auth_absent_block_is_a_noop():
+    validate_auth_config({})
+
+
+def test_auth_disabled_skips_validation_even_with_bad_session_values():
+    validate_auth_config({"auth": {"enabled": False, "session": {"idle_timeout_sec": -1}}})
+
+
+def test_auth_enabled_with_no_session_block_uses_defaults():
+    validate_auth_config({"auth": {"enabled": True}})
+
+
+@pytest.mark.parametrize("bad", ["banana", ["a", "list"], 1, 1.5, True])
+def test_auth_block_not_a_mapping_always_rejected(bad):
+    """Must raise even though `bad` has no `enabled` key to read -- this is
+    exactly the crash gate.py's own unguarded cfg.get("auth", {}).get(...)
+    construction would hit without this check running first."""
+    with pytest.raises(ConfigError):
+        validate_auth_config({"auth": bad})
+
+
+def test_auth_session_not_a_mapping_rejected():
+    cfg = _valid_auth()
+    cfg["auth"]["session"] = "banana"
+    with pytest.raises(ConfigError):
+        validate_auth_config(cfg)
+
+
+@pytest.mark.parametrize("key", ["idle_timeout_sec", "absolute_timeout_sec"])
+@pytest.mark.parametrize("bad", [0, -1, "43200", None, True, float("nan"), float("inf"), float("-inf")])
+def test_auth_session_timeout_keys_reject_bad_values(key, bad):
+    """nan/inf are real floats, so a bare `_is_real_number` check accepts
+    them, and every comparison against nan is False -- `nan <= 0` is False --
+    so a one-sided positivity check alone lets them through silently.
+    Downstream: validate_session()'s idle-expiry comparison against a nan
+    idle timeout never fires, a nan absolute timeout binds as SQL NULL into
+    a NOT NULL column, and int(a real +inf timeout) raises OverflowError at
+    cookie-issuance time."""
+    cfg = _valid_auth()
+    cfg["auth"]["session"][key] = bad
+    with pytest.raises(ConfigError):
+        validate_auth_config(cfg)
+
+
+def test_auth_idle_exceeding_absolute_is_rejected():
+    cfg = _valid_auth()
+    cfg["auth"]["session"]["idle_timeout_sec"] = 700000
+    cfg["auth"]["session"]["absolute_timeout_sec"] = 604800
+    with pytest.raises(ConfigError) as exc:
+        validate_auth_config(cfg)
+    assert "idle_timeout_sec" in str(exc.value)
+
+
+def test_auth_idle_equal_to_absolute_is_ok():
+    cfg = _valid_auth()
+    cfg["auth"]["session"]["idle_timeout_sec"] = 604800
+    cfg["auth"]["session"]["absolute_timeout_sec"] = 604800
+    validate_auth_config(cfg)  # must not raise -- boundary is inclusive
+
+
+@pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
+def test_auth_quoted_yaml_boolean_skips_validation_like_disabled(quoted):
+    """gate.py reads this same key strictly in two places (_boot_auth_enabled,
+    _flag_is_true) specifically so a quoted `enabled: "false"`/`"true"`
+    string is never mistaken for the literal boolean -- both read as OFF. A
+    truthy `auth.get("enabled", False)` read here would disagree with both:
+    it would fail boot over a session block gate.py will never construct an
+    AuthManager to read (quoted "false" is truthy), so this must be a no-op
+    exactly like enabled: False, even with session values that would
+    otherwise raise."""
+    cfg = _valid_auth()
+    cfg["auth"]["enabled"] = quoted
+    cfg["auth"]["session"]["idle_timeout_sec"] = -1
+    validate_auth_config(cfg)  # must not raise -- treated as disabled
+
+    cfg["auth"]["session"] = "not-even-a-mapping"
+    validate_auth_config(cfg)  # still must not raise

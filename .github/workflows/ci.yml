@@ -494,7 +494,12 @@ jobs:
             -q --tb=short \
             --cov=gate \
             --cov=gate_ops \
+            --cov=gate_auth \
             --cov=utils.auth \
+            --cov=utils.authn \
+            --cov=utils.authn_store \
+            --cov=utils.authn_manager \
+            --cov=utils.authn_cli \
             --cov=utils.sanitizer \
             --cov=utils.telemetry_kill \
             --cov=utils.config_validation \

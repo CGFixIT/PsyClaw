@@ -314,6 +314,56 @@ class TestQueryEndpoint:
         assert resp.json()["retrieval_mode"] == "none"
 
 
+class TestValidationErrorNeverEchoesTheSubmittedValue:
+    """FastAPI's default RequestValidationError handler puts each error's raw
+    submitted value under detail[].input -- harmless for /query's query text,
+    but /auth/login's password field turns a merely too-long or wrong-type
+    password into a verbatim disclosure in the 422 body. gate.py's own
+    _on_validation_error handler (mirroring harness/server.py's identical
+    fix) reports only the field location, never the value. This class runs
+    the auth-specific case through the REAL gate.app -- pure Pydantic
+    validation happens before the route body, so auth.enabled being false in
+    the test config does not skip it."""
+
+    def test_oversized_query_body_is_not_echoed(self, client):
+        test_client, _ = client
+        needle = "MARKER_" + "z" * 100
+        resp = test_client.post("/query", json={"query": needle * 700})  # past max_length=65536
+        assert resp.status_code == 422
+        assert needle not in resp.text
+
+    def test_auth_login_oversized_password_is_not_echoed(self, client):
+        test_client, _ = client
+        secret = "SUPER_SECRET_PASSWORD_" + "x" * 2000  # past AuthLoginRequest's max_length=1024
+        resp = test_client.post("/auth/login", json={"username": "a", "password": secret})
+        assert resp.status_code == 422
+        assert "SUPER_SECRET_PASSWORD" not in resp.text
+        assert resp.json()["code"] == "VALIDATION_ERROR"
+
+    def test_auth_login_wrong_type_password_is_not_echoed(self, client):
+        """strict=True on AuthLoginRequest rejects a non-string password
+        outright (no int->str coercion) -- confirm THAT rejection path also
+        never echoes the value."""
+        test_client, _ = client
+        resp = test_client.post("/auth/login", json={"username": "a", "password": 1234567890})
+        assert resp.status_code == 422
+        assert "1234567890" not in resp.text
+
+    def test_malformed_non_json_body_is_not_echoed(self, client):
+        """A wrong/missing Content-Type still reaches Pydantic's json_invalid
+        error, whose `input` is the ENTIRE raw body -- confirm that path is
+        covered too, not just per-field errors."""
+        test_client, _ = client
+        secret = "SUPER_SECRET_PASSWORD_marker"
+        resp = test_client.post(
+            "/auth/login",
+            content=f'{{"username": "a", "password": "{secret}"'.encode(),  # deliberately truncated/invalid JSON
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 422
+        assert secret not in resp.text
+
+
 class TestHealthEndpoint:
     def test_health_returns_status(self, client):
         test_client, _ = client
@@ -1093,6 +1143,7 @@ class TestLoopbackBindGuard:
         assert gate._auth_and_tls_enabled() is False
         assert gate._require_loopback_bind("10.0.0.50") is False
 
+
     def test_enforcement_probe_sees_a_dependency_when_one_is_attached(self):
         """The probe's own logic, against real FastAPI routes rather than the
         live app: absent on a bare /query, found once the dependency is there,
@@ -1235,3 +1286,38 @@ class TestLoopbackBindGuard:
             "allowed_hosts is now loopback-only, so the Host header would reject LAN "
             "callers too. Update this test's rationale rather than removing the bind guard."
         )
+
+
+class TestBootAuthEnabled:
+    """_boot_auth_enabled gates whether gate.py constructs the AuthManager at
+    module import time -- a strict twin of _flag_is_true, needed separately
+    because that helper is defined later in the file and this runs at import
+    time, before it exists. Pure function, no monkeypatch of gate.cfg needed."""
+
+    def test_literal_true_is_enabled(self):
+        import gate
+        assert gate._boot_auth_enabled({"enabled": True}) is True
+
+    @pytest.mark.parametrize("value", ["false", "true", "no", "0", "off", 1, None])
+    def test_non_literal_values_fail_closed(self, value):
+        """`bool("false")` is True in Python -- a config carrying a quoted
+        `enabled: "false"` must not construct the AuthManager, create the auth
+        database, and bootstrap + print a first account's password. This is
+        the exact bug: gate.py previously read this key with truthy
+        `.get("enabled", False)`, which would have enabled auth here while
+        _flag_is_true's strict check reports it OFF for the bind guard --
+        auth simultaneously "on" and "off"."""
+        import gate
+        assert gate._boot_auth_enabled({"enabled": value}) is False
+
+    def test_missing_key_defaults_closed(self):
+        import gate
+        assert gate._boot_auth_enabled({}) is False
+
+    @pytest.mark.parametrize("bad", ["not-a-dict", None, [], 1])
+    def test_non_mapping_auth_block_fails_closed(self, bad):
+        """gate.cfg.get("auth") can be anything a malformed config.yaml
+        contains; must not raise (an unguarded .get would crash on a
+        non-dict) and must fail closed."""
+        import gate
+        assert gate._boot_auth_enabled(bad) is False

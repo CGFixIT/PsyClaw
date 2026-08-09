@@ -155,20 +155,27 @@ def main(argv: list[str] | None = None) -> int:
     # ── D5 Route table ──────────────────────────────────────────────────────
     print("D5 gate.py routes -> CLAUDE.md + setup-guide.md")
     gate_src = (root / "gate.py").read_text(encoding="utf-8")
-    # gate_ops.py registers the four /ops/* routes onto gate.py's own app with
-    # the same @app.post decorator, just from inside a registration function.
-    # Reading only gate.py left those four unchecked in both directions.
-    ops_path = root / "gate_ops.py"
-    ops_src = ops_path.read_text(encoding="utf-8") if ops_path.exists() else ""
+    # gate_ops.py and gate_auth.py each register their routes onto gate.py's
+    # own app with the same @app.get/@app.post decorators, just from inside a
+    # registration function. Reading only gate.py left those routes unchecked
+    # in both directions -- gate_auth.py added 2026-08-08 for
+    # docs/AUTHENTICATION_DESIGN.md Stage 2 (/auth/login, /auth/logout,
+    # /auth/whoami), same reasoning gate_ops.py's four /ops/* routes already
+    # needed this for.
     _decl = r'@app\.(?:get|post)\("([^"]+)"'
-    routes = sorted(set(re.findall(_decl, gate_src)) | set(re.findall(_decl, ops_src)))
+    routes: set[str] = set(re.findall(_decl, gate_src))
+    for extra_module in ("gate_ops.py", "gate_auth.py"):
+        extra_path = root / extra_module
+        if extra_path.exists():
+            routes |= set(re.findall(_decl, extra_path.read_text(encoding="utf-8")))
+    routes = sorted(routes)
     # Ignore the static mount and root; check the meaningful API routes.
     api_routes = [r for r in routes if r not in ("/",)]
     missing = [r for r in api_routes if r not in claude]
     if not missing:
         ok("D5", f"all {len(api_routes)} API routes named in CLAUDE.md")
     else:
-        note("D5", "gate.py/gate_ops.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
+        note("D5", "gate.py/gate_ops.py/gate_auth.py @app decorators", f"routes absent from CLAUDE.md: {missing}")
 
     # setup-guide.md's REST section enumerates the same routes with runnable
     # curl invocations, so it drifts the same way CLAUDE.md's table does -- and
@@ -222,10 +229,10 @@ def main(argv: list[str] | None = None) -> int:
                 ok("D5", f"setup-guide.md's REST section matches all {len(api_routes)} "
                          "routes, with no phantom routes")
             if undocumented:
-                note("D5", "gate.py/gate_ops.py @app decorators",
+                note("D5", "gate.py/gate_ops.py/gate_auth.py @app decorators",
                      f"routes missing from setup-guide.md's REST section: {undocumented}")
             if phantom:
-                note("D5", "gate.py/gate_ops.py @app decorators",
+                note("D5", "gate.py/gate_ops.py/gate_auth.py @app decorators",
                      f"setup-guide.md documents routes that do not exist in code: {phantom}")
 
     # ── D6 Stop-hook claims ─────────────────────────────────────────────────

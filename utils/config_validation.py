@@ -10,6 +10,7 @@ Mirrors the dataclass ``__post_init__`` validation that ``sync/config.py`` and
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from utils.errors import ConfigError
@@ -155,3 +156,76 @@ def validate_personality_config(cfg: dict[str, Any]) -> None:
                 f"personality.soul_max_chars must be a positive integer, got: {soul_max_chars!r}",
                 details={"received": soul_max_chars},
             )
+
+
+def validate_auth_config(cfg: dict[str, Any]) -> None:
+    """Validate ``cfg['auth']`` when the subsystem is enabled.
+
+    Checks:
+      * ``session.idle_timeout_sec`` / ``session.absolute_timeout_sec`` are
+        positive numbers;
+      * ``idle_timeout_sec <= absolute_timeout_sec`` -- otherwise the idle
+        window can never be the one that expires a session first, which is a
+        config mistake worth catching at boot rather than discovering that a
+        "12h idle" setting silently never applies.
+
+    No-op when ``auth.enabled`` is false or the block is absent (Stage 1/2's
+    shipped-disabled default). A PRESENT but malformed ``auth`` block (not a
+    mapping at all -- e.g. ``auth: "banana"``) always raises, even with
+    enabled defaulting false, because gate.py's own ``cfg.get("auth",
+    {}).get("enabled", False)`` has no isinstance guard: without this check
+    running first, that construction crashes with an unhandled AttributeError
+    instead of this module's own clear, typed ConfigError.
+    """
+    auth = cfg.get("auth")
+    if auth is None:
+        return
+    if not isinstance(auth, dict):
+        raise ConfigError(
+            f"config.auth must be a mapping, got: {type(auth).__name__}",
+            details={"received_type": type(auth).__name__},
+        )
+    # `is not True`, not truthy `not auth.get("enabled", False)`: gate.py
+    # reads this same key strictly in two places (_boot_auth_enabled,
+    # _flag_is_true via _auth_and_tls_enabled) specifically so a quoted
+    # `enabled: "false"`/`"true"` string is never mistaken for the literal
+    # boolean. A truthy read here disagreed with both: `"false"` (truthy)
+    # would validate the session block for a config gate.py treats as OFF --
+    # failing boot over a block that will never be read -- and `"true"`
+    # (also truthy) would validate and pass clean for a config gate.py
+    # treats as OFF too, signing off on a misconfiguration with no
+    # diagnostic anywhere in the boot sequence.
+    if auth.get("enabled") is not True:
+        return
+
+    session = auth.get("session", {})
+    if not isinstance(session, dict):
+        raise ConfigError(
+            f"auth.session must be a mapping, got: {type(session).__name__}",
+            details={"received_type": type(session).__name__},
+        )
+
+    idle = session.get("idle_timeout_sec", 43200)
+    absolute = session.get("absolute_timeout_sec", 604800)
+    for name, val in (("idle_timeout_sec", idle), ("absolute_timeout_sec", absolute)):
+        # math.isfinite, not just `val <= 0`: NaN and +/-inf are real floats,
+        # so _is_real_number accepts them, and EVERY comparison against NaN
+        # is False -- `nan <= 0` is False, so a NaN timeout sailed through
+        # this check silently. Downstream that is not cosmetic:
+        # validate_session()'s idle-expiry comparison against a NaN idle
+        # timeout is permanently False (sessions never idle-expire), a NaN
+        # absolute timeout binds as SQL NULL into a NOT NULL column and
+        # every login fails, and `int(manager.absolute_timeout_sec)` at
+        # cookie-issuance time raises OverflowError for +inf.
+        if not _is_real_number(val) or not math.isfinite(val) or val <= 0:
+            raise ConfigError(
+                f"auth.session.{name} must be a finite positive number, got: {val!r}",
+                details={"received": val, "key": name},
+            )
+    if idle > absolute:
+        raise ConfigError(
+            f"auth.session.idle_timeout_sec ({idle}) must be <= "
+            f"absolute_timeout_sec ({absolute}) -- otherwise the idle window "
+            "can never be the one that expires a session",
+            details={"idle_timeout_sec": idle, "absolute_timeout_sec": absolute},
+        )

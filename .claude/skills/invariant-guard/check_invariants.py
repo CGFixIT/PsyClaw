@@ -31,7 +31,7 @@ import re
 import sys
 from pathlib import Path
 
-CORE_FILES = ("gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py")
+CORE_FILES = ("gate.py", "gate_ops.py", "gate_auth.py", "graph.py", "mcp_hybrid_server.py")
 OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness", "telegram")
 
 # The full documented graph shape (CLAUDE.md's "9-node LangGraph topology").
@@ -262,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         gate_tree = parse(root / "gate.py")
         gate_ops_tree = parse(root / "gate_ops.py")
+        gate_auth_tree = parse(root / "gate_auth.py")
         graph_tree = parse(root / "graph.py")
         mcp_tree = parse(root / "mcp_hybrid_server.py")
         agentic_init_tree = parse(root / "agentic" / "__init__.py")
@@ -442,14 +443,20 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── I6 Module isolation ─────────────────────────────────────────────────
     print("I6 Module isolation")
+    # gate_auth.py joins gate_ops.py here for the same reason: it is imported
+    # directly by gate.py (`from gate_auth import register_auth_routes`), so
+    # anything it imports is transitively pulled into gate.py's process --
+    # an `import agentic` (or sync/guardrails/harness/telegram) landing there
+    # would be a substantive I6 violation this check must not stay blind to.
     for fname, tree in (("gate.py", gate_tree), ("gate_ops.py", gate_ops_tree),
+                        ("gate_auth.py", gate_auth_tree),
                         ("graph.py", graph_tree), ("mcp_hybrid_server.py", mcp_tree)):
         bad = sorted({m for m, _ in top_level_import_names(tree) if m in OUT_OF_BAND_PKGS})
         if not bad:
             ok(f"{fname} imports none of {OUT_OF_BAND_PKGS}")
         else:
             fail(f"{fname} imports none of {OUT_OF_BAND_PKGS}", f"imports {bad}")
-    core_roots = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
+    core_roots = {"gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server"}
     scanned = 0
     offenders: list[str] = []
     for pkg in OUT_OF_BAND_PKGS:

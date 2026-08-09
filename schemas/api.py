@@ -143,3 +143,27 @@ class OpsSqlConnectRequest(BaseModel):
     explain: bool = False
     count: bool = False
     fmt: Literal["json", "csv"] = "json"
+
+
+# --- Per-user authentication (docs/AUTHENTICATION_DESIGN.md, Stage 2) --------
+# 32/1024 mirror utils/authn.py's _MIN_PASSWORD_LEN/_MAX_PASSWORD_LEN via the
+# username pattern's own 32-char cap and the password service's own bounds --
+# the schema only needs to keep an oversized payload out of the auth manager,
+# not duplicate its policy; validate_username/validate_password still run
+# inside AuthManager and are the actual source of truth.
+class AuthLoginRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthLoginResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str
+    csrf_token: str
+    expires_ts: float
+
+
+class AuthWhoamiResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str

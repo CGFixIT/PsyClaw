@@ -114,6 +114,7 @@ cyclaw-index = "retrieval.indexer:main"
 cyclaw-metrics = "metrics:main"
 cyclaw-clear-cache = "retrieval.clear_cache:main"
 cyclaw-harness = "harness.server:main"
+cyclaw-user = "utils.authn_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram"]
@@ -121,7 +122,7 @@ packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrai
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "gate.py", "gate_ops.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
+    "gate.py", "gate_ops.py", "gate_auth.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
     "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval",
     "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "telegram", "powershell", "macos",
 ]
@@ -151,7 +152,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram"]
+source = ["gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram"]
 
 # fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
 # Windows branch needs a separate Windows CI lane (deferred -- see
@@ -180,7 +181,7 @@ exclude = [".claude"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "S"]
 ignore = ["E501"]
-per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"], "agentic/__init__.py" = ["E402"], "guardrails/__init__.py" = ["E402"], "telegram/__init__.py" = ["E402"], "harness/server.py" = ["E402"] }
+per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "gate_auth.py" = ["B008"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"], "utils/authn_manager.py" = ["S608"], "agentic/__init__.py" = ["E402"], "guardrails/__init__.py" = ["E402"], "telegram/__init__.py" = ["E402"], "harness/server.py" = ["E402"] }
 
 
 [tool.ruff.lint.isort]

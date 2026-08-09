@@ -159,7 +159,7 @@ _IMPORT_ALLOWLIST = {
 }
 _FIRST_PARTY = {
     "utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram",
-    "gate", "gate_ops", "graph", "mcp_hybrid_server", "metrics", "tests", "conftest",
+    "gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server", "metrics", "tests", "conftest",
 }
 # import name -> PyPI distribution name, for the cases where they differ by more
 # than punctuation. The underscore/hyphen cases (rank_bm25, langchain_xai,
