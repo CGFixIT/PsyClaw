@@ -21,8 +21,9 @@ and/or Claude, selected per-query via `online_provider`). It binds
 (`mcp_hybrid_server.py`) exposes search with no LLM path. 
 
 # Critical Python Coding Requirement:
-- Never use docstrings as multi-line comments other than when placed at the beginning of a python file.
+- Never use docstrings as multi-line comments other than when placed at the beginning of a python file OR top of a defined function.
 - When multi-line comments required outside of that context, just use a # at the beginning of each line of the comment
+
 
 **Where truth lives.** In priority order:
 1. **Code** — the running behavior. When docs and code disagree, code wins.
