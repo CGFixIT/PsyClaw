@@ -22,6 +22,7 @@
 - [Architecture](#architecture)
 - [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
 - [Quick Start](#quick-start)
+- [Docker / GHCR](docs/DOCKER.md)
 - [Full Setup Guide](setup-guide.md)
 - [Project Structure](#project-structure)
 - [Dropbox Corpus Sync](#dropbox-corpus-sync)
@@ -348,6 +349,20 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 | Model pulled in Ollama | — | `qwen3.6:27b` (default), `mistral:7b`, or any chat model |
 | **macOS** (primary) | 14 Sonoma+ | **Apple Silicon only.** An Intel Mac cannot install this repo's pinned torch at all — no `x86_64` wheel is published at that pin |
 | Windows / Linux (fallback) | — | Both fully supported and CI-covered; they share the `+cpu` torch path below |
+
+### Docker (optional runtime image)
+
+Prefer GHCR when you want a prebuilt `linux/amd64` runtime without a local `pip install`.
+Pull `ghcr.io/cgfixit/cyclaw` and run with the existing compose hardening (loopback publish,
+read-only rootfs, seccomp builtin). Full operator guide: [`docs/DOCKER.md`](docs/DOCKER.md).
+
+```bash
+export CYCLAW_IMAGE_TAG=1.9.0
+docker compose pull && docker compose up -d
+curl -sS http://127.0.0.1:8787/health
+```
+
+Native install (below) remains the primary path for Apple Silicon and for the coding harness.
 
 ### Install — macOS (Apple Silicon)
 
@@ -1056,6 +1071,8 @@ of the three commands above for cloud, after the image's own install step.
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
 | `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed` / `ops_fsconnect_executed` / `ops_sqlconnect_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
+
+> **Docker / GHCR:** published runtime image `ghcr.io/cgfixit/cyclaw` (tag-triggered). Operator guide, pull/run commands, Falco opt-in notes, and explicit non-goals (no microVM): [`docs/DOCKER.md`](docs/DOCKER.md). Host publish remains `127.0.0.1` only.
 
 > **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md).
 ---

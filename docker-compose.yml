@@ -9,9 +9,12 @@
 #     pid/mem/cpu limits cap blast radius / DoS
 #   - optional Falco/eBPF detection sidecar behind the `monitoring` profile
 #     (disabled by default — `docker compose --profile monitoring up`)
+#   - published image: ghcr.io/cgfixit/cyclaw (see docs/DOCKER.md)
 
 services:
   cyclaw:
+    # Prefer pull of the published image; `docker compose build` still works.
+    image: ghcr.io/cgfixit/cyclaw:${CYCLAW_IMAGE_TAG:-1.9.0}
     build: .
     container_name: cyclaw-prod
     ports:
