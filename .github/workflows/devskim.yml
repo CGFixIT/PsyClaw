@@ -59,6 +59,9 @@ jobs:
           # CyClaw quirk (CLAUDE.md § Dependency Notes): install CPU-only torch
           # BEFORE requirements.txt, otherwise Linux pulls the multi-GB CUDA
           # wheel. Mirrors ci.yml so DevSkim's import-resolution env matches CI.
+          # This pin is duplicated in ci.yml, pip-audit.yml, and
+          # copilot-setup-steps.yml -- grep for the version string under
+          # .github/workflows/ before bumping it.
           pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
           if [ -f poetry.lock ]; then
             pip install poetry

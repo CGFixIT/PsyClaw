@@ -59,6 +59,11 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # actionlint-py/zizmor have no manifest pin (installed ad hoc below), so
+          # key the cache on the workflow file itself -- same pattern semgrep.yml
+          # already uses for the identical situation.
+          cache-dependency-path: .github/workflows/ci.yml
 
       - name: Install actionlint + zizmor (pinned, from PyPI -- not curl|bash)
         # actionlint-py's pip install fetches the prebuilt actionlint binary
@@ -399,6 +404,9 @@ jobs:
         # The wheel is downloaded once per (os, pin) pair and reused on every
         # subsequent run until the pin changes in pyproject.toml. macOS skips
         # this cache entirely -- see the macOS-specific install step below.
+        # The torch==2.13.0+cpu pin (and this cache key) is duplicated in
+        # pip-audit.yml, copilot-setup-steps.yml, and devskim.yml -- grep for
+        # the version string under .github/workflows/ before bumping it here.
         id: torch-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
