@@ -1,5 +1,6 @@
 # CyClaw Telegram Channel — Design & Phase Plan
 <hr>
+
 > quick verification after token and bot created and config flipped
 
 > python -m telegram.cli send --chat-id YOUR_CHAT_ID --text "CyClaw notify OK" --prompt-token
