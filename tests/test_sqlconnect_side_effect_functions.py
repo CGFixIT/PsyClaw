@@ -126,3 +126,76 @@ def test_rejection_names_the_offending_keyword():
     with pytest.raises(SqlConnectError) as excinfo:
         assert_read_only_sql("SELECT pg_sleep(10)")
     assert excinfo.value.details["keyword"].lower() == "pg_sleep"
+
+
+# ── unicode-escaped identifiers (U&"...") ────────────────────────────────────
+# Postgres un-escapes U&"pg_\0072ead_file" into the plain identifier
+# pg_read_file BEFORE the grammar runs, so the escaped spelling calls exactly the
+# same built-in. _FORBIDDEN_FN_RE scans the RAW identifier text, so it saw
+# "pg_\0072ead_file" and pg_read_\w+ never matched — every forbidden side-effect
+# function above was reachable this way.
+#
+# Verified against a live PostgreSQL 16, not inferred:
+#   SELECT U&"pg_\0072ead_file"('/etc/passwd', 0, 60)  -> root:x:0:0:root:/root...
+#   SELECT pg_catalog.U&"pg_\0072ead_file"('/etc/hostname') -> vm
+# The schema-qualified form executes too, which is why the prefix check does not
+# treat a preceding "." as "this u belongs to a larger name".
+#
+# The fix refuses the U& prefix outright rather than decoding it, matching the
+# E'...' rule in the same function. Decoding would mean reimplementing Postgres's
+# UIDENT rules exactly — \XXXX and \+XXXXXX, surrogate pairs, and a UESCAPE clause
+# that redefines the escape character — and any gap in that decoder is a fresh
+# bypass. A read-only preview never needs a unicode-escaped name.
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r'''SELECT U&"pg_\0072ead_file"('/etc/passwd')''',
+        r'''SELECT u&"pg_\0072ead_file"('/etc/passwd')''',          # lowercase prefix
+        r'''SELECT U&"pg_sl\0065ep"(600)''',                        # needs no DB privilege at all
+        r'''SELECT U&"lo_expor\0074"(1,'/tmp/x')''',                # host file WRITE from a read-only connector
+        r'''SELECT U&"dbl\0069nk_connect"('host=10.0.0.1')''',      # outbound network
+        r'''SELECT U&"pg_ls_di\0072"('/etc')''',
+        r'''SELECT pg_catalog.U&"pg_\0072ead_file"('/etc/passwd')''',  # schema-qualified still executes
+        r'''SELECT U&"pg_st!at_file" UESCAPE '!' ''',               # UESCAPE redefines the escape char
+        r'''SELECT U&'\0064elete'::text''',                         # the string-literal form of the same prefix
+    ],
+)
+def test_unicode_escaped_identifiers_are_refused(sql):
+    with pytest.raises(SqlConnectError) as excinfo:
+        assert_read_only_sql(sql)
+    assert "unicode-escaped" in str(excinfo.value)
+
+
+def test_qualified_u_ampersand_is_the_bypass_shape_not_bitwise_and():
+    """`a.u&"bar"` must be refused, and that is not over-eager.
+
+    It looks like `a.u & "bar"` (bitwise AND of a column named u), which is why
+    the prefix check deliberately does NOT exempt a preceding ".". PostgreSQL 16
+    settles it: with u=6 and "bar"=3, `SELECT 6 & 3` yields 2 but
+    `SELECT a.u&"bar" FROM t a` yields 3, and renaming the column to "baz" fails
+    with `column a.bar does not exist`. Postgres lexes u&"bar" as the
+    unicode-escaped identifier `bar`, so this really is the bypass shape.
+    """
+    with pytest.raises(SqlConnectError):
+        assert_read_only_sql('SELECT a.u&"bar" FROM t a')
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT fooU&"bar" FROM t',      # u is the last char of a longer identifier
+        'SELECT foou&"bar" FROM t',
+        'SELECT "fooU"&"bar" FROM t',    # quoted identifier ending in U, then & then a quote
+        "SELECT a & b FROM t",           # ordinary bitwise AND, no quote follows
+        "SELECT * FROM users LIMIT 10",
+    ],
+)
+def test_ampersand_that_is_not_a_unicode_prefix_still_passes(sql):
+    """The lookback must not swallow ordinary bitwise AND.
+
+    Only a STANDALONE U&/u& token counts: the character before the u must not be
+    an identifier character. `fooU&"bar"` is `fooU & "bar"` to Postgres because
+    the u there is part of a longer name, so it must keep working.
+    """
+    assert assert_read_only_sql(sql).lower().startswith("select")

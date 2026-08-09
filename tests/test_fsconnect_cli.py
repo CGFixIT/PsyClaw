@@ -165,3 +165,49 @@ def test_self_test_command(tmp_path):
     share.mkdir()
     cp = _cfg(tmp_path, {"enabled": True, "allowed_roots": [str(share)]})
     assert cli.main(["--config", cp, "test"]) == 0
+
+
+# ── exit codes are an API ────────────────────────────────────────────────────
+
+def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
+    """Dispatch-point handler, matching agentic/cli.py::main (#824).
+
+    utils/ops_runner.py's _FSCONNECT_LABELS maps 0/2/3/4 and reports everything
+    else as "unknown", so an escaping error made /ops/fsconnect unclassifiable.
+    Narrow on purpose: a genuine bug still raises rather than becoming exit 2.
+    """
+    from utils.errors import FsConnectConfigError, FsConnectError, FsWriteRefused
+
+    for exc, want in [
+        (FsWriteRefused("nope"), cli.EXIT_REFUSED),
+        (FsConnectConfigError("bad cfg"), cli.EXIT_ENV),
+        (FsConnectError("failed"), cli.EXIT_FAIL),
+    ]:
+        monkeypatch.setattr(cli, "cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
+        assert cli.main(["status"]) == want
+
+    monkeypatch.setattr(cli, "cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
+    with pytest.raises(RuntimeError, match="a real bug"):
+        cli.main(["status"])
+
+
+def test_atomic_write_onto_a_directory_is_typed_not_a_raw_oserror(tmp_path):
+    """One mistyped --path must not look like a crash mid-write.
+
+    os.replace onto an existing DIRECTORY raises IsADirectoryError. Every other
+    OSError in pathsafe is already converted (the os.open three lines above this
+    one does exactly that), but the write/replace/fsync block re-raised bare. Two
+    consequences: exit 1, outside the documented 0/2/3/4 set; and an
+    fsconnect_write_intent with no matching _applied, which writer.py's own
+    docstring defines as the crash/tamper signal -- so a typo manufactured a
+    false security alarm.
+    """
+    from agentic.fsconnect.pathsafe import ScopedRoots
+    from utils.errors import FsConnectError
+
+    root = tmp_path / "root"
+    (root / "adir").mkdir(parents=True)
+    with ScopedRoots([str(root)]) as scoped, pytest.raises(FsConnectError) as excinfo:
+        scoped.write_bytes("adir", b"PWN", root=str(root), overwrite=True)
+    assert "atomic write" in str(excinfo.value)
+    assert (root / "adir").is_dir(), "the directory must be left untouched"

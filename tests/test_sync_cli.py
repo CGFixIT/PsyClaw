@@ -381,3 +381,57 @@ def test_setup_include_soul_warns_it_has_no_effect(capsys):
     assert "WILL be mirrored" not in err
     assert "has no effect" in err
     assert "never mirrored" in err
+
+
+# ── exit codes are an API: nothing may escape the documented set ─────────────
+# sync is the sharpest case in the repo. EXIT_SAFETY is 1, so an uncaught
+# traceback does not merely land outside 0/1/2/3/10 -- it COLLIDES with the
+# max-delete fuse, and utils/ops_runner.py's _SYNC_LABELS maps 1 to
+# "safety_abort". The console then reports a tripped deletion fuse
+# ("SAFETY FUSE TRIPPED") for what is actually an unreadable config file.
+
+@pytest.mark.parametrize("cmd", ["status", "sync"])
+@pytest.mark.parametrize(
+    "content, why",
+    [
+        (None, "file does not exist -> OSError"),
+        ("not: [a valid\n  mapping\n", "YAML syntax error -> yaml.YAMLError"),
+        ("just-a-string\n", "non-mapping root -> AttributeError on .get"),
+    ],
+)
+def test_unloadable_config_is_env_error_not_a_fake_safety_abort(tmp_path, cmd, content, why):
+    """load_sync_config converts, mirroring telegram/config.py.
+
+    Before this, all three escaped load_sync_config as OSError / YAMLError /
+    AttributeError -- none of them a SyncError -- so they walked past every
+    caller's handler and exited 1, which sync already spends on EXIT_SAFETY.
+    """
+    reset_config_cache()
+    cfg = tmp_path / "c.yaml"
+    if content is not None:
+        cfg.write_text(content, encoding="utf-8")
+    try:
+        code = main(["--config", str(cfg), cmd])
+    finally:
+        reset_config_cache()
+    assert code == EXIT_ENV, f"{why}: got {code}, want EXIT_ENV"
+    assert code != EXIT_SAFETY, "must never be mistaken for a tripped max-delete fuse"
+
+
+def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
+    """A dispatch-point handler, matching agentic/cli.py::main (#824).
+
+    Narrow on purpose: only the typed hierarchy is classified, so a real bug
+    still raises rather than being flattened into a tidy exit 2.
+    """
+    for exc, want in [
+        (SyncConfigError("bad"), EXIT_ENV),
+        (RcloneNotInstalledError("absent"), EXIT_ENV),
+        (SyncRuntimeError("failed"), EXIT_FAIL),
+    ]:
+        monkeypatch.setattr("sync.cli.cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
+        assert main(["status"]) == want
+
+    monkeypatch.setattr("sync.cli.cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
+    with pytest.raises(RuntimeError, match="a real bug"):
+        main(["status"])

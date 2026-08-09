@@ -72,7 +72,17 @@ def register_auth_routes(
     # that way even if some future proxy terminates TLS in front of CyClaw --
     # api.tls.enabled is the operator's explicit statement that THIS process
     # is the one serving HTTPS, which is what a browser's Secure flag means.
-    tls_enabled = bool((tls_cfg or {}).get("enabled")) if isinstance(tls_cfg, dict) else False
+    #
+    # `is True`, not bool(): every non-empty string is truthy, so a config
+    # carrying `enabled: "false"` (quoted, which YAML parses as the STRING
+    # "false") would otherwise read as enabled. gate.py's _flag_is_true reads
+    # this exact key the same strict way for its bind guard, and the two must
+    # not disagree -- one module treating a quoted value as ON while the other
+    # treats it as OFF is how a Secure cookie ends up on a plain-HTTP socket,
+    # which a browser then refuses to send back, breaking login with no error
+    # to point at. Duplicated rather than imported because gate.py imports
+    # THIS module, so the dependency cannot run the other way.
+    tls_enabled = tls_cfg.get("enabled") is True if isinstance(tls_cfg, dict) else False
     allowed_hosts = cfg.get("security", {}).get("allowed_hosts", ["127.0.0.1", "localhost"])
     # A browser's Origin header is scheme+host+PORT, not host alone.
     # allowed_hosts / TrustedHostMiddleware both deliberately ignore port

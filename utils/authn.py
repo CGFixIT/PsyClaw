@@ -1,17 +1,20 @@
-"""Password hashing and lockout state for CyClaw's per-user authentication.
+"""Password hashing, token minting, and lockout state for CyClaw's per-user
+authentication.
 
-Stage 1 of docs/AUTHENTICATION_DESIGN.md. This module is deliberately inert:
-nothing in the request path imports it yet, so it can land, be reviewed, and be
-tested without changing how a single route behaves.
+Stage 1 of docs/AUTHENTICATION_DESIGN.md: the pure primitives, with no
+database, no HTTP, and no clock of their own. Password verification lives here
+because it is what everything above it rests on and deserves to be reviewed on
+its own; lockout arithmetic lives here because it is state-machine logic that
+should be testable without a database or a clock; the id/token generators live
+here because they are one-line wrappers over `secrets` that every layer above
+needs and none should re-implement.
 
-Two things live here and nothing else. Password verification, because that is
-the primitive everything above it rests on and it deserves to be reviewed on its
-own. And lockout arithmetic, because it is pure state-machine logic that should
-be testable without a database, an HTTP client, or a clock.
-
-The account/session STORE (SQLite via utils/personality_db's pattern) is Stage 1's
-other half and lands beside this; sessions, routes, cookies and TLS are Stages
-2-4. See the design doc for why the split is shaped this way.
+Stage 2 builds on this and DOES reach the request path -- utils/authn_store.py
+(the account/session store), utils/authn_manager.py (AuthManager), and
+gate_auth.py (/auth/login, /auth/logout, /auth/whoami) all sit above it. This
+module still imports none of them: the dependency runs one way only, which is
+what keeps these primitives testable in isolation. Enforcing a credential on
+/query is Stage 3 and has not landed; TLS on the socket is Stage 4.
 """
 
 from __future__ import annotations

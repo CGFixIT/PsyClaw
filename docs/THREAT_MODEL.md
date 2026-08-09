@@ -173,6 +173,20 @@ repository, and explicitly enabled workload are trusted and single-tenant:
   needs no source edit is available via `CYCLAW_AGENTIC_WRITE_DISABLE`.
 - **SQL is read-only-guarded.** `agentic/sqlconnect/client.py` rejects every
   non-`SELECT` statement (and comments, and multi-statements) before execution.
+  A *second*, distinct guard rejects side-effect **functions** by name
+  (`pg_read_*`, `pg_ls_*`, `lo_export`, `dblink*`, `pg_sleep`, …). That one is
+  explicitly defense-in-depth for an over-privileged DSN — the case a read-only
+  connector exists to contain — and it was bypassable until 2026-08-08:
+  PostgreSQL un-escapes a unicode-escaped identifier (`U&"pg_\0072ead_file"`)
+  into the plain built-in *before* the grammar runs, while the name-scan saw the
+  raw escaped text and matched nothing. Verified against a live PostgreSQL 16,
+  including the schema-qualified form; `/etc/passwd` was read back through the
+  guard. The `U&` prefix is now refused outright rather than decoded, matching
+  the neighbouring `E'...'` rule — reimplementing Postgres's UIDENT rules
+  (`\XXXX`, `\+XXXXXX`, surrogate pairs, a `UESCAPE` clause that redefines the
+  escape character) would make any gap in that decoder a fresh bypass. The
+  statement-keyword half above was never affected: those keywords cannot be
+  spelled as quoted identifiers.
 - **Filesystem writes are triple-gated and off by default.** `writes_enabled`
   defaults `False`; writes additionally require a non-empty `reason` and `confirm`,
   and are confined to an allow-list of writable roots via zero-TOCTOU path checks.
