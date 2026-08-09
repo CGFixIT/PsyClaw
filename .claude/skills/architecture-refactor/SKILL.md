@@ -92,7 +92,7 @@ Address any correctness bugs flagged before moving on. Log findings in the track
 
 ```bash
 # Required if this step touched gate.py, graph.py, mcp_hybrid_server.py,
-# gate_ops.py, or utils/config_validation.py
+# gate_ops.py, gate_auth.py, or utils/config_validation.py
 python3 .claude/skills/invariant-guard/check_invariants.py
 ```
 

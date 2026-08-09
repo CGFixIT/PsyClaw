@@ -75,6 +75,18 @@ constants):
   hashes only) from the main audit log — a data-mapping exercise (e.g. for a
   DPA Schedule or a DSR data-inventory response) needs to account for both
   streams, not just `logs/audit.jsonl`.
+- **Per-user auth (Stage 1+2, `docs/AUTHENTICATION_DESIGN.md`) is a new
+  personal-data surface.** `utils/authn_store.py`'s `users`/`sessions`/
+  `device_tokens` tables (default `data/auth/cyclaw_auth.db`, or
+  `CYCLAW_AUTH_DB_URL`) store a `username`, a salted `hashlib.scrypt` password
+  hash (never plaintext — `utils/authn.py`), and session/device-token IDs; no
+  email or IP address is collected in this schema. A data-mapping exercise now
+  needs this store alongside the personality DB and the two log streams above.
+  Ships `auth.enabled: false`; nothing is collected until an operator turns it
+  on, and Stage 3 (enforcing a credential on `/query`) has not landed, so
+  today this store can exist populated while `/query` itself stays
+  unauthenticated — note that gap explicitly if asked to assess the current
+  auth posture, don't assume enabling accounts already gates query access.
 - **External fallback (Grok/Claude) is triple-gated** (invariant I3) and,
   per `policy.fallback.send_local_context_to_grok`/`_claude` (default
   `false`), does not forward retrieved local context off-box unless

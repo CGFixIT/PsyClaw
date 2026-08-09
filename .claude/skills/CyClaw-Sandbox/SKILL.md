@@ -51,6 +51,10 @@ Verify config invariants:
 - `sqlconnect` block present (default `enabled: false`, `read_only: true`, `allow_write: false`)
 - `sync` block present (default `enabled: false`)
 - `agentic` block present (default `enabled: false`, `mode: read`, `writes_enabled: false`)
+- `auth` block present (default `enabled: false`, matching every other opt-in
+  subsystem above); `/auth/login`, `/auth/logout`, `/auth/whoami` (`gate_auth.py`,
+  Stage 2 of `docs/AUTHENTICATION_DESIGN.md`) exist regardless and return `503`
+  rather than `404` so route presence never discloses whether the feature is on
 - `policy.fallback.require_user_confirm`: present but **unwired** (hardcoded in user_gate_router)
 - `policy.fallback.grok_max_prompt_chars`: 8000
 - `policy.fallback.claude_max_prompt_chars`: 8000
@@ -381,6 +385,21 @@ Verify for ALL `/ops/*`, `/soul/*`, `/query`, `/audit/summary`:
   `Permissions-Policy`, `Content-Security-Policy`
 - TrustedHostMiddleware rejects non-allowed Host headers
 
+Also verify for `/auth/login`, `/auth/logout`, `/auth/whoami` (`gate_auth.py`)
+-- these are rate-limited like the routes above but gated differently, so
+check the actual contract rather than reusing the `/soul/*`/`/ops/*` assertions
+verbatim:
+- Returns `429` when per-IP rate limit exceeded (same `enforce_rate_limit`
+  dependency as `/ops/*`)
+- Returns `503`, not `401` or `404`, when `auth.enabled` is false (the shipped
+  default) -- a route's mere presence must never disclose whether the feature
+  is on
+- `/auth/logout` and `/auth/whoami` are gated by session cookie + CSRF or a
+  bearer device token, NOT `CYCLAW_API_KEY` -- do not assert `401` on a missing
+  API key here, that is the wrong credential for this surface
+- Responses include the same security headers as every other route (global
+  middleware, not a per-route concern)
+
 ### Phase 10 -- Terminal HTML Console Contract
 
 Verify `static/terminal.html` contracts:
@@ -520,7 +539,7 @@ API Key Redaction (Grok + Claude): [PASS/FAIL]
 Due-Diligence Invariants: [X/12 passed]
 Harness Console REST API: [PASS/FAIL]
 Harness HTML Contract: [PASS/FAIL]
-Security Invariants: [X/17 passed]
+Security Invariants: [X/24 passed]
 Recommendations: ...
 ```
 
@@ -671,3 +690,6 @@ criteria. Read when implementing new tests or debugging failures.
 | 19 | Harness Module Isolation | `harness/` never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py`, and vice versa (I6; `harness` is in `OUT_OF_BAND_PKGS`) |
 | 20 | Harness Chat Rate Limit | `/api/chat` shares the same `utils.ratelimit.RateLimiter` + `config.yaml`'s `api.rate_limit` block as `gate.py`'s `/query` |
 | 21 | Harness Console XSS Safety | `static/harness.html` renders all model/registry output via `textContent`/`createElement`; no `innerHTML` |
+| 22 | Auth Disabled By Default | `auth.enabled=false` ships default, matching every other opt-in subsystem above |
+| 23 | Auth Route Presence Doesn't Disclose State | `/auth/login`, `/auth/logout`, `/auth/whoami` (`gate_auth.py`) always return `503`, never `404`, when `auth.enabled` is false |
+| 24 | Auth Not Yet Enforced | Stage 3 (requiring a credential on `/query`/the console) has not landed -- these routes only build sessions/login/logout/device tokens today |
