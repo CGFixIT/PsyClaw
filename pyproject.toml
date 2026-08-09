@@ -117,13 +117,42 @@ cyclaw-harness = "harness.server:main"
 cyclaw-user = "utils.authn_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram"]
+# `packages` only pulls in directory packages -- top-level single-file modules
+# (gate.py and friends) and non-package data (config.yaml, static/, data/) were
+# silently dropped by hatchling's default wheel builder even when added to
+# a plain `include` list here (its `only_packages`/file-selection heuristics
+# treat non-package top-level files differently from `include` globs), so
+# `force-include` -- the explicit source->destination mapping hatchling
+# documents for exactly this case -- is required instead. Verified by
+# building the wheel and listing its contents: before this fix, gate.py/
+# gate_ops.py/gate_auth.py/graph.py/mcp_hybrid_server.py/metrics.py/
+# gate_memory.py/memory/ were entirely absent, so every [project.scripts]
+# entry point except the ones rooted at an already-included package
+# (cyclaw-index, cyclaw-clear-cache, cyclaw-harness, cyclaw-user) raised
+# ModuleNotFoundError on a real (non-editable) install -- e.g. `pip install
+# cyclaw` from the wheel python-publish.yml builds on every GitHub Release.
+# `pip install -e .` (the documented dev path) was unaffected: its
+# .pth-based editable mechanism points at the repo root directly and never
+# consults this list.
+packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram", "memory"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"gate.py" = "gate.py"
+"gate_ops.py" = "gate_ops.py"
+"gate_auth.py" = "gate_auth.py"
+"gate_memory.py" = "gate_memory.py"
+"graph.py" = "graph.py"
+"mcp_hybrid_server.py" = "mcp_hybrid_server.py"
+"metrics.py" = "metrics.py"
+"config.yaml" = "config.yaml"
+"static" = "static"
+"data" = "data"
 
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "gate.py", "gate_ops.py", "gate_auth.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
-    "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval",
+    "gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
+    "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval", "memory",
     "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "telegram", "powershell", "macos",
 ]
 
@@ -152,7 +181,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["gate", "gate_ops", "gate_auth", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram"]
+source = ["gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram", "memory"]
 
 # fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
 # Windows branch needs a separate Windows CI lane (deferred -- see

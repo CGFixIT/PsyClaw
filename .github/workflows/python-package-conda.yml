@@ -123,6 +123,8 @@ jobs:
           --cov=gate \
           --cov=gate_ops \
           --cov=gate_auth \
+          --cov=gate_memory \
+          --cov=memory \
           --cov=graph \
           --cov=mcp_hybrid_server \
           --cov=metrics \
