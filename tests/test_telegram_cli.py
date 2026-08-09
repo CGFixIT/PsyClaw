@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -93,6 +95,120 @@ def test_enabled_commands_classify_missing_token_as_environment_error(
         {"enabled": True, "mode": "chat", "allowed_chat_ids": ["1"]},
     )
     assert main(["--config", path, command, *extra]) == EXIT_ENV
+
+
+def test_send_can_use_hidden_transient_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    token = "fresh-runtime-token"
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    path = _write(
+        tmp_path,
+        {"enabled": True, "mode": "notify", "allowed_chat_ids": ["1"]},
+    )
+
+    with (
+        patch("telegram.cli.sys.stdin") as stdin,
+        patch("telegram.cli.getpass.getpass", return_value=token) as prompt,
+        patch("telegram.cli.send_notify", return_value={"result": {"message_id": 7}}) as send,
+    ):
+        stdin.isatty.return_value = True
+        code = main(
+            [
+                "--config",
+                path,
+                "send",
+                "--chat-id",
+                "1",
+                "--text",
+                "hello",
+                "--prompt-token",
+            ]
+        )
+
+    assert code == EXIT_OK
+    prompt.assert_called_once_with("Telegram bot token: ")
+    cfg = send.call_args.args[0]
+    assert cfg.resolve_bot_token() == token
+    assert token not in repr(cfg)
+    assert token not in str(cfg.to_public_dict())
+    assert "TELEGRAM_BOT_TOKEN" not in os.environ
+    captured = capsys.readouterr()
+    assert token not in captured.out
+    assert token not in captured.err
+
+
+def test_prompt_token_refuses_noninteractive_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    path = _write(
+        tmp_path,
+        {"enabled": True, "mode": "notify", "allowed_chat_ids": ["1"]},
+    )
+
+    with (
+        patch("telegram.cli.sys.stdin") as stdin,
+        patch("telegram.cli.getpass.getpass") as prompt,
+        patch("telegram.cli.send_notify") as send,
+    ):
+        stdin.isatty.return_value = False
+        code = main(
+            [
+                "--config",
+                path,
+                "send",
+                "--chat-id",
+                "1",
+                "--text",
+                "hello",
+                "--prompt-token",
+            ]
+        )
+
+    assert code == EXIT_ENV
+    prompt.assert_not_called()
+    send.assert_not_called()
+
+
+def test_prompt_token_handles_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    path = _write(
+        tmp_path,
+        {"enabled": True, "mode": "notify", "allowed_chat_ids": ["1"]},
+    )
+
+    with (
+        patch("telegram.cli.sys.stdin") as stdin,
+        patch("telegram.cli.getpass.getpass", side_effect=KeyboardInterrupt),
+        patch("telegram.cli.send_notify") as send,
+    ):
+        stdin.isatty.return_value = True
+        code = main(
+            [
+                "--config",
+                path,
+                "send",
+                "--chat-id",
+                "1",
+                "--text",
+                "hello",
+                "--prompt-token",
+            ]
+        )
+
+    assert code == EXIT_ENV
+    send.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Telegram bot token prompt cancelled" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_missing_config_is_typed_environment_error(

@@ -1,8 +1,9 @@
 """HTTP clients for Telegram Bot API and CyClaw POST /query.
 
-stdlib + httpx only. Never imports gate/graph/mcp. Secrets are read from the
-environment via TelegramConfig helpers and never written to audit payloads
-(only hashes / redacted fields).
+stdlib + httpx only. Never imports gate/graph/mcp. Secrets are resolved by
+TelegramConfig from an explicit transient CLI prompt or the configured
+environment variable and never written to audit payloads (only hashes /
+redacted fields).
 """
 
 from __future__ import annotations

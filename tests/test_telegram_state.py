@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from telegram.state import claim_hybrid_confirm, grant_hybrid_confirm
+from utils.errors import TelegramRuntimeError
 
 
 def test_hybrid_confirmation_is_persistent_then_single_use(tmp_path: Path) -> None:
@@ -29,6 +31,24 @@ def test_expired_hybrid_confirmation_fails_closed_and_is_removed(tmp_path: Path)
     grant_hybrid_confirm(42, provider="grok", ttl_sec=10, now=1000, path=path)
 
     assert claim_hybrid_confirm(42, now=1010, path=path) is None
+    assert not path.exists()
+
+
+def test_hybrid_confirmation_unlink_failure_fails_closed(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "session_42.json"
+    grant_hybrid_confirm(42, provider="grok", ttl_sec=120, now=1000, path=path)
+
+    with (
+        patch.object(Path, "unlink", side_effect=OSError),
+        pytest.raises(TelegramRuntimeError) as exc,
+    ):
+        claim_hybrid_confirm(42, now=1001, path=path)
+
+    assert exc.value.details == {"gate": "hybrid_confirm_state", "retryable": True}
+    assert path.exists()
+    assert claim_hybrid_confirm(42, now=1001, path=path) == "grok"
     assert not path.exists()
 
 

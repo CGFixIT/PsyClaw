@@ -326,6 +326,34 @@ def test_claimed_hybrid_confirmation_is_forwarded_once_then_consumed(tmp_path: P
     assert any(event.get("event") == "telegram_hybrid_confirm_consumed" for event in events)
 
 
+def test_hybrid_confirmation_state_error_is_audited_without_query(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    with (
+        patch(
+            "telegram.runner.claim_hybrid_confirm",
+            side_effect=TelegramRuntimeError(
+                "state unavailable",
+                details={"gate": "hybrid_confirm_state", "retryable": True},
+            ),
+        ),
+        patch("telegram.runner.audit_log") as audit,
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message") as send,
+        pytest.raises(TelegramRuntimeError),
+    ):
+        handle_inbound_text(cfg, chat_id=42, text="one-shot", update_id=13)
+
+    query.assert_not_called()
+    send.assert_not_called()
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(
+        event.get("event") == "telegram_hybrid_confirm_state_error"
+        and event.get("gate") == "hybrid_confirm_state"
+        and event.get("retryable") is True
+        for event in events
+    )
+
+
 def test_poll_once_handles_text_update(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     updates = [
@@ -678,6 +706,43 @@ def test_poll_forever_persists_offset(tmp_path: Path) -> None:
         n = poll_forever(cfg, max_iterations=1, offset_path=offset_path)
     assert n == 1
     assert load_offset(offset_path) == 6
+
+
+def test_poll_forever_retries_offset_save_without_repolling(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path)
+    offset_path = tmp_path / "offset.json"
+    save_offset(5, offset_path)
+
+    real_save_offset = save_offset
+    persist_attempts = 0
+
+    def _flaky_save_offset(offset: int, path: Path | None = None) -> None:
+        nonlocal persist_attempts
+        persist_attempts += 1
+        if persist_attempts == 1:
+            raise OSError("write failed")
+        real_save_offset(offset, path)
+
+    with (
+        patch("telegram.runner.poll_once", return_value=(6, [{"answer": "ok"}])) as poll,
+        patch("telegram.runner.save_offset", side_effect=_flaky_save_offset) as persist,
+        patch("telegram.runner.time.sleep") as sleep,
+        patch("telegram.runner.audit_log") as audit,
+    ):
+        assert poll_forever(cfg, max_iterations=1, offset_path=offset_path) == 1
+
+    poll.assert_called_once_with(cfg, offset=5)
+    assert persist.call_count == 2
+    sleep.assert_called_once_with(2.0)
+    assert load_offset(offset_path) == 6
+    assert audit.call_args.args[0]["event"] == "telegram_offset_persist_failed"
+    assert audit.call_args.args[0]["retryable"] is True
+
+    with patch("telegram.runner.poll_once", return_value=(6, [])) as restarted:
+        assert poll_forever(cfg, max_iterations=1, offset_path=offset_path) == 1
+    restarted.assert_called_once_with(cfg, offset=6)
 
 
 def test_poll_forever_backs_off_after_message_runtime_failure(tmp_path: Path) -> None:

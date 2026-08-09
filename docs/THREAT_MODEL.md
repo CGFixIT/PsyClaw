@@ -533,8 +533,10 @@ not attacker-chosen at the command level.
   final authority.
 - **Shipped posture.** `telegram.enabled: false`, `mode: notify`, empty
   `allowed_chat_ids`. Enabling with an empty allowlist is a **config load
-  error**. Bot token is env-only (`TELEGRAM_BOT_TOKEN` by default). T3 consent
-  and T4 attachment staging are both independently default-off.
+  error**. CyClaw never persists the bot token: unattended jobs use
+  `TELEGRAM_BOT_TOKEN` by default, while an explicit `--prompt-token` manual CLI
+  run holds it only in process memory. T3 consent and T4 attachment staging are
+  both independently default-off.
 - **Threat surface added (honest).** Telegram's cloud sees message plaintext
   for any traffic the operator sends or receives through the bot. This is
   **not** offline end-to-end privacy for the chat channel; local RAG inference
