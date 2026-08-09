@@ -151,9 +151,16 @@ class AuthManager:
         )
         self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
         self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
-        self._sql_login_success = (
+        # A single conditional UPDATE, not a read-then-write pair: it both
+        # verifies the row is still exactly what login() checked (password
+        # hash, disabled, lockout) AND claims it -- in one statement, so
+        # there is no gap between "check" and "act" for a concurrent writer
+        # to land in. See login()'s own comment for why a bare re-SELECT
+        # (the previous approach) still left a narrower but real window.
+        self._sql_claim_login = (
             f"UPDATE users SET last_login_ts = {ph}, failed_count = 0, locked_until_ts = NULL "
-            f"WHERE username = {ph}"
+            f"WHERE username = {ph} AND password_hash = {ph} AND disabled = 0 "
+            f"AND (locked_until_ts IS NULL OR locked_until_ts <= {ph})"
         )
         self._sql_login_failure = (
             f"UPDATE users SET failed_count = {ph}, locked_until_ts = {ph} WHERE username = {ph}"
@@ -403,9 +410,11 @@ class AuthManager:
                 # Pay the same scrypt cost a real check would, so timing does
                 # not disclose whether this username exists.
                 authn.verify_password(password, _DUMMY_RECORD)
+                self._end_read_txn()
                 raise AuthLoginFailed()
             if authn.is_locked(row["locked_until_ts"], now=now):
                 retry_after = max(row["locked_until_ts"] - now, 0.0)
+                self._end_read_txn()
                 raise AuthAccountLocked(
                     f"account temporarily locked, retry in {int(retry_after) + 1}s",
                     retry_after_sec=retry_after,
@@ -415,9 +424,45 @@ class AuthManager:
             if row["disabled"] or not ok:
                 self._record_failure_locked(canonical, row["failed_count"], now)
                 raise AuthLoginFailed()
+            # Claim the row atomically before minting a session -- a single
+            # conditional UPDATE, not a read-then-write pair. verify_password()
+            # above costs ~0.1s (scrypt), and self._lock only serializes calls
+            # made through THIS AuthManager instance -- it does nothing against
+            # a concurrent `cyclaw-user passwd`/`disable` from a SEPARATE
+            # process, which opens its own AuthManager and its own DB
+            # connection. A bare re-SELECT here (the previous approach) closes
+            # most of that window but not all of it: a concurrent
+            # set_password()'s revoke-sessions-for-user can still run, find
+            # nothing (this call's session doesn't exist yet), and commit
+            # BEFORE this call's session INSERT lands -- so the new session
+            # would survive a password rotation that was specifically meant to
+            # cut it off immediately, the same "revoke NOW, not eventually"
+            # promise set_password()/_set_disabled() make for already-issued
+            # sessions. A single UPDATE closes this for real: it is the first
+            # write in this transaction, so whichever of this call or a
+            # concurrent set_password()/_set_disabled() reaches the row's lock
+            # first forces the other to wait until it commits -- the loser
+            # then re-evaluates its own WHERE clause against the winner's
+            # already-committed state, so a losing login() sees rowcount == 0
+            # (fails closed) and a losing set_password() (should this call win
+            # the race) sees the just-created session once it proceeds, and
+            # revokes it as usual.
+            claimed = self.conn.execute(
+                self._sql_claim_login, (now, canonical, row["password_hash"], now)
+            )
+            if not claimed.rowcount:
+                # Deliberately NOT routed through _record_failure_locked(): the
+                # credential presented was correct at the moment it was
+                # checked. This is "the account changed out from under us",
+                # not "a wrong guess" -- counting it toward the lockout
+                # ceiling would let a legitimate password rotation contribute
+                # to locking the account that rotation was just used on. Raise
+                # the generic error, not a distinct one, so this race is not
+                # itself an oracle for "a concurrent change just happened".
+                self._end_read_txn()
+                raise AuthLoginFailed()
             if needs_rehash:
                 self.conn.execute(self._sql_set_password, (authn.hash_password(password), canonical))
-            self.conn.execute(self._sql_login_success, (now, canonical))
             result = self._create_session_locked(canonical, now)
             self.conn.commit()
             return result

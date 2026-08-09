@@ -95,8 +95,6 @@ def register_auth_routes(
     # through as "same-origin". 8787 (or whatever api.port is set to) is
     # never a scheme default, so a genuine same-origin request's Origin
     # header always states the port explicitly.
-    expected_port = api_cfg.get("port", 8787) if isinstance(api_cfg, dict) else 8787
-    expected_scheme = "https" if tls_enabled else "http"
 
     def _enforce_same_origin(request: Request) -> None:
         """Reject a browser-initiated cross-site request to a state-changing
@@ -129,9 +127,10 @@ def register_auth_routes(
             # unauthenticated route, so an uncaught ValueError here would
             # turn a malformed cross-origin request into a 500 instead of the
             # 403 this check exists to return. A malformed port can never
-            # equal expected_port, so treating it as None (rather than
-            # re-raising) still fails the comparison below and rejects the
-            # request -- it just does so as CROSS_ORIGIN_BLOCKED, not a crash.
+            # equal request.url.port (an int or None, never unparseable), so
+            # treating it as None (rather than re-raising) still fails the
+            # comparison below and rejects the request -- it just does so as
+            # CROSS_ORIGIN_BLOCKED, not a crash.
             origin_port = parsed.port
         except ValueError:
             origin_port = None
@@ -152,12 +151,26 @@ def register_auth_routes(
         # skipping Host validation entirely, and an Origin of "null" parses to
         # hostname None -- both cases fail this condition rather than matching
         # an equally-unvalidated Host.
+        #
+        # Port and scheme are checked against request.url -- THIS request's
+        # own live values -- for the same reason the host check above already
+        # uses request.url.hostname rather than a config-derived expectation:
+        # config.api.port/api.tls.enabled describe how the operator INTENDED
+        # to run the server, not necessarily the connection this request
+        # actually arrived on (a stale config, a port forward, or any other
+        # config/reality drift). No proxy headers are trusted by this app
+        # (gate.py runs uvicorn without proxy_headers/forwarded_allow_ips), so
+        # request.url.port/.scheme reflect the real ASGI connection and are
+        # not attacker-spoofable the way an X-Forwarded-* header would be.
+        # Comparing Origin against a stale expectation instead of the live
+        # request is precisely how a same-origin check silently stops
+        # matching reality.
         same_origin = (
             parsed.hostname is not None
             and parsed.hostname == request.url.hostname
             and parsed.hostname in allowed_hosts
-            and origin_port == expected_port
-            and parsed.scheme == expected_scheme
+            and origin_port == request.url.port
+            and parsed.scheme == request.url.scheme
         )
         if not same_origin:
             raise HTTPException(
