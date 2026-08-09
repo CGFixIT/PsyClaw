@@ -9,10 +9,12 @@ would catch.
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
 
 from utils.authn import PasswordPolicyError
-from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
+from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME, _DUMMY_RECORD
 from utils.errors import (
     AuthAccountLocked,
     AuthLoginFailed,
@@ -332,23 +334,21 @@ class TestLoginTransactionAndRaceSafety:
         via a second AuthManager sharing the same SQLite file, as a side
         effect of the FIRST real verification call inside login().
         """
-        import utils.authn_manager as authn_manager_module
-
         db_path = str(tmp_path / "race.db")
         manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         try:
             manager_a.create_user("alice", _GOOD_PASSWORD)
-            real_verify = authn_manager_module.authn.verify_password
+            real_verify = importlib.import_module("utils.authn").verify_password
             rotated = {"done": False}
 
             def racing_verify(password, record):
-                if not rotated["done"] and record != authn_manager_module._DUMMY_RECORD:
+                if not rotated["done"] and record != _DUMMY_RECORD:
                     rotated["done"] = True
                     manager_b.set_password("alice", "a brand new password entirely")
                 return real_verify(password, record)
 
-            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+            monkeypatch.setattr("utils.authn_manager.authn.verify_password", racing_verify)
 
             with pytest.raises(AuthLoginFailed):
                 manager_a.login("alice", _GOOD_PASSWORD)
@@ -364,23 +364,21 @@ class TestLoginTransactionAndRaceSafety:
         """Same race, via disable_user() instead of a password rotation --
         the other half of the "revoke NOW, not eventually" promise
         _set_disabled()'s own comment makes for already-issued credentials."""
-        import utils.authn_manager as authn_manager_module
-
         db_path = str(tmp_path / "race2.db")
         manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         try:
             manager_a.create_user("alice", _GOOD_PASSWORD)
-            real_verify = authn_manager_module.authn.verify_password
+            real_verify = importlib.import_module("utils.authn").verify_password
             disabled = {"done": False}
 
             def racing_verify(password, record):
-                if not disabled["done"] and record != authn_manager_module._DUMMY_RECORD:
+                if not disabled["done"] and record != _DUMMY_RECORD:
                     disabled["done"] = True
                     manager_b.disable_user("alice")
                 return real_verify(password, record)
 
-            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+            monkeypatch.setattr("utils.authn_manager.authn.verify_password", racing_verify)
 
             with pytest.raises(AuthLoginFailed):
                 manager_a.login("alice", _GOOD_PASSWORD)
@@ -393,23 +391,21 @@ class TestLoginTransactionAndRaceSafety:
         not "a wrong guess" -- it must not be routed through
         _record_failure_locked, or a legitimate password rotation could
         itself contribute to locking the very account it just secured."""
-        import utils.authn_manager as authn_manager_module
-
         db_path = str(tmp_path / "race3.db")
         manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
         try:
             manager_a.create_user("alice", _GOOD_PASSWORD)
-            real_verify = authn_manager_module.authn.verify_password
+            real_verify = importlib.import_module("utils.authn").verify_password
             rotated = {"done": False}
 
             def racing_verify(password, record):
-                if not rotated["done"] and record != authn_manager_module._DUMMY_RECORD:
+                if not rotated["done"] and record != _DUMMY_RECORD:
                     rotated["done"] = True
                     manager_b.set_password("alice", "a brand new password entirely")
                 return real_verify(password, record)
 
-            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+            monkeypatch.setattr("utils.authn_manager.authn.verify_password", racing_verify)
             with pytest.raises(AuthLoginFailed):
                 manager_a.login("alice", _GOOD_PASSWORD)
 
