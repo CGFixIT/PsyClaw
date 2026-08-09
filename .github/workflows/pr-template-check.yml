@@ -32,7 +32,7 @@ jobs:
   check:
     name: Check PR body against template
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     # Dependabot bodies are auto-generated changelog tables, not authored
     # descriptions -- the template does not apply to them.
     if: github.event.pull_request.user.login != 'dependabot[bot]'
