@@ -27,6 +27,11 @@ class TestBuildInputGuardDisabled:
     def test_explicit_enabled_false_returns_none(self):
         assert build_input_guard({"guardrails": {"enabled": False}}) is None
 
+    def test_string_false_does_not_enable(self):
+        # YAML typo enabled: "false" must not arm the layer (truthy string).
+        assert build_input_guard({"guardrails": {"enabled": "false"}}) is None
+        assert build_output_guard({"guardrails": {"enabled": "false"}}) is None
+
     def test_present_but_empty_guardrails_block_returns_none(self):
         # A `guardrails:` key with nothing under it parses to None (valid YAML,
         # an easy real-world slip when stubbing out the block) -- the key IS

@@ -142,3 +142,12 @@ def test_non_string_item_in_rail_list_raises(tmp_path):
     with pytest.raises(GuardrailsConfigError):
         load_guardrails_config(path)
     reset_config_cache()
+
+
+@pytest.mark.parametrize("bad", ["false", "true", "0", "1", 0, 1, None])
+def test_non_bool_enabled_raises(tmp_path, bad):
+    """String/int YAML typos must not silently enable (or pass) the layer."""
+    path = _write_config(tmp_path, {"enabled": bad})
+    with pytest.raises(GuardrailsConfigError, match="boolean"):
+        load_guardrails_config(path)
+    reset_config_cache()

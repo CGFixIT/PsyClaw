@@ -16,14 +16,24 @@ from collections.abc import Callable
 from typing import Any
 
 
+def _guardrails_enabled(cfg: dict[str, Any]) -> bool:
+    """True only when ``guardrails.enabled`` is the literal boolean ``True``.
+
+    A YAML typo ``enabled: "false"`` is a non-empty string (truthy in Python).
+    Using bare ``if enabled`` would import and arm the layer; require ``is True``
+    so only an explicit boolean opt-in turns the seam on.
+    """
+    return (cfg.get("guardrails") or {}).get("enabled", False) is True
+
+
 def build_input_guard(cfg: dict[str, Any]) -> Callable[[str], dict[str, Any]] | None:
     """Build the Phase 2 guardrail_input callable, or None when disabled.
 
-    Returns None immediately when guardrails.enabled is falsy -- BEFORE
-    importing guardrails at all (the import is lazy, inside this branch), so
-    a disabled layer costs nothing: no import, no I/O, no state.
+    Returns None immediately when guardrails.enabled is not literal True --
+    BEFORE importing guardrails at all (the import is lazy, inside this branch),
+    so a disabled layer costs nothing: no import, no I/O, no state.
     """
-    if not (cfg.get("guardrails") or {}).get("enabled", False):
+    if not _guardrails_enabled(cfg):
         return None
 
     from guardrails.config import load_guardrails_config
@@ -45,7 +55,7 @@ def build_output_guard(cfg: dict[str, Any]) -> Callable[[str, str, str], dict[st
     Same guardrails.enabled gate as build_input_guard -- no separate toggle.
     Returns None before importing guardrails at all when disabled.
     """
-    if not (cfg.get("guardrails") or {}).get("enabled", False):
+    if not _guardrails_enabled(cfg):
         return None
 
     from guardrails.config import load_guardrails_config
