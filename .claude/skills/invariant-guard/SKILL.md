@@ -32,7 +32,7 @@ Stdlib-only static analysis — safe in a fresh container before any `pip
 install`. Exit codes follow the repo convention: `0` all pass · `2` invariant
 violated · `3` env/config error (wrong root, unparseable core file).
 
-It verifies 26 assertions across:
+It verifies 34 assertions across:
 
 | ID | Invariant | What is actually checked |
 |---|---|---|
@@ -41,7 +41,7 @@ It verifies 26 assertions across:
 | I3 | Triple-gated external fallback | `gate.py` builds Grok/Claude clients only under `mode == "hybrid"` + provider enabled; `user_gate_router` requires user confirmation, selected provider, and an available provider client |
 | I4 | Audit convergence | Graph reachability: all 7 upstream nodes reach `audit_logger`; `audit_logger → END` |
 | I5 | Soul governance | `apply_evolution` raises on empty `reason`; writes use atomic `os.replace` |
-| I6 | Module isolation | AST imports both directions: gate/graph/mcp never import `agentic`/`sync`/`guardrails`, and no file under those packages imports the core three |
+| I6 | Module isolation | AST imports both directions: `gate.py`/`gate_ops.py`/`gate_auth.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`, and no file under those packages imports the core three (`gate_ops.py`/`gate_auth.py` join the check because `gate.py` imports each of them directly, so anything they import is pulled transitively into `gate.py`'s process) |
 | G1 | Telemetry kill | `_TELEMETRY_KILL` assignment line precedes the first heavy import (`graph`/`retrieval`/`llm`/`fastapi`/…) in `gate.py` |
 | G2 | Auth fail-closed | `hmac.compare_digest` present; unset `CYCLAW_API_KEY` → 401 branch present |
 | G3 | Sanitizer contract | The 6 documented contract phrases are each caught by a compiled `banned_patterns` regex from the real `config.yaml` |
@@ -88,7 +88,7 @@ below, also read and confirm by hand:
 End with a verdict block (paste into the PR body when run as a merge gate):
 
 ```
-Invariant Guard: PASS (26/26) | FAIL (<n> violated)
+Invariant Guard: PASS (34/34) | FAIL (<n> violated)
 Checker: <exit code and any FAIL lines verbatim>
 Manual review: <files read, semantic findings or "none">
 Verdict: safe to merge / fix required: <one line per violation>
