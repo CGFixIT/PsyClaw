@@ -28,7 +28,7 @@ consolidates the threat-model assumptions previously scattered across
 
 | Assumption | Value |
 |---|---|
-| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` unless `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is set — see the ninth amendment in §5 for why that was previously a convention rather than a control. |
+| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` via **two** documented exceptions, both of which a deployment review must check: `CYCLAW_ALLOW_NON_LOOPBACK_BIND` being set, **or** `auth.enabled` + `api.tls.enabled` both literally `true` **and** `/query` demonstrably enforcing a credential (that third condition is probed at runtime, and is false until the authentication design's Stage 3 ships, so this second path cannot open today). See the ninth amendment in §5 for why this was previously a convention rather than a control, and for what the second path does and does not prove. |
 | Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
@@ -698,11 +698,42 @@ the port or serves, and refuses with an actionable message. The whole of
 `127.0.0.0/8` and `::1` are accepted (a superset of C4's literal list — anything
 C4 allows, this allows); an empty host is refused because uvicorn reads it as all
 interfaces, and an unresolvable hostname is refused rather than resolved, so the
-bind decision never depends on DNS. `CYCLAW_ALLOW_NON_LOOPBACK_BIND=1` is the
-explicit opt-out, and it logs a warning naming the unauthenticated routes. Note
-the polarity: this is opt-**in** to the risky state, the inverse of
-`agentic/writer.py`'s disable-only kill switch, because here the dangerous
-configuration is the non-default one.
+bind decision never depends on DNS.
+
+**The two ways past the guard, both of which a deployment review must check.**
+
+1. `CYCLAW_ALLOW_NON_LOOPBACK_BIND=1` — the explicit opt-out, which logs a
+   warning naming the unauthenticated routes. Note the polarity: this is
+   opt-**in** to the risky state, the inverse of `agentic/writer.py`'s
+   disable-only kill switch, because here the dangerous configuration is the
+   non-default one.
+2. `auth.enabled` **and** `api.tls.enabled` both set to the literal boolean
+   `true` in `config.yaml`, **and** `/query` demonstrably carrying an
+   authentication dependency. This is the durable path
+   [`docs/AUTHENTICATION_DESIGN.md`](./AUTHENTICATION_DESIGN.md) §7 designs
+   toward, added so a LAN operator is not left carrying an env var forever
+   once the authentication stages ship.
+
+The third condition on (2) is load-bearing and is checked at runtime rather
+than assumed. The two config flags are a statement of *intent*; an operator who
+sets `auth.enabled: true` reasonably believes they turned authentication on,
+and while Stage 3 of the authentication design remains unbuilt that belief is
+wrong — `/query` is still unauthenticated. `gate.py`'s
+`_request_path_enforcement_active()` therefore probes the live app for the
+dependency instead of trusting the flag, so path (2) cannot open until the
+enforcement genuinely exists, and opens by itself when it does. A log warning
+was considered and rejected for this: the bind happens either way, and the
+operator who most needs the warning is the least likely to read it.
+
+Both flags are compared against the literal boolean `True`, not with `bool()`.
+YAML parses a quoted `enabled: "false"` as the string `"false"`, and every
+non-empty string is truthy in Python — a truthiness read would have let a
+stray pair of quotes open the very gate the operator was trying to keep shut.
+
+What path (2) still does **not** prove is that TLS reached the socket: wiring
+`api.tls.*` into `uvicorn.run` is Stage 4 of the authentication design and has
+not shipped. The guard can demonstrate the credential, not the transport, and
+says so in the warning it logs when it does permit a bind.
 
 **The boundary, stated precisely rather than overclaimed.** The guard covers the
 documented entry points — `python gate.py` and the `cyclaw-server` console script.

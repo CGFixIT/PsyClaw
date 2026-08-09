@@ -1047,16 +1047,86 @@ class TestLoopbackBindGuard:
         monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, value)
         assert gate._require_loopback_bind("0.0.0.0") is False  # noqa: S104 - asserting the refusal
 
-    def test_auth_and_tls_both_enabled_allows_a_non_loopback_bind(self, monkeypatch):
-        """The durable path docs/AUTHENTICATION_DESIGN.md §7 designs toward: once
-        both flags are on, a LAN bind no longer needs the env-var escape hatch."""
+    def test_auth_and_tls_flags_alone_do_not_allow_a_non_loopback_bind(self, monkeypatch):
+        """Config intent is not a delivered control.
+
+        An operator who sets auth.enabled: true reasonably believes they turned
+        authentication on. Stage 3 has not shipped, so /query is still
+        unauthenticated -- and that belief must not be what opens a LAN bind.
+        A log warning cannot substitute: the bind happens either way, and the
+        operator who most needs the warning is the least likely to read it.
+        """
         import gate
         monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
         monkeypatch.setattr(
             gate, "cfg", {"auth": {"enabled": True}, "api": {"tls": {"enabled": True}}}
         )
         assert gate._auth_and_tls_enabled() is True
+        assert gate._request_path_enforcement_active() is False
+        assert gate._require_loopback_bind("10.0.0.50") is False
+
+    def test_auth_and_tls_plus_real_enforcement_allows_a_non_loopback_bind(self, monkeypatch):
+        """The durable path docs/AUTHENTICATION_DESIGN.md §7 designs toward: once
+        both flags are on AND /query actually enforces a credential, a LAN bind
+        no longer needs the env-var escape hatch. Patching the probe here stands
+        in for Stage 3 having shipped -- when it really does, this opens with no
+        edit to gate.py at all."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate, "cfg", {"auth": {"enabled": True}, "api": {"tls": {"enabled": True}}}
+        )
+        monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
         assert gate._require_loopback_bind("10.0.0.50") is True
+
+    @pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
+    def test_a_quoted_yaml_boolean_fails_closed(self, quoted, monkeypatch):
+        """YAML parses `enabled: "false"` as the STRING "false", and every
+        non-empty string is truthy in Python -- so a bool() read would have let
+        an operator who quoted the value by accident open the very gate they
+        were trying to keep shut. Only the literal boolean True counts."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate, "cfg", {"auth": {"enabled": quoted}, "api": {"tls": {"enabled": quoted}}}
+        )
+        assert gate._auth_and_tls_enabled() is False
+        assert gate._require_loopback_bind("10.0.0.50") is False
+
+    def test_enforcement_probe_sees_a_dependency_when_one_is_attached(self):
+        """The probe's own logic, against real FastAPI routes rather than the
+        live app: absent on a bare /query, found once the dependency is there,
+        and found when it is nested inside another dependency rather than
+        attached directly."""
+        import gate
+        from fastapi import Depends, FastAPI
+
+        def require_session_or_token() -> str:
+            return "alice"
+
+        def some_wrapper(user: str = Depends(require_session_or_token)) -> str:
+            return user
+
+        bare = FastAPI()
+        bare.post("/query")(lambda: None)
+
+        direct = FastAPI()
+        direct.post("/query", dependencies=[Depends(require_session_or_token)])(lambda: None)
+
+        nested = FastAPI()
+        nested.post("/query", dependencies=[Depends(some_wrapper)])(lambda: None)
+
+        for built, expected in ((bare, False), (direct, True), (nested, True)):
+            with patch.object(gate, "app", built):
+                assert gate._request_path_enforcement_active() is expected
+
+    def test_shipped_app_does_not_yet_enforce_a_credential_on_query(self):
+        """Pins the current staged reality: Stage 3 has not landed, so the
+        probe is False against the real app. When Stage 3 attaches the
+        dependency this test flips -- update it to assert True then, do not
+        delete it."""
+        import gate
+        assert gate._request_path_enforcement_active() is False
 
     @pytest.mark.parametrize(
         "cfg_value",
@@ -1080,8 +1150,30 @@ class TestLoopbackBindGuard:
         assert gate._auth_and_tls_enabled() is False
         assert gate._require_loopback_bind("10.0.0.50") is False  # noqa: S104 - asserting the refusal
 
-    def test_main_allows_a_lan_bind_when_auth_and_tls_are_both_configured(self, monkeypatch):
-        """End-to-end through main(): config alone, no env var, reaches _serve."""
+    def test_main_allows_a_lan_bind_when_auth_and_tls_are_configured_and_enforced(self, monkeypatch):
+        """End-to-end through main(): config plus real enforcement, no env var,
+        reaches _serve."""
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {
+                "auth": {"enabled": True},
+                "api": {"host": "10.0.0.50", "port": 8787, "tls": {"enabled": True}},
+            },
+        )
+        monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
+        with patch.object(gate, "_is_port_in_use", return_value=False), \
+             patch.object(gate, "_serve") as serve, \
+             patch.object(gate, "_hold_console"):
+            gate.main()
+        serve.assert_called_once_with("10.0.0.50", 8787)
+
+    def test_main_refuses_a_lan_bind_on_the_flags_alone(self, monkeypatch):
+        """The same config as above, with Stage 3 genuinely absent, must never
+        reach _serve -- this is the whole point of probing the capability
+        rather than trusting the flags."""
         import gate
         monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
         monkeypatch.setattr(
@@ -1096,7 +1188,7 @@ class TestLoopbackBindGuard:
              patch.object(gate, "_serve") as serve, \
              patch.object(gate, "_hold_console"):
             gate.main()
-        serve.assert_called_once_with("10.0.0.50", 8787)
+        serve.assert_not_called()
 
     def test_main_refuses_before_probing_the_port(self, monkeypatch):
         """A non-loopback host must be rejected on its own terms.
