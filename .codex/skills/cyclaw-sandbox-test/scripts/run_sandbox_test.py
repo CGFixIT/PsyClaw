@@ -40,18 +40,27 @@ class Result:
 
 
 def _run(name: str, cmd: list[str], cwd: Path, env: dict[str, str], timeout: int) -> Result:
-    proc = subprocess.run(  # noqa: S603 - list-form commands assembled by this smoke runner.
-        cmd,
-        cwd=cwd,
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603 - list-form commands assembled by this smoke runner.
+            cmd,
+            cwd=cwd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return Result(name, "FAIL", f"{type(exc).__name__}: {exc}")
     tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-8:])
     status = "PASS" if proc.returncode == 0 else "FAIL"
     return Result(name, status, f"exit={proc.returncode}\n{tail}".strip())
+
+
+def _require(result: Result, results: list[Result]) -> None:
+    results.append(result)
+    if result.status != "PASS":
+        raise RuntimeError(f"{result.name} failed: {result.detail}")
 
 
 def _json_request(
@@ -226,12 +235,19 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
             venv_cmd = ["py", "-3.12", "-m", "venv", str(repo / ".venv")]
         else:
             venv_cmd = [sys.executable, "-m", "venv", str(repo / ".venv")]
-        results.append(_run("create venv", venv_cmd, repo, env, 120))
+        _require(_run("create venv", venv_cmd, repo, env, 120), results)
         py = _python_in_venv(repo)
-        results.append(
-            _run("upgrade pip", [str(py), "-m", "pip", "install", "--upgrade", "pip==26.1.2"], repo, env, 180)
+        _require(
+            _run(
+                "upgrade pip",
+                [str(py), "-m", "pip", "install", "--upgrade", "pip==26.1.2"],
+                repo,
+                env,
+                180,
+            ),
+            results,
         )
-        results.append(
+        _require(
             _run(
                 "install torch cpu",
                 [
@@ -246,9 +262,10 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
                 repo,
                 env,
                 1200,
-            )
+            ),
+            results,
         )
-        results.append(
+        _require(
             _run(
                 "install requirements",
                 [
@@ -266,11 +283,13 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
                 repo,
                 env,
                 1200,
-            )
+            ),
+            results,
         )
     if not args.skip_index:
-        results.append(
-            _run("build retrieval index", [str(py), "-m", "retrieval.indexer"], repo, env, args.index_timeout)
+        _require(
+            _run("build retrieval index", [str(py), "-m", "retrieval.indexer"], repo, env, args.index_timeout),
+            results,
         )
     return py
 
@@ -469,7 +488,14 @@ def main() -> int:
             "PYTHONUTF8": "1",
         }
     )
-    py = _prepare_repo(repo, args, results, env)
+    try:
+        py = _prepare_repo(repo, args, results, env)
+    except (OSError, RuntimeError) as exc:
+        if not results or results[-1].status != "FAIL":
+            results.append(Result("prepare sandbox", "FAIL", str(exc)))
+        report = _write_report(results)
+        print(report)
+        return 1
     original_config = _enable_mock_providers(repo, results)
 
     skill_dir = Path(__file__).resolve().parents[1]

@@ -4,15 +4,18 @@
 
 Use this when choosing checks before/after a change, validating CI parity, or reporting verification honestly.
 
-## Inputs To Ask For
+## Inputs To Establish
 
 - What changed or what needs confidence.
 - Whether local dependencies are installed.
 - Whether external services such as Ollama, rclone, Postgres, or gh are available.
 
+Infer these from the request and repository first; ask only when a material
+verification choice cannot be resolved safely.
+
 ## Workflow
 
-1. Read `AGENTS.md` verification sections.
+1. Read `AGENTS.md`, `$fable-protocol`, and the relevant verification sections.
 2. For Python changes, start with targeted pytest for touched modules.
 3. For retrieval changes, run `python -m tests.ci_rag_smoke` when the environment is prepared.
 4. For lint-only confidence, run `ruff check --select E,F,I,B,C4,UP,S .`.
@@ -23,8 +26,9 @@ Use this when choosing checks before/after a change, validating CI parity, or re
 7. For skill changes, validate each touched skill folder, parse
    `agents/openai.yaml`, compile bundled Python, run shell syntax checks, and
    confirm the default prompt names the exact `$skill-name`.
-8. For routine, prompt, or checklist-only changes, prefer markdown review and
-   stale-string searches.
+8. For routine, prompt, checklist, or documentation-only changes, run
+   `git diff --check` plus markdown review and stale-string searches. Run
+   `$doc-sync` after architecture, configuration, skill, or command changes.
 9. Record skipped checks with the reason.
 
 ## Verification Checklist

@@ -7,10 +7,12 @@ and the active CI workflows.
 ## Execution Defaults
 
 - If the request is clear, implement directly with the smallest correct diff.
-- Read `AGENTS.md`, and the relevant routine or skill before
+- Read `AGENTS.md`, `$fable-protocol`, and the relevant routine or skill before
   substantive edits.
 - Keep progress updates short. State uncertainty and skipped checks plainly.
-- If unexpected repo changes appear, stop and ask before editing around them.
+- Preserve unrelated repo changes and use an isolated clone/worktree when
+  practical. Stop and ask only when they overlap the requested files or make
+  the target state unclear.
 
 ## Risk Policy
 
@@ -27,7 +29,7 @@ When uncertain, choose the higher tier.
 ### Session And Branch Lifecycle
 
 1. Before creating a branch, committing, pushing, rebasing, or updating a PR,
-   fetch the remote base: `git fetch origin main --prune`.
+   fetch the remote base explicitly: `git fetch origin +refs/heads/main:refs/remotes/origin/main`.
 2. Start from fresh `origin/main`, never by resetting an unknown or dirty
    checkout. Use an isolated clone or worktree when the current checkout is
    not clean.

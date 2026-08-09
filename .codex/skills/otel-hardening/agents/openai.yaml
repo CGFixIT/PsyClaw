@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw OTel Hardening"
+  short_description: "Verify telemetry-kill and phone-home controls"
+  default_prompt: "Use $otel-hardening to verify CyClaw telemetry-kill ordering and dependency phone-home controls against the maintained checker."

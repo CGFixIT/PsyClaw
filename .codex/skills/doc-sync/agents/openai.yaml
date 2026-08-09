@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sync CyClaw Documentation"
+  short_description: "Detect and reconcile code-to-doc drift"
+  default_prompt: "Use $doc-sync to run CyClaw's maintained drift checker, manually verify prose claims, and update only derived documentation."

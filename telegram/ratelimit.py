@@ -92,9 +92,9 @@ class SlidingWindowLimiter:
             # Held capacity may be released sooner than an event expires. When
             # events alone can provide the needed slots, report that deadline.
             event_index = needed - 1
-            details["retry_after"] = max(
-                0.0,
-                q[event_index] + self._window - now,
+            details["retry_after"] = min(
+                self._window,
+                max(0.0, q[event_index] + self._window - now),
             )
         raise TelegramRefused(
             f"rate limit exceeded for {key!r}",

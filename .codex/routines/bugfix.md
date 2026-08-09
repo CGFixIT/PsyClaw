@@ -4,15 +4,18 @@
 
 Use this for a reported bug, failing test, runtime error, or CI failure with a likely code/config cause.
 
-## Inputs To Ask For
+## Inputs To Establish
 
 - Error message, failing command, PR/check URL, or reproduction steps.
 - Expected behavior.
 - Whether the fix should be local only, branch/PR, or direct patch.
 
+Infer these from the request and repository first; ask only when a material
+irreversible choice remains.
+
 ## Workflow
 
-1. Read `AGENTS.md` and the relevant subsystem docs.
+1. Read `AGENTS.md`, `$fable-protocol`, and the relevant subsystem docs.
 2. Reproduce or inspect the failure before editing.
 3. Trace ownership to the smallest file set.
 4. Add or adjust a focused test when behavior changes.

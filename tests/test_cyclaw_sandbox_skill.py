@@ -82,3 +82,33 @@ def test_runner_stops_when_clone_fails(tmp_path: Path, monkeypatch: pytest.Monke
     with pytest.raises(RuntimeError, match="offline: <repo-url>") as exc_info:
         runner._clone_or_use_repo(args, [])
     assert "https://invalid" not in str(exc_info.value)
+
+
+def test_runner_converts_launch_errors_to_reportable_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_script("run_sandbox_test.py")
+
+    def raise_os_error(*args: object, **kwargs: object) -> None:
+        raise OSError("executable unavailable")
+
+    monkeypatch.setattr(runner.subprocess, "run", raise_os_error)
+
+    result = runner._run("create venv", ["missing-python"], tmp_path, {}, 1)
+
+    assert result.status == "FAIL"
+    assert "OSError: executable unavailable" in result.detail
+
+
+def test_prepare_repo_stops_after_required_setup_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load_script("run_sandbox_test.py")
+    args = SimpleNamespace(skip_install=False, skip_index=True, index_timeout=1)
+    results = []
+    monkeypatch.setattr(
+        runner,
+        "_run",
+        lambda name, *args, **kwargs: runner.Result(name, "FAIL", "venv setup failed"),
+    )
+
+    with pytest.raises(RuntimeError, match="create venv failed: venv setup failed"):
+        runner._prepare_repo(tmp_path, args, results, {})
+
+    assert [result.name for result in results] == ["soul scaffold", "create venv"]

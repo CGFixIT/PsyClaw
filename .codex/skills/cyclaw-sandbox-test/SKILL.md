@@ -8,7 +8,9 @@ description: Clone CyClaw origin/main into a clean local sandbox, emulate Ollama
 Use this skill for a fresh, local CyClaw runtime smoke. It proves the gateway
 starts against a mock Ollama, exercises dummy-key Grok/Claude API checks against
 the same loopback mock, verifies browser/API surfaces, and runs independent
-gate and harness runtime contracts without mutating soul content.
+gate and harness runtime contracts without mutating the operator's checkout or
+soul. It may scaffold a sandbox-only default soul when the isolated clone lacks
+one.
 
 ## Workflow
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Injection Red Team"
+  short_description: "Probe sanitizer regressions and bypasses"
+  default_prompt: "Use $injection-redteam to run CyClaw's sanitizer probe corpus and adversarial boundary checks without hiding known findings."

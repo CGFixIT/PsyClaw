@@ -1,0 +1,4 @@
+interface:
+  display_name: "CyClaw Dependency Guard"
+  short_description: "Check dependency and install-profile contracts"
+  default_prompt: "Use $dep-guard to run CyClaw's maintained dependency-contract checks before changing dependencies or install paths."

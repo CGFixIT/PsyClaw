@@ -75,8 +75,17 @@ Skills:
 - `.codex/skills/fable-protocol/` - use at the start of every substantive repo
   task as the session-start discipline layer for premise testing, uncertainty,
   findings-before-writes, security review, and shipping-first prioritization.
+- `.codex/skills/add-comment/` - use for bounded, comment-only WHY annotations.
+- `.codex/skills/architecture-refactor/` - use for one measured,
+  behavior-preserving architecture cleanup.
+- `.codex/skills/dep-guard/` - use before changing dependencies or install
+  surfaces; it delegates to the maintained static checkers.
 - `.codex/skills/doc-sync/` - use after architecture, configuration, skill, or
   command changes to reconcile code-derived facts with CyClaw documentation.
+- `.codex/skills/invariant-guard/` - use after graph, gateway, retrieval,
+  sanitizer, audit, telemetry, soul, or module-isolation changes.
+- `.codex/skills/injection-redteam/` - use for sanitizer regression and
+  prompt-injection boundary checks.
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
   to load repository invariants, architecture, test expectations, and canonical
   reference docs.
@@ -96,12 +105,14 @@ Skills:
 - `.codex/skills/cyclaw-command-check-soul/` - use to validate
   `data/personality/soul.md` presence, hash, readability, and drift without
   mutating it.
-- `.codex/skills/OTel-Hardening/` - use to re-verify that telemetry-kill
+- `.codex/skills/otel-hardening/` - use to re-verify that telemetry-kill
   switches remain ahead of dependency imports and block phone-home paths.
 - `.codex/skills/refactor/` - use for one focused, behavior-preserving
   architecture or measured-performance improvement; do not publish unless asked.
 - `.codex/skills/cyclaw-optimize/` - use when asked to scan `main` for
   optimization opportunities and open focused draft PRs.
+- `.codex/skills/verification-specialist/` - use for independent, read-only
+  verification with executed commands and an explicit verdict.
 
 Routines:
 
@@ -303,11 +314,12 @@ keeping close to this file:
   `pull-requests: write`, `issues: write`, and `id-token: write` for the
   existing Claude PR-comment workflow.
 - `.github/workflows/codex-apply-fixes.yml` is a separate, owner-gated write
-  path: an owner reply containing `@codex apply fixes` (or
-  `@openai-code-agent apply fixes`) to a qualifying bot comment can update only
-  an open same-repository, owner-authored PR head. Advisory `@codex` remains
-  read-only; every generated diff and its CI still need human review before
-  merge.
+  path: an owner `@codex apply fixes` (or `@openai-code-agent apply fixes`)
+  trigger binds to a qualifying bot comment. A reply binds the exact parent;
+  the issue-comment fallback selects the most recent prior qualifying bot
+  comment. It can update only an open same-repository, owner-authored PR head.
+  Advisory `@codex` remains read-only; every generated diff and its CI still
+  need human review before merge.
 - `bash scripts/install-githooks.sh` enables this clone's tracked hooks. The
   pre-push hook refuses a feature-branch push unless it contains fresh
   `origin/main`; it complements, but cannot replace, the documented shared-file
@@ -320,6 +332,10 @@ keeping close to this file:
   guidance to this file — extend, don't overwrite another agent's contract.
 - Do not invent commands; mark unknowns as needs verification (see the Build
   And Run Commands note on Docker above for how to phrase that).
+- Python docstrings are allowed only as the leading statement of a module or
+  function. Use `#` or consecutive `#` lines for inline, block, class, and
+  other explanatory comments; never use a standalone string literal as a
+  comment.
 
 ## Multi-Agent PR Coordination
 
@@ -379,7 +395,14 @@ git reset --hard origin/main
 
 ## Known Gotchas
 
-Covered by `CLAUDE.md` §4 (torch-first install order, `data/personality/soul.md`/`index/`/`logs/` expected at boot, `/soul/*` fail-closed without `CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should mock it). Two with no `CLAUDE.md` equivalent:
+`data/personality/soul.md` is normally persisted at boot, but
+`PersonalityManager` default-initializes the documented soul when it is absent;
+treat absence as identity/governance drift rather than a startup blocker.
+
+Covered by `CLAUDE.md` §4 (torch-first install order, persistence paths for
+`data/personality/soul.md`/`index/`/`logs/`, `/soul/*` fail-closed without
+`CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should
+mock it). Two with no `CLAUDE.md` equivalent:
 
 - Agentic GitHub context needs `gh` in local environments, but core CyClaw does not.
 - `environment.yml` (repo root) is intentionally referenced by the conda workflow from `.github/workflows/python-package-conda.yml` — don't delete it as apparently-unused.

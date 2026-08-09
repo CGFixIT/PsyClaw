@@ -624,6 +624,17 @@ def test_rate_limiter_trips() -> None:
     assert 0 < retry_after <= 60
 
 
+def test_rate_limiter_caps_retry_after_to_window() -> None:
+    limiter = SlidingWindowLimiter(max_ops=2, window_seconds=60)
+    # This representable timestamp rounds ``timestamp + 60`` upward by one ULP.
+    with patch("telegram.ratelimit.time.monotonic", return_value=4.0002):
+        limiter.check("k")
+        limiter.check("k")
+        with pytest.raises(TelegramRefused) as exc:
+            limiter.check("k")
+    assert (exc.value.details or {}).get("retry_after") == 60.0
+
+
 def test_rate_limiter_releases_event_at_window_boundary() -> None:
     limiter = SlidingWindowLimiter(max_ops=1, window_seconds=60)
     with patch("telegram.ratelimit.time.monotonic", side_effect=[0.0, 60.0]):
