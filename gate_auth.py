@@ -16,8 +16,12 @@ routes' mere presence never discloses whether the feature is turned on --
 the same reasoning gate_ops.py's routes stay registered regardless of
 ``agentic.enabled``.
 
-``require_session_or_token`` is exported for Stage 3 to attach to ``/query``
-and the console; only ``/auth/whoami`` calls it in this module today.
+``require_session_or_token`` is the dependency Stage 3 will need to attach to
+``/query`` and the console. It is a closure built inside
+``register_auth_routes`` -- not a module-level export -- so gate.py currently
+locates it by NAME (``_AUTH_DEPENDENCY_NAME``) rather than importing it; see
+that constant's own comment in gate.py for why. Only ``/auth/whoami`` calls it
+in this module today.
 """
 
 from __future__ import annotations

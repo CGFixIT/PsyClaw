@@ -21,8 +21,9 @@ and/or Claude, selected per-query via `online_provider`). It binds
 (`mcp_hybrid_server.py`) exposes search with no LLM path. 
 
 # Critical Python Coding Requirement:
-- Never use docstrings as multi-line comments other than when placed at the beginning of a python file.
+- Never use docstrings as multi-line comments other than when placed at the beginning of a python file OR top of a defined function.
 - When multi-line comments required outside of that context, just use a # at the beginning of each line of the comment
+
 
 **Where truth lives.** In priority order:
 1. **Code** — the running behavior. When docs and code disagree, code wins.
@@ -117,7 +118,7 @@ device tokens only; nothing yet requires a credential to reach `/query`.
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
-| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is exported for Stage 3 to attach to `/query` (not yet wired) |
+| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is the closure Stage 3 will need to attach to `/query` -- gate.py locates it by name (`_AUTH_DEPENDENCY_NAME`), not by importing it (not yet wired) |
 | `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
@@ -579,7 +580,7 @@ python3 .claude/skills/injection-redteam/redteam.py
 ```
 
 CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
-`gate`, `gate_ops`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
+`gate`, `gate_ops`, `gate_auth`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
 discoverable in `tests/` (~100 files, auto-collected by pytest).

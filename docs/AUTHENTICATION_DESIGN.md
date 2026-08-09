@@ -1,7 +1,7 @@
 ---
 title: "CyClaw Authentication — Design"
 date: 2026-08-08
-status: proposed
+status: in-progress
 tags: [security, authentication, tls, threat-model, lan]
 related:
   - docs/THREAT_MODEL.md
@@ -11,7 +11,13 @@ related:
 
 # CyClaw Authentication — Design
 
-**Status: proposed. No request path changes until this is reviewed.**
+**Status: in progress.** Stage 1 (`utils/authn.py`, PR #829), Stage 2
+(sessions, login/logout, per-device tokens, `gate_auth.py`, PR #830), and
+Stage 5 (re-keying the #825 bind guard, landed as part of #825 itself) have
+landed on `main`. `auth.enabled` and `api.tls.enabled` both still ship
+`false`, so no existing install's behavior changed. Stages 3–4 (enforcing a
+credential on `/query`; TLS wiring into `uvicorn.run`) remain pending — see
+§8.
 
 This document exists because the operator wrote the requirement down first, in
 `docs/zIdeas/note.txt`:
@@ -62,6 +68,22 @@ credential is not readable on the wire.
 | The console **already sends** a bearer token on every call, including `/query` | `static/terminal.js` `authHeaders()` |
 | Telegram **already sends** one to `/query` | `telegram/client.py:745`; config field documented *"Optional CyClaw API key for POST /query"* |
 | No password, session, or TLS infrastructure exists | no argon2/bcrypt/passlib/itsdangerous/`SessionMiddleware`/`ssl_keyfile` anywhere |
+
+**Amendment (2026-08-09, Stages 1-2 landed).** The table above reflects the
+state at proposal time. `utils/authn.py` (Stage 1, PR #829) and the account
+/session/token store (Stage 2 — `utils/authn_store.py`,
+`utils/authn_manager.py`, `gate_auth.py`, PR #830) have since landed: password
+and session infrastructure now exists (the "No password, session, or TLS
+infrastructure exists" row is stale for its password/session half; TLS
+infrastructure, Stage 4, genuinely still does not exist — no `ssl_keyfile`
+anywhere). `/auth/login`, `/auth/logout`, and `/auth/whoami` also now exist
+and are registered regardless of `auth.enabled` (returning 503 when it is
+false, matching `gate_ops.py`'s convention for `/ops/*`) — so the
+unauthenticated-route row above is stale too: `/auth/login` carries no
+authentication either, by necessity (a caller has no credential yet to
+present), gated only by the standard rate limit and the same-origin check.
+None of this enforces a credential on `/query` yet — that is still Stage 3,
+not landed.
 
 Two consequences worth stating plainly.
 
@@ -123,9 +145,15 @@ verification that succeeds against outdated parameters transparently re-hashes.
 
 ### 4.2 Account store
 
-Mirrors `utils/personality_db.py` exactly: **SQLite by default**, Postgres via
-`CYCLAW_DB_URL`, `CREATE TABLE IF NOT EXISTS`, umask-safe file creation. No new
-storage technology.
+Follows the same pattern as `utils/personality_db.py`: **SQLite by default**,
+Postgres via either `auth.database_url` in `config.yaml` or the
+`CYCLAW_AUTH_DB_URL` env var, `CREATE TABLE IF NOT EXISTS`, umask-safe file
+creation. No new storage technology. One deliberate deviation from an exact
+mirror: the env var is `CYCLAW_AUTH_DB_URL`, not the shared `CYCLAW_DB_URL`
+personality uses — auth data (password hashes, session ids, device-token
+hashes) is higher-sensitivity, and a shared env var would silently comingle
+the two into whatever database an operator pointed `CYCLAW_DB_URL` at for a
+different subsystem.
 
 ```
 users(username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
@@ -217,17 +245,33 @@ daemon, no internet dependency, consistent with CyClaw's offline-first posture.
 ## 7. Interaction with the `main()` bind guard (#825)
 
 PR #825 refuses a non-loopback `api.host` unless
-`CYCLAW_ALLOW_NON_LOOPBACK_BIND=1`. That guard is keyed on the wrong condition:
-it refuses **because there is no auth**. Once this design lands the rule becomes
+`CYCLAW_ALLOW_NON_LOOPBACK_BIND=1`. That guard was originally keyed on the
+wrong condition: it refused **because there is no auth**. #825's 2026-08-08
+update re-keyed it to this design (Stage 5, §8), and the rule as actually
+implemented in `gate.py`'s `_require_loopback_bind`/`_auth_and_tls_enabled` is
 
 > a non-loopback bind is allowed when authentication is enabled **and** TLS is
-> enabled; otherwise refuse.
+> enabled **and** `/query` demonstrably enforces a credential; otherwise
+> refuse.
 
-which is a strictly better gate — it permits the operator's actual goal and
-refuses the genuinely unsafe combinations (LAN + no auth, LAN + auth over
-plaintext) without an override env var that has to be remembered forever.
-`CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a deliberate escape hatch
-for someone fronting CyClaw with their own reverse proxy.
+The third condition is load-bearing, not optional. The two config flags are a
+statement of *intent*; an operator who sets `auth.enabled: true` reasonably
+believes authentication is on, which is false until Stage 3 attaches a
+credential dependency to `/query`. `gate.py`'s
+`_request_path_enforcement_active()` probes the live FastAPI app for that
+dependency rather than trusting the flags, so this path past loopback cannot
+open until Stage 3 genuinely ships, and opens by itself the moment it does —
+no further edit to the guard is required. This is a strictly better gate than
+the env-var-only guard: it permits the operator's goal (LAN + TLS + auth) once
+both Stage 3 and Stage 4 land, and refuses the genuinely unsafe case (LAN + no
+auth, LAN + auth claimed but not enforced). It **does not** refuse LAN + auth
+over plaintext when both `auth.enabled` and `api.tls.enabled` are set, since
+Stage 4 (wiring TLS into uvicorn) has not shipped — see `docs/THREAT_MODEL.md`'s ninth
+amendment §5 for the precise scope: the guard proves the credential, not the
+transport. `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a
+deliberate escape hatch for someone fronting CyClaw with their own reverse
+proxy. See `docs/THREAT_MODEL.md`'s ninth amendment for the fully verified,
+currently-accurate statement of this rule.
 
 ---
 
@@ -237,11 +281,11 @@ Each stage is independently reviewable and leaves the tree working.
 
 | Stage | Content | Risk |
 |---|---|---|
-| **1** | This document + `utils/authn.py` (scrypt hash/verify, lockout arithmetic) + tests. Pure functions only — no database, no HTTP, no CLI. **No request path touched.** | None — nothing calls it yet |
-| **2** | Account store (`utils/authn_store.py`), `AuthManager` (`utils/authn_manager.py`), `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/`token`), session store, `/auth/login`, `/auth/logout`, `/auth/whoami`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` |
+| **1** — landed, PR #829 | This document + `utils/authn.py` (scrypt hash/verify, lockout arithmetic) + tests. Pure functions only — no database, no HTTP, no CLI. **No request path touched.** | None at merge time; Stage 2 (below) is now the caller |
+| **2** — landed, PR #830 | Account store (`utils/authn_store.py`), `AuthManager` (`utils/authn_manager.py`), `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/`token`), session store, `/auth/login`, `/auth/logout`, `/auth/whoami`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` (ships false, unchanged) |
 | **3** | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
 | **4** | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
-| **5** | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition |
+| **5** — landed, PR #825 | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition (implemented as three — see §7) |
 
 ---
 
