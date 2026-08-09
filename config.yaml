@@ -390,23 +390,33 @@ api:
     # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
     # explicitly to opt rate-limiting into Postgres.
     # database_url: null
-  # Stage 1 config surface for docs/AUTHENTICATION_DESIGN.md §5/§7. NOT wired
-  # to uvicorn yet -- that is Stage 4 (cyclaw-gen-cert + ssl_certfile/
-  # ssl_keyfile). Today this key participates ONLY in gate.py's loopback bind
-  # guard (_auth_and_tls_enabled), alongside auth.enabled below. Setting it
-  # true does not put TLS on the socket. Leave false.
+  # NOT wired to uvicorn: nothing here reaches ssl_certfile/ssl_keyfile, so
+  # setting this true does not put TLS on the socket. Today this key
+  # participates ONLY in gate.py's loopback bind guard (_auth_and_tls_enabled),
+  # alongside auth.enabled below. Must be the literal boolean true -- a quoted
+  # "true" is a string, and gate.py deliberately reads it as OFF rather than
+  # letting stray quotes decide a security gate. Leave false.
+  # Background: docs/AUTHENTICATION_DESIGN.md §5/§7 (that doc lands with the
+  # authentication work; this comment stands on its own without it).
   tls:
     enabled: false
 
-# Stage 1 of docs/AUTHENTICATION_DESIGN.md. This flag has NO effect on any
-# request path yet -- nothing checks it except gate.py's loopback bind guard
-# (_auth_and_tls_enabled), which treats "auth.enabled AND api.tls.enabled" as
-# permission for a non-loopback bind (design §7), so a LAN operator is not
-# stuck carrying CYCLAW_ALLOW_NON_LOOPBACK_BIND forever once real enforcement
-# ships. Setting this true today does NOT put a credential in front of
-# /query -- that needs Stage 2 (sessions/login) and Stage 3 (route
-# enforcement), neither of which exists yet. Leave false until those stages
-# ship; see the design doc before turning this (and api.tls.enabled) on.
+# Per-user authentication. This flag has NO effect on any request path yet --
+# nothing checks it except gate.py's loopback bind guard, which allows a
+# non-loopback bind when auth.enabled AND api.tls.enabled are both true AND
+# /query is actually carrying an authentication dependency. That third
+# condition is probed at runtime, not assumed, precisely so these two flags
+# cannot open a LAN bind while route enforcement is still unbuilt: setting
+# them true today does NOT put a credential in front of /query, and the guard
+# refuses accordingly rather than binding with a warning. Once enforcement
+# ships the guard opens on its own, so a LAN operator is not stuck carrying
+# CYCLAW_ALLOW_NON_LOOPBACK_BIND forever.
+#
+# Must be the literal boolean true -- a quoted "true" is a string, and gate.py
+# deliberately reads it as OFF rather than letting stray quotes decide a
+# security gate. Leave false.
+# Background: docs/AUTHENTICATION_DESIGN.md (that doc lands with the
+# authentication work; this comment stands on its own without it).
 auth:
   enabled: false
 
