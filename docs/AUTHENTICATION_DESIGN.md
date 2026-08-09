@@ -146,7 +146,8 @@ verification that succeeds against outdated parameters transparently re-hashes.
 ### 4.2 Account store
 
 Mirrors `utils/personality_db.py` exactly: **SQLite by default**, Postgres via
-`CYCLAW_DB_URL`, `CREATE TABLE IF NOT EXISTS`, umask-safe file creation. No new
+`CYCLAW_AUTH_DB_URL` (deliberately separate from `personality_db`'s
+`CYCLAW_DB_URL` to avoid comingling auth and personality data), `CREATE TABLE IF NOT EXISTS`, umask-safe file creation. No new
 storage technology.
 
 ```
@@ -256,10 +257,13 @@ credential dependency to `/query`. `gate.py`'s
 dependency rather than trusting the flags, so this path past loopback cannot
 open until Stage 3 genuinely ships, and opens by itself the moment it does —
 no further edit to the guard is required. This is a strictly better gate than
-the env-var-only guard: it permits the operator's actual goal and refuses the
-genuinely unsafe combinations (LAN + no auth, LAN + auth over plaintext, LAN +
-auth claimed but not enforced) without an override env var that has to be
-remembered forever. `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a
+the env-var-only guard: it permits the operator's goal (LAN + TLS + auth) once
+both Stage 3 and Stage 4 land, and refuses the genuinely unsafe case (LAN + no
+auth, LAN + auth claimed but not enforced). It **does not** refuse LAN + auth
+over plaintext when both `auth.enabled` and `api.tls.enabled` are set, since
+Stage 4 (wiring TLS into uvicorn) has not shipped — see `docs/THREAT_MODEL.md`'s ninth
+amendment §5 for the precise scope: the guard proves the credential, not the
+transport. `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a
 deliberate escape hatch for someone fronting CyClaw with their own reverse
 proxy. See `docs/THREAT_MODEL.md`'s ninth amendment for the fully verified,
 currently-accurate statement of this rule.
