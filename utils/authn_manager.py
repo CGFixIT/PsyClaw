@@ -128,6 +128,11 @@ class AuthManager:
         session_cfg = auth_cfg.get("session", {}) or {}
         self.idle_timeout_sec = session_cfg.get("idle_timeout_sec", _DEFAULT_IDLE_TIMEOUT_SEC)
         self.absolute_timeout_sec = session_cfg.get("absolute_timeout_sec", _DEFAULT_ABSOLUTE_TIMEOUT_SEC)
+        # Guards every read/write below (login, session/token validation,
+        # admin ops) through THIS instance. login() holds it for the full
+        # ~0.1s duration of verify_password()'s scrypt cost -- an accepted,
+        # documented tradeoff, not an oversight. See login()'s own comment
+        # for why a lock-free version was designed and rejected.
         self._lock = threading.Lock()
         self.conn, self._ph, self.backend = authn_store.connect(self.db_path, auth_cfg)
         self._prepare_sql()
@@ -397,6 +402,39 @@ class AuthManager:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         password = password if isinstance(password, str) else ""
         now = self._now()
+        # Concurrency note (accepted tradeoff, not a bug -- raised in PR #830's
+        # review round, 2026-08-09, and re-affirmed rather than changed here).
+        # This lock is held for the FULL duration of verify_password() below,
+        # which costs ~0.1s of real scrypt work. That serializes every
+        # concurrent login through THIS AuthManager instance, and also blocks
+        # validate_session()/verify_device_token() calls made through the same
+        # instance while a login is mid-hash, since they share this lock too.
+        #
+        # A lock-free version -- hash outside the lock, then re-enter and
+        # recheck before writing -- was designed and rejected. The obvious
+        # implementation reintroduces a WORSE bug on the lockout counter: two
+        # concurrent wrong-password attempts against the same account would
+        # both read failed_count=4 outside the lock, both independently
+        # compute new_count=5, and both write 5 -- five real failures
+        # recording as one increment, undercounting the lockout ceiling.
+        # Fixing that correctly needs a compare-and-swap on the counter (a
+        # SQL UPDATE ... WHERE failed_count = ? guard) or a per-account lock,
+        # which is a real feature with its own tests, not a drive-by change
+        # bolted onto this method.
+        #
+        # The exposure left by NOT fixing this is bounded and judged
+        # acceptable for docs/THREAT_MODEL.md's single-operator, LAN-scale
+        # deployment: the per-IP rate limiter (gate.py's _enforce_rate_limit,
+        # 60/min) already runs before this method is ever reached, and
+        # realistic concurrent-login volume on a home LAN is a handful of
+        # devices, not a load-testing scenario. Serializing that traffic
+        # through one ~0.1s hash at a time costs a second concurrent caller a
+        # small, bounded latency hit -- correct, just not maximally
+        # concurrent. Revisit only with a fix verified safe by
+        # mutation-testing the LOCKOUT-ACCURACY property specifically (not
+        # just the happy path) -- a naive fix that "passes" only because no
+        # test races two failed attempts is exactly how the undercount above
+        # would ship unnoticed.
         with self._lock:
             row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
             if row is None:
