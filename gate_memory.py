@@ -101,7 +101,14 @@ def register_memory_routes(
             await audit({"event": "memory_propose_rejected", "error": str(e)})
             raise HTTPException(
                 status_code=400,
-                detail={"error": str(e), "code": "INVALID_REASON" if "reason" in str(e).lower() else "MEMORY_BAD_REQUEST"},
+                detail={
+                    "error": str(e),
+                    "code": (
+                        "INVALID_REASON"
+                        if "reason" in str(e).lower()
+                        else "MEMORY_BAD_REQUEST"
+                    ),
+                },
             ) from e
         await audit({
             "event": "memory_propose",
@@ -155,7 +162,9 @@ def register_memory_routes(
         await audit({"event": "memory_reject", "proposal_id": req.proposal_id})
         return asdict(prop)
 
-    @app.get("/query/export/html", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)], response_class=HTMLResponse)
+    @app.get("/query/export/html",
+             dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)],
+             response_class=HTMLResponse)
     async def query_export_html(request: Request) -> HTMLResponse:
         if not _export_on():
             raise HTTPException(status_code=404, detail="Memory HTML export not enabled")
