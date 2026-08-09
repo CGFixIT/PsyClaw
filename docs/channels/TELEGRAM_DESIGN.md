@@ -140,7 +140,7 @@ it from the configured environment variable. Never commit tokens or put them in
 ## 4. Security gates (non-negotiable)
 
 1. **Allowlist** — `allowed_chat_ids` empty while `enabled: true` is a **config load error**. Non-allowlisted inbound is refused and audited.
-2. **Token never persisted by CyClaw** — unattended jobs use `TELEGRAM_BOT_TOKEN` (or the configured env name); manual `send` and `poll` may use the explicit `--prompt-token` no-echo terminal prompt. Audit stores only a 12-char SHA-256 fingerprint.
+2. **Token never persisted by CyClaw** — unattended jobs use `TELEGRAM_BOT_TOKEN` (or the configured env name); manual `send` and `poll` may use the explicit `--prompt-token` no-echo terminal prompt. Audit stores only a 12-char HMAC-SHA256 pseudonym.
 3. **Loopback `/query` only** — `telegram.query.base_url` host must be `127.0.0.1` / `localhost` / `::1`.
 4. **No silent hybrid** — only exact `/online on <grok|claude>` can arm consent; a bare `/online on` is refused rather than selecting a provider. Failed session deletion is audited and refuses the query.
 5. **Rate limit** — process-local sliding window on outbound + inbound
