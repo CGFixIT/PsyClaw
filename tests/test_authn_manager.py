@@ -290,6 +290,138 @@ class TestLogin:
         assert result.username == "alice"
 
 
+class TestLoginTransactionAndRaceSafety:
+    def test_unknown_username_closes_its_read_transaction(self, manager, monkeypatch):
+        """login()'s row-is-None path used to raise AuthLoginFailed without
+        ever closing the implicit transaction the lookup SELECT opened
+        (Postgres, autocommit=False -- see _end_read_txn's docstring): the
+        long-lived server connection was left idle-in-transaction after every
+        rejected unknown-username attempt. Pinned at the manager level (not
+        just Postgres) since _end_read_txn is a no-op-but-still-called
+        contract on SQLite too."""
+        calls = []
+        monkeypatch.setattr(manager, "_end_read_txn", lambda: calls.append(1))
+        with pytest.raises(AuthLoginFailed):
+            manager.login("nosuchuser", "whatever password")
+        assert calls == [1]
+
+    def test_locked_account_closes_its_read_transaction(self, manager, monkeypatch):
+        """Same gap as above, on the is_locked() exit path."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        for _ in range(5):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", "wrong")
+        calls = []
+        monkeypatch.setattr(manager, "_end_read_txn", lambda: calls.append(1))
+        with pytest.raises(AuthAccountLocked):
+            manager.login("alice", _GOOD_PASSWORD)
+        assert calls == [1]
+
+    def test_password_rotated_mid_verification_does_not_mint_a_session(self, tmp_path, monkeypatch):
+        """TOCTOU: verify_password() costs ~0.1s of real scrypt work, and
+        AuthManager._lock only serializes calls made through THIS instance.
+        A SEPARATE process -- exactly what `cyclaw-user passwd` is -- opens
+        its own AuthManager and its own DB connection, so this instance's
+        lock does nothing to order against it. A login that already read the
+        OLD row into memory before that rotation committed must not go on to
+        mint a session for a password that, by the time the session is
+        actually created, is no longer the account's real password.
+
+        The race is simulated deterministically (no real threads/timing):
+        authn.verify_password is patched to perform the concurrent rotation,
+        via a second AuthManager sharing the same SQLite file, as a side
+        effect of the FIRST real verification call inside login().
+        """
+        import utils.authn_manager as authn_manager_module
+
+        db_path = str(tmp_path / "race.db")
+        manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        try:
+            manager_a.create_user("alice", _GOOD_PASSWORD)
+            real_verify = authn_manager_module.authn.verify_password
+            rotated = {"done": False}
+
+            def racing_verify(password, record):
+                if not rotated["done"] and record != authn_manager_module._DUMMY_RECORD:
+                    rotated["done"] = True
+                    manager_b.set_password("alice", "a brand new password entirely")
+                return real_verify(password, record)
+
+            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+
+            with pytest.raises(AuthLoginFailed):
+                manager_a.login("alice", _GOOD_PASSWORD)
+
+            # The account is not left unusable -- the NEW password, the one
+            # that actually won the race, logs in normally afterward.
+            assert manager_a.login("alice", "a brand new password entirely").username == "alice"
+        finally:
+            manager_a.close()
+            manager_b.close()
+
+    def test_account_disabled_mid_verification_does_not_mint_a_session(self, tmp_path, monkeypatch):
+        """Same race, via disable_user() instead of a password rotation --
+        the other half of the "revoke NOW, not eventually" promise
+        _set_disabled()'s own comment makes for already-issued credentials."""
+        import utils.authn_manager as authn_manager_module
+
+        db_path = str(tmp_path / "race2.db")
+        manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        try:
+            manager_a.create_user("alice", _GOOD_PASSWORD)
+            real_verify = authn_manager_module.authn.verify_password
+            disabled = {"done": False}
+
+            def racing_verify(password, record):
+                if not disabled["done"] and record != authn_manager_module._DUMMY_RECORD:
+                    disabled["done"] = True
+                    manager_b.disable_user("alice")
+                return real_verify(password, record)
+
+            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+
+            with pytest.raises(AuthLoginFailed):
+                manager_a.login("alice", _GOOD_PASSWORD)
+        finally:
+            manager_a.close()
+            manager_b.close()
+
+    def test_stale_recheck_does_not_count_toward_lockout(self, tmp_path, monkeypatch):
+        """The recheck failure is "the account changed out from under us",
+        not "a wrong guess" -- it must not be routed through
+        _record_failure_locked, or a legitimate password rotation could
+        itself contribute to locking the very account it just secured."""
+        import utils.authn_manager as authn_manager_module
+
+        db_path = str(tmp_path / "race3.db")
+        manager_a = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        manager_b = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        try:
+            manager_a.create_user("alice", _GOOD_PASSWORD)
+            real_verify = authn_manager_module.authn.verify_password
+            rotated = {"done": False}
+
+            def racing_verify(password, record):
+                if not rotated["done"] and record != authn_manager_module._DUMMY_RECORD:
+                    rotated["done"] = True
+                    manager_b.set_password("alice", "a brand new password entirely")
+                return real_verify(password, record)
+
+            monkeypatch.setattr(authn_manager_module.authn, "verify_password", racing_verify)
+            with pytest.raises(AuthLoginFailed):
+                manager_a.login("alice", _GOOD_PASSWORD)
+
+            # set_password() itself resets the counter to 0; assert it is
+            # still 0 (not 1) after the raced attempt on top of it.
+            row = manager_a.conn.execute(manager_a._sql_get_user, ("alice",)).fetchone()
+            assert row["failed_count"] == 0
+        finally:
+            manager_a.close()
+            manager_b.close()
+
+
 class TestLockout:
     def test_locks_after_five_consecutive_failures(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)

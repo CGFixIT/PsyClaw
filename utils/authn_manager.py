@@ -403,9 +403,11 @@ class AuthManager:
                 # Pay the same scrypt cost a real check would, so timing does
                 # not disclose whether this username exists.
                 authn.verify_password(password, _DUMMY_RECORD)
+                self._end_read_txn()
                 raise AuthLoginFailed()
             if authn.is_locked(row["locked_until_ts"], now=now):
                 retry_after = max(row["locked_until_ts"] - now, 0.0)
+                self._end_read_txn()
                 raise AuthAccountLocked(
                     f"account temporarily locked, retry in {int(retry_after) + 1}s",
                     retry_after_sec=retry_after,
@@ -414,6 +416,40 @@ class AuthManager:
             ok, needs_rehash = authn.verify_password(password, row["password_hash"])
             if row["disabled"] or not ok:
                 self._record_failure_locked(canonical, row["failed_count"], now)
+                raise AuthLoginFailed()
+            # Re-check immediately before minting a session. verify_password()
+            # above costs ~0.1s (scrypt), and self._lock only serializes calls
+            # made through THIS AuthManager instance -- it does nothing against
+            # a concurrent `cyclaw-user passwd`/`disable` from a SEPARATE
+            # process, which opens its own AuthManager and its own DB
+            # connection. Without this recheck, a login that already read the
+            # OLD row into `row` could still mint a session after a password
+            # rotation or disable meant to cut this credential off
+            # immediately -- the same "revoke NOW, not eventually" promise
+            # set_password()/_set_disabled() make for already-issued
+            # sessions. Both backends see the concurrent write here: Postgres
+            # because a second SELECT inside the still-open READ COMMITTED
+            # transaction (the default -- see _end_read_txn()'s docstring)
+            # observes any other transaction's already-committed change, and
+            # SQLite because a bare SELECT opens no transaction of its own,
+            # so it simply reads whatever is currently committed.
+            current = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
+            stale = (
+                current is None
+                or current["disabled"]
+                or current["password_hash"] != row["password_hash"]
+                or authn.is_locked(current["locked_until_ts"], now=now)
+            )
+            if stale:
+                # Deliberately NOT routed through _record_failure_locked(): the
+                # credential presented was correct at the moment it was
+                # checked. This is "the account changed out from under us",
+                # not "a wrong guess" -- counting it toward the lockout
+                # ceiling would let a legitimate password rotation contribute
+                # to locking the account that rotation was just used on. Raise
+                # the generic error, not a distinct one, so this race is not
+                # itself an oracle for "a concurrent change just happened".
+                self._end_read_txn()
                 raise AuthLoginFailed()
             if needs_rehash:
                 self.conn.execute(self._sql_set_password, (authn.hash_password(password), canonical))

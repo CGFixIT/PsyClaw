@@ -50,6 +50,23 @@ def _make_app(manager, cfg=None, enforce_rate_limit=_allow_all):
     return app
 
 
+def _base_url(cfg=None):
+    """The same-origin check compares Origin against THIS request's own live
+    url (request.url.port/.scheme), not a config-derived expectation -- so
+    the test client's base_url must actually reflect cfg's port/scheme for a
+    same-origin test to mean anything. TestClient/httpx never opens a real
+    socket (ASGI in-process dispatch), so an "https://" base_url is enough to
+    make request.url.scheme read "https" inside the app without needing a
+    real TLS handshake or certificate.
+    """
+    cfg = cfg or _cfg()
+    api_cfg = cfg.get("api", {}) if isinstance(cfg, dict) else {}
+    port = api_cfg.get("port", _PORT) if isinstance(api_cfg, dict) else _PORT
+    tls_cfg = api_cfg.get("tls", {}) if isinstance(api_cfg, dict) else {}
+    scheme = "https" if isinstance(tls_cfg, dict) and tls_cfg.get("enabled") is True else "http"
+    return f"{scheme}://localhost:{port}"
+
+
 @pytest.fixture
 def manager(tmp_path):
     m = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "auth.db")}})
@@ -64,8 +81,9 @@ def user(manager):
 
 
 def _client(manager=None, cfg=None, enforce_rate_limit=_allow_all):
+    cfg = cfg or _cfg()
     app = _make_app(manager, cfg=cfg, enforce_rate_limit=enforce_rate_limit)
-    return TestClient(app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138 - test loopback host
+    return TestClient(app, base_url=_base_url(cfg))  # DevSkim: ignore DS162092,DS137138 - test loopback host
 
 
 class TestAuthDisabled:
@@ -310,6 +328,40 @@ class TestSameOrigin:
         username, password = user
         r = _client(manager).post("/auth/login", json={"username": username, "password": password})
         assert r.status_code == 200
+
+    def test_origin_matching_the_live_request_is_accepted_even_if_config_disagrees(self, manager, user):
+        """The check compares Origin against THIS request's own live
+        url (request.url.port/.scheme), not api.port/api.tls.enabled --
+        config states how the operator INTENDED to run the server, not
+        necessarily the connection a given request actually arrived on. cfg
+        here claims port 9999; the app is actually served (via the test
+        client's base_url) on 8787. An Origin naming the port the request
+        genuinely arrived on must still be accepted."""
+        username, password = user
+        app = _make_app(manager, cfg=_cfg(port=9999))
+        client = TestClient(app, base_url="http://localhost:8787")
+        r = client.post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": "http://localhost:8787"},
+        )
+        assert r.status_code == 200
+
+    def test_origin_matching_only_the_stale_config_port_is_rejected(self, manager, user):
+        """The mirror of the test above: an Origin that matches the
+        CONFIGURED port rather than the port this request actually arrived
+        on must be rejected -- proving the check is not silently still
+        keying off config."""
+        username, password = user
+        app = _make_app(manager, cfg=_cfg(port=9999))
+        client = TestClient(app, base_url="http://localhost:8787")
+        r = client.post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": "http://localhost:9999"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
 
 class TestLogoutAndCsrf:
