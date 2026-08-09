@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Enforce CyClaw PR-template title prefix on commit subject lines.
 # Canonical: .github/PULL_REQUEST_TEMPLATE.md (Title section).
+
+## Note for pr descrition/body formatting: Critical pr description requirement:
+# -Always fill out and utilize this template: .github/PULL_REQUEST_TEMPLATE.md fully when opening a PR
+
 set -euo pipefail
 
 msg_file="${1:-}"
