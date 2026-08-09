@@ -149,6 +149,7 @@ def _enable_mock_providers(repo: Path, results: list[Result]) -> str | None:
         original = config_path.read_text(encoding="utf-8")
         config = yaml.safe_load(original)
         config["app"]["mode"] = "hybrid"
+        config.setdefault("api", {})["health_probe_external_providers"] = True
         config["models"]["local_llm"].update(
             {"provider": "ollama", "base_url": f"{MOCK_URL}/v1", "model": MODEL_ID}
         )
