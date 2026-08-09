@@ -175,3 +175,8 @@ def sanitize_chunk(text: str, config_path: str = "config.yaml") -> str:
     for pattern in patterns:
         text = pattern.sub("[FILTERED]", text)
     return text
+
+
+def sanitize_query(text: str, config_path: str = "config.yaml") -> str:
+    """Backward-compatible alias for older sandbox tooling."""
+    return sanitize_chunk(text, config_path)
