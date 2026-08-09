@@ -5,32 +5,87 @@ description: Clone CyClaw origin/main into a clean local sandbox, emulate Ollama
 
 # Cyclaw-Sandbox-Test
 
-Use this skill for a fresh, local CyClaw runtime smoke. It is intentionally narrower than a full release audit: it proves the gateway starts against a mock Ollama, exercises dummy-key Grok/Claude API checks against the same loopback mock, and verifies browser/API surfaces without mutating soul content.
+Use this skill for a fresh, local CyClaw runtime smoke. It proves the gateway
+starts against a mock Ollama, exercises dummy-key Grok/Claude API checks against
+the same loopback mock, verifies browser/API surfaces, and runs independent
+gate and harness runtime contracts without mutating soul content.
 
 ## Workflow
 
 1. Work from a fresh `origin/main` clone unless the user explicitly asks for the current checkout.
-2. Run the bundled runner from the repo root:
+2. Use `py -3.12` on Windows or `python3.12` on macOS/Linux for every command
+   below. Run the static guards before spending time on a clean install:
 
-```powershell
-python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git
+```text
+<python-3.12> .claude/skills/config-guard/check_config.py
+<python-3.12> .claude/skills/invariant-guard/check_invariants.py
+<python-3.12> .claude/skills/dep-guard/check_deps.py --strict
+<python-3.12> .claude/skills/verify-deps/extract_pins.py --strict
+<python-3.12> .claude/skills/verify-deps/check_env_drift.py --strict
+```
+
+Current `main` emits config guard C9 as a hybrid-posture warning.
+Record it; do not silently suppress a real config failure or an unexpected new
+warning. The other listed commands are strict gates.
+
+3. Run the bundled runner from the repo root:
+
+```text
+# Windows
+py -3.12 .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git
+
+# macOS/Linux
+python3.12 .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --repo-url https://github.com/CGFixIT/CyClaw.git
 ```
 
 For an already-prepared checkout, skip the heavy setup:
 
-```powershell
-python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place --skip-install --skip-index
+```text
+<python-3.12> .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --in-place --skip-install --skip-index
 ```
 
 To skip the targeted API/RAG tests during a fast local rerun:
 
-```powershell
-python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place --skip-install --skip-index --skip-tests
+```text
+<python-3.12> .codex/skills/cyclaw-sandbox-test/scripts/run_sandbox_test.py --in-place --skip-install --skip-index --skip-tests
 ```
 
-3. Read the generated Markdown report path printed at the end. Reports are
+4. Read the generated Markdown report path printed at the end. Reports are
    written to a temporary directory outside the checkout. Treat any `FAIL` as
    a blocker before pushing runtime changes.
+
+## Platform Rules
+
+- Windows and Linux install `torch==2.13.0+cpu` from the PyTorch CPU index.
+- Native macOS support means Apple Silicon on macOS 14+ with Python 3.12+.
+  macOS installs plain `torch==2.13.0`, then uses temporary filtered copies of
+  the legacy manifests. It never changes tracked files or tries the unavailable
+  `+cpu` wheel. Run this path on a physical Apple-Silicon Mac when validating a
+  macOS release; hosted `macos-latest` is useful CI evidence, not that proof.
+- For a safe macOS installer-layout smoke, isolate the home directory before
+  invoking the installer:
+
+```bash
+SANDBOX_HOME="$(mktemp -d)"
+HOME="$SANDBOX_HOME" bash macos/install-cyclaw.sh --repo-path "$PWD" --skip-python-deps < /dev/null
+test -x "$SANDBOX_HOME/.CyClaw/bin/cyclaw"
+HOME="$SANDBOX_HOME" bash macos/uninstall-cyclaw.sh < /dev/null
+```
+
+## Escalation Coverage
+
+The bundled runner is the required fresh-clone gate. For changes to the
+harness, terminal UI, agentic controls, or platform installers, also run the
+relevant established verifier after dependencies are installed:
+
+```bash
+CYCLAW_HOME="$(mktemp -d)" CYCLAW_API_KEY=sandbox-key \
+  python .claude/skills/CyClaw-Sandbox/run_full_verification.py
+```
+
+On Linux, `bash .claude/skills/CyClaw-Sandbox/verify.sh` additionally exercises
+the live gateway and harness servers. Do not substitute it for the macOS path:
+its dependency bootstrap is Linux-oriented.
 
 ## What It Exercises
 
@@ -39,6 +94,9 @@ python .codex\skills\cyclaw-sandbox-test\scripts\run_sandbox_test.py --in-place 
 - Runtime prep: `data/personality`, `index`, and `logs` directories; `GROK_API_KEY=dummy`; `ANTHROPIC_API_KEY=dummy`; `CYCLAW_API_KEY` set to a dummy local key.
 - RAG/API smoke: `/health`, `/query` vault-hit, alternate RAG query, offline-declined query, broad miss-style query, and prompt-injection rejection.
 - Terminal console surfaces: `/`, `/static/terminal.html`, `/soul`, `/soul/reload`, unauthenticated fail-closed checks for `/soul/propose`, `/soul/apply`, `/soul/restore`, `/audit/summary`, `/ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect`.
+- Runtime contracts: independent `gate.py` and `harness/server.py` FastAPI,
+  telemetry-kill, endpoint-registration, and loopback checks. The harness
+  contract receives a temporary `CYCLAW_HOME`, never the operator's real state.
 - Targeted tests: `tests.ci_rag_smoke`, `tests/test_client.py`, `tests/test_health.py`, `tests/test_graph.py`, `tests/test_rag_integration.py`, `tests/test_terminal_contract.py`, and `tests/test_cyclaw_sandbox_skill.py`.
 
 ## Safety Rules

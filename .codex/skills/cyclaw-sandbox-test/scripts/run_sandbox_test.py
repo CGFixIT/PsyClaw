@@ -230,43 +230,102 @@ def _prepare_repo(repo: Path, args: argparse.Namespace, results: list[Result], e
         results.append(
             _run("upgrade pip", [str(py), "-m", "pip", "install", "--upgrade", "pip==26.1.2"], repo, env, 180)
         )
-        results.append(
-            _run(
-                "install torch cpu",
-                [
-                    str(py),
-                    "-m",
-                    "pip",
-                    "install",
-                    "torch==2.13.0+cpu",
-                    "--index-url",
-                    "https://download.pytorch.org/whl/cpu",
-                ],
-                repo,
-                env,
-                1200,
+        if sys.platform == "darwin":
+            # Apple Silicon uses the plain PyPI torch wheel. The Linux/Windows
+            # +cpu pin and PyTorch CPU index in the tracked manifests do not
+            # resolve on macOS, so mirror macos/install-cyclaw.sh with temporary
+            # filtered copies instead of mutating the sandbox's tracked files.
+            results.append(
+                _run(
+                    "install torch macOS",
+                    [str(py), "-m", "pip", "install", "torch==2.13.0"],
+                    repo,
+                    env,
+                    1200,
+                )
             )
-        )
-        results.append(
-            _run(
-                "install requirements",
-                [
-                    str(py),
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    "requirements.txt",
-                    "-c",
-                    "constraints.txt",
-                    "--ignore-installed",
-                    "PyYAML",
-                ],
-                repo,
-                env,
-                1200,
+            try:
+                with tempfile.TemporaryDirectory(prefix="cyclaw-sandbox-deps-") as temp_dir:
+                    temp = Path(temp_dir)
+                    requirements = temp / "requirements.txt"
+                    constraints = temp / "constraints.txt"
+                    requirements.write_text(
+                        "".join(
+                            line
+                            for line in (repo / "requirements.txt").read_text(encoding="utf-8").splitlines(keepends=True)
+                            if not line.startswith("torch==")
+                            and not line.startswith("--extra-index-url https://download.pytorch.org")
+                        ),
+                        encoding="utf-8",
+                    )
+                    constraints.write_text(
+                        "".join(
+                            line
+                            for line in (repo / "constraints.txt").read_text(encoding="utf-8").splitlines(keepends=True)
+                            if not line.startswith("torch==")
+                        ),
+                        encoding="utf-8",
+                    )
+                    results.append(
+                        _run(
+                            "install requirements macOS",
+                            [
+                                str(py),
+                                "-m",
+                                "pip",
+                                "install",
+                                "-r",
+                                str(requirements),
+                                "-c",
+                                str(constraints),
+                                "--ignore-installed",
+                                "PyYAML",
+                            ],
+                            repo,
+                            env,
+                            1200,
+                        )
+                    )
+            except OSError as exc:
+                results.append(Result("prepare macOS dependency manifests", "FAIL", str(exc)))
+        else:
+            results.append(
+                _run(
+                    "install torch cpu",
+                    [
+                        str(py),
+                        "-m",
+                        "pip",
+                        "install",
+                        "torch==2.13.0+cpu",
+                        "--index-url",
+                        "https://download.pytorch.org/whl/cpu",
+                    ],
+                    repo,
+                    env,
+                    1200,
+                )
             )
-        )
+            results.append(
+                _run(
+                    "install requirements",
+                    [
+                        str(py),
+                        "-m",
+                        "pip",
+                        "install",
+                        "-r",
+                        "requirements.txt",
+                        "-c",
+                        "constraints.txt",
+                        "--ignore-installed",
+                        "PyYAML",
+                    ],
+                    repo,
+                    env,
+                    1200,
+                )
+            )
     if not args.skip_index:
         results.append(
             _run("build retrieval index", [str(py), "-m", "retrieval.indexer"], repo, env, args.index_timeout)
@@ -396,27 +455,52 @@ assert "Mock Claude API" in claude_answer, claude_answer
 
 
 def _run_targeted_tests(py: Path, repo: Path, env: dict[str, str], timeout: int) -> list[Result]:
-    return [
-        _run("tests.ci_rag_smoke", [str(py), "-m", "tests.ci_rag_smoke"], repo, env, timeout),
+    results = [
         _run(
-            "targeted pytest recent API/RAG tests",
-            [
-                str(py),
-                "-m",
-                "pytest",
-                "tests/test_client.py",
-                "tests/test_health.py",
-                "tests/test_graph.py",
-                "tests/test_rag_integration.py",
-                "tests/test_terminal_contract.py",
-                "tests/test_cyclaw_sandbox_skill.py",
-                "-q",
-            ],
+            "gate runtime contract",
+            [str(py), ".claude/skills/CyClaw-Sandbox/gate_runtime_check.py"],
             repo,
             env,
             timeout,
         ),
     ]
+    # Do not inherit an operator's CYCLAW_HOME: the contract check exercises
+    # the harness app and may otherwise read or write their real sessions.
+    with tempfile.TemporaryDirectory(prefix="cyclaw-sandbox-harness-") as harness_home:
+        contract_env = {**env, "CYCLAW_HOME": harness_home}
+        results.append(
+            _run(
+                "harness runtime contract",
+                [str(py), ".claude/skills/CyClaw-Sandbox/harness_runtime_check.py"],
+                repo,
+                contract_env,
+                timeout,
+            ),
+        )
+    results.extend(
+        [
+            _run("tests.ci_rag_smoke", [str(py), "-m", "tests.ci_rag_smoke"], repo, env, timeout),
+            _run(
+                "targeted pytest recent API/RAG tests",
+                [
+                    str(py),
+                    "-m",
+                    "pytest",
+                    "tests/test_client.py",
+                    "tests/test_health.py",
+                    "tests/test_graph.py",
+                    "tests/test_rag_integration.py",
+                    "tests/test_terminal_contract.py",
+                    "tests/test_cyclaw_sandbox_skill.py",
+                    "-q",
+                ],
+                repo,
+                env,
+                timeout,
+            ),
+        ]
+    )
+    return results
 
 
 def _write_report(results: list[Result]) -> Path:
@@ -441,6 +525,13 @@ def _write_report(results: list[Result]) -> Path:
 
 
 def main() -> int:
+    if sys.version_info < (3, 12):  # noqa: UP036 - launcher validates its interpreter before setup.
+        print(
+            "Python 3.12+ is required; rerun with 'py -3.12' on Windows or 'python3.12' on macOS/Linux.",
+            file=sys.stderr,
+        )
+        return 2
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-url", default="https://github.com/CGFixIT/CyClaw.git")
     parser.add_argument("--branch", default="main")
