@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Enforce CyClaw PR-template title prefix on commit subject lines.
+# Canonical: .github/PULL_REQUEST_TEMPLATE.md (Title section).
+set -euo pipefail
+
+msg_file="${1:-}"
+if [[ -z "$msg_file" || ! -f "$msg_file" ]]; then
+  exit 0
+fi
+
+subject="$(head -n1 "$msg_file" | tr -d '\r')"
+# Empty subject should fail elsewhere; don't double-enforce here.
+[[ -n "$subject" ]] || exit 0
+
+# Allow standard git-generated subjects
+case "$subject" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *|Amend!\ *)
+    exit 0
+    ;;
+esac
+
+# Dependabot / Renovate style subjects
+if [[ "$subject" =~ ^(chore|build|ci)\(deps\) ]]; then
+  exit 0
+fi
+
+# Title format from .github/PULL_REQUEST_TEMPLATE.md:
+#   [prefix] - Short descriptive sentence
+allowed='invariant|governance|fsconnect|agentic|rag|harness|security|docs|infra|fix|feat'
+if printf '%s' "$subject" | grep -Eq "^\[(${allowed})\] - .+"; then
+  exit 0
+fi
+
+printf '%s\n' \
+  "commit-msg: subject does not match CyClaw PR template title format" \
+  "  Got:  ${subject}" \
+  "  Want: [prefix] - Short descriptive sentence" \
+  "  Allowed prefixes: [invariant] [governance] [fsconnect] [agentic] [rag]" \
+  "                    [harness] [security] [docs] [infra] [fix] [feat]" \
+  "  Example: [docs] - document commit-msg PR title gate" \
+  "  Source:  .github/PULL_REQUEST_TEMPLATE.md (Title section)" \
+  "  Bypass (emergency only): git commit --no-verify" \
+  >&2
+exit 1

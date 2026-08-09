@@ -1,7 +1,8 @@
-# Git hooks (branch naming and fresh main)
+# Git hooks (branch naming, title prefix, fresh main)
 
 Enforces **documented multi-vendor feature-branch prefixes** on commit and push,
-plus fresh-`origin/main` ancestry for feature-branch pushes.
+**PR-template commit title prefixes** on every commit subject, plus
+fresh-`origin/main` ancestry for feature-branch pushes.
 
 Canonical list (must stay aligned with `utils.agent_identity.ALLOWED_BRANCH_PREFIXES`,
 `CLAUDE.md` §5 / Kimi section, and `.github/PULL_REQUEST_TEMPLATE.md`):
@@ -20,7 +21,27 @@ Also allowed: `main`, `master`, `develop`, `dependabot/*`, `renovate/*`, `releas
 | Hook | When | Behavior |
 |------|------|----------|
 | `pre-commit` | every commit | refuses commit if current branch is off-convention |
+| `commit-msg` | every commit | refuses subjects that are not `[prefix] - description` per the PR template Title section |
 | `pre-push` | every push | fetches `origin/main`, refuses off-convention head refs, and refuses non-default branches that do not contain current `origin/main` |
+
+## PR body template (not a git hook)
+
+Git cannot intercept PR bodies created via the GitHub UI, `gh pr create`, or
+the GitHub connector API. For that layer:
+
+1. **Always** fill [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md) fully when opening a PR (required for Grok Build + GitHub connector on cgfixit/CyClaw).
+2. **Local check:** `scripts/check-pr-template.sh path/to/body.md` before create.
+3. **CI:** advisory sticky comment via `.github/workflows/pr-template-check.yml`.
+
+Example:
+
+```bash
+# draft body from template, edit, then gate
+cp .github/PULL_REQUEST_TEMPLATE.md /tmp/pr-body.md
+# ... fill sections ...
+scripts/check-pr-template.sh /tmp/pr-body.md
+gh pr create --title '[docs] - …' --body-file /tmp/pr-body.md
+```
 
 ## Install (once per clone)
 
