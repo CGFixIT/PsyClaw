@@ -166,6 +166,26 @@ def verify_password(password: str, record: str) -> tuple[bool, bool]:
         salt, expected = _unb64(parts[4]), _unb64(parts[5])
     except (ValueError, TypeError, base64.binascii.Error):
         return (False, False)
+    # Bound the stored parameters against CURRENT policy ceilings before ever
+    # calling scrypt. hash_password() only ever writes n/r/p AT-OR-BELOW these
+    # constants and dklen fixed at _SCRYPT_DKLEN -- a record can be weaker (that
+    # is what needs_rehash exists to upgrade) but this codebase has never
+    # written one stronger. A record claiming higher values, or a dklen that
+    # does not match, is therefore forged or corrupted, not a legitimate legacy
+    # row. Two distinct issues close here:
+    #   - A short/truncated `expected` (e.g. dklen=1) previously let
+    #     hmac.compare_digest match against a ~1/256-sized search space instead
+    #     of the full 32-byte key -- reproduced directly: ~6/2000 wrong
+    #     passwords collided against a hand-built dklen=1 record, matching the
+    #     predicted rate. Requiring the exact current dklen closes it.
+    #   - An inflated stored n/r (e.g. n=2**20) previously drove
+    #     maxmem=max(_SCRYPT_MAXMEM, n*r*128*4) toward multiple GiB per attempt
+    #     on an unauthenticated route. Capping n/r/p here means the fixed
+    #     _SCRYPT_MAXMEM ceiling is always sufficient, so the dynamic expansion
+    #     is removed below rather than kept as dead code that still looks
+    #     load-bearing.
+    if n > _SCRYPT_N or r > _SCRYPT_R or p > _SCRYPT_P or len(expected) != _SCRYPT_DKLEN:
+        return (False, False)
     try:
         derived = hashlib.scrypt(
             password.encode("utf-8"),
@@ -173,31 +193,26 @@ def verify_password(password: str, record: str) -> tuple[bool, bool]:
             n=n,
             r=r,
             p=p,
-            dklen=len(expected),
-            maxmem=max(_SCRYPT_MAXMEM, n * r * 128 * 4),
+            dklen=_SCRYPT_DKLEN,
+            maxmem=_SCRYPT_MAXMEM,
         )
     except (ValueError, MemoryError, OverflowError):
-        # This is the ONLY validity check on the stored parameters, deliberately.
-        # scrypt itself rejects n that is not a power of two greater than one,
-        # r/p below one, and dklen of zero -- so an explicit pre-check ahead of
-        # this was verified redundant in both directions and removed rather than
-        # left as dead weight. It also stops a record claiming an absurd n from
-        # becoming a memory-exhaustion lever on an unauthenticated route.
+        # scrypt itself rejects n that is not a power of two greater than one
+        # and r/p below one -- an explicit pre-check for those was verified
+        # redundant in both directions and removed rather than left as dead
+        # weight. n/r/p are now bounded above by the check just above, so the
+        # OverflowError case (n/r/p crossing into C long territory on LLP64/
+        # Windows before scrypt's own ValueError checks run -- confirmed by
+        # this suite's own Windows CI leg) is no longer reachable through a
+        # forged record; it stays here as defense-in-depth, not as the active
+        # mitigation for that class of input anymore.
         #
-        # OverflowError specifically: n/r/p cross into C long territory before
-        # scrypt's own ValueError checks run. On LLP64 platforms (Windows) a C
-        # long is 32 bits even in a 64-bit build, so a record claiming an n like
-        # 2**40 overflows there and raises OverflowError instead of ValueError --
-        # confirmed by this suite's own Windows CI leg, which failed here before
-        # this except-clause covered it. 64-bit Linux/macOS never hit this path
-        # (their C long is 64 bits), which is why it surfaced only on one leg.
-        #
-        # The dklen=0 case is the one worth naming. compare_digest(b"", b"") is
-        # True, so a record with an empty stored hash would authenticate any
-        # password IF the derived key could ever also be empty. It cannot:
-        # scrypt rejects dklen=0 outright, so that comparison is unreachable
-        # rather than merely unlikely. That is a property of scrypt, not of code
-        # written here, which is exactly why
+        # The dklen=0 case is the one worth naming even though the bound check
+        # above already rejects any expected length other than _SCRYPT_DKLEN.
+        # compare_digest(b"", b"") is True, so a record with an empty stored
+        # hash would authenticate any password IF the derived key could ever
+        # also be empty -- it cannot, scrypt rejects dklen=0 outright. That is
+        # a property of scrypt, not of code written here, which is exactly why
         # test_malformed_record_fails_closed_without_raising pins the outcome
         # instead of trusting the reasoning.
         return (False, False)
