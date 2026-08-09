@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -65,10 +65,12 @@ jobs:
         run: python -m pip install --upgrade "pip==26.1.2"
 
       - name: Cache torch CPU wheel
+        if: runner.os != 'macOS'
         # Mirrors ci.yml's dedicated torch cache: torch (~2GB) is pinned
         # infrequently, so keying its wheel separately means this job's own
         # requirements.txt/constraints.txt triggers don't force a re-download of
-        # the heaviest dependency on every run.
+        # the heaviest dependency on every run. macOS skips this cache entirely
+        # -- see the macOS-specific install step below (same split ci.yml uses).
         # The torch==2.13.0+cpu pin (and this cache key) is duplicated in
         # ci.yml, copilot-setup-steps.yml, and devskim.yml -- grep for the
         # version string under .github/workflows/ before bumping it here.
@@ -81,7 +83,7 @@ jobs:
             torch-cpu-2.13.0-${{ runner.os }}-
 
       - name: Download torch wheel (cache miss only)
-        if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
+        if: runner.os != 'macOS' && steps.torch-wheel-cache.outputs.cache-hit != 'true'
         shell: bash
         # torch is intentionally NOT pinned in requirements.txt — see its header:
         # a bare resolve pulls the ~2.5 GB CUDA build from PyPI on Linux. Fetch
@@ -94,10 +96,28 @@ jobs:
             --no-deps -d .torch-wheels
 
       - name: Install with constraints (reproducible gate)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -r requirements.txt -c constraints.txt
+
+      - name: Install with constraints (macOS -- plain torch, no +cpu suffix)
+        if: runner.os == 'macOS'
+        shell: bash
+        # torch==2.13.0+cpu 404s on https://download.pytorch.org/whl/cpu for
+        # macOS -- that index lists plain (non "+cpu"-suffixed) versions there
+        # instead, because Apple Silicon has no separate CPU/CUDA build to
+        # disambiguate. Same fix ci.yml's "Install deps (macOS -- plain torch,
+        # no +cpu suffix)" step applies: install plain torch directly, then
+        # everything else from copies of both manifests with the torch/
+        # extra-index-url lines stripped, so pip never tries to reconcile the
+        # installed plain build against the +cpu-suffixed pin.
+        run: |
+          pip install "torch==2.13.0"
+          grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' requirements.txt > /tmp/requirements-macos.txt
+          grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
+          pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt
 
       - name: Minimal hermetic prep + smoke import check
         shell: bash
