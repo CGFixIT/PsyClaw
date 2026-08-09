@@ -145,6 +145,8 @@ def compute_metrics(events) -> dict:
     mode_counts: Counter = Counter()
     model_counts: Counter = Counter()
     online_escalated = 0
+    guardrail_blocked_count = 0
+    guardrail_degraded_count = 0
     injection_total = 0
     injection_codes: Counter = Counter()
     injection_fields: Counter = Counter()
@@ -154,6 +156,16 @@ def compute_metrics(events) -> dict:
     for e in events:
         total += 1
         event_counts[_bucket_key(e.get("event"))] += 1
+
+        # graph.audit_logger_node stamps both fields on every rag_query AND
+        # user_gate_pause event (never just rag_query), so count across all
+        # events rather than scoping to the rag_query branch below. MCP events
+        # never carry these keys (no LLM/guardrail path there), so they simply
+        # never match -- no explicit event-type filter needed.
+        if e.get("guardrail_blocked") is True:
+            guardrail_blocked_count += 1
+        if e.get("guardrail_degraded") is True:
+            guardrail_degraded_count += 1
 
         # Folded into this loop rather than given its own function: summarize_audit
         # passes iter_events(...), a generator, so a second aggregator would either
@@ -239,6 +251,8 @@ def compute_metrics(events) -> dict:
         "retrieval_modes": dict(mode_counts.most_common()),
         "model_used": dict(model_counts.most_common()),
         "online_escalated": online_escalated,
+        "guardrail_blocked_count": guardrail_blocked_count,
+        "guardrail_degraded_count": guardrail_degraded_count,
         "injection_findings": {
             "total": injection_total,
             "by_code": dict(injection_codes.most_common()),

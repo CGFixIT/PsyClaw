@@ -304,6 +304,26 @@ class TestComputeMetrics:
         events = [{"event": "rag_query", "model_used": "claude-sonnet-5"}]
         assert compute_metrics(events)["online_escalated"] == 1
 
+    def test_guardrail_blocked_and_degraded_counters(self):
+        """graph.audit_logger_node stamps guardrail_blocked/guardrail_degraded on
+        every rag_query AND user_gate_pause event -- count both event types, and
+        only count True (present-but-false and absent must not increment)."""
+        events = [
+            {"event": "rag_query", "guardrail_blocked": True, "guardrail_degraded": False},
+            {"event": "rag_query", "guardrail_blocked": False, "guardrail_degraded": True},
+            {"event": "user_gate_pause", "guardrail_blocked": True, "guardrail_degraded": True},
+            {"event": "rag_query"},  # legacy event predating both fields
+        ]
+        summary = compute_metrics(events)
+        assert summary["guardrail_blocked_count"] == 2
+        assert summary["guardrail_degraded_count"] == 2
+
+    def test_guardrail_counters_zero_when_absent(self):
+        events = [{"event": "rag_query", "model_used": "qwen"}]
+        summary = compute_metrics(events)
+        assert summary["guardrail_blocked_count"] == 0
+        assert summary["guardrail_degraded_count"] == 0
+
 
 class TestMain:
     """Cover the ``cyclaw-metrics`` console entry point (``metrics:main``).
