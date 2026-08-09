@@ -108,12 +108,22 @@ class GuardrailsConfig:
     # --- Validation -------------------------------------------------------
 
     def __post_init__(self) -> None:
+        self._validate_enabled()
         self._validate_engine()
         self._validate_base_url()
         self._validate_threshold()
         self._validate_nemo_config_dir()
         self._validate_metrics_path()
         self._validate_rail_lists()
+
+    def _validate_enabled(self) -> None:
+        # YAML can load enabled: "false" as a string; truthy strings would turn
+        # the opt-in layer ON. Same fail-closed pattern as sqlconnect/sync bools.
+        if not isinstance(self.enabled, bool):
+            raise GuardrailsConfigError(
+                f"guardrails.enabled must be a boolean true/false, got: {self.enabled!r}",
+                details={"field": "enabled", "received": repr(self.enabled)},
+            )
 
     def _validate_rail_lists(self) -> None:
         # Dataclasses don't enforce field types at runtime, so a config.yaml

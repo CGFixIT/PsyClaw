@@ -132,11 +132,24 @@ def test_run_select_bad_sql_before_connect():
         client.run_select("DELETE FROM t")  # guard fires before any DB work
 
 
-def test_driver_absent():
+def test_driver_absent(monkeypatch):
+    """Absent-driver path must not depend on the host missing psycopg."""
+    import builtins
+    import sys
+
     sc = SqlConnectConfig(driver="postgres")
     client = SqlClient({}, sc)
+    monkeypatch.delitem(sys.modules, "psycopg", raising=False)
+    real_import = builtins.__import__
+
+    def _no_psycopg(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "psycopg" or (isinstance(name, str) and name.startswith("psycopg.")):
+            raise ImportError("simulated missing psycopg")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _no_psycopg)
     with pytest.raises(SqlDriverNotInstalledError):
-        client._import_driver()  # psycopg not installed in this env
+        client._import_driver()
 
 
 def test_dsn_missing(monkeypatch):
@@ -265,6 +278,33 @@ def test_assert_rejects_mssql_adhoc_query_functions(bad):
     """OPENROWSET/OPENQUERY/OPENDATASOURCE are forbidden -- see _FORBIDDEN_RE."""
     with pytest.raises(SqlConnectError):
         assert_read_only_sql(bad)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "SELECT * FROM linked_srv.db.dbo.secrets",
+        "SELECT * FROM [linked_srv].[db].[dbo].[secrets]",
+        "SELECT * FROM linked_srv..dbo.secrets",
+        "select x from linked.db.schema.t where 1=1",
+    ],
+)
+def test_assert_rejects_mssql_four_part_names(bad):
+    """Four-part / linked-server names leave the DSN's intended DB boundary."""
+    with pytest.raises(SqlConnectError, match="four-part|linked-server"):
+        assert_read_only_sql(bad)
+
+
+@pytest.mark.parametrize(
+    "ok",
+    [
+        "SELECT * FROM dbo.users",
+        "SELECT * FROM otherdb.dbo.users",
+        "SELECT a.b FROM t",
+    ],
+)
+def test_assert_allows_two_and_three_part_names(ok):
+    assert assert_read_only_sql(ok) == ok.strip().rstrip(";").strip()
 
 
 def test_execute_sets_read_only_for_psycopg_style_driver(monkeypatch):

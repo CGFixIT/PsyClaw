@@ -115,6 +115,17 @@ _FORBIDDEN_FN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# MSSQL four-part / linked-server object refs (server.db.schema.obj and the
+# empty-catalog form server..schema.obj). OPENQUERY/OPENROWSET are already in
+# _FORBIDDEN_RE; four-part dotted names are the other way to leave the DSN's
+# intended database without using those keywords. Three-part names
+# (db.schema.obj) on the same instance are still allowed.
+_MSSQL_FOUR_PART_RE = re.compile(
+    r"(?:\[[^\]]+\]|[A-Za-z_][\w$]*)"
+    r"(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][\w$]*|)){3,}",
+    re.IGNORECASE,
+)
+
 # Quoted regions can legitimately contain SQL keywords or comment/``;``
 # punctuation as *data* or as a quoted column name -- e.g.
 # ``SELECT 'please do not delete'`` or ``SELECT "delete" FROM t``. Those are never
@@ -319,6 +330,14 @@ def assert_read_only_sql(sql: str) -> str:
             f"forbidden keyword in read-only query: {fn_hit.group(0)!r}",
             code="SQLCONNECT_BAD_QUERY",
             details={"keyword": fn_hit.group(0)},
+        )
+    # Keep identifiers so bracket-quoted four-part names are still visible.
+    multipart = _MSSQL_FOUR_PART_RE.search(_strip_quoted(cleaned, keep_identifiers=True))
+    if multipart:
+        raise SqlConnectError(
+            "linked-server / four-part object names are not allowed in read-only queries",
+            code="SQLCONNECT_BAD_QUERY",
+            details={"name": multipart.group(0)},
         )
     return cleaned
 
