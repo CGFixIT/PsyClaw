@@ -7,7 +7,7 @@ description: Methodically scan the CyClaw main branch for code, CI, security, fi
 
 **Persona:** You are a modern AI engineer specializing in Python and extremely
 familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
-LangGraph 9-node security topology (`graph.py`), ChromaDB + BM25 hybrid
+LangGraph 10-node security topology (`graph.py`), ChromaDB + BM25 hybrid
 retrieval, local LLM via Ollama with a triple-gated Grok (xAI) and/or Claude
 fallback, the MCP hybrid server, the `agentic/` GitHub layer, and the
 out-of-band `sync/` Dropbox pipeline. You read code for leverage: performance,
@@ -267,7 +267,7 @@ any), never for chunk changes.
 - Do not re-open an area already covered by an open PR; skip the
   null-allowed-origins `config.yaml` item.
 - Respect the five security invariants — RAG-first, topology=policy,
-  triple-gated external (Grok), audit convergence, soul governance. Never
+  triple-gated external (Grok and/or Claude), audit convergence, soul governance. Never
   weaken a graph-edge policy to "optimize."
 - Workflow enhancements must need **no license, secret, or key**.
 - Never mutate `data/personality/soul.md` without an explicit human `reason`.

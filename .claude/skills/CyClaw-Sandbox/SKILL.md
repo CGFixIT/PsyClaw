@@ -41,12 +41,12 @@ Inspect: `gate.py`, `graph.py`, `config.yaml`, `pyproject.toml`,
 `tests/test_harness.py`.
 
 Verify config invariants:
-- `app.mode`: "offline"
+- `app.mode`: "hybrid" (armed 2026-08-07 — see `docs/THREAT_MODEL.md` eighth amendment; was "offline")
 - `api.host`: "127.0.0.1", `api.port`: 8787
-- `models.grok.enabled`: false (triple-gate offline default)
-- `models.claude.enabled`: false
+- `models.grok.enabled`: true (armed 2026-08-07; was false — still triple-gated, `user_confirmed_online` is per-request and cannot be pre-set)
+- `models.claude.enabled`: true (same amendment)
 - `retrieval.min_score`: 0.028
-- 33 banned injection patterns in `policy.prompt_filter.banned_patterns`
+- 40 banned injection patterns in `policy.prompt_filter.banned_patterns`
 - `fsconnect` block present (default `enabled: false`)
 - `sqlconnect` block present (default `enabled: false`, `read_only: true`, `allow_write: false`)
 - `sync` block present (default `enabled: false`)
@@ -671,7 +671,7 @@ criteria. Read when implementing new tests or debugging failures.
 |---|-----------|-------|
 | 1 | RAG-First | `retrieve_node` is always N1 |
 | 2 | Topology = Policy | Routing via `route_by_score_node`, not prompts |
-| 3 | Triple-Gated External | `grok.enabled=false` + `claude.enabled=false` (default) |
+| 3 | Triple-Gated External | `app.mode=="hybrid"` AND `<provider>.enabled` AND per-request `user_confirmed_online`, all three — `grok.enabled=true` + `claude.enabled=true` shipped since 2026-08-07, so only `user_confirmed_online` still gates in practice |
 | 4 | Audit Convergence | `audit_logger_node` is always last |
 | 5 | Soul Governance | Evolution requires human reason string |
 | 6 | Zero Telemetry | 10 env vars killed at import time |

@@ -29,12 +29,14 @@ cfg = yaml.safe_load(open('config.yaml'))
 print('mode:', cfg['app']['mode'])
 print('host:', cfg['api']['host'])
 print('port:', cfg['api']['port'])
-print('top_k:', cfg['retrieval']['top_k'])
+print('top_k_semantic:', cfg['retrieval']['top_k_semantic'])
+print('top_k_keyword:', cfg['retrieval']['top_k_keyword'])
 print('min_score:', cfg['retrieval']['min_score'])
 print('grok_enabled:', cfg['models']['grok'].get('enabled', False))
+print('claude_enabled:', cfg['models']['claude'].get('enabled', False))
 "
 ```
-Flag if `host` is not `127.0.0.1` (loopback requirement) or if `grok_enabled=true` unexpectedly.
+Flag if `host` is not `127.0.0.1` (loopback requirement). `grok_enabled`/`claude_enabled` are `true` by default since 2026-08-07 (armed — see `docs/THREAT_MODEL.md` eighth amendment); that alone is expected, not an anomaly. Both providers stay triple-gated (`app.mode == "hybrid"` AND `<provider>.enabled` AND the per-request `user_confirmed_online`) — flag only if `app.mode` is `hybrid` *and* a provider is enabled *and* you see evidence of `user_confirmed_online` being satisfied without an explicit user opt-in.
 
 ### 4. Environment Variables
 ```bash
