@@ -560,23 +560,26 @@ auth_manager = None
 if _boot_auth_enabled(cfg.get("auth")):
     auth_manager = AuthManager(cfg)
     # bootstrap_if_empty() is a no-op on every boot after the first: it only
-    # ever acts when the users table is genuinely empty. The password is
-    # returned exactly once here and never persisted in plaintext or logged
-    # -- only hash_password()'s output reaches the database. This is why
-    # auth.enabled defaults false: turning it on is the one moment an
-    # operator MUST be watching this console output.
-    _bootstrap_password = auth_manager.bootstrap_if_empty()
-    if _bootstrap_password:
+    # ever acts when the users table is genuinely empty. No credential
+    # appears in this banner on purpose: an earlier version printed a
+    # generated one-time password here, and CodeQL rightly flagged it
+    # (alert #1057) -- a service's stdout is not ephemeral (systemd journal,
+    # Docker log driver, any log shipper all persist it). The account is
+    # created with an unusable placeholder hash instead (see
+    # bootstrap_if_empty's docstring), so there is no secret to show: the
+    # operator sets the first real password locally, off any output channel,
+    # via getpass.
+    if auth_manager.bootstrap_if_empty():
         print(
             f"\n{'=' * 70}\n"
             f"CyClaw authentication is now enabled. A first account was created:\n"
             f"\n"
             f"    username: {BOOTSTRAP_USERNAME}\n"
-            f"    password: {_bootstrap_password}\n"
             f"\n"
-            f"This password is shown ONCE and is not stored anywhere in plaintext.\n"
-            f"Save it now, then log in and consider `cyclaw-user passwd "
-            f"{BOOTSTRAP_USERNAME}` to set your own.\n"
+            f"It cannot be logged into yet: no password is set (and none was\n"
+            f"generated anywhere visible). Set one now, on this machine:\n"
+            f"\n"
+            f"    cyclaw-user passwd {BOOTSTRAP_USERNAME}\n"
             f"{'=' * 70}\n"
         )
 

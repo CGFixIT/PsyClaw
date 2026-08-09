@@ -427,11 +427,16 @@ api:
 # this on a non-loopback bind.
 #
 # Turning this on for the first time with no existing accounts creates one:
-# username "admin", a random one-time password printed ONCE to the server's
-# console at boot (never logged, never stored in plaintext). Manage accounts
-# after that with the local-only `cyclaw-user` CLI (add/list/disable/enable/
-# passwd/token) -- see utils/authn_cli.py. No account exists until you turn
-# this on; nothing is ever created automatically.
+# username "admin", with NO usable password -- the account is seeded with the
+# hash of a random secret that is discarded on the spot, never printed,
+# logged, or stored in plaintext (a printed one-time password was the
+# original design; CodeQL alert #1057 flagged it, and correctly: a service's
+# stdout is persisted by journald/Docker/log shippers, so "printed once" was
+# never really once). Set the first real password on the server machine with
+# `cyclaw-user passwd admin` (prompts via getpass, no echo); manage accounts
+# after that with the same local-only CLI (add/list/disable/enable/passwd/
+# token) -- see utils/authn_cli.py. No account exists until you turn this
+# on; nothing is ever created automatically.
 auth:
   enabled: false
   # SQLite by default (relative paths anchor to the repo root, matching

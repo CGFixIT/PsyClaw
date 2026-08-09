@@ -276,6 +276,18 @@ Each stage is independently reviewable and leaves the tree working.
 4. **Bootstrap.** Proposed: `cyclaw-user add` refuses to run over HTTP and must
    be run locally, so there is never a window where a default credential exists.
    No default account is ever created.
+   **Resolved (2026-08-08, amended 2026-08-09):** first enable with an empty
+   users table creates `admin` seeded with the hash of a random secret that is
+   discarded inside the same call — never returned, printed, logged, or stored
+   in plaintext — so the account exists but cannot be logged into until
+   `cyclaw-user passwd admin` sets a real password locally via `getpass`.
+   The first iteration of this decision printed a generated one-time password
+   to the server console instead; CodeQL flagged it (alert #1057), and the
+   objection is substantive, not pedantic: a service's stdout is persisted by
+   systemd's journal, Docker's log driver, and any log shipper, so
+   "printed once" was never really once. The discard design keeps this
+   decision's actual requirement — no fixed default credential, ever — while
+   removing every output channel a credential could reach.
 
 ---
 

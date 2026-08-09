@@ -10,6 +10,7 @@ Mirrors the dataclass ``__post_init__`` validation that ``sync/config.py`` and
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from utils.errors import ConfigError
@@ -184,7 +185,17 @@ def validate_auth_config(cfg: dict[str, Any]) -> None:
             f"config.auth must be a mapping, got: {type(auth).__name__}",
             details={"received_type": type(auth).__name__},
         )
-    if not auth.get("enabled", False):
+    # `is not True`, not truthy `not auth.get("enabled", False)`: gate.py
+    # reads this same key strictly in two places (_boot_auth_enabled,
+    # _flag_is_true via _auth_and_tls_enabled) specifically so a quoted
+    # `enabled: "false"`/`"true"` string is never mistaken for the literal
+    # boolean. A truthy read here disagreed with both: `"false"` (truthy)
+    # would validate the session block for a config gate.py treats as OFF --
+    # failing boot over a block that will never be read -- and `"true"`
+    # (also truthy) would validate and pass clean for a config gate.py
+    # treats as OFF too, signing off on a misconfiguration with no
+    # diagnostic anywhere in the boot sequence.
+    if auth.get("enabled") is not True:
         return
 
     session = auth.get("session", {})
@@ -197,9 +208,18 @@ def validate_auth_config(cfg: dict[str, Any]) -> None:
     idle = session.get("idle_timeout_sec", 43200)
     absolute = session.get("absolute_timeout_sec", 604800)
     for name, val in (("idle_timeout_sec", idle), ("absolute_timeout_sec", absolute)):
-        if not _is_real_number(val) or val <= 0:
+        # math.isfinite, not just `val <= 0`: NaN and +/-inf are real floats,
+        # so _is_real_number accepts them, and EVERY comparison against NaN
+        # is False -- `nan <= 0` is False, so a NaN timeout sailed through
+        # this check silently. Downstream that is not cosmetic:
+        # validate_session()'s idle-expiry comparison against a NaN idle
+        # timeout is permanently False (sessions never idle-expire), a NaN
+        # absolute timeout binds as SQL NULL into a NOT NULL column and
+        # every login fails, and `int(manager.absolute_timeout_sec)` at
+        # cookie-issuance time raises OverflowError for +inf.
+        if not _is_real_number(val) or not math.isfinite(val) or val <= 0:
             raise ConfigError(
-                f"auth.session.{name} must be a positive number, got: {val!r}",
+                f"auth.session.{name} must be a finite positive number, got: {val!r}",
                 details={"received": val, "key": name},
             )
     if idle > absolute:

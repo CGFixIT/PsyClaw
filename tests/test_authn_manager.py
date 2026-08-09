@@ -47,33 +47,40 @@ def fast_manager(tmp_path):
 
 class TestBootstrap:
     def test_bootstrap_creates_the_first_account(self, manager):
-        password = manager.bootstrap_if_empty()
-        assert password is not None
-        assert len(password) >= 20
+        # `is True`, not truthiness: bootstrap_if_empty used to return the
+        # plaintext password (a non-empty str, also truthy), and returning
+        # the secret again is exactly the regression this pins against --
+        # CodeQL alert #1057 (clear-text logging of sensitive data) was the
+        # print-once banner built on that return value.
+        assert manager.bootstrap_if_empty() is True
         users = manager.list_users()
         assert [u.username for u in users] == [BOOTSTRAP_USERNAME]
 
     def test_bootstrap_is_a_noop_once_any_user_exists(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
-        assert manager.bootstrap_if_empty() is None
+        assert manager.bootstrap_if_empty() is False
         # Still just the one account -- bootstrap did not also create "admin".
         assert [u.username for u in manager.list_users()] == ["alice"]
 
-    def test_bootstrap_password_actually_logs_in(self, manager):
-        password = manager.bootstrap_if_empty()
-        result = manager.login(BOOTSTRAP_USERNAME, password)
-        assert result.username == BOOTSTRAP_USERNAME
+    def test_bootstrap_account_is_unusable_until_a_password_is_set(self, manager):
+        """The placeholder hash is of a secret that was discarded inside
+        bootstrap_if_empty -- nobody, operator included, can log in as admin
+        until `cyclaw-user passwd admin` sets a real password. This is the
+        design that keeps any credential off stdout/logs entirely (CodeQL
+        #1057): there is no secret to disclose because none survives the
+        call. Obvious guesses must fail like any wrong password."""
+        assert manager.bootstrap_if_empty() is True
+        for guess in ("", "admin", "password", "cyclaw", BOOTSTRAP_USERNAME):
+            with pytest.raises(AuthLoginFailed):
+                manager.login(BOOTSTRAP_USERNAME, guess)
 
-    def test_two_bootstrap_passwords_are_different(self, tmp_path):
-        """A fixed default password would be exactly the shortcut
-        docs/AUTHENTICATION_DESIGN.md §9/§10 was written to avoid."""
-        m1 = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "a.db")}})
-        m2 = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "b.db")}})
-        try:
-            assert m1.bootstrap_if_empty() != m2.bootstrap_if_empty()
-        finally:
-            m1.close()
-            m2.close()
+    def test_bootstrap_account_works_after_passwd_sets_a_real_password(self, manager):
+        """`cyclaw-user passwd admin` (which calls set_password) is the ONLY
+        path that makes the bootstrap account usable -- the same local-only
+        recovery path docs/AUTHENTICATION_DESIGN.md §9 already relies on."""
+        assert manager.bootstrap_if_empty() is True
+        manager.set_password(BOOTSTRAP_USERNAME, _GOOD_PASSWORD)
+        assert manager.login(BOOTSTRAP_USERNAME, _GOOD_PASSWORD).username == BOOTSTRAP_USERNAME
 
 
 class TestAccounts:

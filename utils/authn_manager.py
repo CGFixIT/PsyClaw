@@ -33,10 +33,11 @@ logger = logging.getLogger("cyclaw.authn_manager")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Fixed username for the auto-generated first-run account
-# (docs/AUTHENTICATION_DESIGN.md §10.4, bootstrap decision 2026-08-08): a
-# random one-time PASSWORD is generated at first boot, but the username is
-# not itself a secret, so a stable, predictable "admin" is fine -- the
-# operator picks their own usernames for every account after this one via
+# (docs/AUTHENTICATION_DESIGN.md §10.4, bootstrap decision 2026-08-08, amended
+# 2026-08-09): the account is seeded with an unusable placeholder hash and no
+# credential ever reaches an output channel (see bootstrap_if_empty), and the
+# username is not itself a secret -- so a stable, predictable "admin" is fine.
+# The operator picks their own usernames for every account after this one via
 # `cyclaw-user add`.
 BOOTSTRAP_USERNAME = "admin"
 
@@ -234,28 +235,39 @@ class AuthManager:
 
     # -- accounts ----------------------------------------------------------
 
-    def bootstrap_if_empty(self) -> str | None:
-        """Create BOOTSTRAP_USERNAME with a random password if no user exists.
+    def bootstrap_if_empty(self) -> bool:
+        """Create BOOTSTRAP_USERNAME with an UNUSABLE placeholder if no user exists.
 
-        Returns the plaintext password exactly once, for the caller to print
-        to the local console (never logged, never written to disk in
-        plaintext -- only hash_password()'s output is persisted). Returns
-        None when at least one user already exists, so this is safe to call
-        on every boot: it only ever acts on a genuinely empty table.
+        Returns True when the account was created, False when at least one
+        user already exists -- so this is safe to call on every boot: it only
+        ever acts on a genuinely empty table.
+
+        The placeholder is the hash of a random secret that is generated,
+        hashed, and DISCARDED inside this call -- deliberately never returned,
+        printed, logged, or written anywhere in plaintext. An earlier version
+        returned the plaintext for the caller to print once to the console;
+        CodeQL flagged that (clear-text logging of sensitive data,
+        cgfixit/CyClaw alert #1057) and the deeper point stands: a service's
+        stdout is not ephemeral -- systemd's journal, Docker's log driver, and
+        anything shipping logs off-box all persist it. Until the operator runs
+        `cyclaw-user passwd admin` (local-only, getpass, no echo -- the same
+        recovery path docs/AUTHENTICATION_DESIGN.md §9 already relies on),
+        the account exists but cannot be logged into, exactly like a Linux
+        account whose password field is locked. No fixed default credential
+        ever ships, and no credential ever reaches an output channel.
         """
         with self._lock:
             row = self.conn.execute(self._sql_count_users).fetchone()
             if row and int(row["n"]) > 0:
                 self._end_read_txn()
-                return None
-            password = authn.generate_bootstrap_password()
-            record = authn.hash_password(password)
+                return False
+            record = authn.hash_password(authn.generate_bootstrap_password())
             now = self._now()
             self.conn.execute(
                 self._sql_insert_user, (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None)
             )
             self.conn.commit()
-            return password
+            return True
 
     def create_user(self, username: str, password: str) -> str:
         """Validate, hash, and insert a new user. Returns the canonical username."""

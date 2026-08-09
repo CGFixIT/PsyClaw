@@ -402,16 +402,24 @@ only: sessions, login/logout, and per-device bearer tokens exist, but
 | `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
 
 Turning `auth.enabled` on for the first time with no existing accounts
-creates one — username `admin`, a random one-time password printed **once**
-to the server's own console at boot. Manage accounts after that with the
-local-only `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/
-`token create`/`token list`/`token revoke`) — it never runs over HTTP.
+creates one — username `admin`, with **no usable password**: the account is
+seeded with the hash of a random secret that is discarded immediately, so
+nothing is ever printed, logged, or stored in plaintext. Set the first real
+password on the server machine itself (prompts via `getpass`, no echo):
+
+```bash
+cyclaw-user passwd admin
+```
+
+Manage accounts after that with the same local-only `cyclaw-user` CLI
+(`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/
+`token revoke`) — it never runs over HTTP.
 
 ```bash
 # Log in — save the cookie jar and read the csrf_token out of the response.
 curl -s -c cookies.txt -X POST http://127.0.0.1:8787/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"the-one-time-password"}' | python3 -m json.tool
+  -d '{"username":"admin","password":"the-password-you-set"}' | python3 -m json.tool
 
 # Who am I, using the saved session cookie.
 curl -s -b cookies.txt http://127.0.0.1:8787/auth/whoami | python3 -m json.tool

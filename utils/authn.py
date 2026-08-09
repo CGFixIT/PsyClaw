@@ -290,19 +290,23 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-# 18 raw bytes -> 24 base64url chars: comfortably above _MIN_PASSWORD_LEN (12)
-# with margin for the bootstrap operator to see and retype it once, and short
-# enough to read off a terminal without wrapping.
+# 18 raw bytes -> 24 base64url chars: comfortably above _MIN_PASSWORD_LEN (12).
 _BOOTSTRAP_PASSWORD_BYTES = 18
 
 
 def generate_bootstrap_password() -> str:
-    """A random strong password for the auto-generated first-run account.
+    """A random secret seeding the first-run account's UNUSABLE placeholder hash.
 
-    Printed once to the local console by the caller and never stored in
-    plaintext or logged -- only hash_password()'s output is persisted. This
+    The caller (AuthManager.bootstrap_if_empty) hashes this and discards it --
+    it is never returned to an operator, printed, logged, or stored in
+    plaintext, so the bootstrap account cannot be logged into until
+    `cyclaw-user passwd` sets a real password locally via getpass. This
     exists so CyClaw never ships a fixed, guessable default credential
-    (docs/AUTHENTICATION_DESIGN.md §9/§10): every install's first password is
-    unique and generated locally, on that machine, at first boot.
+    (docs/AUTHENTICATION_DESIGN.md §9/§10): every install's placeholder is
+    unique and generated locally, on that machine, at first boot. (An earlier
+    design returned this for a print-once console banner; CodeQL alert #1057
+    flagged that, and the discard design replaced it -- a service's stdout is
+    persisted by journald/Docker/log shippers, so "shown once" was never
+    really once.)
     """
     return secrets.token_urlsafe(_BOOTSTRAP_PASSWORD_BYTES)
