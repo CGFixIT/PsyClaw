@@ -1,7 +1,5 @@
 # CyClaw: Local AI you can Trust.
 
-> Offline-first RAG and General Purpose Chatbot (Optional send to online LLM), Secure/Privacy Focused search, chat and agentic coding harness w/ Dropbox Sync for RAG data corpus.
-
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.139-blue.svg)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2.9-blue.svg)](https://github.com/langchain-ai/langgraph)
