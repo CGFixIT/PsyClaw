@@ -38,7 +38,7 @@ them wrongly. Exit `0` no drift · `2` drift found · `3` env error.
 | D2 | `pyproject [project.scripts]` | Every console entry point is named in CLAUDE.md |
 | D3 | `config.yaml` | `port`/`min_score`/`rrf_k`/`graph_timeout_sec`/`soul_max_chars` cited in CLAUDE.md match the real values |
 | D4 | `banned_patterns` length | The "`<n>` patterns" claim is consistent across CLAUDE.md, config.yaml, guardrails, fsconnect |
-| D5 | `gate.py`/`gate_ops.py`/`gate_auth.py` `@app` routes | Every API route is named in CLAUDE.md, and `setup-guide.md`'s REST section matches (both directions: undocumented and phantom routes) |
+| D5 | `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py` `@app` routes | Every API route is named in CLAUDE.md, and `setup-guide.md`'s REST section matches (both directions: undocumented and phantom routes) |
 | D6 | `.claude/settings.json` hooks | A "stop hook" claim is either backed by a wired Stop hook or accurately attributed to the session runtime |
 
 ### Step 2 — Reconcile each mechanical drift item
