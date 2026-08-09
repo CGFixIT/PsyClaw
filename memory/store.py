@@ -26,7 +26,9 @@ from utils.logger import hash_query, redact_sensitive
 
 logger = logging.getLogger("cyclaw.memory")
 
-_write_lock = threading.Lock()
+# RLock: apply_proposal holds the lock while calling insert/update helpers that
+# re-enter the same lock on the public API paths.
+_write_lock = threading.RLock()
 _episode_counter = 0
 _episode_counter_lock = threading.Lock()
 
@@ -47,6 +49,25 @@ def _db_path(cfg: Mapping[str, Any]) -> Path:
     mem = _mem_cfg(cfg)
     raw = mem.get("db_path") or "data/memory/cyclaw_memory.db"
     return Path(str(raw))
+
+
+def _max_active_facts(cfg: Mapping[str, Any]) -> int | None:
+    """Configured active-fact ceiling, or None when unset/disabled."""
+    raw = (_mem_cfg(cfg).get("facts") or {}).get("max_active")
+    if raw is None:
+        return None
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if limit < 1:
+        return None
+    return limit
+
+
+def _count_active_facts(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS c FROM facts WHERE active = 1").fetchone()
+    return int(row["c"] if row is not None else 0)
 
 
 def connect(cfg: Mapping[str, Any]) -> sqlite3.Connection:
@@ -231,10 +252,60 @@ def list_facts(
 def get_fact(cfg: Mapping[str, Any], fact_id: int) -> Fact | None:
     conn = connect(cfg)
     try:
-        row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
-        return _row_to_fact(row) if row else None
+        return _get_fact_conn(conn, fact_id)
     finally:
         conn.close()
+
+
+def _get_fact_conn(conn: sqlite3.Connection, fact_id: int) -> Fact | None:
+    row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
+    return _row_to_fact(row) if row else None
+
+
+def _insert_fact_conn(
+    conn: sqlite3.Connection,
+    cfg: Mapping[str, Any],
+    content: str,
+    *,
+    category: str = "general",
+    tags: list[str] | None = None,
+    confidence: float = 1.0,
+    source: str = "human",
+    reason: str = "",
+) -> Fact:
+    """Insert an active fact on an open connection (caller owns txn/lock)."""
+    check_content_size(content, dict(cfg))
+    cleaned_tags = check_tags(tags)
+    conf = max(0.0, min(1.0, float(confidence)))
+    limit = _max_active_facts(cfg)
+    if limit is not None and _count_active_facts(conn) >= limit:
+        raise ValueError(f"active fact limit reached ({limit})")
+    now = _now()
+    digest = _sha256(content)
+    cur = conn.execute(
+        """
+        INSERT INTO facts (
+          content, category, tags_json, confidence, source, active,
+          created_at, updated_at, applied_reason, content_sha256
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+        """,
+        (
+            content,
+            (category or "general")[:64],
+            json.dumps(cleaned_tags),
+            conf,
+            source or "human",
+            now,
+            now,
+            reason or "",
+            digest,
+        ),
+    )
+    fact_id = int(cur.lastrowid)
+    row = conn.execute("SELECT * FROM facts WHERE id = ?", (fact_id,)).fetchone()
+    if row is None:
+        raise RuntimeError("fact row missing after write")
+    return _row_to_fact(row)
 
 
 def insert_fact(
@@ -247,44 +318,30 @@ def insert_fact(
     source: str = "human",
     reason: str = "",
 ) -> Fact:
-    check_content_size(content, dict(cfg))
-    cleaned_tags = check_tags(tags)
-    conf = max(0.0, min(1.0, float(confidence)))
-    now = _now()
-    digest = _sha256(content)
     with _write_lock:
         conn = connect(cfg)
         try:
-            cur = conn.execute(
-                """
-                INSERT INTO facts (
-                  content, category, tags_json, confidence, source, active,
-                  created_at, updated_at, applied_reason, content_sha256
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-                """,
-                (
-                    content,
-                    (category or "general")[:64],
-                    json.dumps(cleaned_tags),
-                    conf,
-                    source or "human",
-                    now,
-                    now,
-                    reason or "",
-                    digest,
-                ),
+            fact = _insert_fact_conn(
+                conn,
+                cfg,
+                content,
+                category=category,
+                tags=tags,
+                confidence=confidence,
+                source=source,
+                reason=reason,
             )
             conn.commit()
-            fact_id = int(cur.lastrowid)
-            row = conn.execute("SELECT * FROM facts WHERE id = ?", (fact_id,)).fetchone()
-            if row is None:
-                raise RuntimeError("fact row missing after write")
-            return _row_to_fact(row)
+            return fact
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
 
-def update_fact(
+def _update_fact_conn(
+    conn: sqlite3.Connection,
     cfg: Mapping[str, Any],
     fact_id: int,
     *,
@@ -294,7 +351,7 @@ def update_fact(
     confidence: float | None = None,
     reason: str = "",
 ) -> Fact:
-    existing = get_fact(cfg, fact_id)
+    existing = _get_fact_conn(conn, fact_id)
     if existing is None:
         raise ValueError(f"fact {fact_id} not found")
     new_content = content if content is not None else existing.content
@@ -308,55 +365,94 @@ def update_fact(
     )
     now = _now()
     digest = _sha256(new_content)
+    conn.execute(
+        """
+        UPDATE facts SET content=?, category=?, tags_json=?, confidence=?,
+          updated_at=?, applied_reason=?, content_sha256=?, active=1
+        WHERE id=?
+        """,
+        (
+            new_content,
+            new_cat,
+            json.dumps(new_tags),
+            new_conf,
+            now,
+            reason or existing.applied_reason,
+            digest,
+            int(fact_id),
+        ),
+    )
+    row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
+    if row is None:
+        raise RuntimeError("fact row missing after write")
+    return _row_to_fact(row)
+
+
+def update_fact(
+    cfg: Mapping[str, Any],
+    fact_id: int,
+    *,
+    content: str | None = None,
+    category: str | None = None,
+    tags: list[str] | None = None,
+    confidence: float | None = None,
+    reason: str = "",
+) -> Fact:
     with _write_lock:
         conn = connect(cfg)
         try:
-            conn.execute(
-                """
-                UPDATE facts SET content=?, category=?, tags_json=?, confidence=?,
-                  updated_at=?, applied_reason=?, content_sha256=?, active=1
-                WHERE id=?
-                """,
-                (
-                    new_content,
-                    new_cat,
-                    json.dumps(new_tags),
-                    new_conf,
-                    now,
-                    reason or existing.applied_reason,
-                    digest,
-                    int(fact_id),
-                ),
+            fact = _update_fact_conn(
+                conn,
+                cfg,
+                fact_id,
+                content=content,
+                category=category,
+                tags=tags,
+                confidence=confidence,
+                reason=reason,
             )
             conn.commit()
-            row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
-            if row is None:
-                raise RuntimeError("fact row missing after write")
-            return _row_to_fact(row)
+            return fact
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
 
-def deactivate_fact(cfg: Mapping[str, Any], fact_id: int, *, reason: str = "") -> Fact:
-    existing = get_fact(cfg, fact_id)
+def _deactivate_fact_conn(
+    conn: sqlite3.Connection,
+    fact_id: int,
+    *,
+    reason: str = "",
+) -> Fact:
+    existing = _get_fact_conn(conn, fact_id)
     if existing is None:
         raise ValueError(f"fact {fact_id} not found")
     now = _now()
+    conn.execute(
+        """
+        UPDATE facts SET active=0, updated_at=?, applied_reason=?
+        WHERE id=?
+        """,
+        (now, reason or existing.applied_reason, int(fact_id)),
+    )
+    row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
+    if row is None:
+        raise RuntimeError("fact row missing after write")
+    return _row_to_fact(row)
+
+
+def deactivate_fact(cfg: Mapping[str, Any], fact_id: int, *, reason: str = "") -> Fact:
     with _write_lock:
         conn = connect(cfg)
         try:
-            conn.execute(
-                """
-                UPDATE facts SET active=0, updated_at=?, applied_reason=?
-                WHERE id=?
-                """,
-                (now, reason or existing.applied_reason, int(fact_id)),
-            )
+            fact = _deactivate_fact_conn(conn, fact_id, reason=reason)
             conn.commit()
-            row = conn.execute("SELECT * FROM facts WHERE id = ?", (int(fact_id),)).fetchone()
-            if row is None:
-                raise RuntimeError("fact row missing after write")
-            return _row_to_fact(row)
+            return fact
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -392,6 +488,9 @@ def create_proposal(
             if row is None:
                 raise RuntimeError("proposal row missing after write")
             return _row_to_proposal(row)
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -458,78 +557,154 @@ def set_proposal_status(
             if row is None:
                 raise ValueError(f"proposal {proposal_id} not found")
             return _row_to_proposal(row)
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
 
 def apply_proposal(cfg: Mapping[str, Any], proposal_id: int, reason: str) -> dict[str, Any]:
-    """Apply a pending proposal: enforce injection, mutate facts, mark applied."""
-    require_reason(reason)
-    prop = get_proposal(cfg, proposal_id)
-    if prop is None:
-        raise ValueError(f"proposal {proposal_id} not found")
-    if prop.status != "pending":
-        raise ValueError(f"proposal {proposal_id} is not pending (status={prop.status})")
+    """Apply a pending proposal: enforce injection, mutate facts, mark applied.
 
-    action = prop.action
-    payload = prop.payload
+    Claim + mutation run under one write lock and one BEGIN IMMEDIATE
+    transaction so concurrent apply of the same proposal cannot double-insert.
+    """
+    require_reason(reason)
+    reason_s = reason.strip()
     cfg_dict = dict(cfg)
 
-    if action == "add_fact":
-        content = str(payload.get("content") or "")
-        check_content_size(content, cfg_dict)
-        enforce_content(content, cfg_dict)
-        fact = insert_fact(
-            cfg,
-            content,
-            category=str(payload.get("category") or "general"),
-            tags=list(payload.get("tags") or []),
-            confidence=float(payload.get("confidence", 1.0)),
-            source=str(payload.get("source") or "human"),
-            reason=reason.strip(),
-        )
-        set_proposal_status(cfg, proposal_id, "applied", resolved_reason=reason.strip())
-        return {"status": "applied", "action": action, "fact_id": fact.id, "proposal_id": proposal_id}
+    with _write_lock:
+        conn = connect(cfg)
+        try:
+            # Exclusive txn: blocks concurrent writers on this DB file too.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM memory_proposals WHERE id = ?",
+                (int(proposal_id),),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"proposal {proposal_id} not found")
+            if row["status"] != "pending":
+                raise ValueError(
+                    f"proposal {proposal_id} is not pending (status={row['status']})"
+                )
+            prop = _row_to_proposal(row)
+            action = prop.action
+            payload = prop.payload
 
-    if action == "update_fact":
-        fact_id = int(payload.get("fact_id") or 0)
-        if fact_id < 1:
-            raise ValueError("update_fact requires fact_id")
-        content = payload.get("content")
-        if content is not None:
-            check_content_size(str(content), cfg_dict)
-            enforce_content(str(content), cfg_dict)
-        fact = update_fact(
-            cfg,
-            fact_id,
-            content=str(content) if content is not None else None,
-            category=str(payload["category"]) if "category" in payload else None,
-            tags=list(payload["tags"]) if "tags" in payload else None,
-            confidence=float(payload["confidence"]) if "confidence" in payload else None,
-            reason=reason.strip(),
-        )
-        set_proposal_status(cfg, proposal_id, "applied", resolved_reason=reason.strip())
-        return {"status": "applied", "action": action, "fact_id": fact.id, "proposal_id": proposal_id}
+            if action == "add_fact":
+                content = str(payload.get("content") or "")
+                check_content_size(content, cfg_dict)
+                enforce_content(content, cfg_dict)
+                fact = _insert_fact_conn(
+                    conn,
+                    cfg,
+                    content,
+                    category=str(payload.get("category") or "general"),
+                    tags=list(payload.get("tags") or []),
+                    confidence=float(payload.get("confidence", 1.0)),
+                    source=str(payload.get("source") or "human"),
+                    reason=reason_s,
+                )
+            elif action == "update_fact":
+                fact_id = int(payload.get("fact_id") or 0)
+                if fact_id < 1:
+                    raise ValueError("update_fact requires fact_id")
+                content = payload.get("content")
+                if content is not None:
+                    check_content_size(str(content), cfg_dict)
+                    enforce_content(str(content), cfg_dict)
+                fact = _update_fact_conn(
+                    conn,
+                    cfg,
+                    fact_id,
+                    content=str(content) if content is not None else None,
+                    category=(
+                        str(payload["category"]) if "category" in payload else None
+                    ),
+                    tags=list(payload["tags"]) if "tags" in payload else None,
+                    confidence=(
+                        float(payload["confidence"])
+                        if "confidence" in payload
+                        else None
+                    ),
+                    reason=reason_s,
+                )
+            elif action == "deactivate_fact":
+                fact_id = int(payload.get("fact_id") or 0)
+                if fact_id < 1:
+                    raise ValueError("deactivate_fact requires fact_id")
+                fact = _deactivate_fact_conn(conn, fact_id, reason=reason_s)
+            else:
+                raise ValueError(f"unsupported action: {action}")
 
-    if action == "deactivate_fact":
-        fact_id = int(payload.get("fact_id") or 0)
-        if fact_id < 1:
-            raise ValueError("deactivate_fact requires fact_id")
-        fact = deactivate_fact(cfg, fact_id, reason=reason.strip())
-        set_proposal_status(cfg, proposal_id, "applied", resolved_reason=reason.strip())
-        return {"status": "applied", "action": action, "fact_id": fact.id, "proposal_id": proposal_id}
-
-    raise ValueError(f"unsupported action: {action}")
+            now = _now()
+            cur = conn.execute(
+                """
+                UPDATE memory_proposals
+                SET status=?, resolved_at=?, resolved_reason=?
+                WHERE id=? AND status='pending'
+                """,
+                ("applied", now, reason_s, int(proposal_id)),
+            )
+            if cur.rowcount != 1:
+                raise ValueError(
+                    f"proposal {proposal_id} is not pending (status changed)"
+                )
+            conn.commit()
+            return {
+                "status": "applied",
+                "action": action,
+                "fact_id": fact.id,
+                "proposal_id": proposal_id,
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def reject_proposal(cfg: Mapping[str, Any], proposal_id: int, reason: str) -> MemoryProposal:
     require_reason(reason)
-    prop = get_proposal(cfg, proposal_id)
-    if prop is None:
-        raise ValueError(f"proposal {proposal_id} not found")
-    if prop.status != "pending":
-        raise ValueError(f"proposal {proposal_id} is not pending (status={prop.status})")
-    return set_proposal_status(cfg, proposal_id, "rejected", resolved_reason=reason.strip())
+    reason_s = reason.strip()
+    with _write_lock:
+        conn = connect(cfg)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            now = _now()
+            cur = conn.execute(
+                """
+                UPDATE memory_proposals
+                SET status=?, resolved_at=?, resolved_reason=?
+                WHERE id=? AND status='pending'
+                """,
+                ("rejected", now, reason_s, int(proposal_id)),
+            )
+            if cur.rowcount != 1:
+                row = conn.execute(
+                    "SELECT * FROM memory_proposals WHERE id = ?",
+                    (int(proposal_id),),
+                ).fetchone()
+                if row is None:
+                    raise ValueError(f"proposal {proposal_id} not found")
+                raise ValueError(
+                    f"proposal {proposal_id} is not pending (status={row['status']})"
+                )
+            row = conn.execute(
+                "SELECT * FROM memory_proposals WHERE id = ?",
+                (int(proposal_id),),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"proposal {proposal_id} not found")
+            conn.commit()
+            return _row_to_proposal(row)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def search_facts_fts(

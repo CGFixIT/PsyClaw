@@ -7,10 +7,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
 
 from gate_memory import register_memory_routes
+from memory.store import apply_proposal, get_fact, insert_fact
+from schemas.api import MemoryProposeRequest
 
 
 @pytest.fixture
@@ -26,7 +28,7 @@ def memory_app(tmp_path: Path, api_key: str):
         "memory": {
             "enabled": True,
             "db_path": str(tmp_path / "mem.db"),
-            "facts": {"enabled": True, "max_content_chars": 8192},
+            "facts": {"enabled": True, "max_content_chars": 8192, "max_active": 10000},
             "episodes": {"enabled": True, "store_raw_query": False, "max_answer_summary_chars": 200},
             "retrieval_fusion": {"enabled": False},
             "propose_apply": {"enabled": True},
@@ -43,15 +45,6 @@ def memory_app(tmp_path: Path, api_key: str):
 
     async def _rl():
         return None
-
-    def require_api_key(request=None):  # simplified — TestClient passes header check below
-        from fastapi import Header, HTTPException
-
-        # real dependency style
-        return None
-
-    # Use a real fail-closed dependency matching gate style
-    from fastapi import Depends, Header, HTTPException
 
     async def _require(authorization: str | None = Header(default=None)):
         expected = os.environ.get("CYCLAW_API_KEY") or ""
@@ -138,9 +131,6 @@ def test_disabled_master_404_on_facts(tmp_path, api_key):
     async def _rl():
         return None
 
-    from fastapi import Header, HTTPException
-    import os
-
     async def _require(authorization: str | None = Header(default=None)):
         expected = os.environ.get("CYCLAW_API_KEY") or ""
         if not authorization or authorization.removeprefix("Bearer ").strip() != expected:
@@ -165,3 +155,62 @@ def test_blank_reason_rejected_by_schema(memory_app):
         json={"action": "add_fact", "content": "x", "reason": ""},
     )
     assert r.status_code == 422
+
+
+def test_content_only_update_preserves_metadata(memory_app):
+    """Codex P1: content-only update must not clobber category/tags/confidence."""
+    app, cfg, key, _audit = memory_app
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {key}"}
+
+    fact = insert_fact(
+        cfg,
+        "Original content about shell",
+        category="prefs",
+        tags=["shell", "zsh"],
+        confidence=0.7,
+        reason="seed",
+    )
+
+    prop = client.post(
+        "/memory/propose",
+        headers=headers,
+        json={
+            "action": "update_fact",
+            "fact_id": fact.id,
+            "content": "Updated content about shell",
+            "reason": "content-only edit",
+        },
+    )
+    assert prop.status_code == 200, prop.text
+    payload = prop.json()["payload"]
+    assert "content" in payload
+    assert "category" not in payload
+    assert "tags" not in payload
+    assert "confidence" not in payload
+
+    applied = client.post(
+        "/memory/apply",
+        headers=headers,
+        json={"proposal_id": prop.json()["id"], "reason": "apply content-only"},
+    )
+    assert applied.status_code == 200, applied.text
+    updated = get_fact(cfg, fact.id)
+    assert updated is not None
+    assert updated.content == "Updated content about shell"
+    assert updated.category == "prefs"
+    assert updated.tags == ["shell", "zsh"]
+    assert updated.confidence == pytest.approx(0.7)
+
+
+def test_proposal_payload_builder_omits_defaults_on_update():
+    req = MemoryProposeRequest(
+        action="update_fact",
+        fact_id=3,
+        content="only content",
+        reason="r",
+    )
+    from gate_memory import _proposal_payload
+
+    payload = _proposal_payload(req)
+    assert payload == {"fact_id": 3, "content": "only content"}

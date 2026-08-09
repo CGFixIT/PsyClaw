@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from memory.policy import enforce_content, require_reason
 from memory.store import (
     apply_proposal,
     connect,
+    count_active_facts,
     create_proposal,
     deactivate_fact,
     get_fact,
@@ -20,6 +22,7 @@ from memory.store import (
     reject_proposal,
     search_facts_fts,
     stage_episode,
+    update_fact,
 )
 from utils.errors import PromptInjectionError
 
@@ -134,3 +137,97 @@ def test_prune_noop_recent(mem_cfg):
         {"query": "q", "answer": "a", "answer_model": "local", "retrieved_docs": []},
     )
     assert prune_episodes(mem_cfg) == 0
+
+
+def test_double_apply_is_rejected_without_duplicate_facts(mem_cfg):
+    """Codex P2: concurrent/repeat apply of one proposal must not insert twice."""
+    prop = create_proposal(
+        mem_cfg,
+        "add_fact",
+        {"content": "Only one copy of this fact should exist"},
+        reason="once",
+    )
+    first = apply_proposal(mem_cfg, prop.id, reason="apply-1")
+    assert first["status"] == "applied"
+    with pytest.raises(ValueError, match="not pending"):
+        apply_proposal(mem_cfg, prop.id, reason="apply-2")
+    assert count_active_facts(mem_cfg) == 1
+
+
+def test_concurrent_apply_single_winner(mem_cfg):
+    prop = create_proposal(
+        mem_cfg,
+        "add_fact",
+        {"content": "race-safe fact content unique marker"},
+        reason="race",
+    )
+
+    def _try_apply(i: int):
+        try:
+            return ("ok", apply_proposal(mem_cfg, prop.id, reason=f"race-{i}"))
+        except ValueError as e:
+            return ("err", str(e))
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [pool.submit(_try_apply, i) for i in range(8)]
+        for fut in as_completed(futs):
+            results.append(fut.result())
+
+    oks = [r for r in results if r[0] == "ok"]
+    errs = [r for r in results if r[0] == "err"]
+    assert len(oks) == 1
+    assert len(errs) == 7
+    assert count_active_facts(mem_cfg) == 1
+
+
+def test_max_active_enforced_on_insert(mem_cfg):
+    """Codex P2: facts.max_active is a hard ceiling on active rows."""
+    mem_cfg["memory"]["facts"]["max_active"] = 2
+    insert_fact(mem_cfg, "fact one", reason="a")
+    insert_fact(mem_cfg, "fact two", reason="b")
+    with pytest.raises(ValueError, match="active fact limit reached"):
+        insert_fact(mem_cfg, "fact three", reason="c")
+    assert count_active_facts(mem_cfg) == 2
+
+    # deactivate frees a slot
+    facts = list_facts(mem_cfg, active_only=True)
+    deactivate_fact(mem_cfg, facts[0].id, reason="free slot")
+    insert_fact(mem_cfg, "fact three after free", reason="d")
+    assert count_active_facts(mem_cfg) == 2
+
+
+def test_max_active_enforced_on_apply(mem_cfg):
+    mem_cfg["memory"]["facts"]["max_active"] = 1
+    insert_fact(mem_cfg, "seed fact", reason="seed")
+    prop = create_proposal(
+        mem_cfg,
+        "add_fact",
+        {"content": "should be rejected by max_active"},
+        reason="overflow",
+    )
+    with pytest.raises(ValueError, match="active fact limit reached"):
+        apply_proposal(mem_cfg, prop.id, reason="apply overflow")
+    # failed apply must leave proposal pending so operator can free space and retry
+    from memory.store import get_proposal
+
+    still = get_proposal(mem_cfg, prop.id)
+    assert still is not None
+    assert still.status == "pending"
+    assert count_active_facts(mem_cfg) == 1
+
+
+def test_update_fact_partial_fields(mem_cfg):
+    fact = insert_fact(
+        mem_cfg,
+        "base content",
+        category="ops",
+        tags=["a"],
+        confidence=0.4,
+        reason="seed",
+    )
+    updated = update_fact(mem_cfg, fact.id, content="new content only", reason="edit")
+    assert updated.content == "new content only"
+    assert updated.category == "ops"
+    assert updated.tags == ["a"]
+    assert updated.confidence == pytest.approx(0.4)

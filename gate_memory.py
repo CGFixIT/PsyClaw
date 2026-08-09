@@ -20,6 +20,41 @@ from utils.errors import PromptInjectionError
 logger = logging.getLogger("cyclaw.gate_memory")
 
 
+def _proposal_payload(req: MemoryProposeRequest) -> dict[str, Any]:
+    """Build store payload from only fields the client explicitly set.
+
+    For ``update_fact``, defaults on the request model (category/tags/confidence)
+    must not be written into the proposal — apply_proposal treats key presence
+    as an intentional overwrite. ``add_fact`` still fills store defaults when
+    those fields are omitted.
+    """
+    fields = req.model_fields_set
+    if req.action == "add_fact":
+        return {
+            "content": req.content,
+            "category": req.category if "category" in fields else "general",
+            "tags": list(req.tags) if "tags" in fields else [],
+            "confidence": req.confidence if "confidence" in fields else 1.0,
+            "source": "human",
+        }
+    if req.action == "update_fact":
+        payload: dict[str, Any] = {}
+        if req.fact_id is not None:
+            payload["fact_id"] = req.fact_id
+        if "content" in fields:
+            payload["content"] = req.content
+        if "category" in fields:
+            payload["category"] = req.category
+        if "tags" in fields:
+            payload["tags"] = list(req.tags)
+        if "confidence" in fields:
+            payload["confidence"] = req.confidence
+        return payload
+    if req.action == "deactivate_fact":
+        return {"fact_id": req.fact_id}
+    return {}
+
+
 def register_memory_routes(
     app: FastAPI,
     cfg: dict[str, Any],
@@ -89,13 +124,7 @@ def register_memory_routes(
 
         try:
             require_reason(req.reason)
-            payload: dict[str, Any] = {
-                "content": req.content,
-                "fact_id": req.fact_id,
-                "category": req.category,
-                "tags": list(req.tags),
-                "confidence": req.confidence,
-            }
+            payload = _proposal_payload(req)
             prop = create_proposal(cfg, req.action, payload, req.reason)
         except ValueError as e:
             await audit({"event": "memory_propose_rejected", "error": str(e)})
