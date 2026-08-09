@@ -55,6 +55,7 @@ def test_runner_temporarily_points_providers_at_mock(tmp_path: Path) -> None:
 
     assert original == original_text
     assert config["app"]["mode"] == "hybrid"
+    assert config["api"]["health_probe_external_providers"] is True
     assert config["models"]["local_llm"]["provider"] == "ollama"
     assert config["models"]["local_llm"]["base_url"] == f"{runner.MOCK_URL}/v1"
     assert config["models"]["local_llm"]["model"] == runner.MODEL_ID
