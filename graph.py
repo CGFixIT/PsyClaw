@@ -741,6 +741,20 @@ def audit_logger_node(state: GraphState, cfg: dict,
             logger.error("personality.record_interaction failed (non-fatal)", exc_info=True)
             event["personality_db_error"] = str(exc)
 
+    # Non-fatal episode staging (memory foundation). Mirrors personality block.
+    try:
+        mem_cfg = (cfg.get("memory") or {})
+        if (
+            mem_cfg.get("enabled") is True
+            and (mem_cfg.get("episodes") or {}).get("enabled") is True
+            and state.get("answer_model")
+        ):
+            from memory.store import stage_episode  # lazy
+            stage_episode(cfg, state)
+    except Exception as exc:
+        logger.error("memory.stage_episode failed (non-fatal)", exc_info=True)
+        event["memory_episode_error"] = str(exc)
+
     audit_log(event)
 
     return {"audit_event": event}

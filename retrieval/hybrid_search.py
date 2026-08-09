@@ -301,7 +301,32 @@ class HybridRetriever:
             normalized.append(hit)
         return normalized
 
+    def _maybe_fuse_memory(self, query: str, hits: list[SearchResult]) -> list[SearchResult]:
+        """Optionally fuse memory FTS hits. Never raises; defaults off."""
+        try:
+            mem_cfg = (self.cfg.get("memory") or {})
+            fusion_cfg = mem_cfg.get("retrieval_fusion") or {}
+            if not (
+                mem_cfg.get("enabled") is True
+                and fusion_cfg.get("enabled") is True
+                and (mem_cfg.get("facts") or {}).get("enabled") is True
+            ):
+                return hits
+            from memory.retrieval_adapter import fuse_memory_hits  # lazy
+            return fuse_memory_hits(query, hits, self.cfg)
+        except Exception as exc:  # noqa: BLE001 — memory must never fail retrieval
+            try:
+                audit_log({
+                    "event": "memory_fusion_error",
+                    "path": "hybrid_search",
+                    "error": str(exc),
+                })
+            except Exception:  # noqa: BLE001, S110 — audit best-effort only
+                logger.debug("memory fusion error audit failed", exc_info=True)
+            return hits
+
     def hybrid_search(self, query: str) -> list[SearchResult]:
+
         semantic_hits: list[SearchResult] = []
         keyword_hits: list[SearchResult] = []
         try:
@@ -317,13 +342,13 @@ class HybridRetriever:
             audit_log({"event": "retrieval_degraded", "path": "keyword", "error": str(e)})
 
         if not semantic_hits and not keyword_hits:
-            return []
+            return self._maybe_fuse_memory(query, [])
         if not semantic_hits:
             # BM25-only fallback: raw BM25 scores are unbounded positive floats
             # and are NOT comparable to the fused rrf_score the min_score gate is
             # calibrated against (a raw 2.7 would trivially clear 0.028 as false
             # high-confidence). Rebase them into the RRF range.
-            return self._normalize_single_path(keyword_hits)
+            return self._maybe_fuse_memory(query, self._normalize_single_path(keyword_hits))
         if not keyword_hits:
             # Semantic-only fallback: raw `1 - distance` already lies in a
             # bounded, comparable range and is what the min_score gate is tuned
@@ -332,7 +357,7 @@ class HybridRetriever:
             # degenerates to <=0 and the keyword path is empty). Leave it as-is:
             # re-basing to 1/(k+rank) would discard the similarity magnitude and
             # sink genuine hits below the gate.
-            return semantic_hits
+            return self._maybe_fuse_memory(query, semantic_hits)
 
         scores = {}
         semantic_meta = {}
@@ -385,4 +410,4 @@ class HybridRetriever:
         # union can hold up to top_k_semantic + top_k_keyword distinct chunks),
         # dropping chunks the caller explicitly requested before they ever saw
         # them. Slicing is the caller's responsibility, not the fuser's.
-        return merged
+        return self._maybe_fuse_memory(query, merged)

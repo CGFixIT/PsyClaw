@@ -177,6 +177,39 @@ personality:
   #                     # Optional Postgres backend — see docs/POSTGRES_BACKEND.md (install, TLS,
   #                     # least-privilege role). Default SQLite stays zero-config / offline-first.
 
+# ===========================
+# Memory subsystem (optional, default-off)  [v0.1 foundation]
+# ===========================
+# Identity (soul.md / PersonalityManager) is NOT memory. This block controls the
+# optional facts + episodes store under memory/. Every switch defaults false —
+# disabled code paths are no-ops and never raise into /query.
+# Design: docs/memory/IMPLEMENTATION_PLAN.md  Operator: docs/memory/README.md
+memory:
+  enabled: false                    # master switch
+  db_path: "data/memory/cyclaw_memory.db"
+  facts:
+    enabled: false
+    max_content_chars: 8192
+    max_active: 10000
+  episodes:
+    enabled: false
+    store_raw_query: false          # default: query_hash only (privacy)
+    max_answer_summary_chars: 2000
+    ttl_days: 365
+    prune_every: 100
+  retrieval_fusion:
+    enabled: false                  # fuse FTS fact hits into hybrid_search
+    max_hits: 3
+    rrf_k: 60
+    min_fts_score: 0.0
+    source_prefix: "memory:fact:"
+  propose_apply:
+    enabled: false                  # /memory/propose|apply|reject
+  export_html:
+    enabled: false                  # GET /query/export/html
+  consolidation:
+    enabled: false                  # stub only; must stay false in v1
+
 policy:
   fallback:
     enabled: true
