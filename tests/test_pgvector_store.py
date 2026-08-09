@@ -108,6 +108,30 @@ def test_pgvector_reader_missing_table_raises(fresh_store):
         get_vector_reader(_cfg())
 
 
+def test_pgvector_reader_missing_table_does_not_leak_the_connection(fresh_store):
+    """__init__ raises before returning, so nothing else can reach self.close()
+    to release the connection self._connection() opened -- it must close it
+    itself before raising. Verified against pg_stat_activity, not by inspecting
+    a private attribute, so this catches a regression even if the internal
+    close-before-raise call is refactored away."""
+    import psycopg
+
+    from utils.errors import IndexNotFoundError
+    from utils.personality_db import _harden_pg_conninfo
+
+    def _cyclaw_connection_count():
+        with psycopg.connect(_harden_pg_conninfo(DSN), autocommit=True) as conn:
+            return conn.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'cyclaw'"
+            ).fetchone()[0]
+
+    baseline = _cyclaw_connection_count()
+    for _ in range(5):
+        with pytest.raises(IndexNotFoundError):
+            get_vector_reader(_cfg())
+    assert _cyclaw_connection_count() <= baseline
+
+
 def test_pgvector_reader_handles_legacy_rows_without_source_hash(fresh_store):
     import psycopg
     from pgvector.psycopg import register_vector
