@@ -136,6 +136,9 @@ class GraphState(TypedDict, total=False):
     # Guardrail (Phase 2 offline input rail; only set when a guard is configured)
     guardrail_blocked: bool
     guardrail_rails: list[str]
+    # True when a configured guard raised and the node failed open (Decision 3).
+    # Distinct from guardrail_blocked so audit can tell "passed" from "degraded".
+    guardrail_degraded: bool
 
     # Audit
     audit_event: dict
@@ -357,7 +360,7 @@ def guardrail_input_node(
         result = input_guard(state["query"])
     except Exception:
         logger.warning("input_guard raised; failing open (query answered normally)", exc_info=True)
-        return {}
+        return {"guardrail_degraded": True}
 
     if not result.get("blocked"):
         return {}
@@ -392,7 +395,7 @@ def guardrail_output_node(
         result = output_guard(state.get("query", ""), state.get("answer", ""), context)
     except Exception:
         logger.warning("output_guard raised; failing open (answer returned as generated)", exc_info=True)
-        return {}
+        return {"guardrail_degraded": True}
 
     if not result.get("blocked"):
         return {}
@@ -709,6 +712,7 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "hit_count": len(state.get("retrieved_docs", [])),
         "guardrail_blocked": state.get("guardrail_blocked", False),
         "guardrail_rails": state.get("guardrail_rails", []),
+        "guardrail_degraded": state.get("guardrail_degraded", False),
         # now corpus files and hits are visible in audit but not query
         "sources": [
             {

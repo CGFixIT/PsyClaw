@@ -941,7 +941,8 @@ class TestGuardrailInputNode:
             raise RuntimeError("guard exploded")
 
         out = guardrail_input_node({"query": "x"}, input_guard=_boom)
-        assert out == {}
+        # Fail-open still answers the query, but audit must see degradation.
+        assert out == {"guardrail_degraded": True}
 
     def test_guard_receives_the_query(self):
         seen = []
@@ -1174,7 +1175,7 @@ class TestGuardrailOutputNode:
 
         state = {"answer_model": "local", "answer": "kept as-is", "retrieved_docs": []}
         out = guardrail_output_node(state, output_guard=_boom)
-        assert out == {}
+        assert out == {"guardrail_degraded": True}
 
     def test_guard_receives_query_answer_and_joined_context(self):
         seen = []

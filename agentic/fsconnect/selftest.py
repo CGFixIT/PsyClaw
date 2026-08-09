@@ -53,7 +53,7 @@ def run_self_test(config_path: str = "config.yaml") -> tuple[int, int, list[str]
 
     # 3. injection scanner present.
     if build_injection_patterns(cfg):
-        results.append(ok("03. injection scanner compiled (OWASP ∪ banned_patterns)"))
+        results.append(ok("03. injection scanner compiled (OWASP + banned_patterns)"))
     else:
         results.append(fail("03. injection scanner present", "no patterns compiled"))
 
