@@ -115,7 +115,14 @@ class AuthManager:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
         auth_cfg = cfg.get("auth", {}) or {}
-        self.enabled = bool(auth_cfg.get("enabled", False))
+        # No self.enabled here on purpose. Nothing ever read it, and a
+        # bool()-truthy copy of auth.enabled sitting on this object is an
+        # invitation to read it: `enabled: "false"` (quoted, so a STRING) is
+        # truthy, which is the exact bug already fixed twice in this
+        # subsystem -- gate.py's _boot_auth_enabled and _flag_is_true, and
+        # gate_auth.py's tls_enabled, all now demand the literal True.
+        # Whether auth is on is gate.py's decision, made before this object
+        # is ever constructed; the manager just does what it is asked.
         self.db_path = _anchor(auth_cfg.get("db_path", "data/auth/cyclaw_auth.db"))
         session_cfg = auth_cfg.get("session", {}) or {}
         self.idle_timeout_sec = session_cfg.get("idle_timeout_sec", _DEFAULT_IDLE_TIMEOUT_SEC)
@@ -204,6 +211,21 @@ class AuthManager:
     def _now(self) -> float:
         return time.time()
 
+    def _end_read_txn(self) -> None:
+        """Close the implicit transaction a read-only query opened.
+
+        psycopg connects with autocommit=False (utils/authn_store.py, mirroring
+        utils/personality_db.py), so the FIRST statement -- a bare SELECT
+        included -- opens a transaction that stays open until commit or
+        rollback. A read-only path that returns without either leaves this
+        long-lived server connection "idle in transaction", pinning a snapshot
+        that stops VACUUM reclaiming dead rows for as long as the process runs.
+        commit() rather than rollback() because these paths wrote nothing and
+        there is nothing to undo; on SQLite, where a SELECT opens no write
+        transaction, it is a no-op.
+        """
+        self.conn.commit()
+
     def close(self) -> None:
         try:
             self.conn.close()
@@ -224,6 +246,7 @@ class AuthManager:
         with self._lock:
             row = self.conn.execute(self._sql_count_users).fetchone()
             if row and int(row["n"]) > 0:
+                self._end_read_txn()
                 return None
             password = authn.generate_bootstrap_password()
             record = authn.hash_password(password)
@@ -250,6 +273,7 @@ class AuthManager:
     def list_users(self) -> list[UserSummary]:
         with self._lock:
             rows = self.conn.execute(self._sql_list_users).fetchall()
+            self._end_read_txn()
         return [
             UserSummary(
                 username=r["username"],
@@ -400,10 +424,22 @@ class AuthManager:
         with self._lock:
             row = self.conn.execute(self._sql_get_session, (session_id,)).fetchone()
             if row is None or row["revoked"]:
+                self._end_read_txn()
                 return None
-            if now >= row["expires_ts"]:
-                return None
-            if now >= row["last_seen_ts"] + self.idle_timeout_sec:
+            if now >= row["expires_ts"] or now >= row["last_seen_ts"] + self.idle_timeout_sec:
+                # Revoke, rather than merely refusing this one call. The idle
+                # limit is the reason: last_seen_ts is stored per row, but
+                # idle_timeout_sec is re-read from config on every call, so a
+                # session already observed idle-expired under a 12h timeout
+                # becomes valid AGAIN if the operator raises idle_timeout_sec
+                # and restarts -- the browser still holds the cookie and the
+                # row was never marked dead. Writing the observation down
+                # makes expiry a one-way door. (The absolute limit cannot
+                # resurrect that way, since expires_ts is frozen into the row
+                # at creation, but it costs nothing to retire that row too
+                # rather than re-evaluating it until it ages out.)
+                self.conn.execute(self._sql_revoke_session, (session_id,))
+                self.conn.commit()
                 return None
             self.conn.execute(self._sql_touch_session, (now, session_id))
             self.conn.commit()
@@ -456,6 +492,7 @@ class AuthManager:
         with self._lock:
             row = self.conn.execute(self._sql_get_token, (token_hash,)).fetchone()
             if row is None or row["revoked"]:
+                self._end_read_txn()
                 return None
             self.conn.execute(self._sql_touch_token, (now, token_hash))
             self.conn.commit()
@@ -465,6 +502,7 @@ class AuthManager:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         with self._lock:
             rows = self.conn.execute(self._sql_list_tokens, (canonical,)).fetchall()
+            self._end_read_txn()
         return [
             DeviceTokenSummary(
                 label=r["label"], created_ts=r["created_ts"],

@@ -394,6 +394,29 @@ class TestSessions:
         finally:
             fast_manager._now = real_now
 
+    def test_an_idle_expired_session_cannot_be_resurrected_by_raising_the_timeout(self, fast_manager):
+        """Observing idle expiry must REVOKE the row, not merely refuse the call.
+
+        last_seen_ts is stored per row, but idle_timeout_sec is re-read from
+        config on every call -- so without a revoke, a session already seen
+        idle-expired under a short timeout becomes valid again the moment the
+        operator raises idle_timeout_sec and restarts. The browser still holds
+        the cookie, and nothing ever marked the row dead. Raising the timeout
+        in place here stands in for that config change plus restart.
+        """
+        fast_manager.create_user("alice", _GOOD_PASSWORD)
+        result = fast_manager.login("alice", _GOOD_PASSWORD)
+        real_now = fast_manager._now
+        fast_manager._now = lambda: real_now() + 10  # idle_timeout_sec is 5
+        try:
+            assert fast_manager.validate_session(result.session_id) is None
+            # The operator widens the idle window and restarts; last_seen_ts
+            # now sits comfortably inside it. The session must stay dead.
+            fast_manager.idle_timeout_sec = 100000
+            assert fast_manager.validate_session(result.session_id) is None
+        finally:
+            fast_manager._now = real_now
+
     def test_valid_use_slides_the_idle_window_forward(self, fast_manager):
         """The idle timeout is a ROLLING window: touching the session inside
         the window must push the deadline forward, not just check it once."""
