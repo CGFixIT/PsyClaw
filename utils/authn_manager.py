@@ -277,6 +277,17 @@ class AuthManager:
                 # exists to answer it NOW, not eventually.
                 self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
                 self.conn.execute(self._sql_revoke_tokens_for_user, (canonical,))
+            elif cur.rowcount:
+                # login() records a failed attempt for a disabled account
+                # exactly like a wrong password (see login()'s
+                # `if row["disabled"] or not ok:` branch), so a disabled
+                # account can accrue its own lockout from attempts made while
+                # it was disabled. Re-enabling it is a deliberate
+                # administrative decision to make it usable again NOW --
+                # leaving a stale lockout in place would have `cyclaw-user
+                # enable` still return 423 until the ceiling drains, the same
+                # bug set_password() closes for the password-reset path.
+                self.conn.execute(self._sql_reset_lockout, (canonical,))
             self.conn.commit()
             if not cur.rowcount:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})

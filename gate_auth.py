@@ -121,6 +121,20 @@ def register_auth_routes(
         if origin is None:
             return
         parsed = urlparse(origin)
+        try:
+            # .port is a lazy property: urlparse() itself never raises, but
+            # reading .port does, for a non-numeric or out-of-range (>65535)
+            # port string -- e.g. Origin: http://localhost:notaport or
+            # http://localhost:99999. Both are attacker-controlled on an
+            # unauthenticated route, so an uncaught ValueError here would
+            # turn a malformed cross-origin request into a 500 instead of the
+            # 403 this check exists to return. A malformed port can never
+            # equal expected_port, so treating it as None (rather than
+            # re-raising) still fails the comparison below and rejects the
+            # request -- it just does so as CROSS_ORIGIN_BLOCKED, not a crash.
+            origin_port = parsed.port
+        except ValueError:
+            origin_port = None
         # The host comparison is against THIS request's own Host header, not
         # against the allow-list. allowed_hosts ships with two distinct LAN
         # machines (10.0.0.111 and 10.0.0.112) alongside the loopback names, so
@@ -142,7 +156,7 @@ def register_auth_routes(
             parsed.hostname is not None
             and parsed.hostname == request.url.hostname
             and parsed.hostname in allowed_hosts
-            and parsed.port == expected_port
+            and origin_port == expected_port
             and parsed.scheme == expected_scheme
         )
         if not same_origin:

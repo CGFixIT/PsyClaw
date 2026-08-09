@@ -533,13 +533,31 @@ personality = None
 if cfg.get("personality", {}).get("enabled", False):
     personality = PersonalityManager(cfg)
 
+def _boot_auth_enabled(auth_cfg: object) -> bool:
+    """True only when ``auth_cfg["enabled"]`` is the literal boolean ``True``.
+
+    A standalone, testable twin of ``_flag_is_true`` below (used by the bind
+    guard): that helper can't be called from here because it is defined
+    later in this file for the bind guard, and this runs at MODULE IMPORT
+    TIME, before it exists. Deliberately NOT truthy `.get("enabled", False)`:
+    every non-empty string is truthy, so a config carrying `enabled: "false"`
+    (quoted, which YAML parses as the STRING "false") would otherwise
+    construct the AuthManager, create the auth database, and bootstrap +
+    print a first account's password -- while `_flag_is_true` reads the SAME
+    key strictly and reports it OFF, leaving the server in a state where
+    auth is simultaneously "on" (accounts exist, routes work) and "off" (no
+    non-loopback bind was ever intended).
+    """
+    return isinstance(auth_cfg, dict) and auth_cfg.get("enabled") is True
+
+
 # Stage 2 of docs/AUTHENTICATION_DESIGN.md. auth_manager stays None (the
 # request path below never constructs it) unless auth.enabled is true --
 # matching every other CyClaw subsystem's disabled-by-default convention.
 # gate_auth.py's routes always exist regardless (see its own docstring for
 # why), but every handler checks for None first and returns 503.
 auth_manager = None
-if cfg.get("auth", {}).get("enabled", False):
+if _boot_auth_enabled(cfg.get("auth")):
     auth_manager = AuthManager(cfg)
     # bootstrap_if_empty() is a no-op on every boot after the first: it only
     # ever acts when the users table is genuinely empty. The password is

@@ -1143,6 +1143,41 @@ class TestLoopbackBindGuard:
         assert gate._auth_and_tls_enabled() is False
         assert gate._require_loopback_bind("10.0.0.50") is False
 
+
+class TestBootAuthEnabled:
+    """_boot_auth_enabled gates whether gate.py constructs the AuthManager at
+    module import time -- a strict twin of _flag_is_true, needed separately
+    because that helper is defined later in the file and this runs at import
+    time, before it exists. Pure function, no monkeypatch of gate.cfg needed."""
+
+    def test_literal_true_is_enabled(self):
+        import gate
+        assert gate._boot_auth_enabled({"enabled": True}) is True
+
+    @pytest.mark.parametrize("value", ["false", "true", "no", "0", "off", 1, None])
+    def test_non_literal_values_fail_closed(self, value):
+        """`bool("false")` is True in Python -- a config carrying a quoted
+        `enabled: "false"` must not construct the AuthManager, create the auth
+        database, and bootstrap + print a first account's password. This is
+        the exact bug: gate.py previously read this key with truthy
+        `.get("enabled", False)`, which would have enabled auth here while
+        _flag_is_true's strict check reports it OFF for the bind guard --
+        auth simultaneously "on" and "off"."""
+        import gate
+        assert gate._boot_auth_enabled({"enabled": value}) is False
+
+    def test_missing_key_defaults_closed(self):
+        import gate
+        assert gate._boot_auth_enabled({}) is False
+
+    @pytest.mark.parametrize("bad", ["not-a-dict", None, [], 1])
+    def test_non_mapping_auth_block_fails_closed(self, bad):
+        """gate.cfg.get("auth") can be anything a malformed config.yaml
+        contains; must not raise (an unguarded .get would crash on a
+        non-dict) and must fail closed."""
+        import gate
+        assert gate._boot_auth_enabled(bad) is False
+
     def test_enforcement_probe_sees_a_dependency_when_one_is_attached(self):
         """The probe's own logic, against real FastAPI routes rather than the
         live app: absent on a bare /query, found once the dependency is there,

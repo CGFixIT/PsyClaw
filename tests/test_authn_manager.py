@@ -316,6 +316,22 @@ class TestLockout:
         manager.set_password("alice", "a completely different password")
         assert manager.login("alice", "a completely different password").username == "alice"
 
+    def test_enable_user_clears_a_lockout_accrued_while_disabled(self, manager):
+        """login() rejects a disabled account through the SAME failure-recording
+        branch as a wrong password (`if row["disabled"] or not ok:`), so a
+        disabled account can accrue its own lockout from attempts made while it
+        was disabled. cyclaw-user enable is a deliberate administrative decision
+        to make the account usable again NOW -- without clearing the lockout, the
+        newly re-enabled account would still return 423 until the ceiling drains,
+        the same bug set_password() closes for the password-reset path above."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.disable_user("alice")
+        for _ in range(5):
+            with pytest.raises(AuthLoginFailed):
+                manager.login("alice", _GOOD_PASSWORD)
+        manager.enable_user("alice")
+        assert manager.login("alice", _GOOD_PASSWORD).username == "alice"
+
     def test_lockout_clears_after_the_delay_elapses(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         for _ in range(5):

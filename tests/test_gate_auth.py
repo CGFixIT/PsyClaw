@@ -251,6 +251,30 @@ class TestSameOrigin:
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
+    @pytest.mark.parametrize(
+        "malformed_origin",
+        [
+            "http://localhost:notaport",  # non-numeric port
+            "http://localhost:99999",  # out of the 0-65535 range
+        ],
+    )
+    def test_malformed_origin_port_is_rejected_not_a_500(self, manager, user, malformed_origin):
+        """urlparse().port is a lazy property that raises ValueError for a
+        non-numeric or out-of-range port string -- urlparse() itself never
+        raises, so nothing catches this until something reads .port. Both
+        values are attacker-controlled on an unauthenticated route; an
+        uncaught ValueError here would turn a malformed cross-origin request
+        into an unhandled 500 instead of the 403 this check exists to
+        return."""
+        username, password = user
+        r = _client(manager).post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": malformed_origin},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
     def test_origin_without_an_explicit_port_is_rejected(self, manager, user):
         """CyClaw's port (8787) is never a scheme default, so a genuine
         same-origin request's Origin header always states it explicitly --
