@@ -862,13 +862,14 @@ guardrails:
 # Absence of this block, or enabled: false, disables the Telegram channel entirely.
 # Runs strictly via `python -m telegram.cli` — never imported by gate.py, graph.py,
 # or mcp_hybrid_server.py. Answers (mode=chat) go only through HTTP POST /query on
-# loopback so I1–I5 stay intact. Bot token lives in the environment only.
+# loopback so I1–I5 stay intact. Bot token is transient: no-echo CLI prompt for
+# manual send/poll, or the configured environment variable for unattended use.
 # Design + phase plan: docs/channels/TELEGRAM_DESIGN.md
 # Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
 telegram:
   enabled: false                 # off by default; CLI status/test work; send/poll no-op or refuse
   mode: "notify"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
-  bot_token_env: "TELEGRAM_BOT_TOKEN"  # token NEVER stored here — set the env var
+  bot_token_env: "TELEGRAM_BOT_TOKEN"  # unattended token source; token is never stored in YAML
   allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
   api_base: "https://api.telegram.org"
   poll_timeout_sec: 30           # long-poll window for getUpdates (mode=chat)

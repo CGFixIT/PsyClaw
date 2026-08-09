@@ -220,6 +220,7 @@ class TelegramConfig:
     media: TelegramMediaConfig = field(default_factory=TelegramMediaConfig)
     # Bookkeeping — not a config key.
     _config_path: str = "config.yaml"
+    _runtime_bot_token: str = field(default="", init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _validate_bool(self.enabled, "telegram.enabled")
@@ -330,9 +331,16 @@ class TelegramConfig:
     def is_chat_allowed(self, chat_id: int | str) -> bool:
         return str(chat_id).strip() in set(self.allowed_chat_ids)
 
+    def set_runtime_bot_token(self, token: str) -> None:
+        """Set a transient CLI token without writing it to config or the environment."""
+        normalized = token.strip()
+        if not normalized:
+            raise TelegramConfigError("Prompted bot token is empty")
+        self._runtime_bot_token = normalized
+
     def resolve_bot_token(self) -> str:
-        """Read the bot token from the configured env var. Never logs the value."""
-        token = os.environ.get(self.bot_token_env, "").strip()
+        """Resolve a transient CLI token or the configured env var. Never logs it."""
+        token = self._runtime_bot_token or os.environ.get(self.bot_token_env, "").strip()
         if not token:
             raise TelegramConfigError(
                 f"Bot token env var {self.bot_token_env} is unset or empty",
@@ -348,7 +356,10 @@ class TelegramConfig:
         """Config surface safe for status/selftest (no secrets)."""
         d = asdict(self)
         d.pop("_config_path", None)
-        d["bot_token_set"] = bool(os.environ.get(self.bot_token_env, "").strip())
+        d.pop("_runtime_bot_token", None)
+        d["bot_token_set"] = bool(
+            self._runtime_bot_token or os.environ.get(self.bot_token_env, "").strip()
+        )
         d["api_key_set"] = bool(os.environ.get(self.query.api_key_env, "").strip())
         return d
 

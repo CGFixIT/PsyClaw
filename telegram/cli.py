@@ -18,9 +18,11 @@ This module never imports gate.py, graph.py, or mcp_hybrid_server.py.
 from __future__ import annotations
 
 import argparse
+import getpass
 import sys
+import warnings
 
-from telegram.config import load_telegram_config
+from telegram.config import TelegramConfig, load_telegram_config
 from telegram.runner import poll_forever, send_notify
 from telegram.selftest import run_self_test
 from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, TelegramRuntimeError
@@ -28,6 +30,7 @@ from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, Te
 EXIT_OK = 0
 EXIT_FAIL = 2
 EXIT_ENV = 3
+_PROMPT_HELP = "Read the bot token from a hidden interactive prompt instead of the environment."
 
 
 def _heading(text: str) -> None:
@@ -60,6 +63,26 @@ def _disabled_notice() -> int:
     print("  telegram.enabled is false in config.yaml; nothing to do.")
     print("  Set telegram.enabled: true and non-empty allowed_chat_ids to use this layer.")
     return EXIT_OK
+
+
+def _prompt_bot_token(cfg: TelegramConfig) -> None:
+    if not sys.stdin.isatty():
+        raise TelegramConfigError(
+            "--prompt-token requires an interactive terminal",
+            details={"hint": f"Set {cfg.bot_token_env} for unattended startup."},
+        )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            token = getpass.getpass("Telegram bot token: ")
+    except (EOFError, getpass.GetPassWarning):
+        raise TelegramConfigError(
+            "Unable to read the bot token without echo",
+            details={"hint": f"Set {cfg.bot_token_env} instead."},
+        ) from None
+    except KeyboardInterrupt:
+        raise TelegramConfigError("Telegram bot token prompt cancelled") from None
+    cfg.set_runtime_bot_token(token)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -145,6 +168,8 @@ def cmd_send(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     try:
+        if args.prompt_token:
+            _prompt_bot_token(cfg)
         result = send_notify(cfg, chat_id=args.chat_id, text=str(text))
     except TelegramConfigError as exc:
         _print_typed_error(exc)
@@ -181,6 +206,8 @@ def cmd_poll(args: argparse.Namespace) -> int:
         _err("poll requires telegram.mode: chat (current mode refuses inbound).")
         return EXIT_ENV
     try:
+        if args.prompt_token:
+            _prompt_bot_token(cfg)
         cfg.resolve_bot_token()
     except TelegramConfigError as exc:
         _print_typed_error(exc)
@@ -230,6 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_send.add_argument("--chat-id", required=True, help="Telegram chat id (must be allowlisted).")
     p_send.add_argument("--text", default="", help="Message text.")
     p_send.add_argument("--body-file", default="", help="Read message text from file (overrides --text).")
+    p_send.add_argument("--prompt-token", action="store_true", help=_PROMPT_HELP)
     p_send.add_argument(
         "--dry-run",
         action="store_true",
@@ -238,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_send.set_defaults(func=cmd_send)
 
     p_poll = sub.add_parser("poll", help="T2: long-poll inbound (mode=chat only).")
+    p_poll.add_argument("--prompt-token", action="store_true", help=_PROMPT_HELP)
     p_poll.add_argument(
         "--max-iterations",
         type=int,

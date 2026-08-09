@@ -179,8 +179,7 @@ def claim_hybrid_confirm(
             if session is None:
                 return None
             confirm_until, provider = session
-            with suppress(OSError):
-                session_path.unlink(missing_ok=True)
+            session_path.unlink(missing_ok=True)
             if current >= confirm_until:
                 return None
             return provider

@@ -230,7 +230,22 @@ def handle_inbound_text(
     # another member's /online grant (or any stale chat-scoped session file).
     online_provider = None
     if cfg.allow_hybrid_confirm and _is_private_chat(chat_type):
-        online_provider = claim_hybrid_confirm(chat_id)
+        try:
+            online_provider = claim_hybrid_confirm(chat_id)
+        except TelegramRuntimeError:
+            audit_log(
+                {
+                    "event": "telegram_hybrid_confirm_state_error",
+                    "channel": "telegram",
+                    "chat_id": str(chat_id),
+                    "chat_type": "private",
+                    "update_id": update_id,
+                    "gate": "hybrid_confirm_state",
+                    "retryable": True,
+                },
+                config_path=cfg._config_path,
+            )
+            raise
     if online_provider is not None:
         audit_log(
             {
@@ -502,11 +517,25 @@ def poll_forever(
         try:
             new_offset, handled = poll_once(cfg, offset=offset)
             if new_offset is not None and new_offset != offset:
-                try:
-                    save_offset(new_offset, offset_path)
-                except OSError:
-                    # ponytail: keep polling even if disk write fails; memory offset still advances.
-                    pass
+                while True:
+                    try:
+                        save_offset(new_offset, offset_path)
+                        break
+                    except OSError:
+                        # Do not poll again until the already-processed batch is
+                        # durable. Exiting here would let launchd KeepAlive replay
+                        # the same update and repeat its outbound side effects.
+                        audit_log(
+                            {
+                                "event": "telegram_offset_persist_failed",
+                                "channel": "telegram",
+                                "gate": "offset_persistence",
+                                "offset": new_offset,
+                                "retryable": True,
+                            },
+                            config_path=cfg._config_path,
+                        )
+                        time.sleep(sleep_on_error_sec)
                 offset = new_offset
             retryable = [result for result in handled if result.get("retryable") is True]
             if retryable:

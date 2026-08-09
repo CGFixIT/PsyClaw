@@ -1,13 +1,14 @@
 """HTTP clients for Telegram Bot API and CyClaw POST /query.
 
-stdlib + httpx only. Never imports gate/graph/mcp. Secrets are read from the
-environment via TelegramConfig helpers and never written to audit payloads
-(only hashes / redacted fields).
+stdlib + httpx only. Never imports gate/graph/mcp. Secrets are resolved by
+TelegramConfig from an explicit transient CLI prompt or the configured
+environment variable and never written to audit payloads (only hashes /
+redacted fields).
 """
 
 from __future__ import annotations
 
-import hashlib
+import hmac
 import math
 import threading
 import time
@@ -70,9 +71,21 @@ def reset_http_client_for_tests() -> None:
         _RETRY_NOT_BEFORE.clear()
 
 
+_TOKEN_PSEUDONYM_CONTEXT = b"CyClaw Telegram token pseudonym v1"
+
+
+def _token_pseudonym(token: str) -> str:
+    """Deterministic HMAC pseudonym; the high-entropy token is the secret key."""
+    return hmac.digest(
+        token.encode("utf-8"),
+        _TOKEN_PSEUDONYM_CONTEXT,
+        "sha256",
+    ).hex()
+
+
 def _hash_token_fingerprint(token: str) -> str:
-    """Short non-reversible fingerprint for audit (never the token itself)."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
+    """Short non-reversible audit fingerprint (never the token itself)."""
+    return _token_pseudonym(token)[:12]
 
 
 def _handle_retry_after(
@@ -105,7 +118,7 @@ def _handle_retry_after(
                 "fatal": True,
             },
         )
-    key = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    key = _token_pseudonym(token)
     deadline = time.monotonic() + delay
     with _RETRY_LOCK:
         _RETRY_NOT_BEFORE[key] = max(_RETRY_NOT_BEFORE.get(key, 0.0), deadline)
@@ -121,7 +134,7 @@ def _handle_retry_after(
 
 
 def _raise_during_retry_cooldown(token: str, method: str) -> None:
-    key = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    key = _token_pseudonym(token)
     now = time.monotonic()
     with _RETRY_LOCK:
         deadline = _RETRY_NOT_BEFORE.get(key, 0.0)

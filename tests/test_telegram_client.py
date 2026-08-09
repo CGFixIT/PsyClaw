@@ -11,6 +11,8 @@ import pytest
 import yaml
 
 from telegram.client import (
+    _hash_token_fingerprint,
+    _token_pseudonym,
     chunk_text,
     download_file,
     get_file,
@@ -48,6 +50,17 @@ def _cfg(tmp_path: Path, **overrides: object):
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     return load_telegram_config(str(path))
+
+
+def test_token_pseudonym_is_deterministic_and_audit_fingerprint_is_truncated() -> None:
+    token = "high-entropy-test-token"
+    pseudonym = _token_pseudonym(token)
+
+    assert pseudonym == _token_pseudonym(token)
+    assert pseudonym != _token_pseudonym("different-test-token")
+    assert len(pseudonym) == 64
+    assert token not in pseudonym
+    assert _hash_token_fingerprint(token) == pseudonym[:12]
 
 
 def test_send_message_allowlist_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
