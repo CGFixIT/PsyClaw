@@ -38,6 +38,13 @@ def main() -> int:
     # present. verify.sh exports CYCLAW_API_KEY before launching the server.
     api_key = os.environ.get("CYCLAW_API_KEY", "")
 
+    # Older Windows consoles can still be CP1252. Do not crash if a response
+    # or banner contains a glyph that the active console cannot encode.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="backslashreplace")
+
     def auth_headers() -> dict:
         h = {"Content-Type": "application/json"}
         if api_key:
