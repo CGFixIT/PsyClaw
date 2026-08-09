@@ -49,6 +49,8 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
 10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
 11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
+12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, Stage 2 of `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. The three `/auth/*` routes exist regardless of `auth.enabled` and return 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **Stage 3 (enforcing a credential on `/query` and the console) has not landed** — these routes build sessions/login/logout/device tokens only
+13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, plan in `docs/memory/README.md`) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints
 
 ---
 
@@ -478,11 +480,22 @@ status code means, is in
 ```text
 CyClaw/
 ├── gate.py
+├── gate_ops.py                 # /ops/* endpoints (sync/agentic/fsconnect/sqlconnect subprocess shims)
+├── gate_auth.py                # /auth/* endpoints — session cookie + CSRF, bearer device tokens
+├── gate_memory.py              # /memory/* + /query/export/html — optional, default-off memory admin surface
 ├── graph.py
+├── metrics.py                  # audit.jsonl analyzer (cyclaw-metrics)
 ├── config.yaml                 # single source of truth
 ├── README.md
 ├── Dropbox_Sync_Guide.md
 ├── mcp_hybrid_server.py        # retrieval-only MCP server
+├── memory/                     # optional facts + episodes SQLite+FTS5 store (default-off, see gate_memory.py)
+│   ├── store.py                # SQLite + FTS5 backend for facts/episodes
+│   ├── policy.py               # propose/apply governance (reason required, injection scan)
+│   ├── retrieval_adapter.py    # optional fusion hook into hybrid retrieval
+│   ├── mirror.py               # episode staging (lazy, non-fatal)
+│   ├── consolidation.py        # episode -> fact consolidation
+│   └── models.py               # typed request/response shapes
 ├── agentic/                    # out-of-band GitHub context + governed registry
 │   ├── cli.py
 │   ├── context.py
@@ -1070,6 +1083,8 @@ of the three commands above for cloud, after the image's own install step.
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
 | `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed` / `ops_fsconnect_executed` / `ops_sqlconnect_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |
+| `/auth/*` routes | Stage 2 of the per-user auth design (`gate_auth.py`); session cookie + CSRF for browsers, bearer device tokens for programmatic clients; every handler checks `auth.enabled` first and returns 503 (not 404) so route presence never discloses whether the feature is on. Stage 3 (enforcing a credential on `/query`/the console) has not landed |
+| `/memory/*` + `/query/export/html` routes | Optional, default-off memory admin surface (`gate_memory.py`); every `memory:` switch ships `false`; `require_api_key` gated, rate-limited; mutating routes (`propose`/`apply`/`reject`) require a non-empty `reason` string, with an injection scan on `apply` |
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
 
 > **Docker / GHCR:** published runtime image `ghcr.io/cgfixit/cyclaw` (tag-triggered). Operator guide, pull/run commands, Falco opt-in notes, and explicit non-goals (no microVM): [`docs/DOCKER.md`](docs/DOCKER.md). Host publish remains `127.0.0.1` only.
