@@ -72,7 +72,7 @@ jobs:
           conda-${{ runner.os }}-${{ matrix.python-version }}-v3-
 
     - name: Pin pip in the conda env (matches ci.yml's exact pin)
-      shell: bash -l {0}
+      shell: bash -leo pipefail {0}
       run: |
         # Root cause of the cache poisoning above: this workflow was the only one
         # that never pinned pip, so the env drifted onto whatever pip PyPI shipped
@@ -90,13 +90,13 @@ jobs:
         python -m pip --version
 
     - name: Install CyClaw in editable mode + test extras
-      shell: bash -l {0}
+      shell: bash -leo pipefail {0}
       run: |
         python -m pip install -e ".[test,dev]" --no-deps
         # If heavy deps live in environment.yml, they are already resolved by mamba
 
     - name: Prepare hermetic test env
-      shell: bash -l {0}
+      shell: bash -leo pipefail {0}
       run: |
         mkdir -p data/personality index logs
         echo '# Soul' > data/personality/soul.md
@@ -116,7 +116,7 @@ jobs:
           emb-model-
 
     - name: Pytest — unit + integration + safe smoke (RAG/policy focused)
-      shell: bash -l {0}
+      shell: bash -leo pipefail {0}
       run: |
         pytest tests/ \
           -v \
@@ -141,7 +141,7 @@ jobs:
           --tb=short
 
     - name: Run verify harness / smoke (if present)
-      shell: bash -l {0}
+      shell: bash -leo pipefail {0}
       run: |
         if [ -x ./verify.sh ]; then
           echo "Running project verify.sh harness..."
