@@ -1,1 +1,0 @@
-Dont forget that curl requests or powershell api commands can still query cyclaw if on same lan - need to add authentication before truly considering this secure
