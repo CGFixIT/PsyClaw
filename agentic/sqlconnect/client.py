@@ -28,6 +28,11 @@ from utils.errors import (
 )
 from utils.logger import audit_log
 
+# Dialect assumed when a caller does not name one. Mirrors SqlConnectConfig's own
+# default so the guard's standalone callers (selftest, sandbox verifier) behave
+# like a default deployment; test_sqlconnect_client pins the two together.
+_DEFAULT_DRIVER = "postgres"
+
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 # NOTE: ``replace`` is deliberately NOT in this list. ``REPLACE`` as a write
 # statement is MySQL-only DML, and this connector supports only Postgres/MSSQL,
@@ -159,7 +164,24 @@ _MSSQL_FOUR_PART_RE = re.compile(
 # identifiers (``SELECT [a'b] ; DROP TABLE t ; SELECT [c'd]``). Scanning left
 # to right gives each opener the precedence the database gives it, so a quote
 # inside another quoted region is data, not an opener.
-_SIMPLE_QUOTES = {"'": "'", '"': '"', "[": "]"}
+# Quoting rules are per-DIALECT, not a union of both. Applying one dialect's
+# opener while connected to the other is itself a bypass: the scanner opens a
+# phantom region on a character the target database treats as ordinary syntax,
+# blanks everything up to the next such character, and the ``;``/comment/keyword
+# checks below never see the statement hidden in between. Both directions were
+# reachable:
+#
+#     mssql, ``$`` is a legal identifier character (``a$x$`` is a column name):
+#         SELECT 1 AS a$x$ ; EXEC xp_cmdshell 'whoami' ; SELECT 1 AS b$x$
+#     postgres, ``[`` is array subscript (``]]`` ends a nested array literal):
+#         SELECT ARRAY[ARRAY[1]] ; COPY (SELECT 1) TO PROGRAM 'id' ; SELECT ARRAY[1]
+#
+# Each was accepted as a single SELECT. Selecting per driver is strictly
+# fail-closed -- dropping an inapplicable opener blanks LESS text, so the guards
+# see MORE of the statement and can only reject more, never less.
+_SIMPLE_QUOTES_COMMON = {"'": "'", '"': '"'}
+# MSSQL bracket identifiers (``[a b]``, ``]]`` escapes a literal ``]``).
+_SIMPLE_QUOTES_MSSQL = {**_SIMPLE_QUOTES_COMMON, "[": "]"}
 # ``$$``/``$tag$`` -- Postgres dollar-quoting. A bare ``$1`` placeholder does not
 # match (no closing ``$``), so it falls through and is emitted literally.
 _DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
@@ -174,14 +196,19 @@ _DOLLAR_TAG_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
 _IDENT_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$")
 
 
-def _skip_simple_quote(sql: str, start: int, opener: str) -> int:
+def _simple_quotes_for(driver: str) -> dict[str, str]:
+    """Opener->closer map for ``driver``'s simple-quoting forms."""
+    return _SIMPLE_QUOTES_MSSQL if driver == "mssql" else _SIMPLE_QUOTES_COMMON
+
+
+def _skip_simple_quote(sql: str, start: int, opener: str, quotes: dict[str, str]) -> int:
     """Index just past the region opened by ``opener`` at ``start``.
 
     Covers the three doubled-escape forms: ``'...''...'`` string literals,
     ``"..."" ..."`` quoted identifiers, and ``[...]]...]`` MSSQL bracket
     identifiers. Raises on an unterminated region.
     """
-    closer = _SIMPLE_QUOTES[opener]
+    closer = quotes[opener]
     cursor = start + 1
     while True:
         end = sql.find(closer, cursor)
@@ -244,7 +271,7 @@ def _is_unicode_escape_prefix(emitted: list[str]) -> bool:
     return len(emitted) < 3 or emitted[-3] not in _IDENT_CHARS
 
 
-def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
+def _strip_quoted(sql: str, *, keep_identifiers: bool = False, driver: str = _DEFAULT_DRIVER) -> str:
     """Blank out every quoted region so the structural guards scan only real SQL.
 
     Each region collapses to a single space, preserving token boundaries.
@@ -260,12 +287,18 @@ def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
     while a quoted column name must not. The structural checks (``;``, comments)
     and ``_FORBIDDEN_RE`` keep reading the fully-blanked copy, so none of the
     stacked-statement / comment-hiding defenses are weakened by this.
+
+    ``driver`` selects which dialect's quoting forms are recognised -- see the
+    ``_SIMPLE_QUOTES_COMMON`` comment for why applying both dialects' rules at
+    once is a bypass rather than extra safety.
     """
+    quotes = _simple_quotes_for(driver)
+    dollar_quoting = driver != "mssql"
     out: list[str] = []
     cursor = 0
     while cursor < len(sql):
         char = sql[cursor]
-        if char in _SIMPLE_QUOTES:
+        if char in quotes:
             if char == "'" and _is_escape_string_prefix(out):
                 raise SqlConnectError(
                     "escape-string literals (E'...') are not allowed in read-only queries",
@@ -283,7 +316,7 @@ def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
                     "in read-only queries",
                     code="SQLCONNECT_BAD_QUERY",
                 )
-            end = _skip_simple_quote(sql, cursor, char)
+            end = _skip_simple_quote(sql, cursor, char, quotes)
             if keep_identifiers and char != "'":
                 # Padded with spaces on BOTH sides so the emitted text can never
                 # fuse with an adjacent token, and so _is_escape_string_prefix
@@ -294,7 +327,7 @@ def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
                 out.append(" ")
             cursor = end
             continue
-        dollar_end = _skip_dollar_quote(sql, cursor) if char == "$" else None
+        dollar_end = _skip_dollar_quote(sql, cursor) if (dollar_quoting and char == "$") else None
         if dollar_end is None:
             out.append(char)
             cursor += 1
@@ -304,13 +337,19 @@ def _strip_quoted(sql: str, *, keep_identifiers: bool = False) -> str:
     return "".join(out)
 
 
-def assert_read_only_sql(sql: str) -> str:
-    """Return a cleaned single SELECT/WITH statement, or raise ``SqlConnectError``."""
+def assert_read_only_sql(sql: str, *, driver: str = _DEFAULT_DRIVER) -> str:
+    """Return a cleaned single SELECT/WITH statement, or raise ``SqlConnectError``.
+
+    ``driver`` picks the dialect whose quoting rules the structural guards apply.
+    It defaults to the same driver ``SqlConnectConfig`` defaults to, so callers
+    that only need the dialect-independent checks (the self-test, the sandbox
+    verifier) keep working unchanged; ``SqlClient`` passes its configured driver.
+    """
     if not isinstance(sql, str) or not sql.strip():
         raise SqlConnectError("empty SQL", code="SQLCONNECT_BAD_QUERY")
     cleaned = sql.strip().rstrip(";").strip()
     # Structural guards run on the quote-stripped copy (see _QUOTED_RE rationale).
-    scan = _strip_quoted(cleaned)
+    scan = _strip_quoted(cleaned, driver=driver)
     # Defense in depth: SQL comments (``--`` line, ``/* */`` block) are a known
     # vector for hiding forbidden keywords or a stacked statement from a keyword
     # scanner (the DB strips the comment, the guard does not). Read-only previews
@@ -337,7 +376,7 @@ def assert_read_only_sql(sql: str) -> str:
     # function Postgres calls, so this scan must see through `"pg_sleep"` and
     # `pg_catalog."pg_read_file"` -- while string literals stay blanked, so a
     # query that merely mentions one of these names as data is still fine.
-    fn_hit = _FORBIDDEN_FN_RE.search(_strip_quoted(cleaned, keep_identifiers=True))
+    fn_hit = _FORBIDDEN_FN_RE.search(_strip_quoted(cleaned, keep_identifiers=True, driver=driver))
     if fn_hit:
         raise SqlConnectError(
             f"forbidden keyword in read-only query: {fn_hit.group(0)!r}",
@@ -345,7 +384,7 @@ def assert_read_only_sql(sql: str) -> str:
             details={"keyword": fn_hit.group(0)},
         )
     # Keep identifiers so bracket-quoted four-part names are still visible.
-    multipart = _MSSQL_FOUR_PART_RE.search(_strip_quoted(cleaned, keep_identifiers=True))
+    multipart = _MSSQL_FOUR_PART_RE.search(_strip_quoted(cleaned, keep_identifiers=True, driver=driver))
     if multipart:
         raise SqlConnectError(
             "linked-server / four-part object names are not allowed in read-only queries",
@@ -576,7 +615,7 @@ class SqlClient:
 
     def run_select(self, sql: str, fmt: Literal["json", "csv"] = "json") -> dict:
         self._guard_op("run_select")
-        cleaned = assert_read_only_sql(sql)  # pure guard, runs before any connection
+        cleaned = assert_read_only_sql(sql, driver=self.sql_cfg.driver)  # pure guard, pre-connection
         audit_log({"event": "sqlconnect_read", "op": "run_select", "fmt": fmt}, self.config_path)
         result = self._execute(cleaned)
         if fmt == "csv":
@@ -599,7 +638,7 @@ class SqlClient:
                 code="SQLCONNECT_OP_NOT_ALLOWED",
                 details={"driver": "mssql"},
             )
-        cleaned = assert_read_only_sql(sql)  # pure guard, runs before any connection
+        cleaned = assert_read_only_sql(sql, driver=self.sql_cfg.driver)  # pure guard, pre-connection
         audit_log({"event": "sqlconnect_read", "op": "explain"}, self.config_path)
         return {"op": "explain", **self._execute(f"EXPLAIN {cleaned}")}
 

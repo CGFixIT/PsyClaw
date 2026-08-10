@@ -96,22 +96,26 @@ def test_quoted_identifier_cannot_smuggle_a_side_effect_function(bad):
 
 
 @pytest.mark.parametrize(
-    "good",
+    ("good", "driver"),
     [
         # A quoted identifier that merely collides with a STATEMENT keyword is a
         # column name, not a statement -- the original reason quoted regions are
         # blanked for _FORBIDDEN_RE. Splitting the scan must not regress this.
-        'SELECT "delete" FROM t',
-        'SELECT "select", "update" FROM t',
-        'SELECT t."insert" AS i FROM t',
-        "SELECT [delete] FROM t",
+        ('SELECT "delete" FROM t', "postgres"),
+        ('SELECT "select", "update" FROM t', "postgres"),
+        ('SELECT t."insert" AS i FROM t', "postgres"),
+        # Bracket identifiers are mssql syntax, so the "a quoted keyword is a
+        # column name" rule is asserted against that driver. Postgres has no
+        # bracket identifiers -- there "[delete]" is not valid SELECT syntax at
+        # all, so the guard is free to refuse it.
+        ("SELECT [delete] FROM t", "mssql"),
         # A quoted identifier ending in E must not turn the next literal into an
         # E'...' escape string once identifier text is emitted into the scan.
-        "SELECT \"gradeE\", 'plain' FROM t",
+        ("SELECT \"gradeE\", 'plain' FROM t", "postgres"),
     ],
 )
-def test_quoted_statement_keywords_are_still_ordinary_column_names(good):
-    assert assert_read_only_sql(good).lower().startswith("select")
+def test_quoted_statement_keywords_are_still_ordinary_column_names(good, driver):
+    assert assert_read_only_sql(good, driver=driver).lower().startswith("select")
 
 
 def test_blocked_name_inside_a_string_literal_is_data_not_sql():
