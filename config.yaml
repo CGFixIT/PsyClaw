@@ -867,12 +867,15 @@ guardrails:
 # Design + phase plan: docs/channels/TELEGRAM_DESIGN.md
 # Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
 telegram:
-telegram:
-  enabled: true
-  mode: notify          # start here, not chat
-  allowed_chat_ids: ["YOUR_CHAT_ID"]
-  # leave allow_hybrid_confirm and media.enabled false
+  enabled: false                 # off by default; CLI status/test work; send/poll no-op or refuse
+  mode: "notify"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
   bot_token_env: "TELEGRAM_BOT_TOKEN"  # unattended token source; token is never stored in YAML
+  allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
+  # To enable: set enabled: true, keep mode "notify" to start (not "chat"), and put
+  # your real numeric chat id in allowed_chat_ids -- a placeholder string is accepted
+  # by the list-type check but can never match a real update, so the channel would
+  # look armed while silently refusing every message. Leave allow_hybrid_confirm and
+  # media.enabled false unless you have read their sections below.
   api_base: "https://api.telegram.org"
   poll_timeout_sec: 30           # long-poll window for getUpdates (mode=chat)
   max_message_chars: 4000        # align with policy.prompt_filter.max_input_chars
