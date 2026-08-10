@@ -120,9 +120,22 @@ _FORBIDDEN_FN_RE = re.compile(
 # _FORBIDDEN_RE; four-part dotted names are the other way to leave the DSN's
 # intended database without using those keywords. Three-part names
 # (db.schema.obj) on the same instance are still allowed.
+#
+# The name parts are ``[\w$]+`` and NOT ``[A-Za-z_][\w$]*``, because this scan
+# runs against _strip_quoted(keep_identifiers=True), which emits the *contents*
+# of bracket quoting without the brackets. A linked server addressed by IP --
+# ``[10.0.0.5].db.dbo.tbl``, the form an operator actually types -- therefore
+# arrives here as ``10.0.0.5.db.dbo.tbl``, whose leading part starts with a
+# digit. Requiring a letter/underscore lead made that part unmatchable, and the
+# remainder (``db.dbo.tbl``) is only two dot-groups against the ``{3,}`` floor,
+# so the whole reference slipped through the guard that exists to stop it. The
+# same hole covered ``[10.0.0.5,1433]`` (host,port) and bracketed IPv6 literals.
+# Allowing a digit lead costs nothing: three-part names still have too few
+# groups to match, and numeric literals cannot reach four dotted parts outside
+# a quoted region (string literals are blanked before this scan).
 _MSSQL_FOUR_PART_RE = re.compile(
-    r"(?:\[[^\]]+\]|[A-Za-z_][\w$]*)"
-    r"(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][\w$]*|)){3,}",
+    r"(?:\[[^\]]+\]|[\w$]+)"
+    r"(?:\s*\.\s*(?:\[[^\]]+\]|[\w$]+|)){3,}",
     re.IGNORECASE,
 )
 
