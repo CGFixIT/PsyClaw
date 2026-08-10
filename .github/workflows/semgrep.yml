@@ -49,7 +49,13 @@ jobs:
 
       - name: Install and run Semgrep
         run: |
-          pip install semgrep
+          # Pinned exactly, matching this repo's convention for every other
+          # workflow-only scanner tool (flake8/wemake-python-styleguide in
+          # lint.yml, actionlint-py/zizmor in ci.yml): an unpinned scanner can
+          # resolve a different ruleset/version on two separate runs of the
+          # same commit, making one lane's SARIF silently unreproducible
+          # against another's. Bump deliberately, not via a floating install.
+          pip install semgrep==1.172.0
           # Zizmor owns the dangerous-trigger control and supports the reviewed,
           # scoped exception in pr-review.yml. Semgrep SARIF uploads source-
           # suppressed findings, so exclude only the duplicate registry rule.

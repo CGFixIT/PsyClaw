@@ -509,6 +509,8 @@ jobs:
             --cov=gate_auth \
             --cov=gate_memory \
             --cov=memory \
+            --cov=utils.agent_identity \
+            --cov=utils.repo_paths \
             --cov=utils.auth \
             --cov=utils.authn \
             --cov=utils.authn_store \
