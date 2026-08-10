@@ -12,7 +12,7 @@
 
 # 4)
 - It ultimately will run in a container (deploy/) but not necessarily something to do now but keep in mind and research a bit
-> DONE
+> *
 
 # 5)
 - learn some of the very specific differences with the 3-5 compliance data protocols - last time i looked I was surprised the regulations weren’t perfectly aligned with what I’d consider secure or keeping data private; sometimes it’s preventing acccess despite that limiting the level of access/observability.. wasn’t anything that didn’t seem possible but def will need to carefully revisit at least some and know about more to not sound like an idiot haha - 
