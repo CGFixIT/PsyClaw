@@ -215,6 +215,167 @@ Set `CYCLAW_SQL_DSN` (or whatever `dsn_env` names). v0.1 **cannot write**
 
 ---
 
+## Security best practices
+
+These are operator practices on top of the built-in gates. The gates fail closed;
+this section is how to **use** them without accidentally widening blast radius.
+
+### Least privilege — open only what you need
+
+| Goal | Leave off / keep closed |
+|---|---|
+| Read GitHub context only | `enabled: true`; keep `allow_git_write_tools: false`; do not publish |
+| Local plan/patch/verify | `deepagent_github.enabled` + `allow_git_write_tools`; **no** push/publish |
+| Local commit only | `real-repo-run-decide --decision approve` without `--push` |
+| Push branch, no PR | `real-repo-run-push` (or decide with `--push` only) |
+| Draft PR | `real-repo-run-publish` — highest gate surface |
+| FS reads only | `fsconnect.enabled` with `writes_enabled: false` |
+| SQL | keep `read_only: true` / `allow_write: false` (required in v0.1) |
+
+Prefer **local model** for implement iterations; use cloud (`--provider` +
+`--confirm-online`) for a **one-shot plan** only when needed. Do not leave
+`allow_shell_execution` or `allow_filesystem_write_tools` true — shell remains
+unimplemented/hard-refused; FS write tools are for the retired harness surface,
+not a host shell.
+
+### Gate hygiene
+
+1. **Never treat a plan dict as authority.** `execute_write` rebuilds argv and
+   requires a **fresh** `confirm` from its own caller. Do not craft or replay
+   plan JSON to skip a human decision.
+2. **Per-call reason + confirm are not optional ceremony.** Empty reasons and
+   missing `--confirm` / `--confirm-publish` / `--confirm-online` are correct
+   refusals (exit 4).
+3. **Booleans must be real YAML booleans.** Quoted `"true"` / `"false"` are
+   strings; config validation rejects non-bools on load-bearing gates so they
+   cannot silently open a switch.
+4. **Do not weaken protected paths or scanners to “make a run pass.”**
+   `protected_write_paths` and `scan_code_shape: true` exist to stop reward
+   hacking and exfil-shaped patches. If a legitimate change hits them, fix the
+   change or document a one-off exception — do not ship `scan_code_shape: false`
+   as a default.
+5. **Keep `agentic.enabled: false` when idle.** Turning the master switch off
+   is the normal “done for the day” posture; mode/writes flags can stay armed.
+
+### Human review is the real control
+
+Automated checks (injection scan, code-shape heuristics, executor pytest/ruff)
+are **necessary but not sufficient**.
+
+- Always inspect `real-repo-run-status` **diff + untracked new files** before
+  `approve`. An empty tracked diff can still hide brand-new files.
+- Review **`--instruction`**, **`--plan-file`**, and PR/issue context as
+  untrusted: paste-from-ticket is a confused-deputy path; the CLI already
+  scans these, but humans still decide.
+- Prefer **two-stage** workflows: cloud (or human) plan → local implement →
+  human approve → optional push → optional draft PR. Separate decisions so a
+  single flag cannot silently escalate.
+- Prefer **draft PRs only** (enforced: `pr_create` always `--draft`). Promote
+  to ready-for-review yourself after reading the PR on GitHub.
+
+### Secrets, credentials, and identity
+
+| Do | Don’t |
+|---|---|
+| Keep API keys in env only (`GROK_API_KEY`, `ANTHROPIC_API_KEY`, `CYCLAW_SQL_DSN`, `CYCLAW_API_KEY`) | Put tokens in `config.yaml`, skill bodies, plans, or commits |
+| Use `gh auth login` + `gh auth setup-git` for push | Inject `GH_TOKEN` into agentic subprocess env (deliberately not allowlisted — shared with executor) |
+| Confirm `gh auth status` is the identity you intend before publish | Assume the process identity is “the bot” if your laptop `gh` is personal |
+| Prefer least-privilege GitHub tokens / fine-scoped PATs for automation hosts | Broad classic PATs on a shared machine |
+| Treat `workspace_root` clones as sensitive (may contain secrets from the target repo) | Leave old clones forever — `real-repo-run-discard` after decide |
+
+Rollback kill switch (no source edit): `export CYCLAW_AGENTIC_WRITE_DISABLE=1`
+(disable-only; cannot arm a closed build). For a permanent rollback, also set
+`agentic.enabled: false` and re-check `EXECUTION_ENABLED` / mode / writes_enabled
+per [`GITHUB_WRITE_ENABLEMENT.md`](../docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
+
+### Real-repo & executor surface
+
+- **Checks files are operator-authored trust.** The harness sends profile
+  *names*, not raw argv, over HTTP — keep it that way. A local checks file of
+  `{"argv": ["git", "push", ...]}` can bypass branch scoping if you author it;
+  never paste untrusted argv into checks manifests.
+- **Declare `--read-file` paths explicitly.** The planner cannot browse the
+  clone; over-sharing secrets-bearing files into the prompt is an operator
+  choice — minimize declared reads.
+- **Keep clones under `data/agentic/workspaces`.** Paths are validated under the
+  repo `data/` tree; do not retarget workspace roots outside the repo.
+- **Discard finished runs** so model-written worktrees and credentials-adjacent
+  git state do not accumulate.
+
+### Filesystem connector
+
+- Split **read** (`allowed_roots`) and **write** (`writable_roots`) scopes;
+  never point writable roots at the CyClaw source tree or home config dirs.
+- Keep `follow_symlinks: false` (required). Do not enable UNC roots unless you
+  accept egress risk (`allow_unc_roots`).
+- Prefer trash deletes over `--purge`; leave `allow_hard_delete: false`.
+- Turn on `block_on_injection_flags` if untrusted content may be written.
+- Enable write rate limits and quotas before multi-user or scripted writers.
+- See [`FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md`](../docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md).
+
+### SQL connector
+
+- DSN **only** from environment (`dsn_env`). Never embed passwords in YAML.
+- Use a **read-only DB role** at the server even though the client enforces
+  SELECT-only and session read-only.
+- Keep `max_rows` and `statement_timeout_ms` tight for exploratory use.
+- Do not set `allow_write: true` / `read_only: false` — config load fails closed
+  in v0.1 for a reason.
+
+### Cloud egress & data minimization
+
+- Local planner `base_url` **must** be loopback; non-loopback is a config error
+  (prevents silent remote exfil of planner prompts).
+- Every cloud call needs **`--confirm-online`** — treat that as “I accept this
+  prompt (instruction + context + files) leaving the machine.”
+- Prefer two-stage so large file bodies go to a local model after a short cloud
+  plan, not on every iteration.
+- Do not enable cloud providers you do not use; an enabled provider with a live
+  key while `allow_cloud_providers` is false is a **config error** (fail loud).
+
+### Skills registry
+
+- Apply skills only after reading the body; injection patterns block many
+  jailbreaks but not semantic policy violations.
+- Keep `registry_path` under `data/`; refuse paths that escape the data tree.
+- Prefer `propose-skill` dry-runs before `apply-skill --confirm`.
+
+### Audit, observability, and incident response
+
+1. **Watch** `logs/audit.jsonl` (or `python -m metrics`) for
+   `agentic_write_*`, `*_tool_denied`, `*_injection_*`, and cloud-confirm events.
+2. **Investigate** unexpected `agentic_write_executed` or `push` events
+   immediately — match run ids, reasons, and `gh` identity.
+3. **Contain:** `CYCLAW_AGENTIC_WRITE_DISABLE=1`, set `agentic.enabled: false`,
+   revoke/rotate cloud keys and `gh` credentials if compromise is plausible.
+4. **Preserve** audit logs and run records under `workspace_root/runs/` before
+   discarding clones if you need forensics.
+
+### What never to build or enable casually
+
+- Host shell / PowerShell / bash tools for the model
+- Unrestricted filesystem access over the live checkout
+- Skipping human approve for push/PR “to save a step”
+- Importing `agentic.*` into `gate.py` / `graph.py` / MCP (breaks I6)
+- Force-push, non-draft PR create, or writes to `main` (not offered; do not add)
+
+### Quick pre-flight checklist
+
+```text
+[ ] agentic.enabled only true while actively operating
+[ ] gh auth status / identity confirmed
+[ ] allow_git_write_tools true only for real-repo work you intend to write
+[ ] scan_code_shape true; protected_write_paths intact
+[ ] No secrets in YAML, skills, plans, or --instruction paste
+[ ] Cloud: key in env + --confirm-online only when needed
+[ ] Diff (+ new files) reviewed before approve
+[ ] Push and publish are separate, intentional decisions
+[ ] Know the kill switch: CYCLAW_AGENTIC_WRITE_DISABLE=1
+[ ] Self-test green: python -m agentic.cli test
+```
+
+---
+
 ## Tool-call capabilities
 
 ### A. GitHub read tools (`agentic.context` / `gh_client`)
@@ -461,5 +622,6 @@ python -m agentic.sqlconnect.cli test
 | [`docs/agentic/AGENTIC_README.md`](../docs/agentic/AGENTIC_README.md) | Full user guide |
 | [`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](../docs/agentic/GITHUB_WRITE_ENABLEMENT.md) | Arming draft PR create |
 | [`docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md`](../docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md) | FS write enablement |
+| [`docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`](../docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md) | FS security review checklist |
 | [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) | Skills registry governance |
 | [`docs/THREAT_MODEL.md`](../docs/THREAT_MODEL.md) | Threat-model amendments for this layer |
