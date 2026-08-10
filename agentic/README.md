@@ -1,13 +1,465 @@
-# `.agentic/` — Project Agentic Harness & Workflows & Coding agent
+# `agentic/` — CyClaw Agentic Layer
 
-Quick reference for CyClaw Agentic Functionality
+**Status (2026-08-09):** Experimental, **disabled by default**, out-of-band.
+Primary entry: `python -m agentic.cli` (plus sibling CLIs for filesystem and SQL).
+Canonical longer guide: [`docs/agentic/AGENTIC_README.md`](../docs/agentic/AGENTIC_README.md).
+Write-path enablement checklist: [`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](../docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
 
-## Tools
-- FS - Look into how complicated a powershell or shell-based harness like grok build or kimi code would be to securely implement in cyclaw - fs/sql works but no cmd/ps1/bash yet
-- SQL
-- PG*
-- sync/
-- agentic/
+An **opt-in** layer for governed tool calls against GitHub, local skills, a
+jailed real-repo coding loop, scoped filesystem roots, and read-only SQL.
+It is **never imported** by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
+(I6 isolation) — so it cannot affect retrieval, routing, or the MCP surface.
 
-## Skills
-*work in progress*
+> **Security posture in one line:** every subsystem ships **off**. Reads use
+> audited, argv-list subprocesses (no shell). Writes need multiple independent
+> gates (config flags + human reason + per-call confirm). Host shell tools and
+> unrestricted filesystem tools are **not** exposed. There is no `cmd` / `ps1` /
+> `bash` agent tool surface.
+
+---
+
+## Package map
+
+| Path | What it does |
+|---|---|
+| `agentic/cli.py` | Main CLI: GitHub context, skills registry, real-repo loop, write publish |
+| `agentic/config.py` | `agentic:` block schema + defaults |
+| `agentic/context.py` | Read-only GitHub context (PR / issue / repo) via `gh` |
+| `agentic/gh_client.py` | `gh` chokepoint: version floor, argv-list, retries, clone |
+| `agentic/registry.py` | Governed local skills registry (propose / apply) |
+| `agentic/writer.py` | GitHub write gate — executable op: draft `pr_create` only |
+| `agentic/real_repo_loop.py` | Live plan → patch → verify → human-decides → commit pipeline |
+| `agentic/real_repo_run_store.py` | Persisted run records under `workspace_root/runs/` |
+| `agentic/executor/` | Sandboxed verification (`pytest` / `ruff` / custom checks) |
+| `agentic/deepagent_github/` | Real-repo workspace tools + **retired** DeepAgents graph probe |
+| `agentic/harness_optimizer/` | Fixture/harness optimizer + scoped proposer workspace tools |
+| `agentic/fsconnect/` | Scoped filesystem connector (`python -m agentic.fsconnect.cli`) |
+| `agentic/sqlconnect/` | Read-only SQL connector (`python -m agentic.sqlconnect.cli`) |
+
+---
+
+## Default config (shipped `config.yaml`)
+
+Master switch is **off**. Mode / writes flags may be pre-armed in YAML so that
+flipping `enabled: true` is the remaining layer gate — **per-call reason +
+confirm are still mandatory** on every mutation.
+
+```yaml
+agentic:
+  enabled: false                 # MASTER SWITCH — CLI no-ops (exit 0) while false
+  repo: "cgfixit/CyClaw"
+  mode: "write"                  # "read" | "write" (still needs enabled + reason + confirm)
+  writes_enabled: true           # second write flag; not sufficient alone
+  gh_min_version: "2.40.0"
+  gh_timeout_sec: 30
+  gh_retries: 2
+  registry_path: "data/agentic/skills_registry.json"
+  allowed_read_ops:
+    - pr_view
+    - pr_list
+    - pr_diff
+    - issue_view
+    - issue_list
+    - repo_view
+
+  deepagent_github:
+    enabled: false               # also gates real-repo-run / real-repo-run-plan
+    provider: "ollama"           # "ollama" | "openai_compatible"
+    base_url: "http://127.0.0.1:11434/v1"   # loopback only (validated)
+    model: "qwen3.6:27b"
+    planner_timeout_sec: 600
+    planner_max_tokens: 2048
+    allow_deepagents_dependency: false
+    allow_filesystem_write_tools: false   # retired DeepAgents virtual surface only
+    allow_shell_execution: false          # no host shell tool (hard-refused if true)
+    allow_github_writes: false            # writer.py is the PR write boundary
+    allow_git_write_tools: false          # REAL-REPO write_file/add/commit/push gate
+    protected_write_paths:                # reward-hack defense (path-prefix match)
+      - "tests/"
+      - "conftest.py"
+      - ".github/"
+      - ".git/"
+      - "pyproject.toml"
+      - "setup.cfg"
+      - "pytest.ini"
+      - ".ruff.toml"
+      - "ruff.toml"
+      - "tox.ini"
+      - "noxfile.py"
+      - ".claude/"
+      - ".codex/"
+    max_write_budget_bytes: 100000
+    scan_code_shape: true
+    max_handoff_chars: 200000
+    workspace_root: "data/agentic/workspaces"
+    allow_cloud_providers: true
+    providers:
+      grok:
+        enabled: true
+        model: "grok-4.5"
+      claude:
+        enabled: true
+        model: "claude-sonnet-5"
+
+  harness_optimizer:
+    enabled: false
+    max_iterations: 3
+    require_human_confirm_for_accept: true
+    output_dir: "data/agentic/harness_optimizer/runs"
+    memory_dir: "data/agentic/harness_optimizer/memory"
+    allow_local_model_judge: false
+```
+
+Code-level defaults (when a key is absent) lean **more conservative** than the
+shipped YAML for some write flags (`mode: "read"`, `writes_enabled: false` in
+`agentic/config.py`). Always treat **`config.yaml` as source of truth** for a
+checkout.
+
+Sibling connectors (also default-off):
+
+```yaml
+fsconnect:
+  enabled: false
+  writes_enabled: false
+  allowed_fs_ops: [fs_list, fs_stat, fs_read, fs_grep, fs_glob]
+  # writable_roots default to OS share folder; writes need reason + confirm
+
+sqlconnect:
+  enabled: false
+  driver: "postgres"             # or "mssql"
+  dsn_env: "CYCLAW_SQL_DSN"      # DSN from env only — never YAML
+  read_only: true                # hard requirement in v0.1
+  allow_write: false             # must stay false
+  allowed_sql_ops: [schema_list, table_preview, run_select, explain, row_count]
+```
+
+---
+
+## How to enable
+
+### 1. Layer master switch (GitHub context + skills + real-repo CLI)
+
+```yaml
+agentic:
+  enabled: true
+```
+
+While `enabled: false`, every `agentic.cli` command **except** `status` and
+`test` is a clean no-op (exit 0). `status` always reports the disabled state.
+
+Prerequisites: GitHub CLI `gh` ≥ `gh_min_version`, authenticated (`gh auth login`).
+CyClaw never reads or forwards your token.
+
+### 2. Real-repo coding loop
+
+```yaml
+agentic:
+  enabled: true
+  deepagent_github:
+    enabled: true
+    model: "qwen3.6:27b"          # required for local planner
+    allow_git_write_tools: true   # required to write/commit/push in the clone
+```
+
+Then every run still needs **`--reason` + `--confirm`**. Cloud planner/coder
+needs the full six-condition chain (see below).
+
+### 3. Draft PR publish (`pr_create`)
+
+`EXECUTION_ENABLED = True` in `agentic/writer.py` (armed). Still requires **all** of:
+
+| # | Gate | Shipped default |
+|---|---|---|
+| 0 | `agentic.enabled` | `false` |
+| 1 | `mode == "write"` | `write` (open in YAML) |
+| 2 | `writes_enabled` | `true` (open in YAML) |
+| 3 | non-empty human `reason` | per-call |
+| 4 | `confirm=True` | per-call |
+| code | `EXECUTION_ENABLED` and not `CYCLAW_AGENTIC_WRITE_DISABLE` | armed |
+
+Only **`pr_create` (always `--draft`)** executes. `pr_comment` / `issue_comment`
+are plan-only. Rollback without a source edit: `CYCLAW_AGENTIC_WRITE_DISABLE=1`.
+
+### 4. Cloud providers (Grok / Claude) for planning or coding
+
+Six conditions, all required:
+
+1. `agentic.enabled: true`
+2. `deepagent_github.enabled: true`
+3. `allow_cloud_providers: true`
+4. `providers.<name>.enabled: true`
+5. API key in env only — `GROK_API_KEY` or `ANTHROPIC_API_KEY` (never in YAML)
+6. Per-run **`--confirm-online`**
+
+### 5. Filesystem connector
+
+```yaml
+fsconnect:
+  enabled: true
+  allowed_roots: ["/path/you/allow/read"]   # required when enabled
+  writes_enabled: true                      # only if you want writes
+```
+
+Writes are confined to `writable_roots` (separate list), need reason + confirm,
+and hard-delete needs `allow_hard_delete: true` plus `--purge`.
+
+### 6. SQL connector (read-only)
+
+```yaml
+sqlconnect:
+  enabled: true
+```
+
+Set `CYCLAW_SQL_DSN` (or whatever `dsn_env` names). v0.1 **cannot write**
+(`read_only: true`, `allow_write: false` enforced at config load).
+
+---
+
+## Tool-call capabilities
+
+### A. GitHub read tools (`agentic.context` / `gh_client`)
+
+Allowlisted ops (`allowed_read_ops`):
+
+| Op | Purpose |
+|---|---|
+| `repo_view` | Repository overview |
+| `pr_list` / `pr_view` / `pr_diff` | PR metadata + diff |
+| `issue_list` / `issue_view` | Issue metadata |
+| `repo_clone` | Used internally by real-repo workspace (not a free-form agent tool) |
+
+Invocation:
+
+```bash
+python -m agentic.cli context --repo
+python -m agentic.cli context --pr 123
+python -m agentic.cli context --issue 45
+```
+
+GitHub-sourced text is injection-scanned before it is allowed into planner
+prompts. Reads stay available for human inspection even when findings exist;
+model-feeding paths refuse on injection / scanner-unavailable findings.
+
+### B. Skills registry tools
+
+Local governed registry at `registry_path` (must resolve under `data/`):
+
+```bash
+python -m agentic.cli propose-skill --name deploy --desc "..." --body-file s.md --reason "draft"
+python -m agentic.cli apply-skill   --name deploy --desc "..." --body-file s.md --reason "add" --confirm
+```
+
+`apply-skill` requires master switch + reason + confirm + injection scan +
+atomic write + sha256 versioning (soul propose/apply pattern).
+
+### C. Real-repo workspace tools (`RepoWorkspaceTools`)
+
+Jailed clone under `deepagent_github.workspace_root`. Containment uses
+`fsconnect.pathsafe.ScopedRoots` for reads; git writes use argv-list `git` with
+scrubbed env and `cwd` pinned to the clone.
+
+| Tool / method | Default | What it does |
+|---|---|---|
+| `read_file` / `list_dir` / `stat_file` | always (once cloned) | Scoped reads inside the clone |
+| `write_file` | `allow_git_write_tools` | Create/overwrite one text file (≤ 256 KiB) |
+| `checkout_branch` | `allow_git_write_tools` | `git checkout -b <vendor>/<topic>` only |
+| `add` | `allow_git_write_tools` | Stage validated paths |
+| `commit` | `allow_git_write_tools` | Commit as CyClaw agent identity; `--no-verify` |
+| `diff` / `untracked_files` | `allow_git_write_tools` | Review surface for humans |
+| `push_branch` | `allow_git_write_tools` | **Only network write here** — push agent branch to origin |
+
+Hard denials: `.git/**` paths, protected path prefixes, write-budget overruns,
+code-shape scan hits (`scan_code_shape`), injection in proposed content.
+
+Branch names must use an allowed vendor prefix (`agent/`, `grok/`, `kimi/`,
+`claude/`, `codex/`, `CyClaw/`, …).
+
+### D. Real-repo loop (live coding pipeline)
+
+```text
+clone → (optional cloud plan file) → model proposes patches → write_file
+  → executor checks → pending_decision → human approve/reject
+  → (optional) push → (optional) draft PR
+```
+
+```bash
+# Optional two-stage: cloud plans once, local implements
+python -m agentic.cli real-repo-run-plan --repo --instruction "..." \
+    --provider grok --confirm-online --out plan.md
+# Review/edit plan.md, then implement WITHOUT --provider:
+python -m agentic.cli real-repo-run --repo --instruction "..." \
+    --checks-file checks.json --branch claude/topic \
+    --commit-message "..." --reason "..." --plan-file plan.md --confirm \
+    --read-file path/to/existing.py
+
+python -m agentic.cli real-repo-run-status --run-id <id>   # includes pending diff
+python -m agentic.cli real-repo-run-decide --run-id <id> --decision approve  # or reject
+python -m agentic.cli real-repo-run-push    --run-id <id>
+python -m agentic.cli real-repo-run-publish --run-id <id> --reason "..." --confirm
+python -m agentic.cli real-repo-run-discard --run-id <id>
+```
+
+Also reachable (authenticated) via harness routes:
+`POST /api/agent/run`, `GET /api/agent/runs/{id}`, `POST /api/agent/runs/{id}/decision`.
+Two-stage `--provider` / `--plan-file` is **CLI-only** today.
+
+**`--provider` semantics differ by subcommand:**
+
+- On `real-repo-run-plan` → only the one-shot plan call
+- On `real-repo-run` → every iteration of the whole loop
+
+For “cloud plans, local implements”: pass `--provider` only to `real-repo-run-plan`.
+
+### E. GitHub write tools (`agentic.writer`)
+
+| Op | Plan | Execute |
+|---|---|---|
+| `pr_create` | yes | yes — always `--draft` |
+| `pr_comment` | yes | **no** (plan-only) |
+| `issue_comment` | yes | **no** (plan-only) |
+
+### F. DeepAgents tool catalog (retired graph path)
+
+Code retained; **no further development planned** (owner decision 2026-07-31).
+`deepagent-plan` probes gate state and **never** `.invoke()`s the agent.
+
+| Tool | Default allowed | Notes |
+|---|---|---|
+| `repo_context_read` | yes | Surface manifest |
+| `local_repo_read` | yes | Scoped fixture/workspace file |
+| `rag_search_readonly` | yes | Injected read-only RAG |
+| `proposal_workspace_write_current` | `allow_filesystem_write_tools` | Write under `current/` only |
+| `finish_proposal` | `allow_filesystem_write_tools` | Write `proposal.md` |
+| `local_shell` | always denied in practice | Unimplemented / build-refused |
+| `github_write` | always denied here | Real path is `writer.py` |
+
+### G. Harness optimizer workspace tools (`ProposerWorkspaceTools`)
+
+Plain Python boundary (future MCP shape). **No shell, no GitHub writes, no
+holdout reads, no unrestricted FS.**
+
+| Tool | Purpose |
+|---|---|
+| `list_workspace` | List visible entries (skips `holdout_hidden`) |
+| `read_file` | Read one visible file (≤ 256 KiB) |
+| `read_surface_manifest` | Local surface manifest |
+| `read_train_failures` | Visible train artifacts |
+| `read_visible_history` | Prior-attempt artifacts |
+| `rag_search_readonly` | Injected RAG or empty results |
+| `write_current_file` | Atomic write under `current/` only |
+| `finish_proposal` | Atomic write of `proposal.md` |
+
+### H. Filesystem connector tools (`fsconnect`)
+
+```bash
+python -m agentic.fsconnect.cli status
+python -m agentic.fsconnect.cli list  --root ... --path ...
+python -m agentic.fsconnect.cli read  --root ... --path ...
+python -m agentic.fsconnect.cli stat  --root ... --path ...
+python -m agentic.fsconnect.cli grep  --root ... --path ... --pattern ...
+python -m agentic.fsconnect.cli glob  --root ... --pattern '*.md'
+# Writes (gated):
+python -m agentic.fsconnect.cli write   --path ... --body-file f --reason ... --confirm
+python -m agentic.fsconnect.cli append  --path ... --body-file f --reason ... --confirm
+python -m agentic.fsconnect.cli mkdir   --path ... --reason ... --confirm
+python -m agentic.fsconnect.cli move    --src ... --dst ... --reason ... --confirm
+python -m agentic.fsconnect.cli delete  --path ... --reason ... --confirm   # trash; --purge needs allow_hard_delete
+python -m agentic.fsconnect.cli trash-empty / trash-restore / quota-status
+python -m agentic.fsconnect.cli index   [--apply] [--reindex]
+python -m agentic.fsconnect.cli reveal
+python -m agentic.fsconnect.cli test
+```
+
+Content-agnostic: never calls the LLM. Operator supplies bytes via
+`--body` / `--body-file` / stdin. Symlinks under a root are always denied
+(`follow_symlinks` must be false).
+
+### I. SQL connector tools (`sqlconnect`) — read-only
+
+```bash
+python -m agentic.sqlconnect.cli status
+python -m agentic.sqlconnect.cli schema
+python -m agentic.sqlconnect.cli query --sql 'SELECT ...'
+python -m agentic.sqlconnect.cli query --sql 'SELECT ...' --explain   # Postgres plan
+python -m agentic.sqlconnect.cli query --table schema.table
+python -m agentic.sqlconnect.cli query --table schema.table --count
+python -m agentic.sqlconnect.cli test
+```
+
+Session-level read-only + SELECT-only query guard. No write path in v0.1.
+
+### J. Explicitly **not** available
+
+- Host shell / PowerShell / bash agent tools (no Grok-Build / Kimi-style shell harness)
+- Unrestricted filesystem tools over the live repo
+- Autonomous push/PR without human gates
+- Core request-path import of any of the above
+
+---
+
+## Main CLI commands
+
+```bash
+python -m agentic.cli status
+python -m agentic.cli context --repo | --pr N | --issue N
+python -m agentic.cli propose-skill ...
+python -m agentic.cli apply-skill ... --reason ... --confirm
+python -m agentic.cli real-repo-run-plan ...
+python -m agentic.cli real-repo-run ... --checks-file ... --branch ... --commit-message ... --reason ... --confirm
+python -m agentic.cli real-repo-run-status --run-id ...
+python -m agentic.cli real-repo-run-decide --run-id ... --decision approve|reject
+python -m agentic.cli real-repo-run-push --run-id ...
+python -m agentic.cli real-repo-run-publish --run-id ... --reason ... --confirm
+python -m agentic.cli real-repo-run-discard --run-id ...
+python -m agentic.cli deepagent-plan --repo --instruction "..."   # retired probe, no invoke
+python -m agentic.cli test
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | success (also clean no-op when disabled) |
+| 2 | operation failed |
+| 3 | config / environment problem |
+| 4 | write/apply refused by a gate |
+
+Mapped by `utils/ops_runner.py` for `/ops/agentic`.
+
+---
+
+## Auditing
+
+Every read, refusal, tool allow/deny, registry change, clone, git op, and write
+plan/execute emits JSONL via `utils.logger.audit_log` (secrets/emails/IPs
+redacted). Representative event names:
+
+- `agentic_read`, `agentic_write_refused`, `agentic_write_dryrun`, `agentic_write_executed`
+- `agentic_skill_applied`, `agentic_skill_injection_blocked`
+- `agentic_repo_workspace_*`, `agentic_deepagent_tool_*`, `agentic_harness_workspace_tool_*`
+- `agentic_real_repo_*`
+
+Inspect with `python -m metrics` or `logs/audit.jsonl`.
+
+---
+
+## Tests
+
+```bash
+GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q
+python -m agentic.cli test
+python -m agentic.fsconnect.cli test
+python -m agentic.sqlconnect.cli test
+```
+
+---
+
+## Related docs
+
+| Doc | Topic |
+|---|---|
+| [`docs/agentic/AGENTIC_README.md`](../docs/agentic/AGENTIC_README.md) | Full user guide |
+| [`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](../docs/agentic/GITHUB_WRITE_ENABLEMENT.md) | Arming draft PR create |
+| [`docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md`](../docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md) | FS write enablement |
+| [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) | Skills registry governance |
+| [`docs/THREAT_MODEL.md`](../docs/THREAT_MODEL.md) | Threat-model amendments for this layer |
