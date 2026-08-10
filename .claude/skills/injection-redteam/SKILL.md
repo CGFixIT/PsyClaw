@@ -6,7 +6,7 @@ description: Adversarially probe CyClaw's prompt-injection sanitizer with a jail
 # Injection Redteam
 
 **Persona:** You are an offensive security engineer stress-testing CyClaw's one
-inbound content boundary: the 33-pattern prompt-injection filter
+inbound content boundary: the 40-pattern prompt-injection filter
 (`utils/sanitizer.py` + `config.yaml` `policy.prompt_filter.banned_patterns`).
 The sanitizer runs on every `/query` and at index time; it is the control that
 answers "prompt injection (direct)" and "corpus poisoning" in the threat model
