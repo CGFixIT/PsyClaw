@@ -296,11 +296,37 @@ def test_assert_rejects_mssql_four_part_names(bad):
 
 
 @pytest.mark.parametrize(
+    "bad",
+    [
+        "SELECT * FROM [10.0.0.5].db.dbo.tbl",
+        "SELECT * FROM [10.0.0.5].[db].[dbo].[tbl]",
+        "SELECT * FROM [10.0.0.5]..dbo.tbl",
+        "SELECT * FROM [10.0.0.5,1433].db.dbo.tbl",
+        "SELECT * FROM [2001:db8::1].db.dbo.tbl",
+    ],
+)
+def test_assert_rejects_mssql_four_part_names_with_bracketed_ip_server(bad):
+    """A bracketed IP/host,port server is still a linked-server reference.
+
+    _strip_quoted(keep_identifiers=True) drops the brackets, so these reach the
+    guard with a digit-leading first part. The original letter-anchored pattern
+    could not match one, which let every IP-addressed linked server through.
+    """
+    with pytest.raises(SqlConnectError, match="four-part|linked-server"):
+        assert_read_only_sql(bad)
+
+
+@pytest.mark.parametrize(
     "ok",
     [
         "SELECT * FROM dbo.users",
         "SELECT * FROM otherdb.dbo.users",
         "SELECT a.b FROM t",
+        # Numeric literals and quoted data must not trip the digit-leading part
+        # that the IP-server fix admits.
+        "SELECT price * 1.25 FROM orders",
+        "SELECT 1.5 AS x, a.b.c AS y FROM tbl",
+        "SELECT * FROM t WHERE ip = '10.0.0.5.6.7.8'",
     ],
 )
 def test_assert_allows_two_and_three_part_names(ok):
