@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from utils.config_validation import (
     validate_auth_config,
@@ -296,3 +299,51 @@ def test_auth_quoted_yaml_boolean_skips_validation_like_disabled(quoted):
 
     cfg["auth"]["session"] = "not-even-a-mapping"
     validate_auth_config(cfg)  # still must not raise
+
+
+class TestShippedConfigNoDuplicateKeys:
+    """The REAL config.yaml must not declare the same key twice in one mapping.
+    # ^ shut yo mouth claude. you aint wrong though. the kind of thing almost impossible to do from a computer 
+    PyYAML resolves a duplicate key by silently keeping the LAST one -- no
+    warning, no error. That turns a copy-paste slip into invisible config
+    corruption: commit 94ac628 landed a second `telegram:` mapping on main, and
+    the surviving block armed the channel with a placeholder chat id while the
+    documented defaults above it were discarded. Every validator still passed,
+    because by the time they run PyYAML has already thrown one of the two away.
+    Scanning the composed node tree (not the constructed dict) is the only layer
+    where both keys are still visible.
+    """
+
+    @staticmethod
+    def _duplicate_keys(node, path="<root>"):
+        dupes = []
+        if isinstance(node, yaml.MappingNode):
+            seen = set()
+            for key_node, value_node in node.value:
+                key = getattr(key_node, "value", None)
+                if key in seen:
+                    dupes.append(f"{path}.{key}")
+                seen.add(key)
+                dupes.extend(
+                    TestShippedConfigNoDuplicateKeys._duplicate_keys(value_node, f"{path}.{key}")
+                )
+        elif isinstance(node, yaml.SequenceNode):
+            for index, item in enumerate(node.value):
+                dupes.extend(
+                    TestShippedConfigNoDuplicateKeys._duplicate_keys(item, f"{path}[{index}]")
+                )
+        return dupes
+
+    def test_no_duplicate_keys_anywhere_in_shipped_config(self):
+        config_path = Path(__file__).resolve().parents[1] / "config.yaml"
+        with config_path.open(encoding="utf-8") as handle:
+            root = yaml.compose(handle)
+        assert self._duplicate_keys(root) == []
+
+    def test_detects_a_planted_duplicate(self, tmp_path):
+        # A checker that cannot see planted drift is not a checker.
+        planted = tmp_path / "config.yaml"
+        planted.write_text("telegram:\n  enabled: false\ntelegram:\n  enabled: true\n", encoding="utf-8")
+        with planted.open(encoding="utf-8") as handle:
+            root = yaml.compose(handle)
+        assert self._duplicate_keys(root) == ["<root>.telegram"]
