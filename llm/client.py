@@ -24,7 +24,7 @@ import math
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.parse import urlparse
 
 import httpx
@@ -293,6 +293,10 @@ class ResolvedLocalBackend:
     model: str
     source: str  # "primary" | "fallback"
     api_key: str = ""
+    # True when NEITHER backend answered its probe and this is the
+    # boot-must-not-die fallback to primary, rather than a positive selection.
+    # Callers use it to know the choice was a guess worth re-checking later.
+    degraded: bool = False
 
 
 # Process-level resolution cache so LocalLLMClient and /health share one probe.
@@ -452,8 +456,15 @@ def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLoca
         "local LLM backend: primary and fallback probes failed; using primary (%s)",
         primary_provider,
     )
-    _resolved_local_backends[key] = primary
-    return primary
+    # Deliberately NOT cached. Caching this pinned the process to a backend that
+    # was merely the default-on-failure: booting gate.py before starting the
+    # model server (an ordinary sequence, and one that simply worked when the
+    # base_url pointed straight at a single backend) meant the later-arriving
+    # server was never adopted, /health kept reporting the dead primary, and only
+    # a restart recovered. Leaving the miss uncached costs one short probe pair
+    # per resolve while nothing is reachable -- a path whose requests fail anyway
+    # -- and lets the next caller see a backend that has since come up.
+    return replace(primary, degraded=True)
 
 
 class LocalLLMClient:
@@ -482,11 +493,43 @@ class LocalLLMClient:
         self.api_key = resolved.api_key
         self._client = httpx.Client(timeout=self.timeout)
         self._label = _provider_label(self.provider)
+        # Kept so a boot that found nothing reachable can be re-resolved later
+        # (see _readopt_backend_if_degraded); resolve_local_backend is pure with
+        # respect to this dict, so holding it costs nothing.
+        self._llm_cfg = llm_cfg
+        self._degraded = resolved.degraded
 
     def close(self) -> None:
         self._client.close()
 
+    def _readopt_backend_if_degraded(self) -> None:
+        """Adopt a backend that came up after this client was constructed.
+
+        gate.py builds one LocalLLMClient at import and it holds base_url/model
+        for the process lifetime. When neither backend answered at that moment,
+        those attributes describe a server that may since have started -- so
+        re-resolve before spending a full request timeout on a known-dead
+        address. Only the degraded boot pays this; a positively-selected backend
+        is cached and never re-probed.
+        """
+        try:
+            resolved = resolve_local_backend(self._llm_cfg)
+        except LLMServiceError:
+            return  # keep the current address; generate() will surface the error
+        if resolved.degraded:
+            return
+        self.provider = resolved.provider
+        self.base_url = resolved.base_url
+        self.model = resolved.model
+        self.backend_source = resolved.source
+        self.api_key = resolved.api_key
+        self._label = _provider_label(self.provider)
+        self._degraded = False
+        log.info("local LLM backend: adopted %s after post-boot probe", self.provider)
+
     def generate(self, prompt: str) -> str:
+        if self._degraded:
+            self._readopt_backend_if_degraded()
         label = self._label
 
         def do_post() -> httpx.Response:
