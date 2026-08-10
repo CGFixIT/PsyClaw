@@ -955,25 +955,39 @@ into `approve`.
 
 ### Enable it
 
-All five ship `false`; the run path needs the first three, and nothing here arms
-the draft-PR step:
+The block below is what `config.yaml` actually ships. The three switches that
+gate whether a run happens at all — `agentic.enabled`,
+`deepagent_github.enabled`, `allow_git_write_tools` — ship `false`, so nothing
+here runs or writes until an operator turns them on, and nothing here arms the
+draft-PR step.
+
+The three cloud switches ship **`true`**, armed alongside `models.grok` /
+`models.claude` on 2026-08-07 (see `docs/THREAT_MODEL.md`'s eighth amendment).
+That is not the whole gate: reaching a cloud provider still needs
+`agentic.enabled`, `deepagent_github.enabled`, the provider's API-key env var,
+and a per-run `--confirm-online`. With the master switches `false`, an armed
+provider is unreachable — but read this block as "already armed, waiting on the
+master switches," not as "off."
 
 ```yaml
 agentic:
-  enabled: false                        # master switch
+  enabled: false                        # master switch -- ships closed
   deepagent_github:
-    enabled: false
+    enabled: false                      # ships closed
     allow_git_write_tools: false        # gates every write/commit/push in the clone
-    model: ""                           # must be set for the local planner
+    model: "qwen3.6:27b"                # local planner model; cite models.local_llm.model
     workspace_root: "data/agentic/workspaces"
     max_write_budget_bytes: 100000
     max_handoff_chars: 200000           # outbound-prompt cap for cloud egress
     planner_max_tokens: 2048             # real-repo completion cap; keep it within Ollama num_ctx
-    allow_cloud_providers: false        # gate 3 of the cloud chain
+    allow_cloud_providers: true         # gate 3 of the cloud chain -- ARMED
     providers:
-      grok:   { enabled: false, model: "grok-4.5" }
-      claude: { enabled: false, model: "claude-sonnet-5" }
+      grok:   { enabled: true, model: "grok-4.5" }        # ARMED
+      claude: { enabled: true, model: "claude-sonnet-5" } # ARMED
 ```
+
+Setting a provider `enabled: true` while `allow_cloud_providers` is `false` is a
+config error, not a silent no-op — so these three move together.
 
 Opening a PR requires `agentic.mode: "write"` and `writes_enabled: true` (both
 now ship open), `agentic/writer.py`'s `EXECUTION_ENABLED` (ships `True` since
