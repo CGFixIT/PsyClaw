@@ -1014,6 +1014,133 @@ class TestResolveLocalBackend:
         resolved = resolve_local_backend(llm_cfg)
         assert resolved.source == "primary"
         assert resolved.provider == "ollama"
+        # Flagged as a guess, not a selection -- nothing answered its probe.
+        assert resolved.degraded is True
+
+    def test_double_failure_is_not_cached_so_a_later_backend_is_seen(self, monkeypatch):
+        """A backend that starts after the first resolve must still be adopted.
+
+        Caching the both-probes-failed result pinned the process to a backend
+        that was only the boot-must-not-die default, so starting the model
+        server afterwards never took effect until a restart.
+        """
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen3.6:27b",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "x",
+            },
+        }
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: False)
+        assert resolve_local_backend(llm_cfg).degraded is True
+
+        # LM Studio comes up; a fresh resolve must re-probe rather than replay.
+        monkeypatch.setattr(
+            "llm.client._probe_openai_models",
+            lambda url, *a, **k: "1234" in url,
+        )
+        recovered = resolve_local_backend(llm_cfg)
+        assert recovered.source == "fallback"
+        assert recovered.provider == "lmstudio"
+        assert recovered.degraded is False
+
+    def test_client_readopts_backend_that_appears_after_construction(self, monkeypatch):
+        """gate.py builds one client at import; it must not stay pinned to a dead
+        address when a backend shows up later."""
+        cfg = {
+            "models": {
+                "local_llm": {
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                    "model": "qwen3.6:27b",
+                    "max_tokens": 10,
+                    "temperature": 0.0,
+                    "timeout_sec": 5,
+                    "fallback": {
+                        "enabled": True,
+                        "provider": "lmstudio",
+                        "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                        "model": "x",
+                    },
+                }
+            }
+        }
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: False)
+        client = LocalLLMClient(cfg=cfg)
+        assert client.base_url.endswith("11434/v1")
+
+        posted: list[str] = []
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        def _post(url, **kwargs):
+            posted.append(url)
+            return _Resp()
+
+        client._client.post = _post
+        monkeypatch.setattr(
+            "llm.client._probe_openai_models",
+            lambda url, *a, **k: "1234" in url,
+        )
+        client.generate("hi")
+        assert client.provider == "lmstudio"
+        assert posted[-1].startswith("http://127.0.0.1:1234/v1")  # DevSkim: ignore DS162092
+        client.close()
+
+    def test_healthy_backend_is_not_re_probed_on_every_generate(self, monkeypatch):
+        """Only a degraded boot re-probes; a selected backend stays cached."""
+        cfg = {
+            "models": {
+                "local_llm": {
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                    "model": "qwen3.6:27b",
+                    "max_tokens": 10,
+                    "temperature": 0.0,
+                    "timeout_sec": 5,
+                    "fallback": {
+                        "enabled": True,
+                        "provider": "lmstudio",
+                        "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                        "model": "x",
+                    },
+                }
+            }
+        }
+        probes: list[str] = []
+
+        def _probe(url, *a, **k):
+            probes.append(url)
+            return "11434" in url
+
+        monkeypatch.setattr("llm.client._probe_openai_models", _probe)
+        client = LocalLLMClient(cfg=cfg)
+        probes.clear()
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        client._client.post = lambda url, **kwargs: _Resp()
+        client.generate("hi")
+        assert probes == []
+        client.close()
 
 
 class TestClaudeStopReasonDiagnostics:
