@@ -20,7 +20,7 @@
 - [NeMo Guardrails](#nemo-guardrails-v18)
 - [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
 - [Security Model](https://github.com/cgfixit/CyClaw/tree/main/docs/security-philosophy)
-- [Remaining Work](remaining_work.md) 
+- [Remaining Work](docs/zWork/remaining_work_STALE.md) 
 - [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) 
 
 ---
@@ -184,7 +184,7 @@ flowchart TD
 
 CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore`) require a **Bearer API key**. Without it they return `HTTP 401` immediately — intentional fail-closed behavior.
 
-> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, and the console pages (`GET /`, `/static/*`) are unauthenticated.
+> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated.
 
 ### macOS — zsh (the default shell) or bash
 
@@ -343,6 +343,18 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 | **macOS** (primary) | 14 Sonoma+ | **Apple Silicon only.** An Intel Mac cannot install this repo's pinned torch at all — no `x86_64` wheel is published at that pin |
 | Windows / Linux (fallback) | — | Both fully supported and CI-covered; they share the `+cpu` torch path below |
 
+**Optional local-backend failover.** Ollama is the primary local backend; CyClaw
+can also fail over to LM Studio (or any other OpenAI-compatible loopback
+server) if Ollama isn't reachable. It's off by default — set
+`models.local_llm.fallback.enabled: true` in `config.yaml` and fill in your LM
+Studio model id (`fallback.model`; LM Studio ids don't carry the Ollama-style
+`name:tag` colon, so don't just reuse `qwen3.6:27b`). When enabled, a short
+probe (`fallback.probe_timeout_sec`, default 1.5s) tries Ollama first and
+LM Studio second, both `LocalLLMClient` and `/health` share the same choice,
+and it re-checks automatically if neither backend was reachable the first
+time. See `llm/client.py`'s `resolve_local_backend` for the full resolution
+order.
+
 ### Docker (optional runtime image)
 
 Prefer GHCR when you want a prebuilt `linux/amd64` runtime without a local `pip install`.
@@ -400,7 +412,9 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # 2) Install the rest, pinned to the verified transitive tree.
-pip install -r requirements.txt -c constraints.txt
+#    --ignore-installed PyYAML avoids a resolver conflict with a system-level
+#    PyYAML some platforms preinstall outside pip's own tracking.
+pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
 ### Every optional feature in one environment (any platform)
@@ -478,7 +492,6 @@ CyClaw/
 ├── metrics.py                  # audit.jsonl analyzer (cyclaw-metrics)
 ├── config.yaml                 # single source of truth
 ├── README.md
-├── Dropbox_Sync_Guide.md
 ├── mcp_hybrid_server.py        # retrieval-only MCP server
 ├── memory/                     # optional facts + episodes SQLite+FTS5 store (default-off, see gate_memory.py)
 │   ├── store.py                # SQLite + FTS5 backend for facts/episodes
@@ -600,7 +613,7 @@ python -m sync.cli unschedule
 
 The same actions are available from the **Sync Console** panel in the terminal UI via `POST /ops/sync` (loopback-only, API-key gated, audited).
 
-See `Dropbox_Sync_Guide.md` for full setup and scheduling details, and [`docs/SYNC_README.md`](docs/SYNC_README.md) for module internals (lock lifecycle, exit codes, error taxonomy).
+See [`docs/! How-To-Guides/Dropbox_Sync_Guide.md`](docs/%21%20How-To-Guides/Dropbox_Sync_Guide.md) for full setup and scheduling details, and [`docs/SYNC_README.md`](docs/SYNC_README.md) for module internals (lock lifecycle, exit codes, error taxonomy).
 
 ---
 
