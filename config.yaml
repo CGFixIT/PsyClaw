@@ -867,7 +867,7 @@ guardrails:
 # Design + phase plan: docs/channels/TELEGRAM_DESIGN.md
 # Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
 telegram:
-  enabled: false                 # off by default; CLI status/test work; send/poll no-op or refuse
+  enabled: false                 # off by default; NEED ID AT LEAST TO TURN TRUE - CLI status/test work; send/poll no-op or refuse
   mode: "notify"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
   bot_token_env: "TELEGRAM_BOT_TOKEN"  # unattended token source; token is never stored in YAML
   allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
