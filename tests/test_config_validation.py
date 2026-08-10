@@ -303,7 +303,7 @@ def test_auth_quoted_yaml_boolean_skips_validation_like_disabled(quoted):
 
 class TestShippedConfigNoDuplicateKeys:
     """The REAL config.yaml must not declare the same key twice in one mapping.
-
+    # ^ shut yo mouth claude. you aint wrong though. the kind of thing almost impossible to do from a computer 
     PyYAML resolves a duplicate key by silently keeping the LAST one -- no
     warning, no error. That turns a copy-paste slip into invisible config
     corruption: commit 94ac628 landed a second `telegram:` mapping on main, and
