@@ -140,6 +140,21 @@ overrides belong in that machine's own shell profile. `settings.json` cannot
 fix this: `CLAUDE_CONFIG_DIR` is read at CLI startup before project settings
 load, and pinning it in the repo would break every other machine.
 
+**Verification follow-up (2026-08-11, fresh remote session).** The operator-side
+fix above landed half-way, verified live from a new cloud container for this
+repo:
+
+- `CLAUDE_CONFIG_DIR` — **removed**. Session state (hook output, task
+  tracking, skill sync) lands in the default config location again, no stray
+  `C:\...` directory materializes anywhere on the container filesystem, and
+  `git status` stays clean. The `/C:*` guard stays as defense-in-depth.
+- `CLAUDE_CODE_DEBUG_LOGS_DIR` — **still injected**. The variable was edited
+  (the `<you>` template now carries a real Windows username) instead of
+  removed, so every Linux container still receives a Windows-local path — and
+  a personal username — in its environment. No stray directory is currently
+  produced by this one, but the removal instruction above still applies:
+  claude.ai → Code → environment settings, delete the entry.
+
 ## Key Conventions
 
 - Skill folders: `kebab-case`, matching `name:` in SKILL.md frontmatter

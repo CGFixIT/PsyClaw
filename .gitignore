@@ -105,3 +105,8 @@ docs/memories/CONSOLIDATED.md
 # repo root holding live session state (.claude.json, transcripts, task locks)
 # that must never be committed. Guard the drive-letter pattern, not a username.
 /C:*
+
+# Claude Code personal per-machine overrides (local permission grants, operator
+# preferences). settings.json is the shared project config; settings.local.json
+# is operator-specific and must never be committed.
+.claude/settings.local.json
