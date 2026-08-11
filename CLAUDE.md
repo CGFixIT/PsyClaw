@@ -236,6 +236,21 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** `pip install -r requirements.txt` fails or pulls a CUDA torch.
   **Rule:** install `torch==2.13.0+cpu` from the PyTorch CPU index **first**,
   then `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`.
+- **Trap:** running that same torch line on macOS, or "fixing" the `+cpu` pin in
+  the manifests when it 404s there. **Rule:** macOS needs **plain**
+  `torch==2.13.0` — Apple Silicon publishes one arm64 wheel, so there is no
+  CPU/CUDA build to disambiguate and no `+cpu` local version exists on the
+  PyTorch index. Both manifests hardcode `+cpu` **by design** (dependency-
+  confusion-proof reproducibility on Linux/Windows); install plain torch first,
+  then feed pip copies of `requirements.txt`/`constraints.txt` with the
+  `torch==`/`--extra-index-url` lines stripped. `ci.yml`'s `macos-latest` leg and
+  `macos/install-cyclaw.sh`'s `Darwin` branch both already do this — see §8.
+- **Trap:** running `cyclaw-server`/`cyclaw-index`/`cyclaw-metrics` after only
+  `pip install -r requirements.txt`. **Rule:** those are `[project.scripts]`
+  console scripts; pip writes the shims only when the **project itself** is
+  installed (`pip install -e .`). `requirements.txt` is a third-party pin list
+  with no self-install line, so the short names are `command not found` after
+  it. The `python -m …` forms always work and are what both shipped launchers use.
 - **Trap:** running `pytest` in a fresh container — no deps are installed.
   **Rule:** a freshly-cloned container has NO Python deps. Install first
   (`/CyClaw-Sandbox` — Quick Mode for a fast check, or the full audit for a
@@ -583,12 +598,27 @@ behavior gap).
 Skills reference this section; keep it as the single canonical copy.
 
 ```bash
-# Install (order matters — torch CPU FIRST)
+# Install — Linux/Windows (order matters — torch CPU FIRST)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 
+# Install — macOS (Apple Silicon): PLAIN torch, no +cpu suffix, no index override.
+# The +cpu local-version wheel does not exist for macOS and both manifests
+# hardcode that pin, so the generic block above fails twice on a Mac. Strip the
+# torch/index lines out — same thing ci.yml's macos-latest leg runs.
+pip install "torch==2.13.0"
+grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
+    requirements.txt > /tmp/requirements-macos.txt
+grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
+pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt --ignore-installed PyYAML
+
+# The cyclaw-* console scripts below need the project itself installed —
+# requirements.txt is a third-party pin list with no self-install line, so
+# without this they are `command not found`. The `python -m …` forms always work.
+pip install -e . -c constraints.txt
+
 # Build the retrieval index (required before /query returns hits)
-python -m retrieval.indexer            # or: cyclaw-index
+python -m retrieval.indexer            # or: cyclaw-index (needs pip install -e .)
 
 # Tests (GROK_API_KEY must be any non-empty value)
 GROK_API_KEY=dummy pytest tests/ -q --tb=short
@@ -622,8 +652,9 @@ python3 .claude/skills/index-doctor/doctor.py --rebuild
 python3 .claude/skills/injection-redteam/redteam.py
 ```
 
-CI target is Python 3.12 on a three-OS matrix (ubuntu + macos, both blocking;
-windows runs `continue-on-error`, so it reports but does not gate). Coverage sources:
+CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); ubuntu
+and macos gate the build while the windows leg carries `continue-on-error`, so
+it surfaces failures without blocking. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is

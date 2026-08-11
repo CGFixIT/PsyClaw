@@ -63,30 +63,24 @@ All `*-refactor` skills follow the same seven-step cycle:
 Claude Code resolves skills from three scopes: **project** (`<repo>/.claude/skills/`,
 version-controlled, shared with every collaborator on this repo), **user**
 (`~/.claude/skills/`, personal, follows the operator across every repo), and
-**plugin/built-in** (shipped by Claude Code itself or installed marketplaces —
-`xlsx`, `pdf`, `pptx`, `docx`, `dataviz`, `canvas-design`, `mcp-builder`,
-`skill-creator`, `theme-factory`, `web-artifacts-builder`, `artifact-*`,
-`keybindings-help`, `update-config`, `code-review`, `simplify`,
-`fewer-permission-prompts`, `loop`, `claude-api`, `init`, `security-review`,
-and similar). Personal skills (`cg-coach`, `cg-career-advisor`, `learn`,
-`unfiltered-expert-style`, the user-level copy of `fable-protocol`) are
-likewise operator-identity-scoped, not project-scoped.
+**plugin/built-in** (document/artifact tooling, review helpers, and config
+utilities shipped by Claude Code itself or by installed marketplaces).
 
 This directory intentionally vendors only the **project** scope — every skill
 in `CLAUDE.md` §9's tables already lives under `.claude/skills/` here, one
-folder per `name:` in its `SKILL.md` frontmatter. Personal and built-in
+folder per `name:` in its `SKILL.md` frontmatter. User-scope and built-in
 skills are **not** copied in, for three concrete reasons:
 
 1. **YAGNI / no current caller.** No CyClaw code path or documented workflow
-   invokes `xlsx`, `pdf`, `cg-coach`, etc. — they exist for the operator across
-   unrelated repos, not for this project.
+   invokes them — they serve the operator across unrelated repos, not this
+   project.
 2. **Drift risk.** Built-in skills are maintained upstream by Claude Code
    itself; a vendored copy would silently diverge from the version other
    sessions actually run, defeating the point of "official" tooling.
-3. **Personal-scope leakage.** Coaching/career/writing-style skills carry the
-   operator's identity, not CyClaw's. Checking them into a shared repo would
-   expose personal context to every collaborator who clones it — out of scope
-   for a project `.claude/` tree.
+3. **Scope leakage.** User-scope skills are tied to an operator's own identity
+   and working style, not to CyClaw. Checking them into a shared repo would
+   expose that context to everyone who clones it — out of scope for a project
+   `.claude/` tree.
 
 If a personal or built-in skill genuinely becomes load-bearing for CyClaw
 (a documented workflow starts depending on it), add it to `.claude/skills/`
