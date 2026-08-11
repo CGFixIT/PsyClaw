@@ -98,3 +98,10 @@ docs/memories/CONSOLIDATED.md
 # Claude Code agent worktree isolation (runtime scaffolding, never repo content)
 .claude/worktrees/
 .venv-tg/
+
+# Claude Code remote-session cruft: a CLAUDE_CONFIG_DIR env var carrying a
+# Windows path (C:\Users\<user>\.claude\) into a Linux container resolves as a
+# *relative* path and materializes a literal "C:\Users\..." directory at the
+# repo root holding live session state (.claude.json, transcripts, task locks)
+# that must never be committed. Guard the drive-letter pattern, not a username.
+/C:*
