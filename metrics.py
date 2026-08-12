@@ -264,9 +264,45 @@ def compute_metrics(events) -> dict:
 
 
 def summarize_audit(audit_file: str) -> dict:
-    """Summarize audit metrics and evidence-quality counters in bounded memory."""
-    summary = compute_metrics(iter_events(audit_file))
-    summary["audit_integrity"] = compute_audit_integrity(audit_file)
+    """Summarize audit metrics and evidence-quality counters in one pass over the file.
+
+    Previously called compute_metrics(iter_events(...)) and compute_audit_integrity(...)
+    separately -- two independent opens/reads of the same append-only, unbounded
+    audit.jsonl on every GET /audit/summary hit and every cyclaw-metrics run. This
+    streams the file once, feeding compute_metrics the same filtered events
+    iter_events() would yield while counting the integrity stats iter_events()
+    silently drops (malformed JSON, JSON-valid non-dict lines) as a side effect of the
+    single pass. compute_audit_integrity() itself is untouched -- kept for its own
+    direct callers/tests -- this only removes the second file pass from the hot path.
+    """
+    integrity = {
+        "malformed_lines": 0,
+        "events_with_raw_query": 0,
+        "rag_events_missing_query_hash": 0,
+    }
+
+    def _events():
+        path = Path(audit_file)
+        if not path.exists():
+            return
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    integrity["malformed_lines"] += 1
+                    continue
+                if not isinstance(event, dict):
+                    integrity["malformed_lines"] += 1
+                    continue
+                if "query" in event:
+                    integrity["events_with_raw_query"] += 1
+                if event.get("event") in ("rag_query", "mcp_rag_query") and "query_hash" not in event:
+                    integrity["rag_events_missing_query_hash"] += 1
+                yield event
+
+    summary = compute_metrics(_events())
+    summary["audit_integrity"] = integrity
     return summary
 
 
