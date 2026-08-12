@@ -31,14 +31,17 @@ env/
 **/.st_cache/
 
 # Local runtime state — provided via bind mounts at runtime, not baked in.
-# `index/` is the config.yaml hybrid-retrieval root (ChromaDB + BM25). It can
-# hold private corpus-derived vectors/keyword state; never copy it into image
-# layers. Compose bind-mounts ./index at runtime (see docker-compose.yml).
+# `index/` is the config.yaml hybrid-retrieval root (ChromaDB + BM25).
+# `data/personality/` holds soul.md + the personality/interaction-history DB
+# (config.yaml personality.db_path); `data/agentic/` holds the skills registry
+# + harness-optimizer run history. All three can carry private, corpus- or
+# interaction-derived state; never copy any of them into image layers.
+# docker-compose.yml bind-mounts ./index and ./data at runtime.
 logs/
 checkpoints/
 index/
-data/chroma/
-data/bm25/
+data/personality/
+data/agentic/
 
 # Tests & docs are not needed in the runtime image
 tests/

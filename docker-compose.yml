@@ -90,7 +90,14 @@ services:
   #     docker compose --profile monitoring up -d && docker logs -f cyclaw-falco
   #   See deploy/falco/README.md "Validate before trust" checklist.
   falco:
-    image: falcosecurity/falco:0.39.2
+    # Pinned to the multi-arch manifest-list digest of the 0.39.2 tag (resolved
+    # 2026-08-12 via `docker manifest inspect falcosecurity/falco:0.39.2`); kept
+    # alongside the tag for human readability, matching Dockerfile's base-image
+    # pin and ci.yml's pgvector pin convention. This is the single most
+    # privileged container in the stack (privileged:true, host /proc, docker
+    # socket, kernel debugfs) — a re-tagged/compromised image would otherwise
+    # silently enter this profile. Re-pin the digest on any Falco version bump.
+    image: falcosecurity/falco:0.39.2@sha256:6aac44f74a105c2de47018c570da2128c84228c75dedddfcedf6a13adc0b5204
     container_name: cyclaw-falco
     profiles: ["monitoring"]
     privileged: true            # required for the kernel / eBPF driver
