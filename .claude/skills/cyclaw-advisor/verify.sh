@@ -1,4 +1,4 @@
-#/usr/bin/env bash
+#!/usr/bin/env bash
 # verify.sh — cyclaw-advisor verification.
 # Checks consistency of dep files, security posture, and compliance readiness.
 
