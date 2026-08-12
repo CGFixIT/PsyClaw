@@ -1142,6 +1142,156 @@ class TestResolveLocalBackend:
         assert probes == []
         client.close()
 
+    # ── a selected backend that starts failing must not stay pinned ──────────
+    # resolve_local_backend caches a POSITIVE selection for the process
+    # lifetime. That pinned gate.py to a fallback adopted during a primary
+    # outage even after the primary recovered -- and because the probe only
+    # asks whether the SERVER answers (GET /models 2xx, body discarded), a
+    # fallback whose configured model does not exist there is selected happily
+    # and then 404s every request until a restart. config.yaml ships
+    # fallback.model as an "EXAMPLE ONLY" placeholder, so that is the default
+    # shape of the mistake.
+
+    def _failover_cfg(self):
+        return {
+            "models": {
+                "local_llm": {
+                    "provider": "ollama",
+                    "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+                    "model": "qwen3.6:27b",
+                    "max_tokens": 10,
+                    "temperature": 0.0,
+                    "timeout_sec": 5,
+                    "fallback": {
+                        "enabled": True,
+                        "provider": "lmstudio",
+                        "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                        "model": "placeholder-not-loaded",
+                    },
+                }
+            }
+        }
+
+    def test_failing_fallback_is_dropped_and_recovered_primary_readopted(self, monkeypatch, no_sleep):
+        """The bug this closes: 404s forever on a wrong fallback model.
+
+        Primary down -> fallback selected and cached. The fallback answers its
+        probe but 404s the configured model. Previously that pairing survived
+        the primary coming back, so every request failed until a restart.
+        """
+        cfg = self._failover_cfg()
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda url, *a, **k: "1234" in url)
+        client = LocalLLMClient(cfg=cfg)
+        assert client.provider == "lmstudio"  # primary down, fallback adopted
+
+        def _post_404(url, **kwargs):
+            req = httpx.Request("POST", url)
+            return httpx.Response(404, request=req)
+
+        client._client.post = _post_404
+        with pytest.raises(LLMServiceError):
+            client.generate("hi")
+
+        # Primary is back. The next request must re-probe and re-adopt it
+        # rather than keep hitting the fallback that cannot serve this model.
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda url, *a, **k: "11434" in url)
+        posted: list[str] = []
+
+        class _Ok:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        def _post_ok(url, **kwargs):
+            posted.append(url)
+            return _Ok()
+
+        client._client.post = _post_ok
+        assert client.generate("hi") == "ok"
+        assert client.provider == "ollama"
+        assert posted[-1].startswith("http://127.0.0.1:11434/v1")  # DevSkim: ignore DS162092
+        client.close()
+
+    def test_failure_does_not_re_probe_when_failover_is_disabled(self, monkeypatch, no_sleep):
+        """Shipped config has no fallback, so there is nothing to switch to.
+
+        A failing request must not start spending probes on a config where the
+        answer can only ever be the same primary.
+        """
+        cfg = self._failover_cfg()
+        cfg["models"]["local_llm"]["fallback"]["enabled"] = False
+        probes: list[str] = []
+
+        def _probe(url, *a, **k):
+            probes.append(url)
+            return True
+
+        monkeypatch.setattr("llm.client._probe_openai_models", _probe)
+        client = LocalLLMClient(cfg=cfg)
+        probes.clear()
+
+        def _post_500(url, **kwargs):
+            req = httpx.Request("POST", url)
+            return httpx.Response(500, request=req)
+
+        client._client.post = _post_500
+        for _ in range(2):
+            with pytest.raises(LLMServiceError):
+                client.generate("hi")
+        assert probes == []
+        assert client.provider == "ollama"
+        client.close()
+
+    def test_failure_while_everything_is_down_stays_degraded(self, monkeypatch, no_sleep):
+        """Both backends dead: keep re-probing, do not pin to a dead address."""
+        cfg = self._failover_cfg()
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda url, *a, **k: "1234" in url)
+        client = LocalLLMClient(cfg=cfg)
+        assert client.provider == "lmstudio"
+
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda *a, **k: False)
+
+        def _post_503(url, **kwargs):
+            req = httpx.Request("POST", url)
+            return httpx.Response(503, request=req)
+
+        client._client.post = _post_503
+        with pytest.raises(LLMServiceError):
+            client.generate("hi")
+        # The failure only ARMS the re-probe; it runs at the start of the next
+        # request, so a failing call never pays for a probe on top of its own
+        # timeout.
+        assert client._recheck_backend is True
+        assert client._degraded is False
+
+        # Second attempt, still nothing reachable: the re-probe runs, finds no
+        # backend, and latches degraded so later requests keep looking rather
+        # than pinning to a dead address.
+        with pytest.raises(LLMServiceError):
+            client.generate("hi")
+        assert client._degraded is True
+
+        # Fallback returns: the degraded flag keeps the door open for it.
+        monkeypatch.setattr("llm.client._probe_openai_models", lambda url, *a, **k: "1234" in url)
+
+        class _Ok:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict:
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        client._client.post = lambda url, **kwargs: _Ok()
+        assert client.generate("hi") == "ok"
+        assert client.provider == "lmstudio"
+        client.close()
+
 
 class TestClaudeStopReasonDiagnostics:
     """A Claude 200 can legitimately carry no answer text. stop_reason is the
