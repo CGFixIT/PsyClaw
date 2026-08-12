@@ -498,25 +498,43 @@ class LocalLLMClient:
         # respect to this dict, so holding it costs nothing.
         self._llm_cfg = llm_cfg
         self._degraded = resolved.degraded
+        # A positively-selected backend is cached process-wide. That is right
+        # while it answers and wrong once it stops: gate.py holds one client for
+        # the process lifetime, so a fallback adopted during a primary outage
+        # kept answering from the same address forever -- including when the
+        # configured fallback model does not exist on that server (config.yaml
+        # ships fallback.model as an EXAMPLE ONLY placeholder), which turns a
+        # recoverable outage into permanent 404s until a restart. Set on failure
+        # so the NEXT request re-probes; the success path never pays for it.
+        # Only meaningful with a fallback configured -- with failover off there
+        # is nothing to switch to, so the default config is untouched.
+        fb_cfg = llm_cfg.get("fallback") or {}
+        self._failover_enabled = bool(isinstance(fb_cfg, dict) and fb_cfg.get("enabled", False))
+        self._recheck_backend = False
 
     def close(self) -> None:
         self._client.close()
 
-    def _readopt_backend_if_degraded(self) -> None:
+    def _readopt_backend_if_stale(self) -> None:
         """Adopt a backend that came up after this client was constructed.
 
         gate.py builds one LocalLLMClient at import and it holds base_url/model
-        for the process lifetime. When neither backend answered at that moment,
-        those attributes describe a server that may since have started -- so
-        re-resolve before spending a full request timeout on a known-dead
-        address. Only the degraded boot pays this; a positively-selected backend
-        is cached and never re-probed.
+        for the process lifetime. Two situations make those attributes stale:
+        neither backend answered at boot (degraded), or the backend that was
+        selected has since started failing. Both mean the current address may
+        no longer be the right one, so re-resolve before spending a full request
+        timeout on it. A healthy, answering backend never reaches here.
         """
+        self._recheck_backend = False
         try:
             resolved = resolve_local_backend(self._llm_cfg)
         except LLMServiceError:
             return  # keep the current address; generate() will surface the error
         if resolved.degraded:
+            # Nothing reachable right now. Stay degraded so the next request
+            # re-probes too -- resolve_local_backend deliberately leaves this
+            # case uncached for exactly that reason.
+            self._degraded = True
             return
         self.provider = resolved.provider
         self.base_url = resolved.base_url
@@ -527,9 +545,21 @@ class LocalLLMClient:
         self._degraded = False
         log.info("local LLM backend: adopted %s after post-boot probe", self.provider)
 
+    def _invalidate_backend_after_failure(self) -> None:
+        """Drop the cached resolution so the next generate() re-probes.
+
+        Costs one probe pair, and only on a request that already failed, so a
+        working backend is never slowed down. With failover disabled there is
+        no alternative to switch to, so this is a no-op for the shipped config.
+        """
+        if not self._failover_enabled:
+            return
+        _resolved_local_backends.pop(_cache_key_for_local_llm(self._llm_cfg), None)
+        self._recheck_backend = True
+
     def generate(self, prompt: str) -> str:
-        if self._degraded:
-            self._readopt_backend_if_degraded()
+        if self._degraded or self._recheck_backend:
+            self._readopt_backend_if_stale()
         label = self._label
 
         def do_post() -> httpx.Response:
@@ -545,31 +575,39 @@ class LocalLLMClient:
                 },
             )
 
-        return _post_with_retry(
-            service=self.provider or "ollama",
-            do_post=do_post,
-            max_retries=self.retry_max,
-            backoff_base=self.retry_backoff,
-            backoff_max=self.retry_backoff_max,
-            # A local read timeout = a stalled model; retrying just burns another
-            # full timeout_sec on an orphaned thread (the graph deadline already
-            # returned 504). Transport/5xx/429 still retry — those fail fast.
-            retry_on_timeout=False,
-            on_http=lambda e: LLMServiceError(
-                f"{label} HTTP error: {e.response.status_code}",
-                details={"status": e.response.status_code, "provider": self.provider},
-            ),
-            on_timeout=lambda e: LLMServiceError(
-                f"{label} timeout",
-                details={"timeout_sec": self.timeout, "provider": self.provider},
-            ),
-            # Type-only: str(e) can carry URLs, body fragments, or secrets that
-            # graph embeds into HTTP 200 answers via _generate_or_error.
-            on_other=lambda e: LLMServiceError(
-                f"{label} error: {type(e).__name__}",
-                details={"exc_type": type(e).__name__, "provider": self.provider},
-            ),
-        )
+        try:
+            return _post_with_retry(
+                service=self.provider or "ollama",
+                do_post=do_post,
+                max_retries=self.retry_max,
+                backoff_base=self.retry_backoff,
+                backoff_max=self.retry_backoff_max,
+                # A local read timeout = a stalled model; retrying just burns another
+                # full timeout_sec on an orphaned thread (the graph deadline already
+                # returned 504). Transport/5xx/429 still retry — those fail fast.
+                retry_on_timeout=False,
+                on_http=lambda e: LLMServiceError(
+                    f"{label} HTTP error: {e.response.status_code}",
+                    details={"status": e.response.status_code, "provider": self.provider},
+                ),
+                on_timeout=lambda e: LLMServiceError(
+                    f"{label} timeout",
+                    details={"timeout_sec": self.timeout, "provider": self.provider},
+                ),
+                # Type-only: str(e) can carry URLs, body fragments, or secrets that
+                # graph embeds into HTTP 200 answers via _generate_or_error.
+                on_other=lambda e: LLMServiceError(
+                    f"{label} error: {type(e).__name__}",
+                    details={"exc_type": type(e).__name__, "provider": self.provider},
+                ),
+            )
+        except LLMServiceError:
+            # The selected backend just failed. Re-probe before the next request
+            # so a recovered primary is re-adopted instead of staying pinned to
+            # a backend that may be down or missing the configured model.
+            self._invalidate_backend_after_failure()
+            raise
+
 
 class GrokClient:
     def __init__(self, config_path: str = "config.yaml", cfg: dict | None = None):
