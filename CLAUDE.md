@@ -240,6 +240,31 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   **Rule:** a freshly-cloned container has NO Python deps. Install first
   (`/CyClaw-Sandbox` — Quick Mode for a fast check, or the full audit for a
   Python 3.12 runtime gate) before any test/run step.
+- **Trap:** assuming a fresh coding-agent sandbox's `python3`/`pip3` already
+  target 3.12, or reflexively `apt install`ing a 3.12 you don't need. **Rule:**
+  verified on the default Claude Code cloud sandbox image
+  (`sandbox-ccr-default`, Ubuntu 24.04): Python 3.10/3.11/3.12/3.13 are **all
+  already present** at `/usr/bin/python3.NN`, but `update-alternatives --list
+  python3` registers only 3.11, and CyClaw's dependencies are pre-installed
+  into 3.11's `dist-packages` — so bare `python3`/`pip3`/`pytest` silently run
+  under 3.11 against a project whose `pyproject.toml` requires `>=3.12,<3.13`.
+  This is invisible until a version-gated stdlib call fails: `test_agentic_*`
+  (`agentic/deepagent_github/repo_workspace.py`'s `shutil.rmtree(onexc=...)`,
+  a 3.12+ parameter) fails 142 tests with no other symptom, and it is easy to
+  mistake for a red `main`. **Do not `apt install`/build a new Python** — it
+  is already on disk. Point at it explicitly instead:
+  `python3.12 -m venv /root/.venv-cyclaw-312 && /root/.venv-cyclaw-312/bin/pip
+  install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
+  && /root/.venv-cyclaw-312/bin/pip install -r requirements.txt -c
+  constraints.txt --ignore-installed PyYAML` (outside the repo tree so it
+  never needs a `.gitignore` entry), then always invoke tests via
+  `/root/.venv-cyclaw-312/bin/python -m pytest ...`. This venv does **not**
+  survive session end — the container is reclaimed and rebuilt from the same
+  generic image, not from anything in this repo — so treat it as a
+  per-session setup step, not a one-time fix. Do not change the container's
+  system-wide `python3` default (`update-alternatives`): the harness's own
+  hook scripts (`~/.claude/*.py`) shebang `#!/usr/bin/env python3` and resolve
+  through it.
 - **Trap:** assuming the server refuses to boot without `GROK_API_KEY`.
   **Rule:** `security.require_env` is **decorative** — no code reads it. The
   server boots fine; Grok just reports unavailable. Tests only need
