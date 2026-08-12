@@ -627,25 +627,30 @@ def test_run_select_returns_json_by_default(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "driver"),
     [
         # Dollar-quoting: a "'" inside $$...$$ used to open a phantom
         # single-quoted region that swallowed the ";" and the DML keyword.
-        "SELECT $$'$$ ; DROP TABLE t ; SELECT $$'$$",
-        "SELECT $tag$'$tag$ ; DELETE FROM users ; SELECT $tag$'$tag$",
-        "SELECT $$'$$ -- DROP TABLE t\nSELECT $$'$$",
-        # MSSQL bracket identifiers: same shape, different quoting form.
-        "SELECT [a'b] ; DROP TABLE t ; SELECT [c'd]",
+        ("SELECT $$'$$ ; DROP TABLE t ; SELECT $$'$$", "postgres"),
+        ("SELECT $tag$'$tag$ ; DELETE FROM users ; SELECT $tag$'$tag$", "postgres"),
+        ("SELECT $$'$$ -- DROP TABLE t\nSELECT $$'$$", "postgres"),
+        # MSSQL bracket identifiers: same shape, different quoting form. Pinned
+        # to the mssql driver because bracket identifiers only exist there --
+        # on postgres "[" is array subscript and the "'" really does open a
+        # string literal, so postgres itself sees one (invalid) statement, not
+        # a stacked DROP. See test_dialect_quoting_is_not_a_union below.
+        ("SELECT [a'b] ; DROP TABLE t ; SELECT [c'd]", "mssql"),
         # Double-quoted identifiers holding a "'".
-        'SELECT "a\'b" ; DROP TABLE t ; SELECT "c\'d"',
+        ('SELECT "a\'b" ; DROP TABLE t ; SELECT "c\'d"', "postgres"),
+        ('SELECT "a\'b" ; DROP TABLE t ; SELECT "c\'d"', "mssql"),
         # The mirror case: "$$" inside a normal string must not be read as a
         # dollar-quote opener (this is why the scan runs left to right).
-        "SELECT '$$', 'x' ; DROP TABLE t ; SELECT '$$'",
+        ("SELECT '$$', 'x' ; DROP TABLE t ; SELECT '$$'", "postgres"),
         # Postgres escape strings can escape their own closing quote.
-        "SELECT E'\\'' ; DROP TABLE t ; SELECT E'\\''",
+        ("SELECT E'\\'' ; DROP TABLE t ; SELECT E'\\''", "postgres"),
     ],
 )
-def test_assert_rejects_quote_form_confusion(bad):
+def test_assert_rejects_quote_form_confusion(bad, driver):
     """No quoting form may hide a statement separator inside another.
 
     Regression: _strip_quoted was a regex alternation over '...' and "..."
@@ -655,7 +660,7 @@ def test_assert_rejects_quote_form_confusion(bad):
     accepted a stacked DROP/DELETE as "a single SELECT".
     """
     with pytest.raises(SqlConnectError) as exc:
-        assert_read_only_sql(bad)
+        assert_read_only_sql(bad, driver=driver)
     assert exc.value.code == "SQLCONNECT_BAD_QUERY"
 
 
@@ -688,23 +693,92 @@ def test_assert_still_accepts_legitimate_quoting(good):
 
 
 @pytest.mark.parametrize(
-    "bad",
+    ("bad", "driver"),
     [
-        "SELECT 'unterminated FROM t",
-        "SELECT $$unterminated FROM t",
-        'SELECT "unterminated FROM t',
-        "SELECT [unterminated FROM t",
+        ("SELECT 'unterminated FROM t", "postgres"),
+        ("SELECT 'unterminated FROM t", "mssql"),
+        ("SELECT $$unterminated FROM t", "postgres"),
+        ('SELECT "unterminated FROM t', "postgres"),
+        ('SELECT "unterminated FROM t', "mssql"),
+        # Bracket identifiers are mssql-only, so the unterminated-"[" refusal
+        # is asserted against that driver. On postgres "[" is array subscript
+        # and has no closing-bracket obligation.
+        ("SELECT [unterminated FROM t", "mssql"),
     ],
 )
-def test_assert_rejects_unterminated_quoted_regions(bad):
+def test_assert_rejects_unterminated_quoted_regions(bad, driver):
     """An unterminated region is refused rather than scanned to end-of-string.
 
     Swallowing the remainder would hide whatever followed from the keyword and
     statement-separator guards, which is the fail-open direction.
     """
     with pytest.raises(SqlConnectError) as exc:
-        assert_read_only_sql(bad)
+        assert_read_only_sql(bad, driver=driver)
     assert exc.value.code == "SQLCONNECT_BAD_QUERY"
+
+
+@pytest.mark.parametrize(
+    ("bad", "driver"),
+    [
+        # mssql: "$" is a legal identifier character, so "a$x$" is a column
+        # name. Applying postgres dollar-quoting here opened a phantom region
+        # from the first "$x$" to the second, blanking the ";" and the stacked
+        # statement out of every structural scan.
+        ("SELECT 1 AS a$x$ ; EXEC xp_cmdshell 'whoami' ; SELECT 1 AS b$x$", "mssql"),
+        ("SELECT 1 AS a$x$ ; DROP TABLE t ; SELECT 1 AS b$x$", "mssql"),
+        ("SELECT 1 AS a$x$ ; UPDATE users SET admin=1 ; SELECT 1 AS b$x$", "mssql"),
+        # postgres: "[" is array subscript, and a nested array literal ends in
+        # "]]" -- which the mssql bracket rule consumed as an escaped "]" and
+        # kept scanning, swallowing the stacked statement that followed.
+        ("SELECT ARRAY[ARRAY[1]] ; DROP TABLE t ; SELECT ARRAY[1]", "postgres"),
+        ("SELECT ARRAY[ARRAY[1]] ; COPY (SELECT 1) TO PROGRAM 'id' ; SELECT ARRAY[1]", "postgres"),
+    ],
+)
+def test_dialect_quoting_is_not_a_union(bad, driver):
+    """One dialect's quoting rules must not be applied to the other's driver.
+
+    Regression: _strip_quoted recognised postgres dollar-quoting AND mssql
+    bracket identifiers on every query regardless of sqlconnect.driver. Each
+    dialect's extra opener is an ordinary, non-quoting character in the other,
+    so the scanner opened a region the target database never sees and blanked
+    a stacked statement out of the ";" / comment / keyword scans.
+    """
+    with pytest.raises(SqlConnectError) as exc:
+        assert_read_only_sql(bad, driver=driver)
+    assert exc.value.code == "SQLCONNECT_BAD_QUERY"
+
+
+@pytest.mark.parametrize(
+    ("good", "driver"),
+    [
+        # The flip side of the same fix: each dialect's ordinary syntax must
+        # stay accepted. Nested postgres arrays previously raised
+        # "unterminated '[' quoted region", rejecting a valid read query.
+        ("SELECT ARRAY[ARRAY[1]]", "postgres"),
+        ("SELECT ARRAY[ARRAY[1,2],ARRAY[3,4]] AS grid", "postgres"),
+        ("SELECT a[1] FROM t", "postgres"),
+        ("SELECT 1 AS a$x$", "mssql"),
+        ("SELECT [my col] FROM [my table]", "mssql"),
+        ("SELECT $$it's fine$$ AS q", "postgres"),
+    ],
+)
+def test_dialect_native_syntax_stays_accepted(good, driver):
+    """Closing the union bypass must not reject either dialect's own syntax."""
+    assert assert_read_only_sql(good, driver=driver).lower().startswith("select")
+
+
+def test_guard_default_driver_matches_shipped_config_default():
+    """The guard's standalone default must track SqlConnectConfig's default.
+
+    assert_read_only_sql is callable without a driver (selftest, sandbox
+    verifier). If the two defaults drift, those callers silently scan with the
+    wrong dialect's quoting rules -- the exact condition this module's
+    driver-awareness exists to prevent.
+    """
+    from agentic.sqlconnect.client import _DEFAULT_DRIVER
+    from agentic.sqlconnect.config import SqlConnectConfig
+
+    assert _DEFAULT_DRIVER == SqlConnectConfig().driver
 
 
 def test_dollar_placeholder_is_not_a_quote_opener():
