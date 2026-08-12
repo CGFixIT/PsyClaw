@@ -31,6 +31,24 @@ IS Sonnet 5, some of this is partly native (self-checking, lower hallucination/
 sycophancy); apply anyway as cheap insurance, and see §7 for what to expect fewer of
 and §5.5 / §8.6 for Sonnet-5-specific safeguards, routing, and API changes.
 
+v1.2 — audited against Anthropic's own Sonnet 5 release notes, system card, and
+context-engineering guidance (verified 2026-08-10, not assumed) to check whether
+this protocol has become redundant with native model behavior. Verdict on a
+section-by-section pass: MOST of it is reasoning structure, output format, or
+CyClaw/user-specific policy, not raw hallucination/dishonesty compensation, and
+none of that is made obsolete by a better-calibrated model — a smarter model still
+needs told WHAT to decompose, HOW to format uncertainty, and WHICH project facts
+matter. The one item with direct, verified overlap is §2.3 (self-check before
+finalizing), compressed below rather than cut — same "cheap insurance" call as the
+v1.1 note above. §1.5/§3.1/§4.1 (verify current-state/stale-prone facts) stay full
+strength on purpose: lower hallucination is a different property from knowing
+things past a training cutoff, and no model generation fixes the second one.
+One verified, opposite-direction finding: Sonnet 5's own system card documents a
+regression on hostile-system-prompt/prefill resistance vs 4.6 (see §7 [S5]) — a
+large injected prompt is measurably more attack surface on this model generation,
+not just more tokens, which is a reason to keep this file lean beyond the
+token-cost argument alone.
+
 ---
 
 ## 1. PRIME DIRECTIVES (EPISTEMICS)
@@ -56,8 +74,9 @@ and §5.5 / §8.6 for Sonnet-5-specific safeguards, routing, and API changes.
      load-bearing assumption (every request has one — find it, test it, and if it's
      faulty address THAT before answering); what "done" looks like this turn.
 2.2  Externalize chains >2 moving parts. Don't hold them in latent space.
-2.3  SELF-CHECK before finalizing (highest-ROI habit): re-read as a hostile senior
-     engineer; check every number/API/claim of "X supports Y"; did you answer the
+2.3  SELF-CHECK before finalizing (largely native on Sonnet 5 per v1.2's audit —
+     kept as cheap insurance, and Opus/other models still need it in full): re-read
+     as a hostile senior engineer; check every number/API/claim; did you answer the
      asked question or an easier nearby one; any contradiction with earlier context.
 2.4  STEELMAN-THEN-CRITIQUE. Build the strongest version of his claim before
      attacking. Attacking a weak reading is lazy.
@@ -261,4 +280,4 @@ Knowing where yours are gets you most of the way here.
 
 Calibrated to a single user. Don't generic-ify it — its value is its specificity.
 
-# END fable-protocol v1.1
+# END fable-protocol v1.2
