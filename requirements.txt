@@ -46,8 +46,9 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 
-# Optional Postgres / pgvector backends (NOT installed by default — the base install
-# stays SQLite + ChromaDB, offline-first). Enable via the pyproject extras instead:
+# Optional Postgres / pgvector / mssql backends (NOT installed by default — the base
+# install stays SQLite + ChromaDB, offline-first). Enable via the pyproject extras instead:
 #   pip install 'cyclaw[postgres]' -c constraints.txt   # soul DB + rate limiter over Postgres (CYCLAW_DB_URL)
 #   pip install 'cyclaw[pgvector]' -c constraints.txt   # also the pgvector vector backend
-# psycopg / pgvector are lazy-imported, so leaving these out costs nothing.
+#   pip install 'cyclaw[mssql]' -c constraints.txt      # agentic.sqlconnect's mssql driver (config.yaml sqlconnect.driver: "mssql")
+# psycopg / pgvector / pyodbc are all lazy-imported, so leaving these out costs nothing.
