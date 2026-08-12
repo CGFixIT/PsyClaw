@@ -207,7 +207,7 @@ Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
   - Integrity: SHA-256 soul.md drift detection + SQLite shadow DB. In-flight:
     3-layer semantic drift detection — (1) structural diffing, (2) NLI entailment
     via DeBERTa-v3-base-MNLI, (3) embedding distance via existing MiniLM stack.
-  - OWASP-aligned injection scanner (32 banned_patterns)
+  - OWASP-aligned injection scanner (40 banned_patterns)
   - MCP server: retrieval-only, sampling:null; telemetry kill-block
   - Soul governance: soul.md mutation requires an explicit human `reason` string
     and goes through PersonalityManager (atomic write) — governed, not silently

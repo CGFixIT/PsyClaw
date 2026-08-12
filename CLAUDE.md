@@ -597,11 +597,12 @@ python3 .claude/skills/index-doctor/doctor.py --rebuild
 python3 .claude/skills/injection-redteam/redteam.py
 ```
 
-CI target is Python 3.12 (ubuntu + windows matrix). Coverage sources:
+CI target is Python 3.12 on a three-OS matrix (ubuntu + macos, both blocking;
+windows runs `continue-on-error`, so it reports but does not gate). Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (~100 files, auto-collected by pytest).
+discoverable in `tests/` (128 `test_*.py` files, auto-collected by pytest).
 
 ---
 

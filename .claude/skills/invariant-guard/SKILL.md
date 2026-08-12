@@ -130,7 +130,7 @@ fail proves nothing — the mutation test keeps it honest.
   update the checker consciously in the same commit (Step 2 case 2).
 - **PyYAML soft-dependency:** G3 uses `yaml.safe_load` when available and falls
   back to a line-scan when not (fresh container). Both paths were verified to
-  find all 33 patterns.
+  find all 40 patterns.
 - **Don't run it from inside a subdirectory** with `--repo-root` unset in
   unusual layouts; it auto-detects root from its own path, and exits 3 if
   `gate.py` isn't found there.
