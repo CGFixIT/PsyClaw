@@ -132,17 +132,35 @@ def main(argv: list[str] | None = None) -> int:
     # "consistent everywhere it's cited" -- the count is cited in a mermaid node
     # and a threat table, which no other check reads either. A blind spot in a
     # drift checker is worse than no checker, because it is trusted.
+    #
+    # Second round of the same lesson: .claude/** was still unscanned after the
+    # files above were added, so the fable-protocol skill and its command copy
+    # sat on a stale "32 banned_patterns" while this check again reported
+    # "consistent everywhere it's cited". Agent-facing prompt files are read by
+    # every session, so a wrong number there is repeated back with confidence.
     for opt in (
         "guardrails/rails.py", "agentic/fsconnect/client.py",
         "README.md", "docs/THREAT_MODEL.md", "INVARIANTS.md",
+        "AGENTS.md",
     ):
         fp = root / opt
         if fp.exists():
             cite_files[opt] = fp.read_text(encoding="utf-8")
+    # Agent-facing prompt/rule files. Globbed rather than listed because skills
+    # and commands are added routinely, and a new one citing the count must not
+    # need an edit here to be covered.
+    for sub in (".claude/skills", ".claude/commands", ".claude/rules"):
+        base = root / sub
+        if base.is_dir():
+            for fp in sorted(base.rglob("*.md")):
+                cite_files[str(fp.relative_to(root))] = fp.read_text(encoding="utf-8")
     drift_files = []
     for name, text in cite_files.items():
-        # Find "<n> patterns" / "<n>-pattern" claims and check they equal real_n.
-        for m in re.finditer(r"(\d+)[\s-]+pattern", text):
+        # Find "<n> patterns" / "<n>-pattern" / "<n> banned_patterns" claims and
+        # check they equal real_n. The banned_patterns spelling is matched
+        # explicitly: "32 banned_patterns" has no whitespace directly before
+        # "pattern", so the generic alternative below never saw it.
+        for m in re.finditer(r"(\d+)[\s-]+(?:banned_)?pattern", text):
             claimed = int(m.group(1))
             if claimed != real_n and claimed > 5:  # ignore small unrelated numbers
                 drift_files.append(f"{name} claims {claimed}")
