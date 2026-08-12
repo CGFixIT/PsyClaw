@@ -118,6 +118,7 @@ jobs:
     - name: Pytest — unit + integration + safe smoke (RAG/policy focused)
       shell: bash -leo pipefail {0}
       run: |
+        # --cov target list mirrored from ci.yml's "Run tests + coverage" step -- keep both in sync by hand (2 lanes, below the threshold where a shared/generated list earns its own tooling).
         pytest tests/ \
           -v \
           --cov=gate \
@@ -125,13 +126,41 @@ jobs:
           --cov=gate_auth \
           --cov=gate_memory \
           --cov=memory \
+          --cov=utils.agent_identity \
+          --cov=utils.repo_paths \
+          --cov=utils.auth \
+          --cov=utils.authn \
+          --cov=utils.authn_store \
+          --cov=utils.authn_manager \
+          --cov=utils.authn_cli \
+          --cov=utils.sanitizer \
+          --cov=utils.telemetry_kill \
+          --cov=utils.config_validation \
+          --cov=utils.errors \
+          --cov=utils.logger \
+          --cov=utils.personality \
+          --cov=utils.personality_db \
+          --cov=utils.ratelimit \
+          --cov=utils.health \
+          --cov=utils.ops_runner \
+          --cov=utils.guardrail_bridge \
+          --cov=utils.selftest \
+          --cov=llm.client \
           --cov=graph \
+          --cov=retrieval.embeddings \
+          --cov=retrieval.hybrid_search \
+          --cov=retrieval.indexer \
+          --cov=retrieval.stemmer \
+          --cov=retrieval.vector_store \
+          --cov=retrieval.clear_cache \
           --cov=mcp_hybrid_server \
           --cov=metrics \
-          --cov=llm \
-          --cov=retrieval \
-          --cov=utils \
-          --cov=sync \
+          --cov=sync.selftest \
+          --cov=sync.runner \
+          --cov=sync.config \
+          --cov=sync.filters \
+          --cov=sync.cli \
+          --cov=sync.scheduler \
           --cov=agentic \
           --cov=guardrails \
           --cov=harness \
