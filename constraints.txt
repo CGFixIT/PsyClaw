@@ -59,15 +59,17 @@ nltk==3.10.0
 # [tool.uv.sources] table currently routes this).
 torch==2.13.0+cpu
 
-# Optional Postgres / pgvector backends (pyproject extras: postgres, pgvector).
-# These are NOT installed by the default path; constraints only cap a version when
-# the package IS pulled in (via `pip install 'cyclaw[postgres]'` / the postgres CI
-# job), keeping that resolve reproducible without forcing the dep on SQLite installs.
+# Optional Postgres / pgvector / mssql backends (pyproject extras: postgres, pgvector,
+# mssql). These are NOT installed by the default path; constraints only cap a version
+# when the package IS pulled in (via `pip install 'cyclaw[postgres]'` / the postgres CI
+# job / `cyclaw[mssql]`), keeping that resolve reproducible without forcing the dep on
+# SQLite installs.
 # NB: a -c constraints file cannot carry the [binary] extra (pip >= 26.1.2 rejects
 # extras in constraints), so the binary wheel package is pinned by its own name.
 psycopg==3.2.13
 psycopg-binary==3.2.13
 pgvector==0.4.2
+pyodbc==5.3.0
 
 # Optional NeMo Guardrails layer (pyproject extra: guardrails). This is not
 # installed by the default offline runtime; the constraint keeps the opt-in
