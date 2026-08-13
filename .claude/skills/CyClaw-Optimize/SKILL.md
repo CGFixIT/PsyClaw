@@ -9,10 +9,13 @@ description: Methodically scan the CyClaw main branch for code, CI, security, fi
 familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
 LangGraph 10-node security topology (`graph.py`), ChromaDB + BM25 hybrid
 retrieval, local LLM via Ollama with a triple-gated Grok (xAI) and/or Claude
-fallback, the MCP hybrid server, the `agentic/` GitHub layer, and the
-out-of-band `sync/` Dropbox pipeline. You read code for leverage: performance,
-security, financial risk / oversight in assumptions, auditability, and
-maintainability.
+fallback, the MCP hybrid server, the `agentic/` GitHub layer (including
+`deepagent_github/`, the GitHub coding agent, and `fsconnect/`, the filesystem
+bridge), the `harness/` coding-agent server, and the out-of-band `sync/`
+Dropbox pipeline — all of which ship platform launchers for **macOS** (primary
+target) and **Windows** (close secondary) under `macos/` and `powershell/`.
+You read code for leverage: performance, security, financial risk / oversight
+in assumptions, auditability, and maintainability.
 
 **What this skill does:** drives a time-boxed scan of the **main** branch,
 groups findings into a **small set of reviewable PR-sized chunks** (about 1–4
@@ -66,7 +69,14 @@ structure):
 > license/secret/key**); `tests/` (coverage gaps, logic errors, brittle
 > fixtures, missing assertions); `agentic/` and `sync/` (bugs, inefficient
 > loops, redundant logic, error-handling and financial/oversight-assumption
-> risk); `llm/client.py` + `graph.py` (outdated Grok/xAI model names &
+> risk); `agentic/fsconnect/`, `harness/`, and `agentic/deepagent_github/`,
+> with **macOS as the primary target** (Darwin-specific path handling in
+> `pathsafe.py`, `macos/*.sh` installer/launcher scripts) and **Windows as a
+> close secondary** (`powershell/*.ps1` scripts, `pathsafe.py`'s `_win_*`
+> helpers) — but do not re-flag the Windows `pathsafe` test-coverage gap as a
+> new finding, it's a tracked, deliberate deferral (see
+> `docs/work/FSCONNECT_SQL_ROADMAP.md`'s "FS Phase 4 — Windows hardening");
+> `llm/client.py` + `graph.py` (outdated Grok/xAI model names &
 > endpoints, retry/timeout, performance); `config.yaml` (risky defaults);
 > `requirements.txt` / `constraints.txt` / `pyproject.toml` (loose/outdated
 > pins, missing imports); readability/auditability anywhere. Return 6–10
@@ -90,8 +100,7 @@ mcp__github__list_pull_requests(owner="CGFixIT", repo="CyClaw", state="open")
 > Gotcha (verified): this call returns a very large payload. Parse it down to
 > `number` + `title` only — e.g. read the saved tool-result file with a small
 > `python3 -c "import json; ..."` over `number`/`title` — rather than dumping
-> it into context. This session it showed 2 open PRs (#175, #176), both
-> dependency/pinning chores, so no overlap with the scan findings.
+> it into context.
 
 ### Step 3 — Select focus areas and announce them
 
@@ -305,6 +314,19 @@ any), never for chunk changes.
   the root-cause fix PR first (lowest-order / first in the merge queue), then
   refresh / re-run the rest. Diagnose a child PR's CI red against `main`'s own
   state before assuming the PR caused it.
+- **Don't "fix" `EMBED_DEVICE`.** `retrieval/embeddings.py` hardcodes
+  `EMBED_DEVICE = "cpu"` on purpose — sentence-transformers auto-selects `mps`
+  on Apple Silicon otherwise, which caused a real ranking regression (PR
+  #734). A finding proposing GPU/`mps` auto-detection here is wrong.
+- **Windows `pathsafe` coverage gap is a known, tracked deferral, not a fresh
+  finding.** `agentic/fsconnect/pathsafe.py`'s `_win_*` helpers are `# pragma:
+  no cover`, and `tests/test_fsconnect_pathsafe.py` skips entirely on
+  `os.name == "nt"` — documented as "FS Phase 4" in
+  `docs/work/FSCONNECT_SQL_ROADMAP.md`.
+- **macOS/Windows launcher asymmetry — use judgment.** `macos/invoke-cyclaw.sh`
+  starts both `gate.py` and `harness.server`; `powershell/Invoke-CyClaw.ps1`
+  starts only `harness.server`. May or may not be worth a finding — confirm
+  intent before proposing a fix.
 
 ---
 
@@ -336,3 +358,9 @@ fifth PR just to host a monitoring note.)
 Each kept chunk is independently reviewable and small/medium. Shared-file
 pairs still follow Step 3.5; merge this session's drafts **low PR number →
 high**, parent-before-child when stacked.
+
+## Notes
+
+- Feature freeze applies (`CLAUDE.md` §1) — the operative test is "does this polish the portfolio signal or fix a real defect?" New capabilities need explicit user justification first.
+- Never push directly to `main`; never force-push without sign-off.
+- Re-run `python3 .claude/skills/invariant-guard/check_invariants.py` before opening any PR that touches core files.
