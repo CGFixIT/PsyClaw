@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 import yaml
 
 from agentic.fsconnect import context
+from agentic.fsconnect import pathsafe
 from agentic.fsconnect.client import FsClient
 from agentic.fsconnect.config import load_fsconnect_config
-from utils.errors import FsConnectError
+from utils.errors import FsConnectError, FsPathError
 from utils.logger import _get_config, reset_config_cache
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
@@ -51,6 +53,28 @@ def test_fs_list(env):
         res = c.fs_list("")
     names = {e["name"] for e in res["entries"]}
     assert {"hello.txt", "sub", "danger.txt", "blob.bin"} <= names
+
+
+def test_darwin_read_walks_skip_apple_metadata_and_dataless(monkeypatch, env):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    cfg, fs_cfg, cp, share, _audit = env
+    for name in (".DS_Store", ".localized", "._note.md"):
+        (share / name).write_text("metadata", encoding="utf-8")
+    (share / ".env").write_text("ordinary dotfile", encoding="utf-8")
+    (share / "placeholder.md").touch()
+    monkeypatch.setattr(pathsafe, "_is_macos_dataless", lambda st: st.st_size == 0)
+
+    with FsClient(cfg, fs_cfg, config_path=cp) as client:
+        listed = {entry["name"] for entry in client.fs_list()["entries"]}
+        globbed = {entry["path"] for entry in client.fs_glob(pattern="*")["matches"]}
+        with pytest.raises(FsPathError, match="metadata file"):
+            client.fs_read(".DS_Store")
+        with pytest.raises(FsPathError, match="dataless placeholder"):
+            client.fs_read("placeholder.md")
+
+    assert {".DS_Store", ".localized", "._note.md", "placeholder.md"}.isdisjoint(listed)
+    assert {".DS_Store", ".localized", "._note.md", "placeholder.md"}.isdisjoint(globbed)
+    assert ".env" in listed
 
 
 def test_fs_stat(env):

@@ -36,7 +36,9 @@ def _cfg(tmp_path: Path, fsblock: dict) -> str:
 def test_status_runs(tmp_path, capsys):
     cp = _cfg(tmp_path, {"enabled": False})
     assert cli.main(["--config", cp, "status"]) == 0
-    assert "Filesystem Connector Status" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Filesystem Connector Status" in output
+    assert "allow_macos_volume_roots" in output
 
 
 def test_bad_config_exit_env(tmp_path):

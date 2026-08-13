@@ -16,6 +16,7 @@ from utils.errors import (
     FsConnectConfigError,
     FsConnectError,
     FsConnectRuntimeError,
+    FsMacOSPermissionError,
     FsPathError,
     FsWriteRefused,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "FsConnectError",
     "FsConnectConfigError",
     "FsPathError",
+    "FsMacOSPermissionError",
     "FsWriteRefused",
     "FsConnectRuntimeError",
 ]

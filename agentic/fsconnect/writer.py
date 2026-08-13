@@ -115,6 +115,7 @@ class FsWriter:
             fs_cfg.write_root_strs,
             create=True,
             allow_unc=fs_cfg.allow_unc_roots,
+            allow_macos_volume_roots=fs_cfg.allow_macos_volume_roots,
             strict_roots=fs_cfg.strict_roots,
             on_fallback=self._audit_root_fallback,
         )

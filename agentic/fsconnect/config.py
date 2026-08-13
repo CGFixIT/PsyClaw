@@ -21,6 +21,7 @@ mcp_hybrid_server.py.
 from __future__ import annotations
 
 import os
+import posixpath
 import sys
 from dataclasses import asdict, dataclass, field
 
@@ -66,6 +67,33 @@ def _is_unc(path: str) -> bool:
     return path.startswith("\\\\") or path.startswith("//")
 
 
+def _is_macos_volume_root(path: str) -> bool:
+    """Config-time heuristic: does ``path`` lexically look like it targets
+    ``/Volumes`` or a descendant, before the directory necessarily exists?
+
+    This can't consult the filesystem for identity -- the path (e.g. a
+    currently-unmounted external/network share) may not exist yet -- so it's
+    a plain, exact-case prefix check against macOS's fixed ``/Volumes`` mount
+    spelling, not a case-folding guess (there's no reliable way to know a
+    not-yet-resolved path's eventual volume's case sensitivity; see
+    ``pathsafe._is_real_descendant``'s docstring). It's intentionally a
+    conservative pre-check, not the final authority:
+    ``pathsafe._is_macos_volume_path`` -- run after the path is confirmed to
+    exist -- is the ground-truth, filesystem-identity-based check that closes
+    any case-insensitive-volume alias this lexical pre-check might miss.
+    """
+    if sys.platform != "darwin":
+        return False
+    expanded = os.path.expanduser(os.path.expandvars(path))
+    for candidate in (expanded, os.path.realpath(expanded)):
+        if not posixpath.isabs(candidate):
+            continue
+        normalized = posixpath.normpath(candidate)
+        if normalized == "/Volumes" or normalized.startswith("/Volumes/"):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class QuotaSpec:
     """Per-root capacity limits. ``None`` means unbounded on that axis."""
@@ -80,6 +108,7 @@ class QuotaSpec:
 # of which gates are load-bearing.
 _BOOL_FIELDS = (
     "allow_unc_roots",
+    "allow_macos_volume_roots",
     "follow_symlinks",
     "scan_content",
     "writes_enabled",
@@ -100,6 +129,7 @@ class FsConnectConfig:
     allowed_roots: list[str] = field(default_factory=list)
     allowed_fs_ops: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWED_FS_OPS))
     allow_unc_roots: bool = False
+    allow_macos_volume_roots: bool = False
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
     follow_symlinks: bool = False
     scan_content: bool = True
@@ -197,6 +227,12 @@ class FsConnectConfig:
                     f"fsconnect.{field_name} contains a UNC path but allow_unc_roots is false",
                     details={"field": field_name, "path": r},
                 )
+            if _is_macos_volume_root(r) and not self.allow_macos_volume_roots:
+                raise FsConnectConfigError(
+                    f"fsconnect.{field_name} contains a macOS /Volumes root but "
+                    "allow_macos_volume_roots is false",
+                    details={"field": field_name, "path": r},
+                )
 
     def _validate_phase2_scalars(self) -> None:
         for name in ("trash_retention_days", "quota_recompute_hours"):
@@ -288,6 +324,8 @@ class FsConnectConfig:
             # Default the index root to the first writable root (generate->write->index loop).
             write_strs = self.write_root_strs
             self.index_root = write_strs[0] if write_strs else None
+        if self.index_root is not None:
+            self._check_root_list("index_root", [self.index_root])
         exts: list[str] = []
         for e in self.index_extensions:
             if not isinstance(e, str) or not e.strip():
