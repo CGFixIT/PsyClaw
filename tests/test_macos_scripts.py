@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CANONICAL_HOME_SUFFIX = ".CyClaw"
 
@@ -31,3 +33,34 @@ def test_invoke_cyclaw_home_dir_matches_install_cyclaw() -> None:
     assert invoke_match.group(1) == _CANONICAL_HOME_SUFFIX
     assert install_match.group(1) == _CANONICAL_HOME_SUFFIX
     assert invoke_match.group(1) == install_match.group(1)
+
+
+def test_installer_preserves_patched_config_across_updates() -> None:
+    install_text = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
+    assert 'git -C "$REPO_DIR" pull --ff-only --autostash' in install_text
+
+
+def test_macos_scripts_never_enable_writes_or_indexing() -> None:
+    script_names = ("install-cyclaw.sh", "setup-fsconnect.sh")
+    combined = "\n".join(
+        (_REPO_ROOT / "macos" / name).read_text(encoding="utf-8") for name in script_names
+    )
+    helper = (_REPO_ROOT / "macos" / "_enable_fsconnect_readlist.py").read_text(encoding="utf-8")
+    assert "writes_enabled: true" not in combined
+    assert "index_enabled: true" not in combined
+    assert '"writes_enabled": True' not in helper
+    assert '"index_enabled": True' not in helper
+
+
+def test_macos_setup_contract_and_flags_are_narrow() -> None:
+    setup = (_REPO_ROOT / "macos" / "setup-fsconnect.sh").read_text(encoding="utf-8")
+    installer = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
+    shipped = yaml.safe_load((_REPO_ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+    assert shipped["fsconnect"]["enabled"] is False
+    assert "--prepare-only" in setup
+    assert "--no-fsconnect" in installer
+    assert "<<'README'" in setup
+    assert "reject_shell_metachars \"$REPO_DIR\"" in installer
+    for unsupported in ("declare -A", "mapfile", "readarray", "local -n"):
+        assert unsupported not in setup

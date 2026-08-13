@@ -8,18 +8,22 @@
 # Usage:
 #   bash macos/uninstall-cyclaw.sh                # keep ~/.CyClaw data
 #   bash macos/uninstall-cyclaw.sh --remove-home  # also delete ~/.CyClaw
+#   bash macos/uninstall-cyclaw.sh --remove-fsconnect  # prompt before deleting ~/CyClaw-FS
 
 set -euo pipefail
 
 REMOVE_HOME=0
+REMOVE_FSCONNECT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --remove-home) REMOVE_HOME=1; shift ;;
+    --remove-fsconnect) REMOVE_FSCONNECT=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
 HOME_DIR="$HOME/.CyClaw"
+FSCONNECT_DIR="$HOME/CyClaw-FS"
 
 PATH_START="# >>> cyclaw harness path >>>"
 PATH_END="# <<< cyclaw harness path <<<"
@@ -116,7 +120,8 @@ done
 
 if [ "$REMOVE_HOME" -eq 1 ] && [ -d "$HOME_DIR" ]; then
   printf 'Delete %s including all sessions and the venv? (y/N) ' "$HOME_DIR"
-  read -r answer
+  answer=""
+  read -r answer || true
   case "$answer" in
     y|Y)
       rm -rf "$HOME_DIR"
@@ -126,6 +131,27 @@ if [ "$REMOVE_HOME" -eq 1 ] && [ -d "$HOME_DIR" ]; then
       echo "[cyclaw] kept $HOME_DIR"
       ;;
   esac
+fi
+
+if [ "$REMOVE_FSCONNECT" -eq 1 ] && { [ -e "$FSCONNECT_DIR" ] || [ -L "$FSCONNECT_DIR" ]; }; then
+  if [ -L "$FSCONNECT_DIR" ] || [ "$FSCONNECT_DIR" != "$HOME/CyClaw-FS" ]; then
+    echo "[cyclaw] WARNING: refusing unexpected fsconnect target: $FSCONNECT_DIR" >&2
+    exit 1
+  fi
+  printf 'Delete %s and every file in the fsconnect jail? (y/N) ' "$FSCONNECT_DIR"
+  answer=""
+  read -r answer || true
+  case "$answer" in
+    y|Y)
+      rm -rf "$FSCONNECT_DIR"
+      echo "[cyclaw] removed $FSCONNECT_DIR (config remains fail-closed until setup is rerun)"
+      ;;
+    *)
+      echo "[cyclaw] kept $FSCONNECT_DIR"
+      ;;
+  esac
+elif [ "$REMOVE_FSCONNECT" -eq 0 ] && [ -d "$FSCONNECT_DIR" ]; then
+  echo "[cyclaw] kept $FSCONNECT_DIR (pass --remove-fsconnect to remove it)"
 fi
 
 echo "[cyclaw] uninstall complete."
