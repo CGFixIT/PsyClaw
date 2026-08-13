@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess  # noqa: S404 -- argv-list file-manager launch only; never shell=True
 import sys
+import unicodedata
 from pathlib import Path
 
 from agentic.fsconnect.pathsafe import _norm_contains
@@ -29,15 +30,37 @@ def _file_manager_argv(path: str) -> list[str]:
     return ["xdg-open", path]
 
 
+def _path_identity(path: str) -> str:
+    """Comparison-only identity for containment checks; never an access authority.
+
+    Plain ``os.path.normcase`` is a no-op on POSIX, which is wrong on macOS:
+    APFS is case-insensitive by default and Finder/shell tab-completion make a
+    case-varied spelling of the same real path routine. On Darwin, also strip
+    Unicode format-control characters (category ``Cf``, e.g. zero-width
+    non-joiner) before casefolding so an alias built from invisible characters
+    doesn't read as a different path. Both sides of every comparison in this
+    module are already ``realpath``-resolved before this runs, so folding case
+    here only widens which *already-verified-identical* filesystem entities
+    compare equal -- it cannot admit a target that isn't genuinely the same
+    entity as (or a real descendant of) an allowed root.
+    """
+    normalized = os.path.normcase(path)
+    if sys.platform != "darwin":  # pragma: no cover - exercised via monkeypatch
+        return normalized
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+
+
 def _within_roots(target: Path, allowed_roots: list[str]) -> str | None:
     """The canonical path of ``target`` if it is equal-to or under one of
     ``allowed_roots``, else ``None``.
 
     Both sides are ``realpath``-canonicalized (resolving symlinks) and
-    ``normcase``-normalized, then compared with the same segment-aware containment
-    check the read/write paths use (``pathsafe._norm_contains`` — closes the
-    sibling-prefix bypass). A symlink under a root that points outside it resolves
-    outside and is therefore refused.
+    identity-normalized (``_path_identity`` -- ``normcase`` everywhere,
+    additionally case/Cf-folded on macOS), then compared with the same
+    segment-aware containment check the read/write paths use
+    (``pathsafe._norm_contains`` — closes the sibling-prefix bypass). A symlink
+    under a root that points outside it resolves outside and is therefore
+    refused.
 
     Returning the canonical path (not a bool) lets ``reveal`` launch EXACTLY the
     path that was containment-checked. Launching the original, unresolved string
@@ -46,11 +69,11 @@ def _within_roots(target: Path, allowed_roots: list[str]) -> str | None:
     not what was validated.
     """
     target_real = os.path.realpath(str(target))
-    target_norm = os.path.normcase(target_real)
+    target_norm = _path_identity(target_real)
     for root in allowed_roots:
         if not root:
             continue
-        root_norm = os.path.normcase(os.path.realpath(root))
+        root_norm = _path_identity(os.path.realpath(root))
         if _norm_contains(root_norm, target_norm):
             return target_real
     return None
