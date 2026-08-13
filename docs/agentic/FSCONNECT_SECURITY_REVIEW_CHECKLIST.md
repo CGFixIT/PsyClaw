@@ -28,6 +28,7 @@ Reviewer: ______   Date: ______   Deployment: ______   Config sha256: ______
 - [ ] `write_rate_limit.enabled: true` with a persisted `db_path` (separate sqlite file from the gateway limiter; default `data/fsconnect_rate.db`).
 - [ ] `require_confirm_destructive: true`.
 - [ ] `allow_unc_roots: false` unless a UNC/network root was deliberately reviewed.
+- [ ] On macOS, `allow_macos_volume_roots: false` unless a `/Volumes` network/removable root was separately reviewed.
 
 ## C. OS posture
 
@@ -35,6 +36,19 @@ Reviewer: ______   Date: ______   Deployment: ______   Config sha256: ______
 - [ ] Roots are on a local filesystem (not NFS/SMB), OR network-share risk is formally accepted (R-1 residual).
 - [ ] `logs/` is not inside any writable root; `audit.jsonl` is `chattr +a` (append-only) where available, or shipped off-host (R-9 is open — see playbook §10).
 - [ ] Platform is POSIX. **Windows write-enablement is REFUSED until Phase 4**: the Windows write paths in `pathsafe.py` are `# pragma: no cover` and unverified; do not set `writes_enabled: true` on Windows.
+
+### macOS additions
+
+- [ ] `strict_roots: true`; a TCC/POSIX denial produced the typed Files and
+  Folders guidance and did not relocate the configured root.
+- [ ] The launching Terminal/iTerm has only the required Files and Folders
+  access; no privacy-control profile was installed for fsconnect.
+- [ ] Case/Cf alias fixtures pass on APFS; `O_NOFOLLOW` held-fd descent remains
+  the access authority, not the lossy comparison identity.
+- [ ] `.DS_Store`, `.localized`, `._*`, and dataless placeholders are absent
+  from read/index results without materializing cloud content.
+- [ ] If `/Volumes` is opted in, removable/network loss and trust-boundary risk
+  are documented independently from Windows UNC handling.
 
 ## D. Threat-model spot-checks (execute, do not assume)
 
