@@ -14,7 +14,7 @@
 #     against the OpenAI-compatible endpoint, complementing (not replacing)
 #     tests/test_client.py's monkeypatched error-mapping/retry coverage
 #   - real-repo-run-smoke (2026-08, docs/agentic/DEFERRED_WORK.md D1): a
-#     real-socket, real-gh-subprocess, real-git-clone smoke of the
+#     real-socket, real subprocess (deterministic fake gh), real local-git-clone smoke of the
 #     real-repo-run wiring, closing a gap the existing CLI contract tests
 #     leave open by mocking every outer boundary in Python
 #   - Aligns with v1.9.0 invariants (reproducible CI security gate, Python 3.12, stable Chroma pin)
@@ -159,13 +159,99 @@ jobs:
           # any future chromadb CVE) still fails this gate. See SECURITY.md.
           allow-ghsas: GHSA-f4j7-r4q5-qw2c
 
+  windows-installer-smoke:
+    name: windows-2022 / Windows PowerShell 5.1 installer
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Parse and exercise installer with Windows PowerShell 5.1
+        # Keep this on the inbox `powershell` host, not pwsh: Install-CyClaw.ps1
+        # explicitly supports Windows PowerShell 5.1. A UTF-8-without-BOM smart
+        # punctuation regression previously parsed under pwsh 7 but failed here.
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Installer = Join-Path $env:GITHUB_WORKSPACE "powershell\Install-CyClaw.ps1"
+          $Uninstaller = Join-Path $env:GITHUB_WORKSPACE "powershell\Uninstall-CyClaw.ps1"
+          $OriginalUserProfile = $env:USERPROFILE
+
+          try {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $Installer, [ref]$tokens, [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -ne 0) {
+              $parseErrors | ForEach-Object { Write-Error $_.Message }
+              throw "Install-CyClaw.ps1 does not parse under Windows PowerShell 5.1"
+            }
+
+            $env:USERPROFILE = Join-Path $env:RUNNER_TEMP "cyclaw-installer-ps51"
+            New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+            & $Installer -RepoPath $env:GITHUB_WORKSPACE -SkipPythonDeps -NoProfileEdit -NoPathEdit
+
+            $HomeDir = Join-Path $env:USERPROFILE ".CyClaw"
+            foreach ($relative in @("bin", "sessions", "skills", "tools", "memory")) {
+              if (-not (Test-Path -LiteralPath (Join-Path $HomeDir $relative))) {
+                throw "installer did not create .CyClaw\$relative"
+              }
+            }
+            foreach ($relative in @("bin\Invoke-CyClaw.ps1", "bin\cyclaw.cmd")) {
+              if (-not (Test-Path -LiteralPath (Join-Path $HomeDir $relative) -PathType Leaf)) {
+                throw "installer did not create .CyClaw\$relative"
+              }
+            }
+            $shim = Get-Content -LiteralPath (Join-Path $HomeDir "bin\cyclaw.cmd") -Raw
+            if (-not $shim.Contains($env:GITHUB_WORKSPACE)) {
+              throw "installer shim does not reference the PR checkout"
+            }
+
+            & $Uninstaller
+            if (-not (Test-Path -LiteralPath $HomeDir -PathType Container)) {
+              throw "default uninstall deleted .CyClaw data"
+            }
+
+            # Exercise the same constructible payload as the pwsh lane below,
+            # this time through the claimed Windows PowerShell 5.1 runtime.
+            $env:USERPROFILE = Join-Path $env:RUNNER_TEMP "cyclaw-installer-ps51-adversarial"
+            New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+            $EvilDir = Join-Path $env:RUNNER_TEMP 'evil$(Get-Date)'
+            New-Item -ItemType Directory -Force -Path (Join-Path $EvilDir "harness") | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "harness\server.py") `
+              -Destination (Join-Path $EvilDir "harness\server.py")
+
+            $threw = $false
+            try {
+              & $Installer -RepoPath $EvilDir -SkipPythonDeps -NoProfileEdit -NoPathEdit
+            }
+            catch {
+              $threw = $true
+              if ($_.Exception.Message -notmatch "refusing") {
+                throw "installer failed for an unexpected reason: $($_.Exception.Message)"
+              }
+            }
+            if (-not $threw) {
+              throw "installer accepted a repo path containing shell metacharacters"
+            }
+            if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE ".CyClaw\bin\cyclaw.cmd")) {
+              throw "installer wrote a shim after rejecting the adversarial path"
+            }
+          }
+          finally {
+            $env:USERPROFILE = $OriginalUserProfile
+          }
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     # Bound every run: the install step pulls torch + chromadb + sentence-transformers
     # and the RAG smoke spins up an embedded ChromaDB. A hung download or a wedged
     # service should fail fast, not idle until GitHub's 6-hour default and burn
-    # Actions minutes on both OS legs of the matrix.
+    # Actions minutes on all three OS legs of the matrix.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -177,10 +263,8 @@ jobs:
         # for macOS -- confirmed on this matrix leg's first run, and documented
         # in docs/HARNESS_MACOS.md.
         os: [ubuntu-latest, windows-latest, macos-latest]
-    # Keep Windows compatibility coverage visible, but do not let its
-    # environment-sensitive test suite block the authoritative Linux/macOS
-    # gates. Failures remain surfaced in the PR checks and workflow summary.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # All three supported hosts are release gates. Platform-specific skips are
+    # reported below with `pytest -rs`; a failing Windows result is not masked.
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -298,11 +382,6 @@ jobs:
         # containing $(...) becomes live code the next time any PowerShell
         # session sources the generated profile. NTFS does not forbid $, (,
         # ), or ` in filenames, so this is a real, constructible primitive.
-        # continue-on-error matches this repo's convention for a new/unproven
-        # smoke path (the macOS install-script smoke tests above, and
-        # verify-skills) -- the authoritative gate for this OS leg stays
-        # "Run tests + coverage".
-        continue-on-error: true
         shell: pwsh
         env:
           USERPROFILE: ${{ runner.temp }}\cyclaw-smoke-home-adversarial
@@ -358,7 +437,6 @@ jobs:
         # provides zero coverage against this class of input by construction
         # (it always passes a clean checkout path), so this is a second,
         # deliberately adversarial step, not a duplicate.
-        continue-on-error: true
         shell: bash
         env:
           HOME: ${{ runner.temp }}/cyclaw-smoke-home-adversarial
@@ -475,6 +553,25 @@ jobs:
           echo '# Soul' > data/personality/soul.md
           echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
+      - name: macOS real fsconnect policy + install-to-read integration
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Verbose output is intentional: the full-suite `-q` progress alone
+          # cannot show whether a host-dependent APFS probe ran or skipped.
+          pytest -vv -rs \
+            tests/test_fsconnect_macos_real.py \
+            tests/test_macos_fsconnect_setup.py::test_installer_enabled_profile_lists_stats_reads_and_dry_runs_writes
+
+      - name: Windows native fsconnect handle-authority integration
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # Keep the native security matrix visible by test name. The full
+          # suite runs it again; this early gate makes a platform skip or a
+          # junction/handle regression impossible to hide in quiet progress.
+          pytest -vv -rs tests/test_fsconnect_pathsafe_windows.py
+
       - name: Cache embeddings model (sentence-transformers)
         # retrieval/embeddings.py fetches models.embeddings.model (all-MiniLM-L6-v2,
         # ~90MB) from HuggingFace on first use into cache_dir (config.yaml:
@@ -501,6 +598,109 @@ jobs:
           # (Unit tests + coverage run in the next step.)
           python -m tests.ci_rag_smoke
 
+      - name: Windows live gateway + harness API smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GROK_API_KEY: dummy
+          CYCLAW_API_KEY: smoke-test-key-ci
+          CYCLAW_HOME: ${{ runner.temp }}\cyclaw-runtime-home
+          CYCLAW_HARNESS_HOST: 127.0.0.1
+          CYCLAW_HARNESS_PORT: '8790'
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Python = (Get-Command python -CommandType Application).Source
+          $Pwsh = (Get-Command pwsh -CommandType Application).Source
+          $RuntimeDir = Join-Path $env:RUNNER_TEMP "cyclaw-windows-live-smoke"
+          New-Item -ItemType Directory -Force -Path $RuntimeDir, $env:CYCLAW_HOME | Out-Null
+          $script:Processes = @()
+          $script:Logs = @()
+
+          function Start-CyClawProcess {
+            param(
+              [string]$Name,
+              [string[]]$Arguments,
+              [string]$WorkingDirectory
+            )
+            $stdout = Join-Path $RuntimeDir "$Name.stdout.log"
+            $stderr = Join-Path $RuntimeDir "$Name.stderr.log"
+            $process = Start-Process -FilePath $Python -ArgumentList $Arguments `
+              -WorkingDirectory $WorkingDirectory -WindowStyle Hidden -PassThru `
+              -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $script:Processes += $process
+            $script:Logs += $stdout, $stderr
+            return $process
+          }
+
+          function Wait-CyClawEndpoint {
+            param(
+              [string]$Name,
+              [string]$Uri,
+              [System.Diagnostics.Process]$Process
+            )
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              if ($Process.HasExited) {
+                throw "$Name exited before becoming ready (exit $($Process.ExitCode))"
+              }
+              try {
+                $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { return }
+              }
+              catch {
+                # Expected while the loopback-only process is starting.
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            throw "$Name did not become ready at $Uri"
+          }
+
+          try {
+            $mock = Start-CyClawProcess -Name "mock-ollama" -WorkingDirectory $RuntimeDir -Arguments @(
+              (Join-Path $env:GITHUB_WORKSPACE ".claude\skills\CyClaw-Sandbox\mock_ollama.py"),
+              "--host", "127.0.0.1", "--port", "11434", "--model", "qwen3.6:27b"
+            )
+            Wait-CyClawEndpoint -Name "mock Ollama" -Uri "http://127.0.0.1:11434/api/tags" -Process $mock
+
+            $gateway = Start-CyClawProcess -Name "gateway" -WorkingDirectory $env:GITHUB_WORKSPACE -Arguments @(
+              "-m", "uvicorn", "gate:app", "--host", "127.0.0.1", "--port", "8787"
+            )
+            Wait-CyClawEndpoint -Name "gateway" -Uri "http://127.0.0.1:8787/health" -Process $gateway
+
+            $harness = Start-CyClawProcess -Name "harness" -WorkingDirectory $env:GITHUB_WORKSPACE -Arguments @(
+              "-m", "harness.server"
+            )
+            Wait-CyClawEndpoint -Name "harness" -Uri "http://127.0.0.1:8790/api/status" -Process $harness
+
+            $smokeStdout = Join-Path $RuntimeDir "windows-smoke.stdout.log"
+            $smokeStderr = Join-Path $RuntimeDir "windows-smoke.stderr.log"
+            $smoke = Start-Process -FilePath $Pwsh -ArgumentList @(
+              "-NoLogo", "-NoProfile", "-File",
+              (Join-Path $env:GITHUB_WORKSPACE ".claude\skills\CyClaw-Sandbox\windows-smoke.ps1")
+            ) -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -Wait -PassThru `
+              -RedirectStandardOutput $smokeStdout -RedirectStandardError $smokeStderr
+            Get-Content -LiteralPath $smokeStdout
+            if ($smoke.ExitCode -ne 0) {
+              if (Test-Path -LiteralPath $smokeStderr) { Get-Content -LiteralPath $smokeStderr }
+              throw "windows-smoke.ps1 failed with exit $($smoke.ExitCode)"
+            }
+          }
+          catch {
+            foreach ($log in $script:Logs) {
+              if (Test-Path -LiteralPath $log) {
+                Write-Host "===== $log ====="
+                Get-Content -LiteralPath $log
+              }
+            }
+            throw
+          }
+          finally {
+            foreach ($process in $script:Processes) {
+              if ($null -ne $process -and -not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
+            }
+          }
+
       - name: Run tests + coverage
         shell: bash
         run: |
@@ -509,7 +709,7 @@ jobs:
           # by pytest's default discovery pattern (it doesn't match test_*.py)
           # and runs separately in the RAG smoke step above.
           pytest tests/ \
-            -q --tb=short \
+            -q -rs --tb=short \
             --cov=gate \
             --cov=gate_ops \
             --cov=gate_auth \
@@ -613,7 +813,7 @@ jobs:
       - name: Final status
         run: echo "Ollama mock verification completed (llm.client OpenAI-compatible path, real socket)"
 
-  # Real-socket, real-gh-subprocess, real-git-clone smoke for the real-repo-run
+  # Real-socket, real subprocess (deterministic fake gh), real local-git-clone smoke for real-repo-run
   # wiring. tests/test_agentic_real_repo_run_cli.py already covers this
   # command's contract exhaustively, but mocks all three of its outer
   # boundaries in Python (agentic.context.run_read, repo_workspace.run_read,
@@ -663,16 +863,20 @@ jobs:
         run: pytest tests/test_agentic_real_repo_run_smoke.py -v --tb=short
 
       - name: Final status
-        run: echo "real-repo-run smoke verification completed (real socket, real gh subprocess, real git clone)"
+        run: echo "real-repo-run smoke completed (real socket/subprocess/local clone; fake gh; no live GitHub)"
 
   # Optional Deep Agents contract check. This deliberately installs only the
   # lightweight agentic dependency set; default runtime CI remains offline-first.
   deepagents-harness:
-    name: deepagents-harness
-    runs-on: ubuntu-latest
+    name: deepagents-harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -688,17 +892,21 @@ jobs:
             constraints.txt
 
       - name: Install optional Deep Agents harness dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade "pip==26.1.2"
           pip install -c constraints.txt pyyaml httpx langgraph langchain-core pytest pytest-asyncio rank-bm25
           pip install -c constraints.txt deepagents langchain-openai langchain-xai
+          python -m pip check
 
       - name: Verify Deep Agents HITL and fixture runner
+        shell: bash
         run: |
           pytest tests/test_agentic_harness_phase679.py tests/test_agentic_deepagent_optional.py \
             tests/test_agentic_cloud_chat_model_wire_format.py -q --tb=short
 
       - name: Audit optional Deep Agents dependencies (freeze, not hand-written)
+        if: runner.os == 'Linux'
         # Captures the versions actually resolved/installed above rather than a
         # hardcoded string -- a hand-maintained version list here would be the
         # same class of silent-drift risk dep-guard's D8 check exists to catch
@@ -709,11 +917,14 @@ jobs:
         # langchain-* distribution -- langchain-anthropic and langchain-google-genai
         # (both MANDATORY deps of deepagents), plus langsmith and now langchain-xai
         # -- was installed but never audited.
+        shell: bash
+        env:
+          DEEPAGENTS_FREEZE: deepagents-requirements.txt
         run: |
           pip install pip-audit
-          pip freeze | grep -Ei '^(deepagents|langchain|langchain-[a-z0-9-]+|langsmith)==' > /tmp/deepagents-requirements.txt
-          cat /tmp/deepagents-requirements.txt
-          pip-audit -r /tmp/deepagents-requirements.txt
+          pip freeze | grep -Ei '^(deepagents|langchain|langchain-[a-z0-9-]+|langsmith)==' > "$DEEPAGENTS_FREEZE"
+          cat "$DEEPAGENTS_FREEZE"
+          pip-audit -r "$DEEPAGENTS_FREEZE"
 
   # ==============================================================================
   # Postgres backend job (opt-in DB paths)

@@ -54,19 +54,17 @@ rate-limiting reuses `utils.ratelimit.RateLimiter` per-root and globally
   OWASP∪banned-pattern hits advisorily; Phase 3 routes flagged files to a quarantine
   area and requires human release before they enter the corpus.
 
-### FS Phase 4 — Windows hardening (already designed, needs a Windows CI lane)
-- ~~Wire `GetFinalPathNameByHandle` re-assertion on the open handle into the
-  Windows branch of `pathsafe`~~ **[Status correction 2026-08-02]: already
-  wired for reads**, per `agentic/fsconnect/pathsafe.py`'s own module
-  docstring (line 27: "File opens additionally re-assert containment via
-  `GetFinalPathNameByHandle` on the open handle when available"). Windows
-  writes remain hard-refused unconditionally pending equivalent write-path
-  hardening (`tests/test_fsconnect_writer.py::test_windows_writes_hard_refused`).
-- Add a Windows CI runner so the `# pragma: no cover` branches are exercised
-  (junction/UNC/8.3/ADS fixtures) — still open: `tests/test_fsconnect_pathsafe.py`
-  is skipped entirely on Windows itself (`pytestmark = pytest.mark.skipif(os.name
-  == "nt", ...)`), so no adversarial junction/UNC/8.3/ADS fixture module runs
-  on the Windows CI leg that does exist.
+### FS Phase 4 — Windows hardening (read authority and native CI shipped)
+- Read/list/stat now open once with `CreateFileW`, reject reparse traversal,
+  verify the opened handle with `GetFinalPathNameByHandleW`, and consume that
+  same handle. The canonical root and every ancestor are held without delete
+  sharing, and root identity is checked before and after target open.
+  Windows writes remain hard-refused pending equivalent handle-relative
+  mutation authority (`tests/test_fsconnect_pathsafe_windows.py`).
+- The blocking Windows CI leg runs a native adversarial fixture module covering
+  junction swaps, root replacement, held-handle read/list behavior, hostile
+  UNC/device/ADS/trailing-dot targets, and the Windows write refusal. The broad
+  POSIX module remains skipped on Windows because it tests `openat` semantics.
 - Per-root NTFS ACL inspection surfaced in `fs_stat` (advisory least-privilege check).
 
 ### Audit hardening (connector-wide, high buyer value)
