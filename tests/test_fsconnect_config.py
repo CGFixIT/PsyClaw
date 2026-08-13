@@ -94,9 +94,10 @@ def test_unc_root_allowed_with_flag(tmp_path):
 
 
 @pytest.mark.parametrize("field_name", ["allowed_roots", "writable_roots"])
-def test_macos_volume_roots_refused_by_default(monkeypatch, tmp_path, field_name):
+@pytest.mark.parametrize("root", ["/Volumes/External/share", "/volumes/External/share", "/Vol\u200dumes/External/share"])
+def test_macos_volume_roots_refused_by_default(monkeypatch, tmp_path, field_name, root):
     monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
-    path = _write_cfg(tmp_path, {"enabled": True, field_name: ["/Volumes/External/share"]})
+    path = _write_cfg(tmp_path, {"enabled": True, field_name: [root]})
     with pytest.raises(FsConnectConfigError, match="allow_macos_volume_roots is false"):
         load_fsconnect_config(path)
 

@@ -75,7 +75,8 @@ def _is_macos_volume_path(path: str) -> bool:
     if sys.platform != "darwin" or not posixpath.isabs(path):
         return False
     normalized = posixpath.normpath(path)
-    return normalized == "/Volumes" or normalized.startswith("/Volumes/")
+    identity = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+    return identity == "/volumes" or identity.startswith("/volumes/")
 
 
 def _raise_macos_permission(action: str, exc: OSError) -> None:
@@ -194,7 +195,7 @@ class ScopedRoots:
         *,
         create: bool = False,
         allow_unc: bool = False,
-        allow_macos_volume_roots: bool = True,
+        allow_macos_volume_roots: bool = False,
         strict_roots: bool = False,
         on_fallback: Callable[[str, str], None] | None = None,
     ) -> None:

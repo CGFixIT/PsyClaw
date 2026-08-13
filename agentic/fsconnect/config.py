@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import posixpath
 import sys
+import unicodedata
 from dataclasses import asdict, dataclass, field
 
 from utils.errors import FsConnectConfigError
@@ -76,7 +77,8 @@ def _is_macos_volume_root(path: str) -> bool:
         if not posixpath.isabs(candidate):
             continue
         normalized = posixpath.normpath(candidate)
-        if normalized == "/Volumes" or normalized.startswith("/Volumes/"):
+        identity = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+        if identity == "/volumes" or identity.startswith("/volumes/"):
             return True
     return False
 

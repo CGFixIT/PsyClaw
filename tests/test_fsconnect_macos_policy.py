@@ -69,6 +69,8 @@ def test_filter_propagates_permission_error(darwin: None) -> None:
     [
         ("/Volumes", True),
         ("/Volumes/External/share", True),
+        ("/volumes/External/share", True),
+        ("/Vol\u200dumes/External/share", True),
         ("/VolumesLike/share", False),
         ("Volumes/External", False),
     ],
@@ -86,6 +88,13 @@ def test_resolved_macos_volume_alias_is_refused_at_runtime(darwin: None, monkeyp
             create=False,
             allow_macos_volume_roots=False,
         )
+
+
+def test_scoped_roots_refuses_macos_volume_by_default(darwin: None, monkeypatch) -> None:
+    monkeypatch.setattr(pathsafe.Path, "resolve", lambda self, *, strict: self)
+    monkeypatch.setattr(pathsafe, "_is_macos_volume_path", lambda _path: True)
+    with pytest.raises(FsPathError, match="allow_macos_volume_roots is false"):
+        pathsafe.ScopedRoots(["/private/alias"], create=False)
 
 
 @pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
