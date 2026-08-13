@@ -85,9 +85,9 @@ def _is_macos_volume_path(resolved_path: str) -> bool:
     filesystem identity against ``/Volumes`` sidesteps the guess entirely --
     correct regardless of what case rule (if any) the volume applies.
 
-    TODO(consolidate): this duplicates the ancestor-walk technique the
-    root-matching fix in this module needs too; once both are merged, this
-    should call a single shared helper instead of two copies.
+    Note: this duplicates the ancestor-walk technique the root-matching fix
+    elsewhere in this module also needs; once both land, this should call a
+    single shared helper instead of two copies.
     """
     if sys.platform != "darwin" or not posixpath.isabs(resolved_path):
         return False
