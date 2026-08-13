@@ -101,13 +101,12 @@ try {
 Write-Host ""
 Write-Host "=== CyClaw Windows Harness API smoke bomb ($HarnessBase) ===" -ForegroundColor Cyan
 
-# The harness's five state-changing POSTs, GET /api/github/status and the three
-# /api/agent/* run routes are gated
-# on the same Bearer CYCLAW_API_KEY the gateway uses (utils/auth.py), AND a
-# per-process CSRF token minted at server start and embedded only in the page
-# GET / serves. Reuses $ApiKey read above; the token is extracted from the
-# console page fetched at step 7 below, the same way harness.html's own JS
-# reads it. The open read routes ignore both.
+# The harness's guarded routes, including session-detail reads, use the same
+# Bearer CYCLAW_API_KEY as the gateway (utils/auth.py), AND a per-process CSRF
+# token minted at server start and embedded only in the page GET / serves.
+# Reuses $ApiKey read above; the token is extracted from the console page
+# fetched at step 7 below, the same way harness.html's own JS reads it. Public
+# aggregate/status reads ignore both.
 $HarnessHeaders = @{ Authorization = "Bearer $ApiKey" }
 
 # 7. GET / — harness console served (also the only source of the CSRF token)
@@ -153,7 +152,7 @@ try {
 
 if ($SessionId) {
     try {
-        $s = Invoke-RestMethod -Uri "$HarnessBase/api/sessions/$SessionId" -Method GET   # DevSkim: ignore DS137138
+        $s = Invoke-RestMethod -Uri "$HarnessBase/api/sessions/$SessionId" -Method GET -Headers $HarnessHeaders   # DevSkim: ignore DS137138
         if ($s.session_id -eq $SessionId) { Pass "GET /api/sessions/{id} (echoes session_id)" }
         else { Fail "GET /api/sessions/{id} unexpected: $($s | ConvertTo-Json -Compress)" }
     } catch { Fail "GET /api/sessions/{id} threw: $_" }
@@ -171,7 +170,7 @@ if ($SessionId) {
 
 # 13. GET /api/sessions/{bogus} — unknown id -> 404
 try {
-    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/sessions/000000000000" -Method GET -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/sessions/000000000000" -Method GET -Headers $HarnessHeaders -SkipHttpErrorCheck   # DevSkim: ignore DS137138
     if ($resp.StatusCode -eq 404) { Pass "GET /api/sessions/{bogus} (HTTP 404)" }
     else { Fail "GET /api/sessions/{bogus} HTTP $($resp.StatusCode) (expected 404)" }
 } catch { Fail "GET /api/sessions/{bogus} threw: $_" }

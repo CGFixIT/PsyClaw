@@ -20,10 +20,11 @@ mock with the real thing, one layer down.
 - The **model** is a real ``http.server.HTTPServer`` on an ephemeral loopback
   port (mirrors ``test_llm_client_ollama.py``'s ``mock_ollama`` fixture
   exactly), not a monkeypatched ``.invoke()``.
-- ``gh`` is a real executable script on ``PATH`` (mirrors nothing existing --
-  every other test stubs ``gh_client.run_read`` itself, never exercising
-  ``check_gh_version``'s or ``build_read_argv``'s own subprocess path), not a
-  monkeypatched module reference.
+- ``gh`` is a real executable on ``PATH`` -- an extensionless Python script on
+  POSIX and a ``gh.cmd`` launcher for the same script on Windows (mirrors
+  nothing existing -- every other test stubs ``gh_client.run_read`` itself,
+  never exercising ``check_gh_version``'s or ``build_read_argv``'s own
+  subprocess path), not a monkeypatched module reference.
 - The clone target is a real ``git init --bare`` repository on local disk that
   the fake ``gh``'s ``repo clone`` handler actually ``git clone``s from, not a
   directory the test fabricates directly.
@@ -103,9 +104,27 @@ sys.exit(f"fake gh: unhandled invocation {argv!r}")
 '''
 
 
+def _install_fake_gh(bin_dir: Path, source: str) -> Path:
+    """Install a subprocess-executed fake ``gh`` for the current platform."""
+    if sys.platform == "win32":
+        implementation = bin_dir / "gh.py"
+        implementation.write_text(source, encoding="utf-8")
+        gh_path = bin_dir / "gh.cmd"
+        gh_path.write_text(
+            f'@echo off\r\n"{sys.executable}" "%~dp0gh.py" %*\r\n',
+            encoding="utf-8",
+        )
+        return gh_path
+
+    gh_path = bin_dir / "gh"
+    gh_path.write_text(source, encoding="utf-8")
+    gh_path.chmod(gh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return gh_path
+
+
 @pytest.fixture()
 def fake_gh_on_path(tmp_path, monkeypatch):
-    """Put a real, executable fake `gh` at the front of PATH for this test only.
+    """Put a real, platform-executable fake `gh` at the front of PATH for this test only.
 
     ``check_gh_version`` is ``lru_cache``d for the life of the process (see
     its own docstring) -- cleared before and after so this test's fake `gh`
@@ -115,9 +134,7 @@ def fake_gh_on_path(tmp_path, monkeypatch):
     """
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
-    gh_path = bin_dir / "gh"
-    gh_path.write_text(_FAKE_GH_SCRIPT, encoding="utf-8")
-    gh_path.chmod(gh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    gh_path = _install_fake_gh(bin_dir, _FAKE_GH_SCRIPT)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     check_gh_version.cache_clear()
     yield gh_path
@@ -213,21 +230,6 @@ def checks_file(tmp_path):
     return str(path)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "POSIX-only by construction, not an untested gap. The fake `gh` is an "
-        "extensionless file with a `#!/usr/bin/env python3` shebang; on Windows "
-        "shutil.which() resolves through PATHEXT (.EXE/.CMD/.BAT), so gh_client "
-        "would never find it, and Windows cannot execute a shebang script anyway. "
-        "Making it work there means a .cmd shim whose subprocess behavior cannot "
-        "be verified from this repo's Linux/macOS dev environment. The wiring this "
-        "test guards is platform-independent Python, and it still runs as a real "
-        "blocking gate on every PR via ci.yml's dedicated `real-repo-run-smoke` "
-        "job (ubuntu-latest) plus the macos-latest matrix leg -- so skipping the "
-        "redundant windows matrix execution loses no coverage."
-    ),
-)
 def test_real_repo_run_reaches_pending_decision_over_real_socket_and_gh(
     fake_gh_on_path, real_bare_repo, smoke_config, checks_file, monkeypatch, capsys,
 ):
@@ -292,9 +294,7 @@ def canary_gh_on_path(tmp_path, monkeypatch):
     """
     bin_dir = tmp_path / "canary-bin"
     bin_dir.mkdir()
-    gh_path = bin_dir / "gh"
-    gh_path.write_text(_CANARY_GH_SCRIPT, encoding="utf-8")
-    gh_path.chmod(gh_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    _install_fake_gh(bin_dir, _CANARY_GH_SCRIPT)
     gh_log = tmp_path / "gh_invocations.log"
     gh_log.write_text("", encoding="utf-8")
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
@@ -340,18 +340,6 @@ def harness_shaped_agentic_config(tmp_path):
     reset_config_cache()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "POSIX-only by construction, same reasoning as this file's other "
-        "smoke test: the canary `gh` is an extensionless shebang script, "
-        "which shutil.which()/PATHEXT and Windows execution semantics cannot "
-        "resolve. The wiring this test guards is platform-independent "
-        "Python, and it still runs as a real blocking gate via ci.yml's "
-        "ubuntu-latest real-repo-run-smoke job plus the macos-latest matrix "
-        "leg, so skipping the redundant windows execution loses no coverage."
-    ),
-)
 def test_ops_runner_call_shape_refuses_injected_instruction_pre_flight(
     canary_gh_on_path, harness_shaped_agentic_config, monkeypatch,
 ):

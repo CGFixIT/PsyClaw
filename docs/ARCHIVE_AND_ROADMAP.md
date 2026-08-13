@@ -733,12 +733,12 @@ forward-looking.
   to hold, reroute, or refuse a file. A file with a nonzero count is staged and
   reindexed exactly like a clean one. The quarantine mechanism itself remains to be built.
 
-### FS Phase 4 — Windows hardening (more nuanced than the doc states; partially shipped)
-- **`GetFinalPathNameByHandle` re-assertion: already wired for reads, per
-  `agentic/fsconnect/pathsafe.py`'s own module docstring** ("File opens additionally
-  re-assert containment via `GetFinalPathNameByHandle` on the open handle when
-  available," `pathsafe.py:26-28`) — this is ahead of where the roadmap doc places it
-  ("needs a Windows CI lane," implying not yet wired for reads).
+### FS Phase 4 — Windows hardening (read authority and native CI shipped)
+- **Windows read/list/stat authority:** targets are opened once with `CreateFileW`;
+  `GetFinalPathNameByHandleW`, root identity, and reparse checks fail closed before
+  the same handle is consumed. Canonical root ancestors are held without delete
+  sharing to prevent whole-tree rename swaps. Directory enumeration uses
+  `GetFileInformationByHandleEx`, not a pathname reopen.
 - **Windows writes: NOT enabled at all — a stronger, undocumented-by-the-roadmap
   mitigation is in place instead.** `tests/test_fsconnect_writer.py:422-442`
   (`test_windows_writes_hard_refused`) confirms every write op is hard-refused on
@@ -747,16 +747,11 @@ forward-looking.
   name-validate-then-write-by-name fallback has a TOCTOU window a junction can exploit.
   This is a stricter stance than the doc anticipates — it isn't "hardening still to
   design," it's "writes disabled until the hardening lands."
-- **Windows CI lane: partially present, not what the doc asks for.** `ci.yml`'s main
-  `test` job already runs the full suite on `windows-latest` (`ci.yml:164`), so a
-  Windows runner exists in CI. But the adversarial fixture matrix that would exercise
-  the `# pragma: no cover` branches (20 of them in `pathsafe.py`, covering junction/UNC/
-  8.3/ADS-style attacks) is `tests/test_fsconnect_pathsafe.py`, and that entire module
-  is skipped when running on Windows itself (`pytestmark = pytest.mark.skipif(os.name
-  == "nt", ...)`, line 17) — it validates the POSIX openat/`O_NOFOLLOW` authority path
-  only. No Windows-specific junction/UNC/8.3/ADS fixture module exists elsewhere in
-  `tests/`. The doc's ask ("a Windows CI runner so the `# pragma: no cover` branches
-  are exercised") is still open even though a Windows CI leg now runs.
+- **Windows CI lane:** blocking `windows-latest` coverage now includes
+  `tests/test_fsconnect_pathsafe_windows.py`, with real NTFS junction swaps,
+  root replacement, same-handle read/list checks, hostile target rejection, and
+  the unconditional Windows write refusal. The POSIX-only module remains skipped
+  there by design.
 - **Per-root NTFS ACL inspection in `fs_stat`: NOT implemented.** No `ntfs`/`acl`
   reference in `agentic/fsconnect/`.
 
@@ -988,7 +983,7 @@ that test, not a judgment on the idea's merit.
 | FS Phase 3: cross-file content dedup by sha256 | NOT_IMPLEMENTED | minor — low priority | §5 |
 | FS Phase 3: local OCR for scanned PDFs/images | NOT_IMPLEMENTED | new capability, new dependency — needs explicit justification | §5 |
 | FS Phase 3: quarantine of injection-flagged content (currently advisory-only) | NOT_IMPLEMENTED | meaningful security hardening — good candidate | §5 |
-| FS Phase 4: adversarial Windows CI fixture matrix for `pathsafe.py`'s `# pragma: no cover` branches | NOT_IMPLEMENTED (a Windows CI leg runs, but skips this module) | worthwhile test-coverage hardening if Windows writes are ever pursued | §5 |
+| FS Phase 4: adversarial Windows CI fixture matrix for `pathsafe.py`'s native handle branches | IMPLEMENTED (`tests/test_fsconnect_pathsafe_windows.py`; blocking Windows leg) | keep junction/root-swap/held-handle regressions blocking | §5 |
 | FS Phase 4: per-root NTFS ACL inspection in `fs_stat` | NOT_IMPLEMENTED | new capability, Windows-specific, speculative — skip absent a driving need | §5 |
 | Hash-chained / append-only tamper-evident audit log | NOT_IMPLEMENTED | real security hardening for a live write path — worth doing | §5 |
 | SQL Phase 2: live-DB CI integration tests (a sqlconnect-specific job; Postgres pattern already exists elsewhere, MSSQL has none) | NOT_IMPLEMENTED | solid test-coverage hardening for an already-shipped connector | §5 |

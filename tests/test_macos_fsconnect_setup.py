@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -52,6 +53,17 @@ def _run_script(
         input=input_text,
         text=True,
         env=env,
+        timeout=60,
+    )
+
+
+def _run_cli(config: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "agentic.fsconnect.cli", "--config", str(config), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=_REPO_ROOT,
         timeout=60,
     )
 
@@ -200,6 +212,98 @@ def test_installer_default_enables_but_no_fsconnect_does_not(tmp_path: Path) -> 
     skipped_block = yaml.safe_load(skipped_config.read_text(encoding="utf-8"))["fsconnect"]
     assert skipped_block["enabled"] is False
     assert (skipped_home / "CyClaw-FS").is_dir()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX installer integration")
+def test_installer_enabled_profile_lists_stats_reads_and_dry_runs_writes(tmp_path: Path) -> None:
+    """Exercise the installed Mac profile through the real fsconnect CLI."""
+    home = tmp_path / "home"
+    home.mkdir()
+    config = _copy_config(tmp_path)
+    audit = tmp_path / "audit.jsonl"
+    config_text = config.read_text(encoding="utf-8")
+    audit_needle = 'audit_file: "logs/audit.jsonl"'
+    assert audit_needle in config_text
+    # JSON strings are valid YAML scalars and avoid PyYAML's standalone-scalar
+    # document terminator (``...``), which would split this copied config.
+    audit_yaml = json.dumps(str(audit))
+    config.write_text(
+        config_text.replace(audit_needle, f"audit_file: {audit_yaml}"),
+        encoding="utf-8",
+    )
+
+    installed = _run_script(
+        _INSTALLER,
+        "--repo-path",
+        str(_REPO_ROOT),
+        "--skip-python-deps",
+        "--no-profile-edit",
+        "--no-path-edit",
+        home=home,
+        config=config,
+    )
+    assert installed.returncode == 0, installed.stderr
+
+    jail = home / "CyClaw-FS"
+    note = jail / "note.txt"
+    content = "operator-provided Mac jail note\n"
+    note.write_text(content, encoding="utf-8")
+
+    block = yaml.safe_load(config.read_text(encoding="utf-8"))["fsconnect"]
+    assert block["enabled"] is True
+    assert block["allowed_roots"] == [str(jail.resolve())]
+    assert block["allowed_fs_ops"] == _EXPECTED_OPS
+    assert block["writes_enabled"] is False
+    assert block["index_enabled"] is False
+
+    status = _run_cli(config, "status")
+    assert status.returncode == 0, status.stderr
+    assert "writes_enabled" in status.stdout and "False" in status.stdout
+
+    listed = _run_cli(config, "list", "--root", str(jail))
+    assert listed.returncode == 0, listed.stderr
+    list_result = yaml.safe_load(listed.stdout)
+    assert {entry["name"] for entry in list_result["entries"]} >= {"README.txt", "note.txt"}
+
+    stated = _run_cli(config, "stat", "--root", str(jail), "--path", "note.txt")
+    assert stated.returncode == 0, stated.stderr
+    stat_result = yaml.safe_load(stated.stdout)
+    assert stat_result["type"] == "file"
+    assert stat_result["size"] == len(content.encode("utf-8"))
+
+    read = _run_cli(config, "read", "--root", str(jail), "--path", "note.txt")
+    assert read.returncode == 0, read.stderr
+    read_result = yaml.safe_load(read.stdout)
+    assert read_result["content"] == content
+
+    denied = jail / "must-not-exist.txt"
+    write = _run_cli(
+        config,
+        "write",
+        "--root",
+        str(jail),
+        "--path",
+        denied.name,
+        "--body",
+        "blocked",
+        "--reason",
+        "CI verifies the default dry-run gate",
+    )
+    assert write.returncode == 0, write.stderr
+    write_result = yaml.safe_load(write.stdout)
+    assert write_result["executed"] is False
+    assert not denied.exists()
+
+    if sys.platform == "darwin" and "requested a Time Machine exclusion" in installed.stdout:
+        excluded = subprocess.run(
+            ["tmutil", "isexcluded", str(jail)],  # noqa: S603,S607 -- macOS system utility, argv list
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert excluded.returncode == 0, excluded.stderr
+        assert "[Excluded]" in excluded.stdout
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX uninstall integration")

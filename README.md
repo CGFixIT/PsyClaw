@@ -35,7 +35,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
 5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
-7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped reads + gated writes over local/SMB shares, TOCTOU-safe) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
+7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped held-handle reads + gated writes over local/SMB shares) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
 10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
@@ -509,7 +509,7 @@ CyClaw/
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
 │   │   ├── client.py           # scoped reads (fs_list/stat/read/grep)
-│   │   ├── pathsafe.py         # TOCTOU-safe openat/O_NOFOLLOW security core
+│   │   ├── pathsafe.py         # held-handle containment core (POSIX + Windows reads)
 │   │   ├── writer.py           # gated, atomic writes (default-disabled)
 │   │   └── indexer.py          # toggleable RAG-corpus indexing of the share
 │   ├── sqlconnect/             # (v1.8) read-only SQL scaffold (Postgres/MSSQL)
@@ -691,9 +691,9 @@ v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulate
 
 ### `agentic/fsconnect/` — local / SMB filesystem connector
 
-Scoped **reads** and separately-gated **writes** over a local or SMB file share, sharing one TOCTOU-safe security core.
+Scoped **reads** and separately-gated **writes** over a local or SMB file share, sharing one held-handle security core.
 
-- **`pathsafe.py` security core** — POSIX `openat` / `O_NOFOLLOW` handle-descent from a held root directory fd (so the root cannot be swapped under the process). Denies UNC, NTFS alternate data streams (`file::$DATA`), `\\?\` / `\\.\` device paths, `..` traversal, and any symlink / reparse point. Segment-aware containment closes **CVE-2025-53110** (sibling-prefix) and `realpath` + `O_NOFOLLOW` close **CVE-2025-53109** (symlink/junction escape).
+- **`pathsafe.py` security core** — POSIX uses `openat` / `O_NOFOLLOW` descent from a held root directory fd. Windows read/list/stat locks the canonical root ancestry against rename, opens once with `CreateFileW`, verifies `GetFinalPathNameByHandleW` containment and root identity, and consumes that same handle; Windows writes remain hard-refused. Denies UNC, NTFS alternate data streams (`file::$DATA`), `\\?\` / `\\.\` device paths, `..` traversal, and symlink / reparse traversal. Segment-aware containment closes **CVE-2025-53110** (sibling-prefix), while held-handle authority prevents name-reopen junction swaps.
 - **Reads** (`fs_list` / `fs_stat` / `fs_read` / `fs_grep`) confined to `allowed_roots`, audited, with a 5 MiB read cap and advisory OWASP∪`banned_patterns` content scanning.
 - **Writes** (`fs_write` / `fs_append` / `fs_mkdir` / `fs_move`) — fully built but **`writes_enabled: false` by default**; confined to a **separate** `writable_roots` list; gated by a human `reason` + `--confirm` (for destructive ops); atomic (`tmp` + `os.replace`); **content-agnostic** (never calls the LLM — an operator pipes local-LLM/QWEN output in). A code-level `FS_WRITE_HARD_DISABLE` kill switch forces dry-run regardless of config.
 - **Toggleable RAG-corpus indexing** of the share (`index_enabled`, dry-run default) stages eligible files into the corpus and triggers a reindex **subprocess** — enabling a generate → write → index loop without importing the retrieval layer.
@@ -1097,7 +1097,7 @@ of the three commands above for cloud, after the image's own install step.
 | Claude gating | Same triple gate, independently: `mode=hybrid` AND `claude.enabled=true` AND `user_confirmed_online=true` |
 | Soul writes | Explicit human reason string + enforced write-boundary scan + atomic write |
 | Agentic writes | `pr_create` implemented; the source constant and two config gates ship open since 2026-08-07, so `agentic.enabled` (ships `false`) plus per-call reason/confirm is what refuses. `pr_comment`/`issue_comment` remain plan-only |
-| Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap); writes default-OFF, confined to a separate `writable_roots`, gated by human `reason` + `--confirm`, atomic; TOCTOU-safe `pathsafe` core denies UNC/ADS/device-path/`..`/symlink escapes |
+| Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap) with POSIX held-fd descent and Windows same-handle containment; writes default-OFF and hard-refused on Windows, otherwise confined to separate `writable_roots`, gated by human `reason` + `--confirm`, and atomic; UNC/ADS/device-path/`..`/symlink escapes are denied |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
 | `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed` / `ops_fsconnect_executed` / `ops_sqlconnect_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |

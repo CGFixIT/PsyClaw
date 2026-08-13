@@ -119,14 +119,14 @@ jobs:
           grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
           pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt
 
-      - name: Minimal hermetic prep + smoke import check
+      - name: Verify dependency consistency + smoke imports
         shell: bash
         run: |
+          python -m pip check
           mkdir -p data/personality index logs
           echo '# Soul' > data/personality/soul.md
           echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
           python -c "import chromadb, langgraph, fastapi; print('Core imports OK on ${{ matrix.os }}')"
-          # Optional: python -m tests.ci_rag_smoke if full smoke desired in verify
 
   scan:
     needs: verify-install
@@ -158,7 +158,7 @@ jobs:
         #   - No HttpClient / no network-exposed /api/v2 server surface
         #   - Pre-computed embeddings via sentence-transformers (no dynamic embedding functions or trust_remote_code paths)
         #   - Offline-first design + full telemetry kill switch in gate.py
-        #   - Reproducible install gate (verify-install matrix on ubuntu/windows + Python 3.12)
+        #   - Reproducible install gate (verify-install matrix on Ubuntu/Windows/macOS + Python 3.12)
         # Cross-ref: cyclaw-advisor §K / §M, hybrid_search.py:55, indexer.py:58, gate.py:TELEMETRY_KILL
         # Track upstream for patched 1.5.x release; re-evaluate on bump.
         #

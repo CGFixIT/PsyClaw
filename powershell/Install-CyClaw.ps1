@@ -96,7 +96,7 @@ elseif (-not (Test-Path (Join-Path $Repo "harness\server.py"))) {
     if (Test-Path $Repo) { Remove-Item -Recurse -Force $Repo }
     Write-Step "cloning CyClaw origin main to $Repo"
     & git clone --depth 1 $RepoUrl $Repo
-    if ($LASTEXITCODE -ne 0) { throw "git clone failed (exit $LASTEXITCODE) — is git installed and GitHub reachable?" }
+    if ($LASTEXITCODE -ne 0) { throw "git clone failed (exit $LASTEXITCODE) -- is git installed and GitHub reachable?" }
 }
 else {
     Write-Step "repo already present at $Repo (pulling latest main)"
@@ -198,4 +198,4 @@ function global:cyclaw {
 
 Write-Host ""
 Write-Step "install complete. Open a NEW PowerShell window and run:  cyclaw"
-Write-Step "the harness console opens at http://127.0.0.1:8790 — /help lists commands."
+Write-Step "the harness console opens at http://127.0.0.1:8790 -- /help lists commands."

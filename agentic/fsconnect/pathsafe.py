@@ -18,15 +18,15 @@ Design (red-team-hardened):
     the root immutable for the process: swapping the root's path later does not
     change the inode our held fd points at.
 
-  * **Windows (documented fallback).** ``os.open`` supports neither ``dir_fd`` nor
-    ``O_NOFOLLOW`` on Windows, so we canonicalize (``realpath``), enforce
-    segment-aware containment with ``normcase``, and deny **any** reparse point
-    (symlink *or* junction/mount point) along the path via the
-    ``FILE_ATTRIBUTE_REPARSE_POINT`` / ``st_reparse_tag`` check -- which is the
-    primary defense there, since ``realpath`` is not reliable for junctions. File
-    opens additionally re-assert containment via ``GetFinalPathNameByHandle`` on the
-    open handle when available. These branches are not exercised by the Linux CI and
-    are marked ``# pragma: no cover``.
+  * **Windows (read authority).** ``os.open`` supports neither ``dir_fd`` nor
+    ``O_NOFOLLOW`` on Windows. Each read/stat/list target is therefore opened once
+    with ``CreateFileW``. The resulting handle must be non-reparse, its
+    ``GetFinalPathNameByHandleW`` path must remain inside the allow-listed root, and
+    the root's file identity must still match the identity held at construction.
+    Reads and stats use that same handle; directory enumeration uses
+    ``GetFileInformationByHandleEx`` on that same directory handle. Windows writes
+    remain hard-refused by ``writer.py`` because their legacy name-based helpers do
+    not yet provide equivalent handle-relative mutation authority.
 
 Early rejection (both platforms) refuses: empty/NUL targets, absolute or
 drive/UNC-prefixed targets (targets are always *relative* to a root), ``..``
@@ -38,6 +38,7 @@ Never imported by gate.py / graph.py / mcp_hybrid_server.py.
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import hashlib
 import os
@@ -47,8 +48,10 @@ import stat as statmod
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from utils.errors import FsConnectRuntimeError, FsMacOSPermissionError, FsPathError
 
@@ -56,9 +59,357 @@ _POSIX = os.name != "nt"
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_FILE_ATTRIBUTE_DIRECTORY = 0x10
+_FILE_ATTRIBUTE_READONLY = 0x1
 _SF_DATALESS = getattr(statmod, "SF_DATALESS", 0x40000000)
 
+_WIN_GENERIC_READ = 0x80000000
+_WIN_FILE_LIST_DIRECTORY = 0x0001
+_WIN_FILE_READ_ATTRIBUTES = 0x0080
+_WIN_FILE_SHARE_READ = 0x00000001
+_WIN_FILE_SHARE_WRITE = 0x00000002
+_WIN_FILE_SHARE_DELETE = 0x00000004
+_WIN_OPEN_EXISTING = 3
+_WIN_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_WIN_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+_WIN_FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+_WIN_FILE_FULL_DIRECTORY_INFO_CLASS = 14
+_WIN_FILE_FULL_DIRECTORY_RESTART_INFO_CLASS = 15
+_WIN_ERROR_NO_MORE_FILES = 18
+_WIN_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+_WIN_DIR_BUFFER_BYTES = 64 * 1024
+_WIN_EPOCH_OFFSET_100NS = 116_444_736_000_000_000
+
 _SEP_RE = re.compile(r"[\\/]+")
+
+
+class _WinFileAttributeTagInfo(ctypes.Structure):
+    _fields_ = [
+        ("file_attributes", wintypes.DWORD),
+        ("reparse_tag", wintypes.DWORD),
+    ]
+
+
+class _WinByHandleFileInformation(ctypes.Structure):
+    _fields_ = [
+        ("file_attributes", wintypes.DWORD),
+        ("creation_time", wintypes.FILETIME),
+        ("last_access_time", wintypes.FILETIME),
+        ("last_write_time", wintypes.FILETIME),
+        ("volume_serial_number", wintypes.DWORD),
+        ("file_size_high", wintypes.DWORD),
+        ("file_size_low", wintypes.DWORD),
+        ("number_of_links", wintypes.DWORD),
+        ("file_index_high", wintypes.DWORD),
+        ("file_index_low", wintypes.DWORD),
+    ]
+
+
+class _WinFileFullDirectoryInfo(ctypes.Structure):
+    _fields_ = [
+        ("next_entry_offset", wintypes.DWORD),
+        ("file_index", wintypes.DWORD),
+        ("creation_time", ctypes.c_longlong),
+        ("last_access_time", ctypes.c_longlong),
+        ("last_write_time", ctypes.c_longlong),
+        ("change_time", ctypes.c_longlong),
+        ("end_of_file", ctypes.c_longlong),
+        ("allocation_size", ctypes.c_longlong),
+        ("file_attributes", wintypes.DWORD),
+        ("file_name_length", wintypes.DWORD),
+        ("ea_size", wintypes.DWORD),
+        ("file_name", ctypes.c_wchar * 1),
+    ]
+
+
+_WIN_DIRECTORY_NAME_OFFSET = _WinFileFullDirectoryInfo.file_name.offset
+_WIN_KERNEL32: Any | None = None
+if os.name == "nt":  # pragma: no branch - selected at import time
+    _WIN_KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _WIN_KERNEL32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    _WIN_KERNEL32.CreateFileW.restype = wintypes.HANDLE
+    _WIN_KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _WIN_KERNEL32.CloseHandle.restype = wintypes.BOOL
+    _WIN_KERNEL32.GetFinalPathNameByHandleW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    _WIN_KERNEL32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    _WIN_KERNEL32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_WinByHandleFileInformation),
+    ]
+    _WIN_KERNEL32.GetFileInformationByHandle.restype = wintypes.BOOL
+    _WIN_KERNEL32.GetFileInformationByHandleEx.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    _WIN_KERNEL32.GetFileInformationByHandleEx.restype = wintypes.BOOL
+
+
+_WinFileIdentity = tuple[int, int, int]
+
+
+def _win_api() -> Any:  # pragma: no cover - Windows only
+    if _WIN_KERNEL32 is None:
+        raise FsPathError("Windows handle APIs are unavailable on this platform")
+    return _WIN_KERNEL32
+
+
+def _win_error(action: str, path: str) -> FsPathError:  # pragma: no cover - Windows only
+    error = ctypes.get_last_error()
+    return FsPathError(
+        f"Windows denied {action}",
+        details={"path": path, "winerror": error, "error": ctypes.FormatError(error)},
+    )
+
+
+def _win_close_handle(handle: int) -> None:  # pragma: no cover - Windows only
+    if handle >= 0:
+        _win_api().CloseHandle(wintypes.HANDLE(handle))
+
+
+def _win_create_handle(
+    path: Path,
+    access: int,
+    *,
+    share_delete: bool = True,
+) -> int:  # pragma: no cover - Windows only
+    share_mode = _WIN_FILE_SHARE_READ | _WIN_FILE_SHARE_WRITE
+    if share_delete:
+        share_mode |= _WIN_FILE_SHARE_DELETE
+    ctypes.set_last_error(0)
+    raw_handle = _win_api().CreateFileW(
+        str(path),
+        access,
+        share_mode,
+        None,
+        _WIN_OPEN_EXISTING,
+        _WIN_FILE_FLAG_OPEN_REPARSE_POINT | _WIN_FILE_FLAG_BACKUP_SEMANTICS,
+        None,
+    )
+    if raw_handle is None or raw_handle == _WIN_INVALID_HANDLE_VALUE:
+        raise _win_error("opening a filesystem target", str(path))
+    return int(raw_handle)
+
+
+def _win_handle_attributes(handle: int) -> int:  # pragma: no cover - Windows only
+    info = _WinFileAttributeTagInfo()
+    ctypes.set_last_error(0)
+    ok = _win_api().GetFileInformationByHandleEx(
+        wintypes.HANDLE(handle),
+        _WIN_FILE_ATTRIBUTE_TAG_INFO_CLASS,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if not ok:
+        raise _win_error("inspecting an open filesystem target", "<open handle>")
+    return int(info.file_attributes)
+
+
+def _win_handle_identity(handle: int) -> _WinFileIdentity:  # pragma: no cover - Windows only
+    info = _WinByHandleFileInformation()
+    ctypes.set_last_error(0)
+    ok = _win_api().GetFileInformationByHandle(wintypes.HANDLE(handle), ctypes.byref(info))
+    if not ok:
+        raise _win_error("identifying an open filesystem target", "<open handle>")
+    return (
+        int(info.volume_serial_number),
+        int(info.file_index_high),
+        int(info.file_index_low),
+    )
+
+
+def _win_normalize_final_path(path: str) -> str:  # pragma: no cover - Windows only
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
+    return os.path.normpath(path)
+
+
+def _win_final_path(handle: int) -> str:  # pragma: no cover - Windows only
+    size = 512
+    while size <= 32_768:
+        buffer = ctypes.create_unicode_buffer(size)
+        ctypes.set_last_error(0)
+        length = _win_api().GetFinalPathNameByHandleW(
+            wintypes.HANDLE(handle), buffer, size, 0
+        )
+        if length == 0:
+            raise _win_error("resolving an open filesystem target", "<open handle>")
+        if length < size:
+            return _win_normalize_final_path(buffer.value)
+        size = int(length) + 1
+    raise FsPathError("Windows returned an overlong final filesystem path")
+
+
+def _win_lock_ancestors(
+    final_path: str,
+    root_identity: _WinFileIdentity,
+) -> tuple[int, ...]:  # pragma: no cover - Windows only
+    """Lock the canonical root's ancestors against rename, then recheck the root."""
+    handles: list[int] = []
+    try:
+        for ancestor in reversed(Path(final_path).parents):
+            handle = _win_create_handle(
+                ancestor,
+                _WIN_FILE_READ_ATTRIBUTES,
+                share_delete=False,
+            )
+            handles.append(handle)
+            if not _win_handle_attributes(handle) & _FILE_ATTRIBUTE_DIRECTORY:
+                raise FsPathError("configured Windows root has a non-directory ancestor")
+
+        # Ancestors are acquired top-down. Once all are held without delete
+        # sharing, a swap cannot be restored behind this final identity check.
+        current = _win_create_handle(Path(final_path), _WIN_FILE_READ_ATTRIBUTES)
+        try:
+            if _win_handle_identity(current) != root_identity:
+                raise FsPathError("configured Windows root changed while its ancestors were locked")
+        finally:
+            _win_close_handle(current)
+        return tuple(handles)
+    except BaseException:
+        for handle in reversed(handles):
+            _win_close_handle(handle)
+        raise
+
+
+def _win_open_root(
+    path: Path,
+) -> tuple[int, _WinFileIdentity, str, tuple[int, ...]]:  # pragma: no cover - Windows only
+    # The scope-lifetime root handle deliberately withholds FILE_SHARE_DELETE.
+    # Windows then prevents renaming/replacing the root namespace entry while
+    # reads are active, closing a swap-and-swap-back race between identity checks.
+    handle = _win_create_handle(
+        path,
+        _WIN_FILE_LIST_DIRECTORY | _WIN_FILE_READ_ATTRIBUTES,
+        share_delete=False,
+    )
+    try:
+        attrs = _win_handle_attributes(handle)
+        if attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
+            raise FsPathError("configured root is a reparse point")
+        if not attrs & _FILE_ATTRIBUTE_DIRECTORY:
+            raise FsPathError("configured root is not a directory")
+        identity = _win_handle_identity(handle)
+        final_path = _win_final_path(handle)
+        ancestor_handles = _win_lock_ancestors(final_path, identity)
+        return handle, identity, final_path, ancestor_handles
+    except BaseException:
+        _win_close_handle(handle)
+        raise
+
+
+def _win_assert_root_current(sr: SafeRoot) -> None:  # pragma: no cover - Windows only
+    if sr.win_handle < 0 or sr.win_identity is None or sr.win_final_path is None:
+        raise FsPathError("configured Windows root has no held identity")
+    if _win_handle_identity(sr.win_handle) != sr.win_identity:
+        raise FsPathError("held Windows root identity changed")
+    current = _win_create_handle(Path(sr.win_final_path), _WIN_FILE_READ_ATTRIBUTES)
+    try:
+        attrs = _win_handle_attributes(current)
+        if attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
+            raise FsPathError("configured Windows root was replaced by a reparse point")
+        if not attrs & _FILE_ATTRIBUTE_DIRECTORY:
+            raise FsPathError("configured Windows root is no longer a directory")
+        if _win_handle_identity(current) != sr.win_identity:
+            raise FsPathError("configured Windows root was replaced")
+        if os.path.normcase(_win_final_path(current)) != sr.normcase:
+            raise FsPathError("configured Windows root moved")
+    finally:
+        _win_close_handle(current)
+
+
+def _win_handle_to_fd(handle: int) -> int:  # pragma: no cover - Windows only
+    import msvcrt
+
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except OSError as exc:
+        _win_close_handle(handle)
+        raise FsPathError(
+            "cannot attach a Python file descriptor to the validated Windows handle",
+            details={"errno": exc.errno, "strerror": exc.strerror},
+        ) from exc
+
+
+def _win_filetime_to_unix_seconds(value: int) -> int:  # pragma: no cover - Windows only
+    return max(0, (value - _WIN_EPOCH_OFFSET_100NS) // 10_000_000)
+
+
+def _win_directory_entry(name: str, info: _WinFileFullDirectoryInfo) -> dict[str, object]:
+    attrs = int(info.file_attributes)
+    if attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
+        kind = "symlink"
+        mode = statmod.S_IFLNK | 0o777
+    elif attrs & _FILE_ATTRIBUTE_DIRECTORY:
+        kind = "dir"
+        mode = statmod.S_IFDIR | (0o555 if attrs & _FILE_ATTRIBUTE_READONLY else 0o777)
+    else:
+        kind = "file"
+        mode = statmod.S_IFREG | (0o444 if attrs & _FILE_ATTRIBUTE_READONLY else 0o666)
+    return {
+        "name": name,
+        "type": kind,
+        "size": int(info.end_of_file),
+        "mode": statmod.filemode(mode),
+        "mtime": _win_filetime_to_unix_seconds(int(info.last_write_time)),
+    }
+
+
+def _win_list_handle(handle: int) -> list[dict[str, object]]:  # pragma: no cover - Windows only
+    entries: list[dict[str, object]] = []
+    info_class = _WIN_FILE_FULL_DIRECTORY_RESTART_INFO_CLASS
+    while True:
+        buffer = ctypes.create_string_buffer(_WIN_DIR_BUFFER_BYTES)
+        ctypes.set_last_error(0)
+        ok = _win_api().GetFileInformationByHandleEx(
+            wintypes.HANDLE(handle),
+            info_class,
+            buffer,
+            len(buffer),
+        )
+        if not ok:
+            error = ctypes.get_last_error()
+            if error == _WIN_ERROR_NO_MORE_FILES:
+                break
+            raise _win_error("enumerating a validated directory handle", "<open handle>")
+        info_class = _WIN_FILE_FULL_DIRECTORY_INFO_CLASS
+        cursor = 0
+        while True:
+            if cursor + _WIN_DIRECTORY_NAME_OFFSET > len(buffer):
+                raise FsPathError("Windows returned malformed directory information")
+            info = _WinFileFullDirectoryInfo.from_buffer_copy(buffer, cursor)
+            name_length = int(info.file_name_length)
+            if name_length % 2 or cursor + _WIN_DIRECTORY_NAME_OFFSET + name_length > len(buffer):
+                raise FsPathError("Windows returned malformed directory entry name data")
+            name = ctypes.wstring_at(
+                ctypes.addressof(buffer) + cursor + _WIN_DIRECTORY_NAME_OFFSET,
+                name_length // ctypes.sizeof(ctypes.c_wchar),
+            )
+            if name not in {".", ".."}:
+                entries.append(_win_directory_entry(name, info))
+            next_offset = int(info.next_entry_offset)
+            if next_offset == 0:
+                break
+            if next_offset < _WIN_DIRECTORY_NAME_OFFSET + name_length or cursor + next_offset >= len(buffer):
+                raise FsPathError("Windows returned malformed directory entry offsets")
+            cursor += next_offset
+    return sorted(entries, key=lambda entry: str(entry["name"]))
 
 
 def _is_same_entity(a: str, b: str) -> bool:
@@ -247,6 +598,10 @@ class SafeRoot:
     path: Path
     normcase: str
     dir_fd: int  # POSIX: a held O_DIRECTORY fd; Windows: -1 (unused)
+    win_handle: int = -1
+    win_identity: _WinFileIdentity | None = None
+    win_final_path: str | None = None
+    win_ancestor_handles: tuple[int, ...] = ()
 
 
 class ScopedRoots:
@@ -306,6 +661,10 @@ class ScopedRoots:
                         details={"root": raw},
                     )
             seen.append((norm, resolved_str))
+            win_handle = -1
+            win_identity: _WinFileIdentity | None = None
+            win_final_path: str | None = None
+            win_ancestor_handles: tuple[int, ...] = ()
             if _POSIX:
                 try:
                     dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY)
@@ -317,7 +676,21 @@ class ScopedRoots:
                     ) from exc
             else:
                 dir_fd = -1
-            self._roots.append(SafeRoot(requested=raw, path=resolved, normcase=norm, dir_fd=dir_fd))
+                if os.name == "nt":
+                    win_handle, win_identity, win_final_path, win_ancestor_handles = _win_open_root(resolved)
+                    norm = os.path.normcase(win_final_path)
+            self._roots.append(
+                SafeRoot(
+                    requested=raw,
+                    path=resolved,
+                    normcase=norm,
+                    dir_fd=dir_fd,
+                    win_handle=win_handle,
+                    win_identity=win_identity,
+                    win_final_path=win_final_path,
+                    win_ancestor_handles=win_ancestor_handles,
+                )
+            )
 
     def _prepare_root(self, raw: str, *, create: bool) -> Path:
         path = Path(os.path.expanduser(os.path.expandvars(raw)))
@@ -381,6 +754,10 @@ class ScopedRoots:
             if r.dir_fd >= 0:
                 with suppress(OSError):
                     os.close(r.dir_fd)
+            if r.win_handle >= 0:
+                _win_close_handle(r.win_handle)
+            for handle in reversed(r.win_ancestor_handles):
+                _win_close_handle(handle)
         self._roots = []
 
     def __enter__(self) -> ScopedRoots:
@@ -894,6 +1271,39 @@ class ScopedRoots:
 
     # --- Windows fallbacks (not exercised by Linux CI) -------------------
 
+    def _win_open_checked(  # pragma: no cover - Windows only
+        self,
+        sr: SafeRoot,
+        comps: list[str],
+        *,
+        access: int,
+    ) -> tuple[int, int]:
+        _win_assert_root_current(sr)
+        if sr.win_final_path is None:
+            raise FsPathError("configured Windows root has no canonical handle path")
+        candidate = Path(sr.win_final_path).joinpath(*comps)
+        handle = _win_create_handle(candidate, access)
+        try:
+            attrs = _win_handle_attributes(handle)
+            if attrs & _FILE_ATTRIBUTE_REPARSE_POINT:
+                raise FsPathError("reparse point (symlink/junction) target is not allowed")
+            final_path = _win_final_path(handle)
+            if not _norm_contains(sr.normcase, os.path.normcase(final_path)):
+                raise FsPathError("open handle resolves outside the allowed root")
+            # Containment alone would still permit an intermediate junction that
+            # redirects to another directory *inside* the root.  The config
+            # contract is stricter: follow_symlinks is hard-false.  A canonical
+            # handle path that differs from the requested path proves that some
+            # alias/reparse traversal occurred, so refuse it before consumption.
+            candidate_norm = os.path.normcase(os.path.normpath(str(candidate)))
+            if os.path.normcase(final_path) != candidate_norm:
+                raise FsPathError("open handle traversed a reparse point or path alias")
+            _win_assert_root_current(sr)
+            return handle, attrs
+        except BaseException:
+            _win_close_handle(handle)
+            raise
+
     def _win_resolve(self, sr: SafeRoot, comps: list[str], *, must_exist: bool) -> Path:  # pragma: no cover
         candidate = sr.path
         for c in comps:
@@ -919,22 +1329,39 @@ class ScopedRoots:
     def _read_win(self, sr: SafeRoot, comps: list[str], max_bytes: int) -> bytes:  # pragma: no cover
         if not comps:
             raise FsPathError("target is a directory")
-        real = self._win_resolve(sr, comps, must_exist=True)
-        size = real.stat().st_size
-        if size > max_bytes:
-            raise FsConnectRuntimeError(f"file exceeds max_file_bytes ({max_bytes})", details={"size": size})
-        return real.read_bytes()
+        handle, attrs = self._win_open_checked(sr, comps, access=_WIN_GENERIC_READ)
+        if attrs & _FILE_ATTRIBUTE_DIRECTORY:
+            _win_close_handle(handle)
+            raise FsPathError("target is not a regular file")
+        return self._read_fd(_win_handle_to_fd(handle), max_bytes)
 
     def _stat_win(self, sr: SafeRoot, comps: list[str]) -> dict:  # pragma: no cover
-        real = self._win_resolve(sr, comps, must_exist=True)
-        return self._stat_to_dict(comps[-1] if comps else ".", real.stat())
+        handle, _attrs = self._win_open_checked(sr, comps, access=_WIN_FILE_READ_ATTRIBUTES)
+        fd = _win_handle_to_fd(handle)
+        try:
+            st = os.fstat(fd)
+        except OSError as exc:
+            raise FsPathError(
+                "cannot stat the validated Windows handle",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
+        finally:
+            with suppress(OSError):
+                os.close(fd)
+        return self._stat_to_dict(comps[-1] if comps else ".", st)
 
     def _list_win(self, sr: SafeRoot, comps: list[str]) -> list[dict]:  # pragma: no cover
-        real = self._win_resolve(sr, comps, must_exist=True)
-        out: list[dict] = []
-        for entry in sorted(os.scandir(real), key=lambda e: e.name):
-            out.append(self._stat_to_dict(entry.name, entry.stat(follow_symlinks=False)))
-        return out
+        handle, attrs = self._win_open_checked(
+            sr,
+            comps,
+            access=_WIN_FILE_LIST_DIRECTORY | _WIN_FILE_READ_ATTRIBUTES,
+        )
+        try:
+            if not attrs & _FILE_ATTRIBUTE_DIRECTORY:
+                raise FsPathError("target is not a directory")
+            return _win_list_handle(handle)
+        finally:
+            _win_close_handle(handle)
 
     def _write_win(  # pragma: no cover
         self, sr: SafeRoot, comps: list[str], data: bytes, overwrite: bool, sha: str
