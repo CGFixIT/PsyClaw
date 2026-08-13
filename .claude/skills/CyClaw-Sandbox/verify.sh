@@ -31,6 +31,7 @@ SERVER_PID=""
 HARNESS_SERVER_PID=""
 MOCK_OLLAMA_PID=""
 HARNESS_HOME=""
+OLLAMA_TIER=""
 
 note()   { echo "[verify] $*"; }
 pass()   { echo "  PASS  $1"; REPORT_ROWS+=("| $1 | PASS | $2 |"); }
@@ -263,6 +264,9 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:11434/v1/models" >/dev/null 2>&1; t
     curl -sf --max-time 1 "http://127.0.0.1:11434/v1/models" >/dev/null 2>&1 && break  # DevSkim: ignore DS162092,DS137138
     sleep 0.25
   done
+  OLLAMA_TIER=1
+else
+  OLLAMA_TIER=2
 fi
 
 # CYCLAW_API_KEY is already exported above for the gate.py checks; the harness
@@ -299,6 +303,11 @@ note "Stage 6 — writing report to $REPORT"
   echo "- **Runtime:** Python $FULLVER"
   echo "- **Branch/commit:** $(git rev-parse --abbrev-ref HEAD 2>/dev/null) @ $(git rev-parse --short HEAD 2>/dev/null)"
   echo "- **Platform:** $(uname -srm)"
+  if [ "$OLLAMA_TIER" = "2" ]; then
+    echo "- **Ollama realism tier:** 2 (real daemon detected)"
+  else
+    echo "- **Ollama realism tier:** 1 (mock_ollama.py HTTP mock)"
+  fi
   echo ""
   echo "| Stage | Result | Detail |"
   echo "|---|---|---|"

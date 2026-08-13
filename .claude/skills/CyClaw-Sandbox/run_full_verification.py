@@ -52,6 +52,13 @@ BRANCH = "main"
 CYCLAW_DIR = Path(os.environ.get("CYCLAW_REPO", "/tmp/CyClaw"))
 RESULTS_FILE = Path("query_results.json")
 
+# Which of the 3-tier Ollama realism ladder this run actually exercised (see
+# SKILL.md's "3-tier realism" section). Tier 0 (in-process pytest MockLocalLLM
+# stub) is tests/conftest.py's concern, not this script's. Set once in main()
+# by _probe_ollama_tier() before any phase that talks to the local-LLM base_url
+# runs, then stamped into both report files this script writes.
+OLLAMA_TIER: int | None = None
+
 # ANSI colors
 R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"; B = "\033[94m"; C = "\033[96m"; N = "\033[0m"
 
@@ -295,6 +302,25 @@ def _ensure_repo():
     os.chdir(CYCLAW_DIR)
 
 
+def _probe_ollama_tier() -> int:
+    """Which Ollama realism tier this run gets: 2 if a real daemon (or
+    mock_ollama.py started ahead of us by verify.sh) already answers on
+    127.0.0.1:11434, else 1 (this script has no live chat backend and the
+    local_llm queries in Phase 4 will hit connection errors instead of a
+    mocked 200). Short-timeout GET, stdlib-only so it needs no FULL_DEPS
+    install to run before any other phase.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        # DevSkim: ignore DS162092,DS137138 - loopback-only probe, offline-only
+        urllib.request.urlopen("http://127.0.0.1:11434/v1/models", timeout=1.5)
+        return 2
+    except (urllib.error.URLError, OSError, ValueError):
+        return 1
+
+
 def _install_deps() -> bool:
     if not os.environ.get("FULL_DEPS"):
         return False
@@ -321,16 +347,18 @@ def phase_config_invariants() -> PhaseResult:
         cfg = yaml.safe_load(f) or {}
 
     checks = [
-        ("app.mode == 'offline'", cfg.get("app", {}).get("mode") == "offline"),
+        ("app.mode == 'hybrid'", cfg.get("app", {}).get("mode") == "hybrid"),
         ("api.host == 127.0.0.1", cfg.get("api", {}).get("host") == "127.0.0.1"),
         ("api.port == 8787", cfg.get("api", {}).get("port") == 8787),
-        ("grok.enabled == false", cfg.get("models", {}).get("grok", {}).get("enabled") is False),
+        ("grok.enabled == true", cfg.get("models", {}).get("grok", {}).get("enabled") is True),
         ("claude block present", "claude" in cfg.get("models", {})),
-        ("claude.enabled == false", cfg.get("models", {}).get("claude", {}).get("enabled") is False),
+        ("claude.enabled == true", cfg.get("models", {}).get("claude", {}).get("enabled") is True),
         ("retrieval.min_score == 0.028", abs(cfg.get("retrieval", {}).get("min_score", 0) - 0.028) < 0.001),
         ("33 banned patterns", len(cfg.get("policy", {}).get("prompt_filter", {}).get("banned_patterns", [])) >= 33),
         ("fsconnect block present", "fsconnect" in cfg),
         ("fsconnect.enabled == false", cfg.get("fsconnect", {}).get("enabled") is False),
+        ("fsconnect.allow_macos_volume_roots == false",
+         cfg.get("fsconnect", {}).get("allow_macos_volume_roots") is False),
         ("sqlconnect block present", "sqlconnect" in cfg),
         ("sqlconnect.read_only == true", cfg.get("sqlconnect", {}).get("read_only") is True),
         ("sync block present", "sync" in cfg),
@@ -608,7 +636,7 @@ def phase_execute_queries() -> PhaseResult:
         })
 
     with open(RESULTS_FILE, "w") as f:
-        json.dump({"query_results": all_results}, f, indent=2)
+        json.dump({"query_results": all_results, "ollama_tier": OLLAMA_TIER}, f, indent=2)
     log(f"\n  Results saved to {RESULTS_FILE}")
 
     return phase
@@ -1317,6 +1345,11 @@ def main():
     else:
         log("Running in sandbox mode (stubs active)", Y)
 
+    global OLLAMA_TIER
+    OLLAMA_TIER = _probe_ollama_tier()
+    tier_desc = "real daemon/mock already answering" if OLLAMA_TIER == 2 else "this script's own mock_ollama.py"
+    log(f"Ollama realism: Tier {OLLAMA_TIER} ({tier_desc})", C)
+
     results: list[PhaseResult] = []
     phases = [
         phase_config_invariants,
@@ -1385,12 +1418,15 @@ def main():
     print(f"Harness Console REST API: {'PASS' if results[9].passed else 'FAIL'}")
     print(f"Harness HTML contract: {'PASS' if results[10].passed else 'FAIL'}")
     print(f"Security Invariants: {results[0].passed_count}/{len(results[0].checks)} passed")
+    tier_note = "real daemon/mock already up" if OLLAMA_TIER == 2 else "own mock_ollama.py needed"
+    print(f"Ollama realism tier: {OLLAMA_TIER} ({tier_note})")
     print(f"{'='*60}")
 
     report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "total_checks": total_checks,
         "total_passed": total_passed,
+        "ollama_tier": OLLAMA_TIER,
         "phases": [
             {
                 "name": p.name,
