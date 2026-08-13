@@ -781,6 +781,7 @@ jobs:
             tests/test_personality_postgres.py \
             tests/test_ratelimit_postgres.py \
             tests/test_pgvector_store.py \
+            tests/test_personality_db.py \
             -q --tb=short
 
       - name: Final status
