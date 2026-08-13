@@ -236,6 +236,25 @@ def test_jail_failure_after_a_successful_clone_leaves_no_directory(tmp_path, mon
     assert list(workspace_root.iterdir()) == []
 
 
+def test_clone_succeeds_when_workspace_root_resolves_under_macos_volumes(tmp_path, monkeypatch):
+    """Regression guard: ScopedRoots' allow_macos_volume_roots gate exists for
+    fsconnect's user-facing /Volumes policy (removable/network media needs an
+    explicit operator opt-in) and must not leak into this unrelated caller --
+    dest here is always derived from the operator-configured workspace_root,
+    never arbitrary user input, so a workspace_root an operator deliberately
+    placed on an external/secondary macOS volume must keep working. See the
+    allow_macos_volume_roots=True comment at both ScopedRoots(...) call sites
+    in repo_workspace.py."""
+    from agentic.fsconnect import pathsafe
+
+    monkeypatch.setattr(pathsafe.sys, "platform", "darwin")
+    monkeypatch.setattr(pathsafe, "_is_macos_volume_path", lambda _resolved: True)
+    fake = _fake_clone_populating(files={"a.txt": "x"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch)) as tools:
+            assert tools.read_file("a.txt") == "x"
+
+
 # --- lifecycle / cleanup -----------------------------------------------------
 
 
@@ -987,6 +1006,24 @@ def test_attach_reopens_an_existing_clone_and_can_read_and_write(tmp_path, monke
         assert reattached.allow_git_write_tools is True
         reattached.write_file("new.txt", "attached write\n")
         assert (dest / "new.txt").read_text(encoding="utf-8") == "attached write\n"
+
+
+def test_attach_succeeds_when_dest_resolves_under_macos_volumes(tmp_path, monkeypatch):
+    """attach()'s ScopedRoots(...) call needs the same allow_macos_volume_roots
+    opt-in as clone() -- see that test's docstring for why."""
+    from agentic.fsconnect import pathsafe
+
+    fake = _fake_clone_populating_git_repo(files={"a.txt": "hello\n"})
+    cfg = _cfg_with_git_writes(tmp_path, monkeypatch)
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        original = RepoWorkspaceTools.clone(cfg)
+        dest = Path(mrun.call_args.kwargs["dest"])
+        original._scoped.close()
+
+    monkeypatch.setattr(pathsafe.sys, "platform", "darwin")
+    monkeypatch.setattr(pathsafe, "_is_macos_volume_path", lambda _resolved: True)
+    with RepoWorkspaceTools.attach(cfg, dest) as reattached:
+        assert reattached.read_file("a.txt") == "hello\n"
 
 
 def test_attach_rejects_a_destination_outside_the_workspace_root(tmp_path, monkeypatch):

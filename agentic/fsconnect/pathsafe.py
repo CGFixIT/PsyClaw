@@ -45,7 +45,6 @@ import posixpath
 import re
 import stat as statmod
 import sys
-import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -62,12 +61,64 @@ _SF_DATALESS = getattr(statmod, "SF_DATALESS", 0x40000000)
 _SEP_RE = re.compile(r"[\\/]+")
 
 
-def _root_match_identity(path: str) -> str:
-    """Comparison-only identity for configured roots; never an access authority."""
-    normalized = os.path.normcase(path)
-    if sys.platform != "darwin":
-        return normalized
-    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+def _is_same_entity(a: str, b: str) -> bool:
+    """True if ``a`` and ``b`` name the same real filesystem entity.
+
+    Compares (st_dev, st_ino) rather than the path strings -- true filesystem
+    identity, independent of any case-folding or Unicode-normalization rule a
+    given volume may or may not apply. Returns ``False`` (never raises) if
+    either path can't be stat'd; callers should treat that as "not a match",
+    not as an error.
+    """
+    try:
+        return os.path.samestat(os.stat(a), os.stat(b))
+    except OSError:
+        return False
+
+
+def _is_real_descendant(inner_real: str, outer_real: str) -> bool:
+    """True if ``inner_real`` is ``outer_real`` itself, or a real (on-disk)
+    descendant of it -- judged by filesystem identity, not string spelling.
+
+    Not every macOS/APFS volume is case-insensitive: it's a per-volume,
+    format-time choice (a case-sensitive external/network volume can be
+    mounted alongside a case-insensitive boot volume), and CPython does not
+    expose Darwin's ``_PC_CASE_SENSITIVE`` pathconf key to ask which applies
+    at runtime -- verified directly against ``Modules/posixmodule.c`` across
+    several CPython versions: no such entry exists in
+    ``posix_constants_pathconf``, so ``os.pathconf(path, 'PC_CASE_SENSITIVE')``
+    raises ``KeyError`` on every current CPython, including on macOS. So this
+    doesn't guess at case-folding rules at all: it walks ``inner_real``'s
+    already-``realpath``-resolved (symlink-free) ancestor chain comparing
+    filesystem identity against ``outer_real`` at each level via
+    ``_is_same_entity``. Because ``inner_real`` has no symlinks left in it,
+    every ``dirname``-truncated prefix of it is itself already a canonical,
+    symlink-free path, so this can't be tricked by a symlink planted partway
+    up the chain. This is the same fallback technique CPython's own test
+    suite (``Lib/test/support/os_helper.py``'s ``fs_is_case_insensitive``)
+    and git's repository-init code (``setup.c``, probing a scrambled-case
+    ``CoNfIg`` spelling) use for the same class of problem.
+
+    Callers should try the cheap lexical ``_norm_contains`` check first and
+    call this only as a fallback when that fails -- it costs one or more
+    ``stat`` calls.
+    """
+    try:
+        outer_stat = os.stat(outer_real)
+    except OSError:
+        return False
+    current = inner_real
+    while True:
+        try:
+            current_stat = os.stat(current)
+        except OSError:
+            return False
+        if os.path.samestat(current_stat, outer_stat):
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
 
 
 def _is_macos_volume_path(resolved_path: str) -> bool:
@@ -77,36 +128,18 @@ def _is_macos_volume_path(resolved_path: str) -> bool:
     Called only after ``Path.resolve(strict=True)`` has confirmed the path
     exists, so filesystem identity (device+inode) is available and is the
     ground truth -- this asks the filesystem directly via
-    ``os.stat``/``os.path.samestat`` rather than guessing at a case-folding
-    rule. Not every APFS volume is case-insensitive, and Python has no
-    reliable way to ask which applies to a given path (CPython does not
-    expose Darwin's ``_PC_CASE_SENSITIVE`` pathconf key). Walking
-    ``resolved_path``'s already-symlink-free ancestor chain comparing
-    filesystem identity against ``/Volumes`` sidesteps the guess entirely --
-    correct regardless of what case rule (if any) the volume applies.
-
-    Note: this duplicates the ancestor-walk technique the root-matching fix
-    elsewhere in this module also needs; once both land, this should call a
-    single shared helper instead of two copies.
+    ``os.stat``/``os.path.samestat`` (via ``_is_real_descendant``) rather
+    than guessing at a case-folding rule. Not every APFS volume is
+    case-insensitive, and Python has no reliable way to ask which applies to
+    a given path (CPython does not expose Darwin's ``_PC_CASE_SENSITIVE``
+    pathconf key). Walking ``resolved_path``'s already-symlink-free ancestor
+    chain comparing filesystem identity against ``/Volumes`` sidesteps the
+    guess entirely -- correct regardless of what case rule (if any) the
+    volume applies.
     """
     if sys.platform != "darwin" or not posixpath.isabs(resolved_path):
         return False
-    try:
-        volumes_stat = os.stat("/Volumes")
-    except OSError:
-        return False
-    current = resolved_path
-    while True:
-        try:
-            current_stat = os.stat(current)
-        except OSError:
-            return False
-        if os.path.samestat(current_stat, volumes_stat):
-            return True
-        parent = posixpath.dirname(current)
-        if parent == current:
-            return False
-        current = parent
+    return _is_real_descendant(resolved_path, "/Volumes")
 
 
 def _raise_macos_permission(action: str, exc: OSError) -> None:
@@ -251,18 +284,23 @@ class ScopedRoots:
         Partial failure is the caller's to clean up: see __init__, which is the
         only caller and which closes whatever this managed to open.
         """
-        seen: list[str] = []
+        seen: list[tuple[str, str]] = []  # (normcase, resolved-str) pairs
         for raw in root_strs:
             resolved = self._prepare_root(raw, create=create)
             norm = os.path.normcase(str(resolved))
-            match_identity = _root_match_identity(str(resolved))
-            for other in seen:
-                if _norm_contains(other, match_identity) or _norm_contains(match_identity, other):
+            resolved_str = str(resolved)
+            for other_norm, other_resolved in seen:
+                if (
+                    _norm_contains(other_norm, norm)
+                    or _norm_contains(norm, other_norm)
+                    or _is_real_descendant(resolved_str, other_resolved)
+                    or _is_real_descendant(other_resolved, resolved_str)
+                ):
                     raise FsPathError(
                         f"overlapping roots are not allowed: {raw!r}",
                         details={"root": raw},
                     )
-            seen.append(match_identity)
+            seen.append((norm, resolved_str))
             if _POSIX:
                 try:
                     dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY)
@@ -360,9 +398,10 @@ class ScopedRoots:
                 "multiple roots configured; specify which root",
                 details={"roots": [r.requested for r in self._roots]},
             )
-        match_identity = _root_match_identity(str(Path(os.path.expanduser(os.path.expandvars(root_arg)))))
+        expanded_arg = str(Path(os.path.expanduser(os.path.expandvars(root_arg))))
+        norm_arg = os.path.normcase(expanded_arg)
         for r in self._roots:
-            if r.requested == root_arg or _root_match_identity(str(r.path)) == match_identity:
+            if r.requested == root_arg or r.normcase == norm_arg or _is_same_entity(expanded_arg, str(r.path)):
                 return r
         raise FsPathError(
             f"root not in the configured allow-list: {root_arg!r}",

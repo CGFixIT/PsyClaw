@@ -306,7 +306,15 @@ class RepoWorkspaceTools:
         deep_cfg = agentic_cfg.deepagent_github
         dest = _clone(agentic_cfg, deep_cfg, config_path=config_path, app_cfg=cfg)
         try:
-            scoped = ScopedRoots([str(dest)])
+            # allow_macos_volume_roots=True: dest is always derived from the
+            # operator-configured workspace_root, not arbitrary user input --
+            # the same "broad on purpose" trust this caller already extends
+            # to ScopedRoots elsewhere (see the except block below). Without
+            # this, a workspace_root an operator deliberately placed on an
+            # external/secondary macOS volume would be refused outright; that
+            # opt-in exists for fsconnect's user-facing removable-media
+            # policy, not for this already-trusted, config-derived caller.
+            scoped = ScopedRoots([str(dest)], allow_macos_volume_roots=True)
         except Exception as exc:
             # Broad on purpose, mirroring ScopedRoots.__init__'s own posture
             # toward its partially-opened roots: the clone itself succeeded --
@@ -375,7 +383,12 @@ class RepoWorkspaceTools:
         if not dest_resolved.is_dir():
             raise AgenticError("cannot attach: clone directory does not exist", details={"dest": str(dest)})
         try:
-            scoped = ScopedRoots([str(dest_resolved)])
+            # allow_macos_volume_roots=True: see clone()'s identical opt-in --
+            # dest_resolved was already verified above to be a real clone()
+            # output under the operator-configured workspace_root, so this
+            # isn't extending trust to new input, just not re-litigating a
+            # decision already made when workspace_root was configured.
+            scoped = ScopedRoots([str(dest_resolved)], allow_macos_volume_roots=True)
         except Exception as exc:
             raise AgenticError(
                 "failed to jail the existing cloned repository",
