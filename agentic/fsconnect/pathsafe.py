@@ -41,6 +41,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import posixpath
 import re
 import stat as statmod
 import sys
@@ -50,12 +51,13 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from utils.errors import FsConnectRuntimeError, FsPathError
+from utils.errors import FsConnectRuntimeError, FsMacOSPermissionError, FsPathError
 
 _POSIX = os.name != "nt"
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_SF_DATALESS = getattr(statmod, "SF_DATALESS", 0x40000000)
 
 _SEP_RE = re.compile(r"[\\/]+")
 
@@ -66,6 +68,90 @@ def _root_match_identity(path: str) -> str:
     if sys.platform != "darwin":
         return normalized
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+
+
+def _is_macos_volume_path(resolved_path: str) -> bool:
+    """Ground-truth (post-resolve) check: does ``resolved_path`` name
+    ``/Volumes`` itself, or a real (on-disk) descendant of it?
+
+    Called only after ``Path.resolve(strict=True)`` has confirmed the path
+    exists, so filesystem identity (device+inode) is available and is the
+    ground truth -- this asks the filesystem directly via
+    ``os.stat``/``os.path.samestat`` rather than guessing at a case-folding
+    rule. Not every APFS volume is case-insensitive, and Python has no
+    reliable way to ask which applies to a given path (CPython does not
+    expose Darwin's ``_PC_CASE_SENSITIVE`` pathconf key). Walking
+    ``resolved_path``'s already-symlink-free ancestor chain comparing
+    filesystem identity against ``/Volumes`` sidesteps the guess entirely --
+    correct regardless of what case rule (if any) the volume applies.
+
+    TODO(consolidate): this duplicates the ancestor-walk technique the
+    root-matching fix in this module needs too; once both are merged, this
+    should call a single shared helper instead of two copies.
+    """
+    if sys.platform != "darwin" or not posixpath.isabs(resolved_path):
+        return False
+    try:
+        volumes_stat = os.stat("/Volumes")
+    except OSError:
+        return False
+    current = resolved_path
+    while True:
+        try:
+            current_stat = os.stat(current)
+        except OSError:
+            return False
+        if os.path.samestat(current_stat, volumes_stat):
+            return True
+        parent = posixpath.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+def _raise_macos_permission(action: str, exc: OSError) -> None:
+    if sys.platform != "darwin" or exc.errno not in {errno.EACCES, errno.EPERM}:
+        return
+    raise FsMacOSPermissionError(
+        f"macOS denied filesystem access while {action}. Grant Files and Folders "
+        "access to Terminal or iTerm, whichever launches CyClaw, under System "
+        "Settings > Privacy & Security.",
+        details={"errno": exc.errno, "strerror": exc.strerror, "action": action},
+    ) from exc
+
+
+def _is_macos_artifact_name(name: str) -> bool:
+    return sys.platform == "darwin" and (
+        name in {".DS_Store", ".localized"} or name.startswith("._")
+    )
+
+
+def _is_macos_dataless(st: os.stat_result) -> bool:
+    return (
+        sys.platform == "darwin"
+        and st.st_size == 0
+        and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
+    )
+
+
+def _filter_macos_entries(
+    names: list[str],
+    stat_entry: Callable[[str], os.stat_result],
+) -> list[tuple[str, os.stat_result]]:
+    """Apply the Darwin read/index visibility policy to directory entries."""
+    visible: list[tuple[str, os.stat_result]] = []
+    for name in names:
+        if _is_macos_artifact_name(name):
+            continue
+        try:
+            st = stat_entry(name)
+        except OSError as exc:
+            _raise_macos_permission(f"checking directory entry {name!r}", exc)
+            continue
+        if _is_macos_dataless(st):
+            continue
+        visible.append((name, st))
+    return visible
 
 
 def _norm_contains(parent_norm: str, child_norm: str) -> bool:
@@ -139,10 +225,12 @@ class ScopedRoots:
         *,
         create: bool = False,
         allow_unc: bool = False,
+        allow_macos_volume_roots: bool = False,
         strict_roots: bool = False,
         on_fallback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.allow_unc = allow_unc
+        self.allow_macos_volume_roots = allow_macos_volume_roots
         self.strict_roots = strict_roots
         self._on_fallback = on_fallback
         self._roots: list[SafeRoot] = []
@@ -175,7 +263,17 @@ class ScopedRoots:
                         details={"root": raw},
                     )
             seen.append(match_identity)
-            dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY) if _POSIX else -1
+            if _POSIX:
+                try:
+                    dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY)
+                except OSError as exc:
+                    _raise_macos_permission(f"opening configured root {raw!r}", exc)
+                    raise FsPathError(
+                        f"cannot open configured root {raw!r}",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
+            else:
+                dir_fd = -1
             self._roots.append(SafeRoot(requested=raw, path=resolved, normcase=norm, dir_fd=dir_fd))
 
     def _prepare_root(self, raw: str, *, create: bool) -> Path:
@@ -184,6 +282,7 @@ class ScopedRoots:
             try:
                 path.mkdir(parents=True, exist_ok=True)
             except PermissionError as exc:
+                _raise_macos_permission(f"preparing configured root {raw!r}", exc)
                 # Documented fallback for the default service path (/var/lib/cyclaw-fs):
                 # if we cannot create it, fall back to a home-dir share that needs no
                 # root. Phase 2 makes this fallback (a) refusable and (b) audited: with
@@ -204,12 +303,31 @@ class ScopedRoots:
                 path = fallback
         try:
             resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
+        except OSError as exc:
+            _raise_macos_permission(f"resolving configured root {raw!r}", exc)
             raise FsPathError(
                 f"root does not exist or cannot be resolved: {raw!r}",
                 details={"error": str(exc)},
             ) from exc
-        if not resolved.is_dir():
+        except RuntimeError as exc:
+            raise FsPathError(
+                f"root does not exist or cannot be resolved: {raw!r}",
+                details={"error": str(exc)},
+            ) from exc
+        if _is_macos_volume_path(str(resolved)) and not self.allow_macos_volume_roots:
+            raise FsPathError(
+                f"configured root resolves under macOS /Volumes but allow_macos_volume_roots is false: {raw!r}",
+                details={"root": raw, "resolved": str(resolved)},
+            )
+        try:
+            resolved_stat = resolved.stat()
+        except OSError as exc:
+            _raise_macos_permission(f"checking configured root {raw!r}", exc)
+            raise FsPathError(
+                f"cannot stat configured root {raw!r}",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
+        if not statmod.S_ISDIR(resolved_stat.st_mode):
             raise FsPathError(f"root is not a directory: {raw!r}", details={"resolved": str(resolved)})
         return resolved
 
@@ -269,6 +387,7 @@ class ScopedRoots:
                 try:
                     nfd = os.open(comp, os.O_RDONLY | _O_NOFOLLOW | _O_DIRECTORY, dir_fd=dir_fd)
                 except OSError as exc:
+                    _raise_macos_permission(f"descending into {comp!r}", exc)
                     raise FsPathError(
                         f"cannot descend into {comp!r}",
                         details={"errno": exc.errno, "strerror": exc.strerror},
@@ -283,37 +402,74 @@ class ScopedRoots:
 
     # --- public operations ------------------------------------------------
 
-    def read_bytes(self, target: str, *, root: str | None = None, max_bytes: int) -> bytes:
+    def read_bytes(
+        self,
+        target: str,
+        *,
+        root: str | None = None,
+        max_bytes: int,
+        skip_macos_metadata: bool = False,
+    ) -> bytes:
         comps = split_components(target)
         sr = self.pick_root(root)
+        if skip_macos_metadata and comps and _is_macos_artifact_name(comps[-1]):
+            raise FsPathError(f"macOS metadata file is not exposed: {comps[-1]!r}")
         if _POSIX:
             with self._descend_posix(sr, comps) as (pfd, leaf):
+                if skip_macos_metadata:
+                    try:
+                        pre_open_stat = os.stat(leaf, dir_fd=pfd, follow_symlinks=False)
+                    except OSError as exc:
+                        _raise_macos_permission(f"checking {leaf!r} before reading", exc)
+                        raise FsPathError(
+                            f"cannot stat {leaf!r} before reading",
+                            details={"errno": exc.errno, "strerror": exc.strerror},
+                        ) from exc
+                    if _is_macos_dataless(pre_open_stat):
+                        raise FsPathError(f"iCloud dataless placeholder is not read: {leaf!r}")
                 try:
                     fd = os.open(leaf, os.O_RDONLY | _O_NOFOLLOW, dir_fd=pfd)
                 except OSError as exc:
+                    _raise_macos_permission(f"opening {leaf!r} for reading", exc)
                     raise FsPathError(
                         f"cannot open {leaf!r} for reading",
                         details={"errno": exc.errno, "strerror": exc.strerror},
                     ) from exc
-                return self._read_fd(fd, max_bytes)
+                return self._read_fd(fd, max_bytes, skip_macos_metadata=skip_macos_metadata)
         return self._read_win(sr, comps, max_bytes)  # pragma: no cover - Windows only
 
     @staticmethod
-    def _read_fd(fd: int, max_bytes: int) -> bytes:
+    def _read_fd(fd: int, max_bytes: int, *, skip_macos_metadata: bool = False) -> bytes:
         try:
             st = os.fstat(fd)
             if not statmod.S_ISREG(st.st_mode):
                 raise FsPathError("target is not a regular file")
+            if skip_macos_metadata and _is_macos_dataless(st):
+                raise FsPathError("iCloud dataless placeholder is not read")
             if st.st_size > max_bytes:
                 raise FsConnectRuntimeError(
                     f"file exceeds max_file_bytes ({max_bytes})",
                     details={"size": st.st_size, "max": max_bytes},
                 )
+        except OSError as exc:
+            os.close(fd)
+            _raise_macos_permission("checking an open file", exc)
+            raise FsPathError(
+                "cannot inspect the open file",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
         except BaseException:
             os.close(fd)
             raise
-        with os.fdopen(fd, "rb", closefd=True) as f:
-            data = f.read(max_bytes + 1)
+        try:
+            with os.fdopen(fd, "rb", closefd=True) as f:
+                data = f.read(max_bytes + 1)
+        except OSError as exc:
+            _raise_macos_permission("reading an open file", exc)
+            raise FsConnectRuntimeError(
+                "failed while reading an open file",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
         if len(data) > max_bytes:
             raise FsConnectRuntimeError(
                 f"file exceeds max_file_bytes ({max_bytes})",
@@ -326,11 +482,19 @@ class ScopedRoots:
         sr = self.pick_root(root)
         if _POSIX:
             if not comps:
-                return self._stat_to_dict(".", os.fstat(sr.dir_fd))
+                try:
+                    return self._stat_to_dict(".", os.fstat(sr.dir_fd))
+                except OSError as exc:
+                    _raise_macos_permission("checking the configured root", exc)
+                    raise FsPathError(
+                        "cannot stat the configured root",
+                        details={"errno": exc.errno, "strerror": exc.strerror},
+                    ) from exc
             with self._descend_posix(sr, comps) as (pfd, leaf):
                 try:
                     st = os.stat(leaf, dir_fd=pfd, follow_symlinks=False)
                 except OSError as exc:
+                    _raise_macos_permission(f"checking {leaf!r}", exc)
                     raise FsPathError(
                         f"cannot stat {leaf!r}",
                         details={"errno": exc.errno, "strerror": exc.strerror},
@@ -338,33 +502,55 @@ class ScopedRoots:
                 return self._stat_to_dict(leaf, st)
         return self._stat_win(sr, comps)  # pragma: no cover - Windows only
 
-    def list_dir(self, target: str, *, root: str | None = None) -> list[dict]:
+    def list_dir(
+        self,
+        target: str,
+        *,
+        root: str | None = None,
+        skip_macos_metadata: bool = False,
+    ) -> list[dict]:
         comps = split_components(target)
         sr = self.pick_root(root)
         if _POSIX:
             if not comps:
-                return self._listdir_fd(sr.dir_fd)
+                return self._listdir_fd(sr.dir_fd, skip_macos_metadata=skip_macos_metadata)
             with self._descend_posix(sr, comps) as (pfd, leaf):
                 try:
                     lfd = os.open(leaf, os.O_RDONLY | _O_NOFOLLOW | _O_DIRECTORY, dir_fd=pfd)
                 except OSError as exc:
+                    _raise_macos_permission(f"opening directory {leaf!r}", exc)
                     raise FsPathError(
                         f"cannot open directory {leaf!r}",
                         details={"errno": exc.errno, "strerror": exc.strerror},
                     ) from exc
                 try:
-                    return self._listdir_fd(lfd)
+                    return self._listdir_fd(lfd, skip_macos_metadata=skip_macos_metadata)
                 finally:
                     with suppress(OSError):
                         os.close(lfd)
         return self._list_win(sr, comps)  # pragma: no cover - Windows only
 
-    def _listdir_fd(self, dir_fd: int) -> list[dict]:
+    def _listdir_fd(self, dir_fd: int, *, skip_macos_metadata: bool = False) -> list[dict]:
         entries: list[dict] = []
-        for name in sorted(os.listdir(dir_fd)):
+        try:
+            names = sorted(os.listdir(dir_fd))
+        except OSError as exc:
+            _raise_macos_permission("listing a configured directory", exc)
+            raise FsPathError(
+                "cannot list a configured directory",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
+        if skip_macos_metadata:
+            filtered = _filter_macos_entries(
+                names,
+                lambda name: os.stat(name, dir_fd=dir_fd, follow_symlinks=False),
+            )
+            return [self._stat_to_dict(name, st) for name, st in filtered]
+        for name in names:
             try:
                 st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-            except OSError:
+            except OSError as exc:
+                _raise_macos_permission(f"checking directory entry {name!r}", exc)
                 continue
             entries.append(self._stat_to_dict(name, st))
         return entries

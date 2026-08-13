@@ -70,7 +70,10 @@ class FsClient:
         self.fs_cfg = fs_cfg
         self.config_path = config_path
         self._roots = ScopedRoots(
-            fs_cfg.allowed_roots, create=False, allow_unc=fs_cfg.allow_unc_roots
+            fs_cfg.allowed_roots,
+            create=False,
+            allow_unc=fs_cfg.allow_unc_roots,
+            allow_macos_volume_roots=fs_cfg.allow_macos_volume_roots,
         )
         self._patterns = build_injection_patterns(cfg) if fs_cfg.scan_content else []
 
@@ -105,7 +108,7 @@ class FsClient:
 
     def fs_list(self, target: str = "", *, root: str | None = None) -> dict:
         self._guard_op("fs_list")
-        entries = self._roots.list_dir(target, root=root)
+        entries = self._roots.list_dir(target, root=root, skip_macos_metadata=True)
         self._audit({"event": "fsconnect_read", "op": "fs_list", "path": target or ".",
                      "count": len(entries)})
         return {"op": "fs_list", "path": target or ".", "count": len(entries), "entries": entries}
@@ -118,7 +121,12 @@ class FsClient:
 
     def fs_read(self, target: str, *, root: str | None = None) -> dict:
         self._guard_op("fs_read")
-        data = self._roots.read_bytes(target, root=root, max_bytes=self.fs_cfg.max_file_bytes)
+        data = self._roots.read_bytes(
+            target,
+            root=root,
+            max_bytes=self.fs_cfg.max_file_bytes,
+            skip_macos_metadata=True,
+        )
         is_binary = _looks_binary(data)
         flags: list[str] = []
         content: str | None = None
@@ -147,7 +155,12 @@ class FsClient:
         self._guard_op("fs_grep")
         if not pattern:
             raise FsConnectError("fs_grep requires a non-empty pattern", code="FSCONNECT_BAD_ARG")
-        data = self._roots.read_bytes(target, root=root, max_bytes=self.fs_cfg.max_file_bytes)
+        data = self._roots.read_bytes(
+            target,
+            root=root,
+            max_bytes=self.fs_cfg.max_file_bytes,
+            skip_macos_metadata=True,
+        )
         if _looks_binary(data):
             raise FsConnectError(
                 "fs_grep target appears to be binary",
@@ -195,7 +208,7 @@ class FsClient:
         def _walk(rel: str, depth: int) -> bool:
             """Enumerate *rel*; return False once the match cap is hit (stop)."""
             nonlocal depth_capped
-            for entry in self._roots.list_dir(rel, root=root):
+            for entry in self._roots.list_dir(rel, root=root, skip_macos_metadata=True):
                 name = entry["name"]
                 child = f"{rel}/{name}" if rel else name
                 relpath = child[len(prefix):] if prefix and child.startswith(prefix) else child

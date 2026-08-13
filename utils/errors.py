@@ -205,6 +205,18 @@ class FsPathError(FsConnectError):
         super().__init__(message, code="FSCONNECT_PATH_DENIED", details=details)
 
 
+class FsMacOSPermissionError(FsPathError):
+    """macOS privacy or POSIX permissions denied an fsconnect path operation."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        FsConnectError.__init__(
+            self,
+            message,
+            code="FSCONNECT_MACOS_PERMISSION_DENIED",
+            details=details,
+        )
+
+
 class FsWriteRefused(FsConnectError):
     """A write was refused because a gate (writes_enabled / reason / confirm) failed.
 

@@ -7,15 +7,17 @@ branches are documented and ``# pragma: no cover``.
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import agentic.fsconnect.pathsafe as pathsafe
 from agentic.fsconnect.pathsafe import ScopedRoots, _root_match_identity, split_components
-from utils.errors import FsConnectRuntimeError, FsPathError
+from utils.errors import FsConnectRuntimeError, FsMacOSPermissionError, FsPathError
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX openat authority; Windows path differs")
 
@@ -190,6 +192,93 @@ def test_linux_case_alias_roots_remain_distinct(monkeypatch, tmp_path):
     alias = tmp_path / "note.md"
     with ScopedRoots([str(first), str(alias)], create=False) as roots:
         assert len(roots.roots) == 2
+
+
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
+def test_darwin_root_permission_error_is_typed(monkeypatch, tmp_path, error_number):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    share = tmp_path / "share"
+    share.mkdir()
+
+    def denied_open(*_args, **_kwargs):
+        raise PermissionError(error_number, "denied")
+
+    monkeypatch.setattr(os, "open", denied_open)
+    with pytest.raises(FsMacOSPermissionError) as caught:
+        ScopedRoots([str(share)], create=False)
+    assert caught.value.code == "FSCONNECT_MACOS_PERMISSION_DENIED"
+    assert "Files and Folders" in caught.value.message
+    assert "Terminal or iTerm" in caught.value.message
+
+
+def test_darwin_permission_error_never_falls_back(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fallbacks: list[tuple[str, str]] = []
+
+    def denied_mkdir(*_args, **_kwargs):
+        raise PermissionError(errno.EPERM, "denied")
+
+    monkeypatch.setattr(Path, "mkdir", denied_mkdir)
+    with pytest.raises(FsMacOSPermissionError):
+        ScopedRoots(
+            [str(tmp_path / "denied")],
+            create=True,
+            strict_roots=False,
+            on_fallback=lambda requested, fallback: fallbacks.append((requested, fallback)),
+        )
+    assert fallbacks == []
+
+
+def test_darwin_list_permission_error_is_typed(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    share = tmp_path / "share"
+    share.mkdir()
+    with ScopedRoots([str(share)], create=False) as roots:
+        def denied_listdir(_fd):
+            raise PermissionError(errno.EPERM, "denied")
+
+        monkeypatch.setattr(os, "listdir", denied_listdir)
+        with pytest.raises(FsMacOSPermissionError):
+            roots.list_dir("")
+
+
+def test_darwin_list_skips_apple_metadata(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    share = tmp_path / "share"
+    share.mkdir()
+    for name in (".DS_Store", ".localized", "._note.md", "visible.md"):
+        (share / name).write_text(name, encoding="utf-8")
+    with ScopedRoots([str(share)], create=False) as roots:
+        names = {entry["name"] for entry in roots.list_dir("", skip_macos_metadata=True)}
+    assert names == {"visible.md"}
+
+
+def test_darwin_dataless_flag_requires_zero_size(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0x40000000))
+    assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=1, st_flags=0x40000000))
+    assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0))
+
+
+def test_darwin_dataless_read_refused_before_file_open(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    share = tmp_path / "share"
+    share.mkdir()
+    (share / "placeholder.md").touch()
+    with ScopedRoots([str(share)], create=False) as roots:
+        original_open = os.open
+        opened_leaf: list[str] = []
+
+        def track_open(path, *args, **kwargs):
+            if path == "placeholder.md":
+                opened_leaf.append(path)
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(pathsafe, "_is_macos_dataless", lambda st: st.st_size == 0)
+        monkeypatch.setattr(os, "open", track_open)
+        with pytest.raises(FsPathError, match="dataless placeholder"):
+            roots.read_bytes("placeholder.md", max_bytes=1024, skip_macos_metadata=True)
+        assert opened_leaf == []
 
 
 def test_root_replaced_by_symlink_uses_held_fd(tmp_path):
