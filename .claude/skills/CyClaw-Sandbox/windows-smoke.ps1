@@ -13,6 +13,11 @@
 #   python -m harness.server
 # Then, from the repo root:
 #   ..claude\skills\CyClaw-Sandbox\windows-smoke.ps1
+#
+# Coverage gap (documented choice, not an oversight): of the four gate.py
+# /ops/* endpoints, only /ops/fsconnect's "status" action is exercised below
+# (check 22). /ops/sync, /ops/agentic, and /ops/sqlconnect are NOT yet
+# covered by this script.
 
 param(
     [int]$Port = 8787,
@@ -220,6 +225,50 @@ try {
     if ($null -ne $r.runs -and $null -ne $r.count) { Pass ("GET /api/harness/runs (count={0})" -f $r.count) }
     else { Fail "GET /api/harness/runs unexpected: $($r | ConvertTo-Json -Compress)" }
 } catch { Fail "GET /api/harness/runs threw: $_" }
+
+# 19. GET /api/agent/checks — verification profiles list
+try {
+    $r = Invoke-RestMethod -Uri "$HarnessBase/api/agent/checks" -Method GET -Headers $HarnessHeaders   # DevSkim: ignore DS137138
+    if ($null -ne $r.profiles) { Pass ("GET /api/agent/checks (profiles={0})" -f $r.profiles.Count) }
+    else { Fail "GET /api/agent/checks unexpected: $($r | ConvertTo-Json -Compress)" }
+} catch { Fail "GET /api/agent/checks threw: $_" }
+
+# 20. POST /api/agent/run — deliberately auth-gate-only, NOT a real run. The
+#     other agent routes drive a real `python -m agentic.cli` subprocess: a
+#     run clones a repository, calls a model and can block for up to 3600s
+#     (see harness_emulation.py step 13's identical reasoning, and
+#     harness/server.py's agent_run docstring). A smoke test must not do
+#     that, so this only asserts the route rejects an unauthenticated caller.
+try {
+    $resp = Invoke-WebRequest -Uri "$HarnessBase/api/agent/run" -Method POST -ContentType "application/json" -Body '{}' -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    if ($resp.StatusCode -eq 401 -or $resp.StatusCode -eq 403) { Pass "POST /api/agent/run rejects unauthenticated (HTTP $($resp.StatusCode))" }
+    else { Fail "POST /api/agent/run unauth HTTP $($resp.StatusCode) (expected 401/403)" }
+} catch { Fail "POST /api/agent/run unauth threw: $_" }
+
+# 21. POST /api/agent/runs/{run_id}/decision — same auth-gate-only rationale
+#     as check 20: a real decision is the one request that can reach a git
+#     write. Uses a syntactically plausible but nonexistent 32-zero run id
+#     as a placeholder; only the auth gate is probed, unauthenticated.
+try {
+    $decisionUri = "$HarnessBase/api/agent/runs/$('0' * 32)/decision"
+    $resp = Invoke-WebRequest -Uri $decisionUri -Method POST -ContentType "application/json" -Body '{}' -SkipHttpErrorCheck   # DevSkim: ignore DS137138
+    if ($resp.StatusCode -eq 401 -or $resp.StatusCode -eq 403) { Pass "POST /api/agent/runs/{id}/decision rejects unauthenticated (HTTP $($resp.StatusCode))" }
+    else { Fail "POST /api/agent/runs/{id}/decision unauth HTTP $($resp.StatusCode) (expected 401/403)" }
+} catch { Fail "POST /api/agent/runs/{id}/decision unauth threw: $_" }
+
+# 22. POST /ops/fsconnect (action=status) — against the main gate, not the
+#     harness. Proves the /ops/fsconnect REST contract works on Windows, NOT
+#     the Windows-specific fsconnect/pathsafe.py fallback code paths
+#     themselves (those need fsconnect.enabled plus real enabled roots
+#     configured -- out of scope here, deferred to a documented future
+#     project phase).
+try {
+    $headers = @{ Authorization = "Bearer $ApiKey" }
+    $body = '{"action": "status"}'
+    $r = Invoke-RestMethod -Uri "$Base/ops/fsconnect" -Method POST -Headers $headers -ContentType "application/json" -Body $body   # DevSkim: ignore DS137138
+    if ($null -ne $r.config) { Pass ("POST /ops/fsconnect status (fsconnect.enabled={0})" -f $r.config.enabled) }
+    else { Fail "POST /ops/fsconnect status unexpected: $($r | ConvertTo-Json -Compress)" }
+} catch { Fail "POST /ops/fsconnect status threw: $_" }
 
 Write-Host ""
 if ($Failures -eq 0) {

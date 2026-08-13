@@ -33,7 +33,7 @@ cd CyClaw && git checkout main && git pull
 
 Inspect: `gate.py`, `graph.py`, `config.yaml`, `pyproject.toml`,
 `llm/client.py`, `retrieval/hybrid_search.py`, `utils/personality.py`,
-`utils/ops_runner.py`, `utils/metrics.py`, `static/terminal.html`,
+`utils/ops_runner.py`, `metrics.py`, `static/terminal.html`,
 `agentic/fsconnect/client.py`, `agentic/sqlconnect/client.py`,
 `schemas/api.py`, `tests/test_due_diligence_invariants.py`,
 `harness/server.py`, `harness/config.py`, `harness/sessions.py`,
@@ -280,6 +280,7 @@ Verify the real invariants pinned by `tests/test_due_diligence_invariants.py`:
 | `TestExternalCallGateRuntimeHalf` | Both grok+claude require: hybrid mode + enabled + key + user confirm |
 | `TestExternalCallGateConstructionHalf` | `build_graph` only constructs clients when mode=hybrid + enabled |
 | `TestAuditConvergence` | Every node reaches `audit_logger`; `audit_logger` -> END |
+| `TestGuardrailInputAuditConvergence` | Guardrail-blocked queries still converge at `audit_logger` (`answer_model="guardrail-blocked"`, rail recorded) |
 | `TestSoulReasonGate` | `apply_evolution` refuses empty reason |
 | `TestSoulInjectionScanBoundary` | Injection scanner covers the documented patterns |
 | `TestAuditQueryPrivacy` | Audit log contains SHA-256 hashes, never plaintext queries |
@@ -288,6 +289,7 @@ Verify the real invariants pinned by `tests/test_due_diligence_invariants.py`:
 | `TestCoreModuleIsolation` | `agentic/` never imported by gate/graph/mcp |
 | `TestHealthEmbeddingsSignalIsStatic` | Embeddings health signal does not depend on model load |
 | `TestFallbackRequireUserConfirmIsUnwired` | `policy.fallback.require_user_confirm` is NOT read by gate.py or graph.py |
+| `TestShippedCoreConfigContract` | Pins shipped `config.yaml`'s `app.mode` / `models.*.enabled` / `send_local_context_to_*` against the file on disk |
 
 The `require_user_confirm` key is **documented as unwired** in config.yaml.
 The actual confirmation pause is hardcoded in `user_gate_router`:
@@ -433,6 +435,10 @@ against the live app rather than grepping source text.
 | `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend |
 | `/api/github/status` | GET | Subprocess-backed via `utils.ops_runner.run_agentic_op` (read-only, mirrors `/ops/agentic`'s delegation pattern) |
 | `/api/harness/runs` | GET | Harness-optimizer run listing, `runs` + `count` |
+| `/api/agent/checks` | GET | Lists named check profiles (Bearer-gated) |
+| `/api/agent/run` | POST | Starts a coding-agent run (Bearer+CSRF-gated; NOT exercised live by this skill -- clones a repo, calls a model, can block ~900s; only the auth-gate (401/403-when-unauthenticated) is probed) |
+| `/api/agent/runs/{id}` | GET | Run status (Bearer-gated) |
+| `/api/agent/runs/{id}/decision` | POST | Approve/reject a pending run (Bearer+CSRF-gated; auth-gate only -- a decision reaches a git write) |
 
 Also verify:
 - `/docs`, `/redoc`, `/openapi.json` all return 404 (`create_app` sets
@@ -507,6 +513,10 @@ python .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
 | `test_client.py` | LocalLLMClient + GrokClient + **ClaudeClient** (error/retry/timeout/401-fail-fast parity) |
 | `test_ops_runner.py` | Subprocess delegation for all 4 ops runners |
 | `test_fsconnect_*.py` | FsConnect CLI, client, config, pathsafe, writer |
+| `test_fsconnect_macos_policy.py` | Darwin logic, SIMULATED via `sys.platform`/`os.stat` monkeypatching -- runs cross-platform, always exercises the Darwin branch regardless of host OS |
+| `test_macos_fsconnect_setup.py` | REAL, unmocked subprocess execution of `macos/setup-fsconnect.sh` + `macos/_enable_fsconnect_readlist.py` end-to-end (config mutation, idempotency, `--no-fsconnect` behavior); POSIX-generic, genuinely real on both Linux and macOS CI |
+| `test_macos_scripts.py` | Static content/regex pins on the shell scripts themselves (no execution) |
+| `test_fsconnect_macos_real.py` | NEW -- genuinely REAL Darwin syscalls, no monkeypatching: `/Volumes` opt-in gate, Apple-metadata filtering (`.DS_Store`/`._*`), case-insensitive-APFS root-overlap detection, real `EACCES`-to-typed-error mapping. Darwin-only (self-skips everywhere else). SF_DATALESS/iCloud-dataless handling is deliberately NOT made real here (no way to create a genuine dataless placeholder in CI) -- stays covered only by the simulated `test_fsconnect_macos_policy.py` |
 | `test_sqlconnect_*.py` | SQLConnect CLI, client, config, read-only guards |
 | `test_sync_*.py` | Sync CLI, config, runner, scheduler, filters |
 | `test_agentic_*.py` | Agentic CLI, config, context, writer, registry |
@@ -515,7 +525,7 @@ python .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
 | `test_health.py` | Health check with grok + **claude** probes |
 | `test_metrics.py` | Audit integrity, **claude escalation heuristic** |
 | `test_telemetry_kill.py` | 10 env vars set at import time |
-| `test_due_diligence_invariants.py` | **12 invariant classes**: RAG-first, external call gates, audit convergence, soul governance, soul injection, audit privacy, sanitizer CWD, MCP no-LLM, module isolation, health embeddings, **unwired require_user_confirm** |
+| `test_due_diligence_invariants.py` | **14 invariant classes**: RAG-first, external call gates, audit convergence, guardrail audit convergence, soul governance, soul injection, audit privacy, sanitizer CWD, MCP no-LLM, module isolation, health embeddings, **unwired require_user_confirm**, shipped core config contract |
 | `test_terminal_contract.py` | Console endpoint existence, **explicit provider buttons** |
 | `test_harness.py` | Full harness endpoint suite over `TestClient`: config/home layout, session CRUD + corrupt-file tolerance, soul/model toggles, chat + backend fallback resolution, GitHub status delegation, harness-runs listing, console framing headers, auto-docs absence, non-loopback rebinding rejection, shutdown client-close handling |
 
@@ -536,7 +546,7 @@ Terminal Consoles (all 5): [PASS/FAIL]
 Triple-Gate Online API (Grok): [PASS/FAIL]
 Triple-Gate Online API (Claude): [PASS/FAIL]
 API Key Redaction (Grok + Claude): [PASS/FAIL]
-Due-Diligence Invariants: [X/12 passed]
+Due-Diligence Invariants: [X/14 passed]
 Harness Console REST API: [PASS/FAIL]
 Harness HTML Contract: [PASS/FAIL]
 Security Invariants: [X/24 passed]
@@ -653,6 +663,35 @@ discovers `verify.sh`/`smoke.sh`, not `.ps1` files).
 Detailed test case inventory with expected inputs, outputs, and assertion
 criteria. Read when implementing new tests or debugging failures.
 
+## Gotchas
+
+- **`python3` may not be 3.12.** The default Claude Code cloud sandbox ships
+  Python 3.10/3.11/3.12/3.13 side by side, but `update-alternatives` and the
+  pre-installed dependencies both point at 3.11 -- so bare `python3`/`pytest`
+  silently run this skill's checks against the wrong interpreter, and the
+  failure (e.g. `test_agentic_*` breaking on a 3.12-only stdlib parameter)
+  looks like a red `main`, not a version mismatch. Point explicitly at
+  `python3.12` (see `CLAUDE.md` §4) rather than trusting the default.
+- **Quick Mode and the full 14-phase run test different things.** `/run`
+  (`smoke.sh`, 29 checks) is a fast, surface-level pass against a live
+  server; it does not build the mock corpus, exercise the due-diligence
+  invariant classes, or walk the harness agent-run routes. A green Quick
+  Mode is not evidence the full procedure would also pass, and vice versa --
+  treat them as complementary, not substitutable.
+- **`mock_ollama.py` is one of three local-LLM realism tiers, not the only
+  one.** Tier 0 is the in-process pytest stub (`MockLocalLLM` in
+  `tests/conftest.py`), Tier 1 is this skill's stdlib `mock_ollama.py` HTTP
+  server (deterministic `/api/chat` 200s), and Tier 2 is a real Ollama
+  daemon. Neither `verify.sh` nor `run_full_verification.py` currently
+  auto-detects which tier is live -- confirm which one you're actually
+  running against before trusting a pass/fail result.
+- **The four `/api/agent/*` routes are auth-gate-only in this skill.** Only
+  `/api/agent/checks` is exercised for real; `/api/agent/run` and
+  `/api/agent/runs/{id}/decision` are only probed for a 401 on a bad key
+  (see Phase 11) because a real call clones a repo, calls a model, can block
+  ~900s, and can reach a git write. A green Phase 11 does not mean the
+  agent run loop itself was verified end to end.
+
 ## Mock Embedding Implementation
 
 `MockSentenceTransformer` creates sparse keyword-based 384-dim vectors:
@@ -665,7 +704,10 @@ criteria. Read when implementing new tests or debugging failures.
 - `query(query_embeddings, n_results)` -- cosine similarity search
 - `get_or_create_collection(name)` -- singleton collection registry
 
-## Security Invariants Checklist
+## Guardrails
+
+Restates the security invariants this skill verifies (see `CLAUDE.md` §3 for
+the six canonical ones plus supporting guards this table extends).
 
 | # | Invariant | Check |
 |---|-----------|-------|

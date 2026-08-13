@@ -11,11 +11,11 @@ description: >
 Invoke the `CyClaw-Sandbox` skill and run the full sandbox audit: clone,
 install, mock Ollama, audit every subsystem, report. $ARGUMENTS
 
-See `.claude/skills/CyClaw-Sandbox/SKILL.md` for the full 21-phase procedure
+See `.claude/skills/CyClaw-Sandbox/SKILL.md` for the full 14-phase procedure
 (realism ladder, config validation, gate/graph standalone checks, the
 5-query/4-path swarm test, triple-gate + key redaction, due-diligence
 invariants, Phase 2 guardrails, the full `/soul/*` + `/ops/*` REST surface,
-terminal.html contract, the 3.12 runtime gate, 20 security invariants, and
+terminal.html contract, the 3.12 runtime gate, 24 security invariants, and
 the report/PR machinery).
 
 For a fast check against your current checkout with no clone/report/PR —

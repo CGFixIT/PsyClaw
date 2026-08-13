@@ -13,6 +13,7 @@ the harness console's full REST API.
 5. [Terminal Console Endpoint Tests](#terminal-console-endpoint-tests)
 6. [Harness Console Endpoint Tests](#harness-console-endpoint-tests)
 7. [Config Invariants](#config-invariants)
+8. [macOS Realism Coverage](#macos-realism-coverage)
 
 ---
 
@@ -237,7 +238,7 @@ def test_anthropic_key_redacted_in_errors():
 
 ## Due-Diligence Invariant Tests
 
-From `tests/test_due_diligence_invariants.py` (12 test classes):
+From `tests/test_due_diligence_invariants.py` (14 test classes):
 
 ### TestRagFirstEntry
 - `retrieve` is the unconditional graph entry point
@@ -255,6 +256,12 @@ From `tests/test_due_diligence_invariants.py` (12 test classes):
 - Every node routes to `audit_logger`
 - `audit_logger` -> END (no further nodes)
 - Audit log written on every path
+
+### TestGuardrailInputAuditConvergence
+- I4 extension (Phase 2): a query blocked by the offline `guardrail_input`
+  node still converges at `audit_logger` with the blocked `answer_model`
+  recorded -- the new node must not create a shortcut around audit logging
+- See `docs/NeMo/phase2_implementation_plan.md` Decision 3
 
 ### TestSoulReasonGate
 - `apply_evolution` refuses empty reason string
@@ -290,6 +297,30 @@ From `tests/test_due_diligence_invariants.py` (12 test classes):
 - `user_gate_router` hardcodes `confirmed is None` -> pause
 - Config key kept for backward compat but documented as unwired
 - Test will FAIL if someone wires it up (deliberate breakage signal)
+
+### TestShippedCoreConfigContract
+- Pins the SHIPPED `config.yaml`'s core posture keys
+- `TestShippedAgenticConfigContract` (`tests/test_agentic_config.py`) already
+  pins the agentic block against the real file; the core request path had no
+  equivalent, and the gap is not hypothetical -- the operator commit of
+  2026-08-07 flipped `app.mode`, `app.debug`, and BOTH `models.<provider>.enabled`
+  in the shipped file and no test broke, because no test read those keys from it
+- Matters specifically for I3: per `INVARIANTS.md`, two of the triple gate's
+  three conditions (`mode == "hybrid"`, `<provider>.enabled`) are NOT enforced
+  in `graph.py` at all -- they live in `gate.py`'s client construction, and
+  `TestExternalCallGateConstructionHalf` above pins that the graph does not
+  read them. So a change to these config values silently changes what the
+  graph can reach, with the graph-side tests still green. This class is that
+  tripwire
+- These assertions pin the CURRENT posture, armed included -- not a claim that
+  the armed values are the safe ones, only that changing them should be
+  deliberate and visible in a diff
+- Also pins `policy.fallback.send_local_context_to_grok`/`_claude` are both
+  `false` (the load-bearing exfiltration guard), that `/health` does not probe
+  external providers by default, and that `app.debug` (ships `true`) is still
+  read by no production code path in `gate.py`/`graph.py` -- if that ever
+  changes, this test forces the wiring change to confront the shipped value in
+  the same diff
 
 ---
 
@@ -420,6 +451,15 @@ either endpoint; these gate only the harness's own system-prompt composition.
 | HC-17 | GET | `/docs`, `/redoc`, `/openapi.json` | 404 (auto-docs disabled -- `docs_url`/`redoc_url`/`openapi_url=None`) |
 | HC-18 | GET | `/api/status` with a non-loopback `Host` header | 400 (`TrustedHostMiddleware` DNS-rebinding defense) |
 
+### Coding Agent Runs (`/api/agent/*`)
+
+| Test | Method | Endpoint | Expected |
+|------|--------|----------|----------|
+| HC-19 | GET | `/api/agent/checks` | 200, `{profiles: [...]}` -- lists named check profiles; open by design (no `guarded` dependency), same reasoning as `/api/registry` -- the console must populate before an operator key is entered |
+| HC-20 | POST | `/api/agent/run` | Auth-gate only: expect 401/403 unauthenticated -- NOT exercised live, it clones a repo, calls a model, and blocks synchronously (wall-clock budget derived per request, capped at 3600s) |
+| HC-21 | GET | `/api/agent/runs/{id}` | Run status (Bearer-gated) |
+| HC-22 | POST | `/api/agent/runs/{id}/decision` | Approve/reject a pending run -- auth-gate only, NOT exercised live: an authorized decision reaches a git write |
+
 ### Test Environment Notes
 
 - Isolate `CYCLAW_HOME` to a fresh temp directory before building the app --
@@ -437,15 +477,15 @@ either endpoint; these gate only the harness's own system-prompt composition.
 
 ## Config Invariants
 
-### Offline Mode (Default)
+### Hybrid Mode (Default, shipped 2026-08-07)
 ```yaml
 app:
-  mode: "offline"
+  mode: "hybrid"
 models:
   grok:
-    enabled: false
+    enabled: true
   claude:
-    enabled: false
+    enabled: true
 policy:
   fallback:
     require_user_confirm: true  # UNWIRED - hardcoded in user_gate_router
@@ -459,17 +499,45 @@ logging:
       - "sk-[a-zA-Z0-9]{20,}"     # OpenAI-style
       - "sk-ant-[a-zA-Z0-9_\\-]{20,}"  # Anthropic (Claude)
 ```
-
-### Hybrid Mode (For Testing)
-```yaml
-app:
-  mode: "hybrid"
-models:
-  grok:
-    enabled: true
-  claude:
-    enabled: true
-```
-- Both providers enabled
+- This is the SHIPPED posture: `app.mode: "hybrid"` and both
+  `models.grok.enabled`/`models.claude.enabled` are `true` in the real
+  `config.yaml`, satisfying two of I3's three gates by default (see
+  `docs/THREAT_MODEL.md`'s eighth amendment). The third gate,
+  `user_confirmed_online`, is per-request and cannot be pre-set by config.
 - User confirmation still required (hardcoded, Gate 2)
 - `is_available()` checks API keys (Gate 3)
+- Pinned by `TestShippedCoreConfigContract` (see
+  [Due-Diligence Invariant Tests](#due-diligence-invariant-tests)) so a future
+  edit to these keys shows up as a visible diff, not a silent posture change
+
+### Offline Mode (available via `app.mode: "offline"`)
+```yaml
+app:
+  mode: "offline"
+models:
+  grok:
+    enabled: false
+  claude:
+    enabled: false
+```
+- Not the shipped default -- an operator opts into this by editing
+  `config.yaml`
+- No external clients constructed at all (`TestExternalCallGateConstructionHalf`)
+- A low-score query falls through to `offline_best_effort_node` instead of a
+  provider fallback
+
+---
+
+## macOS Realism Coverage
+
+Four test files touch macOS/fsconnect behavior, and only some of them exercise
+real Darwin syscalls -- the rest are simulated (portable, run on any CI
+runner) or purely static. Know which is which before treating a green run on
+one of them as proof of real macOS behavior:
+
+| File | Realism | Notes |
+|------|---------|-------|
+| `tests/test_fsconnect_macos_policy.py` | SIMULATED | `sys.platform`/`os.stat` monkeypatched, cross-platform. |
+| `tests/test_macos_fsconnect_setup.py` | REAL | Real subprocess execution of the setup scripts, POSIX-generic. |
+| `tests/test_macos_scripts.py` | STATIC | Static content/regex pins, no execution. |
+| `tests/test_fsconnect_macos_real.py` (new) | REAL, Darwin-only | Real Darwin syscalls (`/Volumes` gate, Apple-metadata filtering, case-insensitive-APFS overlap, real `EACCES` mapping). `SF_DATALESS`/iCloud-dataless is explicitly NOT made real (can't be created deterministically in CI) and stays covered only by the simulated file above. |

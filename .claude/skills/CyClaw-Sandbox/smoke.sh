@@ -292,18 +292,31 @@ with tempfile.TemporaryDirectory() as tmp:
     print("  PASS  agentic/fsconnect write live (writes_enabled=True, file created and verified)")
     reset_config_cache()
 
-# ── 13. OS platform detection ─────────────────────────────────────────────
+# ── 13. OS platform detection (all three branches, host-independent) ──────
 import sys as _sys, os as _os
+from unittest.mock import patch
 from agentic.fsconnect.osutil import _file_manager_argv
-argv = _file_manager_argv("/tmp")
-platform = "nt" if _os.name == "nt" else ("darwin" if _sys.platform == "darwin" else "linux")
-if _os.name == "nt":
-    assert argv[0] == "explorer", f"Windows: expected explorer, got {argv[0]}"
-elif _sys.platform == "darwin":
-    assert argv[0] == "open", f"macOS: expected open, got {argv[0]}"
-else:
-    assert argv[0] == "xdg-open", f"Linux: expected xdg-open, got {argv[0]}"
-print(f"  PASS  OS platform detection ({platform} → {argv[0]})")
+
+# _file_manager_argv branches on os.name == "nt" (win32) first, then
+# sys.platform == "darwin" (macOS), else xdg-open (linux/anything else).
+# Patch both attributes to force each branch in turn regardless of which
+# single host this smoke run actually executes on, so the assertion isn't
+# vacuous on whichever OS ran it (previously only the host's own branch was
+# ever exercised).
+with patch.object(_os, "name", "nt"), patch.object(_sys, "platform", "win32"):
+    argv = _file_manager_argv("/tmp")
+    assert argv[0] == "explorer", f"win32: expected explorer, got {argv[0]}"
+print("  PASS  OS platform detection (win32 → explorer)")
+
+with patch.object(_os, "name", "posix"), patch.object(_sys, "platform", "darwin"):
+    argv = _file_manager_argv("/tmp")
+    assert argv[0] == "open", f"darwin: expected open, got {argv[0]}"
+print("  PASS  OS platform detection (darwin → open)")
+
+with patch.object(_os, "name", "posix"), patch.object(_sys, "platform", "linux"):
+    argv = _file_manager_argv("/tmp")
+    assert argv[0] == "xdg-open", f"linux: expected xdg-open, got {argv[0]}"
+print("  PASS  OS platform detection (linux → xdg-open)")
 PYEOF
 STATUS=$?
 [ $STATUS -eq 0 ] || { fail "agentic/fsconnect checks (see output above)"; }
