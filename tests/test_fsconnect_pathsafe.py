@@ -8,10 +8,13 @@ branches are documented and ``# pragma: no cover``.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
-from agentic.fsconnect.pathsafe import ScopedRoots, split_components
+import agentic.fsconnect.pathsafe as pathsafe
+from agentic.fsconnect.pathsafe import ScopedRoots, _root_match_identity, split_components
 from utils.errors import FsConnectRuntimeError, FsPathError
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX openat authority; Windows path differs")
@@ -146,6 +149,47 @@ def test_overlapping_roots_rejected(tmp_path):
     (base / "b").mkdir(parents=True)
     with pytest.raises(FsPathError):
         ScopedRoots([str(base), str(base / "b")], create=False)
+
+
+def test_darwin_root_identity_collapses_case_and_format_controls(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert _root_match_identity("/tmp/Note.md") == _root_match_identity("/tmp/no\u200cte.md")
+
+
+def test_linux_root_identity_preserves_case_and_format_controls(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert _root_match_identity("/tmp/Note.md") != _root_match_identity("/tmp/no\u200cte.md")
+
+
+@pytest.mark.parametrize("alias_name", ["note.md", "No\u200cte.md"])
+def test_darwin_case_or_cf_alias_roots_rejected(monkeypatch, tmp_path, alias_name):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(pathsafe, "_POSIX", False)
+    monkeypatch.setattr(ScopedRoots, "_prepare_root", lambda _self, raw, *, create: Path(raw))
+    first = tmp_path / "Note.md"
+    alias = tmp_path / alias_name
+    with pytest.raises(FsPathError, match="overlapping roots"):
+        ScopedRoots([str(first), str(alias)], create=False)
+
+
+def test_darwin_alias_selects_configured_held_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    configured = tmp_path / "Share"
+    configured.mkdir()
+    (configured / "inside.txt").write_text("held fd", encoding="utf-8")
+    with ScopedRoots([str(configured)], create=False) as roots:
+        alias = str(configured).replace("Share", "sh\u200care")
+        assert roots.read_bytes("inside.txt", root=alias, max_bytes=1024) == b"held fd"
+
+
+def test_linux_case_alias_roots_remain_distinct(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(pathsafe, "_POSIX", False)
+    monkeypatch.setattr(ScopedRoots, "_prepare_root", lambda _self, raw, *, create: Path(raw))
+    first = tmp_path / "Note.md"
+    alias = tmp_path / "note.md"
+    with ScopedRoots([str(first), str(alias)], create=False) as roots:
+        assert len(roots.roots) == 2
 
 
 def test_root_replaced_by_symlink_uses_held_fd(tmp_path):
