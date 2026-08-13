@@ -107,7 +107,11 @@ elif [ ! -f "$REPO_DIR/harness/server.py" ]; then
   git clone --depth 1 "$REPO_URL" "$REPO_DIR"
 else
   step "repo already present at $REPO_DIR (pulling latest main)"
-  git -C "$REPO_DIR" pull --ff-only
+  # setup-fsconnect.sh intentionally patches the checkout's active config.yaml.
+  # Preserve that (and any other tracked local configuration) across an update;
+  # if Git cannot reapply it cleanly, pull exits non-zero with the changes kept
+  # for operator resolution instead of discarding configuration.
+  git -C "$REPO_DIR" pull --ff-only --autostash
 fi
 reject_shell_metachars "$REPO_DIR"
 

@@ -35,6 +35,11 @@ def test_invoke_cyclaw_home_dir_matches_install_cyclaw() -> None:
     assert invoke_match.group(1) == install_match.group(1)
 
 
+def test_installer_preserves_patched_config_across_updates() -> None:
+    install_text = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
+    assert 'git -C "$REPO_DIR" pull --ff-only --autostash' in install_text
+
+
 def test_macos_scripts_never_enable_writes_or_indexing() -> None:
     script_names = ("install-cyclaw.sh", "setup-fsconnect.sh")
     combined = "\n".join(

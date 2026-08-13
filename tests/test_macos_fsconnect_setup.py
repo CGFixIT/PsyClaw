@@ -74,8 +74,29 @@ def test_helper_applies_exact_safe_contract_and_is_byte_idempotent(tmp_path: Pat
     assert block["index_enabled"] is False
     assert block["allow_hard_delete"] is False
     assert block["allow_unc_roots"] is False
+    assert block["allow_macos_volume_roots"] is False
     assert block["follow_symlinks"] is False
     assert block["scan_content"] is True
+    assert enable_readlist(config, root) is False
+    assert config.read_bytes() == first
+
+
+def test_helper_resets_macos_volume_opt_in(tmp_path: Path) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "before: keep\n"
+        "fsconnect:\n"
+        "  enabled: false\n"
+        "  allow_macos_volume_roots: true\n"
+        "after: keep\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "CyClaw-FS"
+    root.mkdir()
+
+    assert enable_readlist(config, root) is True
+    first = config.read_bytes()
+    assert yaml.safe_load(first)["fsconnect"]["allow_macos_volume_roots"] is False
     assert enable_readlist(config, root) is False
     assert config.read_bytes() == first
 

@@ -22,6 +22,7 @@ _SAFETY_VALUES: dict[str, object] = {
     "index_enabled": False,
     "allow_hard_delete": False,
     "allow_unc_roots": False,
+    "allow_macos_volume_roots": False,
     "follow_symlinks": False,
     "scan_content": True,
 }
