@@ -41,6 +41,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import posixpath
 import re
 import stat as statmod
 import sys
@@ -67,6 +68,14 @@ def _root_match_identity(path: str) -> str:
     if sys.platform != "darwin":
         return normalized
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
+
+
+def _is_macos_volume_path(path: str) -> bool:
+    """Return whether a resolved Darwin path is ``/Volumes`` or below it."""
+    if sys.platform != "darwin" or not posixpath.isabs(path):
+        return False
+    normalized = posixpath.normpath(path)
+    return normalized == "/Volumes" or normalized.startswith("/Volumes/")
 
 
 def _raise_macos_permission(action: str, exc: OSError) -> None:
@@ -185,10 +194,12 @@ class ScopedRoots:
         *,
         create: bool = False,
         allow_unc: bool = False,
+        allow_macos_volume_roots: bool = True,
         strict_roots: bool = False,
         on_fallback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.allow_unc = allow_unc
+        self.allow_macos_volume_roots = allow_macos_volume_roots
         self.strict_roots = strict_roots
         self._on_fallback = on_fallback
         self._roots: list[SafeRoot] = []
@@ -272,7 +283,20 @@ class ScopedRoots:
                 f"root does not exist or cannot be resolved: {raw!r}",
                 details={"error": str(exc)},
             ) from exc
-        if not resolved.is_dir():
+        if _is_macos_volume_path(str(resolved)) and not self.allow_macos_volume_roots:
+            raise FsPathError(
+                f"configured root resolves under macOS /Volumes but allow_macos_volume_roots is false: {raw!r}",
+                details={"root": raw, "resolved": str(resolved)},
+            )
+        try:
+            resolved_stat = resolved.stat()
+        except OSError as exc:
+            _raise_macos_permission(f"checking configured root {raw!r}", exc)
+            raise FsPathError(
+                f"cannot stat configured root {raw!r}",
+                details={"errno": exc.errno, "strerror": exc.strerror},
+            ) from exc
+        if not statmod.S_ISDIR(resolved_stat.st_mode):
             raise FsPathError(f"root is not a directory: {raw!r}", details={"resolved": str(resolved)})
         return resolved
 
@@ -380,15 +404,17 @@ class ScopedRoots:
                         f"cannot open {leaf!r} for reading",
                         details={"errno": exc.errno, "strerror": exc.strerror},
                     ) from exc
-                return self._read_fd(fd, max_bytes)
+                return self._read_fd(fd, max_bytes, skip_macos_metadata=skip_macos_metadata)
         return self._read_win(sr, comps, max_bytes)  # pragma: no cover - Windows only
 
     @staticmethod
-    def _read_fd(fd: int, max_bytes: int) -> bytes:
+    def _read_fd(fd: int, max_bytes: int, *, skip_macos_metadata: bool = False) -> bytes:
         try:
             st = os.fstat(fd)
             if not statmod.S_ISREG(st.st_mode):
                 raise FsPathError("target is not a regular file")
+            if skip_macos_metadata and _is_macos_dataless(st):
+                raise FsPathError("iCloud dataless placeholder is not read")
             if st.st_size > max_bytes:
                 raise FsConnectRuntimeError(
                     f"file exceeds max_file_bytes ({max_bytes})",

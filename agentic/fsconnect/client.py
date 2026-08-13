@@ -70,7 +70,10 @@ class FsClient:
         self.fs_cfg = fs_cfg
         self.config_path = config_path
         self._roots = ScopedRoots(
-            fs_cfg.allowed_roots, create=False, allow_unc=fs_cfg.allow_unc_roots
+            fs_cfg.allowed_roots,
+            create=False,
+            allow_unc=fs_cfg.allow_unc_roots,
+            allow_macos_volume_roots=fs_cfg.allow_macos_volume_roots,
         )
         self._patterns = build_injection_patterns(cfg) if fs_cfg.scan_content else []
 

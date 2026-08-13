@@ -133,7 +133,12 @@ class FsIndexer:
     def scan(self) -> dict:
         """Dry-run: enumerate eligible files under index_root (no copy, no reindex)."""
         manifest: list[dict] = []
-        with ScopedRoots([self.index_root], create=False, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
+        with ScopedRoots(
+            [self.index_root],
+            create=False,
+            allow_unc=self.fs_cfg.allow_unc_roots,
+            allow_macos_volume_roots=self.fs_cfg.allow_macos_volume_roots,
+        ) as roots:
             self._walk(roots, "", manifest)
         eligible = [m for m in manifest if "skipped" not in m]
         audit_log({"event": "fsconnect_index_scan", "index_root": self.index_root,
@@ -219,7 +224,12 @@ class FsIndexer:
             copied.append(rel)
 
         probe = self._cache_probe(cache, staging) if incremental else None
-        with ScopedRoots([self.index_root], create=False, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
+        with ScopedRoots(
+            [self.index_root],
+            create=False,
+            allow_unc=self.fs_cfg.allow_unc_roots,
+            allow_macos_volume_roots=self.fs_cfg.allow_macos_volume_roots,
+        ) as roots:
             # Single pass: _walk reads each CHANGED file once and hands the bytes
             # straight to _stage (bounded memory -- one file held at a time).
             self._walk(roots, "", manifest, on_file=_stage, cached_entry_for=probe)

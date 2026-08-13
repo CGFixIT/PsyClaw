@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agentic.fsconnect import pathsafe
-from utils.errors import FsMacOSPermissionError
+from utils.errors import FsMacOSPermissionError, FsPathError
 
 
 @pytest.fixture
@@ -62,3 +62,57 @@ def test_filter_propagates_permission_error(darwin: None) -> None:
 
     with pytest.raises(FsMacOSPermissionError):
         pathsafe._filter_macos_entries(["note.md"], denied)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/Volumes", True),
+        ("/Volumes/External/share", True),
+        ("/VolumesLike/share", False),
+        ("Volumes/External", False),
+    ],
+)
+def test_macos_volume_path_is_segment_aware(darwin: None, path: str, expected: bool) -> None:
+    assert pathsafe._is_macos_volume_path(path) is expected
+
+
+def test_resolved_macos_volume_alias_is_refused_at_runtime(darwin: None, monkeypatch) -> None:
+    monkeypatch.setattr(pathsafe.Path, "resolve", lambda self, *, strict: self)
+    monkeypatch.setattr(pathsafe, "_is_macos_volume_path", lambda _path: True)
+    with pytest.raises(FsPathError, match="allow_macos_volume_roots is false"):
+        pathsafe.ScopedRoots(
+            ["/private/alias"],
+            create=False,
+            allow_macos_volume_roots=False,
+        )
+
+
+@pytest.mark.parametrize("error_number", [errno.EPERM, errno.EACCES])
+def test_root_stat_permission_is_typed(
+    darwin: None,
+    monkeypatch,
+    error_number: int,
+) -> None:
+    monkeypatch.setattr(pathsafe.Path, "resolve", lambda self, *, strict: self)
+
+    def denied(_self):
+        raise PermissionError(error_number, "denied")
+
+    monkeypatch.setattr(pathsafe.Path, "stat", denied)
+    with pytest.raises(FsMacOSPermissionError):
+        pathsafe.ScopedRoots(["configured-root"], create=False)
+
+
+def test_open_fd_is_rechecked_for_dataless_state(darwin: None, monkeypatch) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(
+        pathsafe.os,
+        "fstat",
+        lambda _fd: SimpleNamespace(st_mode=pathsafe.statmod.S_IFREG, st_size=0, st_flags=0x40000000),
+    )
+    monkeypatch.setattr(pathsafe.os, "close", closed.append)
+
+    with pytest.raises(FsPathError, match="dataless placeholder"):
+        pathsafe.ScopedRoots._read_fd(123, 1024, skip_macos_metadata=True)
+    assert closed == [123]
