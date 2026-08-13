@@ -4,8 +4,11 @@
   CyClaw fsconnect weekly expired-trash maintenance template.
 
   DISABLED BY DEFAULT. This file is not installed or loaded automatically.
-  Edit every REPLACE_* value, complete the write-enablement security review,
-  and test the command manually before copying it to ~/Library/LaunchAgents/.
+  To enable it later:
+    1. Edit every REPLACE_* value and complete the write-enablement review.
+    2. mkdir -p ~/Library/Logs/CyClaw
+    3. Test ProgramArguments manually while writes remain disabled.
+    4. Copy the edited file to ~/Library/LaunchAgents/ and load it explicitly.
   With writes_enabled: false (the installer default), trash-empty is a no-op.
   No secrets are required or embedded here. No KeepAlive is configured.
 -->
