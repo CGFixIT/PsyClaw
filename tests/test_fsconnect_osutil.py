@@ -8,8 +8,6 @@ replaced the whole function body, so the scope check was never exercised.
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -95,29 +93,62 @@ def test_reveal_rejects_leading_dash_target(tmp_path, stub_launch):
     assert not stub_launch
 
 
-def test_darwin_path_identity_collapses_case_and_format_controls(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "darwin")
-    assert osutil._path_identity("/tmp/Note.md") == osutil._path_identity("/tmp/note.MD")
-    assert osutil._path_identity("/tmp/Note.md") == osutil._path_identity("/tmp/no‌te.md")
+# --- filesystem-identity fallback (not a blanket "fold case on Darwin" guess) --
+#
+# _within_roots' fallback (pathsafe._is_real_descendant) asks the filesystem
+# directly via device+inode rather than assuming any platform-wide case
+# policy -- not every APFS volume is case-insensitive. These tests simulate
+# an actually-case-insensitive lookup by mocking os.stat to resolve a
+# differently-spelled path to the same real entity, exactly what a real
+# case-insensitive volume's directory lookup would produce.
+
+def test_within_roots_admits_filesystem_identity_alias(monkeypatch, tmp_path):
+    root = tmp_path / "CyClaw-FS"
+    root.mkdir()
+    root_stat = os.stat(root)
+    alias_root = str(root).replace("CyClaw-FS", "cyclaw-fs")  # never actually created
+    target = root / "File.TXT"
+    target.write_text("x", encoding="utf-8")
+    original_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path) == alias_root:
+            return root_stat
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(osutil.os, "stat", fake_stat)
+    canonical = osutil._within_roots(target, [alias_root])
+    assert canonical == str(target)
 
 
-def test_linux_path_identity_preserves_case_and_format_controls(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
-    assert osutil._path_identity("/tmp/Note.md") != osutil._path_identity("/tmp/note.MD")
-    assert osutil._path_identity("/tmp/Note.md") != osutil._path_identity("/tmp/no‌te.md")
-
-
-def test_within_roots_darwin_admits_case_varied_alias(monkeypatch):
-    # os.path.realpath is stubbed to identity so this exercises the comparison
-    # logic without needing an actual case-insensitive filesystem in CI.
-    monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(osutil.os.path, "realpath", lambda p: p)
-    canonical = osutil._within_roots(Path("/Users/x/CyClaw-FS/sub/File.TXT"), ["/users/x/cyclaw-fs"])
-    assert canonical == "/Users/x/CyClaw-FS/sub/File.TXT"
-
-
-def test_within_roots_linux_refuses_case_varied_alias(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(osutil.os.path, "realpath", lambda p: p)
-    canonical = osutil._within_roots(Path("/Users/x/CyClaw-FS/sub/File.TXT"), ["/users/x/cyclaw-fs"])
+def test_within_roots_refuses_genuinely_different_directory(tmp_path):
+    # On a real (case-sensitive) filesystem, two similarly-spelled directories
+    # are genuinely different real entities and must never be conflated.
+    root = tmp_path / "CyClaw-FS"
+    other = tmp_path / "cyclaw-fs"
+    root.mkdir()
+    other.mkdir()
+    target = root / "File.TXT"
+    target.write_text("x", encoding="utf-8")
+    canonical = osutil._within_roots(target, [str(other)])
     assert canonical is None
+
+
+def test_reveal_end_to_end_admits_filesystem_identity_alias(monkeypatch, tmp_path, stub_launch):
+    root = tmp_path / "CyClaw-FS"
+    root.mkdir()
+    root_stat = os.stat(root)
+    alias_root = str(root).replace("CyClaw-FS", "cyclaw-fs")
+    target = root / "File.TXT"
+    target.write_text("x", encoding="utf-8")
+    original_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path) == alias_root:
+            return root_stat
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(osutil.os, "stat", fake_stat)
+    res = osutil.reveal(str(target), [alias_root])
+    assert res["revealed"] == str(target)
+    assert len(stub_launch) == 1
