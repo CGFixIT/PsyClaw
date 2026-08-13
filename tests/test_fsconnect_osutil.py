@@ -122,10 +122,15 @@ def test_within_roots_admits_filesystem_identity_alias(monkeypatch, tmp_path):
 
 
 def test_within_roots_refuses_genuinely_different_directory(tmp_path):
-    # On a real (case-sensitive) filesystem, two similarly-spelled directories
-    # are genuinely different real entities and must never be conflated.
+    # Two real, unrelated directories are genuinely different entities and
+    # must never be conflated. Deliberately NOT a case-variant pair (unlike
+    # the mocked tests above): on a real case-insensitive filesystem (e.g.
+    # the default macOS CI runner), "CyClaw-FS" and "cyclaw-fs" would be the
+    # SAME directory entry and the second mkdir() would collide -- this test
+    # only needs "two directories that are not each other", not a specific
+    # naming scheme.
     root = tmp_path / "CyClaw-FS"
-    other = tmp_path / "cyclaw-fs"
+    other = tmp_path / "unrelated-dir"
     root.mkdir()
     other.mkdir()
     target = root / "File.TXT"

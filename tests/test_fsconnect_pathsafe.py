@@ -247,10 +247,26 @@ def test_case_insensitive_alias_selects_configured_held_root(monkeypatch, tmp_pa
         assert roots.read_bytes("inside.txt", root=alias, max_bytes=1024) == b"held fd"
 
 
+def _tmp_is_case_sensitive(tmp_path: Path) -> bool:
+    """Runtime probe, not a platform guess -- same technique as CPython's own
+    Lib/test/support/os_helper.fs_is_case_insensitive (see pathsafe's
+    _is_real_descendant docstring for why guessing by platform is wrong)."""
+    probe = tmp_path / "CaseProbe.tmp"
+    probe.write_text("x", encoding="utf-8")
+    try:
+        return not (tmp_path / "caseprobe.tmp").exists()
+    finally:
+        probe.unlink()
+
+
 def test_case_sensitive_alias_roots_remain_distinct(tmp_path):
-    """On a real case-sensitive filesystem (this CI runner), two
-    similarly-named-but-actually-different directories are genuinely
-    different real entities and must never be merged into one root."""
+    """On a case-sensitive filesystem, two similarly-named-but-actually-
+    different directories are genuinely different real entities and must
+    never be merged into one root. Skipped on a case-insensitive filesystem
+    (e.g. the default macOS CI runner) -- there, "Note.md" and "note.md"
+    cannot coexist as two directories at all, so the scenario doesn't apply."""
+    if not _tmp_is_case_sensitive(tmp_path):
+        pytest.skip("tmp_path filesystem is case-insensitive; case-variant dirs can't coexist")
     first = tmp_path / "Note.md"
     alias = tmp_path / "note.md"
     first.mkdir()
