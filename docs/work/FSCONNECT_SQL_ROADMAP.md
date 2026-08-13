@@ -43,7 +43,12 @@ rate-limiting reuses `utils.ratelimit.RateLimiter` per-root and globally
 
 ### FS Phase 3 — incremental indexing & richer corpus
 - Watch-based incremental reindex (`inotify` on Linux / `ReadDirectoryChangesW` on
-  Windows) instead of full restage; content de-duplication by sha256.
+  Windows / FSEvents on macOS) instead of full restage; content de-duplication
+  by sha256. FSEvents paths are advisory triggers, never access authority:
+  every read must re-enter `ScopedRoots` held-fd descent. Coalesced, dropped,
+  root-change, or overflow events force a full rescan, which remains the source
+  of truth. No FSEvents dependency, daemon, state database, or enabled indexing
+  is part of the current macOS work.
 - Local OCR for scanned PDFs/images (Tesseract, fully offline) before ingestion.
 - **Quarantine of injection-flagged content**: today the indexer flags
   OWASP∪banned-pattern hits advisorily; Phase 3 routes flagged files to a quarantine

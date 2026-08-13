@@ -21,7 +21,8 @@ tree rather than a shared abstraction layer.
 bash ./macos/install-cyclaw.sh
 
 # Or let the installer clone origin main itself -- just run the script.
-# Options: --repo-path ~/src/CyClaw  --skip-python-deps  --no-profile-edit  --no-path-edit
+# Options: --repo-path ~/src/CyClaw  --skip-python-deps  --no-profile-edit
+#          --no-path-edit  --no-fsconnect
 ```
 
 The installer: creates `~/.CyClaw`, clones or links the repo, creates a venv
@@ -34,16 +35,58 @@ created only when none exists; Linux retains its `.bash_profile`/`.bashrc`
 selection). Target shells: bash (including macOS's stock 3.2) and zsh;
 BSD userland is assumed on macOS — no GNU-only flags, no Homebrew dependency.
 
+The default install also prepares `~/CyClaw-FS` and enables only confined
+filesystem list/stat/read access. Pass `--no-fsconnect` to prepare the folder
+without changing `config.yaml`.
+
 Uninstall (keeps data by default):
 
 ```bash
 bash ./macos/uninstall-cyclaw.sh                 # remove PATH/rc-function hooks only
 bash ./macos/uninstall-cyclaw.sh --remove-home   # also delete ~/.CyClaw (prompts)
+bash ./macos/uninstall-cyclaw.sh --remove-fsconnect  # separately prompt for ~/CyClaw-FS
 ```
 
 The uninstaller removes complete CyClaw-managed blocks atomically per startup
 file, leaves malformed files unchanged, and preserves symlinked startup files
 by updating their regular-file target.
+
+## macOS filesystem connector
+
+`~/.CyClaw` is the harness home; `~/CyClaw-FS` is a separate private filesystem
+jail. The installer never grants access to `$HOME`, Desktop, Documents,
+Downloads, iCloud Drive, the repo, `~/.CyClaw`, or `data/corpus/`.
+
+| Setting after default install | Value |
+|---|---|
+| `fsconnect.enabled` | `true` in the installed repo only; shipped template stays `false` |
+| `allowed_roots` / `writable_roots` | expanded `~/CyClaw-FS` only |
+| `allowed_fs_ops` | `fs_list`, `fs_stat`, `fs_read` |
+| `writes_enabled` / `index_enabled` | `false` |
+| `strict_roots` | `true` |
+| `follow_symlinks` | `false` (truthy config is rejected) |
+| `scan_content` | `true` |
+
+Run setup again safely at any time:
+
+```bash
+bash ./macos/setup-fsconnect.sh                # prepare + enforce list/stat/read
+bash ./macos/setup-fsconnect.sh --prepare-only # folder/README only; no config edit
+python -m agentic.fsconnect.cli status
+python -m agentic.fsconnect.cli list --root "$HOME/CyClaw-FS"
+```
+
+macOS privacy denials fail closed. Grant the Terminal/iTerm application that
+launches CyClaw access under **System Settings > Privacy & Security > Files and
+Folders**. The setup does not install a privacy-control profile or request broader
+machine-wide access. `/Volumes` network/removable roots remain refused unless the
+separate `allow_macos_volume_roots` opt-in is reviewed and enabled.
+
+To add `grep` or `glob`, append `fs_grep` and/or `fs_glob` deliberately to
+`allowed_fs_ops`; setup leaves them out each time it enforces the safe profile.
+To enable writes later, follow
+`docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md` and complete the security
+checklist first. The setup and installer never enable writes or indexing.
 
 `macos/invoke-cyclaw.sh` (the `cyclaw` shim's launcher) falls back to a
 system `python3`/`python` on `PATH` when `~/.CyClaw/venv/bin/python` is

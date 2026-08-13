@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CyClaw fsconnect weekly expired-trash maintenance template.
+
+  DISABLED BY DEFAULT. This file is not installed or loaded automatically.
+  To enable it later:
+    1. Edit every REPLACE_* value and complete the write-enablement review.
+    2. mkdir -p ~/Library/Logs/CyClaw
+    3. Test ProgramArguments manually while writes remain disabled.
+    4. Copy the edited file to ~/Library/LaunchAgents/ and load it explicitly.
+  With writes_enabled: false (the installer default), trash-empty is a no-op.
+  No secrets are required or embedded here. No KeepAlive is configured.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cgfixit.cyclaw.fsconnect-trash</string>
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_CYCLAW_REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_CYCLAW_PYTHON</string>
+    <string>-m</string>
+    <string>agentic.fsconnect.cli</string>
+    <string>--config</string>
+    <string>REPLACE_WITH_CYCLAW_REPO/config.yaml</string>
+    <string>trash-empty</string>
+    <string>--root</string>
+    <string>/Users/REPLACE_USER/CyClaw-FS</string>
+    <string>--reason</string>
+    <string>weekly launchd retention purge</string>
+    <string>--confirm</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/fsconnect-trash.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/fsconnect-trash.log</string>
+</dict>
+</plist>

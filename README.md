@@ -715,7 +715,7 @@ fsconnect:
   allowed_roots: ["/srv/share"]   # REQUIRED when enabled; existing dirs
   max_file_bytes: 5242880         # 5 MiB read cap
   writes_enabled: false           # master write switch (dry-run plans while false)
-  writable_roots: [null]          # null => OS default (/var/lib/cyclaw-fs | C:\CyClaw-FS)
+  writable_roots: [null]          # null => ~/CyClaw-FS (macOS) | /var/lib/cyclaw-fs (Linux) | C:\CyClaw-FS
   max_write_bytes: 10485760       # 10 MiB write cap
   index_enabled: false            # toggle RAG-corpus indexing of the share
 ```
