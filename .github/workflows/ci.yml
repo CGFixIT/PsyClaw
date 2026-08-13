@@ -609,8 +609,8 @@ jobs:
           CYCLAW_HARNESS_PORT: '8790'
         run: |
           $ErrorActionPreference = "Stop"
-          $Python = (Get-Command python -CommandType Application).Source
-          $Pwsh = (Get-Command pwsh -CommandType Application).Source
+          $Python = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+          $Pwsh = (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
           $RuntimeDir = Join-Path $env:RUNNER_TEMP "cyclaw-windows-live-smoke"
           New-Item -ItemType Directory -Force -Path $RuntimeDir, $env:CYCLAW_HOME | Out-Null
           $script:Processes = @()
