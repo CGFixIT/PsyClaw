@@ -38,9 +38,12 @@ def test_ordinary_dotfile_is_not_ignored(darwin: None) -> None:
     assert not pathsafe._is_macos_artifact_name(".env")
 
 
-def test_dataless_flag_requires_zero_size(darwin: None) -> None:
+def test_dataless_flag_is_authoritative_regardless_of_logical_size(darwin: None) -> None:
+    # A real dataless placeholder's st_size typically reports the file's full
+    # logical size (not 0) -- macOS preserves it so Finder/ls can show a
+    # correct size without downloading. The flag alone must decide.
     assert pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0x40000000))
-    assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=1, st_flags=0x40000000))
+    assert pathsafe._is_macos_dataless(SimpleNamespace(st_size=12345, st_flags=0x40000000))
     assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0))
 
 

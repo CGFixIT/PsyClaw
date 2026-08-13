@@ -160,11 +160,16 @@ def _is_macos_artifact_name(name: str) -> bool:
 
 
 def _is_macos_dataless(st: os.stat_result) -> bool:
-    return (
-        sys.platform == "darwin"
-        and st.st_size == 0
-        and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
-    )
+    """True if ``st`` names a non-resident (iCloud-evicted) file.
+
+    ``SF_DATALESS`` alone is authoritative. A real dataless placeholder's
+    ``st_size`` typically still reports the file's full logical size (macOS
+    preserves it so Finder/ls can show a correct size without downloading),
+    not 0 -- requiring ``st_size == 0`` in addition to the flag would miss
+    the common case and let a subsequent read materialize (download) it,
+    which is exactly what a read on an offline-first system must not do.
+    """
+    return sys.platform == "darwin" and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
 
 
 def _filter_macos_entries(

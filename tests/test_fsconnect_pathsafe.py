@@ -337,10 +337,13 @@ def test_darwin_list_skips_apple_metadata(monkeypatch, tmp_path):
     assert names == {"visible.md"}
 
 
-def test_darwin_dataless_flag_requires_zero_size(monkeypatch):
+def test_darwin_dataless_flag_is_authoritative_regardless_of_logical_size(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
+    # A real dataless placeholder's st_size typically reports the file's full
+    # logical size (not 0) -- macOS preserves it so Finder/ls can show a
+    # correct size without downloading. The flag alone must decide.
     assert pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0x40000000))
-    assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=1, st_flags=0x40000000))
+    assert pathsafe._is_macos_dataless(SimpleNamespace(st_size=12345, st_flags=0x40000000))
     assert not pathsafe._is_macos_dataless(SimpleNamespace(st_size=0, st_flags=0))
 
 
