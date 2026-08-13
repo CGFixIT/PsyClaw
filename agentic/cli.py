@@ -922,6 +922,11 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             iterations=len(result.iterations),
             plan_sha256=plan_sha256,
         )
+        # Keep the accepted clone for the later human decision, but release
+        # ScopedRoots' authority handles now.  On Windows they deliberately
+        # deny delete sharing; relying on process exit would make an in-process
+        # reject/discard unable to remove the clone.
+        tools.release()
     else:
         record = RealRepoRunRecord(
             run_id=run_id, repo=cfg.repo, dest=str(tools.worktree), status="exhausted",
@@ -955,16 +960,14 @@ def _render_pending_diff(cfg: AgenticConfig, dest: str, config_path: str, change
     every untracked path in the clone, in case unrelated cruft exists there)
     are appended as their full current content.
 
-    Deliberately does NOT call ``tools.close()`` on the reattached instance:
-    that method always removes the clone from disk regardless of whether it
-    came from ``clone()`` or ``attach()``, and this is a read-only peek, not
-    ownership of the clone's lifecycle. The unreleased directory descriptor
-    is reclaimed by the OS when this short-lived CLI-subprocess-per-call
-    process exits (see I6) -- not a leak in the way it would be in a
-    long-running process.
+    This read-only peek releases the reattached instance's filesystem handles
+    without deleting the retained clone.  That is necessary for in-process
+    callers on Windows, where the jail handles intentionally deny delete
+    sharing until released.
     """
     from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
 
+    tools: RepoWorkspaceTools | None = None
     try:
         tools = RepoWorkspaceTools.attach(cfg, Path(dest), config_path=config_path)
         tracked_diff = tools.diff()
@@ -975,6 +978,9 @@ def _render_pending_diff(cfg: AgenticConfig, dest: str, config_path: str, change
             parts.append(f"--- new file: {path} ---\n{content}")
     except AgenticError as exc:
         return f"[diff unavailable: {exc.message}]"
+    finally:
+        if tools is not None:
+            tools.release()
     diff_text = "\n\n".join(parts)
     if not diff_text:
         return "[no diff to show -- the candidate reported changed files, but none were tracked or new]"
@@ -1185,9 +1191,13 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
             cfg=app_cfg,
         )
     except AgenticWriteRefused as exc:
+        if args.decision == "approve":
+            tools.release()
         _err(exc.message)
         return EXIT_REFUSED
     except AgenticError as exc:
+        if args.decision == "approve":
+            tools.release()
         _err(exc.message)
         return EXIT_FAIL
     finally:
@@ -1209,17 +1219,23 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
     # is not.
     save_run(runs_dir, record)
 
-    if outcome["status"] == "approved" and args.push:
-        code = _push_record(tools, record, runs_dir)
-        if code != EXIT_OK:
-            return code
-        if args.publish:
-            code = _publish_record(
-                cfg, record, runs_dir,
-                reason=args.reason, confirm=args.confirm_publish, config_path=args.config,
-            )
+    if outcome["status"] == "approved":
+        if args.push:
+            try:
+                code = _push_record(tools, record, runs_dir)
+            finally:
+                tools.release()
             if code != EXIT_OK:
                 return code
+            if args.publish:
+                code = _publish_record(
+                    cfg, record, runs_dir,
+                    reason=args.reason, confirm=args.confirm_publish, config_path=args.config,
+                )
+                if code != EXIT_OK:
+                    return code
+        else:
+            tools.release()
 
     save_run(runs_dir, record)
     print(json.dumps(record.to_dict(), indent=2))
@@ -1294,12 +1310,15 @@ def cmd_real_repo_run_push(args: argparse.Namespace) -> int:
 
     from agentic.real_repo_run_store import save_run
 
-    code = _push_record(tools, record, runs_dir)
-    if code != EXIT_OK:
-        return code
-    save_run(runs_dir, record)
-    print(json.dumps(record.to_dict(), indent=2))
-    return EXIT_OK
+    try:
+        code = _push_record(tools, record, runs_dir)
+        if code != EXIT_OK:
+            return code
+        save_run(runs_dir, record)
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_OK
+    finally:
+        tools.release()
 
 
 def cmd_real_repo_run_publish(args: argparse.Namespace) -> int:
@@ -1329,14 +1348,17 @@ def cmd_real_repo_run_publish(args: argparse.Namespace) -> int:
 
     from agentic.real_repo_run_store import save_run
 
-    code = _publish_record(
-        cfg, record, runs_dir, reason=args.reason, confirm=args.confirm, config_path=args.config,
-    )
-    if code != EXIT_OK:
-        return code
-    save_run(runs_dir, record)
-    print(json.dumps(record.to_dict(), indent=2))
-    return EXIT_OK
+    try:
+        code = _publish_record(
+            cfg, record, runs_dir, reason=args.reason, confirm=args.confirm, config_path=args.config,
+        )
+        if code != EXIT_OK:
+            return code
+        save_run(runs_dir, record)
+        print(json.dumps(record.to_dict(), indent=2))
+        return EXIT_OK
+    finally:
+        tools.release()
 
 
 def cmd_real_repo_run_discard(args: argparse.Namespace) -> int:

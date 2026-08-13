@@ -269,6 +269,20 @@ def test_close_removes_the_clone_from_disk(tmp_path, monkeypatch):
     assert not dest.parent.exists()
 
 
+def test_release_retains_the_clone_and_is_idempotent(tmp_path, monkeypatch):
+    fake = _fake_clone_populating(files={"a.txt": "x"})
+    with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
+        tools = RepoWorkspaceTools.clone(_cfg(tmp_path, monkeypatch))
+        dest = Path(mrun.call_args.kwargs["dest"])
+        tools.release()
+        tools.release()
+        assert (dest / "a.txt").read_text(encoding="utf-8") == "x"
+
+    with RepoWorkspaceTools.attach(_cfg(tmp_path, monkeypatch), dest):
+        pass
+    assert not dest.exists()
+
+
 def test_close_is_safe_to_call_twice(tmp_path, monkeypatch):
     fake = _fake_clone_populating(files={"a.txt": "x"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
@@ -999,7 +1013,7 @@ def test_attach_reopens_an_existing_clone_and_can_read_and_write(tmp_path, monke
         original = RepoWorkspaceTools.clone(cfg)
         dest = Path(mrun.call_args.kwargs["dest"])
         assert original.worktree == dest
-        original._scoped.close()  # simulate the process that cloned it having exited
+        original.release()  # simulate the process that cloned it having exited
 
     with RepoWorkspaceTools.attach(cfg, dest) as reattached:
         assert reattached.read_file("a.txt") == "hello\n"
@@ -1018,7 +1032,7 @@ def test_attach_succeeds_when_dest_resolves_under_macos_volumes(tmp_path, monkey
     with patch.object(repo_workspace, "run_read", side_effect=fake) as mrun:
         original = RepoWorkspaceTools.clone(cfg)
         dest = Path(mrun.call_args.kwargs["dest"])
-        original._scoped.close()
+        original.release()
 
     monkeypatch.setattr(pathsafe.sys, "platform", "darwin")
     monkeypatch.setattr(pathsafe, "_is_macos_volume_path", lambda _resolved: True)

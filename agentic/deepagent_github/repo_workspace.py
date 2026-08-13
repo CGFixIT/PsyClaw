@@ -824,14 +824,28 @@ class RepoWorkspaceTools:
         self._audit("agentic_repo_workspace_git_op", op=tool, count=len(paths))
         return paths
 
+    def release(self) -> None:
+        """Release filesystem-authority handles while retaining the clone.
+
+        A real-repo run deliberately keeps an accepted clone for a later human
+        decision.  The CLI normally exits immediately afterward, but callers
+        that invoke :func:`agentic.cli.main` in-process must not depend on
+        process exit to close the held jail handles.  On Windows those handles
+        intentionally deny delete sharing, so leaving them open also prevents
+        a later reject/discard invocation from reclaiming the clone.
+
+        Idempotent.  Use :meth:`close` when the clone itself must be deleted.
+        """
+        self._scoped.close()
+
     def close(self) -> None:
-        """Release the held directory fd and delete the clone from disk.
+        """Release filesystem-authority handles and delete the clone from disk.
 
         Idempotent-ish: closing twice is harmless (ScopedRoots.close() and a
         missing directory are both tolerated), but this is not itself
         thread-safe -- callers own their own instance's lifecycle.
         """
-        self._scoped.close()
+        self.release()
         # ScopedRoots holds a dir_fd on `_dest`, not a lock on its parent, so
         # removing the parent (which also removes `_dest`) after close() is
         # safe -- _rmtree_best_effort handles both the case where the clone
