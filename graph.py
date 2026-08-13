@@ -388,8 +388,17 @@ def guardrail_output_node(
     if output_guard is None or state.get("answer_model") != "local":
         return {}
 
-    docs = state.get("retrieved_docs", [])
-    context = "\n\n".join(d.get("text", "") for d in docs)  # matches guardrail_safety_node's own precedent, integration.py
+    # Ground the check in what local_llm_node actually fed the model
+    # (answer_sources = docs[:5], further truncated by its own char budget),
+    # not the full retrieved_docs. Shipped defaults (top_k_semantic=5 +
+    # top_k_keyword=5) mean retrieved_docs can carry up to 10 fused chunks --
+    # using it here let the grounding check match the model's answer against
+    # chunks it never saw, so a real hallucination could be judged "grounded"
+    # if it happened to overlap doc #6-10. Safe to read unconditionally: this
+    # function already returned above unless answer_model == "local", and
+    # local_llm_node always sets answer_sources (possibly []) whenever it runs.
+    docs = state.get("answer_sources", [])
+    context = "\n\n".join(d.get("text", "") for d in docs)
 
     try:
         result = output_guard(state.get("query", ""), state.get("answer", ""), context)
