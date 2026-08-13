@@ -6,7 +6,7 @@ description: Find and implement one current, evidence-backed CyClaw improvement,
 # Optimize CyClaw
 
 Optimize the current repository state, not a remembered finding. The successful
-outcome is one small, demonstrated improvement or a clear no-change conclusion.
+outcome is one or two small, demonstrated improvement or a clear no-change conclusion.
 Do not manufacture architecture, speed work, or PR volume.
 
 ## Evidence standard
