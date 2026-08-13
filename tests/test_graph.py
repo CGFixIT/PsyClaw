@@ -1177,13 +1177,19 @@ class TestGuardrailOutputNode:
         out = guardrail_output_node(state, output_guard=_boom)
         assert out == {"guardrail_degraded": True}
 
-    def test_guard_receives_query_answer_and_joined_context(self):
+    def test_guard_receives_query_answer_and_answer_sources_context(self):
         seen = []
         guard = lambda q, a, c: (seen.append((q, a, c)), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
-        docs = [{"text": "doc one"}, {"text": "doc two"}]
+        # retrieved_docs has 3 docs; answer_sources (what local_llm_node actually
+        # fed into its prompt) has only the first 2 -- guardrail_output_node must
+        # ground against answer_sources, not the full retrieved_docs, or it checks
+        # the model's answer against text the model never saw.
+        retrieved_docs = [{"text": "doc one"}, {"text": "doc two"}, {"text": "doc three (never shown to the model)"}]
+        answer_sources = retrieved_docs[:2]
         state = {
             "query": "what is RRF?", "answer_model": "local", "answer": "an answer",
-            "retrieved_docs": docs,
+            "retrieved_docs": retrieved_docs,
+            "answer_sources": answer_sources,
         }
         guardrail_output_node(state, output_guard=guard)
         assert seen == [("what is RRF?", "an answer", "doc one\n\ndoc two")]
