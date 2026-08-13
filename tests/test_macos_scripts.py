@@ -12,6 +12,7 @@ the drift.
 
 from __future__ import annotations
 
+import plistlib
 import re
 from pathlib import Path
 
@@ -59,3 +60,22 @@ def test_macos_setup_contract_and_flags_are_narrow() -> None:
     assert "reject_shell_metachars \"$REPO_DIR\"" in installer
     for unsupported in ("declare -A", "mapfile", "readarray", "local -n"):
         assert unsupported not in setup
+
+
+def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
+    plist_path = _REPO_ROOT / "macos" / "LaunchAgents" / "com.cgfixit.cyclaw.fsconnect-trash.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    arguments = document["ProgramArguments"]
+
+    assert document["Label"] == "com.cgfixit.cyclaw.fsconnect-trash"
+    assert document["RunAtLoad"] is False
+    assert "KeepAlive" not in document
+    assert document["StartCalendarInterval"]["Weekday"] == 1
+    assert arguments[1:3] == ["-m", "agentic.fsconnect.cli"]
+    assert "trash-empty" in arguments
+    assert "--root" in arguments
+    assert "--reason" in arguments
+    assert "--confirm" in arguments
+    assert "--all" not in arguments
+    assert "EnvironmentVariables" not in document
+    assert any("REPLACE_" in value for value in arguments)

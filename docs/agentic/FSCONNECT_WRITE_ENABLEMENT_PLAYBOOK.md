@@ -91,6 +91,20 @@ a `rule_applied` string.
 **Verify:** no files created; audit log shows one `fsconnect_write_dryrun` per op with a
 sensible `rule_applied`.
 
+### macOS pre-flight additions
+
+- Run `macos/setup-fsconnect.sh` first. It creates `~/CyClaw-FS`, enables only
+  list/stat/read, sets `strict_roots: true`, and keeps writes/indexing off.
+- Confirm Terminal/iTerm has only the needed **Files and Folders** permission.
+  Do not install a privacy-control profile for this connector.
+- APFS root matching is case-insensitive and strips Unicode format controls for
+  allow-list comparison only. Held-fd `O_NOFOLLOW` descent remains authority.
+- `/Volumes` is a network/removable trust boundary and requires the separate
+  `allow_macos_volume_roots: true` review; `allow_unc_roots` does not cover it.
+- Before enabling writes, separate the reviewed write root from the default
+  read jail. The installer declares the same jail for future dry runs only while
+  `writes_enabled: false`.
+
 ## 6. Stage 2 — Security review
 
 Execute `FSCONNECT_SECURITY_REVIEW_CHECKLIST.md` end to end. Record the config sha256
@@ -126,7 +140,8 @@ Applied ops return `{"status": "applied", "executed": true, "intent_id": ..., "r
 - **Weekly:** review trash, then purge expired entries. `trash-empty` purges only
   entries past `trash_retention_days` unless `--all` is given, is itself gated + audited
   per entry, and also sweeps orphaned `*.cyclaw-tmp` crash leftovers older than 24 h.
-  Sample cron (no daemon ships — Assumption A5):
+  Sample cron (no daemon is auto-installed; a disabled launchd template also
+  ships under `macos/LaunchAgents/`):
 
   ```cron
   0 3 * * 0  cd /opt/cyclaw && python -m agentic.fsconnect.cli --config config.yaml trash-empty --reason "weekly retention purge" --confirm
