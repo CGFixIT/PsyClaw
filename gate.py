@@ -12,7 +12,6 @@ CHANGES FROM ORIGINAL (soul.md / persistent personality integration):
   - Pass personality to build_graph()
   - Add /soul endpoint (GET current soul, POST propose evolution)
   - Add /soul/apply endpoint (POST to apply after user confirmation)
-  - enhance ci or create explicit logging to ensure soul is injected to appropriate chat queries-first just test by adding a unique non llm training fact and it should say vault miss but replies correct-thats the lazy version to start but ci long term if metrics not already  
 ---
 
 Addresses:
