@@ -31,6 +31,7 @@
 #   --no-profile-edit    do not add the cyclaw() function to the shell rc file
 #                        (the PATH entry is still added unless --no-path-edit)
 #   --no-path-edit       do not modify PATH via the shell rc file
+#   --no-fsconnect       prepare ~/CyClaw-FS but do not enable list/read access
 #
 # Target shells: bash (including macOS's stock 3.2) and zsh. BSD userland
 # assumed on macOS -- no GNU-only flags, no Homebrew dependency declared or
@@ -43,6 +44,7 @@ REPO_PATH=""
 SKIP_PYTHON_DEPS=0
 NO_PROFILE_EDIT=0
 NO_PATH_EDIT=0
+NO_FSCONNECT=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -50,6 +52,7 @@ while [ $# -gt 0 ]; do
     --skip-python-deps) SKIP_PYTHON_DEPS=1; shift ;;
     --no-profile-edit) NO_PROFILE_EDIT=1; shift ;;
     --no-path-edit) NO_PATH_EDIT=1; shift ;;
+    --no-fsconnect) NO_FSCONNECT=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -107,6 +110,10 @@ else
   git -C "$REPO_DIR" pull --ff-only
 fi
 reject_shell_metachars "$REPO_DIR"
+
+# Prepare the private jail even when enablement is explicitly skipped. The setup
+# script is idempotent and never changes config in --prepare-only mode.
+bash "$REPO_DIR/macos/setup-fsconnect.sh" --prepare-only
 
 # -- 3. Python + dependencies -----------------------------------------------------
 find_python312() {
@@ -178,7 +185,21 @@ if [ "$SKIP_PYTHON_DEPS" -eq 0 ]; then
   step "dependencies installed"
 fi
 
-# -- 4. Launcher + shim -----------------------------------------------------------
+# -- 4. Filesystem connector -----------------------------------------------------
+if [ "$NO_FSCONNECT" -eq 0 ]; then
+  FSCONNECT_PYTHON=""
+  if [ -x "$VENV_DIR/bin/python" ]; then
+    FSCONNECT_PYTHON="$VENV_DIR/bin/python"
+  elif [ -n "$PY_CMD" ]; then
+    FSCONNECT_PYTHON="$PY_CMD"
+  fi
+  CYCLAW_FSCONNECT_PYTHON="$FSCONNECT_PYTHON" bash "$REPO_DIR/macos/setup-fsconnect.sh"
+  step "fsconnect list/read enabled for $HOME/CyClaw-FS; writes and indexing remain off"
+else
+  step "fsconnect jail prepared; config enablement skipped (--no-fsconnect)"
+fi
+
+# -- 5. Launcher + shim -----------------------------------------------------------
 cp "$REPO_DIR/macos/invoke-cyclaw.sh" "$BIN_DIR/invoke-cyclaw.sh"
 chmod +x "$BIN_DIR/invoke-cyclaw.sh"
 
@@ -193,7 +214,7 @@ EOF
 chmod +x "$SHIM"
 step "launcher shim written to $SHIM"
 
-# -- 5 & 6. PATH + shell rc function ----------------------------------------------
+# -- 6 & 7. PATH + shell rc function ----------------------------------------------
 # macOS/Linux have no persistent user-level PATH store analogous to Windows'
 # registry -- both the PATH export and the cyclaw() function are added to the
 # same shell rc file, each behind its own marker block, so either can be

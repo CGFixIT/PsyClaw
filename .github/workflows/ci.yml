@@ -222,7 +222,10 @@ jobs:
           # --repo-path points the installer at THIS PR's own checkout instead of
           # cloning origin/main -- without it the smoke test would silently
           # validate main forever, never the branch under test.
-          bash macos/install-cyclaw.sh --repo-path "$GITHUB_WORKSPACE" --skip-python-deps < /dev/null
+          # The early smoke intentionally skips config enablement because PyYAML is
+          # installed later in this job. tests/test_macos_fsconnect_setup.py runs
+          # the default enablement path after dependencies are present.
+          bash macos/install-cyclaw.sh --repo-path "$GITHUB_WORKSPACE" --skip-python-deps --no-fsconnect < /dev/null
 
           [ -d "$HOME/.CyClaw" ] || fail "home directory not created"
           # NOT "repo" -- that dir is only created on the clone path; --repo-path
@@ -232,6 +235,9 @@ jobs:
             [ -d "$HOME/.CyClaw/$d" ] || fail "missing \$HOME/.CyClaw/$d"
           done
           [ -x "$HOME/.CyClaw/bin/cyclaw" ] || fail "cyclaw shim missing or not executable"
+          [ -d "$HOME/CyClaw-FS" ] || fail "fsconnect jail not prepared"
+          [ "$(stat -f '%Lp' "$HOME/CyClaw-FS")" = "700" ] || fail "fsconnect jail mode is not 700"
+          [ -f "$HOME/CyClaw-FS/README.txt" ] || fail "fsconnect jail README missing"
           grep -qF "$GITHUB_WORKSPACE" "$HOME/.CyClaw/bin/cyclaw" \
             || fail "shim does not reference the checked-out repo (--repo-path not honored)"
 
