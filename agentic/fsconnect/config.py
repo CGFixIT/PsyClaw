@@ -21,6 +21,7 @@ mcp_hybrid_server.py.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 
 from utils.errors import FsConnectConfigError
@@ -45,11 +46,14 @@ _WINDOWS = os.name == "nt"
 def os_default_writable_root() -> str:
     """OS-appropriate default for the file-share write root.
 
-    Windows -> ``C:\\CyClaw-FS``. Linux/other -> ``/var/lib/cyclaw-fs`` when
-    ``/var/lib`` is writable (service install), else ``~/CyClaw-FS`` (no root
-    required). Side-effect free: ``os.access`` probes permission without creating
-    anything; the directory itself is created later by ``pathsafe``.
+    Windows -> ``C:\\CyClaw-FS``. macOS -> ``~/CyClaw-FS``. Linux/other ->
+    ``/var/lib/cyclaw-fs`` when ``/var/lib`` is writable (service install), else
+    ``~/CyClaw-FS`` (no root required). Side-effect free: ``os.access`` probes
+    permission without creating anything; the directory itself is created later
+    by ``pathsafe``.
     """
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/CyClaw-FS")
     if _WINDOWS:
         return r"C:\CyClaw-FS"
     if os.access("/var/lib", os.W_OK):

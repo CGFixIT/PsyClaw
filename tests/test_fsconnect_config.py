@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -110,12 +111,38 @@ def test_unknown_key_collected_not_fatal(tmp_path):
     assert "typo_field" in fc._unknown_keys
 
 
-def test_os_default_writable_root_is_os_specific():
-    root = os_default_writable_root()
-    if os.name == "nt":
-        assert root == r"C:\CyClaw-FS"
-    else:
-        assert root in ("/var/lib/cyclaw-fs", os.path.expanduser("~/CyClaw-FS"))
+def test_os_default_writable_root_darwin_never_probes_var_lib(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os.path, "expanduser", lambda value: "/Users/test/CyClaw-FS")
+
+    def fail_access(*_args):
+        pytest.fail("Darwin must not probe /var/lib")
+
+    monkeypatch.setattr(os, "access", fail_access)
+    assert os_default_writable_root() == "/Users/test/CyClaw-FS"
+
+
+@pytest.mark.parametrize(
+    ("var_lib_writable", "expected"),
+    [(True, "/var/lib/cyclaw-fs"), (False, "/home/test/CyClaw-FS")],
+)
+def test_os_default_writable_root_linux(monkeypatch, var_lib_writable, expected):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("agentic.fsconnect.config._WINDOWS", False)
+    monkeypatch.setattr(os, "access", lambda path, mode: path == "/var/lib" and var_lib_writable)
+    monkeypatch.setattr(os.path, "expanduser", lambda value: "/home/test/CyClaw-FS")
+    assert os_default_writable_root() == expected
+
+
+def test_os_default_writable_root_windows_never_probes_var_lib(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("agentic.fsconnect.config._WINDOWS", True)
+
+    def fail_access(*_args):
+        pytest.fail("Windows must not probe /var/lib")
+
+    monkeypatch.setattr(os, "access", fail_access)
+    assert os_default_writable_root() == r"C:\CyClaw-FS"
 
 
 def test_to_dict_roundtrips():

@@ -744,7 +744,7 @@ fsconnect:
   # --- WRITE scope (separate, gated, default-disabled) ---
   writes_enabled: false          # master write switch; false => write ops return DRY-RUN plans only
   writable_roots:                # the ONLY paths writes may touch; created at startup if missing
-    - null                       # null => OS default: C:\CyClaw-FS (Win) | /var/lib/cyclaw-fs (Linux, ~/CyClaw-FS fallback)
+    - null                       # null => C:\CyClaw-FS (Win) | ~/CyClaw-FS (macOS) | /var/lib/cyclaw-fs (Linux, home fallback)
   max_write_bytes: 10485760      # 10 MiB write cap
   require_confirm_destructive: true   # overwrite-existing / move need --confirm AND --reason
   # --- Phase 2 write-enablement (all default-off / unbounded; safe to omit) ---

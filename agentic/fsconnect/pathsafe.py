@@ -43,6 +43,8 @@ import hashlib
 import os
 import re
 import stat as statmod
+import sys
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -56,6 +58,14 @@ _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 
 _SEP_RE = re.compile(r"[\\/]+")
+
+
+def _root_match_identity(path: str) -> str:
+    """Comparison-only identity for configured roots; never an access authority."""
+    normalized = os.path.normcase(path)
+    if sys.platform != "darwin":
+        return normalized
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf").casefold()
 
 
 def _norm_contains(parent_norm: str, child_norm: str) -> bool:
@@ -157,13 +167,14 @@ class ScopedRoots:
         for raw in root_strs:
             resolved = self._prepare_root(raw, create=create)
             norm = os.path.normcase(str(resolved))
+            match_identity = _root_match_identity(str(resolved))
             for other in seen:
-                if _norm_contains(other, norm) or _norm_contains(norm, other):
+                if _norm_contains(other, match_identity) or _norm_contains(match_identity, other):
                     raise FsPathError(
                         f"overlapping roots are not allowed: {raw!r}",
                         details={"root": raw},
                     )
-            seen.append(norm)
+            seen.append(match_identity)
             dir_fd = os.open(str(resolved), os.O_RDONLY | _O_DIRECTORY) if _POSIX else -1
             self._roots.append(SafeRoot(requested=raw, path=resolved, normcase=norm, dir_fd=dir_fd))
 
@@ -231,9 +242,9 @@ class ScopedRoots:
                 "multiple roots configured; specify which root",
                 details={"roots": [r.requested for r in self._roots]},
             )
-        norm = os.path.normcase(str(Path(os.path.expanduser(os.path.expandvars(root_arg)))))
+        match_identity = _root_match_identity(str(Path(os.path.expanduser(os.path.expandvars(root_arg)))))
         for r in self._roots:
-            if r.requested == root_arg or r.normcase == norm:
+            if r.requested == root_arg or _root_match_identity(str(r.path)) == match_identity:
                 return r
         raise FsPathError(
             f"root not in the configured allow-list: {root_arg!r}",
