@@ -11,7 +11,7 @@ inbound content boundary: the 40-pattern prompt-injection filter
 The sanitizer runs on every `/query` and at index time; it is the control that
 answers "prompt injection (direct)" and "corpus poisoning" in the threat model
 (`docs/THREAT_MODEL.md` §2). Adversarial coverage decays as new bypass families
-emerge — this loop keeps it current. See `docs/PROPOSED_SKILLS.md` #2.
+emerge — this loop keeps it current. See `docs/work/PROPOSED_SKILLS.md` #2.
 
 **What "done" looks like for one pass:** every probe in the corpus behaves as
 labeled (jailbreaks blocked, legitimate queries allowed), each newly-closed gap
@@ -41,10 +41,16 @@ and classifies each:
 Exit `0` = baseline holds (open findings are allowed to exist). Exit `2` = a new
 bypass or a false positive. Exit `3` = deps/env problem.
 
-The seed corpus ships with **7 real open findings** in the shipped config (e.g.
-`from THE it department` defeats the `from (it department|...)` pattern; a
-zero-width character splits a trigger word). Confirm them yourself before
-touching anything.
+The seed corpus currently ships **dry** — every originally-identified finding
+(8 total: `me-05`, `au-02`, `hx-01`–`hx-06`) is already closed and lives on as
+a permanent regression anchor in `probes.yaml` (e.g. the original
+`from THE it department` bypass of the `from (it department|...)` pattern, and
+a zero-width-character trigger-word split — both now blocked). Run Step 1
+first to confirm this is still true: a nonzero `open_findings` count means a
+NEW gap surfaced (a real sanitizer regression, or a freshly-extended probe) —
+Steps 2–5 are how you close it. If `open_findings` is 0, skip straight to
+**Step 6** and extend the corpus rather than hunting for a finding that
+doesn't exist yet.
 
 ### Step 2 — Pick one open finding and classify the bypass family
 
@@ -70,6 +76,9 @@ Add ONE regex to the matching taxonomy section in `config.yaml`. Requirements:
   the benign near-miss probes (`bn-09`, `bn-10`, …). Broad verbs like `remember`
   or `update` on their own will blow the false-positive budget.
 - Keep the taxonomy count comments accurate if you change section totals.
+- Patterns also compile with `re.DOTALL` (same `_load_filter` call) — `.`
+  matches newlines, which is why cross-line phrasing like `mode.*disabled`
+  works. Don't assume `.` stops at a line break when writing a pattern.
 
 ### Step 4 — Re-run; confirm the finding closed and nothing regressed
 
@@ -103,11 +112,12 @@ and go again. Never delete a probe — a closed finding stays as an anchor.
 
 ### Step 7 — Sync the documented pattern count
 
-If you added patterns, the documentary total "33" is cited in several places
-(`config.yaml` header comment, `CLAUDE.md`, `guardrails/rails.py` comment,
-`agentic/fsconnect/client.py` comment). Update them, or run `/doc-sync` which
-checks exactly this. The count is **documentary, not asserted** — no test
-enforces `== 33` — but drift misleads the next reader.
+If you added patterns, the documentary pattern-count total is cited in several
+places (`config.yaml`'s header/section comments, `CLAUDE.md`, `guardrails/rails.py`
+comments — currently **40** everywhere). Grep for the old count to find every
+citation, or run `/doc-sync`, whose D4 check verifies exactly this. The count
+is **documentary, not asserted** — no test enforces an exact total — but drift
+misleads the next reader.
 
 ---
 
