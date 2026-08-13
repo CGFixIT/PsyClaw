@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 import yaml
 
+from agentic.fsconnect import pathsafe
 from agentic.fsconnect.config import load_fsconnect_config
 from agentic.fsconnect.indexer import FsIndexer
+from utils.errors import FsMacOSPermissionError, FsPathError
 from utils.logger import _get_config, reset_config_cache
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
@@ -65,6 +68,44 @@ def test_scan_lists_eligible_and_flags(env):
     assert paths["big.txt"].get("skipped") == "too_large"  # over the 50-byte cap
     assert paths["docs/b.txt"]["injection_flag_count"] >= 1
     assert res["eligible"] == 2  # a.md + docs/b.txt (big.txt skipped)
+
+
+def test_darwin_index_walk_skips_apple_metadata_and_dataless(monkeypatch, env):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    cfg, fs_cfg, cp, idx, _tmp = env
+    for name in (".DS_Store", ".localized", "._sidecar.md"):
+        (idx / name).write_text("metadata", encoding="utf-8")
+    (idx / "placeholder.md").touch()
+    monkeypatch.setattr(pathsafe, "_is_macos_dataless", lambda st: st.st_size == 0)
+
+    result = FsIndexer(cfg, fs_cfg, config_path=cp).scan()
+    paths = {entry["path"] for entry in result["files"]}
+    assert {".DS_Store", ".localized", "._sidecar.md", "placeholder.md"}.isdisjoint(paths)
+
+
+def test_index_scan_does_not_create_or_fallback_missing_root(env):
+    cfg, fs_cfg, cp, _idx, tmp = env
+    missing = tmp / "missing-index-root"
+    fs_cfg.index_root = str(missing)
+    with pytest.raises(FsPathError):
+        FsIndexer(cfg, fs_cfg, config_path=cp).scan()
+    assert not missing.exists()
+
+
+def test_index_scan_propagates_macos_permission_error(monkeypatch, env):
+    from agentic.fsconnect.pathsafe import ScopedRoots
+
+    cfg, fs_cfg, cp, _idx, _tmp = env
+    original_read = ScopedRoots.read_bytes
+
+    def denied(self, target, *args, **kwargs):
+        if target == "a.md":
+            raise FsMacOSPermissionError("macOS denied access")
+        return original_read(self, target, *args, **kwargs)
+
+    monkeypatch.setattr(ScopedRoots, "read_bytes", denied)
+    with pytest.raises(FsMacOSPermissionError):
+        FsIndexer(cfg, fs_cfg, config_path=cp).scan()
 
 
 def test_apply_stages_into_staging_dir(env):

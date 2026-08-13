@@ -107,6 +107,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("allowed_roots", ", ".join(fc.allowed_roots) or "(none)")
     _kv("allowed_fs_ops", ", ".join(fc.allowed_fs_ops))
     _kv("allow_unc_roots", fc.allow_unc_roots)
+    _kv("allow_macos_volume_roots", fc.allow_macos_volume_roots)
     _kv("max_file_bytes", fc.max_file_bytes)
     _kv("writes_enabled", fc.writes_enabled)
     _kv("writable_roots", ", ".join(fc.write_root_strs) or "(none)")

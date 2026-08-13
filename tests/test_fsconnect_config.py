@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import agentic.fsconnect.config as fsconfig
 from agentic.fsconnect.config import (
     FsConnectConfig,
     load_fsconnect_config,
@@ -40,6 +41,7 @@ def test_defaults_when_minimal(tmp_path):
     assert fc.enabled is True
     assert fc.allowed_roots == [str(tmp_path)]
     assert fc.writes_enabled is False
+    assert fc.allow_macos_volume_roots is False
     assert fc.allowed_fs_ops == ["fs_list", "fs_stat", "fs_read", "fs_grep", "fs_glob"]
     # null writable root expands to the OS default; index_root defaults to it
     assert fc.write_root_strs == [os_default_writable_root()]
@@ -89,6 +91,68 @@ def test_unc_root_allowed_with_flag(tmp_path):
     )
     fc = load_fsconnect_config(path)
     assert fc.allowed_roots == ["\\\\server\\share"]
+
+
+@pytest.mark.parametrize("field_name", ["allowed_roots", "writable_roots"])
+def test_macos_volume_roots_refused_by_default(monkeypatch, tmp_path, field_name):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    path = _write_cfg(tmp_path, {"enabled": True, field_name: ["/Volumes/External/share"]})
+    with pytest.raises(FsConnectConfigError, match="allow_macos_volume_roots is false"):
+        load_fsconnect_config(path)
+
+
+def test_macos_volume_index_root_refused_by_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    path = _write_cfg(tmp_path, {"enabled": True, "index_root": "/Volumes/External/share"})
+    with pytest.raises(FsConnectConfigError, match="allow_macos_volume_roots is false"):
+        load_fsconnect_config(path)
+
+
+def test_macos_volume_roots_require_separate_opt_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    root = "/Volumes/External/share"
+    path = _write_cfg(
+        tmp_path,
+        {
+            "enabled": True,
+            "allow_unc_roots": True,
+            "allow_macos_volume_roots": True,
+            "allowed_roots": [root],
+            "writable_roots": [root],
+            "index_root": root,
+        },
+    )
+    fc = load_fsconnect_config(path)
+    assert fc.allowed_roots == [root]
+    assert fc.write_root_strs == [root]
+    assert fc.index_root == root
+
+
+def test_unc_opt_in_does_not_allow_macos_volumes(monkeypatch, tmp_path):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    path = _write_cfg(
+        tmp_path,
+        {
+            "enabled": True,
+            "allow_unc_roots": True,
+            "allowed_roots": ["/Volumes/External/share"],
+        },
+    )
+    with pytest.raises(FsConnectConfigError, match="allow_macos_volume_roots is false"):
+        load_fsconnect_config(path)
+
+
+def test_macos_volumes_sibling_prefix_is_not_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    path = _write_cfg(tmp_path, {"enabled": True, "allowed_roots": ["/VolumesLike/share"]})
+    assert load_fsconnect_config(path).allowed_roots == ["/VolumesLike/share"]
+
+
+def test_macos_volume_symlink_alias_is_refused(monkeypatch):
+    monkeypatch.setattr(fsconfig.sys, "platform", "darwin")
+    monkeypatch.setattr(fsconfig.os.path, "realpath", lambda _path: "/Volumes/External/share")
+    with pytest.raises(FsConnectConfigError, match="allow_macos_volume_roots is false"):
+        FsConnectConfig(allowed_roots=["/private/mounted-share"])
 
 
 def test_index_extensions_normalized(tmp_path):
@@ -157,6 +221,7 @@ def test_quoted_bool_gates_fail_closed(tmp_path):
     # OPEN an execution/deletion gate. All safety booleans must be real
     # booleans, including the enabled toggle.
     for key in ("enabled", "writes_enabled", "allow_hard_delete",
+                "allow_macos_volume_roots",
                 "require_confirm_destructive", "strict_roots",
                 "block_on_injection_flags"):
         sub = tmp_path / key

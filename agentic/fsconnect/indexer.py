@@ -29,7 +29,7 @@ from pathlib import Path
 from agentic.fsconnect.client import build_injection_patterns
 from agentic.fsconnect.config import FsConnectConfig
 from agentic.fsconnect.pathsafe import ScopedRoots, split_components
-from utils.errors import FsConnectError, FsConnectRuntimeError
+from utils.errors import FsConnectError, FsConnectRuntimeError, FsMacOSPermissionError
 from utils.logger import audit_log
 
 _DEFAULT_STAGING = Path("data/corpus/fsconnect")
@@ -66,7 +66,7 @@ class FsIndexer:
         on_file: Callable[[str, bytes], None] | None = None,
         cached_entry_for: Callable[[str, dict], dict | None] | None = None,
     ) -> None:
-        for entry in roots.list_dir(rel):
+        for entry in roots.list_dir(rel, skip_macos_metadata=True):
             name = entry["name"]
             child = f"{rel}/{name}" if rel else name
             if entry["type"] == "dir":
@@ -97,7 +97,13 @@ class FsIndexer:
                         manifest.append(hit)
                         continue
                 try:
-                    data = roots.read_bytes(child, max_bytes=self.fs_cfg.index_max_file_bytes)
+                    data = roots.read_bytes(
+                        child,
+                        max_bytes=self.fs_cfg.index_max_file_bytes,
+                        skip_macos_metadata=True,
+                    )
+                except FsMacOSPermissionError:
+                    raise
                 except (FsConnectError, OSError) as exc:
                     # Isolate per-file read failures so one unreadable file never
                     # aborts the whole scan/apply. The size check above uses the
@@ -127,7 +133,7 @@ class FsIndexer:
     def scan(self) -> dict:
         """Dry-run: enumerate eligible files under index_root (no copy, no reindex)."""
         manifest: list[dict] = []
-        with ScopedRoots([self.index_root], create=True, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
+        with ScopedRoots([self.index_root], create=False, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
             self._walk(roots, "", manifest)
         eligible = [m for m in manifest if "skipped" not in m]
         audit_log({"event": "fsconnect_index_scan", "index_root": self.index_root,
@@ -213,7 +219,7 @@ class FsIndexer:
             copied.append(rel)
 
         probe = self._cache_probe(cache, staging) if incremental else None
-        with ScopedRoots([self.index_root], create=True, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
+        with ScopedRoots([self.index_root], create=False, allow_unc=self.fs_cfg.allow_unc_roots) as roots:
             # Single pass: _walk reads each CHANGED file once and hands the bytes
             # straight to _stage (bounded memory -- one file held at a time).
             self._walk(roots, "", manifest, on_file=_stage, cached_entry_for=probe)
