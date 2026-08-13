@@ -7,27 +7,32 @@
 #
 # What it does:
 #   1. Pins the git identity the stop hook requires.
-#   2. Ensures `main` is fetched and that we are on a fresh working branch cut
-#      from origin/main (creates one if missing; never force-resets an existing
-#      branch that already has work).
+#   2. Ensures `origin/main` is freshly fetched and that we are on a working
+#      branch cut from origin/main (creates one if missing; never force-resets
+#      an existing branch that already has work).
 #   3. Prints a repo inventory to seed the time-boxed scan (dirs, file counts,
 #      LOC, largest files, dependency manifests, CI workflows, recent commits).
 #
-# It deliberately does NOT: call the GitHub API (PR dedup is an MCP step the
-# agent runs), edit any code, or commit. Read-only except for git config + an
-# optional branch create.
+# It deliberately does NOT: call the GitHub API, edit product code, or commit.
+# PR dedup uses whichever authenticated GitHub surface the agent has. This is
+# read-only except for git config and an optional branch create.
 #
 # Usage:
 #   bash .claude/skills/CyClaw-Optimize/bootstrap.sh [work-branch-name]
 #
 # If a branch name is given and it does not exist, it is created from
-# origin/main. With no argument the script only reports the current branch.
+# origin/main. With no argument it fetches and reports without changing branches.
 
 set -euo pipefail
 
 WORK_BRANCH="${1:-}"
 
 hr() { printf '%s\n' "------------------------------------------------------------"; }
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: working tree is not clean; use an isolated clone or worktree" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Git identity (driver-agnostic CyClaw Agent defaults; overridable via
@@ -42,7 +47,7 @@ echo "git identity: $(git config user.name) <$(git config user.email)>"
 # 2. Fetch main + position on a working branch cut from origin/main
 # ---------------------------------------------------------------------------
 echo "fetching origin/main ..."
-git fetch origin main --quiet || echo "WARN: fetch failed (offline?) — using local refs"
+git fetch origin +refs/heads/main:refs/remotes/origin/main --quiet
 
 if [ -n "$WORK_BRANCH" ]; then
   if git show-ref --verify --quiet "refs/heads/${WORK_BRANCH}"; then
@@ -53,6 +58,13 @@ if [ -n "$WORK_BRANCH" ]; then
     git checkout -b "$WORK_BRANCH" origin/main
   fi
 fi
+
+if ! git merge-base --is-ancestor origin/main HEAD; then
+  echo "ERROR: current branch does not contain the freshly fetched origin/main" >&2
+  echo "       Rebase it or choose a new branch before optimizing." >&2
+  exit 1
+fi
+
 hr
 echo "current branch: $(git rev-parse --abbrev-ref HEAD)"
 echo "merge-base with origin/main: $(git merge-base HEAD origin/main 2>/dev/null || echo '?')"
@@ -67,10 +79,9 @@ hr
 
 echo "## File counts by area"
 for d in gate.py graph.py mcp_hybrid_server.py metrics.py \
-         agentic agentic/fsconnect agentic/deepagent_github harness \
-         sync retrieval utils schemas llm \
-         macos powershell \
-         tests .github .claude config.yaml requirements.txt pyproject.toml; do
+         agentic agentic/fsconnect agentic/sqlconnect sync retrieval utils schemas llm \
+         harness macos powershell guardrails memory telegram tests .github .claude \
+         config.yaml requirements.txt constraints.txt pyproject.toml; do
   if [ -d "$d" ]; then
     n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
     printf '  %-22s %s files\n' "$d/" "$n"
@@ -81,7 +92,7 @@ for d in gate.py graph.py mcp_hybrid_server.py metrics.py \
 done
 
 echo
-echo "## Largest Python files (LOC) — god-module / refactor candidates"
+echo "## Largest Python files (LOC) - inspection seeds, not defects"
 find . -name '*.py' -not -path './.git/*' -not -path './*/node_modules/*' \
   -exec wc -l {} + 2>/dev/null | sort -rn | sed -n '2,16p'
 
@@ -107,5 +118,4 @@ git log origin/main --oneline -n 12 2>/dev/null | sed 's/^/  /'
 
 hr
 echo "Bootstrap complete. Next: dispatch the 4-minute scan subagent (see SKILL.md)."
-echo "Then run the PR-dedup MCP step BEFORE selecting focus areas:"
-echo "  mcp__github__list_pull_requests(owner=CGFixIT, repo=CyClaw, state=open)"
+echo "Then deduplicate against open PRs with an available GitHub integration or official gh."

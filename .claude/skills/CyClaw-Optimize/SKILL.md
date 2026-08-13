@@ -1,366 +1,248 @@
 ---
 name: CyClaw-Optimize
-description: Methodically scan the CyClaw main branch for code, CI, security, financial-risk, and maintainability optimization opportunities, then open a small set of focused, reviewable pull requests only when each chunk earns its keep (not a fixed PR quota). Use when asked to optimize CyClaw, find competitive/trade-bot advantages, harden CI, audit for risk, propose improvements, or open optimization PRs against main.
+description: Find and implement current, evidence-backed CyClaw improvements, with macOS as the primary operator path and Windows as a close secondary. Use for reliability, security, performance, CI, packaging, documentation, RAG, harness, fsconnect, GitHub agent, Dropbox sync, or other optimization work against current main.
 ---
 
-# CyClaw-Optimize
+# CyClaw Optimize
 
-**Persona:** You are a modern AI engineer specializing in Python and extremely
-familiar with the CyClaw architecture — FastAPI RAG gateway (`gate.py`),
-LangGraph 10-node security topology (`graph.py`), ChromaDB + BM25 hybrid
-retrieval, local LLM via Ollama with a triple-gated Grok (xAI) and/or Claude
-fallback, the MCP hybrid server, the `agentic/` GitHub layer (including
-`deepagent_github/`, the GitHub coding agent, and `fsconnect/`, the filesystem
-bridge), the `harness/` coding-agent server, and the out-of-band `sync/`
-Dropbox pipeline — all of which ship platform launchers for **macOS** (primary
-target) and **Windows** (close secondary) under `macos/` and `powershell/`.
-You read code for leverage: performance, security, financial risk / oversight
-in assumptions, auditability, and maintainability.
+Find the smallest current improvement that demonstrably earns a change. One
+focused PR is better than several thin PRs, and a no-change conclusion is valid.
+Do not optimize remembered findings, revive retired paths, or infer live-service
+behavior from unit tests.
 
-**What this skill does:** drives a time-boxed scan of the **main** branch,
-groups findings into a **small set of reviewable PR-sized chunks** (about 1–4
-when several independent fixes earn their keep — **a guideline, not a quota**;
-do not invent low-value PRs to hit a number), and opens one focused pull request
-per kept chunk on a branch cut from the **topology base** Step 3.5 assigns —
-never committing to `main` directly. A human decides when to merge/close.
-Prefer merging this session's drafts **lowest PR number → highest**, parent
-before child when stacked.
+CyClaw is an offline-first Python 3.12 RAG gateway with a retrieval-only MCP
+server. The core uses FastAPI, a 10-node LangGraph policy topology, ChromaDB +
+BM25 + RRF retrieval, local Ollama generation, and separately gated Grok and
+Claude fallbacks. Optional `agentic/`, `sync/`, harness, and Telegram surfaces
+remain out of the core request path. Default-off guardrails enter through
+`utils.guardrail_bridge` without direct core imports.
 
-**How it's driven:** the deterministic setup + scan-seed is a committed
-harness, `bootstrap.sh`. The scan itself is a read-only subagent. PR dedup and
-PR creation are GitHub MCP tool calls. Paths below are relative to the repo
-root (the `<unit>` dir).
+## Authority and current-state rule
 
----
+Read these before retaining a candidate:
 
-## Run (agent path)
+1. `AGENTS.md`, `CLAUDE.md`, `INVARIANTS.md`, and `docs/THREAT_MODEL.md`.
+2. `.codex/skills/cyclaw-project-guidance/SKILL.md` and the relevant routine.
+3. Current source, config, tests, workflow, and subsystem docs for the area.
+4. Open PRs, recent commits, and current `origin/main`.
 
-### Step 0 — Bootstrap (harness)
+Current code and executable tests outrank stale prose. If they disagree, fix or
+explicitly report the documentation drift. The tracked canonical Claude skill
+is this file; a machine-side `.agents` copy is a port, not a second repo source.
 
-Run the harness. It pins the git identity the stop hook requires, fetches
-`origin/main`, positions you on a fresh working branch cut from `origin/main`
-(creating it if you pass a name), and prints a repo inventory that seeds the
-scan:
+Use this evidence ladder in findings and PR bodies:
+
+1. **Static/configured** - code, config, or a parser check only.
+2. **Simulated/mocked** - platform calls, subprocesses, network, or services are
+   replaced by fixtures.
+3. **Host-real** - the actual OS, filesystem, process, socket, or embedded
+   component ran locally or in CI.
+4. **Live external** - the real account, API, daemon, device, or managed service
+   was exercised.
+
+Never promote evidence to a higher level than the check actually reached.
+
+## Platform and feature map
+
+Use macOS as the primary operator path and Windows as a close secondary. Linux
+still matters for CI and services, but it is not the focus of this skill.
+
+| Surface | macOS primary | Windows secondary | Do not overclaim |
+|---|---|---|---|
+| Core RAG + MCP | Real embedded ChromaDB, BM25, and RRF run in blocking CI. Use plain `torch==2.13.0` on supported Apple Silicon/macOS. | The same real retrieval smoke is blocking. Install `torch==2.13.0+cpu` from the PyTorch CPU index first. | The RAG smoke stops before generation; mock Ollama is not a live Ollama daemon. MCP remains retrieval-only. |
+| Harness | `macos/install-cyclaw.sh` installs `~/.CyClaw`; `invoke-cyclaw.sh` starts the gateway on `8787` and harness on `8790`, loopback only. | `powershell/Install-CyClaw.ps1` installs `%USERPROFILE%\.CyClaw`; blocking CI runs a live gateway + harness process smoke under `pwsh`. | macOS CI tests install/fsconnect but does not launch the full dual-process script. Windows smoke does not perform a real agent mutation. |
+| Filesystem integration | Default install prepares `~/CyClaw-FS` and enables exactly list/stat/read there. Writes and indexing stay off. Darwin uses held-fd descent, APFS identity checks, typed permission errors, Apple metadata filtering, `/Volumes` opt-in, and Finder reveal. | Shipped config stays disabled with empty roots. There is no Windows setup helper. Native list/stat/read use checked Windows handles; writes are hard-refused before root creation. | Real APFS disk-image CI is not a TCC prompt, real iCloud-evicted file, physical removable/network disk, Time Machine backup, or loaded LaunchAgent. |
+| GitHub coding agent | Optimize the governed `real-repo-run` clone -> plan -> patch -> verify -> human-decision path and harness console. Commit, push, and draft publish are separate gates. | The same Python path is portable and its smoke runs in the full suite. | CI uses local git plus a fake `gh`; it does not use a live GitHub account or model. DeepAgents is retained for compatibility/tests, not new feature work. |
+| Dropbox sync | Real default-off rclone code uses an App-Folder-scoped Dropbox remote; scheduling uses cron. Pull is the safe default and soul is excluded. | The same subsystem schedules through Task Scheduler and a generated batch file. | Self-test and pytest mock the remote and do not prove rclone OAuth or live Dropbox transfer. |
+| CI/install | `macos-latest` is a blocking gate with installer, adversarial path, fsconnect, RAG, and full-suite coverage. | `windows-latest` is blocking; Windows PowerShell 5.1 installer and native fsconnect lanes are also blocking. | A green matrix does not erase platform skips or prove external services. Use `-rs` or dedicated verbose lanes when skip visibility matters. |
+
+Other current optional surfaces deserve the same discipline:
+
+- SQL connectors are default-off and hard read-only; ordinary CI is not a live
+  MSSQL/Postgres connector test. The pgvector service job is Linux-only.
+- Memory features ship off and use governed propose/apply boundaries. Account
+  and session machinery exists, but do not assume every request path enforces it.
+- Guardrails are default-off; offline heuristic rails and mocked optional NeMo
+  coverage are not a live NeMo deployment.
+- Telegram has mocked Bot API coverage, not recorded live operator validation;
+  partial media work is not a cross-platform production contract.
+
+## Workflow
+
+### Step 0 - Fresh-main preflight
+
+Preserve a dirty, divergent, or unrelated checkout. Use a clean isolated clone
+or worktree instead of resetting it. Verify Git and GitHub authentication without
+printing tokens, then fetch the exact remote-tracking ref:
 
 ```bash
-bash .claude/skills/CyClaw-Optimize/bootstrap.sh agent/cyclaw-optimize-<topic>
+git fetch origin +refs/heads/main:refs/remotes/origin/main
+git rev-parse --verify origin/main
+git status --short --branch
 ```
 
-Omit the branch argument to run read-only against the current branch. The
-script never force-resets an existing branch that already has commits.
-
-> Verified this session: the harness ran clean, reported the branch /
-> merge-base / commits-ahead, and printed file counts, the largest-Python-file
-> list (refactor candidates), the CI workflow list, dependency manifests, Grok
-> touchpoints, and recent `main` commits.
-
-### Step 1 — Time-boxed scan (subagent, ~4 minutes)
-
-Dispatch **one read-only `Explore` subagent** to scan for ~4 minutes. Do not
-let it edit anything. Give it the persona and the concrete areas to sweep.
-This is the prompt that worked this session (adapt the topic, keep the
-structure):
-
-> You are a modern AI engineer specializing in Python and deeply familiar with
-> the CyClaw architecture. Repo root is the CWD. Spend ~4 minutes on a
-> READ-ONLY scan for concrete optimization / fix opportunities suitable for
-> small-to-medium focused PRs. Sweep: `.github/workflows/*.yml` (caching,
-> action SHA pinning, `cancel-in-progress`, matrix gaps — **nothing needing a
-> license/secret/key**); `tests/` (coverage gaps, logic errors, brittle
-> fixtures, missing assertions); `agentic/` and `sync/` (bugs, inefficient
-> loops, redundant logic, error-handling and financial/oversight-assumption
-> risk); `agentic/fsconnect/`, `harness/`, and `agentic/deepagent_github/`,
-> with **macOS as the primary target** (Darwin-specific path handling in
-> `pathsafe.py`, `macos/*.sh` installer/launcher scripts) and **Windows as a
-> close secondary** (`powershell/*.ps1` scripts, `pathsafe.py`'s `_win_*`
-> helpers) — but do not re-flag the Windows `pathsafe` test-coverage gap as a
-> new finding, it's a tracked, deliberate deferral (see
-> `docs/work/FSCONNECT_SQL_ROADMAP.md`'s "FS Phase 4 — Windows hardening");
-> `llm/client.py` + `graph.py` (outdated Grok/xAI model names &
-> endpoints, retry/timeout, performance); `config.yaml` (risky defaults);
-> `requirements.txt` / `constraints.txt` / `pyproject.toml` (loose/outdated
-> pins, missing imports); readability/auditability anywhere. Return 6–10
-> DISTINCT findings, each with: title, file path(s) + line numbers, one-line
-> description, category, effort (small/medium). End with a suggested grouping
-> into a small set of PR-sized chunks (only as many as earn a PR — not a fixed five). Cite real code — do not invent.
-
-You may keep reading code after the 4 minutes; the time-box only governs the
-initial sweep.
-
-### Step 2 — Dedup against open PRs (MCP) — do this BEFORE picking focus areas
-
-List open PRs and drop any candidate area already covered by an open PR. Also
-explicitly skip the known-stale "null allowed origins in `config.yaml`" idea —
-it is out of scope.
-
-```text
-mcp__github__list_pull_requests(owner="CGFixIT", repo="CyClaw", state="open")
-```
-
-> Gotcha (verified): this call returns a very large payload. Parse it down to
-> `number` + `title` only — e.g. read the saved tool-result file with a small
-> `python3 -c "import json; ..."` over `number`/`title` — rather than dumping
-> it into context.
-
-### Step 3 — Select focus areas and announce them
-
-From the deduped findings, choose only the PR-sized chunks that clearly earn
-their keep. **Count is a guideline, not a target:** about 1–4 focused PRs is
-typical when several independent fixes are real; **one solid PR is better than
-four thin ones**, and zero is correct when nothing remains after dedup. Never
-split or invent work just to fill a slot. Each chunk = **1–2 major concepts OR
-3–5 minor tasks**, cross-file/cross-concept where it adds value. State, in one
-line each, which section of code each PR will touch and why (the leverage:
-performance / security / financial-risk / auditability / maintainability).
-Prefer chunks that are independently reviewable and easily restorable through
-GitHub — subject to Step 3.5 when they share files.
-
-### Step 3.5 — Plan branch topology for shared files (prevents merge-loss / conflicts)
-
-Always START from `origin/main` (Step 0 / the bootstrap cuts the first branch
-there — that is correct). The strategy below only changes **where you cut the
-2nd-and-later branch when it edits a file an earlier chunk also edits.**
-
-Before creating any branches, build a **file → chunks** map and find every file
-touched by more than one chunk. The usual shared files: `.github/workflows/ci.yml`
-(everyone appends to the pytest list / `--cov` list), `config.yaml`,
-`requirements.txt` / `constraints.txt` / `pyproject.toml`, `CLAUDE.md`. For each
-shared file pick ONE strategy:
-
-- **(A) Consolidate** — put *all* edits to that shared file in a single chunk/PR
-  (or a dedicated "CI wiring" PR). Best when the edits are small and related
-  (e.g. each chunk only appends one line to the ci.yml test list). The other
-  chunks then touch only their own new files and carry no ci.yml edit.
-- **(B) Stack** — cut the later branch from the *earlier branch* instead of
-  `origin/main`, so the later PR already contains the earlier's edit to the
-  shared file. Set the later PR's **base to the earlier branch** on GitHub (not
-  `main`). Stacked PRs must merge parent-first; rebase the child after the
-  parent merges. Best when chunks are large and otherwise independent.
-
-**Why it matters:** two branches cut from the same base that edit the **same or
-adjacent lines** of a shared file produce a merge **conflict** — GitHub blocks
-the merge button until a human resolves it, and a careless resolution can drop
-one side's edit (the "lost changes" failure mode). Non-adjacent edits to the same
-file 3-way-merge cleanly, but verify rather than trust luck.
-
-**Verify before opening PRs** — for every pair of branches that share a file, do
-a throwaway 3-way merge locally and confirm both edits survive with no conflict:
+Stop if fetch/auth fails, the isolated tree is dirty, or the ref is unrelated.
+Record the branch-point SHA. The optional Bash scan harness is:
 
 ```bash
-git checkout -B _trial origin/main
-git merge --no-ff origin/<branch-A> && git merge --no-ff origin/<branch-B>
-grep -q '<A-marker>' <shared-file> && grep -q '<B-marker>' <shared-file> && echo "both present"
-grep -rc '<<<<<<<' <shared-file>           # must be 0
-python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"  # still valid
-git checkout main && git branch -D _trial
+bash .claude/skills/CyClaw-Optimize/bootstrap.sh <driver>/cyclaw-optimize-<topic>
 ```
 
-> Verified this session: two PRs both appended to `ci.yml` (one to the pytest
-> list, one to the `--cov` list) in **non-adjacent** regions. Trial merges in
-> both orders combined cleanly — both edits present, valid YAML, zero conflict
-> markers — so no consolidation/stacking was needed. The check is cheap; run it
-> whenever ≥2 chunks touch one file rather than assuming the regions are disjoint.
+Use the driver prefix required by `.github/PULL_REQUEST_TEMPLATE.md` (`codex/`,
+`claude/`, and so on). On Windows without Bash, run the equivalent Git commands
+directly; do not add a Bash dependency to the product.
 
-**Session merge order:** plan chunks so humans can merge this run's drafts from
-**lowest PR number → highest**, with stack **parents always before children**.
-That order is the universal default for the rest of this skill (Step 4+), whether
-a given PR's GitHub `base` is `main` or a parent branch.
+### Step 1 - Read-only sweep
 
-### Step 4 — One focused PR per chunk
+Time-box the first sweep, optionally delegating independent read-only audits.
+Inspect only enough breadth to find grounded candidates:
 
-Work chunks in **planned merge order** (see Step 3.5): parent / lower-order
-first, then children. For each chunk, use its **topology base** — not a blanket
-assumption that every branch starts at `main`:
+- `gate.py`, `graph.py`, `retrieval/`, `llm/`, and `mcp_hybrid_server.py`
+- `harness/`, `macos/`, `powershell/`, and platform integration tests
+- `agentic/`, especially `fsconnect/`, `sqlconnect/`, and `real_repo_loop.py`
+- `sync/`, `guardrails/`, memory/auth, Telegram, and their operator docs
+- `config.yaml`, manifests, installers, workflows, and security controls
+- tests for the exact behavior, including skips and mocked boundaries
 
-| Topology (Step 3.5) | Cut branch from | GitHub PR `base` |
-|---|---|---|
-| Independent (no shared-file dependency on another chunk in this run) | `origin/main` | `main` |
-| Stacked on an earlier chunk | that earlier chunk's branch | that earlier branch (not `main`) until the parent merges |
-| Consolidated | whatever branch owns the shared-file edits | same as that branch's topology |
+Look for reproduced defects, measurable waste, stale contracts, missing
+regressions, dependency/config drift, audit gaps, and unsafe defaults. File size,
+disabled-by-default code, or novelty alone is not a defect. Under the feature
+freeze, new behavior needs an explicit mechanism that improves the portfolio or
+fixes a real operator problem.
 
-1. Make the focused change(s). Keep the diff minimal and on-topic; avoid
-   touching unrelated files (CLAUDE.md operating contract).
-2. Verify (see **Verify** below).
-3. Commit with a clear message, then push with upstream tracking:
+### Step 2 - Verify and deduplicate candidates
 
-   ```bash
-   git add -p
-   git commit -m "<type>: <what changed and why>"
-   git push -u origin <branch-name>
-   ```
+Trace callers and reproduce or statically prove each candidate. Check recent
+commits and list current open PRs using the available GitHub integration or the
+official authenticated `gh` CLI. Reduce large responses to number, title, head,
+and base. Drop work that is already covered, inherited from a known-red base,
+retired, or blocked on an unapproved product/security decision.
 
-   On network failure only, retry up to 4× with exponential backoff
-   (2s, 4s, 8s, 16s).
-4. Open a **draft** PR via MCP with a clear title and a body covering: the
-   change, its benefit, risk to monitor, and **merge topology** (independent /
-   stacked-on `<parent-branch or #N>` / consolidated; planned merge order).
+Rank survivors by evidence, impact, effort, and regression risk. Select the
+smallest root-cause change whose benefit can be verified. Stop honestly if none
+clears that bar.
 
-   Independent chunk (only when Step 3.5 says it has no stack parent):
+### Step 3 - Announce focused chunks
 
-   ```text
-   mcp__github__create_pull_request(
-     owner="CGFixIT", repo="CyClaw",
-     base="main", head="<branch-name>",
-     draft=true,
-     title="<concise title>",
-     body="## What\n...\n## Why / benefit\n...\n## Risk to monitor\n...\n## Merge topology\n- independent\n- merge order: ...")
-   ```
+State each proposed chunk, owned files, benefit, verification, and residual
+risk. There is no PR quota. Keep one or a small number of independently
+reviewable chunks; do not split work to manufacture activity.
 
-   Stacked child (PR `base` must be the **parent branch**, not `main`):
+### Step 3.5 - Map shared files and branch topology
 
-   ```text
-   mcp__github__create_pull_request(
-     owner="CGFixIT", repo="CyClaw",
-     base="<parent-branch-name>", head="<child-branch-name>",
-     draft=true,
-     title="<concise title>",
-     body="## What\n...\n## Why / benefit\n...\n## Risk to monitor\n...\n## Merge topology\n- stacked on <parent-branch> / #<parent-PR>\n- merge parent first, then this PR")
-   ```
+Before branching, build `file -> chunks`. For every file touched by more than
+one chunk, choose one strategy:
 
-**Merge order for this skill run:** after drafts exist, prefer merging **lowest
-PR number → highest** among the PRs this session opened, except where Step 3.5
-stacking requires **parent before child** (parent may have the lower number if
-you opened in order; if not, parent-first wins over number order). When a parent
-lands on `main` (often via squash), refresh each open child onto current
-`origin/main` (or retarget base to `main` after rebase) before merging the next.
+- **Consolidate** related edits to the shared file in one chunk.
+- **Stack** a truly dependent child on the parent branch and use the parent
+  branch as the child's PR base.
 
-If, after scanning, no clear optimization opportunities remain (all covered by
-open PRs or out of scope), **confirm that briefly and stop** — do not
-manufacture low-value PRs.
+Do not cut sibling branches from `main` and hope adjacent edits merge. Before
+publishing related branches, trial-merge them in the planned order in a
+throwaway worktree or clone. Confirm both changes survive, conflict-marker count
+is zero, and affected YAML/TOML/JSON/shell still parses. Parent branches merge
+before children; otherwise publish and merge in the planned human order.
 
----
+### Step 4 - Implement the minimum change
 
-## Verify (per PR, before pushing)
+Reuse existing patterns and dependencies. Avoid speculative abstractions, new
+knobs, broad rewrites, and unrelated cleanup. Add the smallest regression that
+would fail without the fix. Keep documentation claims tied to the evidence
+level actually exercised.
 
-The repo's documented gate (from `CLAUDE.md`):
+### Step 5 - Verify proportionately
+
+Always inspect the final diff and run the narrowest relevant checks:
 
 ```bash
-GROK_API_KEY=dummy pytest tests/ -q --tb=short
-# scope to the touched area when faster, e.g.:
-GROK_API_KEY=dummy pytest tests/test_graph.py -q --tb=short
+git diff --check
+python .claude/skills/invariant-guard/check_invariants.py
 ```
 
-> Gotcha (verified this session): a freshly-cloned web container has **no
-> Python deps installed** — `pytest` import fails outright. Install first via
-> the `/run-cyclaw` or `/sandbox-runtime-verification` skill (note the CyClaw
-> install quirks: `torch==2.13.0+cpu` before `requirements.txt`, and
-> `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`). For
-> CI-/docs-/workflow-only PRs that touch no Python, the YAML/lint changes are
-> validated by the repo's own CI on push — a local pytest run is not required.
+For touched Python, run the configured Ruff selection and targeted pytest:
 
-Optionally run `/code-review` on the diff before opening the PR.
+```bash
+python -m ruff check --select E,F,I,B,C4,UP,S <touched-files>
+python -m pytest <target-tests> -q --tb=short
+```
 
----
+Set the dummy test key once when a selected test imports the gateway:
 
-## Branch Permissions (pre-granted for this skill)
+```bash
+# Bash
+export GROK_API_KEY=dummy
 
-When **CyClaw-Optimize** is invoked, the user pre-authorises creation and push
-of per-chunk branches named `agent/cyclaw-optimize-<topic>` (or the env
-override of `CYCLAW_AGENT_BRANCH_PREFIX`), each cut from the **topology base**
-Step 3.5 assigned (session start / first independent chunk from `origin/main`;
-stacked children from their parent branch). Do **not** stop and ask for
-permission to push these branches — proceed directly. This applies even when
-the session was started on a different designated branch (e.g. `agent/<name>`
-from a session-start hook). Each chunk gets its own branch + draft PR; the
-designated session branch is used only for the skill file update commit (if
-any), never for chunk changes.
+# PowerShell
+$env:GROK_API_KEY = "dummy"
+```
 
----
+Useful platform/feature routes include:
 
-## Guardrails (CyClaw invariants — do not violate)
+```bash
+# macOS host-real filesystem/setup coverage
+python -m pytest tests/test_fsconnect_macos_real.py tests/test_macos_fsconnect_setup.py tests/test_macos_scripts.py -vv -rs --tb=short
 
-- **Never commit to `main` directly** via git or MCP when a feature branch +
-  PR exist — it causes add/add rebase conflicts. Always branch → PR → human
-  merges.
-- **All PRs are draft**; the human decides when to merge/close.
-- Do not re-open an area already covered by an open PR; skip the
-  null-allowed-origins `config.yaml` item.
-- Respect the five security invariants — RAG-first, topology=policy,
-  triple-gated external (Grok and/or Claude), audit convergence, soul governance. Never
-  weaken a graph-edge policy to "optimize."
-- Workflow enhancements must need **no license, secret, or key**.
-- Never mutate `data/personality/soul.md` without an explicit human `reason`.
+# Windows host-real handle authority (add -p no:cacheprovider locally if needed)
+python -m pytest tests/test_fsconnect_pathsafe_windows.py -vv -rs --tb=short
 
----
+# embedded retrieval on either supported desktop OS
+python -m tests.ci_rag_smoke
+
+# governed local-git/fake-gh coding loop; not live GitHub
+python -m pytest tests/test_agentic_real_repo_run_smoke.py tests/test_agentic_real_repo_run_cli.py -q --tb=short
+
+# Dropbox/rclone logic; still not a live Dropbox transfer
+python -m pytest tests/test_sync_*.py -q --tb=short
+```
+
+PowerShell does not reliably expand pytest globs; enumerate
+`tests/test_sync_*.py` and pass the resulting paths there.
+
+For docs/skills, run `python .claude/skills/doc-sync/doc_sync.py`; run
+dependency guards when install guidance changes and `bash -n` for touched shell.
+Expand to `python -m pytest tests/ -q --tb=short` for cross-cutting or
+release-risk changes. Explain every skip and unavailable physical/live check.
+
+### Step 6 - Publish only when authorized
+
+Fetch `origin/main` again before the first push and rebase independent work if
+it moved. Re-run affected checks after any rebase. Stage intentionally, commit
+with the repo's title convention, push only the feature branch, and open a
+draft PR with the complete template. Record branch-point SHA, topology, commands,
+results, skipped checks, and residual risk.
+
+Monitor every required CI check to a terminal state. Fix branch-caused failures
+with follow-up commits; distinguish inherited-red `main`. Never push to `main`,
+force-push, merge, or request review unless separately authorized.
+
+## Guardrails
+
+- Preserve I1 RAG-first retrieval, I2 topology-as-policy, I3 triple-gated
+  external fallback, I4 audit convergence, I5 soul governance, and I6 optional
+  module isolation. Under I6, `gate.py`, `gate_ops.py`, `gate_auth.py`,
+  `gate_memory.py`, `graph.py`, and `mcp_hybrid_server.py` must not import
+  `agentic`, `sync`, `guardrails`, `harness`, or `telegram`; those out-of-band
+  modules must not import the core request-path modules either.
+- Preserve loopback defaults, fail-closed boundaries, redaction, human commit
+  decisions, and default-off out-of-band integrations.
+- Do not add dependencies, secrets, hosted services, licenses, or configuration
+  switches without demonstrated need and complete install/CI alignment.
+- Do not mutate `data/personality/soul.md` unless the task explicitly concerns
+  governed soul content.
+- Keep local, committed, pushed, draft, CI, review, and merged state distinct.
 
 ## Gotchas
 
-- **MCP PR-list payload is huge** — always reduce to `number`/`title` before
-  reading (see Step 2). Reading it raw blows the token budget.
-- **No deps in a fresh container** — the test gate needs an install pass first
-  (see Verify).
-- **Largest-file ≠ worst-file.** `bootstrap.sh` flags big Python files
-  (`sync/runner.py`, `graph.py`, `gate.py`, `utils/personality.py`) as
-  refactor candidates, but size alone isn't a defect — confirm a real issue
-  before proposing a refactor PR.
-- **Stay in scope per PR.** The whole point is reviewable, restorable chunks;
-  resist bundling unrelated fixes because they're "right there."
-- **The 4-minute box is for the initial sweep only** — keep reading code
-  afterward to confirm each finding before it becomes a PR.
-- **Shared-file PRs can collide.** When ≥2 chunks edit one file (most often
-  `.github/workflows/ci.yml`, `config.yaml`, the dependency manifests,
-  `CLAUDE.md`, or other hotspots from Step 3.5), cutting every branch from the
-  same base without consolidating or stacking will *conflict* if their edits
-  touch the same/adjacent lines — and a sloppy conflict resolution drops one
-  side. See **Step 3.5**: consolidate the shared-file edits into one PR, or
-  stack the later branch on the earlier one, trial-merge the pair before
-  opening, and merge in **session order** (prefer lowest PR number → highest,
-  with stack parents always before children). After a parent lands, refresh
-  open children onto the updated base before merging the next.
-- **A broken `main` poisons every PR whose base ultimately includes it.** If
-  `main` itself is red (e.g. a bad committed data file or a failing test landed
-  earlier), *every* branch that incorporates that tip inherits those failures,
-  so the optimize PRs show red CI for reasons unrelated to their own diffs. Land
-  the root-cause fix PR first (lowest-order / first in the merge queue), then
-  refresh / re-run the rest. Diagnose a child PR's CI red against `main`'s own
-  state before assuming the PR caused it.
-- **Don't "fix" `EMBED_DEVICE`.** `retrieval/embeddings.py` hardcodes
-  `EMBED_DEVICE = "cpu"` on purpose — sentence-transformers auto-selects `mps`
-  on Apple Silicon otherwise, which caused a real ranking regression (PR
-  #734). A finding proposing GPU/`mps` auto-detection here is wrong.
-- **Windows `pathsafe` coverage gap is a known, tracked deferral, not a fresh
-  finding.** `agentic/fsconnect/pathsafe.py`'s `_win_*` helpers are `# pragma:
-  no cover`, and `tests/test_fsconnect_pathsafe.py` skips entirely on
-  `os.name == "nt"` — documented as "FS Phase 4" in
-  `docs/work/FSCONNECT_SQL_ROADMAP.md`.
-- **macOS/Windows launcher asymmetry — use judgment.** `macos/invoke-cyclaw.sh`
-  starts both `gate.py` and `harness.server`; `powershell/Invoke-CyClaw.ps1`
-  starts only `harness.server`. May or may not be worth a finding — confirm
-  intent before proposing a fix.
-
----
-
-## Example output (illustrative scan shape — re-scan; do not reuse blindly)
-
-The Step-1 subagent returned several grounded findings and proposed a small
-grouping (real file paths, then-current `main`). **Five is not a quota** — keep
-only chunks that still look high-leverage after dedup:
-
-1. **Test-coverage completeness** — add `gate`, `retrieval.{hybrid_search,
-   indexer,stemmer}`, `utils.personality_db`, and `agentic.*` to `--cov` in
-   `.github/workflows/ci.yml`; add the TestClient/httpx deprecation filter to
-   `pyproject.toml`. *(tests/CI, small)*
-2. **CI action pinning + concurrency** — pin unpinned actions to full SHAs in
-   `codeql.yml`/`devskim.yml`/`defender-for-devops.yml`; add
-   `cancel-in-progress: true` to `codeql.yml` and `pip-audit.yml`.
-   *(CI/security, small)*
-3. **LLM client resilience** — exponential-backoff retry in
-   `llm/client.py` `LocalLLMClient.generate`/`GrokClient.generate` + tests.
-   *(reliability, medium)*
-4. **Audit hardening** — redact resolved paths in `agentic/config.py` error
-   details; verify the current xAI `grok-4` model name in `config.yaml`; add a
-   platform-detection fallback in `sync/scheduler.py`. *(security/robustness,
-   small)*
-
-(Docs-only follow-ups can wait or ride with a related chunk — do not open a
-fifth PR just to host a monitoring note.)
-
-Each kept chunk is independently reviewable and small/medium. Shared-file
-pairs still follow Step 3.5; merge this session's drafts **low PR number →
-high**, parent-before-child when stacked.
-
-## Notes
-
-- Feature freeze applies (`CLAUDE.md` §1) — the operative test is "does this polish the portfolio signal or fix a real defect?" New capabilities need explicit user justification first.
-- Never push directly to `main`; never force-push without sign-off.
-- Re-run `python3 .claude/skills/invariant-guard/check_invariants.py` before opening any PR that touches core files.
+- macOS uses plain Torch; Windows/Linux use the pinned CPU wheel and CPU index.
+- The generic shipped fsconnect template is disabled and broader than the
+  intentionally narrow macOS installed overlay. Compare the right state.
+- Real APFS disk-image tests are stronger than monkeypatching but weaker than
+  TCC, iCloud eviction, physical `/Volumes`, or Time Machine execution.
+- A local git clone plus fake `gh` is not live GitHub. A sync self-test is not
+  live Dropbox. A loopback mock server is not live Ollama.
+- The dedicated real-repo job may be Linux-only while full-suite discovery runs
+  the portable test on macOS and Windows. Read both workflow and test skips.
+- `fail-fast: false` does not make an OS non-blocking; `continue-on-error` does.
+- A largest-file list is a scan seed, not proof that a refactor is warranted.
+- A broken `main` can make every child red. Compare failures before editing the
+  branch, and do not smuggle unrelated base repairs into the PR.
