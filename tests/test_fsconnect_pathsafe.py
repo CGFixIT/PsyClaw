@@ -8,13 +8,12 @@ branches are documented and ``# pragma: no cover``.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
 import agentic.fsconnect.pathsafe as pathsafe
-from agentic.fsconnect.pathsafe import ScopedRoots, _root_match_identity, split_components
+from agentic.fsconnect.pathsafe import ScopedRoots, split_components
 from utils.errors import FsConnectRuntimeError, FsPathError
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX openat authority; Windows path differs")
@@ -151,43 +150,127 @@ def test_overlapping_roots_rejected(tmp_path):
         ScopedRoots([str(base), str(base / "b")], create=False)
 
 
-def test_darwin_root_identity_collapses_case_and_format_controls(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "darwin")
-    assert _root_match_identity("/tmp/Note.md") == _root_match_identity("/tmp/no\u200cte.md")
+# --- filesystem-identity fallback (pathsafe._is_same_entity / _is_real_descendant) --
+#
+# Not every case-insensitive-looking alias is actually the same real directory
+# (only a genuinely case-insensitive volume makes that true), so these are
+# platform-agnostic: they test filesystem TRUTH (device+inode), never a
+# blanket "fold case on this OS" assumption. The two tests that simulate an
+# actually-case-insensitive lookup do so by mocking os.stat to return the
+# same stat_result for two different spellings -- exactly what a real
+# case-insensitive volume's directory lookup would produce.
+
+def test_is_same_entity_true_for_identical_path(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    assert pathsafe._is_same_entity(str(d), str(d)) is True
 
 
-def test_linux_root_identity_preserves_case_and_format_controls(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
-    assert _root_match_identity("/tmp/Note.md") != _root_match_identity("/tmp/no\u200cte.md")
+def test_is_same_entity_false_for_distinct_real_directories(tmp_path):
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    assert pathsafe._is_same_entity(str(a), str(b)) is False
 
 
-@pytest.mark.parametrize("alias_name", ["note.md", "No\u200cte.md"])
-def test_darwin_case_or_cf_alias_roots_rejected(monkeypatch, tmp_path, alias_name):
-    monkeypatch.setattr(sys, "platform", "darwin")
+def test_is_same_entity_false_when_a_path_is_missing(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    assert pathsafe._is_same_entity(str(d), str(tmp_path / "missing")) is False
+
+
+def test_is_real_descendant_true_for_nested_target(tmp_path):
+    base = tmp_path / "root"
+    nested = base / "a" / "b"
+    nested.mkdir(parents=True)
+    assert pathsafe._is_real_descendant(str(nested), str(base)) is True
+
+
+def test_is_real_descendant_true_for_root_itself(tmp_path):
+    base = tmp_path / "root"
+    base.mkdir()
+    assert pathsafe._is_real_descendant(str(base), str(base)) is True
+
+
+def test_is_real_descendant_false_for_sibling_directory(tmp_path):
+    base = tmp_path / "root"
+    sibling = tmp_path / "sibling"
+    base.mkdir()
+    sibling.mkdir()
+    assert pathsafe._is_real_descendant(str(sibling), str(base)) is False
+
+
+def test_is_real_descendant_false_when_outer_root_is_missing(tmp_path):
+    assert pathsafe._is_real_descendant(str(tmp_path / "x"), str(tmp_path / "missing")) is False
+
+
+def test_case_insensitive_alias_roots_rejected_as_overlapping(monkeypatch, tmp_path):
+    """Simulates a genuinely case-insensitive volume (os.stat resolving a
+    differently-spelled path to the same real entity) rather than assuming
+    every volume behaves that way -- two configured roots that a case-
+    insensitive filesystem would treat as the same directory are refused as
+    overlapping via the filesystem-identity fallback."""
     monkeypatch.setattr(pathsafe, "_POSIX", False)
     monkeypatch.setattr(ScopedRoots, "_prepare_root", lambda _self, raw, *, create: Path(raw))
-    first = tmp_path / "Note.md"
-    alias = tmp_path / alias_name
+    real = tmp_path / "Share"
+    real.mkdir()
+    real_stat = os.stat(real)
+    alias = tmp_path / "share"  # different case spelling; never actually created
+    original_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path) == str(alias):
+            return real_stat
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathsafe.os, "stat", fake_stat)
     with pytest.raises(FsPathError, match="overlapping roots"):
-        ScopedRoots([str(first), str(alias)], create=False)
+        ScopedRoots([str(real), str(alias)], create=False)
 
 
-def test_darwin_alias_selects_configured_held_root(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "darwin")
+def test_case_insensitive_alias_selects_configured_held_root(monkeypatch, tmp_path):
     configured = tmp_path / "Share"
     configured.mkdir()
     (configured / "inside.txt").write_text("held fd", encoding="utf-8")
+    configured_stat = os.stat(configured)
+    alias = str(configured).replace("Share", "share")
+    original_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path) == alias:
+            return configured_stat
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(pathsafe.os, "stat", fake_stat)
     with ScopedRoots([str(configured)], create=False) as roots:
-        alias = str(configured).replace("Share", "sh\u200care")
         assert roots.read_bytes("inside.txt", root=alias, max_bytes=1024) == b"held fd"
 
 
-def test_linux_case_alias_roots_remain_distinct(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(pathsafe, "_POSIX", False)
-    monkeypatch.setattr(ScopedRoots, "_prepare_root", lambda _self, raw, *, create: Path(raw))
+def _tmp_is_case_sensitive(tmp_path: Path) -> bool:
+    """Runtime probe, not a platform guess -- same technique as CPython's own
+    Lib/test/support/os_helper.fs_is_case_insensitive (see pathsafe's
+    _is_real_descendant docstring for why guessing by platform is wrong)."""
+    probe = tmp_path / "CaseProbe.tmp"
+    probe.write_text("x", encoding="utf-8")
+    try:
+        return not (tmp_path / "caseprobe.tmp").exists()
+    finally:
+        probe.unlink()
+
+
+def test_case_sensitive_alias_roots_remain_distinct(tmp_path):
+    """On a case-sensitive filesystem, two similarly-named-but-actually-
+    different directories are genuinely different real entities and must
+    never be merged into one root. Skipped on a case-insensitive filesystem
+    (e.g. the default macOS CI runner) -- there, "Note.md" and "note.md"
+    cannot coexist as two directories at all, so the scenario doesn't apply."""
+    if not _tmp_is_case_sensitive(tmp_path):
+        pytest.skip("tmp_path filesystem is case-insensitive; case-variant dirs can't coexist")
     first = tmp_path / "Note.md"
     alias = tmp_path / "note.md"
+    first.mkdir()
+    alias.mkdir()
     with ScopedRoots([str(first), str(alias)], create=False) as roots:
         assert len(roots.roots) == 2
 
