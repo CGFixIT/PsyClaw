@@ -62,13 +62,6 @@ jobs:
     permissions:
       contents: read
       security-events: write  # upload-sarif
-    env:
-      # The legacy (v1) GitHub Actions cache service can fail a large gha-cache
-      # export (this image's torch layer alone is ~360MB) with "failed to
-      # reserve cache" / "error writing layer blob" -- a documented cache-API
-      # limitation, not a build error. The v2 cache service fixes it; opt in
-      # explicitly since it is not yet the default for every runner image.
-      ACTIONS_CACHE_SERVICE_V2: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -78,6 +71,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
 
+      # cache-to is deliberately NOT on this step -- see "Refresh build cache"
+      # below. This step only needs to succeed at building + loading the image
+      # for Trivy to scan; that must never depend on the cache EXPORT succeeding.
       - name: Build image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
         with:
@@ -85,7 +81,6 @@ jobs:
           load: true
           tags: cyclaw:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Run Trivy image scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -103,3 +98,20 @@ jobs:
         with:
           sarif_file: trivy-image-results.sarif
           category: trivy-image
+
+      # This repo's every open PR re-triggers this job (pull_request has no path
+      # filter), so many docker-image runs across different PRs/branches can
+      # build+cache this same Dockerfile concurrently. buildx's type=gha cache
+      # export was observed failing outright ("failed to reserve cache") under
+      # that concurrency -- confirmed empirically: the build step above always
+      # completes and loads the image fine, only a COMBINED build+cache-export
+      # step failed. Isolating the export into its own best-effort step (same
+      # builder, so this rebuild hits BuildKit's local cache and is fast) means
+      # a losing cache-export race can no longer fail the scan job above it.
+      - name: Refresh build cache (best-effort)
+        continue-on-error: true
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
