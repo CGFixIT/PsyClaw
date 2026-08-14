@@ -3,12 +3,17 @@
 Subcommands:
 
     setup        Verify rclone, load+show config, write filters, print the
-                 Dropbox OAuth hint, optionally schedule the daily job.
+                 Dropbox OAuth hint, optionally schedule the job.
     sync         Run one sync now. ``--dry-run`` previews; ``--resync`` rebuilds
                  the bisync baseline.
     test         Run the pre-flight self-test.
-    schedule     Register the daily job (cron / launchd / Task Scheduler).
-    unschedule   Remove the daily job.
+    schedule     Register the scheduled job. Backend + frequency come from
+                 config.yaml's sync.scheduler_backend ("cron" default, or
+                 "launchd" -- Darwin-only, opt-in, writes a plist but never
+                 auto-loads it -- see docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md)
+                 and sync.schedule_frequency ("daily" default, or "weekly" /
+                 "monthly"). Windows always uses Task Scheduler.
+    unschedule   Remove the scheduled job.
     status       Print current sync + schedule status.
 
 Exit codes (see §7 of the implementation plan):
@@ -157,7 +162,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if args.schedule:
         try:
             entry = get_scheduler(cfg).install()
-            _ok(f"Scheduled daily sync ({entry.cron_or_time})")
+            _ok(f"Scheduled sync ({entry.cron_or_time})")
+            if entry.note:
+                _warn(entry.note)
         except SchedulerError as exc:
             _err(f"Scheduling failed: {exc.message}")
             return EXIT_ENV
@@ -310,6 +317,8 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         _print_typed_error(exc)
         return EXIT_ENV
     _ok(f"Scheduled: {entry.cron_or_time} on {entry.platform_name}")
+    if entry.note:
+        _warn(entry.note)
     return EXIT_OK
 
 
@@ -340,7 +349,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("remote", cfg.remote)
     _kv("direction", cfg.direction)
     _kv("include_soul", f"{cfg.include_soul} (deprecated no-op -- soul is never mirrored)")
-    _kv("schedule", f"{cfg.schedule_hour:02d}:{cfg.schedule_min:02d}")
+    _kv("schedule", f"{cfg.schedule_frequency} {cfg.schedule_hour:02d}:{cfg.schedule_min:02d}")
+    _kv("scheduler_backend", cfg.scheduler_backend)
     _kv("filter_file", cfg.filter_file)
     _kv("log_dir", cfg.log_dir)
     _kv("platform", platform.system())
@@ -355,6 +365,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         entry = get_scheduler(cfg).status()
         if entry:
             _ok(f"Scheduled: {entry.cron_or_time}")
+            if entry.note:
+                _kv("launchd state", entry.note)
         else:
             print("  [-] Not scheduled.")
     except SchedulerError as exc:
@@ -390,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_setup = sub.add_parser("setup", help="Bootstrap: verify env, write filters, optional schedule.")
-    p_setup.add_argument("--schedule", action="store_true", help="Also register the daily scheduled job.")
+    p_setup.add_argument("--schedule", action="store_true", help="Also register the scheduled job.")
     p_setup.set_defaults(func=cmd_setup)
 
     p_sync = sub.add_parser("sync", help="Run one sync now.")
@@ -401,10 +413,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")
     p_test.set_defaults(func=cmd_test)
 
-    p_sched = sub.add_parser("schedule", help="Register the daily scheduled job.")
+    p_sched = sub.add_parser("schedule", help="Register the scheduled job.")
     p_sched.set_defaults(func=cmd_schedule)
 
-    p_unsched = sub.add_parser("unschedule", help="Remove the daily scheduled job.")
+    p_unsched = sub.add_parser("unschedule", help="Remove the scheduled job.")
     p_unsched.set_defaults(func=cmd_unschedule)
 
     p_status = sub.add_parser("status", help="Print sync + schedule status.")

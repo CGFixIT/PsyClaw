@@ -5,9 +5,12 @@
 
 CyClaw's sync module mirrors a Dropbox folder into your local `data/corpus/`
 without weakening any of CyClaw's security invariants. It is a thin Python
-wrapper around the `rclone` binary, runs as a **separate process** (cron /
-systemd timer / launchd / Task Scheduler), and emits per-file audit events into
-the same `logs/audit.jsonl` the gateway uses.
+wrapper around the `rclone` binary and emits per-file audit events into the
+same `logs/audit.jsonl` the gateway uses. It runs as a **separate process**,
+registered via `sync/scheduler.py`'s own `cron` (Linux/macOS, the default) or
+`launchd` (macOS, opt-in — see "Scheduling" below) backends, or manually via a
+systemd `--user` timer if you prefer that over cron (`sync/scheduler.py` does
+not generate a systemd unit itself).
 
 > **Sync is NOT a graph node and is never imported by `gate.py` / `graph.py` /
 > `mcp_hybrid_server.py`.** Primary invocation is `python -m sync.cli`.
@@ -26,7 +29,7 @@ CyClaw/
 │   ├── config.py          RcloneConfig dataclass + validating YAML loader
 │   ├── filters.py         cyclaw_filters.txt generator (hardened denylist)
 │   ├── runner.py          rclone subprocess + JSON-log parser + SHA-256 audit
-│   ├── scheduler.py       cron + Task Scheduler abstraction (idempotent)
+│   ├── scheduler.py       cron + launchd (macOS, opt-in) + Task Scheduler abstraction (idempotent)
 │   ├── selftest.py        pre-flight self-test
 │   └── cli.py             python -m sync.cli entry point
 ├── tests/
@@ -245,21 +248,29 @@ gateway event loop.
 
 ## Scheduling
 
-`python -m sync.cli schedule` registers a single tagged daily job and is
-idempotent (re-running replaces our own entry, never touches yours).
+`python -m sync.cli schedule` registers a single tagged job and is idempotent
+(re-running replaces our own entry, never touches yours). Which mechanism it
+uses is `sync.scheduler_backend` in `config.yaml` (default `"cron"`); how
+often it fires is `sync.schedule_frequency` (default `"daily"`; `"weekly"`
+uses `sync.schedule_weekday`, `"monthly"` uses `sync.schedule_day`).
 
-| Platform | Mechanism | Tag |
-|---|---|---|
-| Linux / macOS / WSL | `crontab` — one line `MIN HOUR * * * <cmd> # CYCLAW_DROPBOX_SYNC` (via `crontab -l` / `crontab -`, never `crontab -e`) | comment `CYCLAW_DROPBOX_SYNC` |
-| Windows | `schtasks /Create /SC DAILY /ST HH:MM /RL LIMITED /F` | task name `CyClaw Dropbox Sync` |
+| Platform | Backend | Mechanism | Tag / identity |
+|---|---|---|---|
+| Linux / macOS / WSL | `cron` (default) | `crontab` — one line `MIN HOUR * * * <cmd> # CYCLAW_DROPBOX_SYNC` (via `crontab -l` / `crontab -`, never `crontab -e`). Daily only — `schedule_frequency` is not consumed by this backend. | comment `CYCLAW_DROPBOX_SYNC` |
+| macOS only | `launchd` (opt-in: `scheduler_backend: "launchd"`) | Generates `~/Library/LaunchAgents/com.cgfixit.cyclaw.sync.plist` via `plistlib` from real, resolved install paths — no `REPLACE_*` placeholders to hand-edit. Supports `daily`/`weekly`/`monthly` via `StartCalendarInterval`. **`install()` never calls `launchctl load`/`bootstrap`** — it prints the exact `launchctl bootstrap gui/<uid> <path>` command; loading a persistent background agent is always an explicit operator step. `remove()` best-effort `launchctl bootout`s before deleting the file. No secret/token is embedded (the sync job needs none — rclone owns its own OAuth state under `~/.config/rclone`). | `Label` `com.cgfixit.cyclaw.sync` |
+| Windows | (only option) | `schtasks /Create /SC DAILY /ST HH:MM /RL LIMITED /F`. Daily only. | task name `CyClaw Dropbox Sync` |
 
-The scheduled command `cd`s into the repo root (so `config.yaml` resolves) and
-runs `python -m sync.cli sync`, propagating `--config` when the loaded config's
-identity differs from the default (e.g. `--config /alt/cfg.yaml` at setup time).
-Every path is safely escaped: the POSIX cron line is `shlex.quote`d per token,
-and the Windows `.bat` launcher quotes and `%`-doubles each path — so a repo or
-config path containing spaces or shell/batch metacharacters (`$()`, backticks,
-`%VAR%`) is passed through literally, never interpreted. On Windows the task
+`cron`/`schtasks` scheduled commands `cd` into the repo root (so `config.yaml`
+resolves) and run `python -m sync.cli sync`, propagating `--config` when the
+loaded config's identity differs from the default (e.g. `--config
+/alt/cfg.yaml` at setup time); the `launchd` plist does the same via
+`WorkingDirectory` + `ProgramArguments` instead. Every path is safely
+escaped: the POSIX cron line is `shlex.quote`d per token, the Windows `.bat`
+launcher quotes and `%`-doubles each path, and the launchd `ProgramArguments`
+array is exec'd directly by the kernel with no shell involved at all (so none
+of the cron/`.bat` escaping applies or is needed there) — a repo or config
+path containing spaces or shell/batch metacharacters (`$()`, backticks,
+`%VAR%`) is passed through literally on every backend. On Windows the task
 points at the generated `cyclaw_sync.bat` launcher (written next to the rclone
 logs) rather than an inline `cmd /c` string — this avoids the quote fragility of
 passing a full command through `schtasks /TR`.
@@ -271,12 +282,21 @@ passing a full command through `schtasks /TR`.
 > descriptor remains open through the optional post-sync check, and the OS
 > releases ownership automatically on a clean exit or crash. The empty lock file
 > remains for reuse; its existence does not mean a sync is active and it must not
-> be manually deleted while a run is in progress.
+> be manually deleted while a run is in progress. This lock is shared by every
+> scheduler backend (cron, launchd, schtasks) since it lives inside `run_sync`
+> itself, not in the scheduler transport.
 >
 > **More robust Linux option:** a systemd `--user` `Type=oneshot` service driven
 > by a timer unit additionally gives journald logging and `Persistent=true`
-> catch-up after downtime. Cron is the implemented portable baseline (it works on
-> macOS/WSL/BSD too).
+> catch-up after downtime. Cron remains the implemented portable baseline (it
+> works on macOS/WSL/BSD too); `sync/scheduler.py` does not generate a systemd
+> unit.
+>
+> See `docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md` for the full rationale
+> behind the launchd backend, what was and wasn't tested (this repo's CI/dev
+> environments are Linux — no live `launchctl` load was exercised), and which
+> other macOS jobs (`fsconnect-trash`, `telegram-health`, `telegram-poll`)
+> remain on static plist templates rather than this generated mechanism.
 
 ---
 
