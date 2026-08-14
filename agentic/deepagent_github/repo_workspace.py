@@ -544,6 +544,7 @@ class RepoWorkspaceTools:
         *,
         timeout_sec: int = DEFAULT_GIT_WRITE_TIMEOUT_SEC,
         extra_env: dict[str, str] | None = None,
+        output_encoding: str | None = None,
     ) -> str:
         binary = _resolve_git_binary()
         env = _git_env()
@@ -559,12 +560,19 @@ class RepoWorkspaceTools:
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding=output_encoding,
                 timeout=timeout_sec,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
             self._audit("agentic_repo_workspace_git_failed", op=tool, reason="timeout")
             raise AgenticError(f"git {tool} timed out after {timeout_sec}s", details={"tool": tool}) from exc
+        except UnicodeDecodeError as exc:
+            self._audit("agentic_repo_workspace_git_failed", op=tool, reason="decode_error")
+            raise AgenticError(
+                f"git {tool} output was not valid {output_encoding or 'text'}",
+                details={"tool": tool},
+            ) from exc
         if completed.returncode != 0:
             self._audit("agentic_repo_workspace_git_failed", op=tool, exit_code=completed.returncode)
             raise AgenticError(
@@ -812,15 +820,22 @@ class RepoWorkspaceTools:
         which would also make an untracked path visible to ``git diff`` but
         by writing a placeholder entry into the index -- a real mutation this
         method deliberately avoids so it stays safe to call from a pure
-        status check).
+        status check). Porcelain v1's ``-z`` form returns raw, NUL-delimited
+        path bytes instead of C-quoted display names. Git represents valid
+        Unicode paths as UTF-8 here, so decode that stream explicitly rather
+        than using the host locale (notably cp1252 on Windows).
         """
         tool = "status"
         self._require_git_writes_enabled(tool)
-        output = self._run_git(tool, ["status", "--porcelain=v1", "--untracked-files=all"])
+        output = self._run_git(
+            tool,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            output_encoding="utf-8",
+        )
         paths = []
-        for line in output.splitlines():
-            if line.startswith("??"):
-                paths.append(line[3:].strip())
+        for record in output.split("\x00"):
+            if record.startswith("?? "):
+                paths.append(record[3:])
         self._audit("agentic_repo_workspace_git_op", op=tool, count=len(paths))
         return paths
 

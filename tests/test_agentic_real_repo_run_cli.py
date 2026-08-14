@@ -14,6 +14,7 @@ discipline for anything downstream of those three mock points.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1617,6 +1618,43 @@ def test_status_renders_the_diff_when_pending_decision(cfg_path, checks_file, mo
     assert record["status"] == "pending_decision"
     assert "target.txt" in record["diff"]
     assert "expected marker" in record["diff"]
+
+
+def test_status_renders_unicode_untracked_file_with_git_quote_path_enabled(
+    cfg_path, checks_file, monkeypatch, capsys,
+):
+    unicode_path = "café.py"
+    marker = "unicode marker"
+    Path(checks_file).write_text(
+        json.dumps([{
+            "name": "unicode_marker_check",
+            "argv": [
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; assert {marker!r} in Path({unicode_path!r}).read_text()",
+            ],
+        }]),
+        encoding="utf-8",
+    )
+    block = f"=== FILE {unicode_path} ===\n{marker}\n=== END FILE ===\nadd unicode file"
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(block))
+    assert _run_start(cfg_path, checks_file) == EXIT_OK
+    record = json.loads(capsys.readouterr().out)
+
+    git_bin = shutil.which("git")
+    assert git_bin is not None
+    subprocess.run(
+        [git_bin, "config", "core.quotePath", "true"],
+        cwd=record["dest"],
+        check=True,
+        capture_output=True,
+    )
+
+    assert main(["--config", cfg_path, "real-repo-run-status", "--run-id", record["run_id"]]) == EXIT_OK
+    status = json.loads(capsys.readouterr().out)
+    assert f"--- new file: {unicode_path} ---" in status["diff"]
+    assert marker in status["diff"]
+    assert "cafÃ©.py" not in status["diff"]
 
 
 def test_status_omits_the_diff_for_a_decided_run(cfg_path, checks_file, monkeypatch, capsys):
