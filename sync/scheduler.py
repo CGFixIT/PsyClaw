@@ -21,26 +21,41 @@ calling ``python -m sync.cli sync`` and skip ``schedule``/``unschedule``. The
 cron baseline has no built-in single-instance guard, so a wrapper-level lockfile
 (or systemd) is recommended if manual and scheduled runs might collide.
 
+macOS note: ``LaunchdScheduler`` below is a second, opt-in Darwin-only backend
+(``sync.scheduler_backend: "launchd"`` in config.yaml; the shipped default
+stays ``"cron"``, so this is zero behavior change unless an operator opts in).
+It generates a real plist from resolved install paths -- no ``REPLACE_*``
+placeholders -- and supports daily/weekly/monthly ``StartCalendarInterval``
+schedules. It deliberately never calls ``launchctl load``/``bootstrap``
+itself: ``install()`` only writes the plist file and returns the exact
+``launchctl bootstrap`` command the operator must run by hand. See
+``docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md`` for the full rationale.
+
 Scheduler identity: every task we register is tagged with ``TASK_TAG`` (a
 trailing comment on Linux/macOS, the task name on Windows) so install/remove
 only ever touch our own entry and never anything the user added by hand.
+``LaunchdScheduler`` uses ``LAUNCHD_LABEL`` the same way -- one fixed plist
+filename it alone owns.
 """
 
 from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import shlex
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from sync.config import RcloneConfig
 from utils.errors import SchedulerError
 
 TASK_TAG = "CYCLAW_DROPBOX_SYNC"
 WINDOWS_TASK_NAME = "CyClaw Dropbox Sync"
+LAUNCHD_LABEL = "com.cgfixit.cyclaw.sync"
 
 
 def _is_managed_cron_line(line: str) -> bool:
@@ -56,6 +71,12 @@ class ScheduleEntry:
     command: str  # the actual command line that will be run
     cron_or_time: str  # cron expression OR HH:MM
     raw: str  # the raw line / schtasks output for debugging
+    # Backend-specific extra guidance for the operator, e.g. LaunchdScheduler's
+    # required (never auto-run) `launchctl bootstrap` command. Empty for
+    # backends where install() is already the complete, live action (cron,
+    # schtasks) -- new field with a default so existing positional/keyword
+    # construction of ScheduleEntry elsewhere is unaffected.
+    note: str = ""
 
 
 def _python_executable() -> str:
@@ -287,6 +308,219 @@ class CronScheduler:
 
 
 # ---------------------------------------------------------------------------
+# macOS -- launchd (Darwin-only; opt-in via sync.scheduler_backend: "launchd")
+# ---------------------------------------------------------------------------
+
+_WEEKDAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")  # index 0-7, 7 aliases Sunday
+
+
+def _launchd_program_arguments(cfg: RcloneConfig) -> list[str]:
+    """The argv launchd execs directly -- no shell, so no quoting is needed.
+
+    Unlike ``_sync_command`` (a single string fed through a POSIX shell via
+    cron), launchd's ``ProgramArguments`` is an array exec'd directly by the
+    kernel: every element is already an inert, literal argument. Mirrors
+    ``_sync_command``'s content (cd is unnecessary -- ``WorkingDirectory``
+    covers it) so both backends invoke the identical CLI surface.
+    """
+    argv = [_python_executable(), "-m", "sync.cli"]
+    cfg_path = getattr(cfg, "_config_path", None)
+    if cfg_path:
+        argv += ["--config", cfg_path]
+    argv.append("sync")
+    return argv
+
+
+def _launchd_calendar_interval(cfg: RcloneConfig) -> dict[str, int]:
+    """Build the StartCalendarInterval dict for cfg.schedule_frequency.
+
+    daily: Hour/Minute only (fires every day). weekly: adds Weekday (launchd's
+    own 0-or-7-is-Sunday convention -- see sync.config's schedule_weekday
+    validation). monthly: adds Day (1-31; launchd simply does not fire in a
+    month shorter than the configured day, e.g. Day=31 in April -- documented
+    upstream launchd behavior, not a CyClaw bug).
+    """
+    interval: dict[str, int] = {"Hour": cfg.schedule_hour, "Minute": cfg.schedule_min}
+    if cfg.schedule_frequency == "weekly":
+        interval["Weekday"] = cfg.schedule_weekday
+    elif cfg.schedule_frequency == "monthly":
+        interval["Day"] = cfg.schedule_day
+    return interval
+
+
+def _launchd_human_schedule(interval: dict[str, int]) -> str:
+    """Human-readable schedule summary, derived from a StartCalendarInterval dict.
+
+    Takes the interval dict itself (not the live RcloneConfig) so status()
+    reports what is actually written on disk, not whatever config.yaml
+    happens to say right now -- the two can legitimately diverge if config.yaml
+    changed since the last `sync.cli schedule` run and install() hasn't been
+    re-run to pick it up.
+    """
+    time_str = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
+    if "Weekday" in interval:
+        return f"weekly {_WEEKDAY_NAMES[interval['Weekday']]} {time_str}"
+    if "Day" in interval:
+        return f"monthly day {interval['Day']} {time_str}"
+    return f"daily {time_str}"
+
+
+class LaunchdScheduler:
+    """Manage a single CyClaw launchd LaunchAgent via a generated plist.
+
+    Darwin-only (enforced by :func:`get_scheduler`, and defensively re-checked
+    in every method here). Writes ``~/Library/LaunchAgents/<LAUNCHD_LABEL>.plist``
+    from real, resolved install paths -- never a ``REPLACE_*`` template an
+    operator must hand-edit. Never calls ``launchctl load``/``bootstrap``
+    itself: loading a persistent background agent is left to an explicit
+    operator step (the exact command is returned in ``ScheduleEntry.note``),
+    matching the same "generate, don't auto-enroll" posture as the shipped
+    ``macos/LaunchAgents/*.plist`` templates, just without the manual
+    placeholder-editing they require.
+    """
+
+    def __init__(self, cfg: RcloneConfig) -> None:
+        self.cfg = cfg
+
+    @staticmethod
+    def _require_darwin() -> None:
+        if platform.system() != "Darwin":
+            raise SchedulerError(
+                "LaunchdScheduler is Darwin-only",
+                details={"platform": platform.system().lower()},
+            )
+
+    @staticmethod
+    def _agents_dir() -> Path:
+        return Path.home() / "Library" / "LaunchAgents"
+
+    @staticmethod
+    def _log_dir() -> Path:
+        return Path.home() / "Library" / "Logs" / "CyClaw"
+
+    @classmethod
+    def _plist_path(cls) -> Path:
+        return cls._agents_dir() / f"{LAUNCHD_LABEL}.plist"
+
+    @staticmethod
+    def _launchctl() -> str | None:
+        """Best-effort launchctl lookup; None (not an error) when absent.
+
+        Unlike CronScheduler/WindowsTaskScheduler's binary lookups (which
+        raise), a missing launchctl must not block install() from writing the
+        plist -- the file is useful evidence/state even before the operator's
+        own launchctl bootstrap step. remove()/status() degrade to
+        file-only behavior when this returns None.
+        """
+        return shutil.which("launchctl")
+
+    def _bootstrap_hint(self, plist_path: Path) -> str:
+        return f"launchctl bootstrap gui/{os.getuid()} {plist_path}"
+
+    def install(self) -> ScheduleEntry:
+        """Write (or overwrite) the CyClaw sync LaunchAgent plist.
+
+        Idempotent: re-running replaces the file in place. Never loads the
+        agent into launchd -- see the class docstring. No secret/token is
+        embedded: the `sync` job needs none (rclone's own OAuth state lives
+        under ~/.config/rclone, untouched by this plist).
+        """
+        self._require_darwin()
+        agents_dir = self._agents_dir()
+        log_dir = self._log_dir()
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        log_path = str(log_dir / "sync.log")
+        interval = _launchd_calendar_interval(self.cfg)
+        document = {
+            "Label": LAUNCHD_LABEL,
+            "WorkingDirectory": _repo_root(self.cfg),
+            "ProgramArguments": _launchd_program_arguments(self.cfg),
+            "StartCalendarInterval": interval,
+            "RunAtLoad": False,
+            "StandardOutPath": log_path,
+            "StandardErrorPath": log_path,
+        }
+
+        plist_path = self._plist_path()
+        tmp_path = plist_path.with_suffix(".plist.tmp")
+        with open(tmp_path, "wb") as f:
+            plistlib.dump(document, f, fmt=plistlib.FMT_XML)
+        os.replace(tmp_path, plist_path)  # atomic on POSIX -- never a partial plist on disk
+
+        return ScheduleEntry(
+            platform_name="darwin",
+            command=" ".join(_launchd_program_arguments(self.cfg)),
+            cron_or_time=_launchd_human_schedule(interval),
+            raw=str(plist_path),
+            note=(
+                f"Plist written to {plist_path} but NOT loaded. Run "
+                f"'{self._bootstrap_hint(plist_path)}' to activate it."
+            ),
+        )
+
+    def remove(self) -> bool:
+        """Best-effort unload, then delete the plist. Returns True if a plist was removed."""
+        self._require_darwin()
+        plist_path = self._plist_path()
+        if not plist_path.exists():
+            return False
+
+        launchctl = self._launchctl()
+        if launchctl:
+            # Tolerate "not loaded"/"no such process" -- bootout on an agent
+            # that was written but never bootstrapped is an expected no-op,
+            # not a failure; we only need the file gone afterward either way.
+            subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
+                [launchctl, "bootout", f"gui/{os.getuid()}", str(plist_path)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        plist_path.unlink()
+        return True
+
+    def status(self) -> ScheduleEntry | None:
+        """Return the on-disk entry if the plist exists, else None.
+
+        Best-effort notes whether launchd currently has it loaded; never
+        raises when launchctl is absent or the probe fails (mirrors
+        sync/cli.py's existing tolerance for a scheduler status read that
+        can't fully resolve on this host).
+        """
+        self._require_darwin()
+        plist_path = self._plist_path()
+        if not plist_path.exists():
+            return None
+
+        with open(plist_path, "rb") as f:
+            document = plistlib.load(f)
+
+        loaded_note = "load state unknown (launchctl unavailable)"
+        launchctl = self._launchctl()
+        if launchctl:
+            probe = subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
+                [launchctl, "print", f"gui/{os.getuid()}/{LAUNCHD_LABEL}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            loaded_note = "loaded" if probe.returncode == 0 else "not loaded"
+
+        interval = document.get("StartCalendarInterval", {})
+        return ScheduleEntry(
+            platform_name="darwin",
+            command=" ".join(document.get("ProgramArguments", [])),
+            cron_or_time=_launchd_human_schedule(interval),
+            raw=str(plist_path),
+            note=loaded_note,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Windows -- schtasks
 # ---------------------------------------------------------------------------
 
@@ -391,13 +625,27 @@ class WindowsTaskScheduler:
 # ---------------------------------------------------------------------------
 
 
-def get_scheduler(cfg: RcloneConfig) -> CronScheduler | WindowsTaskScheduler:
-    """Return the right scheduler for the current OS.
+def get_scheduler(cfg: RcloneConfig) -> CronScheduler | WindowsTaskScheduler | LaunchdScheduler:
+    """Return the right scheduler for the current OS and ``cfg.scheduler_backend``.
 
-    linux/darwin -> CronScheduler; windows -> WindowsTaskScheduler; anything
-    else raises SchedulerError.
+    ``scheduler_backend`` (default ``"cron"``, set via ``sync.scheduler_backend``
+    in config.yaml) selects between the two Darwin-capable backends:
+    "cron" -> CronScheduler (linux/darwin, unchanged default -- existing
+    operators see zero behavior change), "launchd" -> LaunchdScheduler
+    (darwin only; raises SchedulerError if selected on any other platform,
+    rather than silently falling back to cron). Windows always gets
+    WindowsTaskScheduler regardless of scheduler_backend. Any other platform
+    raises SchedulerError.
     """
     sys_name = platform.system().lower()
+    backend = getattr(cfg, "scheduler_backend", "cron")
+    if backend == "launchd":
+        if sys_name != "darwin":
+            raise SchedulerError(
+                f"sync.scheduler_backend: 'launchd' requires macOS (darwin); detected {sys_name}",
+                details={"platform": sys_name, "scheduler_backend": backend},
+            )
+        return LaunchdScheduler(cfg)
     if sys_name == "windows":
         return WindowsTaskScheduler(cfg)
     if sys_name in ("linux", "darwin"):
