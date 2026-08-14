@@ -1124,6 +1124,38 @@ def test_untracked_files_lists_new_paths_not_tracked_content(tmp_path, monkeypat
             assert tools.untracked_files() == ["new_file.txt"]
 
 
+def test_untracked_files_parses_nul_delimited_utf8_paths_without_stripping(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"tracked.txt": "hello\n"})
+    completed = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout="?? café.py\x00??  leading.txt\x00?? trailing.txt \x00?? line\nbreak.py\x00 M tracked.txt\x00",
+        stderr="",
+    )
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with patch.object(repo_workspace.subprocess, "run", return_value=completed) as mrun:
+                assert tools.untracked_files() == [
+                    "café.py",
+                    " leading.txt",
+                    "trailing.txt ",
+                    "line\nbreak.py",
+                ]
+
+    assert mrun.call_args.args[0][1:] == ["status", "--porcelain=v1", "-z", "--untracked-files=all"]
+    assert mrun.call_args.kwargs["encoding"] == "utf-8"
+
+
+def test_untracked_files_fails_closed_on_non_utf8_git_output(tmp_path, monkeypatch):
+    fake = _fake_clone_populating_git_repo(files={"tracked.txt": "hello\n"})
+    decode_error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    with patch.object(repo_workspace, "run_read", side_effect=fake):
+        with RepoWorkspaceTools.clone(_cfg_with_git_writes(tmp_path, monkeypatch)) as tools:
+            with patch.object(repo_workspace.subprocess, "run", side_effect=decode_error):
+                with pytest.raises(AgenticError, match="not valid utf-8"):
+                    tools.untracked_files()
+
+
 def test_untracked_files_empty_when_nothing_new(tmp_path, monkeypatch):
     fake = _fake_clone_populating_git_repo(files={"tracked.txt": "hello\n"})
     with patch.object(repo_workspace, "run_read", side_effect=fake):
