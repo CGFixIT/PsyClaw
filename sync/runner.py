@@ -369,7 +369,9 @@ def build_check_argv(cfg: RcloneConfig, rclone_bin: str = "rclone") -> list[str]
     return argv
 
 
-def run_post_sync_check(cfg: RcloneConfig, rclone_bin: str = "rclone") -> CheckResult:
+def run_post_sync_check(
+    cfg: RcloneConfig, rclone_bin: str = "rclone", *, remaining_budget_sec: float | None = None
+) -> CheckResult:
     """Run ``rclone check`` after a successful sync and return a :class:`CheckResult`.
 
     ``rclone check`` exits 0 when remote and local are identical (filtered),
@@ -381,11 +383,30 @@ def run_post_sync_check(cfg: RcloneConfig, rclone_bin: str = "rclone") -> CheckR
     check, and raising here would skip per-file audit rows and the reindex
     signal. Only a programming misuse should raise from this path.
 
-    Timeout reuses ``cfg.sync_timeout_sec`` (0 = unbounded). Audit event is emitted
+    ``remaining_budget_sec``, when given, overrides the default full
+    ``cfg.sync_timeout_sec`` timeout. The caller (``_run_sync_locked``) passes the
+    wall-clock time actually left under ``sync.lock`` after the copy/retry phase,
+    so ``sync_timeout_sec``'s documented invariant -- it bounds the WHOLE retry
+    sequence under the lock, not just one phase -- holds for the check phase too.
+    Without this, a sync that already spent close to the full budget on retries
+    could hold the lock for up to ~2x sync_timeout_sec if the check then hung.
+    A budget already exhausted (<=0) skips the subprocess entirely rather than
+    launching rclone with a meaningless near-zero timeout. Audit event is emitted
     whether the check passes or not so the operator has a verifiable record.
     """
     argv = build_check_argv(cfg, rclone_bin)
-    timeout = cfg.sync_timeout_sec if cfg.sync_timeout_sec > 0 else None
+    if remaining_budget_sec is not None and remaining_budget_sec <= 0:
+        return CheckResult(
+            ok=False,
+            missing_local=0,
+            missing_remote=0,
+            differences=0,
+            errors=["rclone check skipped: sync wall-clock budget already exhausted"],
+        )
+    if remaining_budget_sec is not None:
+        timeout: float | None = remaining_budget_sec
+    else:
+        timeout = cfg.sync_timeout_sec if cfg.sync_timeout_sec > 0 else None
     try:
         completed = subprocess.run(  # noqa: S603 -- argv list, absolute binary, no shell
             argv,
@@ -401,7 +422,7 @@ def run_post_sync_check(cfg: RcloneConfig, rclone_bin: str = "rclone") -> CheckR
             missing_local=0,
             missing_remote=0,
             differences=0,
-            errors=[f"rclone check timed out after {cfg.sync_timeout_sec}s"],
+            errors=[f"rclone check timed out after {timeout}s"],
         )
     except (FileNotFoundError, subprocess.SubprocessError) as exc:
         return CheckResult(
@@ -1023,8 +1044,12 @@ def _run_sync_locked(
         # non-dry-run sync. Skipped on failure or dry-run because there is nothing to
         # verify. Does not raise on differences -- sets check_result.ok=False instead
         # so the caller can surface the discrepancy without masking the sync result.
+        # Clipped to whatever's left of the same wall-clock budget the retry loop
+        # above already spent from -- see run_post_sync_check's remaining_budget_sec
+        # docstring for why the check phase must not get its own fresh full budget.
         if result.success and not dry_run and getattr(cfg, "post_sync_check", False):
-            result.check_result = run_post_sync_check(cfg, rclone_bin)
+            remaining_for_check = (deadline - time.time()) if (has_budget and deadline is not None) else None
+            result.check_result = run_post_sync_check(cfg, rclone_bin, remaining_budget_sec=remaining_for_check)
 
         # Per-file audit events -- one row per file, with sha256 when available.
         # Summary audit event -- sync_completed (success) or sync_failed (otherwise).
