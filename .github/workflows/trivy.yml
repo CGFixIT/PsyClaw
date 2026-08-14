@@ -62,6 +62,13 @@ jobs:
     permissions:
       contents: read
       security-events: write  # upload-sarif
+    env:
+      # The legacy (v1) GitHub Actions cache service can fail a large gha-cache
+      # export (this image's torch layer alone is ~360MB) with "failed to
+      # reserve cache" / "error writing layer blob" -- a documented cache-API
+      # limitation, not a build error. The v2 cache service fixes it; opt in
+      # explicitly since it is not yet the default for every runner image.
+      ACTIONS_CACHE_SERVICE_V2: true
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
