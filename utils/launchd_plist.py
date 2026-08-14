@@ -72,8 +72,19 @@ def agents_dir() -> Path:
 
 def logs_dir() -> Path:
     """``~/Library/Logs/CyClaw`` -- the shared log directory convention
-    every shipped CyClaw plist (generated or template) already uses."""
-    return Path.home() / "Library" / "Logs" / "CyClaw"
+    every shipped CyClaw plist (generated or template) already uses.
+
+    Creates the directory if missing: every caller uses this path only to
+    build a ``StandardOutPath``/``StandardErrorPath`` value, and launchd does
+    not create that directory itself -- an agent whose log directory is
+    missing fails to launch. ``sync/scheduler.py``'s independently-implemented
+    ``LaunchdScheduler`` already ``mkdir``s its own copy of this same path for
+    exactly that reason; this makes the shared helper do it too instead of
+    requiring every caller to remember the same line.
+    """
+    path = Path.home() / "Library" / "Logs" / "CyClaw"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def plist_path(label: str) -> Path:
