@@ -25,6 +25,35 @@ done
 HOME_DIR="$HOME/.CyClaw"
 FSCONNECT_DIR="$HOME/CyClaw-FS"
 
+# -- Sync scheduler cleanup ---------------------------------------------------
+# The Dropbox sync job (docs/SYNC_README.md) is tagged system-wide -- one
+# crontab comment / one launchd Label per operator account, regardless of
+# which CyClaw checkout registered it -- so at most one is ever active. Clean
+# it up FIRST, before any --remove-home prompt below could delete the repo/venv
+# this needs to invoke, so a background job never outlives `cyclaw` itself.
+# Best-effort only: a missing/invalid config.yaml, an unconfigured sync: block,
+# or no registered schedule are all normal, non-fatal outcomes here -- this
+# must never abort the rest of uninstall (rc-block cleanup, --remove-home,
+# --remove-fsconnect) over an unrelated sync problem.
+unschedule_sync_job() {
+  local py=""
+  if [ -x "$HOME_DIR/venv/bin/python" ]; then
+    py="$HOME_DIR/venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    py="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    py="$(command -v python)"
+  fi
+  if [ -z "$py" ] || [ ! -f "$HOME_DIR/repo/config.yaml" ]; then
+    return 0
+  fi
+  echo "[cyclaw] checking for a registered sync schedule..."
+  if ! (cd "$HOME_DIR/repo" && "$py" -m sync.cli unschedule); then
+    echo "[cyclaw] WARNING: could not clean up the sync schedule (see above); remove it manually with 'python -m sync.cli unschedule' if needed" >&2
+  fi
+}
+unschedule_sync_job
+
 PATH_START="# >>> cyclaw harness path >>>"
 PATH_END="# <<< cyclaw harness path <<<"
 FUNC_START="# >>> cyclaw harness >>>"
