@@ -43,6 +43,11 @@ TASK_TAG = "CYCLAW_DROPBOX_SYNC"
 WINDOWS_TASK_NAME = "CyClaw Dropbox Sync"
 
 
+def _is_managed_cron_line(line: str) -> bool:
+    """Return whether *line* ends with CyClaw's exact cron ownership marker."""
+    return line.rstrip().endswith(f" # {TASK_TAG}")
+
+
 @dataclass
 class ScheduleEntry:
     """Description of a scheduled job, in platform-neutral form."""
@@ -241,9 +246,8 @@ class CronScheduler:
     def install(self) -> ScheduleEntry:
         """Add or replace the CyClaw cron entry (idempotent)."""
         current = self._read_crontab().splitlines()
-        # Strip any existing CyClaw entries (tagged with TASK_TAG), then append
-        # exactly one fresh tagged line.
-        filtered = [ln for ln in current if TASK_TAG not in ln]
+        # Strip any existing CyClaw entries, then append exactly one fresh line.
+        filtered = [ln for ln in current if not _is_managed_cron_line(ln)]
         line = self._our_line()
         filtered.append(line)
         new_content = "\n".join(filtered) + "\n"
@@ -258,7 +262,7 @@ class CronScheduler:
     def remove(self) -> bool:
         """Remove any CyClaw cron entries. Returns True if anything was removed."""
         current = self._read_crontab().splitlines()
-        filtered = [ln for ln in current if TASK_TAG not in ln]
+        filtered = [ln for ln in current if not _is_managed_cron_line(ln)]
         if len(filtered) == len(current):
             return False
         new_content = "\n".join(filtered) + ("\n" if filtered else "")
@@ -268,7 +272,7 @@ class CronScheduler:
     def status(self) -> ScheduleEntry | None:
         """Return the active entry if installed, else None."""
         for ln in self._read_crontab().splitlines():
-            if TASK_TAG in ln:
+            if not ln.lstrip().startswith("#") and _is_managed_cron_line(ln):
                 # Expected shape: "MIN HOUR * * * cmd # TAG"
                 parts = ln.split(maxsplit=5)
                 if len(parts) >= 6:
