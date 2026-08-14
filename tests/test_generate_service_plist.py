@@ -192,6 +192,34 @@ def test_harness_plist_structure(tmp_path: Path, capsys) -> None:
     assert "keep console up" in out
 
 
+def test_harness_plist_with_api_key_service_prints_no_effect_note(tmp_path: Path, capsys) -> None:
+    # harness/server.py never reads CYCLAW_API_KEY -- the wrapper still runs
+    # and exports it, but nothing downstream consumes it, so the operator
+    # gets told rather than believing the flag did something for harness.
+    home = tmp_path / "home"
+    code = _run(
+        home, "--service", "harness", "--api-key-service", "com.cgfixit.cyclaw.api-key",
+        "--confirm", "--reason", "x",
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "does not currently read CYCLAW_API_KEY" in out
+    assert "no effect for --service harness" in out
+
+
+def test_gate_plist_with_api_key_service_has_no_no_effect_note(tmp_path: Path, capsys) -> None:
+    config = _write_config(tmp_path)
+    home = tmp_path / "home"
+    code = _run(
+        home, "--service", "gate", "--config", str(config),
+        "--api-key-service", "com.cgfixit.cyclaw.api-key",
+        "--confirm", "--reason", "x",
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "no effect" not in out
+
+
 def test_harness_plist_custom_throttle(tmp_path: Path) -> None:
     home = tmp_path / "home"
     assert (

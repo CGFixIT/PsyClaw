@@ -208,7 +208,18 @@ def main(argv: list[str] | None = None) -> int:
     print("  (not just 'launchctl stop', which a crash-restart plist may still")
     print("  relaunch depending on how the process actually exited).")
     print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
+    _maybe_print_harness_api_key_note(args)
     return 0
+
+
+def _maybe_print_harness_api_key_note(args: argparse.Namespace) -> None:
+    if args.service != "harness" or not args.api_key_service:
+        return
+    print()
+    print("  NOTE: harness/server.py does not currently read CYCLAW_API_KEY --")
+    print("  --api-key-service has no effect for --service harness today. The")
+    print("  Keychain wrapper still runs and exports the variable, but nothing")
+    print("  in the harness process consumes it.")
 
 
 if __name__ == "__main__":
