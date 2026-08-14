@@ -414,8 +414,23 @@ class LaunchdScheduler:
         """
         return shutil.which("launchctl")
 
+    @staticmethod
+    def _uid() -> int:
+        """POSIX uid, or 0 as an inert placeholder on a non-POSIX Python.
+
+        This class only ever runs for real on Darwin (every public method
+        calls _require_darwin() first), where os.getuid always exists. The
+        fallback exists solely so this class's own tests -- which mock
+        platform.system() to "Darwin" but still execute on whatever
+        interpreter CI actually is -- don't crash: CPython's os module omits
+        getuid entirely on Windows, independent of what platform.system() is
+        mocked to return (confirmed via CI: AttributeError, not a permission
+        or value problem).
+        """
+        return os.getuid() if hasattr(os, "getuid") else 0
+
     def _bootstrap_hint(self, plist_path: Path) -> str:
-        return f"launchctl bootstrap gui/{os.getuid()} {plist_path}"
+        return f"launchctl bootstrap gui/{self._uid()} {plist_path}"
 
     def install(self) -> ScheduleEntry:
         """Write (or overwrite) the CyClaw sync LaunchAgent plist.
@@ -473,7 +488,7 @@ class LaunchdScheduler:
             # that was written but never bootstrapped is an expected no-op,
             # not a failure; we only need the file gone afterward either way.
             subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
-                [launchctl, "bootout", f"gui/{os.getuid()}", str(plist_path)],
+                [launchctl, "bootout", f"gui/{self._uid()}", str(plist_path)],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -502,7 +517,7 @@ class LaunchdScheduler:
         launchctl = self._launchctl()
         if launchctl:
             probe = subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
-                [launchctl, "print", f"gui/{os.getuid()}/{LAUNCHD_LABEL}"],
+                [launchctl, "print", f"gui/{self._uid()}/{LAUNCHD_LABEL}"],
                 capture_output=True,
                 text=True,
                 timeout=10,
