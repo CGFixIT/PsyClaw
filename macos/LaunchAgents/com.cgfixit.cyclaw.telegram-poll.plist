@@ -3,7 +3,17 @@
 <!--
   CyClaw Telegram T2 — long-poll chat adapter (KeepAlive).
 
-  DISABLED BY DEFAULT. Operator steps:
+  DISABLED BY DEFAULT.
+
+  Recommended path: `python -m telegram.cli poll-plist` generates the same
+  plist from real, resolved install paths and injects the bot token via
+  macos/cyclaw-keychain-env.sh (Keychain), never as a plaintext
+  EnvironmentVariables value; pass the api-key-service flag too if
+  CYCLAW_API_KEY is needed. It still never loads the agent; it only prints the
+  `launchctl bootstrap` command to run by hand.
+
+  This hand-editable template remains as a reference/fallback. To enable
+  it directly instead:
     1. CyClaw server + Ollama already running on loopback.
     2. config.yaml: telegram.enabled true, mode: chat, allowed_chat_ids set.
     3. Copy/edit this plist (WorkingDirectory, paths, token).

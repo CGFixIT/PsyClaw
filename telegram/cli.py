@@ -2,10 +2,17 @@
 
 Subcommands:
 
-    status   Print channel config (no secrets).
-    test     Run the pre-flight self-test.
-    send     T1: send one outbound message to an allowlisted chat.
-    poll     T2: long-poll inbound messages (requires mode=chat).
+    status       Print channel config (no secrets).
+    test         Run the pre-flight self-test.
+    send         T1: send one outbound message to an allowlisted chat.
+    poll         T2: long-poll inbound messages (requires mode=chat).
+    poll-plist   Generate (never load) the macOS launchd plist for T2's
+                 KeepAlive poller. Darwin-only. Injects TELEGRAM_BOT_TOKEN
+                 via the Keychain wrapper -- never writes the token into
+                 the plist.
+    health-plist Generate (never load) the macOS launchd plist for T1's
+                 periodic /health probe + notify-on-fail. Darwin-only. Same
+                 Keychain-wrapper token injection as poll-plist.
 
 Exit codes (aligned with sync/agentic):
     0    success / clean no-op when telegram.enabled is false (status/test)
@@ -19,13 +26,26 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import platform
+import shlex
 import sys
 import warnings
+from pathlib import Path
 
 from telegram.config import TelegramConfig, load_telegram_config
 from telegram.runner import poll_forever, send_notify
 from telegram.selftest import run_self_test
+from utils import launchd_plist
 from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, TelegramRuntimeError
+
+# Fixed Labels the generated plists own -- match the shipped static templates
+# at macos/LaunchAgents/com.cgfixit.cyclaw.telegram-{health,poll}.plist (both
+# write to the same well-known paths; the generators are the recommended
+# path, the templates stay as hand-editable references/fallbacks).
+_POLL_LAUNCHD_LABEL = "com.cgfixit.cyclaw.telegram-poll"
+_HEALTH_LAUNCHD_LABEL = "com.cgfixit.cyclaw.telegram-health"
+_DEFAULT_TOKEN_SERVICE = "com.cgfixit.cyclaw.telegram-bot-token"  # noqa: S105 -- Keychain service NAME, not a secret
+_DEFAULT_HEALTH_INTERVAL_SEC = 300
 
 EXIT_OK = 0
 EXIT_FAIL = 2
@@ -235,6 +255,138 @@ def cmd_poll(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_poll_plist(args: argparse.Namespace) -> int:
+    """Generate (never load) the T2 KeepAlive poller launchd plist.
+
+    Darwin-only. TELEGRAM_BOT_TOKEN (and, optionally, CYCLAW_API_KEY) are
+    injected at process-start time via macos/cyclaw-keychain-env.sh -- never
+    written into the plist itself. See that script's header for how to store
+    the secret first (macos/cyclaw-keychain-set.sh).
+    """
+    _heading("CyClaw Telegram Channel -- Generate poll (T2) launchd plist")
+    if platform.system() != "Darwin":
+        _err("poll-plist is Darwin-only (writes a macOS launchd plist).")
+        return EXIT_ENV
+    try:
+        cfg = load_telegram_config(args.config)
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    if not cfg.enabled:
+        return _disabled_notice()
+    if cfg.mode != "chat":
+        _err("poll-plist requires telegram.mode: chat (current mode refuses inbound).")
+        return EXIT_ENV
+
+    repo_root = Path(__file__).resolve().parent.parent
+    inner_argv = [
+        launchd_plist.python_executable(),
+        "-m",
+        "telegram.cli",
+        "--config",
+        str(Path(args.config).resolve()),
+        "poll",
+    ]
+    secrets = [(args.token_service, "TELEGRAM_BOT_TOKEN")]
+    if args.api_key_service:
+        secrets.append((args.api_key_service, "CYCLAW_API_KEY"))
+    wrapper = launchd_plist.keychain_wrapper_path(repo_root)
+    program_args = launchd_plist.wrap_with_keychain_secrets(inner_argv, secrets, wrapper)
+
+    log_path = str(launchd_plist.logs_dir() / "telegram-poll.log")
+    document = {
+        "Label": _POLL_LAUNCHD_LABEL,
+        "WorkingDirectory": str(repo_root),
+        "ProgramArguments": program_args,
+        "KeepAlive": True,
+        "ThrottleInterval": 10,
+        "RunAtLoad": False,
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+
+    path = launchd_plist.plist_path(_POLL_LAUNCHD_LABEL)
+    launchd_plist.write_plist(document, path)
+
+    _kv("plist", path)
+    _kv("token Keychain service", args.token_service)
+    if args.api_key_service:
+        _kv("api-key Keychain service", args.api_key_service)
+    print()
+    print(f"  Store the token first: macos/cyclaw-keychain-set.sh '{args.token_service}'")
+    print("  Run exactly one poller per bot token (T2's own operator checklist).")
+    print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
+    return EXIT_OK
+
+
+def cmd_health_plist(args: argparse.Namespace) -> int:
+    """Generate (never load) the T1 periodic /health-probe launchd plist.
+
+    Darwin-only. Does NOT start gate.py -- probes the already-running
+    server's loopback /health via curl and sends a Telegram notify only on
+    failure. TELEGRAM_BOT_TOKEN is injected the same Keychain-wrapper way as
+    poll-plist.
+    """
+    _heading("CyClaw Telegram Channel -- Generate health (T1) launchd plist")
+    if platform.system() != "Darwin":
+        _err("health-plist is Darwin-only (writes a macOS launchd plist).")
+        return EXIT_ENV
+    try:
+        cfg = load_telegram_config(args.config)
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    if not cfg.enabled:
+        return _disabled_notice()
+
+    chat_id = args.chat_id or cfg.allowed_chat_ids[0]
+    if not cfg.is_chat_allowed(chat_id):
+        _err(f"chat_id {chat_id} is not in telegram.allowed_chat_ids")
+        return EXIT_FAIL
+    if args.interval_sec <= 0:
+        _err("--interval-sec must be > 0")
+        return EXIT_FAIL
+
+    repo_root = Path(__file__).resolve().parent.parent
+    py = launchd_plist.python_executable()
+    config_arg = shlex.quote(str(Path(args.config).resolve()))
+    health_url = shlex.quote(f"{cfg.query.base_url}/health")
+    health_cmd = (
+        f"curl -sf --max-time 5 {health_url} >/dev/null || "
+        f"{shlex.quote(py)} -m telegram.cli --config {config_arg} send "
+        f"--chat-id {shlex.quote(chat_id)} "
+        '--text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"'
+    )
+    inner_argv = ["/bin/bash", "-lc", health_cmd]
+    wrapper = launchd_plist.keychain_wrapper_path(repo_root)
+    program_args = launchd_plist.wrap_with_keychain_secrets(
+        inner_argv, [(args.token_service, "TELEGRAM_BOT_TOKEN")], wrapper
+    )
+
+    log_path = str(launchd_plist.logs_dir() / "telegram-health.log")
+    document = {
+        "Label": _HEALTH_LAUNCHD_LABEL,
+        "WorkingDirectory": str(repo_root),
+        "ProgramArguments": program_args,
+        "StartInterval": args.interval_sec,
+        "RunAtLoad": False,
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+
+    path = launchd_plist.plist_path(_HEALTH_LAUNCHD_LABEL)
+    launchd_plist.write_plist(document, path)
+
+    _kv("plist", path)
+    _kv("chat_id", chat_id)
+    _kv("interval_sec", args.interval_sec)
+    _kv("token Keychain service", args.token_service)
+    print()
+    print(f"  Store the token first: macos/cyclaw-keychain-set.sh '{args.token_service}'")
+    print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m telegram.cli",
@@ -274,6 +426,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop after N getUpdates batches (0 = forever). For tests.",
     )
     p_poll.set_defaults(func=cmd_poll)
+
+    p_poll_plist = sub.add_parser(
+        "poll-plist",
+        help="Generate (never load) the macOS launchd plist for the T2 poller. Darwin-only.",
+    )
+    p_poll_plist.add_argument(
+        "--token-service", default=_DEFAULT_TOKEN_SERVICE,
+        help="Keychain service name holding the bot token (default: %(default)s).",
+    )
+    p_poll_plist.add_argument(
+        "--api-key-service", default="",
+        help="Optional Keychain service name holding CYCLAW_API_KEY (unset: not injected).",
+    )
+    p_poll_plist.set_defaults(func=cmd_poll_plist)
+
+    p_health_plist = sub.add_parser(
+        "health-plist",
+        help="Generate (never load) the macOS launchd plist for the T1 health probe. Darwin-only.",
+    )
+    p_health_plist.add_argument("--chat-id", default="", help="Notify target (default: first allowed_chat_ids entry).")
+    p_health_plist.add_argument(
+        "--interval-sec", type=int, default=_DEFAULT_HEALTH_INTERVAL_SEC,
+        help="Seconds between probes (default: %(default)s).",
+    )
+    p_health_plist.add_argument(
+        "--token-service", default=_DEFAULT_TOKEN_SERVICE,
+        help="Keychain service name holding the bot token (default: %(default)s).",
+    )
+    p_health_plist.set_defaults(func=cmd_health_plist)
 
     return parser
 

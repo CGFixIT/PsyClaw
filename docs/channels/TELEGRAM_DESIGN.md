@@ -189,9 +189,15 @@ token.
 **Operator checklist**
 
 1. Create a bot with BotFather. For a manual smoke, pass `--prompt-token`; the
-   value stays only in that CLI process. For unattended launchd, use
-   `TELEGRAM_BOT_TOKEN` through a Keychain/runtime wrapper or an operator-only
-   `0600` secret file; do not paste the token into the plist.
+   value stays only in that CLI process. For unattended launchd, store it in
+   the macOS Keychain (`macos/cyclaw-keychain-set.sh
+   com.cgfixit.cyclaw.telegram-bot-token`) — `python -m telegram.cli
+   health-plist` / `poll-plist` generate a plist whose `ProgramArguments`
+   run it through `macos/cyclaw-keychain-env.sh` first, which resolves the
+   token from the Keychain and exports `TELEGRAM_BOT_TOKEN` at process-start
+   time. No token value is ever written into the plist. An operator-only
+   `0600` secret file remains a valid alternative if you prefer not to use
+   the Keychain.
 2. Send `/help` to the bot once; resolve your chat id from this bot's own
    `getUpdates` response. Do not disclose it to a third-party bot.
 3. Set in `config.yaml`:
@@ -216,7 +222,7 @@ token.
 | Item | File(s) | Status / instructions |
 |---|---|---|
 | Persistent rate limiter | `telegram/ratelimit.py` | **Deferred (YAGNI).** Process-local sliding window is enough for a single poller. Upgrade to dedicated sqlite under `data/` only if multi-process pollers are needed. Keys: `tg:outbound`, `tg:inbound:{chat_id}`. |
-| Launchd template | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist` | **Shipped (template).** curl `/health` → on fail `telegram.cli send`. Disabled by default; replace path/token placeholders before `launchctl load`. |
+| Launchd generator | `python -m telegram.cli health-plist` | **Shipped.** Generates the same curl-`/health`-then-notify-on-fail plist from real resolved paths (no placeholders), token injected via the Keychain wrapper. Never calls `launchctl load` itself. The static `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist` template remains as a hand-editable reference/fallback. |
 | Message chunking | `telegram/client.py` | **Shipped.** `chunk_text` splits on paragraph/line before hard cut; `send_message` sends sequential chunks. |
 | `send` dry-run | `telegram/cli.py` | **Shipped in T0** (`--dry-run` validates allowlist + prints preview, no HTTP). |
 
@@ -274,7 +280,7 @@ as T1.
 | Offset persistence | `telegram/state.py`, `telegram/runner.py` | **Shipped, fail-closed.** Atomic `data/telegram/offset.json`; `poll_forever` loads/saves and respects no-ack-on-`TelegramRuntimeError`. A save failure is audited and retried in-process while polling stays paused, so launchd cannot repeatedly replay an already-answered update. A process crash during that retry can still resume from the old durable offset under Telegram's at-least-once delivery model. |
 | Command namespace | `telegram/runner.py` | **Shipped.** `/help`, `/status` (loopback `/health` only), `/id`, and T3 `/online`; `/save` only explains the T4 confirmation form when sent without an attachment. |
 | Injection double-check | optional | `/query` already runs the sanitizer. Do not reimplement. |
-| launchd plist | `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-poll.plist` | **Shipped (template).** KeepAlive + ThrottleInterval; log path documented in plist header. |
+| launchd generator | `python -m telegram.cli poll-plist` | **Shipped.** Generates the KeepAlive + ThrottleInterval plist from real resolved paths, token injected via the Keychain wrapper (optionally chains a second wrapper layer for `CYCLAW_API_KEY` via `--api-key-service`). The static `macos/LaunchAgents/com.cgfixit.cyclaw.telegram-poll.plist` template remains as a hand-editable reference/fallback. |
 
 **Tests**
 
@@ -489,7 +495,11 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 4. Run CyClaw loopback server.
 5. Enable Telegram **T1 first**; live with notify for a few days before `mode: chat`.
 6. Poll process: separate from uvicorn so a stuck `/query` does not kill the web UI (or vice versa), but run exactly one poller per bot token.
-7. Prefer launchd templates under `macos/LaunchAgents/` only after manual T1/T2 works and the offset path is writable. Keep the token out of plaintext plist values.
+7. Prefer `python -m telegram.cli health-plist` / `poll-plist` (or the static
+   templates under `macos/LaunchAgents/`) only after manual T1/T2 works and
+   the offset path is writable. The generators inject the token via the
+   Keychain wrapper, never as a plaintext plist value; if hand-editing a
+   template instead, keep the token out of it the same way.
 
 ---
 

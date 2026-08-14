@@ -86,3 +86,21 @@ def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
     assert "EnvironmentVariables" not in document
     assert any("REPLACE_" in value for value in arguments)
     assert b"mkdir -p ~/Library/Logs/CyClaw" in plist_bytes
+
+
+def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
+    """Every macos/LaunchAgents/*.plist must plistlib-parse.
+
+    Regression guard: a literal "--" inside an XML comment (e.g. an
+    embedded CLI flag like --chat-id or --api-key-service, easy to type
+    without noticing the XML significance) makes the whole document
+    invalid per the XML spec, silently breaking `launchctl load` even
+    though the file looks fine to a human reader. Caught for real in this
+    repo's history -- see the PR that added this test.
+    """
+    launch_agents_dir = _REPO_ROOT / "macos" / "LaunchAgents"
+    plist_files = sorted(launch_agents_dir.glob("*.plist"))
+    assert len(plist_files) >= 3  # sanity: the dir isn't empty / glob isn't broken
+    for path in plist_files:
+        document = plistlib.loads(path.read_bytes())
+        assert document["Label"].startswith("com.cgfixit.cyclaw.")
