@@ -184,6 +184,20 @@ _UNTRUSTED_CLOSE = "UNTRUSTED-GITHUB-CONTEXT>>>"
 _MAX_READ_FILE_CHARS = 4_000
 _MAX_TOTAL_READ_CHARS = 12_000
 
+# Hard ceiling on max_iterations. Every other quantity this loop bounds
+# (max_write_budget_bytes, max_handoff_chars, the _MAX_* constants here) has an
+# explicit ceiling; max_iterations was the one caller-supplied number with none,
+# despite driving a REAL PAID API CALL per iteration when run with
+# --provider grok/claude --confirm-online (docs/agentic/AGENTIC_README.md's own
+# "billed on every --max-iterations attempt, not once" warning). An operator
+# typo (an extra zero, or reusing a value sized for the free local-model path)
+# had no code-level backstop against runaway cloud spend short of noticing
+# before --confirm-online. Sized generously above the shipped default (3) for
+# legitimate hard-problem iteration on the free local path, not around any
+# paid-provider budget -- operators driving a paid provider should still pass
+# a much smaller --max-iterations themselves.
+_MAX_ITERATIONS = 25
+
 # Distinct from the planner's own === FILE === output grammar on purpose: this
 # text is INPUT the model reads, not a shape it should echo back or confuse
 # with its own required output syntax.
@@ -781,6 +795,11 @@ def run_real_repo_loop(
         raise AgenticError("loop instruction must be a non-empty string")
     if not isinstance(max_iterations, int) or isinstance(max_iterations, bool) or max_iterations <= 0:
         raise AgenticError("max_iterations must be a positive integer", details={"received": max_iterations})
+    if max_iterations > _MAX_ITERATIONS:
+        raise AgenticError(
+            f"max_iterations must be <= {_MAX_ITERATIONS}",
+            details={"received": max_iterations, "ceiling": _MAX_ITERATIONS},
+        )
     if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
         raise AgenticError("max_tokens must be a positive integer", details={"received": max_tokens})
     if not checks:

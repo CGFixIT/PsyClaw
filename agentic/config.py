@@ -50,10 +50,15 @@ DEFAULT_DEEPAGENT_WORKSPACE_ROOT = "data/agentic/workspaces"
 # grading it would otherwise be "accepted" by construction -- the single most
 # common reward-hacking failure mode of a make-the-checks-pass loop. Matched
 # as a path-PREFIX (see decide_real_repo_candidate's use), so "tests/" also
-# covers "tests/unit/test_x.py".
+# covers "tests/unit/test_x.py". Kept in parity with config.yaml's shipped
+# protected_write_paths (the value actually used whenever config.yaml sets
+# it, which it does) -- this is only the fallback for a deployment that
+# doesn't override the key, so a gap here silently under-protects that case.
 DEFAULT_PROTECTED_WRITE_PATH_PREFIXES = (
     "tests/", "conftest.py", ".github/", ".git/",
-    "pyproject.toml", "setup.cfg", "pytest.ini", ".claude/skills/",
+    "pyproject.toml", "setup.cfg", "pytest.ini",
+    ".ruff.toml", "ruff.toml", "tox.ini", "noxfile.py",
+    ".claude/", ".codex/", "config.yaml", "CLAUDE.md",
 )
 # A whole ITERATION's total proposed-write size, not per-file (that's
 # RepoWorkspaceTools.max_write_bytes). The planner's own system prompt already

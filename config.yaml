@@ -673,6 +673,15 @@ agentic:
       - "noxfile.py"
       - ".claude/"
       - ".codex/"
+      # config.yaml is itself the single source of truth for every tunable
+      # (banned_patterns, retrieval.min_score, rate limits, and this very
+      # list) -- a candidate that loosens a safety tunable here, inside its
+      # own jailed clone, could have a config-validating check in --checks-file
+      # (config-guard/invariant-guard) pass by construction, the identical
+      # reward-hacking pattern this list already closes for .ruff.toml etc.
+      # CLAUDE.md is the operating manual whose rules govern this whole loop.
+      - "config.yaml"
+      - "CLAUDE.md"
     max_write_budget_bytes: 100000               # total bytes ONE iteration may write; not per-file
     # Blocks an iteration whose proposed file content is shaped like an
     # exfiltration, a reverse shell, an obfuscated exec, or a pipe-to-shell

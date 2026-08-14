@@ -103,6 +103,12 @@ def test_deepagent_config_defaults_disabled_and_path_anchored(tmp_path: Path) ->
     assert cfg.deepagent_github.max_write_budget_bytes == DEFAULT_MAX_WRITE_BUDGET_BYTES
     assert "tests/" in cfg.deepagent_github.protected_write_paths
     assert ".git/" in cfg.deepagent_github.protected_write_paths
+    # config.yaml is itself the tunable this whole gate exists to protect
+    # (banned_patterns, retrieval.min_score, this very list); CLAUDE.md governs
+    # the loop that reads it. Both were a gap in the code default that shipped
+    # config.yaml had already closed for .ruff.toml/tox.ini/etc.
+    assert "config.yaml" in cfg.deepagent_github.protected_write_paths
+    assert "CLAUDE.md" in cfg.deepagent_github.protected_write_paths
 
 
 def test_deepagent_config_rejects_non_list_protected_write_paths(tmp_path: Path) -> None:
@@ -374,6 +380,22 @@ class TestShippedAgenticConfigContract:
         assert cfg.mode == "write"
         assert cfg.writes_enabled is True
         assert cfg.repo == "cgfixit/CyClaw"
+
+    def test_protected_write_paths_covers_its_own_governing_files(self) -> None:
+        # The shipped LIST (not just the code default above) is what a real
+        # real-repo-run actually consults -- decide_real_repo_candidate reads
+        # cfg.deepagent_github.protected_write_paths, and config.yaml always
+        # sets this key, so the code default never applies here in practice.
+        paths = self._load().deepagent_github.protected_write_paths
+        assert "config.yaml" in paths
+        assert "CLAUDE.md" in paths
+        # Reward-hacking regression: reject a candidate that proposes to touch
+        # either -- the same code path a self-improvement run's diff-scope
+        # gate uses.
+        from agentic.real_repo_loop import _matches_protected_path
+
+        assert _matches_protected_path("config.yaml", paths)
+        assert _matches_protected_path("CLAUDE.md", paths)
 
     def test_deepagent_github_shipped_gates(self) -> None:
         cfg = self._load().deepagent_github

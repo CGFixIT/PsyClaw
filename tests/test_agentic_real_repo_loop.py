@@ -31,6 +31,7 @@ from agentic.real_repo_loop import (
     RealRepoDecision,
     RealRepoLoopIteration,
     RealRepoLoopResult,
+    _MAX_ITERATIONS,
     _parse_file_blocks,
     _verification_feedback,
     decide_real_repo_candidate,
@@ -716,6 +717,37 @@ def test_run_rejects_non_positive_max_iterations(tmp_path, monkeypatch):
                     tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
                     commit_message="x", max_iterations=0, reason="test", confirm=True,
                 )
+        finally:
+            client.close()
+
+
+def test_run_rejects_max_iterations_above_the_ceiling(tmp_path, monkeypatch):
+    # Backstop against an operator typo (an extra zero, or reusing a value
+    # sized for the free local-model path) driving runaway paid-provider spend
+    # -- see _MAX_ITERATIONS's own comment. Never reaches the client: rejected
+    # before the loop runs, same as the existing non-positive check above.
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            with pytest.raises(AgenticError, match="max_iterations"):
+                run_real_repo_loop(
+                    tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
+                    commit_message="x", max_iterations=_MAX_ITERATIONS + 1, reason="test", confirm=True,
+                )
+        finally:
+            client.close()
+
+
+def test_run_accepts_max_iterations_at_the_ceiling(tmp_path, monkeypatch):
+    # The ceiling itself must remain a valid, usable value (off-by-one guard).
+    with _cloned_tools(tmp_path, monkeypatch) as tools:
+        client = _loop_client(lambda request: _chat_response(_RIGHT_BLOCK))
+        try:
+            result = run_real_repo_loop(
+                tools, client, instruction="x", checks=[_MARKER_CHECK], branch_name="agent/x",
+                commit_message="x", max_iterations=_MAX_ITERATIONS, reason="test", confirm=True,
+            )
+            assert result.accepted is True
         finally:
             client.close()
 
