@@ -72,7 +72,7 @@ EXPOSE 8787
 
 # Simple healthcheck (assumes /health in gate.py)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD python -c "import httpx; httpx.get('http://127.0.0.1:8787/health', timeout=4)" || exit 1
+  CMD python -c "import httpx; response = httpx.get('http://127.0.0.1:8787/health', timeout=4); response.raise_for_status()" || exit 1
 
 # In-container bind is 0.0.0.0 so docker-compose's port publish can reach
 # uvicorn. Binding 127.0.0.1 here is the CONTAINER's private loopback: under

@@ -4,6 +4,11 @@ Native seccomp, AppArmor, and eBPF validation still requires a Linux host; this
 test prevents the repository from silently rewiring an untraced custom policy.
 """
 
+import re
+import subprocess  # noqa: S404 - executes repo-owned healthcheck payloads only
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import yaml
@@ -20,6 +25,17 @@ WRITABLE_ROOTS = (
 )
 
 
+class _HealthHandler(BaseHTTPRequestHandler):
+    status_code = 200
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
+        self.send_response(self.status_code)
+        self.end_headers()
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 def test_compose_forces_builtin_seccomp_and_stage_one_baseline() -> None:
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     service = compose["services"]["cyclaw"]
@@ -30,6 +46,39 @@ def test_compose_forces_builtin_seccomp_and_stage_one_baseline() -> None:
     assert service["cap_drop"] == ["ALL"]
     assert service["security_opt"] == ["no-new-privileges:true", "seccomp:builtin"]
     assert not list((REPO_ROOT / "deploy" / "seccomp").glob("*.json"))
+
+
+def test_container_healthchecks_reject_http_error_statuses() -> None:
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    compose_probe = compose["services"]["cyclaw"]["healthcheck"]["test"]
+
+    docker_match = re.search(r'^\s*CMD python -c "([^"]+)" \|\| exit 1$', dockerfile, re.MULTILINE)
+    assert docker_match, "Dockerfile healthcheck Python payload not found"
+    assert compose_probe[:3] == ["CMD", "python", "-c"]
+    probes = (docker_match.group(1), compose_probe[3])
+
+    server = HTTPServer(("127.0.0.1", 0), _HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    probe_url = f"http://127.0.0.1:{server.server_address[1]}/health"
+    try:
+        for status_code, expected_success in ((200, True), (500, False)):
+            _HealthHandler.status_code = status_code
+            for probe in probes:
+                local_probe = probe.replace("http://127.0.0.1:8787/health", probe_url)
+                result = subprocess.run(  # noqa: S603 - fixed interpreter and repo-owned payload
+                    [sys.executable, "-c", local_probe],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                assert (result.returncode == 0) is expected_success, result.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_apparmor_candidate_matches_writable_carveouts() -> None:
