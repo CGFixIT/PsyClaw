@@ -52,6 +52,25 @@ def test_agents_dir_and_logs_dir_and_plist_path(tmp_path: Path) -> None:
         )
 
 
+def test_logs_dir_creates_the_directory(tmp_path: Path) -> None:
+    # launchd does not create a missing StandardOutPath/StandardErrorPath
+    # directory itself -- every caller builds a log_path from this return
+    # value, so the directory must exist by the time write_plist() runs.
+    with patch("utils.launchd_plist.Path.home", return_value=tmp_path):
+        expected = tmp_path / "Library" / "Logs" / "CyClaw"
+        assert not expected.exists()
+        result = launchd_plist.logs_dir()
+        assert result == expected
+        assert result.is_dir()
+
+
+def test_logs_dir_is_idempotent_when_already_present(tmp_path: Path) -> None:
+    with patch("utils.launchd_plist.Path.home", return_value=tmp_path):
+        launchd_plist.logs_dir()
+        launchd_plist.logs_dir()  # must not raise on the second call
+        assert (tmp_path / "Library" / "Logs" / "CyClaw").is_dir()
+
+
 def test_write_plist_is_atomic_and_leaves_no_tmp_file(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "com.example.job.plist"
     document = {"Label": "com.example.job", "RunAtLoad": False}
