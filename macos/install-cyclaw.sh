@@ -128,7 +128,7 @@ find_python312() {
       if [ -n "$ver" ]; then
         major="${ver%%.*}"
         minor="${ver#*.}"
-        if [ "$major" -eq 3 ] 2>/dev/null && [ "$minor" -ge 12 ] 2>/dev/null; then
+        if [ "$major" -eq 3 ] 2>/dev/null && [ "$minor" -eq 12 ] 2>/dev/null; then
           echo "$candidate"
           return 0
         fi
@@ -140,9 +140,9 @@ find_python312() {
 
 PY_CMD=""
 if ! PY_CMD="$(find_python312)"; then
-  warn "Python 3.12+ not found. Install it (e.g. 'brew install python@3.12', or https://www.python.org/downloads/macos/), then re-run this installer."
+  warn "Python 3.12.x not found. Install it (e.g. 'brew install python@3.12', or https://www.python.org/downloads/macos/), then re-run this installer."
   if [ "$SKIP_PYTHON_DEPS" -eq 0 ]; then
-    echo "Python 3.12+ is required." >&2
+    echo "Python 3.12.x is required to install dependencies." >&2
     exit 1
   fi
 fi
@@ -153,6 +153,12 @@ if [ "$SKIP_PYTHON_DEPS" -eq 0 ]; then
     step "creating virtual environment at $VENV_DIR"
     "$PY_CMD" -m venv "$VENV_DIR"
     [ -x "$VENV_PY" ] || { echo "venv creation failed." >&2; exit 1; }
+  else
+    VENV_VERSION="$("$VENV_PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+    if [ "$VENV_VERSION" != "3.12" ]; then
+      echo "Existing virtual environment at '$VENV_DIR' is not Python 3.12.x (detected: ${VENV_VERSION:-unreadable}). Remove or rename it manually, then re-run; the installer will not replace it automatically." >&2
+      exit 1
+    fi
   fi
   step "installing dependencies (torch first, then requirements; this can take a few minutes)"
   # Match ci.yml's exact pip pin (CVE/repro); never float to latest on installers.
