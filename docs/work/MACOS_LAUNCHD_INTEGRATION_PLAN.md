@@ -5,7 +5,9 @@
 **Status:** Verification complete; `LaunchdScheduler` implemented and tested
 (see "Implementation" and "Testing performed" below) — full suite green in a
 Linux sandbox; real-macOS `launchctl` behavior remains unverified by
-construction (see "NOT run" below).
+construction (see "NOT run" below). All five follow-up items in "Next
+integrations" below have since shipped as four separate draft PRs
+(#909-#912).
 
 ## Method
 
@@ -360,31 +362,60 @@ does not auto-bootstrap.
 
 ## Next integrations (suggested, in rough priority order)
 
-1. **`telegram-health` / `telegram-poll` on the same generated-plist
-   mechanism**, extending `LaunchdScheduler`'s plist-writing helper to
-   `StartInterval` (health probe, every N seconds) and `KeepAlive` (poll,
-   long-running) job shapes — the two calendar-only frequencies this PR
-   built don't cover either. This is also where the real secrets problem
-   lives: these two jobs *do* need `TELEGRAM_BOT_TOKEN`, so this integration
-   should ship together with a Keychain-backed wrapper script (item 2), not
-   before it — otherwise it just reintroduces the token-in-plist tension
-   this doc flagged above.
-2. **A Keychain runtime wrapper** (`security find-generic-password` at
-   process start, feeding the token into the child's env without ever
-   writing it to the plist) for `TELEGRAM_BOT_TOKEN` and `CYCLAW_API_KEY`,
-   replacing the `REPLACE_OR_USE_KEYCHAIN_WRAPPER` placeholder in the
-   existing templates with something that actually ships.
-3. **`fsconnect-trash` migrated off its static template** onto the same
-   generated-plist mechanism (it's already weekly-only, so this PR's
-   `StartCalendarInterval` weekly path covers it directly — the smallest of
-   the remaining three tagged jobs to migrate).
-4. **`uninstall-cyclaw.sh` wired to `python -m sync.cli unschedule`** (and
-   equivalents for any other migrated jobs) so uninstall actually removes a
-   loaded LaunchAgent instead of leaving it running — directly closes the
-   "leftover user-loaded plists survive uninstall" gap.
-5. **A supervised LaunchAgent for `gate.py`/`harness/server.py`** — the
-   highest-value but highest-risk item (an always-running network listener
-   restarted by launchd on crash/reboot is a materially different security
-   posture than "runs only while a terminal is open," and deserves its own
-   threat-model review before implementation, not a bundled add-on to a
-   scheduler PR).
+All five items below shipped as four follow-up draft PRs, each cut
+independently from `origin/main` (not stacked on this PR or on each other,
+and each duplicating the shared `utils/launchd_plist.py` helper + Keychain
+scripts rather than branching from one another) to keep them
+independently reviewable and mergeable with zero cross-branch conflict
+risk. Every one of them is still Darwin-only, still only *generates* a
+plist (never calls `launchctl load`/`bootstrap` itself), and was verified
+in the same Linux sandbox limitation this PR documents — real-macOS
+`launchctl` behavior remains unverified by construction for all four.
+
+1. **`uninstall-cyclaw.sh` wired to `python -m sync.cli unschedule`** —
+   shipped in
+   [PR #909](https://github.com/cgfixit/CyClaw/pull/909)
+   (`claude/macos-uninstall-unschedule`). Adds a best-effort
+   `unschedule_sync_job()` step, run first (before any `--remove-home`
+   deletion), that calls `sync.cli unschedule` against
+   `~/.CyClaw/repo/config.yaml` when present; any failure prints a
+   `WARNING` and uninstall proceeds rather than aborting.
+2. **`fsconnect-trash` migrated off its static template** — shipped in
+   [PR #910](https://github.com/cgfixit/CyClaw/pull/910)
+   (`claude/macos-fsconnect-trash-launchd`). Adds
+   `python -m agentic.fsconnect.cli trash-empty-plist`, which writes the
+   weekly `StartCalendarInterval` plist from real resolved paths (no
+   `REPLACE_*` placeholders). Also introduces the shared
+   `utils/launchd_plist.py` helper (write/bootout/probe a plist atomically)
+   that PRs #911 and #912 below both reuse.
+3. **A Keychain runtime wrapper** for `TELEGRAM_BOT_TOKEN` /
+   `CYCLAW_API_KEY`, plus **`telegram-health` / `telegram-poll` on the same
+   generated-plist mechanism** — shipped together in
+   [PR #911](https://github.com/cgfixit/CyClaw/pull/911)
+   (`claude/macos-telegram-launchd-keychain`), exactly as this doc
+   recommended (secrets wrapper first, token-bearing jobs second, not the
+   reverse). `macos/cyclaw-keychain-env.sh` fetches one secret via
+   `security find-generic-password` and `exec`s the wrapped command,
+   composable for chaining more than one secret; `cyclaw-keychain-set.sh`
+   stores one with a no-echo prompt. `python -m telegram.cli poll-plist`
+   (`KeepAlive`) and `health-plist` (`StartInterval`) generate plists that
+   inject the token through the wrapper — no plaintext token ever reaches
+   a plist. Replaces the `REPLACE_OR_USE_KEYCHAIN_WRAPPER` placeholder
+   tension in the shipped static templates with something that actually
+   ships.
+4. **A supervised LaunchAgent for `gate.py`/`harness/server.py`** — shipped
+   in [PR #912](https://github.com/cgfixit/CyClaw/pull/912)
+   (`claude/macos-gate-harness-launchagent`), deliberately gated more
+   tightly than #909-#911 given the risk framing below: `macos/generate_service_plist.py`
+   refuses to write anything without both `--confirm` and a non-empty
+   `--reason` (mirroring `utils/personality.py`'s soul-mutation gate),
+   uses `KeepAlive: {"SuccessfulExit": false}` (restart only on crash, never
+   after a clean `launchctl stop`/`bootout` — verified against both
+   `gate.py`'s and `harness/server.py`'s actual `uvicorn.run()` shutdown
+   behavior before choosing this, not assumed), and defaults
+   `ThrottleInterval` to 30s. This was and remains the highest-value but
+   highest-risk item: an always-running network listener restarted by
+   launchd on crash/reboot is a materially different security posture than
+   "runs only while a terminal is open." The PR itself flags it as the one
+   integration in this series most worth a design read (not just a diff
+   read) before merging.
