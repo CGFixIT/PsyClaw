@@ -18,6 +18,8 @@ Subcommands:
     quota-status  Report per-root quota usage/limits (--recompute to force a walk).
     index    Stage the file-share into the corpus (--apply [--reindex]); dry-run default.
     reveal   Open a writable root in the OS file manager (out-of-band).
+    trash-empty-plist  Generate (never load) the macOS launchd plist for a
+                        weekly trash-empty job, from real resolved paths.
     test     Run the pre-flight self-test.
 
 Write content is supplied via --body / --body-file / stdin -- the connector never
@@ -31,11 +33,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agentic.fsconnect.config import FsConnectConfig, load_fsconnect_config
+from utils import launchd_plist
 from utils.errors import (
     FsConnectConfigError,
     FsConnectError,
@@ -50,6 +55,13 @@ EXIT_OK = 0
 EXIT_FAIL = 2
 EXIT_ENV = 3
 EXIT_REFUSED = 4
+
+# Fixed Label the generated plist owns -- matches the shipped static template
+# at macos/LaunchAgents/com.cgfixit.cyclaw.fsconnect-trash.plist (both write
+# to the same well-known path; the generator is the recommended path, the
+# template stays as a hand-editable reference/fallback).
+_TRASH_LAUNCHD_LABEL = "com.cgfixit.cyclaw.fsconnect-trash"
+_DEFAULT_TRASH_REASON = "weekly launchd retention purge"
 
 
 def _heading(text: str) -> None:
@@ -301,6 +313,87 @@ def cmd_reveal(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_trash_empty_plist(args: argparse.Namespace) -> int:
+    """Generate (never load) the weekly trash-empty launchd plist.
+
+    Darwin-only. Writes ~/Library/LaunchAgents/<label>.plist from real,
+    resolved paths -- no REPLACE_* placeholders -- but never calls
+    `launchctl load`/`bootstrap` itself; loading stays an explicit operator
+    step (see the printed bootstrap hint). The generated command still fails
+    closed at runtime if fsconnect.writes_enabled (or any other write-gate
+    setting) is not true when the job actually fires -- this generator does
+    not bypass or pre-satisfy that gate.
+    """
+    if platform.system() != "Darwin":
+        _err("trash-empty-plist is Darwin-only (writes a macOS launchd plist).")
+        return EXIT_ENV
+
+    fc = _load(args)
+    if fc is None:
+        return EXIT_ENV
+    if not getattr(fc, "enabled", False):
+        return _disabled_noop()
+
+    if not 0 <= args.weekday <= 7:
+        _err("--weekday must be 0-7 (0 or 7 = Sunday, 1 = Monday)")
+        return EXIT_FAIL
+    if not 0 <= args.hour <= 23:
+        _err("--hour must be 0-23")
+        return EXIT_FAIL
+    if not 0 <= args.minute <= 59:
+        _err("--minute must be 0-59")
+        return EXIT_FAIL
+
+    root = args.root or (fc.write_root_strs[0] if fc.write_root_strs else None)
+    if not root:
+        _err("no writable root configured (set fsconnect.writable_roots, or pass --root)")
+        return EXIT_FAIL
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    program_args = [
+        launchd_plist.python_executable(),
+        "-m",
+        "agentic.fsconnect.cli",
+        "--config",
+        str(Path(args.config).resolve()),
+        "trash-empty",
+        "--root",
+        root,
+        "--reason",
+        args.reason,
+        "--confirm",
+    ]
+    log_path = str(launchd_plist.logs_dir() / "fsconnect-trash.log")
+    document = {
+        "Label": _TRASH_LAUNCHD_LABEL,
+        "WorkingDirectory": str(repo_root),
+        "ProgramArguments": program_args,
+        "StartCalendarInterval": {
+            "Weekday": args.weekday,
+            "Hour": args.hour,
+            "Minute": args.minute,
+        },
+        "RunAtLoad": False,
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+
+    path = launchd_plist.plist_path(_TRASH_LAUNCHD_LABEL)
+    launchd_plist.write_plist(document, path)
+
+    _heading("fsconnect trash-empty launchd plist")
+    _kv("plist", path)
+    _kv("root", root)
+    _kv("schedule", f"weekly weekday={args.weekday} {args.hour:02d}:{args.minute:02d}")
+    print()
+    if not fc.writes_enabled:
+        print("  NOTE: fsconnect.writes_enabled is currently false -- this job will")
+        print("  fail closed at runtime until write-enablement is completed. See")
+        print("  docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md.")
+    print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
+    return EXIT_OK
+
+
 def cmd_test(args: argparse.Namespace) -> int:
     from agentic.fsconnect.selftest import run_self_test
     passed, total, lines = run_self_test(args.config)
@@ -417,6 +510,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_reveal = sub.add_parser("reveal", help="Open a writable root in the OS file manager.")
     p_reveal.add_argument("--root", help="Path/root to reveal (default: first writable root).")
     p_reveal.set_defaults(func=cmd_reveal)
+
+    p_tplist = sub.add_parser(
+        "trash-empty-plist",
+        help="Generate (never load) the macOS launchd plist for a weekly trash-empty job. Darwin-only.",
+    )
+    p_tplist.add_argument("--root", help="Writable root to purge (default: first configured writable root).")
+    p_tplist.add_argument("--weekday", type=int, default=1, help="0-7, 0/7=Sunday (default: 1, Monday).")
+    p_tplist.add_argument("--hour", type=int, default=3, help="0-23 (default: 3).")
+    p_tplist.add_argument("--minute", type=int, default=0, help="0-59 (default: 0).")
+    p_tplist.add_argument("--reason", default=_DEFAULT_TRASH_REASON, help="Reason baked into the scheduled command.")
+    p_tplist.set_defaults(func=cmd_trash_empty_plist)
 
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")
     p_test.set_defaults(func=cmd_test)
