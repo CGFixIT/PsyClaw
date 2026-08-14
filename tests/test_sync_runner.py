@@ -903,6 +903,38 @@ def test_run_post_sync_check_timeout_soft_fails(tmp_path):
     assert any("timed out" in e for e in cr.errors)
 
 
+def test_run_post_sync_check_honors_remaining_budget_override(tmp_path):
+    """remaining_budget_sec overrides cfg.sync_timeout_sec entirely -- the caller
+    (run_sync) passes what's actually left under sync.lock after the copy/retry
+    phase, not a fresh full budget."""
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=3600)
+    seen_timeouts = []
+
+    def fake_run(argv, **kwargs):
+        seen_timeouts.append(kwargs.get("timeout"))
+        return MagicMock(returncode=0, stdout="", stderr="0 differences found\n")
+
+    with patch("sync.runner.subprocess.run", side_effect=fake_run):
+        cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE, remaining_budget_sec=12.5)
+
+    assert seen_timeouts == [12.5]
+    assert cr.ok is True
+
+
+def test_run_post_sync_check_skips_subprocess_when_budget_exhausted(tmp_path):
+    """A remaining_budget_sec <= 0 must soft-fail WITHOUT ever invoking rclone --
+    the copy/retry phase already spent the whole documented wall-clock ceiling,
+    so running the check with a meaningless near-zero timeout would just be a
+    wasted subprocess spawn on the way to the same soft-fail."""
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=3600)
+    with patch("sync.runner.subprocess.run") as mock_run:
+        cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE, remaining_budget_sec=0.0)
+
+    mock_run.assert_not_called()
+    assert cr.ok is False
+    assert any("budget" in e for e in cr.errors)
+
+
 def test_run_sync_calls_check_on_success_when_configured(tmp_path):
     cfg = _make_cfg(tmp_path, post_sync_check=True)
     log_path = cfg.log_path
@@ -1139,6 +1171,63 @@ def test_run_sync_unbounded_timeout_disables_budget(tmp_path):
 
     # Both attempts receive None (unbounded).
     assert seen_timeouts == [None, None]
+
+
+def test_run_sync_check_timeout_is_clipped_to_remaining_budget(tmp_path):
+    """The post-sync check phase must not get a fresh full cfg.sync_timeout_sec --
+    it inherits whatever wall-clock budget is left under sync.lock after the copy
+    phase, per sync_timeout_sec's documented 'whole retry sequence' invariant.
+    Pre-fix, run_post_sync_check always recomputed its own full budget here."""
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=3600, post_sync_check=True)
+    log_path = cfg.log_path
+    check_timeouts: list[object] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        if argv[1] == "check":
+            check_timeouts.append(kwargs.get("timeout"))
+            return MagicMock(returncode=0, stdout="", stderr="0 differences found\n")
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert len(check_timeouts) == 1
+    # A fresh full budget would be exactly cfg.sync_timeout_sec (3600); the
+    # clipped remainder of the same budget the copy phase drew from is strictly
+    # less (some real wall-clock time elapses running the copy phase first).
+    assert check_timeouts[0] is not None
+    assert 0 < check_timeouts[0] <= cfg.sync_timeout_sec
+
+
+def test_run_sync_check_timeout_unbounded_when_sync_timeout_disabled(tmp_path):
+    """sync_timeout_sec=0 (documented unbounded escape hatch) must keep the check
+    phase's old None (unbounded) semantics too -- there is no budget to clip to."""
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=0, post_sync_check=True)
+    log_path = cfg.log_path
+    check_timeouts: list[object] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        if argv[1] == "check":
+            check_timeouts.append(kwargs.get("timeout", "MISSING"))
+            return MagicMock(returncode=0, stdout="", stderr="0 differences found\n")
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert check_timeouts == [None]
 
 
 # ---------------------------------------------------------------------------
