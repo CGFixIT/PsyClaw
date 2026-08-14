@@ -39,6 +39,12 @@ DEFAULT_REMOTE_PATH = "CyClaw/corpus"
 DEFAULT_DIRECTION = "pull"  # "pull" (safe default) | "bisync" (opt-in)
 DEFAULT_SCHEDULE_HOUR = 2
 DEFAULT_SCHEDULE_MIN = 0
+DEFAULT_SCHEDULER_BACKEND = "cron"  # "cron" | "launchd" (launchd requires Darwin)
+DEFAULT_SCHEDULE_FREQUENCY = "daily"  # "daily" | "weekly" | "monthly"
+# launchd StartCalendarInterval convention: 0 or 7 = Sunday, 1-6 = Mon-Sat.
+# Default matches the shipped fsconnect-trash.plist template (Weekday: 1).
+DEFAULT_SCHEDULE_WEEKDAY = 1
+DEFAULT_SCHEDULE_DAY = 1  # day of month, 1-31
 DEFAULT_MAX_DELETE = 20
 DEFAULT_MAX_TRANSFER = "1G"
 DEFAULT_CONFLICT_RESOLVE = "newer"
@@ -75,6 +81,8 @@ _REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _SHELL_METACHARS = set(";|&$`<>(){}[]!*?\"'\\\n\r\t ")
 _VALID_DIRECTIONS = ("pull", "bisync")
 _VALID_CONFLICT_RESOLVE = ("newer", "older", "larger", "smaller", "none")
+_VALID_SCHEDULER_BACKENDS = ("cron", "launchd")
+_VALID_SCHEDULE_FREQUENCIES = ("daily", "weekly", "monthly")
 # A single rclone bandwidth rate: a number with an optional unit suffix
 # (b/k/M/G/T/P, optional 'i'), or the literal "off". Timetables (which contain
 # spaces and colons) are intentionally not accepted -- they would also trip the
@@ -155,6 +163,17 @@ class RcloneConfig:
     # Scheduling (cron / systemd / launchd / Task Scheduler).
     schedule_hour: int = DEFAULT_SCHEDULE_HOUR
     schedule_min: int = DEFAULT_SCHEDULE_MIN
+    # Which scheduler transport `sync.cli schedule` registers with. "cron" is
+    # the portable baseline (Linux + macOS); "launchd" is Darwin-only and
+    # rejected by the scheduler factory on any other platform -- see
+    # sync/scheduler.py's get_scheduler().
+    scheduler_backend: str = DEFAULT_SCHEDULER_BACKEND
+    # How often the job fires. "weekly" uses schedule_weekday; "monthly" uses
+    # schedule_day. Ignored by CronScheduler/WindowsTaskScheduler today (both
+    # remain daily-only); consumed by LaunchdScheduler's StartCalendarInterval.
+    schedule_frequency: str = DEFAULT_SCHEDULE_FREQUENCY
+    schedule_weekday: int = DEFAULT_SCHEDULE_WEEKDAY  # 0-7 (0/7 = Sunday); "weekly" only
+    schedule_day: int = DEFAULT_SCHEDULE_DAY  # 1-31; "monthly" only
 
     # File locations (defaults computed at load time, all overridable).
     # Empty string means "unset" -> _fill_default_paths() computes the default
@@ -218,6 +237,31 @@ class RcloneConfig:
             raise SyncConfigError(
                 f"sync.schedule_min must be 0-59, got: {self.schedule_min}",
                 details={"received": self.schedule_min},
+            )
+
+        if self.scheduler_backend not in _VALID_SCHEDULER_BACKENDS:
+            raise SyncConfigError(
+                f"sync.scheduler_backend must be one of {_VALID_SCHEDULER_BACKENDS}, got: {self.scheduler_backend!r}",
+                details={"received": self.scheduler_backend, "valid": list(_VALID_SCHEDULER_BACKENDS)},
+            )
+
+        if self.schedule_frequency not in _VALID_SCHEDULE_FREQUENCIES:
+            raise SyncConfigError(
+                f"sync.schedule_frequency must be one of {_VALID_SCHEDULE_FREQUENCIES}, got: "
+                f"{self.schedule_frequency!r}",
+                details={"received": self.schedule_frequency, "valid": list(_VALID_SCHEDULE_FREQUENCIES)},
+            )
+
+        if not 0 <= self.schedule_weekday <= 7:
+            raise SyncConfigError(
+                f"sync.schedule_weekday must be 0-7 (0 or 7 = Sunday), got: {self.schedule_weekday}",
+                details={"received": self.schedule_weekday},
+            )
+
+        if not 1 <= self.schedule_day <= 31:
+            raise SyncConfigError(
+                f"sync.schedule_day must be 1-31, got: {self.schedule_day}",
+                details={"received": self.schedule_day},
             )
 
         if self.conflict_resolve not in _VALID_CONFLICT_RESOLVE:

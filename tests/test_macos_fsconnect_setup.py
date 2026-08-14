@@ -36,6 +36,7 @@ def _run_script(
     home: Path,
     config: Path,
     input_text: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
@@ -46,6 +47,8 @@ def _run_script(
             "CYCLAW_FSCONNECT_PYTHON": sys.executable,
         }
     )
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [_BASH, str(script), *args],  # noqa: S603
         check=False,
@@ -325,3 +328,42 @@ def test_uninstall_retains_jail_unless_confirmed(tmp_path: Path) -> None:
     removed = _run_script(_UNINSTALLER, "--remove-fsconnect", home=home, config=config, input_text="y\n")
     assert removed.returncode == 0, removed.stderr
     assert not jail.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX uninstall integration")
+def test_uninstall_skips_unschedule_when_no_repo_present(tmp_path: Path) -> None:
+    """No ~/.CyClaw/repo (harness never installed, or --skip-python-deps only) -- silent no-op."""
+    config = _copy_config(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = _run_script(_UNINSTALLER, home=home, config=config)
+    assert result.returncode == 0, result.stderr
+    assert "checking for a registered sync schedule" not in result.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX uninstall integration")
+def test_uninstall_unschedule_is_nonfatal_on_broken_sync_config(tmp_path: Path) -> None:
+    """A present but sync-less config.yaml must not abort the rest of uninstall.
+
+    This never reaches (and therefore never touches) any real scheduler
+    backend -- sync.cli's own config loader raises before get_scheduler() is
+    called, since the sync: block is absent -- so this is safe to run against
+    the real crontab/launchd state of whatever host runs the test.
+    """
+    home = tmp_path / "home"
+    repo_dir = home / ".CyClaw" / "repo"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "config.yaml").write_text("unrelated: true\n", encoding="utf-8")
+    config = _copy_config(tmp_path)  # unused by uninstall-cyclaw.sh itself; _run_script requires it
+
+    result = _run_script(
+        _UNINSTALLER,
+        home=home,
+        config=config,
+        extra_env={"PYTHONPATH": str(_REPO_ROOT)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "checking for a registered sync schedule" in result.stdout
+    assert "WARNING: could not clean up the sync schedule" in result.stderr
+    assert "uninstall complete" in result.stdout

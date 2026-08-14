@@ -575,6 +575,10 @@ sync:
   # bwlimit: "8M"                # optional rclone --bwlimit rate ("8M", "512k", "off"); unset = no limit
   schedule_hour: 2               # 24h local time (cron/timer/Task Scheduler)
   schedule_min: 0
+  scheduler_backend: "cron"      # "cron" (portable, default) | "launchd" (Darwin-only, opt-in; see docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md)
+  schedule_frequency: "daily"    # "daily" | "weekly" | "monthly"
+  schedule_weekday: 1            # 0-7 (0/7=Sunday, 1=Monday); used only when schedule_frequency: "weekly"
+  schedule_day: 1                # 1-31; used only when schedule_frequency: "monthly"
   conflict_resolve: "newer"      # bisync-only: newer modtime wins
   conflict_loser: "rename"       # bisync-only: loser saved as .conflict1 (never deleted)
   # extra_excludes:              # optional, appended AFTER hardened block

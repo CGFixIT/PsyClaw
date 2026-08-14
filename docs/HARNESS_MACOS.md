@@ -51,6 +51,16 @@ The uninstaller removes complete CyClaw-managed blocks atomically per startup
 file, leaves malformed files unchanged, and preserves symlinked startup files
 by updating their regular-file target.
 
+Before touching any of that, it also best-effort removes a registered Dropbox
+sync schedule (`python -m sync.cli unschedule`, run against `~/.CyClaw/repo`
+if present) — the tagged cron entry or, if `sync.scheduler_backend:
+"launchd"` was used, the generated `~/Library/LaunchAgents` plist — so a
+background job never outlives `cyclaw` itself. This step is silent when no
+`~/.CyClaw/repo/config.yaml` exists and non-fatal on any error (a missing or
+unconfigured `sync:` block just prints a warning); it never blocks the rest
+of uninstall. See `docs/SYNC_README.md`'s "Scheduling" section for what gets
+removed.
+
 ## macOS filesystem connector
 
 `~/.CyClaw` is the harness home; `~/CyClaw-FS` is a separate private filesystem
