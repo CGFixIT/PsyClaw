@@ -178,9 +178,15 @@ Write-Step "launcher shim written to $Shim"
 
 # -- 5. User PATH -----------------------------------------------------------------
 if (-not $NoPathEdit) {
+    # GetEnvironmentVariable returns $null (not "") when the account has never had
+    # a User-scope PATH set -- a real case on fresh profiles/Server images/new
+    # accounts, since only the System-scope PATH is guaranteed to exist. $null
+    # survives the -split/-notcontains check below but crashes on .TrimEnd().
+    # Uninstall-CyClaw.ps1's symmetric read already guards this; mirror it here.
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if (($UserPath -split ";") -notcontains $Bin) {
-        [Environment]::SetEnvironmentVariable("Path", ($UserPath.TrimEnd(";") + ";" + $Bin), "User")
+        $NewUserPath = if ($UserPath) { $UserPath.TrimEnd(";") + ";" + $Bin } else { $Bin }
+        [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
         $env:Path = "$env:Path;$Bin"
         Write-Step "added $Bin to the user PATH (new windows inherit it)"
     }
