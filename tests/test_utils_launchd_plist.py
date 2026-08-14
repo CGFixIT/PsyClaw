@@ -30,6 +30,11 @@ def test_current_uid_matches_os_getuid_when_present() -> None:
 
 
 def test_current_uid_falls_back_to_zero_when_getuid_absent() -> None:
+    if not hasattr(os, "getuid"):
+        # Already absent on this platform (e.g. Windows) -- exercises the
+        # fallback directly; nothing to save/delete/restore.
+        assert launchd_plist.current_uid() == 0
+        return
     real_getuid = os.getuid
     del os.getuid
     try:
