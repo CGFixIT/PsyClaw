@@ -141,7 +141,11 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     # cross-origin by any page the operator's browser loads, since GET is a
     # CORS-simple request. Off by default: an operator who wants provider
     # liveness reported here opts in explicitly and accepts that egress.
-    probe_external = bool(cfg.get("api", {}).get("health_probe_external_providers", False))
+    # This is an egress gate, so accept only the literal YAML boolean ``true``.
+    # A quoted ``"false"`` is a non-empty string and therefore truthy; using
+    # bool(...) here turned an operator's explicit opt-out into authenticated
+    # outbound requests from the unauthenticated /health route.
+    probe_external = cfg.get("api", {}).get("health_probe_external_providers") is True
 
     results = []
     # Resolve the same local backend LocalLLMClient uses (primary Ollama, or
@@ -177,7 +181,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
             expect_model=local_model if local_model else None,
         ))
     if (probe_external and cfg["app"]["mode"] == "hybrid" and
-            cfg["models"].get("grok", {}).get("enabled", False)):
+            cfg["models"].get("grok", {}).get("enabled") is True):
         grok_base = cfg["models"]["grok"]["base_url"]
         # xAI's /v1/models is an authenticated endpoint: without a Bearer token it
         # returns 401, which made grok_api report *unhealthy* on every probe even
@@ -203,7 +207,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
                 error="GROK_API_KEY not set (hybrid mode enabled but no API key)",
             ))
     if (probe_external and cfg["app"]["mode"] == "hybrid" and
-            cfg["models"].get("claude", {}).get("enabled", False)):
+            cfg["models"].get("claude", {}).get("enabled") is True):
         claude_cfg = cfg["models"]["claude"]
         # .strip() matches llm/client.py:543 -- see the GROK_API_KEY note above.
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()

@@ -247,6 +247,10 @@ class TestExternalCallGateConstructionHalf:
         assert cond is not None, f"no `{client_class}(...)` guarded by an if found in gate.py"
         assert "hybrid" in cond, f"mode=='hybrid' gate missing from {client_class} guard: {cond}"
         assert "enabled" in cond, f"enabled gate missing from {client_class} guard: {cond}"
+        assert "is True" in cond, (
+            f"{client_class} enabled gate must require the literal boolean True; "
+            f"truthy strings such as quoted YAML 'false' must fail closed: {cond}"
+        )
 
 
 # =============================================================================
