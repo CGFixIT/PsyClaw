@@ -239,16 +239,15 @@ def _format_context_chunks(
     char_cap=None  -> full chunk text (local_llm behaviour)
     char_cap=int   -> truncated chunk text (best-effort / grok partial context)
     total_char_budget=int -> cap the TOTAL rendered length (source headers +
-        separators included). Stops adding (and truncates the crossing chunk)
-        once the budget is reached, bounding prompt size. None = unbounded
-        (legacy behaviour; output is byte-identical to the pre-budget version).
+    separators included). Stops adding (and truncates the crossing chunk)
+    once the budget is reached, bounding prompt size. None = unbounded.
 
     Returns (context_text, included_docs). included_docs is the subset of
-    docs[:limit] that actually contributed text to context_text -- a chunk
-    truncated mid-text by total_char_budget still counts (some of its text
-    reached the model), a chunk dropped entirely once the budget was exhausted
-    does not. Callers use included_docs for answer_sources so a cited source
-    always matches what the model/grounding check actually saw -- see
+    docs[:limit] that actually contributed body text to context_text -- a chunk
+    truncated mid-text by total_char_budget still counts, with its ``text``
+    clipped to exactly what reached the model. A chunk for which only the source
+    header would fit does not count. Callers use included_docs for answer_sources
+    so a cited source always matches what the model/grounding check actually saw -- see
     local_llm_node / offline_best_effort_node, which previously reported the
     raw docs[:limit] regardless of what this function actually kept.
     """
@@ -259,7 +258,11 @@ def _format_context_chunks(
         text = d.get("text", "")
         if char_cap is not None:
             text = text[:char_cap]
-        part = f"[Source: {d.get('source', '?')}, Score: {d.get('score', 0.0):.3f}]\n{text}"
+        if not text:
+            logger.debug("skipping chunk %d with no body text", len(parts) + 1)
+            continue
+        header = f"[Source: {d.get('source', '?')}, Score: {d.get('score', 0.0):.3f}]\n"
+        part = header + text
         if total_char_budget is not None:
             sep_len = len(SECTION_SEP) if parts else 0
             remaining = total_char_budget - used - sep_len
@@ -268,8 +271,12 @@ def _format_context_chunks(
                 break
             if len(part) > remaining:
                 logger.debug("truncating chunk %d from %d to %d chars", len(parts) + 1, len(part), remaining)
-                parts.append(part[:remaining])
-                included.append(d)
+                body_chars = remaining - len(header)
+                if body_chars <= 0:
+                    break
+                clipped_text = text[:body_chars]
+                parts.append(header + clipped_text)
+                included.append({**d, "text": clipped_text})
                 break
             used += sep_len + len(part)
         parts.append(part)
