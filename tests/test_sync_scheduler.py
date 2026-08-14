@@ -148,6 +148,32 @@ def test_cron_install_replaces_prior_tagged_line() -> None:
     assert "/usr/bin/keep.sh" in content
 
 
+def test_cron_install_preserves_unowned_lines_that_contain_task_tag() -> None:
+    cfg = _make_cfg()
+    unrelated = (
+        f"SYNC_LABEL={TASK_TAG}\n"
+        f"1 1 * * * /usr/bin/arg-job --label={TASK_TAG}\n"
+        f"2 1 * * * /usr/bin/comment-job # mentions {TASK_TAG}\n"
+    )
+    written: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout=unrelated)
+        written["content"] = kwargs["input"]
+        return _completed()
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        CronScheduler(cfg).install()
+
+    for line in unrelated.splitlines():
+        assert line in written["content"].splitlines()
+
+
 # ---------------------------------------------------------------------------
 # CronScheduler.remove
 # ---------------------------------------------------------------------------
@@ -196,6 +222,34 @@ def test_cron_remove_returns_true_when_tagged_line_present() -> None:
     assert "/usr/bin/keep.sh" in written["content"]
 
 
+def test_cron_remove_preserves_unowned_lines_that_contain_task_tag() -> None:
+    cfg = _make_cfg()
+    unrelated = (
+        f"SYNC_LABEL={TASK_TAG}\n"
+        f"1 1 * * * /usr/bin/arg-job --label={TASK_TAG}\n"
+        f"2 1 * * * /usr/bin/comment-job # mentions {TASK_TAG}\n"
+    )
+    existing = unrelated + f"3 1 * * * /usr/bin/managed-job # {TASK_TAG}   \n"
+    written: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout=existing)
+        written["content"] = kwargs["input"]
+        return _completed()
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+    ):
+        result = CronScheduler(cfg).remove()
+
+    assert result is True
+    assert "/usr/bin/managed-job" not in written["content"]
+    for line in unrelated.splitlines():
+        assert line in written["content"].splitlines()
+
+
 # ---------------------------------------------------------------------------
 # CronScheduler.status
 # ---------------------------------------------------------------------------
@@ -221,6 +275,30 @@ def test_cron_status_parses_tagged_line() -> None:
 def test_cron_status_returns_none_when_no_tagged_line() -> None:
     cfg = _make_cfg()
     existing = "0 1 * * * /usr/bin/keep.sh\n"
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", return_value=_completed(stdout=existing)),
+    ):
+        assert CronScheduler(cfg).status() is None
+
+
+def test_cron_status_ignores_unowned_lines_that_contain_task_tag() -> None:
+    cfg = _make_cfg()
+    existing = (
+        f"SYNC_LABEL={TASK_TAG}\n"
+        f"1 1 * * * /usr/bin/arg-job --label={TASK_TAG}\n"
+        f"2 1 * * * /usr/bin/comment-job # mentions {TASK_TAG}\n"
+    )
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", return_value=_completed(stdout=existing)),
+    ):
+        assert CronScheduler(cfg).status() is None
+
+
+def test_cron_status_ignores_commented_managed_line() -> None:
+    cfg = _make_cfg()
+    existing = f"  # 30 4 * * * /usr/bin/disabled-job # {TASK_TAG}\n"
     with (
         patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
         patch("sync.scheduler.subprocess.run", return_value=_completed(stdout=existing)),
