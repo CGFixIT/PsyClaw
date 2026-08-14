@@ -48,7 +48,13 @@ unschedule_sync_job() {
     return 0
   fi
   echo "[cyclaw] checking for a registered sync schedule..."
-  if ! (cd "$HOME_DIR/repo" && "$py" -m sync.cli unschedule); then
+  # --config is passed explicitly and absolute: sync.cli's own default
+  # ("config.yaml") resolves relative to wherever the imported sync/utils
+  # package physically lives on disk (utils.logger.resolve_config_path is
+  # repo-root-anchored via __file__, not cwd) -- normally that IS
+  # $HOME_DIR/repo since it's the only copy on PYTHONPATH, but relying on
+  # that implicitly is fragile. Being explicit here removes the ambiguity.
+  if ! (cd "$HOME_DIR/repo" && "$py" -m sync.cli --config "$HOME_DIR/repo/config.yaml" unschedule); then
     echo "[cyclaw] WARNING: could not clean up the sync schedule (see above); remove it manually with 'python -m sync.cli unschedule' if needed" >&2
   fi
 }
