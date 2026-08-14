@@ -25,11 +25,12 @@ from __future__ import annotations
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch
 
 import pytest
 import yaml
 
-from llm.client import LocalLLMClient
+from llm.client import LocalLLMClient, ResolvedLocalBackend
 from utils.errors import LLMServiceError
 
 
@@ -162,4 +163,96 @@ class TestLocalLLMClientAgainstRealHTTPServer:
         client = LocalLLMClient(_write_config(tmp_path, f"http://127.0.0.1:{port}/v1"))
         with pytest.raises(LLMServiceError):
             client.generate("hello")
+        client.close()
+
+
+class TestBackendSwapLockingRegression:
+    """Regression guard for the failover-state race: _readopt_backend_if_stale's
+    multi-attribute reassignment (base_url/model/api_key/...) and generate()'s
+    do_post() snapshot read must serialize through the SAME self._backend_lock --
+    otherwise a concurrent reader could observe a torn combination, e.g. the new
+    backend's base_url paired with the old backend's api_key.
+
+    Both tests force a real, deterministic interleaving via threading.Event
+    synchronization (never a bare sleep racing a timeout): _provider_label is
+    patched to pause INSIDE the locked reassignment block, after every
+    attribute write, giving a controllable window during which the lock is
+    known to be held.
+    """
+
+    def _resolved(self, base_url: str) -> ResolvedLocalBackend:
+        return ResolvedLocalBackend(
+            provider="ollama", base_url=base_url, model="qwen3.6:27b", source="primary",
+        )
+
+    def test_readopt_backend_holds_lock_for_its_entire_reassignment(self, tmp_path, mock_ollama):
+        base_url, _server = mock_ollama([(200, {"choices": [{"message": {"content": "ok"}}]})])
+        client = LocalLLMClient(_write_config(tmp_path, base_url))
+
+        entered_critical_section = threading.Event()
+        release_critical_section = threading.Event()
+
+        def fake_label(provider):
+            entered_critical_section.set()
+            assert release_critical_section.wait(timeout=5), "test timed out waiting for release"
+            return provider
+
+        with patch("llm.client.resolve_local_backend", return_value=self._resolved(base_url)), \
+             patch("llm.client._provider_label", side_effect=fake_label):
+            writer = threading.Thread(target=client._readopt_backend_if_stale)
+            writer.start()
+            assert entered_critical_section.wait(timeout=5)
+
+            # The reassignment block is mid-execution right now, still inside
+            # `with self._backend_lock:` -- a non-blocking acquire must fail.
+            assert client._backend_lock.acquire(blocking=False) is False
+
+            release_critical_section.set()
+            writer.join(timeout=5)
+            assert not writer.is_alive()
+
+        # Lock must be free again once the method has returned.
+        assert client._backend_lock.acquire(blocking=False) is True
+        client._backend_lock.release()
+        client.close()
+
+    def test_concurrent_generate_blocks_until_backend_swap_releases_lock(self, tmp_path, mock_ollama):
+        base_url, _server = mock_ollama([(200, {"choices": [{"message": {"content": "ok"}}]})])
+        client = LocalLLMClient(_write_config(tmp_path, base_url))
+        # Not degraded/recheck: generate() must go straight to do_post() rather
+        # than calling _readopt_backend_if_stale itself, so the ONLY reason it
+        # could block is contending for self._backend_lock with the writer below.
+        assert client._degraded is False
+        assert client._recheck_backend is False
+
+        entered_critical_section = threading.Event()
+        release_critical_section = threading.Event()
+        generate_completed = threading.Event()
+
+        def fake_label(provider):
+            entered_critical_section.set()
+            assert release_critical_section.wait(timeout=5), "test timed out waiting for release"
+            return provider
+
+        def run_generate():
+            client.generate("hello")
+            generate_completed.set()
+
+        with patch("llm.client.resolve_local_backend", return_value=self._resolved(base_url)), \
+             patch("llm.client._provider_label", side_effect=fake_label):
+            writer = threading.Thread(target=client._readopt_backend_if_stale)
+            writer.start()
+            assert entered_critical_section.wait(timeout=5)
+
+            reader = threading.Thread(target=run_generate)
+            reader.start()
+            # do_post()'s snapshot read contends for the same held lock, so it
+            # must not complete while the writer is still inside its section.
+            assert generate_completed.wait(timeout=0.3) is False
+
+            release_critical_section.set()
+            writer.join(timeout=5)
+            reader.join(timeout=5)
+
+        assert generate_completed.is_set()
         client.close()

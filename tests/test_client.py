@@ -22,6 +22,7 @@ from llm.client import (
     ClaudeClient,
     GrokClient,
     LocalLLMClient,
+    _client_timeout,
     reset_local_backend_cache,
     resolve_local_backend,
 )
@@ -136,6 +137,54 @@ def _status_response(status: int, headers: dict | None = None) -> httpx.Response
 def _claude_response(payload: dict) -> httpx.Response:
     req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     return httpx.Response(200, json=payload, request=req)
+
+
+# =============================================================================
+# Connect-timeout isolation (_client_timeout)
+# =============================================================================
+
+class TestClientTimeoutIsolation:
+    """A stalled TCP handshake must fail fast rather than consume the entire
+    per-call timeout -- see llm/client.py's _client_timeout docstring and
+    telegram/client.py's identical httpx.Timeout(N, connect=10.0) precedent."""
+
+    def test_connect_ceiling_is_isolated_from_a_generous_overall_timeout(self):
+        t = _client_timeout(30.0)
+        assert t.connect == 10.0
+        assert t.read == 30.0
+        assert t.write == 30.0
+        assert t.pool == 30.0
+
+    def test_connect_ceiling_never_exceeds_a_short_overall_timeout(self):
+        # A 5s overall budget must not hand connect its own 10s allowance --
+        # that would let connect alone burn past the caller's whole timeout.
+        t = _client_timeout(5.0)
+        assert t.connect == 5.0
+        assert t.read == 5.0
+
+    def test_local_llm_client_uses_isolated_connect_timeout(self, tmp_path):
+        # _write_config's default timeout_sec=5 is below the 10s ceiling, so
+        # this also exercises the clamp-down case end-to-end.
+        client = LocalLLMClient(_write_config(tmp_path))
+        assert client._client.timeout.connect == 5.0
+        assert client._client.timeout.read == 5.0
+        client.close()
+
+    def test_local_llm_client_clamps_connect_when_overall_timeout_is_generous(self, tmp_path):
+        client = LocalLLMClient(_write_config(tmp_path, local_llm_extra={"timeout_sec": 600}))
+        assert client._client.timeout.connect == 10.0
+        assert client._client.timeout.read == 600
+        client.close()
+
+    def test_grok_client_uses_isolated_connect_timeout(self, tmp_path):
+        client = GrokClient(_write_config(tmp_path))
+        assert client._client.timeout.connect == 5.0
+        client.close()
+
+    def test_claude_client_uses_isolated_connect_timeout(self, tmp_path):
+        client = ClaudeClient(_write_config(tmp_path))
+        assert client._client.timeout.connect == 5.0
+        client.close()
 
 
 # =============================================================================
