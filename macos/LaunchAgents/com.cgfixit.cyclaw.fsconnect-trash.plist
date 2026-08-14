@@ -4,7 +4,14 @@
   CyClaw fsconnect weekly expired-trash maintenance template.
 
   DISABLED BY DEFAULT. This file is not installed or loaded automatically.
-  To enable it later:
+
+  Recommended path: `python -m agentic.fsconnect.cli trash-empty-plist`
+  generates the same plist from real, resolved install paths, so no
+  REPLACE_* editing is needed. It still never loads the agent; it only
+  prints the `launchctl bootstrap` command to run by hand.
+
+  This hand-editable template remains as a reference/fallback. To enable
+  it directly instead:
     1. Edit every REPLACE_* value and complete the write-enablement review.
     2. mkdir -p ~/Library/Logs/CyClaw
     3. Test ProgramArguments manually while writes remain disabled.

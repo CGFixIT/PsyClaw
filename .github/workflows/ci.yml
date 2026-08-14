@@ -734,6 +734,7 @@ jobs:
             --cov=utils.ops_runner \
             --cov=utils.guardrail_bridge \
             --cov=utils.selftest \
+            --cov=utils.launchd_plist \
             --cov=llm.client \
             --cov=graph \
             --cov=retrieval.embeddings \
