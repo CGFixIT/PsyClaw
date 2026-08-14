@@ -887,9 +887,12 @@ class TestFormatContextChunksIncluded:
     def test_no_budget_includes_every_doc_up_to_limit(self):
         docs = [self._doc(i, f"chunk {i}") for i in range(5)]
         text, included = _format_context_chunks(docs, limit=3)
-        assert [d["chunk_id"] for d in included] == [0, 1, 2]
-        for i in range(3):
-            assert f"chunk {i}" in text
+        expected = SECTION_SEP.join(
+            f"[Source: {doc['source']}, Score: 0.500]\n{doc['text']}"
+            for doc in docs[:3]
+        )
+        assert text == expected
+        assert included == docs[:3]
 
     def test_budget_exhausted_before_a_doc_drops_it_entirely(self):
         docs = [self._doc(0, "a" * 50), self._doc(1, "b" * 50)]
@@ -911,6 +914,44 @@ class TestFormatContextChunksIncluded:
         assert "a" * 50 in text
         assert "b" * 10 in text
         assert "b" * 11 not in text  # truncated, not the full 50
+
+    def test_budget_that_only_fits_header_excludes_crossing_doc(self):
+        doc = self._doc(0, "body")
+        header = f"[Source: {doc['source']}, Score: 0.500]\n"
+
+        text, included = _format_context_chunks(
+            [doc], limit=1, total_char_budget=len(header),
+        )
+
+        assert text == ""
+        assert included == []
+
+    def test_empty_body_is_not_rendered_or_cited(self):
+        empty = self._doc(0, "")
+        visible = self._doc(1, "visible")
+
+        text, included = _format_context_chunks([empty, visible], limit=2)
+
+        assert empty["source"] not in text
+        assert text == f"[Source: {visible['source']}, Score: 0.500]\nvisible"
+        assert included == [visible]
+
+    def test_budget_truncating_mid_body_returns_exact_rendered_text_and_metadata(self):
+        doc = {
+            **self._doc(0, "visible-hidden"),
+            "source_sha256": "abc123",
+            "stem_tags": ["tag"],
+            "mode": "hybrid",
+        }
+        header = f"[Source: {doc['source']}, Score: 0.500]\n"
+
+        text, included = _format_context_chunks(
+            [doc], limit=1, total_char_budget=len(header) + len("visible"),
+        )
+
+        assert text == header + "visible"
+        assert included == [{**doc, "text": "visible"}]
+        assert included[0] is not doc
 
 
 class TestLocalLlmPromptBudget:
@@ -1281,6 +1322,31 @@ class TestGuardrailOutputNode:
         }
         guardrail_output_node(state, output_guard=guard)
         assert seen == [("what is RRF?", "an answer", "doc one\n\ndoc two")]
+
+    def test_guard_does_not_receive_suffix_clipped_from_local_prompt(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        cfg["retrieval"] = {**cfg["retrieval"], "max_context_tokens": 1}
+        llm = MockLocalLLM(response="an answer")
+        doc = {
+            "text": "V" * _MIN_CONTEXT_CHARS + "NEVER_SHOWN",
+            "score": 0.5,
+            "source": "x.md",
+            "chunk_id": 7,
+        }
+
+        generated = local_llm_node(
+            {"query": "q", "retrieved_docs": [doc]}, llm=llm, cfg=cfg,
+        )
+        seen = []
+        guard = lambda q, a, c: (seen.append(c), {"blocked": False, "message": "", "rails": []})[1]  # noqa: E731
+        guardrail_output_node({"query": "q", **generated}, output_guard=guard)
+
+        header = f"[Source: {doc['source']}, Score: 0.500]\n"
+        expected = "V" * (_MIN_CONTEXT_CHARS - len(header))
+        assert generated["answer_sources"] == [{**doc, "text": expected}]
+        assert seen == [expected]
+        assert "NEVER_SHOWN" not in llm.last_prompt
+        assert "NEVER_SHOWN" not in seen[0]
 
 
 class TestGuardrailOutputGraphIntegration:
