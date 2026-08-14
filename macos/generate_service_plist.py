@@ -67,6 +67,7 @@ from __future__ import annotations
 import argparse
 import platform
 import sys
+import types
 from pathlib import Path
 
 import yaml
@@ -80,10 +81,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from utils import launchd_plist  # noqa: E402
 
-_LABELS = {
+_LABELS = types.MappingProxyType({
     "gate": "com.cgfixit.cyclaw.gate",
     "harness": "com.cgfixit.cyclaw.harness",
-}
+})
 _DEFAULT_HARNESS_PORT = 8790
 _DEFAULT_THROTTLE_SEC = 30
 
@@ -129,11 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _read_gate_port(config_path: Path) -> int:
     try:
-        with open(config_path, encoding="utf-8") as f:
-            doc = yaml.safe_load(f) or {}
+        with open(config_path, encoding="utf-8") as config_file:
+            doc = yaml.safe_load(config_file) or {}
     except OSError as exc:
         print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
-        raise SystemExit(3) from exc
+        sys.exit(3)
     api_cfg = doc.get("api") if isinstance(doc, dict) else None
     port = (api_cfg or {}).get("port", 8787) if isinstance(api_cfg, dict) else 8787
     return int(port)
