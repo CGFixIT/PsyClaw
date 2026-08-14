@@ -106,24 +106,30 @@ Assert-SafeRepoPath $Repo
 
 # -- 3. Python + dependencies ---------------------------------------------------
 function Find-Python312 {
-    # Prefer the py launcher with 3.12+, fall back to python on PATH.
+    # Probe the exact py launcher target instead of trusting a potentially stale
+    # `py -0p` listing, then fall back to Python 3.12.x on PATH.
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) {
-        $vers = & py -0p 2>$null
-        if ($vers -match "3\.(1[2-9]|[2-9][0-9])") { return @("py", "-3.12") }
+        $v = & py -3.12 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $v -eq "3.12") { return @("py", "-3.12") }
     }
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($python) {
         $v = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-        if ($v -and ([version]$v -ge [version]"3.12")) { return @("python") }
+        if ($LASTEXITCODE -eq 0 -and $v -eq "3.12") { return @("python") }
     }
     return $null
 }
 
 $PyCmd = Find-Python312
 if ($null -eq $PyCmd) {
-    Write-Warn "Python 3.12+ not found. Install it from https://www.python.org/downloads/ (tick 'Add to PATH'), then re-run this installer."
-    if (-not $SkipPythonDeps) { throw "Python 3.12+ is required." }
+    Write-Warn "Python 3.12.x not found. Install it from https://www.python.org/downloads/ (tick 'Add to PATH'), then re-run this installer."
+    if (-not $SkipPythonDeps) { throw "Python 3.12.x is required to install dependencies." }
+}
+else {
+    # PowerShell unwraps a single pipeline item (the PATH fallback) to a string.
+    # Normalize it so command indexing is identical to the two-item py launcher.
+    $PyCmd = @($PyCmd)
 }
 
 if (-not $SkipPythonDeps) {
@@ -135,6 +141,13 @@ if (-not $SkipPythonDeps) {
         $PyArgs += @("-m", "venv", $Venv)
         & $PyCmd[0] @PyArgs
         if (-not (Test-Path $VenvPy)) { throw "venv creation failed." }
+    }
+    else {
+        $VenvVersion = & $VenvPy -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+        if ($LASTEXITCODE -ne 0 -or $VenvVersion -ne "3.12") {
+            if (-not $VenvVersion) { $VenvVersion = "unreadable" }
+            throw "Existing virtual environment at '$Venv' is not Python 3.12.x (detected: $VenvVersion). Remove or rename it manually, then re-run; the installer will not replace it automatically."
+        }
     }
     Write-Step "installing dependencies (CPU torch first, then requirements; this can take a few minutes)"
     # Match ci.yml's exact pip pin (CVE/repro); never float to latest on installers.
