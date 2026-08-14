@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -33,6 +34,23 @@ import yaml
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError, RAGError
 
 log = logging.getLogger(__name__)
+
+# A black-holed TCP handshake (firewall/proxy drop, not a fast ECONNREFUSED) must
+# fail fast rather than consume an entire request timeout just to never connect.
+# Mirrors telegram/client.py's identical httpx.Timeout(N, connect=10.0) pattern,
+# which was never applied to these clients.
+_CONNECT_TIMEOUT_SEC = 10.0
+
+
+def _client_timeout(overall_timeout_sec: float) -> httpx.Timeout:
+    """Give connect its own short ceiling, capped at overall_timeout_sec.
+
+    Without this, httpx applies one number to connect/read/write/pool alike, so a
+    stalled connect attempt burns the ENTIRE overall timeout on a worker thread
+    before the caller ever sees an error -- for GrokClient/ClaudeClient that
+    repeats on every retry attempt.
+    """
+    return httpx.Timeout(overall_timeout_sec, connect=min(overall_timeout_sec, _CONNECT_TIMEOUT_SEC))
 
 _RETRYABLE_STATUS_FLOOR = 500
 _RETRYABLE_EXTRA_STATUS = frozenset({429})
@@ -332,7 +350,7 @@ def _probe_openai_models(
     url = f"{base_url.rstrip('/')}/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        with httpx.Client(timeout=timeout_sec) as client:
+        with httpx.Client(timeout=_client_timeout(timeout_sec)) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             return True
@@ -491,7 +509,7 @@ class LocalLLMClient:
         # fallback's base_url whenever the fallback has no api_key of its own
         # configured -- a real backend/credential mismatch, not a convenience.
         self.api_key = resolved.api_key
-        self._client = httpx.Client(timeout=self.timeout)
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
         self._label = _provider_label(self.provider)
         # Kept so a boot that found nothing reachable can be re-resolved later
         # (see _readopt_backend_if_degraded); resolve_local_backend is pure with
@@ -511,6 +529,12 @@ class LocalLLMClient:
         fb_cfg = llm_cfg.get("fallback") or {}
         self._failover_enabled = bool(isinstance(fb_cfg, dict) and fb_cfg.get("enabled", False))
         self._recheck_backend = False
+        # gate.py's /query handler runs on FastAPI's default threadpool, so
+        # concurrent generate() calls can interleave _readopt_backend_if_stale's
+        # multi-attribute reassignment with another thread's do_post() read --
+        # without this lock a reader could observe a torn combination (e.g. the
+        # new backend's base_url paired with the old backend's api_key).
+        self._backend_lock = threading.Lock()
 
     def close(self) -> None:
         self._client.close()
@@ -536,13 +560,16 @@ class LocalLLMClient:
             # case uncached for exactly that reason.
             self._degraded = True
             return
-        self.provider = resolved.provider
-        self.base_url = resolved.base_url
-        self.model = resolved.model
-        self.backend_source = resolved.source
-        self.api_key = resolved.api_key
-        self._label = _provider_label(self.provider)
-        self._degraded = False
+        # Locked: a concurrent do_post() must never observe a partial update
+        # (e.g. the new backend's base_url paired with the old api_key).
+        with self._backend_lock:
+            self.provider = resolved.provider
+            self.base_url = resolved.base_url
+            self.model = resolved.model
+            self.backend_source = resolved.source
+            self.api_key = resolved.api_key
+            self._label = _provider_label(self.provider)
+            self._degraded = False
         log.info("local LLM backend: adopted %s after post-boot probe", self.provider)
 
     def _invalidate_backend_after_failure(self) -> None:
@@ -563,12 +590,17 @@ class LocalLLMClient:
         label = self._label
 
         def do_post() -> httpx.Response:
-            headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+            # Snapshot under the same lock _readopt_backend_if_stale writes
+            # under, so a concurrent backend swap can't hand this request a
+            # torn base_url/model/api_key combination.
+            with self._backend_lock:
+                base_url, model, api_key = self.base_url, self.model, self.api_key
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
             return self._client.post(
-                f"{self.base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers=headers,
                 json={
-                    "model": self.model,
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": self.max_tokens,
                     "temperature": self.temperature
@@ -623,7 +655,7 @@ class GrokClient:
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(grok_cfg)
         # Strip so whitespace-only counts as missing and padded values don't leak into the auth header.
         self.api_key = (os.environ.get("GROK_API_KEY") or "").strip()
-        self._client = httpx.Client(timeout=self.timeout)
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
 
     def close(self) -> None:
         self._client.close()
@@ -681,7 +713,7 @@ class ClaudeClient:
         self.anthropic_version = claude_cfg.get("anthropic_version", "2023-06-01")
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(claude_cfg)
         self.api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-        self._client = httpx.Client(timeout=self.timeout)
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
 
     def close(self) -> None:
         self._client.close()
