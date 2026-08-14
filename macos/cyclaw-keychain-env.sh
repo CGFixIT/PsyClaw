@@ -23,6 +23,18 @@
 # Fails closed: exits 1 without exec'ing anything if the Keychain item is
 # missing or empty, rather than launching the wrapped process with the
 # variable silently unset.
+#
+# ACL caveat (real, not fixable from this script): this is a bash script,
+# not a signed binary, so the first "Always Allow" prompt macOS shows when
+# `security find-generic-password -w` reads a protected item is typically
+# attributed to the interpreter (/bin/bash) rather than to this specific
+# script -- meaning "Always Allow" can grant read access to any later bash
+# process run by the same user, not just this wrapper. This is a general
+# macOS Keychain limitation for interpreted/unsigned callers, not something
+# CyClaw's code controls. Verify the actual prompt/ACL behavior on real
+# hardware before deciding whether this trust boundary is acceptable for a
+# given deployment; a signed binary or a narrower ACL would be the way to
+# tighten it later if needed.
 
 set -euo pipefail
 

@@ -93,6 +93,11 @@ def test_poll_plist_generates_valid_plist(tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert "launchctl bootstrap gui/" in out
     assert "cyclaw-keychain-set.sh" in out
+    # KeepAlive + ThrottleInterval=10 means loading before the token is
+    # stored crash-loops every 10s -- the operator has to be told, not just
+    # shown the (easy to miss) storage command.
+    assert "crash loop" in out
+    assert "Store the token FIRST" in out
 
 
 def test_poll_plist_optional_api_key_service_chains_second_wrapper(tmp_path: Path) -> None:

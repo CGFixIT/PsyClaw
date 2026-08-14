@@ -316,6 +316,12 @@ def cmd_poll_plist(args: argparse.Namespace) -> int:
     print(f"  Store the token first: macos/cyclaw-keychain-set.sh '{args.token_service}'")
     print("  Run exactly one poller per bot token (T2's own operator checklist).")
     print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
+    print()
+    print("  IMPORTANT ORDER: this agent is KeepAlive, throttled to 10s (launchd's")
+    print("  own default). Loading it before the token is stored means the wrapper")
+    print("  exits 1 on every start, so launchd relaunches it every 10s indefinitely")
+    print("  -- a tight, log-spamming crash loop, not a security issue.")
+    print("  Store the token FIRST, then bootstrap.")
     return EXIT_OK
 
 
