@@ -225,6 +225,49 @@ class TestCheckAll:
         # push operators to turn probing back on just to silence a red status.
         assert all(s.healthy for s in statuses)
 
+    @pytest.mark.parametrize("false_like", ["false", 1, None])
+    @pytest.mark.parametrize("gate_name", ["probe", "grok", "claude"])
+    def test_external_probe_gates_require_literal_true(
+        self, tmp_path, monkeypatch, gate_name, false_like
+    ):
+        """Invalid false-like YAML values must fail closed at every egress gate.
+
+        In particular, a quoted ``"false"`` is a non-empty Python string. A
+        truthiness check therefore inverted an operator's explicit opt-out and
+        let unauthenticated GET /health spend both provider credentials.
+        """
+        values = {
+            "probe_external": True,
+            "grok_enabled": False,
+            "claude_enabled": False,
+        }
+        if gate_name == "probe":
+            values.update(
+                probe_external=false_like,
+                grok_enabled=True,
+                claude_enabled=True,
+            )
+        else:
+            values[f"{gate_name}_enabled"] = false_like
+
+        cfg_path = _write_cfg(tmp_path, mode="hybrid", **values)
+        probed = []
+
+        def record(url, **kw):
+            probed.append(url)
+            return _OKResp()
+
+        monkeypatch.setattr(health, "_http_get", record)
+        monkeypatch.setenv("GROK_API_KEY", "test-key-123")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-456")
+
+        statuses = health.check_all(cfg_path)
+
+        names = {s.name for s in statuses}
+        assert "grok_api" not in names
+        assert "claude_api" not in names
+        assert not [url for url in probed if "x.ai" in url or "anthropic" in url]
+
     def test_probe_opt_in_is_off_when_api_block_is_absent(self, tmp_path, monkeypatch):
         """A config predating this key (no api block at all) must default to the
         safe posture, not to probing. `.get("api", {})` is what guarantees it."""

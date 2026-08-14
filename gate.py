@@ -492,12 +492,20 @@ grok = None
 # or loosening this check "to simplify," would let a confirmed low-score query
 # reach a paid external API even in offline mode, since the graph has no
 # backstop for mode/enabled (see INVARIANTS.md Rule 2).
-if cfg.get("app", {}).get("mode") == "hybrid" and cfg["models"].get("grok", {}).get("enabled", False):
+# ``is True`` is deliberate: quoted YAML ``"false"`` must fail closed instead
+# of becoming a truthy string that constructs an external client.
+if (
+    cfg.get("app", {}).get("mode") == "hybrid"
+    and cfg["models"].get("grok", {}).get("enabled") is True
+):
     grok = GrokClient(cfg=cfg)
 
 claude = None
-# Same double-gate as grok above, mirrored for the Claude fallback (PR #441).
-if cfg.get("app", {}).get("mode") == "hybrid" and cfg["models"].get("claude", {}).get("enabled", False):
+# Same strict double-gate as grok above, mirrored for the Claude fallback (PR #441).
+if (
+    cfg.get("app", {}).get("mode") == "hybrid"
+    and cfg["models"].get("claude", {}).get("enabled") is True
+):
     claude = ClaudeClient(cfg=cfg)
 
 def _usable_online_providers() -> list[str]:
