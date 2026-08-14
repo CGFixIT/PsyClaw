@@ -19,7 +19,7 @@ from graph import (
     offline_best_effort_node, grok_fallback_node, claude_fallback_node,
     audit_logger_node, guardrail_input_node, guardrail_output_node, guardrail_router,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
-    _context_char_budget,
+    _context_char_budget, _format_context_chunks, SECTION_SEP,
 )
 from tests.conftest import (
     MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
@@ -401,6 +401,38 @@ class TestOfflineBestEffortIdentity:
 
         assert len(result["answer_sources"]) == 5
         assert result["answer_sources"] == docs[:5]
+
+    def test_answer_sources_excludes_chunks_dropped_by_the_context_budget(self, tmp_path):
+        # The test above only feeds tiny multi-character chunks, so the
+        # budget-truncation branch of _format_context_chunks never fires and a
+        # docs[:5]-vs-included_docs mismatch would go unexercised. Force a real
+        # squeeze: max_context_tokens=1 floors the context budget at the
+        # documented _MIN_CONTEXT_CHARS (800 chars, imported above), and each
+        # doc below renders to ~530 chars (29-char header + 500-char text), so
+        # only 1 full chunk fits before the budget is exhausted -- chunks 2-5
+        # must NOT appear in answer_sources even though docs[:5] would include
+        # them.
+        cfg = _make_cfg(tmp_path)
+        cfg["retrieval"] = {**cfg["retrieval"], "max_context_tokens": 1}
+        llm = MockLocalLLM()
+        docs = [
+            {"text": "x" * 500, "score": 0.3, "source": f"{i}.md", "chunk_id": i}
+            for i in range(5)
+        ]
+        state = {"query": "q", "retrieved_docs": docs}
+        result = offline_best_effort_node(state, llm=llm, cfg=cfg, personality=_FakePersonality())
+
+        assert 0 < len(result["answer_sources"]) < 5
+        included_ids = [d["chunk_id"] for d in result["answer_sources"]]
+        assert included_ids == list(range(len(included_ids)))  # a contiguous prefix, in order
+        dropped_ids = [d["chunk_id"] for d in docs if d["chunk_id"] not in included_ids]
+        assert dropped_ids, "the budget squeeze must actually drop at least one chunk"
+        # The dropped chunks' own source header must not appear in what was
+        # actually sent to the model -- confirms answer_sources isn't merely
+        # under-reporting a doc that in fact reached the prompt.
+        for d in docs:
+            if d["chunk_id"] not in included_ids:
+                assert d["source"] not in llm.last_prompt
 
 
 class TestBuildGraphSignature:
@@ -844,6 +876,43 @@ class TestNodeErrorRecovery:
         assert "error" not in out
 
 
+class TestFormatContextChunksIncluded:
+    """Direct unit coverage of _format_context_chunks's included_docs return --
+    the node-level tests above prove the wiring; these pin the exact drop vs
+    truncate boundary at the function itself."""
+
+    def _doc(self, chunk_id, text, source=None):
+        return {"text": text, "score": 0.5, "source": source or f"{chunk_id}.md", "chunk_id": chunk_id}
+
+    def test_no_budget_includes_every_doc_up_to_limit(self):
+        docs = [self._doc(i, f"chunk {i}") for i in range(5)]
+        text, included = _format_context_chunks(docs, limit=3)
+        assert [d["chunk_id"] for d in included] == [0, 1, 2]
+        for i in range(3):
+            assert f"chunk {i}" in text
+
+    def test_budget_exhausted_before_a_doc_drops_it_entirely(self):
+        docs = [self._doc(0, "a" * 50), self._doc(1, "b" * 50)]
+        header_len = len(f"[Source: {docs[0]['source']}, Score: 0.500]\n")
+        # Budget fits doc 0 exactly and nothing else -- 0 bytes left for doc 1.
+        budget = header_len + 50
+        text, included = _format_context_chunks(docs, limit=2, total_char_budget=budget)
+        assert [d["chunk_id"] for d in included] == [0]
+        assert "a" * 50 in text
+        assert "b" not in text
+
+    def test_budget_truncating_mid_chunk_still_includes_that_doc(self):
+        docs = [self._doc(0, "a" * 50), self._doc(1, "b" * 50)]
+        header_len = len(f"[Source: {docs[1]['source']}, Score: 0.500]\n")
+        # Enough left after doc 0 for doc 1's header plus a PARTIAL body.
+        budget = header_len + 50 + len(SECTION_SEP) + header_len + 10
+        text, included = _format_context_chunks(docs, limit=2, total_char_budget=budget)
+        assert [d["chunk_id"] for d in included] == [0, 1]
+        assert "a" * 50 in text
+        assert "b" * 10 in text
+        assert "b" * 11 not in text  # truncated, not the full 50
+
+
 class TestLocalLlmPromptBudget:
     """The assembled local_llm / offline prompt INPUT must stay within the
     retrieval.max_context_tokens budget (query/soul-aware), so prompt + max_tokens
@@ -911,6 +980,25 @@ class TestLocalLlmPromptBudget:
             llm=llm, cfg=cfg,
         )
         assert len(llm.last_prompt) <= 1000 * CHARS_PER_TOKEN
+
+    def test_local_llm_answer_sources_excludes_chunks_the_budget_dropped(self):
+        # Same "5 huge chunks, small budget" squeeze as
+        # test_total_prompt_bounded_with_oversized_chunks above -- but asserting
+        # on answer_sources instead of the prompt. Only some of the 5 docs fit;
+        # answer_sources must report exactly those, not the raw docs[:5]
+        # (which is what guardrail_output_node's grounding check and gate.py's
+        # HTTP /query response citations both read).
+        llm = MockLocalLLM()
+        cfg = {"retrieval": {"max_context_tokens": 1000}}
+        docs = self._docs(5, 5000)
+        result = local_llm_node(
+            {"query": "what is cyclaw?", "retrieved_docs": docs}, llm=llm, cfg=cfg,
+        )
+        assert 0 < len(result["answer_sources"]) < 5
+        included_ids = {d["chunk_id"] for d in result["answer_sources"]}
+        for d in docs:
+            if d["chunk_id"] not in included_ids:
+                assert d["source"] not in llm.last_prompt
 
 
 class TestGuardrailInputNode:

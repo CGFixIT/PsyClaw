@@ -233,7 +233,7 @@ def _format_context_chunks(
     limit: int,
     char_cap: int | None = None,
     total_char_budget: int | None = None,
-) -> str:
+) -> tuple[str, list[RetrievedDoc]]:
     """Render retrieved docs into the canonical context block.
 
     char_cap=None  -> full chunk text (local_llm behaviour)
@@ -242,8 +242,18 @@ def _format_context_chunks(
         separators included). Stops adding (and truncates the crossing chunk)
         once the budget is reached, bounding prompt size. None = unbounded
         (legacy behaviour; output is byte-identical to the pre-budget version).
+
+    Returns (context_text, included_docs). included_docs is the subset of
+    docs[:limit] that actually contributed text to context_text -- a chunk
+    truncated mid-text by total_char_budget still counts (some of its text
+    reached the model), a chunk dropped entirely once the budget was exhausted
+    does not. Callers use included_docs for answer_sources so a cited source
+    always matches what the model/grounding check actually saw -- see
+    local_llm_node / offline_best_effort_node, which previously reported the
+    raw docs[:limit] regardless of what this function actually kept.
     """
     parts: list[str] = []
+    included: list[RetrievedDoc] = []
     used = 0
     for d in docs[:limit]:
         text = d.get("text", "")
@@ -259,10 +269,12 @@ def _format_context_chunks(
             if len(part) > remaining:
                 logger.debug("truncating chunk %d from %d to %d chars", len(parts) + 1, len(part), remaining)
                 parts.append(part[:remaining])
+                included.append(d)
                 break
             used += sep_len + len(part)
         parts.append(part)
-    return SECTION_SEP.join(parts)
+        included.append(d)
+    return SECTION_SEP.join(parts), included
 
 
 def _generate_or_error(client: _GeneratingClient, prompt: str, *, label: str) -> tuple[str, str | None]:
@@ -388,15 +400,18 @@ def guardrail_output_node(
     if output_guard is None or state.get("answer_model") != "local":
         return {}
 
-    # Ground the check in what local_llm_node actually fed the model
-    # (answer_sources = docs[:5], further truncated by its own char budget),
-    # not the full retrieved_docs. Shipped defaults (top_k_semantic=5 +
-    # top_k_keyword=5) mean retrieved_docs can carry up to 10 fused chunks --
-    # using it here let the grounding check match the model's answer against
-    # chunks it never saw, so a real hallucination could be judged "grounded"
-    # if it happened to overlap doc #6-10. Safe to read unconditionally: this
-    # function already returned above unless answer_model == "local", and
-    # local_llm_node always sets answer_sources (possibly []) whenever it runs.
+    # Ground the check in what local_llm_node actually fed the model --
+    # answer_sources is now exactly _format_context_chunks's included_docs
+    # (the docs that actually made it into the rendered context, dropped/
+    # truncated-away ones excluded), not the full retrieved_docs. Shipped
+    # defaults (top_k_semantic=5 + top_k_keyword=5) mean retrieved_docs can
+    # carry up to 10 fused chunks -- using it here let the grounding check
+    # match the model's answer against chunks it never saw, so a real
+    # hallucination could be judged "grounded" if it happened to overlap doc
+    # #6-10 (or, before this fix, a doc dropped by the context char budget).
+    # Safe to read unconditionally: this function already returned above
+    # unless answer_model == "local", and local_llm_node always sets
+    # answer_sources (possibly []) whenever it runs.
     docs = state.get("answer_sources", [])
     context = "\n\n".join(d.get("text", "") for d in docs)
 
@@ -445,7 +460,7 @@ def local_llm_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
     context_budget_chars = _context_char_budget(
         cfg, soul_preamble=soul_preamble, query=query, framing_chars=_LOCAL_FRAMING_CHARS
     )
-    context_chunks = _format_context_chunks(docs, limit=5, total_char_budget=context_budget_chars)
+    context_chunks, included_docs = _format_context_chunks(docs, limit=5, total_char_budget=context_budget_chars)
 
     prompt = f"""{soul_preamble}USER QUERY: {query}
 
@@ -472,7 +487,7 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
     out: dict = {
         "answer": answer,
         "answer_model": "local",
-        "answer_sources": docs[:5],
+        "answer_sources": included_docs,
     }
     # Surface a generation failure to the audit node + HTTP response, matching
     # retrieve_node's "{code}: {message}" convention. Only set on failure so a
@@ -557,7 +572,10 @@ def _external_fallback_node(
             )
         return f"USER QUERY: {query}"
 
-    context = _format_context_chunks(docs, limit=3, char_cap=200) if send_ctx else ""
+    if send_ctx:
+        context, _included_docs = _format_context_chunks(docs, limit=3, char_cap=200)
+    else:
+        context = ""
     prompt = _assemble(context)
 
     # Cost guard for the only external, paid API calls in the topology. The
@@ -579,7 +597,7 @@ def _external_fallback_node(
             framing_overhead = len(_assemble(""))
             ctx_budget = max_chars - framing_overhead
             if ctx_budget > 0:
-                context = _format_context_chunks(
+                context, _included_docs = _format_context_chunks(
                     docs, limit=3, char_cap=200, total_char_budget=ctx_budget,
                 )
                 prompt = _assemble(context)
@@ -657,6 +675,7 @@ def offline_best_effort_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
     # Soul owns identity when present; neutral fallback only when it is absent.
     identity = "" if personality else "You are a helpful assistant. "
 
+    included_docs: list[RetrievedDoc] = []
     if docs:
         # Per-request nonce (see the UNTRUSTED_NOTE comment above).
         tag = f"ctx-{secrets.token_hex(4)}"
@@ -668,7 +687,7 @@ def offline_best_effort_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
             cfg, soul_preamble=soul_preamble, query=query,
             framing_chars=_OFFLINE_FRAMING_CHARS + len(identity),
         )
-        context = _format_context_chunks(docs, limit=5, total_char_budget=context_budget_chars)
+        context, included_docs = _format_context_chunks(docs, limit=5, total_char_budget=context_budget_chars)
         prompt = f"""{soul_preamble}{identity}USER QUERY: {query}
 
 PARTIAL CONTEXT {UNTRUSTED_NOTE}:
@@ -689,7 +708,7 @@ Provide the best general answer you can. Clearly note that your local knowledge 
     out: dict = {
         "answer": answer,
         "answer_model": "offline-best-effort",
-        "answer_sources": docs[:5] if docs else [],
+        "answer_sources": included_docs,
     }
     # Only set on failure so a successful best-effort answer does not overwrite an
     # upstream error already in state (e.g. a retrieve_node RAG_ERROR that routed
