@@ -69,7 +69,7 @@ GUARDED = [
 # hardcodes, spawns nothing, and the console needs it to populate help before a
 # key has been entered.
 OPEN = [
-    "/", "/api/status", "/api/registry", "/api/tools", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
 ]
 
 

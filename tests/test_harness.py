@@ -19,6 +19,7 @@ from harness.config import HarnessConfig, default_home
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_governed_skills, list_mcp_tools, list_repo_skills
+from harness.skills_view import list_wired_skills, render_skills_diagram
 from harness.tools_view import list_wired_tools, render_tools_diagram
 from harness import server as harness_server
 from harness.server import create_app
@@ -233,6 +234,65 @@ def test_tools_endpoint_is_open(client):
     resp = bare.get("/api/tools")
     assert resp.status_code == 200
     assert resp.json()["diagram"]
+
+
+def test_list_wired_skills_marks_prompt_and_check_roles():
+    payload = list_wired_skills()
+    by_name = {row["name"]: row for row in payload["skills"]}
+    assert by_name["ponytail"]["role"] == "prompt"
+    assert by_name["ponytail"]["wired"] is True
+    assert by_name["ponytail"]["invoked"] is True
+    assert by_name["karpathy-guidelines"]["role"] == "prompt"
+    assert by_name["invariant-guard"]["role"] == "check"
+    assert by_name["invariant-guard"]["wired"] is True
+    assert by_name["config-guard"]["role"] == "check"
+    assert by_name["python-coding-agent"]["role"] == "repo"
+    assert by_name["python-coding-agent"]["wired"] is False
+    assert by_name["python-coding-agent"]["invoked"] is False
+    assert payload["wired"] >= 4
+    assert "HARNESS SKILLS" in payload["diagram"]
+    assert "[ponytail]" in payload["diagram"]
+    assert "python-coding-agent" not in payload["diagram"]
+
+
+def test_render_skills_diagram_single_skill_is_a_box():
+    row = {
+        "name": "ponytail",
+        "role": "prompt",
+        "path": ".claude/skills/ponytail/SKILL.md",
+        "description": "lazy-senior-dev rules",
+        "source": "repo",
+        "invoked": True,
+        "wired": True,
+    }
+    diagram = render_skills_diagram([row], wired=1, total=1)
+    assert diagram.startswith("┌")
+    assert "ponytail" in diagram
+    assert "lazy-senior-dev rules" in diagram
+    assert diagram.endswith("┘")
+
+
+def test_skills_endpoint_lists_live_wiring(client):
+    data = client.get("/api/skills").json()
+    names = {row["name"] for row in data["skills"]}
+    assert {"ponytail", "karpathy-guidelines", "invariant-guard", "config-guard"} <= names
+    for row in data["skills"]:
+        if row["role"] in {"prompt", "check"}:
+            assert row["wired"] is True
+            assert row["invoked"] is True
+        if row["role"] == "repo":
+            assert row["wired"] is False
+    assert data["diagram"].startswith("HARNESS SKILLS")
+    assert "prompt (injected" in data["diagram"]
+    assert "agent-check" in data["diagram"]
+
+
+def test_skills_endpoint_is_open(client):
+    bare = TestClient(client.app, base_url="http://127.0.0.1")
+    resp = bare.get("/api/skills")
+    assert resp.status_code == 200
+    assert resp.json()["diagram"]
+
 
 
 

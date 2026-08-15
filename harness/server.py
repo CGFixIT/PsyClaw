@@ -72,6 +72,7 @@ from harness.schemas import (
     SoulToggleRequest,
 )
 from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError, TokenTally
+from harness.skills_view import list_wired_skills
 from harness.tools_view import list_wired_tools
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
@@ -665,6 +666,16 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             getattr(route, "path", "") or "" for route in app.routes
         )
         return list_wired_tools(registered)
+
+    @app.get("/api/skills")
+    def skills() -> dict:
+        """Wiring inventory for the /skills slash command. Read-only, open.
+
+        Same reason /api/registry is open: the console must populate the
+        diagram before an operator key is entered. ``wired`` means the
+        harness actually injects (prompt) or runs (agent-check) the skill.
+        """
+        return list_wired_skills()
 
     # -- sessions ------------------------------------------------------
     @app.get("/api/sessions")

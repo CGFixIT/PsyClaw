@@ -407,6 +407,7 @@ boundary). Every test below is exercisable through a real FastAPI
 | HC-1 | GET | `/api/status` | 200, `{version, model, provider, base_url, soul_enabled, home, repo_root, sessions, total_tokens, layout}` |
 | HC-2 | GET | `/api/registry` | 200, `{skills: [...], tools: [...], connectors: [...]}` |
 | HC-2b | GET | `/api/tools` | 200, `{tools: [...], wired, total, diagram}`; every `kind=harness` row has `wired=true` against live routes; `hybrid_search` is `kind=mcp` / `invoked=false`; `diagram` starts with `HARNESS TOOLS` |
+| HC-2c | GET | `/api/skills` | 200, `{skills: [...], wired, total, diagram}`; `ponytail`/`karpathy-guidelines` are `role=prompt` and wired; `invariant-guard`/`config-guard` are `role=check` and wired; repo catalog rows are unwired; `diagram` starts with `HARNESS SKILLS` |
 
 ### Session Lifecycle
 

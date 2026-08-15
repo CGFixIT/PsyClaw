@@ -1186,6 +1186,21 @@ def phase_harness_console() -> PhaseResult:
         all(t.get("wired") for t in (tools_payload.get("tools") or []) if t.get("kind") == "harness"),
     ))
 
+    r = client.get("/api/skills")
+    skills_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_skills_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_skills_shape",
+        isinstance(skills_payload.get("skills"), list)
+        and isinstance(skills_payload.get("diagram"), str)
+        and "HARNESS SKILLS" in (skills_payload.get("diagram") or ""),
+    ))
+    skill_names = {s.get("name") for s in skills_payload.get("skills") or []}
+    phase.checks.append(Check(
+        "harness_skills_includes_prompt_and_check",
+        {"ponytail", "karpathy-guidelines", "invariant-guard"} <= skill_names,
+    ))
+
     log("  --- Sessions CRUD ---")
     r = client.post("/api/sessions", json={"title": "sandbox check"})
     phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
@@ -1345,6 +1360,7 @@ def phase_harness_html() -> PhaseResult:
         ("github_status", "/api/github/status"),
         ("harness_runs", "/api/harness/runs"),
         ("tools", "/api/tools"),
+        ("skills", "/api/skills"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"

@@ -22,7 +22,8 @@ _SKILLS = _REPO_ROOT / ".claude" / "skills"
 _SOUL = _REPO_ROOT / "data" / "personality" / "soul.md"
 
 # Ordered: discipline rules first, persona second, soul last (softest).
-_DISCIPLINE_SKILLS = ("ponytail", "karpathy-guidelines")
+# Public so /skills can report what compose_system_prompt actually injects.
+DISCIPLINE_SKILLS: tuple[str, ...] = ("ponytail", "karpathy-guidelines")
 
 # Bounded separately from soul_max_chars so a long goal cannot crowd out
 # the discipline contracts. Keep in sync with harness.schemas._MAX_GOAL_LEN.
@@ -100,7 +101,7 @@ def compose_system_prompt(
     each present skill is under its own header.
     """
     parts = [_HEADER]
-    for name in _DISCIPLINE_SKILLS:
+    for name in DISCIPLINE_SKILLS:
         body = _read_skill_body(name, skills_dir)
         if body:
             parts.append(f"\n## Discipline contract: {name}\n\n{body}")

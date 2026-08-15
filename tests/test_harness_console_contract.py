@@ -159,9 +159,11 @@ def test_console_call_extraction_is_not_empty():
     assert "/api/sessions/{}/rename" in paths
     assert "/api/sessions/{}/goal" in paths
     assert "/api/tools" in paths
+    assert "/api/skills" in paths
     assert ("/api/chat", "POST") in calls
     assert ("/api/sessions/{}/goal", "POST") in calls
     assert ("/api/tools", "GET") in calls
+    assert ("/api/skills", "GET") in calls
 
 
 @pytest.mark.parametrize("path,method", sorted(_console_calls()))
@@ -280,6 +282,21 @@ def test_console_documents_tools_slash_command():
     assert "/api/agent/" not in body
     assert "renderToolsDiagram(" in body
     assert "unknown tool:" in body
+
+
+def test_console_documents_skills_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/skills [all|<name>]'" in html
+    assert "case 'skills':" in html
+    assert "api('/api/skills')" in html
+    assert "function renderSkillsDiagram(" in html
+    start = html.index("case 'skills':")
+    end = html.index("case 'tools':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "renderSkillsDiagram(" in body
+    assert "unknown skill:" in body
+
 
 
 

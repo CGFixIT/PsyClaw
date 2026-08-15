@@ -128,6 +128,21 @@ def available_profiles() -> list[tuple[str, str]]:
     return [(name, _CHECK_PROFILES[name].description) for name in sorted(_CHECK_PROFILES)]
 
 
+def skill_backed_profiles() -> list[tuple[str, str, str]]:
+    """Profiles whose argv runs a repo ``.claude/skills/...`` script.
+
+    ``(name, description, argv_path)``. pytest/ruff are not skills — they
+    are interpreter modules — so they stay off this list.
+    """
+    marker = ".claude/skills/"
+    rows: list[tuple[str, str, str]] = []
+    for name, profile in _CHECK_PROFILES.items():
+        skill_path = next((part for part in profile.argv if marker in part), "")
+        if skill_path:
+            rows.append((name, profile.description, skill_path))
+    return rows
+
+
 def resolve_check_profiles(names: list[str]) -> list[dict[str, object]]:
     """Map profile names to the check manifest ``run_agentic_op`` expects.
 
