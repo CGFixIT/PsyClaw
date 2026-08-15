@@ -245,6 +245,30 @@ def run_checks(cfg: dict[str, Any]) -> None:
     else:
         info("C12", "max_context_tokens/max_tokens not both numeric — skipping no-stall arithmetic")
 
+    # ── C13 api_key_optional is not silently exposing a LAN bind ────────────
+    print("C13 security.api_key_optional vs. the bind address")
+    api_key_optional = _dig(cfg, "security", "api_key_optional") is True
+    if not api_key_optional:
+        ok("C13", "security.api_key_optional is false (default) — CYCLAW_API_KEY still required")
+    else:
+        # Reads api.host ONLY, deliberately not security.allowed_hosts. An
+        # earlier revision also warned on LAN entries in allowed_hosts, which
+        # was a false positive: that list filters request Host HEADERS
+        # (TrustedHostMiddleware), it opens no listening socket, and the runtime
+        # bypass is keyed on the socket PEER. A loopback-bound server with LAN
+        # names in allowed_hosts is not reachable by a LAN device at all, so the
+        # warning failed --strict on the shipped config for a risk that is not
+        # there.
+        host = _dig(cfg, "api", "host")
+        if host in _LOOPBACK_HOSTS:
+            ok("C13", f"security.api_key_optional=true with api.host={host!r} (loopback); "
+                      "the runtime bypass additionally requires a loopback peer")
+        else:
+            warn("C13", f"security.api_key_optional=true with a non-loopback api.host={host!r} — "
+                        "gate.py refuses this pair at bind time and denies the bypass to "
+                        "non-loopback peers, so it cannot serve the CYCLAW_API_KEY-gated routes "
+                        "(soul/ops/memory/audit) as written")
+
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])

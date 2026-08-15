@@ -80,7 +80,15 @@ def client(tmp_path):
         # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
         # (added at import from the real config.yaml allowed_hosts) admits the
         # request; the default "testserver" host would otherwise 400.
-        client = TestClient(gate.app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        client = TestClient(
+            gate.app,
+            base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+            # Starlette defaults the peer to ("testclient", 50000), which is
+            # deliberately NOT loopback under _is_loopback_peer. Set a real
+            # loopback peer so tests exercise the ordinary local-operator case;
+            # the non-loopback case is asserted explicitly in TestApiKeyOptionalPeer.
+            client=("127.0.0.1", 51234),  # DevSkim: ignore DS162092,DS137138
+        )
         yield client, mock_graph
 
     reset_config_cache()
@@ -760,6 +768,57 @@ class TestSoulAndErrorPaths:
         assert "version" in body
         assert "source" in body
 
+    # ------------------------------------------------------------------
+    # security.api_key_optional bypass (config.yaml flag, default false)
+    # ------------------------------------------------------------------
+
+    def test_api_key_optional_false_still_requires_key(self, client, monkeypatch):
+        """Explicit api_key_optional=false behaves exactly like the flag being
+        absent (the pre-existing fail-closed default)."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = False
+        resp = test_client.get("/soul")
+        assert resp.status_code == 401
+
+    def test_api_key_optional_true_bypasses_auth_with_no_key_set(self, client, monkeypatch):
+        """api_key_optional=true skips require_api_key entirely -- no
+        Authorization header, no CYCLAW_API_KEY env var, still 200."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = test_client.get("/soul")
+        assert resp.status_code == 200
+        assert "soul" in resp.json()
+
+    def test_api_key_optional_true_bypasses_auth_with_wrong_key_sent(self, client, monkeypatch):
+        """api_key_optional=true means a wrong/garbage Bearer token still
+        passes -- the dependency never inspects it once bypassed."""
+        test_client, _ = client
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "correct-key-xyz")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = test_client.get(
+            "/soul", headers={"Authorization": "Bearer definitely-not-the-key"}
+        )
+        assert resp.status_code == 200
+
+    def test_api_key_optional_covers_ops_endpoint_too(self, client, monkeypatch):
+        """The same flag also bypasses gate_ops.py's injected require_api_key
+        (POST /ops/sync), not just gate.py's own /soul route."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        with patch("gate_ops.run_sync_op") as mock_run:
+            mock_run.return_value = MagicMock(
+                exit_code=0, label="status", to_dict=lambda: {"exit_code": 0, "label": "status"}
+            )
+            resp = test_client.post("/ops/sync", json={"action": "status", "dry_run": True})
+        assert resp.status_code != 401
+
     def test_get_soul_audit_logged(self, client, monkeypatch, tmp_path):
         """GET /soul writes a soul_read audit event on every authenticated call."""
         import json
@@ -1030,6 +1089,167 @@ class TestAuditSummaryEndpoint:
         assert resp.json()["total_events"] == 1
 
 
+class TestApiKeyOptionalPeer:
+    """api_key_optional must never open the API-key routes to a REMOTE caller.
+
+    _require_loopback_bind only runs under main(). The shipped container's CMD
+    is `uvicorn gate:app --host 0.0.0.0`, and any operator can run the same by
+    hand, so the bind guard is not reachable on that path at all. Keying the
+    bypass off the socket peer instead makes it independent of how the process
+    was launched -- which is the only form of the control that holds for every
+    launch path.
+    """
+
+    def _client(self, peer_host):
+        import gate
+        return TestClient(gate.app, base_url="http://localhost", client=(peer_host, 4321))
+
+    def test_remote_peer_is_refused_even_with_the_flag_on(self, client, monkeypatch):
+        """The reported attack: reach a directly-served app from the LAN with no
+        credential. The flag is on and no key is set, so ONLY the peer check
+        stands between a remote caller and soul mutation."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        assert self._client("10.0.0.50").get("/soul").status_code == 401
+
+    def test_forged_loopback_host_header_does_not_grant_the_bypass(self, client, monkeypatch):
+        """TrustedHostMiddleware is a DNS-rebinding control, not authentication.
+        A remote client can always send Host: 127.0.0.1; the peer it connected
+        from is the part it cannot choose."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        remote = self._client("192.168.1.77")
+        resp = remote.get("/soul", headers={"Host": "127.0.0.1"})  # DevSkim: ignore DS162092,DS137138
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("peer", ["127.0.0.1", "127.0.0.2", "::1"])
+    def test_loopback_peers_still_get_the_bypass(self, client, monkeypatch, peer):
+        """The supported case must keep working: a local operator with the flag
+        on reaches the route with no key. 127.0.0.2 is included because the
+        whole 127.0.0.0/8 range is loopback, matching _is_loopback_host."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        assert self._client(peer).get("/soul").status_code == 200
+
+    def test_remote_peer_with_a_correct_key_still_works(self, client, monkeypatch):
+        """The peer check bounds the BYPASS, not the route. A remote caller
+        holding the real key is exactly as authorised as before this change --
+        otherwise this would be a silent breaking change for anyone fronting
+        CyClaw with their own proxy."""
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "real-key-abc")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = self._client("10.0.0.50").get(
+            "/soul", headers={"Authorization": "Bearer real-key-abc"}
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("header", [
+        "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+        "X-Real-IP", "Forwarded",
+    ])
+    def test_a_forwarded_request_from_a_loopback_peer_is_refused(
+        self, client, monkeypatch, header,
+    ):
+        """A reverse proxy ON THIS HOST defeats the peer check on its own.
+
+        nginx/caddy listening on 0.0.0.0 and proxy_pass-ing to 127.0.0.1:8787
+        terminates the remote connection and opens its own, so every internet
+        caller presents a loopback peer. _serve sets proxy_headers=False, so the
+        real client cannot be recovered from XFF either. The presence of any
+        forwarding header is therefore treated as "something forwarded this" and
+        denies the bypass -- the header VALUE is attacker-controlled and is never
+        parsed or trusted.
+
+        gate.py's own _require_loopback_bind docstring names fronting CyClaw with
+        a reverse proxy as an anticipated deployment, which is why this is not a
+        hypothetical.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        proxied = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert proxied.get("/soul", headers={header: "203.0.113.9"}).status_code == 401
+
+    def test_a_forwarded_request_with_a_real_key_still_works(self, client, monkeypatch):
+        """Proxied deployments are not broken -- only the BYPASS is withheld.
+        A proxy that forwards a valid key is as authorised as it ever was."""
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "real-key-abc")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        proxied = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        resp = proxied.get("/soul", headers={
+            "X-Forwarded-For": "203.0.113.9",
+            "Authorization": "Bearer real-key-abc",
+        })
+        assert resp.status_code == 200
+
+    def test_an_unproxied_loopback_request_still_gets_the_bypass(self, client, monkeypatch):
+        """The supported local-operator case must survive the proxy check."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        direct = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert direct.get("/soul").status_code == 200
+
+    @pytest.mark.parametrize("headers", [
+        {"Origin": "https://evil.example"},
+        {"Origin": "http://attacker.test:8080"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+    ])
+    def test_a_cross_site_request_is_refused_the_bypass(self, client, monkeypatch, headers):
+        """CORS does not protect these routes, so the bypass must not trust them.
+
+        A bodyless cross-origin POST is a CORS-"simple" request: no preflight is
+        sent, so it REACHES the handler and its side effect happens; CORS only
+        withholds the response from the attacker's script afterwards. Verified
+        against the live app before this fix -- an Origin: https://evil.example
+        POST to /soul/reload returned 200 and invoked personality.reload().
+
+        The Bearer key was doing this job implicitly: a page cannot attach an
+        Authorization header to a simple request, and adding one forces a
+        preflight the browser blocks. api_key_optional removes the key, so it
+        has to replace what the key was implicitly providing.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        browser = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert browser.post("/soul/reload", headers=headers).status_code == 401
+
+    @pytest.mark.parametrize("headers", [
+        {},
+        {"Sec-Fetch-Site": "same-origin"},
+        {"Sec-Fetch-Site": "none"},
+        {"Origin": "http://127.0.0.1:8787"},
+        {"Origin": "http://localhost:8787"},
+    ])
+    def test_same_site_and_header_less_callers_keep_the_bypass(
+        self, client, monkeypatch, headers,
+    ):
+        """The console itself and non-browser clients must still work.
+
+        Absent headers are allowed on purpose (curl/PowerShell/the sandbox
+        verifier send neither and are not CSRF vectors) -- the same carve-out
+        harness/server.py's _enforce_same_origin documents.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        caller = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert caller.get("/soul", headers=headers).status_code == 200
+
+    def test_missing_peer_fails_closed(self):
+        """An ASGI scope without a client reads as not-loopback. This backs a
+        security bypass, so an unknown peer must not receive it."""
+        import gate
+        assert gate._is_loopback_peer(MagicMock(client=None)) is False
+
+
 class TestProxyHeaderTrust:
     """uvicorn defaults proxy_headers=True with forwarded_allow_ips "127.0.0.1",
     so on a loopback bind EVERY peer is trusted and ProxyHeadersMiddleware
@@ -1186,6 +1406,58 @@ class TestLoopbackBindGuard:
         )
         monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
         assert gate._require_loopback_bind("10.0.0.50") is True
+
+    def test_api_key_optional_closes_the_auth_and_tls_bind_route(self, monkeypatch):
+        """security.api_key_optional must not compose with the auth+TLS route.
+
+        The two flags govern DIFFERENT credentials. auth.enabled + TLS + a real
+        /query dependency proves the QUERY path carries a session -- which is
+        the whole basis on which the test directly above admits a LAN bind. But
+        api_key_optional: true simultaneously removes the CYCLAW_API_KEY gate
+        from /soul/*, /ops/*, /memory/* and /audit/summary. Composed, a LAN
+        caller reaches soul mutation and the /ops/* subprocess shims with no
+        credential at all, admitted on the strength of a session that never
+        guarded those routes. config-guard's C13 warns on this pair; by this
+        module's own "a warning is not a control" standard, the bind guard is
+        where it has to be refused.
+        """
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(gate, "cfg", {
+            "auth": {"enabled": True},
+            "api": {"tls": {"enabled": True}},
+            "security": {"api_key_optional": True},
+        })
+        monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
+        # Every precondition of the allow-path above is satisfied except this one.
+        assert gate._auth_and_tls_enabled() is True
+        assert gate._api_key_gate_bypassed() is True
+        assert gate._require_loopback_bind("10.0.0.50") is False
+
+    def test_api_key_optional_does_not_affect_a_loopback_bind(self, monkeypatch):
+        """The flag is only refused as a LAN-bind combination. A loopback bind
+        with api_key_optional: true is the configuration the flag exists for and
+        must still start -- otherwise the guard breaks the supported use case."""
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": True}})
+        assert gate._require_loopback_bind("127.0.0.1") is True
+
+    def test_api_key_optional_does_not_revoke_the_explicit_env_override(self, monkeypatch):
+        """The env escape hatch means "I am fronting this with my own auth" --
+        an explicit operator override that outranks the composition guard."""
+        import gate
+        monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, "1")
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": True}})
+        assert gate._require_loopback_bind("10.0.0.50") is True
+
+    @pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
+    def test_api_key_optional_quoted_yaml_fails_open_to_the_safe_side(self, quoted, monkeypatch):
+        """A quoted "true" is the STRING "true", not the boolean -- so the gate
+        is NOT bypassed and the bind route stays available. Same literal-True
+        discipline as _flag_is_true, pointed the safe way for this flag."""
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": quoted}})
+        assert gate._api_key_gate_bypassed() is False
 
     @pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
     def test_a_quoted_yaml_boolean_fails_closed(self, quoted, monkeypatch):

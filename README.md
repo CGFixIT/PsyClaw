@@ -132,7 +132,7 @@ flowchart TD
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
         X -->|"blocked"| L
-        X -->|"passed · high score"| H["④ local_llm\nOllama :11434\nqwen3.6:27b"]
+        X -->|"passed · high score"| H["④ local_llm\nOllama :11434\nqwen3.8:27b"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
         I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated · not railed"]
         I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated · not railed"]
@@ -192,6 +192,8 @@ flowchart TD
 CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore`) require a **Bearer API key**. Without it they return `HTTP 401` immediately — intentional fail-closed behavior.
 
 > **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated.
+
+> **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once — but **only for requests arriving from this machine**. The bypass is granted on the socket peer, so a remote caller still needs the real key no matter how the process was launched. Entries in `security.allowed_hosts` do not change that: that list filters request `Host` headers and opens no listening socket. What *would* matter is the bind itself — `gate.py` refuses to start with a non-loopback `api.host` while the flag is `true`, and `config-guard`'s C13 warns on that pair. Note it also does nothing under Docker: NAT rewrites the source address, so the container sees the bridge gateway rather than loopback and the routes stay key-gated (set `CYCLAW_API_KEY` in the container instead).
 
 ### macOS — zsh (the default shell) or bash
 
@@ -347,7 +349,7 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 |---|---|---|
 | Python | 3.12 | Primary supported runtime |
 | [Ollama](https://ollama.com/) | Any | Must be running on `localhost:11434` |
-| Model pulled in Ollama | — | `qwen3.6:27b` (default), `mistral:7b`, or any chat model |
+| Model pulled in Ollama | — | `qwen3.8:27b` (default), `mistral:7b`, or any chat model |
 | **macOS** (primary) | 14 Sonoma+ | **Apple Silicon only.** An Intel Mac cannot install this repo's pinned torch at all — no `x86_64` wheel is published at that pin |
 | Windows / Linux (fallback) | — | Both fully supported and CI-covered; they share the `+cpu` torch path below |
 
@@ -356,7 +358,7 @@ can also fail over to LM Studio (or any other OpenAI-compatible loopback
 server) if Ollama isn't reachable. It's off by default — set
 `models.local_llm.fallback.enabled: true` in `config.yaml` and fill in your LM
 Studio model id (`fallback.model`; LM Studio ids don't carry the Ollama-style
-`name:tag` colon, so don't just reuse `qwen3.6:27b`). When enabled, a short
+`name:tag` colon, so don't just reuse `qwen3.8:27b`). When enabled, a short
 probe (`fallback.probe_timeout_sec`, default 1.5s) tries Ollama first and
 LM Studio second, both `LocalLLMClient` and `/health` share the same choice,
 and it re-checks automatically if neither backend was reachable the first
@@ -863,7 +865,7 @@ python -m guardrails.cli test                            # pre-flight self-test
 guardrails:
   enabled: false                 # opt-in; also gates the graph.py guardrail_input node
   engine: "openai"               # Ollama OpenAI-compatible endpoint
-  model: "qwen3.6:27b"            # keep in sync with models.local_llm.model
+  model: "qwen3.8:27b"            # keep in sync with models.local_llm.model
   hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
 ```
@@ -1088,7 +1090,7 @@ agentic:
   deepagent_github:
     enabled: false                      # ships closed
     allow_git_write_tools: false        # gates every write/commit/push in the clone
-    model: "qwen3.6:27b"                # local planner model; cite models.local_llm.model
+    model: "qwen3.8:27b"                # local planner model; cite models.local_llm.model
     workspace_root: "data/agentic/workspaces"
     max_write_budget_bytes: 100000
     max_handoff_chars: 200000           # outbound-prompt cap for cloud egress

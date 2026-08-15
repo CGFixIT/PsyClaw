@@ -89,7 +89,7 @@ def test_extract_answer_query_response_fixture() -> None:
         ],
         "retrieval_mode": "hybrid",
         "hit_count": 1,
-        "model_used": "qwen3.6:27b",
+        "model_used": "qwen3.8:27b",
         "needs_confirm": False,
         "confirm_message": None,
         "available_providers": [],
@@ -103,7 +103,7 @@ def test_handle_inbound_happy_path(tmp_path: Path) -> None:
     with (
         patch(
             "telegram.client.post_query",
-            return_value={"answer": "pong", "model_used": "qwen3.6:27b"},
+            return_value={"answer": "pong", "model_used": "qwen3.8:27b"},
         ),
         patch(
             "telegram.client.send_message",

@@ -42,7 +42,7 @@ def _chat_client(payload: dict) -> HarnessChatClient:
 
     return HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1",
-        model="qwen3.6:27b",
+        model="qwen3.8:27b",
         transport=httpx.MockTransport(handler),
     )
 
@@ -152,7 +152,7 @@ def test_chat_survives_malformed_usage_block(usage, expected_prompt, expected_co
     still-valid sibling field keeps its real value."""
     chat = _chat_client(
         {
-            "model": "qwen3.6:27b",
+            "model": "qwen3.8:27b",
             "choices": [{"message": {"role": "assistant", "content": "hello"}}],
             "usage": usage,
         }

@@ -30,7 +30,7 @@ models:
     # no Authorization header is sent. Only set this if you have configured Ollama
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-    model: "qwen3.6:27b"
+    model: "qwen3.8:27b"
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
@@ -43,7 +43,7 @@ models:
     max_tokens: 3000
     temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host -- which, since the default above became qwen3.6:27b,
+    # is expected to host -- which, since the default above became qwen3.8:27b,
     # is now the shipped default itself rather than a headroom allowance for a
     # model heavier than it. A smaller tag simply leaves this budget unused.
     # Worked from the
@@ -78,7 +78,7 @@ models:
       enabled: false
       provider: "lmstudio"                       # label only; same OpenAI-compat stack
       base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
-      model: "qwen3.6-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.6:27b` verbatim
+      model: "qwen3.8-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.8:27b` verbatim
       probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
   embeddings:
     provider: "sentence-transformers"
@@ -511,6 +511,54 @@ security:
   # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
   require_env:
     - "GROK_API_KEY"
+  # Operator opt-out from the CYCLAW_API_KEY Bearer-token gate (require_api_key
+  # in gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/*
+  # system, which stays governed by auth.enabled regardless of this flag.
+  # Read by both gate.py (soul/*, ops/*, memory/*, audit/summary -- 17 routes)
+  # and harness/server.py (26 routes behind its `guarded` list, including
+  # /api/agent/run+push+publish and /api/keys).
+  #
+  # Ships false: unchanged fail-closed behavior (an unset CYCLAW_API_KEY
+  # refuses the endpoint; a wrong key 401s).
+  #
+  # When true, the bypass is granted ONLY to a request that (a) has a loopback
+  # socket peer AND (b) carries no reverse-proxy forwarding header
+  # (X-Forwarded-For/-Host/-Proto, X-Real-IP, Forwarded). Both halves are
+  # required: a proxy running ON THIS HOST terminates the remote connection and
+  # opens its own from 127.0.0.1, so the peer alone would hand the bypass to
+  # anyone who can reach the proxy. Header PRESENCE is the signal; the value is
+  # attacker-controlled and is never parsed.
+  #
+  # RESIDUAL GAP, stated plainly: a proxy that strips those headers is
+  # indistinguishable from no proxy at all. Do NOT enable this flag on a host
+  # where anything fronts CyClaw. The flag is for a machine you use directly.
+  # That is deliberately keyed on the peer rather than:
+  #   * the Host header -- attacker-supplied; TrustedHostMiddleware is a
+  #     DNS-rebinding control, not authentication; or
+  #   * the bind address -- unknown to a request handler, and the bind guard
+  #     below runs only under main(), which `uvicorn gate:app --host 0.0.0.0`
+  #     (the shipped container CMD) and `uvicorn harness.server:app` skip.
+  # So entries in allowed_hosts / allowed_origins below do NOT widen this: they
+  # filter Host/Origin headers on requests that already arrived and open no
+  # listening socket. LAN names there cannot make a loopback-bound server
+  # reachable from the LAN, and even a genuinely remote request is refused the
+  # bypass. config-guard's C13 ignores those lists for exactly this reason.
+  #
+  # What DOES matter is the bind. gate.py's _require_loopback_bind refuses to
+  # start when this is true and api.host is non-loopback -- including via the
+  # auth.enabled + api.tls.enabled route past loopback, since those prove the
+  # QUERY path carries a session and say nothing about the API-key routes this
+  # flag opens. C13 warns on that same pair. This is defence in depth; the
+  # per-request peer check above is the control that holds everywhere.
+  #
+  # DOCKER: the flag is inert in a container. NAT rewrites the source address,
+  # so the peer is the bridge gateway (172.x), never loopback, and the routes
+  # stay key-gated. Not a defect to route around: from inside the container a
+  # request published on 127.0.0.1:8787 and one published on 0.0.0.0:8787 are
+  # indistinguishable, so trusting the bridge would re-expose every
+  # containerised deployment. Set CYCLAW_API_KEY in the container instead
+  # (docker-compose.yml does not set one today).
+  api_key_optional: false
   # Starlette buffers a request's entire raw body into memory before Pydantic
   # validation runs, so schemas/api.py's per-field max_length caps (largest is
   # 65536 chars) don't bound memory use for an oversized POST -- they only
@@ -632,7 +680,7 @@ agentic:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
-    model: "qwen3.6:27b"
+    model: "qwen3.8:27b"
     # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
     # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
     # (600) above: this package is never imported by graph.py/gate.py (I6), so it
@@ -841,7 +889,7 @@ guardrails:
                                   # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
   engine: "openai"               # Ollama exposes an OpenAI-compatible API
   base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
-  model: "qwen3.6:27b"           # keep in sync with models.local_llm.model
+  model: "qwen3.8:27b"           # keep in sync with models.local_llm.model
   nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
   metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
   block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."

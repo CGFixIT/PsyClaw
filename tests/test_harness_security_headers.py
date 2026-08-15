@@ -42,7 +42,7 @@ REQUIRED_HEADERS = {
 
 def _chat() -> HarnessChatClient:
     return SimpleNamespace(  # type: ignore[return-value]
-        model="qwen3.6:27b",
+        model="qwen3.8:27b",
         base_url="http://127.0.0.1:11434/v1",
         available=lambda: False,
         close=lambda: None,
@@ -112,7 +112,7 @@ def test_rejected_host_still_carries_the_headers(client):
 
 def test_unauthenticated_guarded_route_is_hardened(client):
     """A 401 is the most likely response an attacker sees; it must be hardened."""
-    resp = client.post("/api/model", json={"model": "qwen3.6:27b"})
+    resp = client.post("/api/model", json={"model": "qwen3.8:27b"})
     assert resp.status_code in (401, 403)
     assert resp.headers.get("x-content-type-options") == "nosniff"
     assert resp.headers.get("x-frame-options") == "DENY"

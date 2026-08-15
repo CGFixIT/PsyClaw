@@ -46,7 +46,7 @@ GUARDED = [
     ("post", "/api/memory/add", {"text": "prefer ruff"}),
     ("post", "/api/memory/forget", {"id": "deadbeef"}),
     ("post", "/api/memory/clear", None),
-    ("post", "/api/model", {"model": "qwen3.6:27b"}),
+    ("post", "/api/model", {"model": "qwen3.8:27b"}),
     ("post", "/api/web", {"enabled": False}),
     ("post", "/api/web/allow", {"url": "https://docs.python.org/"}),
     ("post", "/api/web/deny", {"url": "https://docs.python.org/"}),
@@ -87,13 +87,13 @@ OPEN = [
 def _chat() -> HarnessChatClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen3.6:27b",
+            "model": "qwen3.8:27b",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         })
 
     return HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen3.6:27b", transport=httpx.MockTransport(handler)
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.8:27b", transport=httpx.MockTransport(handler)
     )
 
 
@@ -176,6 +176,64 @@ def test_guarded_route_accepts_the_right_key(client, method, path, body):
 @pytest.mark.parametrize("path", OPEN)
 def test_open_route_needs_no_key(client, path):
     assert client.get(path).status_code == 200
+
+
+# --- security.api_key_optional bypass (config.yaml flag, default false) ----
+
+
+def _client_with_api_key_optional(cfg, monkeypatch, value: bool) -> TestClient:
+    """Build a harness TestClient against a config.yaml view where
+    security.api_key_optional is overridden to ``value``, leaving every other
+    key untouched (real repo config, not a synthetic one)."""
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = value
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    # Explicit loopback peer: starlette defaults to ("testclient", 50000), which
+    # _is_loopback_peer correctly rejects. The remote case is asserted below.
+    return TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 51234),
+    )
+
+
+@pytest.mark.parametrize(("method", "path", "body"), GUARDED)
+def test_api_key_optional_true_bypasses_every_guarded_route(cfg, monkeypatch, method, path, body):
+    """The flag covers the same 26-route `guarded` surface the coverage tests
+    above pin -- no Authorization header, no CYCLAW_API_KEY env var, still not
+    a 401. CSRF is a separate, independent check and still applies."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    c = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = _call(c, method, path, body, headers=_csrf(c))
+    assert resp.status_code != 401
+
+
+def test_api_key_optional_true_accepts_a_wrong_key_too(cfg, monkeypatch):
+    """Once bypassed, the dependency never inspects whatever token was sent."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    c = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = c.post(
+        "/api/soul", json={"enabled": True},
+        headers={"Authorization": "Bearer garbage", **_csrf(c)},
+    )
+    assert resp.status_code != 401
+
+
+def test_api_key_optional_false_matches_the_default(cfg, monkeypatch):
+    """Explicit false behaves exactly like the flag being absent (the
+    pre-existing fail-closed default) -- the regression this flag must not
+    introduce."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    c = _client_with_api_key_optional(cfg, monkeypatch, False)
+    resp = c.post("/api/soul", json={"enabled": True}, headers=_csrf(c))
+    assert resp.status_code == 401
 
 
 # --- fail-closed -----------------------------------------------------------
@@ -399,7 +457,7 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
 
     secret = "SECRET-ANSWER revenue target is 4.2M and the headcount freeze runs to Q4"
     session = Session(session_id="c11f67fd89ea", title="Quarterly plan",
-                      created_ts=0.0, model="qwen3.6:27b")
+                      created_ts=0.0, model="qwen3.8:27b")
     session.messages.append(Message(role="user", text="what is our Q3 revenue target?"))
     session.messages.append(Message(role="assistant", text=secret))
 
@@ -416,8 +474,90 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
     # summarize_json is the path the listing route really takes; it must agree.
     from_json = Session.summarize_json(json.loads(json.dumps({
         "session_id": "c11f67fd89ea", "title": "Quarterly plan", "created_ts": 0.0,
-        "model": "qwen3.6:27b",
+        "model": "qwen3.8:27b",
         "messages": [{"role": "user", "text": "q"}, {"role": "assistant", "text": secret}],
     })))
     assert secret not in json.dumps(from_json)
     assert from_json["message_count"] == 2
+
+
+def test_api_key_optional_does_not_reach_a_remote_peer(cfg, monkeypatch):
+    """The reported attack, end to end.
+
+    main() refuses a non-loopback bind, but `uvicorn harness.server:app --host
+    0.0.0.0` never calls main(). From there a LAN client can fetch the open
+    console page for this instance's CSRF token, forge Host: 127.0.0.1 past
+    TrustedHostMiddleware, and send no Origin/Sec-Fetch-Site at all (which
+    _enforce_same_origin allows on purpose, for curl). With api_key_optional
+    true, the peer check is the ONLY thing left standing in front of
+    /api/agent/run|push|publish and /api/keys -- so it is asserted here against
+    that full chain rather than against the dependency in isolation.
+    """
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = True
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    remote = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("10.0.0.50", 4321),
+    )
+    # The console page is open by design, so the token really is obtainable.
+    scraped = remote.app.state.csrf_token
+    assert remote.get("/").status_code == 200
+
+    resp = remote.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={"Host": "127.0.0.1", "X-CyClaw-CSRF": scraped},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "UNAUTHORIZED"
+
+
+def test_api_key_optional_still_serves_a_loopback_peer(cfg, monkeypatch):
+    """The supported local-operator case must keep working unchanged."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    local = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = local.post("/api/soul", json={"enabled": True}, headers=_csrf(local))
+    assert resp.status_code != 401
+
+
+def test_api_key_optional_is_denied_to_a_proxied_request(cfg, monkeypatch):
+    """A reverse proxy on this host defeats the peer check by itself.
+
+    The harness binds 127.0.0.1:8790; an operator fronting it with nginx on
+    0.0.0.0 gives every remote caller a loopback peer. Any forwarding header
+    therefore denies the bypass -- presence is the signal, the value is
+    attacker-controlled and never parsed.
+    """
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = True
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    proxied = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 4321),
+    )
+    resp = proxied.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={"X-Forwarded-For": "203.0.113.9", **_csrf(proxied)},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "UNAUTHORIZED"

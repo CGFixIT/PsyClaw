@@ -33,6 +33,7 @@ apply_telemetry_kill()
 # [tool.ruff.lint] per-file-ignores and setup.cfg's flake8 per-file-ignores,
 # matching gate.py's identical pattern for the identical reason.
 import hmac
+import ipaddress
 import logging
 import os
 import secrets
@@ -45,11 +46,13 @@ from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from math import ceil
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -86,13 +89,62 @@ from utils.ratelimit import RateLimiter
 
 logger = logging.getLogger("cyclaw.harness.server")
 
+# Own scheme instance rather than importing utils.auth's: that module's is a
+# private (non-`__all__`) module-level name, and this file already treats
+# utils.auth.require_api_key as the one thing it borrows from that module --
+# see the docstring on _require_api_key_or_optional below for why the check
+# itself still lives there, not here.
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+# Headers a reverse proxy adds when forwarding. Presence is the signal, not
+# value: a proxy on this host makes every remote caller present a loopback peer,
+# which would hand the api_key_optional bypass to anyone who can reach the proxy.
+_FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+
+def _looks_proxied(request: Request) -> bool:
+    """True when any reverse-proxy forwarding header is present."""
+    return any(header in request.headers for header in _FORWARDING_HEADERS)
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    """True when this request arrived from this machine.
+
+    Keyed on the socket peer rather than the Host header or the bind address,
+    because only the peer is outside the caller's control: TrustedHostMiddleware
+    admits a forged ``Host: 127.0.0.1``, and main()'s loopback check never runs
+    when the app is served directly via ``uvicorn harness.server:app``.
+
+    A missing ``client`` reads as NOT loopback -- this backs a security bypass,
+    so an unknown peer fails closed. Mirrors gate.py's helper of the same name;
+    duplicated rather than imported because harness/ must never import gate (I6,
+    enforced by tests/test_harness_isolation.py).
+    """
+    peer = request.client
+    if peer is None:
+        return False
+    host = peer.host or ""
+    if host == "localhost":  # DevSkim: ignore DS162092,DS137138 - loopback name by design
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 _HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
 _RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
-# /loop on a local 27b (qwen3.6:27b / Apple Silicon) must not replay the full
+# /loop on a local 27b (qwen3.8:27b / Apple Silicon) must not replay the full
 # 20-turn window: each completion is large and Ollama reserves max_tokens up
 # front. Eight prior turns is enough to steer without blowing num_ctx.
 _LOOP_HISTORY_TURNS = 8
@@ -255,7 +307,7 @@ def clip_history(messages: list[dict], max_chars: int) -> list[dict]:
 class GenerationGate:
     """At most one local-LLM generation at a time.
 
-    qwen3.6:27b on Apple Silicon is single-stream. A second concurrent chat
+    qwen3.8:27b on Apple Silicon is single-stream. A second concurrent chat
     (two tabs, jammed Enter, /loop + a typed line) queues behind Metal and
     looks like a hang. Non-blocking claim: the second caller gets 409
     instead of waiting minutes.
@@ -288,7 +340,7 @@ def _resolve_backend() -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
             provider="ollama", # Or LM studio - Default fallback label
             base_url="http://127.0.0.1:11434/v1",
-            model="qwen3.6:27b",
+            model="qwen3.8:27b",
             source="primary",
         )
     return resolve_local_backend(llm)
@@ -563,6 +615,46 @@ def create_app(
                 },
             )
 
+    def _require_api_key_or_optional(
+        request: Request,
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+    ) -> None:
+        """Skip the CYCLAW_API_KEY check when security.api_key_optional is true.
+
+        Mirrors gate.py's require_api_key: same config flag, same "checked
+        before the env var" ordering so opting in means "no key needed," not
+        "still refused when unset," and the same LOOPBACK-PEER requirement on
+        the bypass. Delegates to utils.auth.require_api_key for the actual
+        check -- that function stays untouched and always fail-closed when
+        called directly, which is what keeps test_matches_gate_auth_semantics's
+        parity assertion meaningful.
+
+        The peer requirement matters more here than in gate.py, because this
+        app's guarded set includes /api/agent/run|push|publish and /api/keys.
+        main() refuses a non-loopback bind, but `uvicorn harness.server:app
+        --host 0.0.0.0` never calls main(); GET / is deliberately open and
+        embeds this instance's CSRF token, and _enforce_same_origin allows a
+        header-less client on purpose. So without this, the whole guarded
+        surface would reduce to "fetch the console page, scrape the token,
+        forge Host: 127.0.0.1" for anyone who can route to the port.
+        TrustedHostMiddleware cannot close that: a Host header is
+        attacker-controlled, a socket peer is not.
+
+        Annotated[...] = None (not `= Depends(_bearer_scheme)` as the default
+        itself) for the same reason utils/auth.py's own require_api_key uses
+        it: a bare `= Depends(...)` default is WPS404 ("complex default
+        value") under this file's itemized (not blanket) WPS exemption list
+        in setup.cfg -- fixed here in code rather than adding a new grant.
+        """
+        bypass = (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True
+        # _enforce_same_origin already runs ahead of this in `guarded`, so the
+        # cross-site case gate.py had to newly defend is covered here by the
+        # existing dependency order -- and _enforce_csrf_token runs after,
+        # unconditionally. Only the peer and proxy conditions are this closure's.
+        if bypass and _is_loopback_peer(request) and not _looks_proxied(request):
+            return
+        require_api_key(credentials)
+
     # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
     # then origin, then auth, then CSRF. A wrong key against a spent budget must
     # return 429, not 401, or the limiter stops bounding key-guessing. CSRF runs
@@ -572,7 +664,7 @@ def create_app(
     guarded = [
         Depends(_enforce_rate_limit),
         Depends(_enforce_same_origin),
-        Depends(require_api_key),
+        Depends(_require_api_key_or_optional),
         Depends(_enforce_csrf_token),
     ]
 

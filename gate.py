@@ -26,6 +26,7 @@ import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Resolve all bundled resources relative to this file, not the current working
 # directory. When CyClaw is launched by double-clicking gate.py (Windows) the cwd
@@ -67,7 +68,7 @@ except PackageNotFoundError:
 
 import logging
 import yaml
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -97,6 +98,7 @@ from metrics import summarize_audit
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 def require_api_key(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ):
     # Fail-closed (PR #99 #4). Previously, when CYCLAW_API_KEY was unset the
@@ -104,6 +106,29 @@ def require_api_key(
     # /soul/* mutation endpoint unauthenticated. Now, if no key is configured the
     # endpoint is REFUSED rather than left open — no key is generated, logged, or
     # stored. Set CYCLAW_API_KEY to enable soul mutations.
+    #
+    # security.api_key_optional (default false) is the one deliberate escape
+    # hatch: an operator who explicitly opts in gets this dependency skipped
+    # entirely across every route it guards (soul/*, ops/*, memory/*,
+    # audit/summary). Checked first, before the env var, so opting in also
+    # means "no key needed" rather than "still refused when unset."
+    #
+    # The bypass additionally requires a LOOPBACK PEER, and that is the load-
+    # bearing half. _require_loopback_bind covers `python gate.py`, but nothing
+    # calls it when the app is served directly -- the shipped container's CMD is
+    # `uvicorn gate:app --host 0.0.0.0`, and any operator can run the same by
+    # hand. Keying the bypass off the socket's peer address instead of the bind
+    # makes it independent of how the process was launched: a remote caller
+    # never receives it, so the flag cannot silently open soul mutation or the
+    # /ops/* subprocess shims to a network. TrustedHostMiddleware is not a
+    # substitute -- a Host header is attacker-controlled, a peer address is not.
+    #
+    # The peer alone is not sufficient, and neither is peer+unproxied. See
+    # _api_key_bypass_allowed for the full set of conditions and what each one
+    # closes -- they are kept there rather than inline because every one of them
+    # was added in response to a distinct, verified bypass.
+    if _api_key_bypass_allowed(request):
+        return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=401,
@@ -933,6 +958,104 @@ register_memory_routes(
 _ALLOW_NON_LOOPBACK_ENV = "CYCLAW_ALLOW_NON_LOOPBACK_BIND"
 
 
+# Headers a reverse proxy adds when it forwards a request. Their PRESENCE is the
+# signal, not their value: a proxy on this host makes every remote caller look
+# like a loopback peer, so the peer check alone would hand the api_key_optional
+# bypass to the whole internet. The values are attacker-controlled and are
+# deliberately never parsed or trusted here -- only "did something forward this".
+_FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+
+def _looks_cross_site(request: Request) -> bool:
+    """True when a browser says this request came from another site.
+
+    CORS does NOT protect these routes. A bodyless cross-origin POST is a
+    "simple request": no preflight is sent, so it REACHES the handler and its
+    side effect happens; CORSMiddleware only withholds the response from the
+    attacker's script afterwards. Verified against the live app -- an
+    ``Origin: https://evil.example`` POST to /soul/reload returned 200 and
+    invoked personality.reload().
+
+    Until now the Bearer key WAS the CSRF defense for /soul/* and /ops/*: a page
+    cannot attach an Authorization header to a simple request, and adding one
+    forces a preflight the browser then blocks. api_key_optional removes that
+    key, so this check has to replace what it was implicitly providing.
+
+    Absent headers are ALLOWED, matching harness/server.py's
+    _enforce_same_origin: curl and PowerShell send neither, and a non-browser
+    client is not a CSRF vector. Every browser capable of mounting this attack
+    sends at least Origin on a cross-origin POST.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site not in {"same-origin", "none"}:
+        return True
+    origin = request.headers.get("origin")
+    if origin is not None:
+        hostname = urlparse(origin).hostname
+        return hostname is None or not _is_loopback_host(hostname)
+    return False
+
+
+def _api_key_bypass_allowed(request: Request) -> bool:
+    """Whether security.api_key_optional may skip the key for THIS request.
+
+    Every condition is necessary; each closes a hole the previous ones left:
+      * the flag is set at all;
+      * the socket peer is loopback -- a bind check cannot cover a directly
+        served app (the container's own CMD is `uvicorn gate:app --host 0.0.0.0`);
+      * no reverse-proxy forwarding header -- a proxy on this host makes every
+        remote caller present a loopback peer;
+      * not cross-site -- a page the operator visits is a loopback peer too, and
+        a CORS-simple POST executes before CORS withholds the response.
+    """
+    if not _api_key_gate_bypassed():
+        return False
+    if not _is_loopback_peer(request):
+        return False
+    if _looks_proxied(request):
+        return False
+    return not _looks_cross_site(request)
+
+
+def _looks_proxied(request: Request) -> bool:
+    """True when any reverse-proxy forwarding header is present."""
+    return any(header in request.headers for header in _FORWARDING_HEADERS)
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    """True when this request arrived from this machine.
+
+    Keyed on the socket peer, NOT on the Host header and NOT on the bind
+    address. Both alternatives fail here: a Host header is attacker-supplied
+    (TrustedHostMiddleware is a DNS-rebinding control, not authentication), and
+    the bind is unknown to a request handler -- ``_require_loopback_bind`` only
+    runs under ``main()``, which the container's ``uvicorn gate:app --host
+    0.0.0.0`` never calls.
+
+    On X-Forwarded-For: ``_serve`` passes ``proxy_headers=False``, so under the
+    documented entry point this is the real peer. When the app is served
+    directly, uvicorn's default ``forwarded_allow_ips="127.0.0.1"`` rewrites
+    ``scope["client"]`` from XFF only when the ACTUAL peer is already loopback
+    -- so a remote caller cannot spoof its way into looking local, and a
+    loopback caller spoofing a remote value only makes this stricter. An
+    operator who runs with ``--forwarded-allow-ips='*'`` has delegated peer
+    identity to their proxy by choice; that is outside what this can assert.
+
+    A missing ``client`` (an ASGI scope without one) reads as NOT loopback:
+    this backs a security bypass, so an unknown peer fails closed.
+    """
+    peer = request.client
+    if peer is None:
+        return False
+    return _is_loopback_host(peer.host or "")
+
+
 def _is_loopback_host(host: str) -> bool:
     """True if binding ``host`` reaches only this machine.
 
@@ -999,6 +1122,16 @@ def _auth_and_tls_enabled() -> bool:
     api_cfg = cfg.get("api") or {}
     tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
     return _flag_is_true(cfg.get("auth") or {}, "enabled") and _flag_is_true(tls_cfg, "enabled")
+
+
+def _api_key_gate_bypassed() -> bool:
+    """True when ``security.api_key_optional`` disables the CYCLAW_API_KEY gate.
+
+    Same literal-``True`` discipline as ``_flag_is_true`` above, and for the
+    same reason: this backs a bind-time security decision, so a quoted
+    ``"false"`` must not read as enabled.
+    """
+    return _flag_is_true(cfg.get("security") or {}, "api_key_optional")
 
 
 # gate_auth.register_auth_routes exports this dependency for Stage 3 to attach
@@ -1087,11 +1220,23 @@ def _require_loopback_bind(host: str) -> bool:
     capability instead means this route past loopback simply cannot open
     today, and opens by itself when the stage that makes it true ships.
 
+    (1) additionally requires that ``security.api_key_optional`` is NOT set.
+    That flag governs a different credential from the one this route checks:
+    ``_request_path_enforcement_active`` proves ``/query`` carries a session,
+    but ``api_key_optional: true`` simultaneously removes the CYCLAW_API_KEY
+    gate from ``/soul/*``, ``/ops/*``, ``/memory/*`` and ``/audit/summary``.
+    Without this clause the two flags compose into the exact hole the rest of
+    this docstring exists to prevent: a LAN bind admitted on the strength of
+    ``/query``'s session while soul mutation and the ``/ops/*`` subprocess
+    shims sit open to anything that can route to the port. config-guard's C13
+    warns on the same combination, but by this module's own standard above a
+    warning is not a control -- this is the control.
+
     Returns True when it is safe to proceed.
     """
     if _is_loopback_host(host):
         return True
-    if _auth_and_tls_enabled() and _request_path_enforcement_active():
+    if _auth_and_tls_enabled() and _request_path_enforcement_active() and not _api_key_gate_bypassed():
         logger.warning(
             "Binding %s — beyond loopback, allowed because auth.enabled and "
             "api.tls.enabled are both set and /query enforces a credential. "
@@ -1123,6 +1268,12 @@ def _require_loopback_bind(host: str) -> bool:
         "(Stage 3 attaches require_session_or_token only when auth.enabled is the\n"
         "literal boolean true). Both flags plus that attachment allow this bind\n"
         "with no override needed.\n"
+        "\n"
+        "That auth+TLS route is ALSO refused while security.api_key_optional is\n"
+        "true: that flag removes the CYCLAW_API_KEY gate from /soul/*, /ops/*,\n"
+        "/memory/* and /audit/summary, so a session on /query would not stop a\n"
+        "LAN caller reaching soul mutation or the /ops/* subprocess shims. Set\n"
+        "security.api_key_optional back to false to use that route.\n"
         f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
         "put your own authentication in front of it first.\n",
         file=sys.stderr,
