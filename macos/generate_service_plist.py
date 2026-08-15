@@ -209,25 +209,28 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  reason:         {args.reason.strip()}")
     print(f"  restart policy: crash-only (KeepAlive.SuccessfulExit=false), throttled to {args.throttle_sec}s")
     print()
-    if args.service == "gate" and args.config != str(_REPO_ROOT / "config.yaml"):
-        print("  ⚠️  WARNING: --config was passed, but gate.py always loads config.yaml from")
-        print(f"  the repo root, NOT from {args.config}. Verify config.yaml has the correct")
-        print("  port and settings before loading the plist. (Adding --config support to")
-        print("  gate.py would require code changes; for now, update config.yaml directly.)")
-        print()
+    _maybe_print_gate_config_mismatch(args)
     print("  This makes the service ALWAYS-ON: it survives logout/reboot and")
     print("  auto-restarts on crash. To stop it for good, use 'launchctl bootout'")
     print("  (not just 'launchctl stop', which a crash-restart plist may still")
     print("  relaunch depending on how the process actually exited).")
     print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
-    _maybe_print_harness_api_key_note(args)
     return 0
 
 
-def _maybe_print_harness_api_key_note(args: argparse.Namespace) -> None:
-    # Removed: harness/server.py does guard its routes with require_api_key,
-    # so --api-key-service is meaningful for harness. No warning needed.
-    pass
+def _maybe_print_gate_config_mismatch(args: argparse.Namespace) -> None:
+    # gate.py does not accept --config; it always loads config.yaml from the
+    # repo root (anchored via _BASE_DIR). --config only controls what port
+    # this generator *reports*, so an operator passing a non-default path
+    # would otherwise be told a port that the actual supervised process
+    # never binds to -- surface that gap loudly instead of silently.
+    if args.service != "gate" or args.config == str(_REPO_ROOT / "config.yaml"):
+        return
+    print("  ⚠️  WARNING: --config was passed, but gate.py always loads config.yaml from")
+    print(f"  the repo root, NOT from {args.config}. Verify config.yaml has the correct")
+    print("  port and settings before loading the plist. (Adding --config support to")
+    print("  gate.py would require code changes; for now, update config.yaml directly.)")
+    print()
 
 
 if __name__ == "__main__":
