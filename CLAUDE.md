@@ -658,7 +658,7 @@ it surfaces failures without blocking. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (128 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (140 `test_*.py` files, auto-collected by pytest).
 
 ---
 
