@@ -140,7 +140,12 @@ Refused on purpose: `localhost`, `127.0.0.1`, RFC1918, link-local,
 ## Operator API (loopback)
 
 Guarded routes require the same Bearer `CYCLAW_API_KEY` as other admin
-surfaces (`utils.auth.require_api_key`).
+surfaces (`utils.auth.require_api_key`). The separate `/api/auth/*` block
+below is different: it is the harness's own per-user login (Stage 6 of
+`docs/AUTHENTICATION_DESIGN.md`), gated by a `cyclaw_harness_session` cookie
++ CSRF token rather than the API key, and returns `503 AUTH_DISABLED` unless
+the shared `auth.enabled` config flag is `true`. The console's `/users`
+slash command drives it.
 
 | Method | Path | Notes |
 |---|---|---|
@@ -180,6 +185,14 @@ surfaces (`utils.auth.require_api_key`).
 | POST | `/api/agent/runs/{id}/publish` | Draft PR |
 | POST | `/api/agent/runs/{id}/discard` | Reclaim clone |
 | GET | `/api/harness/runs` | Local run list |
+| POST | `/api/auth/login` | Session login (sets `cyclaw_harness_session` cookie); `503` when harness auth is off |
+| POST | `/api/auth/logout` | Session logout |
+| GET | `/api/auth/whoami` | Current session's username + role |
+| GET | `/api/auth/users` | List accounts (admin/operator) |
+| POST | `/api/auth/users` | Create an account (admin/operator; operator cannot create an admin) |
+| POST | `/api/auth/users/{u}/password` | Reset a user's password |
+| POST | `/api/auth/users/{u}/role` | Set a user's role (admin only) |
+| DELETE | `/api/auth/users/{u}` | Delete an account (admin only) |
 
 ## Verify `/goal` + `/loop` + `/web`
 

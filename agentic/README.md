@@ -126,6 +126,8 @@ agentic:
       - "noxfile.py"
       - ".claude/"
       - ".codex/"
+      - "config.yaml"
+      - "CLAUDE.md"
     max_write_budget_bytes: 100000
     scan_code_shape: true
     max_handoff_chars: 200000
@@ -565,6 +567,7 @@ python -m agentic.fsconnect.cli move    --src ... --dst ... --reason ... --confi
 python -m agentic.fsconnect.cli delete  --path ... --reason ... --confirm   # trash; --purge needs allow_hard_delete
 python -m agentic.fsconnect.cli trash-empty / trash-restore / quota-status
 python -m agentic.fsconnect.cli trash-empty-plist   # Darwin-only: generates the launchd plist, never loads it
+python -m agentic.fsconnect.cli trash-empty-task     # Windows-only: generates the scheduled-task XML, never registers it
 python -m agentic.fsconnect.cli index   [--apply] [--reindex]
 python -m agentic.fsconnect.cli reveal
 python -m agentic.fsconnect.cli test

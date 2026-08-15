@@ -1,11 +1,22 @@
 # Dependency Currency — Bump Candidates Plan
 
-**Status:** Planning only — no version bumps applied. Deferred from PR #596
-(merged 2026-07-21), which added the `verify-deps` skill and ran its PyPI
-currency + CVE sweep across every pinned package. This doc records that
-sweep's findings for the packages with a real version gap and no known CVE,
-so a future session can work through them deliberately instead of
-re-researching from scratch.
+**Status:** Partially done — most Tier 1-3 bumps below have since landed
+without this doc being updated (verified 2026-08-15 against `constraints.txt`
+on current `main`): `ruff` is now `0.16.1` (past even the 0.15.22 target),
+`mypy` `2.3.0`, `langgraph` `1.2.9`, `langchain` `1.3.14`, `langchain-openai`
+`1.3.5`, `fastapi` `0.139.2`, `uvicorn` `0.51.0`, and `langchain-core`
+`1.5.0` — i.e. Tier 1 fully, Tier 2's langgraph/langchain/langchain-openai,
+and Tier 3's fastapi/uvicorn/langchain-core. **Still open:** `psycopg`
+(`3.2.13`, unchanged), `pgvector` (`0.4.2`, unchanged), and `websockets`
+(`15.0.1`, unchanged — per this doc's own caveat, gated on confirming
+`langgraph`/`langgraph-sdk` compatibility with 16.x first). No PR/commit in
+`git log -- constraints.txt` documents these bumps individually or updates
+this plan, so treat the version numbers in the tables below as historical
+(what was true 2026-07-21), not current — re-derive with `extract_pins.py`
+before acting on what's left. Originally deferred from PR #596 (merged
+2026-07-21), which added the `verify-deps` skill and ran its PyPI currency +
+CVE sweep across every pinned package. This doc records that sweep's
+findings for the packages with a real version gap and no known CVE.
 
 **Re-derive this list before starting work** — PyPI moves continuously and
 this data is a snapshot from 2026-07-21:

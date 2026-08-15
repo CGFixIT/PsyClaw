@@ -7,6 +7,7 @@ related:
   - docs/audits/SECURITY_REVIEW_STATUS.md
   - docs/SECCOMP_EBPF_HARDENING.md
   - deploy/falco/README.md
+  - docs/AUTHENTICATION_DESIGN.md
 ---
 
 # CyClaw Threat Model & Sandbox Scope
@@ -783,6 +784,81 @@ window remains between the check and the socket. The residual is accepted for
 this loopback, operator-allowlisted, default-off surface; a pinned-connect
 transport is the future fix and is **not** in this tree. Do not treat the
 pre-check as a connect-time pin.
+
+### Eleventh amendment — per-user RBAC lands on Stage 3's auth surface (Stage 6, PR #940, merged 2026-08-15)
+
+The ninth amendment above described Stage 3 (`require_session_or_token` on
+`/query`) as a binary gate: authenticated or not. That is no longer the whole
+picture. PR #940 landed Stage 6 of
+[`docs/AUTHENTICATION_DESIGN.md`](./AUTHENTICATION_DESIGN.md) alongside it:
+every account now carries a `role` of `admin`, `operator`, or `audit`
+(`utils/authn.py`'s `ROLES`), and role is enforced, not advisory.
+
+- **This is authorization on the same single-tenant corpus, not
+  multi-tenancy.** Every authenticated user — any role — still reaches the
+  same corpus, the same soul, and the same local model. §1's single-tenant
+  assumption is unchanged by this amendment.
+- **The `audit` role is explicitly denied `/query`.** `gate.py`'s
+  `_forbid_audit_query` (invoked from the `/query` handler) checks
+  `actor.role == "audit"` and refuses with `403 AUTH_ROLE_DENIED` before the
+  graph is ever invoked. `admin` and `operator` may query; `audit` may only
+  read (`GET /auth/audit/summary`, gated to `admin`/`audit`).
+  `operator` can manage non-admin users (create, disable/enable, reset
+  password) but cannot delete a user, set a role, or touch an admin account;
+  only `admin` can do those. Both checks live in `gate_auth.py`
+  (`_assert_can_create`, `_assert_can_touch`) and are re-checked per request,
+  not cached from the session.
+- **Last-admin protection is atomic, not check-then-act.** The guard against
+  deleting/disabling/demoting the sole remaining enabled admin is folded
+  directly into the SQL statement (`utils/authn_manager.py`'s
+  `last_admin_guard` clause), closing a TOCTOU window an external review
+  found in the first version of this change (PR #940 review findings 1/2/5,
+  landed in `a599c35`). The same fix also moved the `/query` 401 rejection
+  path inside the auth dependency so it is rate-limited and audited like any
+  other auth failure, rather than only after a downstream check.
+- **Shipped posture is unchanged.** `auth.enabled` still ships `false`; RBAC
+  only has an effect once an operator turns Stage 3 on. This amendment
+  documents a control that now exists in the code, not a change to the
+  shipped default.
+
+### Twelfth amendment — optional memory subsystem exists, ships fully disabled (`gate_memory.py` + `memory/`)
+
+A default-off facts/episodes store (SQLite + FTS5) now exists alongside the
+corpus. Every `memory:` key in `config.yaml` ships `false`
+(`memory.enabled` is the master switch; `facts`, `episodes`,
+`retrieval_fusion`, `propose_apply`, `export_html`, and `consolidation` each
+carry their own independent switch, also `false`). With shipped defaults,
+`/query` behavior is identical to a checkout with no `memory/` package at
+all — `memory/README.md` states this explicitly, and `gate_memory.py` lazy
+imports the `memory` package only inside a handler, never at module load, so
+an unenabled checkout never even imports it.
+
+- **Isolation matches the rest of the out-of-band layers.** `gate.py`,
+  `graph.py`, `mcp_hybrid_server.py`, and `retrieval/hybrid_search.py` carry
+  no top-level `import memory` (`tests/test_memory_isolation.py`). This is
+  the same I6 shape as `agentic/`/`sync`/`guardrails`, applied to a module
+  that is registered onto the app (like `gate_ops.py`/`gate_auth.py`) rather
+  than reached out-of-band.
+- **Every mutating route requires Bearer `CYCLAW_API_KEY` plus a non-empty
+  `reason`.** `/memory/propose`, `/memory/apply`, and `/memory/reject` all
+  route through `memory/policy.py::require_reason`; `/memory/apply`
+  additionally injection-scans the payload before writing, mirroring soul's
+  I5 write-path gate without overloading soul's own governance path.
+- **Read routes 404, not silently empty, when disabled.** `/memory/facts`,
+  `/memory/episodes`, `/memory/proposals`, and `GET /query/export/html`
+  return `404` while their governing switch is `false`; only
+  `/memory/status` always returns `200` with an `enabled` flag, so a probe
+  can distinguish "off" from "misconfigured."
+- **Privacy default inside the feature itself.** Even if `episodes.enabled`
+  were turned on, `episodes.store_raw_query` ships `false` — episodes record
+  a query hash, not raw text, by the same convention `utils/logger.py` uses
+  for the audit log. `consolidation.enabled` is a stub wired to always
+  no-op regardless of its own flag; `config.yaml` says it "must stay false
+  in v1," which is a documentation intent, not a code-enforced ceiling.
+- **Failures never fail `/query`.** The memory package's own contract
+  (`memory/README.md`) states retrieval-fusion and episode-staging hooks are
+  lazy and non-fatal — this amendment does not independently re-verify that
+  claim beyond confirming the shipped switches are `false`.
 
 ---
 

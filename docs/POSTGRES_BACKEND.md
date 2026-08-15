@@ -11,7 +11,7 @@ Three independent surfaces can use Postgres; each is off unless you configure a 
 | Surface | Default | Enable with | Tables / objects |
 |---|---|---|---|
 | Soul / personality DB | SQLite (`data/personality/cyclaw_soul.db`) | `CYCLAW_DB_URL` or `personality.database_url` | `soul_versions`, `interactions` |
-| Rate-limiter persistence | in-memory | `api.rate_limit.database_url`, `CYCLAW_RATELIMIT_DB_URL`, or `CYCLAW_DB_URL` | `rate_hits` |
+| Rate-limiter persistence | in-memory | `api.rate_limit.database_url` or `CYCLAW_RATELIMIT_DB_URL` (deliberately does **not** fall back to `CYCLAW_DB_URL` — see `gate.py`) | `rate_hits` |
 | Vector store (pgvector) | ChromaDB | `indexing.vector_backend: pgvector` + `indexing.database_url` / `CYCLAW_VECTOR_DB_URL` / `CYCLAW_DB_URL` | `kb_chunks` (+ HNSW index) |
 
 > The external `agentic/sqlconnect/` connector is a *separate* feature (read-only
@@ -31,13 +31,19 @@ pip install 'cyclaw[pgvector]'   # also the pgvector vector backend
 
 ## Enable
 
-One Postgres can serve all three surfaces. The simplest setup is a single
-`CYCLAW_DB_URL`; each surface can override with its own DSN if you prefer isolation.
+One Postgres can serve all three surfaces, but `CYCLAW_DB_URL` alone only reaches
+two of them: the soul DB and the pgvector store both fall back to it. The
+rate limiter deliberately does **not** — it needs its own explicit
+`CYCLAW_RATELIMIT_DB_URL` (or `api.rate_limit.database_url`), by design, so
+pointing `CYCLAW_DB_URL` at the soul database doesn't silently opt
+rate-limiting into the same Postgres too.
 
 ```bash
 export CYCLAW_DB_URL="postgresql://cyclaw:***@db.internal:5432/cyclaw?sslmode=verify-full"
 # vector store also needs the config flag:
 #   indexing.vector_backend: "pgvector"
+# rate limiter needs its own explicit DSN if you want it persisted too:
+#   export CYCLAW_RATELIMIT_DB_URL="postgresql://cyclaw:***@db.internal:5432/cyclaw"
 ```
 
 Then build the index (pgvector) / start the server as usual:

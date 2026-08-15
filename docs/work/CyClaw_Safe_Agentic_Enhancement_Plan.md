@@ -18,6 +18,11 @@ Two capabilities, both off by default:
 A **write scaffold** exists only as a **disabled, stubbed** module: its gate is the
 out-of-band analogue of CyClaw's triple-gate, and v0.1 physically never executes a
 write (`EXECUTION_ENABLED = False`; the executor raises `NotImplementedError`).
+**[Status as of 2026-08-15: superseded.]** `EXECUTION_ENABLED` was armed
+(flipped to `True`) 2026-08-07 and `execute_write` is now implemented for one
+operation (`pr_create`, draft-only) — see the roadmap item 3 status
+correction below for the current gate chain. This paragraph is preserved as
+the accurate description of v0.1 at the time this plan was written.
 
 ## Hard constraints (non-negotiable)
 - No invariant weakened. Out-of-band preferred. Human approval on anything that
@@ -84,12 +89,23 @@ behind the same `agentic.enabled` + mode flags), accepting the extra SCA surface
    2026-08-02]: shipped, but still disarmed.** This became a materially larger
    effort than this stub envisioned: a plan → patch → verify → human-decides →
    commit loop (`agentic/real_repo_loop.py`) against a jailed real clone, backed
-   by a sandboxed verification layer (`agentic/executor/`). `EXECUTION_ENABLED`
-   remains hardcoded `False` in `agentic/writer.py` — consistent with this
-   plan's own precondition that arming needed explicit sign-off first.
+   by a sandboxed verification layer (`agentic/executor/`). **[Status correction
+   2026-08-15]: subsequently armed.** `EXECUTION_ENABLED` was flipped to `True`
+   on 2026-08-07 per the operator-signed checklist in
+   `docs/agentic/GITHUB_WRITE_ENABLEMENT.md` — again consistent with this
+   plan's own precondition that arming needed explicit sign-off first, which it
+   got. `execute_write` is now live for exactly one operation (`pr_create`,
+   always `--draft`); `pr_comment`/`issue_comment` remain plan-only. The write
+   is still held by `agentic.enabled` (ships `false`), `mode`, `writes_enabled`,
+   a per-call human `reason`, and `confirm` — the flag alone does not write.
 4. Optional: surface registry skills to the operator tooling (still read-only at
    runtime). Still open as a discrete deliverable as of 2026-08-02 — no
-   dedicated doc or module claims this was done as specified.
+   dedicated doc or module claims this was done as specified. **[Status
+   correction 2026-08-15]: shipped.** `harness/registry_view.py` and
+   `harness/skills_view.py` now surface the governed `SkillRegistry`
+   (`data/agentic/skills_registry.json`) read-only through the harness console
+   (`GET /api/registry`, the `/skills` panel) — mutations still only reachable
+   via the `agentic` CLI's propose/apply commands.
 
 ## Risks & mitigations
 - *Scope creep into writes* → executor unimplemented; flag-flip is insufficient.
@@ -100,8 +116,10 @@ behind the same `agentic.enabled` + mode flags), accepting the extra SCA surface
 ## Invariant Preservation Checklist (filled honestly)
 - **RAG-first unconditional entry:** PASS — no graph entry added.
 - **Topology = Policy (no LLM routing):** PASS — CLI-only, deterministic; no edges.
-- **Triple-Gated External + user-confirmed:** PASS — writes need mode+flag+reason+confirm
-  and still only dry-run; reads are local metadata, off by default.
+- **Triple-Gated External + user-confirmed:** PASS — writes need mode+flag+reason+confirm;
+  `plan_write` remains dry-run-only, and `execute_write` (armed 2026-08-07 for
+  `pr_create` only, see item 3 above) re-runs the full gate chain itself before
+  ever executing. Reads are local metadata, off by default.
 - **Audit Convergence on every path:** PASS — every read/refusal/registry op audits.
 - **Soul Governance (human reason + atomic/propose-apply):** PASS — registry mirrors it.
 - **Out-of-band isolation (no request-path coupling):** PASS — enforced **and
