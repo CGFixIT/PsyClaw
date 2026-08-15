@@ -149,11 +149,15 @@ slash command drives it.
 
 `config.yaml`'s `security.api_key_optional` (default `false`, shared with
 `gate.py`) can remove the `CYCLAW_API_KEY` requirement from every guarded
-route below — including the agent run/push/publish routes — for any caller
-that reaches `127.0.0.1:8790` (or a LAN address, if `security.allowed_hosts`
-carries one). It never touches the `/api/auth/*` session system above. See
-`config-guard`'s C13 check and the main README's "API Key Setup" section
-before enabling it.
+route below — including the agent run/push/publish routes — but **only for a
+request whose socket peer is loopback**. A LAN client gets 401 without a valid
+key regardless of what `security.allowed_hosts` contains: that list validates
+the `Host` header on requests that already arrived and opens no listening
+socket, and a `Host` header is attacker-supplied anyway. The peer check is
+also why this holds under `uvicorn harness.server:app --host 0.0.0.0`, which
+never runs `main()`'s loopback guard. It never touches the `/api/auth/*`
+session system above. See the main README's "API Key Setup" section before
+enabling it.
 
 | Method | Path | Notes |
 |---|---|---|

@@ -123,24 +123,26 @@ Every route marked **API key** above — plus the harness console's 26
 `guarded` routes (`harness/server.py`, including `/api/agent/run`/`push`/
 `publish`) — is gated by `require_api_key` (two independent implementations,
 one per app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
-`security.api_key_optional` (default `false`) is the one deliberate bypass:
-set it `true` and every one of those routes stops checking `CYCLAW_API_KEY`
-entirely, on both apps, for any caller that can reach the bound host/port —
-not just localhost. It does **not** touch the separate session/RBAC
-`/auth/*` system below, which stays governed by `auth.enabled` regardless.
-`config-guard`'s C13 check warns (does not fail) when this flag is `true`
-alongside a non-loopback `api.host` or a LAN entry in `security.allowed_hosts`.
-Two hard controls back it. **Per-request:** the bypass applies only to a
-**loopback peer** — a remote caller always needs the real key, on both apps.
-That is the durable one, because it holds regardless of how the process was
-launched, including `uvicorn gate:app --host 0.0.0.0` (the container's own
-`CMD`) and `uvicorn harness.server:app`, neither of which runs a bind guard.
-It is keyed on the socket peer, never the `Host` header — `TrustedHostMiddleware`
-is a DNS-rebinding control, not authentication. **At bind:** `gate.py`'s
-`_require_loopback_bind` refuses a non-loopback `api.host` while the flag is
-`true`, including via the auth+TLS route past loopback. The
-`CYCLAW_ALLOW_NON_LOOPBACK_BIND` env override still outranks the bind guard
-(explicit "I front this with my own auth"), but never the peer check.
+`security.api_key_optional` (default `false`) is the one deliberate bypass. It
+does **not** touch the separate session/RBAC `/auth/*` system below, which
+stays governed by `auth.enabled` regardless. Two controls bound it:
+
+**Per-request (the primary one):** the bypass is granted only when the request's
+**socket peer is loopback** — a remote caller always needs the real key, on both
+apps. It holds regardless of how the process was launched, including
+`uvicorn gate:app --host 0.0.0.0` (the container's own `CMD`) and
+`uvicorn harness.server:app`, neither of which runs a bind guard. Keyed on the
+peer, never the `Host` header (`TrustedHostMiddleware` is a DNS-rebinding
+control, not authentication) and never `security.allowed_hosts`/`allowed_origins`
+(those filter headers on requests that already arrived and open no socket).
+
+**At bind (defence in depth):** `gate.py`'s `_require_loopback_bind` refuses a
+non-loopback `api.host` while the flag is `true`, including via the auth+TLS
+route past loopback. `config-guard`'s C13 warns (does not fail) on that same
+pair. `CYCLAW_ALLOW_NON_LOOPBACK_BIND` still outranks the bind guard (explicit
+"I front this with my own auth"), but never the peer check. Note the flag is
+inert under Docker: NAT rewrites the source, so the peer is the bridge gateway
+and the routes stay key-gated — set `CYCLAW_API_KEY` in the container.
 
 The original three `/auth/*` endpoints (`/auth/login`, `/auth/logout`,
 `/auth/whoami`) were Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
@@ -711,7 +713,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | Skill | Type | Purpose | Runs pre-install? |
 |---|---|---|---|
 | `/invariant-guard` | check | Static-assert the six invariants + guards against a diff | Yes (stdlib) |
-| `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture, `api_key_optional` vs. LAN exposure) | Needs PyYAML |
+| `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture, `api_key_optional` vs. the bind address) | Needs PyYAML |
 | `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints + environment.yml (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
 | `/verify-deps` | check | Extends dep-guard: adds the requirements.txt cross-check dep-guard skips, a dry-run of each install surface's actual command, and a PyPI currency + CVE sweep. Reports only — never auto-bumps a runtime pin | extract_pins.py yes (stdlib); currency sweep needs network |
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
