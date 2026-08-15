@@ -905,7 +905,21 @@ Two controls bound it, and the first is the load-bearing one:
    `gate._serve` passes `proxy_headers=False`, and uvicorn's default
    `forwarded_allow_ips="127.0.0.1"` rewrites `scope["client"]` only when the
    real peer is already loopback.
-2. **Bind-time refusal, defence in depth.** `_require_loopback_bind` refuses a
+2. **Not cross-site, per request.** CORS does not protect the API-key routes:
+   a bodyless cross-origin POST is a CORS-*simple* request, so it reaches the
+   handler and its side effect happens before `CORSMiddleware` withholds the
+   response. The Bearer key was previously doing CSRF duty implicitly — a page
+   cannot attach an `Authorization` header to a simple request without forcing
+   a preflight the browser blocks — so removing the key removed that defense
+   with nothing behind it. Verified exploitable before the fix: an
+   `Origin: https://evil.example` POST to `/soul/reload` returned 200 and ran
+   `personality.reload()`. The bypass is now refused for any request whose
+   `Origin` is non-loopback or whose `Sec-Fetch-Site` is not `same-origin`/
+   `none`. Header-less clients (curl, PowerShell) keep the bypass — they are
+   not CSRF vectors — matching `harness/server.py`'s `_enforce_same_origin`,
+   which already covered the harness for this.
+
+3. **Bind-time refusal, defence in depth.** `_require_loopback_bind` refuses a
    non-loopback `api.host` while the flag is true, including via the auth+TLS
    route past loopback — that route proves `/query` carries a session, which
    says nothing about the API-key routes this flag opens.

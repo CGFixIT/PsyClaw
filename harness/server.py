@@ -647,6 +647,10 @@ def create_app(
         in setup.cfg -- fixed here in code rather than adding a new grant.
         """
         bypass = (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True
+        # _enforce_same_origin already runs ahead of this in `guarded`, so the
+        # cross-site case gate.py had to newly defend is covered here by the
+        # existing dependency order -- and _enforce_csrf_token runs after,
+        # unconditionally. Only the peer and proxy conditions are this closure's.
         if bypass and _is_loopback_peer(request) and not _looks_proxied(request):
             return
         require_api_key(credentials)

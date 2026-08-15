@@ -26,6 +26,7 @@ import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 # Resolve all bundled resources relative to this file, not the current working
 # directory. When CyClaw is launched by double-clicking gate.py (Windows) the cwd
@@ -122,14 +123,11 @@ def require_api_key(
     # /ops/* subprocess shims to a network. TrustedHostMiddleware is not a
     # substitute -- a Host header is attacker-controlled, a peer address is not.
     #
-    # The peer alone is still not sufficient: a reverse proxy ON THIS HOST (a
-    # deployment _require_loopback_bind's own docstring explicitly anticipates)
-    # terminates the remote connection and opens its own from 127.0.0.1, so every
-    # internet caller would present a loopback peer. _serve sets
-    # proxy_headers=False, so the real client is not recoverable from XFF either.
-    # Hence: no forwarding headers may be present. Their presence is the signal,
-    # not their value -- the values are attacker-controlled and never parsed.
-    if _api_key_gate_bypassed() and _is_loopback_peer(request) and not _looks_proxied(request):
+    # The peer alone is not sufficient, and neither is peer+unproxied. See
+    # _api_key_bypass_allowed for the full set of conditions and what each one
+    # closes -- they are kept there rather than inline because every one of them
+    # was added in response to a distinct, verified bypass.
+    if _api_key_bypass_allowed(request):
         return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
@@ -972,6 +970,57 @@ _FORWARDING_HEADERS = (
     "x-real-ip",
     "forwarded",
 )
+
+
+def _looks_cross_site(request: Request) -> bool:
+    """True when a browser says this request came from another site.
+
+    CORS does NOT protect these routes. A bodyless cross-origin POST is a
+    "simple request": no preflight is sent, so it REACHES the handler and its
+    side effect happens; CORSMiddleware only withholds the response from the
+    attacker's script afterwards. Verified against the live app -- an
+    ``Origin: https://evil.example`` POST to /soul/reload returned 200 and
+    invoked personality.reload().
+
+    Until now the Bearer key WAS the CSRF defense for /soul/* and /ops/*: a page
+    cannot attach an Authorization header to a simple request, and adding one
+    forces a preflight the browser then blocks. api_key_optional removes that
+    key, so this check has to replace what it was implicitly providing.
+
+    Absent headers are ALLOWED, matching harness/server.py's
+    _enforce_same_origin: curl and PowerShell send neither, and a non-browser
+    client is not a CSRF vector. Every browser capable of mounting this attack
+    sends at least Origin on a cross-origin POST.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site not in {"same-origin", "none"}:
+        return True
+    origin = request.headers.get("origin")
+    if origin is not None:
+        hostname = urlparse(origin).hostname
+        return hostname is None or not _is_loopback_host(hostname)
+    return False
+
+
+def _api_key_bypass_allowed(request: Request) -> bool:
+    """Whether security.api_key_optional may skip the key for THIS request.
+
+    Every condition is necessary; each closes a hole the previous ones left:
+      * the flag is set at all;
+      * the socket peer is loopback -- a bind check cannot cover a directly
+        served app (the container's own CMD is `uvicorn gate:app --host 0.0.0.0`);
+      * no reverse-proxy forwarding header -- a proxy on this host makes every
+        remote caller present a loopback peer;
+      * not cross-site -- a page the operator visits is a loopback peer too, and
+        a CORS-simple POST executes before CORS withholds the response.
+    """
+    if not _api_key_gate_bypassed():
+        return False
+    if not _is_loopback_peer(request):
+        return False
+    if _looks_proxied(request):
+        return False
+    return not _looks_cross_site(request)
 
 
 def _looks_proxied(request: Request) -> bool:

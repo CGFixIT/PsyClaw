@@ -1195,6 +1195,54 @@ class TestApiKeyOptionalPeer:
         direct = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
         assert direct.get("/soul").status_code == 200
 
+    @pytest.mark.parametrize("headers", [
+        {"Origin": "https://evil.example"},
+        {"Origin": "http://attacker.test:8080"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+    ])
+    def test_a_cross_site_request_is_refused_the_bypass(self, client, monkeypatch, headers):
+        """CORS does not protect these routes, so the bypass must not trust them.
+
+        A bodyless cross-origin POST is a CORS-"simple" request: no preflight is
+        sent, so it REACHES the handler and its side effect happens; CORS only
+        withholds the response from the attacker's script afterwards. Verified
+        against the live app before this fix -- an Origin: https://evil.example
+        POST to /soul/reload returned 200 and invoked personality.reload().
+
+        The Bearer key was doing this job implicitly: a page cannot attach an
+        Authorization header to a simple request, and adding one forces a
+        preflight the browser blocks. api_key_optional removes the key, so it
+        has to replace what the key was implicitly providing.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        browser = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert browser.post("/soul/reload", headers=headers).status_code == 401
+
+    @pytest.mark.parametrize("headers", [
+        {},
+        {"Sec-Fetch-Site": "same-origin"},
+        {"Sec-Fetch-Site": "none"},
+        {"Origin": "http://127.0.0.1:8787"},
+        {"Origin": "http://localhost:8787"},
+    ])
+    def test_same_site_and_header_less_callers_keep_the_bypass(
+        self, client, monkeypatch, headers,
+    ):
+        """The console itself and non-browser clients must still work.
+
+        Absent headers are allowed on purpose (curl/PowerShell/the sandbox
+        verifier send neither and are not CSRF vectors) -- the same carve-out
+        harness/server.py's _enforce_same_origin documents.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        caller = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert caller.get("/soul", headers=headers).status_code == 200
+
     def test_missing_peer_fails_closed(self):
         """An ASGI scope without a client reads as not-loopback. This backs a
         security bypass, so an unknown peer must not receive it."""
