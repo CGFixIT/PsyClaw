@@ -16,10 +16,13 @@ resolved at process-start time by ``powershell/CyClaw-CredMan-Env.ps1``.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
+
+_CREDMAN_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 CREDMAN_WRAPPER_RELATIVE_PATH = "powershell/CyClaw-CredMan-Env.ps1"
 
@@ -84,6 +87,8 @@ def cmd_path(task_name: str) -> Path:
 
 def bat_quote(s: str) -> str:
     """Quote a token for a ``.cmd`` line (spaces + doubled ``%``)."""
+    if "\r" in s or "\n" in s:
+        raise ValueError("token must not contain CR/LF")
     return '"' + s.replace("%", "%%") + '"'
 
 
@@ -123,6 +128,10 @@ def wrap_with_credman_secrets(
     ps = powershell or powershell_executable()
     result = list(argv)
     for target, var_name in reversed(secrets):
+        if not _CREDMAN_TOKEN_RE.fullmatch(target):
+            raise ValueError(f"CredMan target must match {_CREDMAN_TOKEN_RE.pattern}: {target!r}")
+        if not _CREDMAN_TOKEN_RE.fullmatch(var_name):
+            raise ValueError(f"CredMan var_name must match {_CREDMAN_TOKEN_RE.pattern}: {var_name!r}")
         result = [
             ps,
             "-NoProfile",
@@ -301,7 +310,7 @@ def write_generated_task(
     write_cmd_launcher(launcher, argv)
     document = build_task_xml(
         task_name=task_name,
-        command="cmd.exe",
+        command=os.environ.get("COMSPEC", "cmd.exe"),
         arguments=f"/c {bat_quote(str(launcher))}",
         working_directory=working_directory,
         triggers=triggers,

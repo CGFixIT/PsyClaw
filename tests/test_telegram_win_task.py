@@ -64,6 +64,11 @@ def test_health_task_rejects_bad_chat_and_interval(tmp_path: Path) -> None:
     assert _run(cp, tmp_path / "home", "health-task", "--interval-sec", "0") == EXIT_FAIL
 
 
+def test_health_task_empty_allowlist_is_env_not_exception(tmp_path: Path) -> None:
+    cp = _write(tmp_path, {"enabled": True, "allowed_chat_ids": []})
+    assert _run(cp, tmp_path / "home", "health-task") == EXIT_ENV
+
+
 def test_health_task_embeds_chat_not_token(tmp_path: Path) -> None:
     cp = _write(tmp_path, {"enabled": True, "allowed_chat_ids": ["111"]})
     home = tmp_path / "home"

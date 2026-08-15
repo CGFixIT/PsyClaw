@@ -76,3 +76,23 @@ def test_interval_trigger_pt_seconds() -> None:
 
 def test_bat_quote_doubles_percent() -> None:
     assert win_schtasks.bat_quote(r"C:\Users\%TEMP%\x") == r'"C:\Users\%%TEMP%%\x"'
+
+
+def test_bat_quote_rejects_newline() -> None:
+    try:
+        win_schtasks.bat_quote("foo\nbar")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_wrap_with_credman_secrets_rejects_bad_target() -> None:
+    try:
+        win_schtasks.wrap_with_credman_secrets(
+            ["python", "-m", "x"],
+            [("bad target", "TELEGRAM_BOT_TOKEN")],
+            wrapper_path="wrapper.ps1",
+        )
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")

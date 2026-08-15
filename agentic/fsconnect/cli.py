@@ -65,6 +65,7 @@ EXIT_REFUSED = 4
 _TRASH_LAUNCHD_LABEL = "com.cgfixit.cyclaw.fsconnect-trash"
 _TRASH_TASK_NAME = "CyClaw fsconnect-trash"
 _DEFAULT_TRASH_REASON = "weekly launchd retention purge"
+_DEFAULT_TRASH_REASON_WIN = "weekly scheduled-task retention purge"
 
 
 def _heading(text: str) -> None:
@@ -600,7 +601,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ttask.add_argument("--weekday", type=int, default=1, help="0-7, 0/7=Sunday (default: 1, Monday).")
     p_ttask.add_argument("--hour", type=int, default=3, help="0-23 (default: 3).")
     p_ttask.add_argument("--minute", type=int, default=0, help="0-59 (default: 0).")
-    p_ttask.add_argument("--reason", default=_DEFAULT_TRASH_REASON, help="Reason baked into the scheduled command.")
+    p_ttask.add_argument("--reason", default=_DEFAULT_TRASH_REASON_WIN, help="Reason baked into the scheduled command.")
     p_ttask.set_defaults(func=cmd_trash_empty_task)
 
     p_test = sub.add_parser("test", help="Run the pre-flight self-test.")

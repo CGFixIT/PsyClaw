@@ -482,6 +482,9 @@ def cmd_health_task(args: argparse.Namespace) -> int:
     if not cfg.enabled:
         return _disabled_notice()
 
+    if not args.chat_id and not cfg.allowed_chat_ids:
+        _err("telegram.allowed_chat_ids is empty; pass --chat-id")
+        return EXIT_ENV
     chat_id = args.chat_id or cfg.allowed_chat_ids[0]
     if not cfg.is_chat_allowed(chat_id):
         _err(f"chat_id {chat_id} is not in telegram.allowed_chat_ids")
