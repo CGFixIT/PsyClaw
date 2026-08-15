@@ -33,6 +33,28 @@ logger = logging.getLogger(__name__)
 TRASH_DIR = ".cyclaw-trash"
 META_SUFFIX = ".meta.json"
 _MAX_META_BYTES = 64 * 1024  # a sidecar is tiny; cap the read defensively
+# pathsafe._win_error reports these as details["winerror"], never "errno".
+# 2 = ERROR_FILE_NOT_FOUND, 3 = ERROR_PATH_NOT_FOUND (fresh-install absence).
+_WIN_NOT_FOUND = frozenset({2, 3})
+
+
+def _is_absent_trash_error(exc: BaseException) -> bool:
+    """True when list_dir failed because ``.cyclaw-trash`` does not exist yet.
+
+    POSIX FsPathError carries details['errno'] == ENOENT. Windows _win_error
+    carries details['winerror'] in {2, 3} and no errno — treating only ENOENT
+    as silent made every fresh-install list_entries warn on Windows (CI).
+    """
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        details = {}
+    errno_ = details.get("errno")
+    if errno_ is None:
+        errno_ = getattr(exc, "errno", None)
+    winerror = details.get("winerror")
+    if winerror is None:
+        winerror = getattr(exc, "winerror", None)
+    return errno_ == errno.ENOENT or winerror in _WIN_NOT_FOUND
 
 
 def _stamp(now: datetime) -> str:
@@ -155,13 +177,20 @@ def list_entries(roots: ScopedRoots, root: str | None) -> list[TrashEntry]:
         # and expired() then finds nothing to purge, so retention silently
         # stops. Log it so the loss is observable -- the same reason the
         # unreadable-sidecar handler below was upgraded from a silent skip.
-        # Only the exception type and errno are logged; the message can carry a
-        # resolved path.
-        errno_ = getattr(exc, "details", {}).get("errno")
-        if errno_ != errno.ENOENT:
+        # Only the exception type and errno/winerror are logged; the message
+        # can carry a resolved path. POSIX absence is details['errno']==ENOENT;
+        # Windows _win_error uses details['winerror'] in {2, 3} instead.
+        if not _is_absent_trash_error(exc):
+            details = getattr(exc, "details", None)
+            if not isinstance(details, dict):
+                details = {}
             logger.warning(
-                "Cannot list trash dir %r in root %r (%s, errno=%r); reporting empty trash",
-                TRASH_DIR, root, type(exc).__name__, errno_,
+                "Cannot list trash dir %r in root %r (%s, errno=%r, winerror=%r); reporting empty trash",
+                TRASH_DIR,
+                root,
+                type(exc).__name__,
+                details.get("errno", getattr(exc, "errno", None)),
+                details.get("winerror", getattr(exc, "winerror", None)),
             )
         return []
     out: list[TrashEntry] = []

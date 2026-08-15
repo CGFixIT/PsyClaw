@@ -7,13 +7,16 @@ find_entry lookup contract. No filesystem needed for the helper math.
 
 from __future__ import annotations
 
+import errno
 import json
+import logging
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
 from agentic.fsconnect import trash
-from utils.errors import FsConnectRuntimeError
+from utils.errors import FsConnectRuntimeError, FsPathError
 
 NOW = datetime(2026, 7, 9, 14, 55, 1, tzinfo=UTC)
 
@@ -115,6 +118,46 @@ def test_parse_meta_survives_a_sidecar_with_no_name_field():
     parsed = trash._parse_meta(f"{entry.name}{trash.META_SUFFIX}", json.dumps(raw).encode())
     assert parsed is not None
     assert parsed.name == entry.name
+
+
+def test_list_entries_treats_posix_enoent_and_win_not_found_as_absent(caplog):
+    """Fresh-install absence must stay silent on both POSIX errno and Win32 codes.
+
+    pathsafe.list_dir raises FsPathError(details={'errno': ENOENT}) on POSIX and
+    FsPathError(details={'winerror': 2 or 3}) on Windows. Only-ENOENT silence
+    made every first trash-list warn on Windows CI.
+    """
+    roots = MagicMock()
+    roots.list_dir.side_effect = FsPathError("missing", details={"errno": errno.ENOENT})
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+    roots.list_dir.side_effect = FsPathError("missing", details={"winerror": 2})
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+    roots.list_dir.side_effect = FsPathError("missing", details={"winerror": 3})
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+
+def test_list_entries_warns_on_non_absent_and_survives_none_details(caplog):
+    roots = MagicMock()
+    roots.list_dir.side_effect = FsPathError("denied", details={"winerror": 5})
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert "reporting empty trash" in caplog.text
+
+    roots.list_dir.side_effect = FsPathError("odd", details=None)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert "reporting empty trash" in caplog.text
 
 
 def test_find_entry_missing_raises():
