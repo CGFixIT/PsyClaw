@@ -56,6 +56,5 @@ Canonical table: [`docs/NeMo/README.md`](../docs/NeMo/README.md).
 | Output grounding (`local_llm` only) | Shipped |
 | Soul-leak output rail | **Not fully built** — listed as a candidate in config only |
 
-`guardrails/__init__.py` still says “future wiring / never imported by
-graph.py”. That comment is stale. This README follows `graph.py` +
-`utils/guardrail_bridge.py`.
+`guardrail_safety_node` in `integration.py` is an unused example helper, not
+the live graph path.

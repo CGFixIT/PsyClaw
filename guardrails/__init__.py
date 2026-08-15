@@ -1,16 +1,18 @@
-"""CyClaw NeMo Guardrails layer -- out-of-band, opt-in, soul-aware. [v0.1 skeleton]
+"""CyClaw NeMo Guardrails layer -- opt-in, soul-aware, defense-in-depth.
 
-A defense-in-depth content-safety layer that complements (never replaces) the
-LangGraph topology. The graph keeps owning high-level routing/policy; these rails
-add finer-grained input sanitization, RAG grounding / hallucination checks, and
-custom topical rails tailored to CyClaw's soul / personality boundaries.
+A content-safety layer that complements (never replaces) the LangGraph
+topology. The graph keeps owning routing/policy; these rails add input
+sanitization and output grounding on the local-LLM path.
 
-STATUS: early skeleton. It is strictly out-of-band -- run via
-``python -m guardrails.cli`` and NEVER imported by gate.py, graph.py, or
-mcp_hybrid_server.py. That isolation preserves CyClaw's five security invariants
-by construction. The live wiring plan (a VISIBLE graph node + conditional edge,
-so topology=policy is never violated by hidden middleware) is documented in
-``docs/NeMo/later_development_guideline.md``.
+STATUS: input rail and local-LLM output grounding are wired. ``gate.py``,
+``graph.py``, and ``mcp_hybrid_server.py`` must not import this package (I6;
+``tests/test_guardrails_isolation.py``). The live seam is
+``utils/guardrail_bridge.py``, which lazy-imports ``check_input`` /
+``check_output`` only when ``guardrails.enabled is True`` and injects
+closures into ``graph.py`` nodes ``guardrail_input`` and ``guardrail_output``.
+When the flag is off, both nodes pass through and this package is never
+imported. Operator CLI: ``python -m guardrails.cli``. Phased history:
+``docs/NeMo/README.md``.
 
 The optional ``nemoguardrails`` dependency is soft-imported: this package imports
 and runs (offline heuristic rails only) whether or not it is installed.
