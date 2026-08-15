@@ -266,7 +266,7 @@ def register_auth_routes(
             )
         return session
 
-    def require_session_or_token(
+    async def require_session_or_token(
         request: Request,
         cyclaw_session: str | None = Cookie(default=None),
         authorization: str | None = Header(default=None),
@@ -279,17 +279,35 @@ def register_auth_routes(
         Also stamps ``request.state.auth_username`` so a route-level
         ``Depends`` on ``/query`` (return value discarded) still attributes
         the audit record.
+
+        Async with ``to_thread`` around the manager calls: as a sync
+        dependency FastAPI would run this in the threadpool anyway; making
+        that explicit keeps the sqlite lookups off the event loop now that
+        the failure path awaits the limiter and the audit log.
+
+        The 401 path is rate-limited and audited HERE, in the dependency
+        (PR #940 review findings 2 and 5): ``/query``'s per-IP limiter lives
+        in the endpoint BODY, and route dependencies run before the body, so
+        an unauthenticated flood would otherwise be an un-throttled,
+        unrecorded DB lookup per request. The success path deliberately does
+        NOT call the limiter -- the endpoint body already counts exactly
+        once, and counting here too would halve the configured budget.
         """
         manager = _require_enabled()
         username: str | None = None
         if cyclaw_session:
-            session_info = manager.validate_session(cyclaw_session)
+            session_info = await asyncio.to_thread(manager.validate_session, cyclaw_session)
             if session_info is not None:
                 username = session_info.username
         if username is None and authorization and authorization.lower().startswith(_BEARER_PREFIX):
             token = authorization[len(_BEARER_PREFIX):].strip()
-            username = manager.verify_device_token(token)
+            username = await asyncio.to_thread(manager.verify_device_token, token)
         if username is None:
+            await enforce_rate_limit(request)
+            await audit({
+                _EVENT_KEY: "auth_credential_rejected",
+                "path": request.url.path,
+            })
             raise HTTPException(
                 status_code=_HTTP_UNAUTHORIZED,
                 detail={_CODE_KEY: "AUTH_REQUIRED", _MESSAGE_KEY: "authentication required", _DETAILS_KEY: {}},
