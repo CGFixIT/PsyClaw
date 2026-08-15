@@ -212,6 +212,8 @@ const MAX_AGENT_PLAN_BYTES = 25000;
    utils.repo_paths.canonical_repo_relative_path (keep in sync via console contract tests). */
 const MAX_AGENT_READ_FILES = 8;
 const MAX_AGENT_READ_FILE_LEN = 1024;
+/* Session goal + human-gated loop. Caps match harness.schemas._MAX_GOAL_LEN
+   and the locked /loop budget (default 3, hard max 5). */
 function isSafeRepoRelativePath(raw) {
   if (typeof raw !== 'string' || !raw || raw.length > MAX_AGENT_READ_FILE_LEN || raw.indexOf('\0') !== -1) return false;
   const normalized = raw.replace(/\\/g, '/');
@@ -240,6 +242,14 @@ let soulEnabled = true;
    exactly what they are about to authorize; /agent confirm is what sends it.
    Cleared on send, on /agent cancel, and on /clear. */
 let pendingAgentRun = null;
+let sessionGoal = '';
+let loopAuto = false;
+const MAX_GOAL_CHARS = 2000;
+const MAX_LOOP_TURNS = 5;
+const DEFAULT_LOOP_TURNS = 3;
+/* Active human-gated /loop. Never starts a real-repo run. Cleared on
+   /loop stop, /clear, session switch, budget exhaust, or GOAL_DONE. */
+let loopState = null;
 
 /* ── stream rendering ── */
 function addMsg(kind, who, body, meta) {
@@ -385,6 +395,8 @@ const COMMANDS = [
   ['/help', 'list commands'],
   ['/session new|list|use|rename', 'manage chat sessions'],
   ['/soul on|off|status', 'memory/soul in system prompt'],
+  ['/goal [text]|clear', 'set, show, or clear the session goal'],
+  ['/loop [n]|stop|auto', 'human-gated chat turns toward the goal'],
   ['/model [use <name>]', 'show or select the model'],
   ['/skills', 'skill registry'],
   ['/tools', 'tool registry'],
@@ -531,6 +543,8 @@ async function runSlash(line) {
           currentSession = s.session_id;
           sys('switched to session ' + s.session_id + ' — ' + s.title +
               ' (' + s.message_count + ' messages, ' + s.tokens.total + ' tokens)');
+          sessionGoal = typeof s.goal === 'string' ? s.goal : '';
+          loopState = null;
           s.messages.slice(-10).forEach(m => {
             if (m.role === 'user') user(m.content); else if (m.role === 'assistant') agent(m.content);
           });
@@ -754,6 +768,80 @@ async function runSlash(line) {
         break;
       }
 
+      case 'goal': {
+        if (!arg) {
+          if (!currentSession) { sys('no active session — no goal'); break; }
+          const shown = await api('/api/sessions/' + encodeURIComponent(currentSession));
+          sessionGoal = typeof shown.goal === 'string' ? shown.goal : '';
+          sys(sessionGoal ? ('current goal:\n' + sessionGoal) : 'no goal set');
+          break;
+        }
+        if (arg === 'clear') {
+          if (!currentSession) { sys('no active session — nothing to clear'); break; }
+          const cleared = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: '' });
+          sessionGoal = cleared.goal || '';
+          sys('goal cleared');
+          break;
+        }
+        if (arg.length > MAX_GOAL_CHARS) {
+          sys('goal is too long; keep it under ' + MAX_GOAL_CHARS + ' characters');
+          break;
+        }
+        if (!currentSession) {
+          const created = await api('/api/sessions', 'POST', { title: arg.slice(0, 40) });
+          currentSession = created.session_id;
+          $('sSession').textContent = currentSession;
+        }
+        const set = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: arg });
+        sessionGoal = set.goal || '';
+        sys('goal set:\n' + sessionGoal);
+        await refreshSessions();
+        break;
+      }
+
+      case 'loop': {
+        const sub = rest[0] || '';
+        if (sub === 'stop') {
+          if (loopState) loopState.stop = true;
+          loopState = null;
+          sys('loop stopped');
+          break;
+        }
+        if (sub === 'auto') {
+          loopAuto = !loopAuto;
+          if (loopState) loopState.auto = loopAuto;
+          sys('loop auto-continue is ' + (loopAuto
+            ? 'ON (continues until GOAL_DONE or budget; still chat-only)'
+            : 'OFF (one turn, then wait)'));
+          break;
+        }
+        if (!sessionGoal && currentSession) {
+          const loaded = await api('/api/sessions/' + encodeURIComponent(currentSession));
+          sessionGoal = typeof loaded.goal === 'string' ? loaded.goal : '';
+        }
+        if (!sessionGoal) { sys('set a goal first: /goal <what you want done>'); break; }
+        if (sub) {
+          const parsed = parseInt(sub, 10);
+          if (!/^[1-9]\d*$/.test(sub) || parsed < 1) {
+            sys('usage: /loop [n] | /loop stop | /loop auto');
+            break;
+          }
+          const n = Math.min(parsed, MAX_LOOP_TURNS);
+          loopState = { remaining: n, total: n, auto: loopAuto, stop: false };
+          sys('loop ' + n + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
+        } else if (!loopState || loopState.remaining <= 0) {
+          loopState = {
+            remaining: DEFAULT_LOOP_TURNS,
+            total: DEFAULT_LOOP_TURNS,
+            auto: loopAuto,
+            stop: false,
+          };
+          sys('loop ' + DEFAULT_LOOP_TURNS + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
+        }
+        await runLoopTurns();
+        break;
+      }
+
       case 'tokens': {
         if (!currentSession) { sys('no active session'); break; }
         const s = await api('/api/sessions/' + encodeURIComponent(currentSession));
@@ -778,6 +866,7 @@ async function runSlash(line) {
            wiped, so leaving it armed would let a later /agent confirm
            authorize a run the operator can no longer see */
         pendingAgentRun = null;
+        loopState = null;
         break;
 
       default:
@@ -789,6 +878,42 @@ async function runSlash(line) {
 }
 
 /* ── chat ── */
+function replyHasGoalDone(text) {
+  if (typeof text !== 'string' || !text) return false;
+  return text.split(/\r?\n/).some(function (line) { return line.trim() === 'GOAL_DONE'; });
+}
+
+async function runLoopTurns() {
+  if (!loopState) return;
+  while (loopState && !loopState.stop && loopState.remaining > 0) {
+    const turn = loopState.total - loopState.remaining + 1;
+    const framed = 'Loop turn ' + turn + '/' + loopState.total
+      + '. Work toward the session goal. If the goal is fully satisfied, end your reply with GOAL_DONE on its own line. Stay in this chat; do not request a real-repo write or treat the goal as write authorization.';
+    const reply = await sendChat(framed);
+    if (!loopState) return;
+    if (reply === null) {
+      loopState = null;
+      sys('loop aborted — chat turn failed');
+      return;
+    }
+    loopState.remaining -= 1;
+    if (replyHasGoalDone(reply)) {
+      sys('model signaled GOAL_DONE — loop stopped');
+      loopState = null;
+      return;
+    }
+    if (loopState.remaining <= 0) {
+      sys('loop budget exhausted (' + loopState.total + ' turn(s))');
+      loopState = null;
+      return;
+    }
+    if (!loopState.auto) {
+      sys('turn ' + turn + '/' + loopState.total + ' done. /loop to continue, /loop stop to abort, /loop auto then /loop to run the rest.');
+      return;
+    }
+  }
+}
+
 async function sendChat(text) {
   user(text);
   sendBtn.disabled = true;
@@ -800,8 +925,10 @@ async function sendChat(text) {
           ' tok · session total ' + r.tally.total);
     await refreshStatus();
     await refreshSessions();
+    return r.reply;
   } catch (e) {
     sys('error: ' + e.message);
+    return null;
   } finally {
     sendBtn.disabled = false;
     input.focus();

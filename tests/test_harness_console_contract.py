@@ -157,7 +157,9 @@ def test_console_call_extraction_is_not_empty():
     # literal-only extractor would silently drop
     assert "/api/sessions/{}" in paths
     assert "/api/sessions/{}/rename" in paths
+    assert "/api/sessions/{}/goal" in paths
     assert ("/api/chat", "POST") in calls
+    assert ("/api/sessions/{}/goal", "POST") in calls
 
 
 @pytest.mark.parametrize("path,method", sorted(_console_calls()))
@@ -238,3 +240,31 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "Object.assign({}, stagedRun, { reason: why, confirm: true })" in commands
     assert "confirm failed — staged run kept" in commands
     assert "pendingAgentRun = stagedRun" in commands
+
+
+def test_console_documents_goal_and_loop_slash_commands():
+    from harness.schemas import _MAX_GOAL_LEN
+
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/goal [text]|clear'" in html
+    assert "['/loop [n]|stop|auto'" in html
+    assert "case 'goal':" in html
+    assert "case 'loop':" in html
+    assert f"const MAX_GOAL_CHARS = {_MAX_GOAL_LEN};" in html
+    assert "const MAX_LOOP_TURNS = 5;" in html
+    assert "const DEFAULT_LOOP_TURNS = 3;" in html
+
+
+def test_loop_command_never_starts_a_real_repo_run():
+    """ /loop is chat-only. Auto-invoking /api/agent/* would bypass the human
+    /agent confirm + reason gate. """
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("case 'loop':")
+    end = html.index("case 'tokens':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "GOAL_DONE" in html
+    assert "function runLoopTurns()" in html
+    assert "function replyHasGoalDone(" in html
+    assert "never starts a real-repo run" in body
+

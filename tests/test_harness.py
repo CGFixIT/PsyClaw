@@ -135,6 +135,21 @@ def test_system_prompt_adopts_soul_file_without_scanning(tmp_path):
     assert payload in prompt, "soul content no longer adopted verbatim -- if you added a scan, update the docs"
 
 
+def test_system_prompt_includes_session_goal():
+    prompt = compose_system_prompt(soul_enabled=False, goal="land /goal and /loop")
+    assert "Operator goal" in prompt
+    assert "land /goal and /loop" in prompt
+    assert "not a write authorization" in prompt
+    bare = compose_system_prompt(soul_enabled=False)
+    assert "Operator goal" not in bare
+
+
+def test_system_prompt_omits_blank_goal():
+    assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal="   ")
+    assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal=None)
+
+
+
 # -- registry --------------------------------------------------------------------
 
 def test_repo_skills_include_ponytail_and_karpathy():
@@ -564,6 +579,76 @@ def test_sessions_listing_and_rename(client):
     sid = sessions[0]["session_id"]
     renamed = client.post(f"/api/sessions/{sid}/rename", json={"title": "work"})
     assert renamed.json()["title"] == "work"
+
+
+def test_session_goal_set_clear_and_survives_reload(client, cfg):
+    created = client.post("/api/sessions", json={"title": "goal-session"}).json()
+    sid = created["session_id"]
+    assert "goal" not in created  # listing/create summaries stay title-only
+
+    set_resp = client.post(f"/api/sessions/{sid}/goal", json={"goal": "  ship slash commands  "})
+    assert set_resp.status_code == 200
+    assert set_resp.json()["goal"] == "ship slash commands"
+
+    fetched = client.get(f"/api/sessions/{sid}").json()
+    assert fetched["goal"] == "ship slash commands"
+
+    payload = json.loads((cfg.home / "sessions" / f"{sid}.json").read_text(encoding="utf-8"))
+    assert payload["goal"] == "ship slash commands"
+
+    cleared = client.post(f"/api/sessions/{sid}/goal", json={"goal": ""})
+    assert cleared.json()["goal"] == ""
+    assert client.get(f"/api/sessions/{sid}").json()["goal"] == ""
+
+
+def test_session_listing_does_not_leak_goal(client):
+    created = client.post("/api/sessions", json={"title": "secret-goal"}).json()
+    sid = created["session_id"]
+    secret = "SECRET-GOAL do not leak this via the open listing"
+    client.post(f"/api/sessions/{sid}/goal", json={"goal": secret})
+    listing = client.get("/api/sessions").json()
+    blob = json.dumps(listing)
+    assert secret not in blob
+    assert "SECRET-GOAL" not in blob
+    assert "goal" not in listing["sessions"][0]
+
+
+def test_chat_injects_session_goal_into_system_prompt(cfg, monkeypatch):
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    test_client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = test_client.post("/api/sessions", json={"title": "g"}).json()["session_id"]
+    test_client.post(f"/api/sessions/{sid}/goal", json={"goal": "finish the loop feature"})
+    resp = test_client.post("/api/chat", json={"message": "status", "session_id": sid})
+    assert resp.status_code == 200
+    system = captured["body"]["messages"][0]["content"]
+    assert "finish the loop feature" in system
+    assert "Operator goal" in system
+
+
+def test_legacy_session_file_without_goal_still_loads(cfg):
+    store = SessionStore(cfg.sessions_dir)
+    session = store.create(model="qwen3.6:27b", title="legacy")
+    path = cfg.sessions_dir / f"{session.session_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("goal", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    reloaded = store.get(session.session_id)
+    assert reloaded.goal == ""
 
 
 def test_chat_unknown_session_404(client):

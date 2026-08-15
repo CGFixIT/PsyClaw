@@ -62,6 +62,7 @@ from harness.schemas import (
     AgentPublishRequest,
     AgentRunRequest,
     ChatRequest,
+    GoalRequest,
     ModelSelectRequest,
     RenameRequest,
     SessionCreateRequest,
@@ -561,7 +562,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             {"role": msg.role, "content": msg.text, "ts": msg.ts}
             for msg in session.messages
         ]
-        return session.summary() | {"messages": messages}
+        return session.summary() | {"messages": messages, "goal": session.goal}
 
     @app.post("/api/sessions/{session_id}/rename", dependencies=guarded)
     def rename_session(session_id: str, req: RenameRequest) -> dict:
@@ -571,6 +572,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             # A write that could not land is the server's fault, not a bad id.
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
+
+    @app.post("/api/sessions/{session_id}/goal", dependencies=guarded)
+    def session_goal(session_id: str, req: GoalRequest) -> dict:
+        """Set or clear the session-scoped /goal. Guarded: goal is operator data.
+
+        Empty string clears. The value is injected into the chat system prompt
+        as read-only session data; this route never reaches agentic/ or git.
+        """
+        try:
+            session = store.set_goal(session_id, req.goal)
+        except SessionStoreError as exc:
+            status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
+            raise _err(status, exc) from exc
+        return session.summary() | {"goal": session.goal}
 
     # -- soul / model toggles (harness-local; soul.md itself untouched) --
     @app.get("/api/soul")
@@ -602,7 +617,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
 
-        system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled)
+        system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled, goal=session.goal)
         history = [
             {"role": msg.role, "content": msg.text}
             for msg in session.messages[-_HISTORY_TURNS:]

@@ -33,7 +33,7 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | `config.py` | Home layout + read-only view of repo `config.yaml` |
 | `sessions.py` | Per-session JSON + token tallies |
 | `ollama.py` | Local OpenAI-compatible chat client |
-| `prompts.py` | System prompt (repo skills + optional soul) |
+| `prompts.py` | System prompt (repo skills + optional soul + optional session goal) |
 | `registry_view.py` | Read-only merge of skills / tools / connectors |
 | `agent_policy.py` | Check-profile names for real-repo runs |
 | `schemas.py` | Request models |
@@ -52,6 +52,10 @@ See [`agentic/README.md`](../agentic/README.md) and
 
 The shipped registry file is empty. That is correct.
 
+Console slash commands include `/goal` (session-scoped, injected into the
+system prompt as read-only data) and `/loop` (human-gated chat turns toward
+that goal; never starts a real-repo run).
+
 ## Operator API (loopback)
 
 Guarded routes require the same Bearer `CYCLAW_API_KEY` as other admin
@@ -65,6 +69,7 @@ surfaces (`utils.auth.require_api_key`).
 | GET/POST | `/api/sessions` | List / create |
 | GET | `/api/sessions/{id}` | One session |
 | POST | `/api/sessions/{id}/rename` | Rename |
+| POST | `/api/sessions/{id}/goal` | Set or clear the session `/goal` (empty string clears) |
 | GET | `/api/soul` | Harness-local soul-in-prompt flag (does not write `soul.md`) |
 | POST | `/api/soul` | Toggle that flag |
 | POST | `/api/model` | Select local model |

@@ -40,6 +40,7 @@ GUARDED = [
     # characters of the last message, so the "title-only" claim did not hold.
     ("get", "/api/sessions/does-not-exist", None),
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
+    ("post", "/api/sessions/does-not-exist/goal", {"goal": "ship the harness slash commands"}),
     ("post", "/api/soul", {"enabled": True}),
     ("post", "/api/model", {"model": "qwen3.6:27b"}),
     ("post", "/api/chat", {"message": "hi"}),
@@ -398,6 +399,7 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
     assert summary["session_id"] == "c11f67fd89ea"
     assert summary["title"] == "Quarterly plan"
     assert summary["message_count"] == 2
+    assert "goal" not in summary
 
     # summarize_json is the path the listing route really takes; it must agree.
     from_json = Session.summarize_json(json.loads(json.dumps({

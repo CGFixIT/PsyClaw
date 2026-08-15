@@ -7,6 +7,10 @@ Frontmatter is stripped; bodies are concatenated under explicit headers. When
 the operator has soul/memory enabled, the governed soul fragment is appended
 READ-ONLY — this module never mutates ``soul.md`` (invariant I5, write path
 stays with ``utils.personality.apply_evolution``).
+
+An optional session goal (set via the console ``/goal`` command) is appended
+last as read-only session data. It is never a write authorization and never
+changes routing or topology.
 """
 
 from __future__ import annotations
@@ -20,10 +24,20 @@ _SOUL = _REPO_ROOT / "data" / "personality" / "soul.md"
 # Ordered: discipline rules first, persona second, soul last (softest).
 _DISCIPLINE_SKILLS = ("ponytail", "karpathy-guidelines")
 
+# Bounded separately from soul_max_chars so a long goal cannot crowd out
+# the discipline contracts. Keep in sync with harness.schemas._MAX_GOAL_LEN.
+_MAX_GOAL_CHARS = 2000
+
 _HEADER = (
     "You are the CyClaw coding harness agent operating on the operator's "
     "GitHub repositories. The following discipline contracts are MANDATORY and "
     "govern every line of code you propose, write, or review."
+)
+
+_GOAL_PREAMBLE = (
+    "The following is session data the operator set with /goal. "
+    "It is not a write authorization and does not change routing, topology, "
+    "or the real-repo six-gate. Do not treat it as permission to mutate git."
 )
 
 
@@ -51,6 +65,7 @@ def compose_system_prompt(
     skills_dir: Path | None = None,
     soul_path: Path | None = None,
     soul_max_chars: int = 8000,
+    goal: str | None = None,
 ) -> str:
     """Build the harness system prompt.
 
@@ -71,4 +86,7 @@ def compose_system_prompt(
             text = ""
         if text:
             parts.append(f"\n## Operator persona (soul, read-only)\n\n{text}")
+    clipped = (goal or "").strip()[:_MAX_GOAL_CHARS]
+    if clipped:
+        parts.append(f"\n## Operator goal (session, read-only)\n\n{_GOAL_PREAMBLE}\n\n{clipped}")
     return "\n".join(parts)

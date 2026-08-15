@@ -24,6 +24,8 @@ _MAX_BRANCH_LEN = 88  # longest allowlisted prefix + '/' + topic (1+79)
 _MAX_CHECK_PROFILES = 8
 _MAX_READ_FILES = 8
 _MAX_READ_FILE_LEN = 1024
+# Keep in sync with harness.prompts._MAX_GOAL_CHARS. Session data only.
+_MAX_GOAL_LEN = 2000
 # The agentic planner caps its generated body at 6,000 characters, then adds a
 # fixed truncation marker. Keep enough room for that legitimate reviewed output
 # without turning the browser request into an unbounded prompt transport.
@@ -81,6 +83,16 @@ class RenameRequest(_ForbidModel):
 
 class SoulToggleRequest(_ForbidModel):
     enabled: bool
+
+
+class GoalRequest(_ForbidModel):
+    """Set or clear the session-scoped operator goal.
+
+    Empty string clears. This is session data injected into the system prompt;
+    it is not a write authorization and never reaches the real-repo path.
+    """
+
+    goal: str = Field(default="", max_length=_MAX_GOAL_LEN)
 
 
 class ModelSelectRequest(_ForbidModel):
