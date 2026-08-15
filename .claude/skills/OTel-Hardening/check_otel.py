@@ -77,6 +77,25 @@ BASELINE_KEYS = frozenset({
     "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER",
 })
 
+# Documented in cyclaw_telemetry_kill.env but deliberately NOT in TELEMETRY_KILL,
+# for two different reasons that must not be conflated:
+#
+#   _CONDITIONAL_HF_PAIR -- CyClaw sets these itself, but only after confirming
+#   the embedding model is already cached (retrieval/embeddings.py::
+#   _model_offline_eligible). Unconditional would break first-run bootstrap.
+#
+#   SHELL_ONLY_ENV_KEYS -- these govern a program CyClaw never launches, so a
+#   Python-side os.environ write could not reach it. Homebrew runs from the
+#   operator's interactive shell (or, at most, a hand-run macos/*.sh installer),
+#   never as a CyClaw subprocess -- install-cyclaw.sh declares no Homebrew
+#   dependency at all. Putting HOMEBREW_NO_ANALYTICS in TELEMETRY_KILL would
+#   therefore be inert, and an inert key in the kill dict is worse than no key:
+#   it advertises a protection CyClaw does not actually provide (the trap
+#   ORT_TELEMETRY_OPT_OUT already documents). Sourcing this file into a shell
+#   DOES suppress it, so the .env is the one place it belongs.
+_CONDITIONAL_HF_PAIR = frozenset({"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"})
+SHELL_ONLY_ENV_KEYS = frozenset({"HOMEBREW_NO_ANALYTICS"})
+
 BASELINE_CREDENTIALS = frozenset({
     "LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT",
     # Destination overrides, popped as defense-in-depth since 2026-08-15 so a
@@ -299,17 +318,15 @@ def check_reference_env_file(kill: dict[str, str], env_path: Path) -> None:
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith("#") and "=" in line
     }
-    # HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE are documented there deliberately even
-    # though they are NOT unconditional entries in TELEMETRY_KILL -- see both
-    # files' own docstrings/headers. Expected = kill-dict keys plus that pair.
-    expected = set(kill) | {"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"}
+    expected = set(kill) | _CONDITIONAL_HF_PAIR | SHELL_ONLY_ENV_KEYS
     missing_from_doc = expected - documented
     extra_in_doc = documented - expected
     if missing_from_doc or extra_in_doc:
         detail = f"missing from doc: {sorted(missing_from_doc)}; undocumented extra: {sorted(extra_in_doc)}"
         warn("T8", f"{env_path.name} has drifted from the code -- {detail}")
         return
-    ok("T8", f"{env_path.name} documents exactly the code's kill set plus the conditional HF pair")
+    ok("T8", f"{env_path.name} documents exactly the code's kill set "
+             f"plus the conditional HF pair and {len(SHELL_ONLY_ENV_KEYS)} shell-only key(s)")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -686,6 +686,22 @@ download. See `docs/security-philosophy/cyclaw_telemetry_kill.env` for the
 full reference list if you want to source it by hand for a locked-down
 deployment.
 
+**Homebrew (macOS) is not covered by any of the above, and is on by default.**
+Homebrew reports its own install and usage counts, independently of CyClaw —
+CyClaw cannot disable it, because CyClaw never launches `brew` (the installer
+declares no Homebrew dependency at all) and the kill block only reaches
+programs CyClaw itself spawns. If you installed Python or anything else with
+Homebrew, opt out once, per machine:
+
+```bash
+brew analytics off      # persistent; writes a config file, survives new shells
+```
+
+`HOMEBREW_NO_ANALYTICS=1` is the env-var equivalent and is listed in the
+reference `.env` above, so sourcing that file also covers it for that shell.
+Verify with `brew analytics state`. See
+[Homebrew's analytics docs](https://docs.brew.sh/Analytics).
+
 ### Test gate
 
 ```bash
