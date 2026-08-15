@@ -45,6 +45,7 @@ from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from math import ceil
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -572,7 +573,7 @@ def create_app(
             )
 
     def _require_api_key_or_optional(
-        credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
     ) -> None:
         """Skip the CYCLAW_API_KEY check when security.api_key_optional is true.
 
@@ -582,6 +583,12 @@ def create_app(
         for the actual check -- that function stays untouched and always
         fail-closed when called directly, which is what keeps
         test_matches_gate_auth_semantics's parity assertion meaningful.
+
+        Annotated[...] = None (not `= Depends(_bearer_scheme)` as the default
+        itself) for the same reason utils/auth.py's own require_api_key uses
+        it: a bare `= Depends(...)` default is WPS404 ("complex default
+        value") under this file's itemized (not blanket) WPS exemption list
+        in setup.cfg -- fixed here in code rather than adding a new grant.
         """
         if (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True:
             return
