@@ -100,7 +100,7 @@ def test_assert_public_host_refuses_loopback(monkeypatch):
     def fake_getaddrinfo(host, _port):
         return [(0, 0, 0, "", ("127.0.0.1", 0))]
 
-    monkeypatch.setattr("harness.web_search.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(WebToolError) as exc:
         assert_public_host("docs.python.org")
     assert exc.value.code == "WEB_SSRF_DENIED"
@@ -110,7 +110,7 @@ def test_assert_public_host_accepts_global(monkeypatch):
     def fake_getaddrinfo(host, _port):
         return [(0, 0, 0, "", ("1.1.1.1", 0))]
 
-    monkeypatch.setattr("harness.web_search.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
     assert_public_host("one.one.one.one")
     assert ipaddress.ip_address("1.1.1.1").is_global
 

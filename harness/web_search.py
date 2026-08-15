@@ -20,7 +20,6 @@ import html
 import ipaddress
 import json
 import logging
-import socket
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Final
@@ -215,6 +214,7 @@ def assert_public_host(host: str) -> None:
     check and the socket. A pinned-IP transport is the future fix; this
     module does not add one. See docs/THREAT_MODEL.md tenth amendment.
     """
+    import socket  # noqa: WPS433  # local import keeps module import count low
     # Pre-connect IP check only — httpx will DNS again. Not a pin.
     clean = _host_of(host)
     if not clean or clean in _BLOCKED_HOSTS:
