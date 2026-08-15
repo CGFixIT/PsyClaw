@@ -354,6 +354,32 @@ def test_hybrid_confirmation_state_error_is_audited_without_query(tmp_path: Path
     )
 
 
+def test_poll_once_ignores_edited_message_without_spending_t3(tmp_path: Path) -> None:
+    """An edit is not a new inbound: ack it, do not query or claim T3."""
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    updates = [
+        {
+            "update_id": 7,
+            "edited_message": {
+                "chat": {"id": 42, "type": "private"},
+                "text": "edited after /online",
+            },
+        }
+    ]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch("telegram.runner.handle_inbound_text") as handler,
+        patch("telegram.runner.claim_hybrid_confirm") as claim,
+        patch("telegram.client.post_query") as query,
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset == 8
+    assert handled == []
+    handler.assert_not_called()
+    claim.assert_not_called()
+    query.assert_not_called()
+
+
 def test_poll_once_handles_text_update(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     updates = [

@@ -352,8 +352,13 @@ def handle_inbound_media(
 
 
 def _message_from_update(update: dict[str, Any]) -> tuple[int | str, str, str] | None:
-    """Return (chat_id, text, chat_type) for a text message update, else None."""
-    msg = update.get("message") or update.get("edited_message")
+    """Return (chat_id, text, chat_type) for a new text message, else None.
+
+    Edits (``edited_message``) are ignored: poll_once acks them so the stream
+    advances, but they must not run T2/T3. An edit of an allowlisted private
+    text would otherwise claim_hybrid_confirm and POST /query.
+    """
+    msg = update.get("message")
     if not isinstance(msg, dict):
         return None
     chat = msg.get("chat") or {}
