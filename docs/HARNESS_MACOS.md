@@ -51,15 +51,22 @@ The uninstaller removes complete CyClaw-managed blocks atomically per startup
 file, leaves malformed files unchanged, and preserves symlinked startup files
 by updating their regular-file target.
 
-Before touching any of that, it also best-effort removes a registered Dropbox
-sync schedule (`python -m sync.cli unschedule`, run against `~/.CyClaw/repo`
-if present) — the tagged cron entry or, if `sync.scheduler_backend:
-"launchd"` was used, the generated `~/Library/LaunchAgents` plist — so a
-background job never outlives `cyclaw` itself. This step is silent when no
-`~/.CyClaw/repo/config.yaml` exists and non-fatal on any error (a missing or
-unconfigured `sync:` block just prints a warning); it never blocks the rest
-of uninstall. See `docs/SYNC_README.md`'s "Scheduling" section for what gets
-removed.
+Before touching any of that, it also best-effort removes scheduled jobs so
+they cannot outlive `cyclaw`:
+
+- a registered Dropbox sync schedule (`python -m sync.cli unschedule`, run
+  against `~/.CyClaw/repo` if present) — the tagged cron entry or, if
+  `sync.scheduler_backend: "launchd"` was used, the generated
+  `~/Library/LaunchAgents` plist. Silent when no
+  `~/.CyClaw/repo/config.yaml` exists; non-fatal on any error (a missing or
+  unconfigured `sync:` block just prints a warning).
+- the three landed generated LaunchAgents, if their plists are still at
+  `~/Library/LaunchAgents/com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash}.plist`
+  (`launchctl bootout` on Darwin, then delete the file). Other labels,
+  including a future gate/harness agent, are left alone.
+
+Neither step blocks the rest of uninstall. See `docs/SYNC_README.md`'s
+"Scheduling" section for the sync job.
 
 ## macOS filesystem connector
 

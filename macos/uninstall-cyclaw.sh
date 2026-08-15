@@ -60,6 +60,37 @@ unschedule_sync_job() {
 }
 unschedule_sync_job
 
+# -- Landed LaunchAgent cleanup -----------------------------------------------
+# #910/#911 added generators for telegram-poll (KeepAlive), telegram-health,
+# and fsconnect-trash. Those jobs are NOT registered through sync.cli, so the
+# step above never sees them -- a loaded telegram-poll KeepAlive would keep
+# talking to Telegram after `cyclaw` is gone. Best-effort: if the generated
+# plist is still at the well-known path, bootout (Darwin only) then delete it.
+# Failures print a WARNING and uninstall continues. Gate/harness labels are
+# not listed here -- they belong to a still-open design PR, not landed main.
+unschedule_landed_launchagents() {
+  local uid dest label
+  uid="$(id -u 2>/dev/null || echo 0)"
+  for label in \
+    com.cgfixit.cyclaw.telegram-poll \
+    com.cgfixit.cyclaw.telegram-health \
+    com.cgfixit.cyclaw.fsconnect-trash
+  do
+    dest="$HOME/Library/LaunchAgents/${label}.plist"
+    if [ ! -f "$dest" ]; then
+      continue
+    fi
+    echo "[cyclaw] removing LaunchAgent $label..."
+    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout "gui/${uid}" "$dest" 2>/dev/null || true
+    fi
+    if ! rm -f "$dest"; then
+      echo "[cyclaw] WARNING: could not remove $dest" >&2
+    fi
+  done
+}
+unschedule_landed_launchagents
+
 PATH_START="# >>> cyclaw harness path >>>"
 PATH_END="# <<< cyclaw harness path <<<"
 FUNC_START="# >>> cyclaw harness >>>"

@@ -364,7 +364,9 @@ def cmd_health_plist(args: argparse.Namespace) -> int:
         f"--chat-id {shlex.quote(chat_id)} "
         '--text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"'
     )
-    inner_argv = ["/bin/bash", "-lc", health_cmd]
+    # -c, not -lc: a login shell sources the operator's rc files and can
+    # hijack PATH before curl/python run. date(1) still works under -c.
+    inner_argv = ["/bin/bash", "-c", health_cmd]
     wrapper = launchd_plist.keychain_wrapper_path(repo_root)
     program_args = launchd_plist.wrap_with_keychain_secrets(
         inner_argv, [(args.token_service, cfg.bot_token_env)], wrapper

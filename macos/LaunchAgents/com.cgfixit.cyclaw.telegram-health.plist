@@ -33,7 +33,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>-lc</string>
+    <string>-c</string>
     <string>curl -sf --max-time 5 http://127.0.0.1:8787/health &gt;/dev/null || python -m telegram.cli send --chat-id REPLACE_CHAT_ID --text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"</string>
   </array>
   <key>StartInterval</key>
