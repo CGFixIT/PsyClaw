@@ -19,6 +19,7 @@ from harness.config import HarnessConfig, default_home
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_governed_skills, list_mcp_tools, list_repo_skills
+from harness.tools_view import list_wired_tools, render_tools_diagram
 from harness import server as harness_server
 from harness.server import create_app
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
@@ -167,6 +168,72 @@ def test_full_registry_shape():
     reg = full_registry()
     assert set(reg) == {"skills", "tools", "connectors"}
     assert any(c["id"] == "github" for c in reg["connectors"])
+
+
+def test_list_wired_tools_marks_registered_harness_routes():
+    paths = frozenset({
+        "/api/chat",
+        "/api/sessions/{session_id}/goal",
+        "/api/tools",
+    })
+    payload = list_wired_tools(paths)
+    by_name = {row["name"]: row for row in payload["tools"]}
+    assert by_name["chat"]["wired"] is True
+    assert by_name["goal"]["wired"] is True
+    assert by_name["tools"]["wired"] is True
+    assert by_name["github"]["wired"] is False
+    assert by_name["hybrid_search"]["kind"] == "mcp"
+    assert by_name["hybrid_search"]["invoked"] is False
+    assert by_name["hybrid_search"]["wired"] is True
+    assert payload["wired"] >= 4
+    assert "HARNESS TOOLS" in payload["diagram"]
+    assert "[goal]" in payload["diagram"]
+
+
+def test_render_tools_diagram_single_tool_is_a_box():
+    row = {
+        "name": "goal",
+        "slash": "/goal",
+        "method": "POST",
+        "path": "/api/sessions/{session_id}/goal",
+        "description": "session-scoped operator intent",
+        "kind": "harness",
+        "invoked": True,
+        "wired": True,
+    }
+    diagram = render_tools_diagram([row], wired=1, total=1)
+    assert diagram.startswith("┌")
+    assert "POST /api/sessions/{session_id}/goal" in diagram
+    assert "session-scoped operator intent" in diagram
+    assert diagram.endswith("┘")
+
+
+def test_tools_endpoint_lists_only_live_routes(client):
+    data = client.get("/api/tools").json()
+    assert data["wired"] == data["total"]
+    names = {row["name"] for row in data["tools"]}
+    assert {"chat", "goal", "loop", "cancel", "tools", "hybrid_search"} <= names
+    for row in data["tools"]:
+        if row["kind"] == "harness":
+            assert row["wired"] is True
+            assert row["invoked"] is True
+        if row["name"] == "hybrid_search":
+            assert row["kind"] == "mcp"
+            assert row["invoked"] is False
+    assert data["diagram"].startswith("HARNESS TOOLS")
+    assert "console" in data["diagram"]
+    assert "[goal]" in data["diagram"]
+    assert "mcp (AST catalog" in data["diagram"]
+    assert "/api/agent/" in data["diagram"]
+
+
+def test_tools_endpoint_is_open(client):
+    # /tools must work before an operator key is entered, same as /api/registry.
+    bare = TestClient(client.app, base_url="http://127.0.0.1")
+    resp = bare.get("/api/tools")
+    assert resp.status_code == 200
+    assert resp.json()["diagram"]
+
 
 
 # -- governed skills registry view --------------------------------------------------

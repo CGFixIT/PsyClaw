@@ -75,7 +75,7 @@ def main() -> int:
     # 4. Expected endpoints are registered.
     routes = {getattr(r, "path", None) for r in getattr(app, "routes", [])}
     expected = {
-        "/", "/api/status", "/api/registry", "/api/sessions",
+        "/", "/api/status", "/api/registry", "/api/tools", "/api/sessions",
         "/api/sessions/{session_id}", "/api/sessions/{session_id}/rename",
         "/api/soul", "/api/model", "/api/chat", "/api/chat/cancel", "/api/github/status",
         "/api/harness/runs",

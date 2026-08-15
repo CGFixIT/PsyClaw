@@ -1167,6 +1167,25 @@ def phase_harness_console() -> PhaseResult:
         all(isinstance(reg.get(k), list) for k in ("skills", "tools", "connectors")),
     ))
 
+    r = client.get("/api/tools")
+    tools_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_tools_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_tools_shape",
+        isinstance(tools_payload.get("tools"), list)
+        and isinstance(tools_payload.get("diagram"), str)
+        and "HARNESS TOOLS" in (tools_payload.get("diagram") or ""),
+    ))
+    tool_names = {t.get("name") for t in tools_payload.get("tools") or []}
+    phase.checks.append(Check(
+        "harness_tools_includes_goal_and_hybrid_search",
+        {"goal", "loop", "hybrid_search"} <= tool_names,
+    ))
+    phase.checks.append(Check(
+        "harness_tools_all_harness_rows_wired",
+        all(t.get("wired") for t in (tools_payload.get("tools") or []) if t.get("kind") == "harness"),
+    ))
+
     log("  --- Sessions CRUD ---")
     r = client.post("/api/sessions", json={"title": "sandbox check"})
     phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
@@ -1325,6 +1344,7 @@ def phase_harness_html() -> PhaseResult:
         ("chat_cancel", "/api/chat/cancel"),
         ("github_status", "/api/github/status"),
         ("harness_runs", "/api/harness/runs"),
+        ("tools", "/api/tools"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
@@ -1338,7 +1358,7 @@ def phase_harness_html() -> PhaseResult:
 
     log("\n  --- Slash Commands ---")
     slash = (
-        "/session", "/soul", "/model", "/skills", "/github",
+        "/session", "/soul", "/model", "/skills", "/tools", "/github",
         "/harness", "/tokens", "/status", "/goal", "/loop",
     )
     for cmd in slash:

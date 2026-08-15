@@ -72,6 +72,7 @@ from harness.schemas import (
     SoulToggleRequest,
 )
 from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError, TokenTally
+from harness.tools_view import list_wired_tools
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
@@ -651,6 +652,19 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/registry")
     def registry() -> dict:
         return full_registry()
+
+    @app.get("/api/tools")
+    def tools() -> dict:
+        """Wiring inventory for the /tools slash command. Read-only, open.
+
+        Same reason /api/registry is open: the console must populate the
+        diagram before an operator key is entered. ``wired`` is computed
+        against this app's live route table; MCP rows are AST-catalog only.
+        """
+        registered = frozenset(
+            getattr(route, "path", "") or "" for route in app.routes
+        )
+        return list_wired_tools(registered)
 
     # -- sessions ------------------------------------------------------
     @app.get("/api/sessions")

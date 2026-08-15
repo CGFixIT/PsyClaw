@@ -486,6 +486,7 @@ against the live app rather than grepping source text.
 | `/` | GET | Serves `static/harness.html`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY` |
 | `/api/status` | GET | Returns `version`, `model`, `provider`, `base_url`, `soul_enabled`, `home`, `repo_root`, `sessions`, `total_tokens`, `layout` |
 | `/api/registry` | GET | Returns `skills`, `tools`, `connectors` lists (merged repo + governed-registry + MCP + connector catalog) |
+| `/api/tools` | GET | Wiring inventory for `/tools`: each harness surface + MCP catalog row, `wired` against the live route table, plus an ASCII `diagram`. Read-only; open (same reason as `/api/registry`). MCP rows are AST-catalog only — the console does not invoke them |
 | `/api/sessions` | GET / POST | List sessions; create returns HTTP 201 with `session_id` |
 | `/api/sessions/{id}` | GET | Session summary + `messages` (`content`/`role`/`ts`); unknown id -> 404 |
 | `/api/sessions/{id}/rename` | POST | Applies a new title; unknown id -> 404 |
@@ -526,11 +527,11 @@ Verify `static/harness.html` contracts:
 - All 3 sidebar panes exist (commands, sessions, registry) with their tab
   markers (`data-pane="commands"` etc.)
 - All `/api/*` endpoints the console calls are present: `/api/status`,
-  `/api/registry`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
+  `/api/registry`, `/api/tools`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
   `/api/chat/cancel`, `/api/github/status`, `/api/harness/runs`, plus the
   session-scoped `/goal` POST built as `/api/sessions/{id}/goal`
 - All documented slash commands are wired: `/session`, `/soul`, `/model`,
-  `/skills`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
+  `/skills`, `/tools`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
 - **XSS safety**: no `innerHTML` usage anywhere -- the console's own comment
   documents this invariant explicitly ("Model output and registry data are
   DATA, never HTML"); rendering goes through `textContent` and

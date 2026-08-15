@@ -314,6 +314,61 @@ function table(rows, headers) {
   return t;
 }
 
+function renderToolsDiagram(tools, wired, total) {
+  if (!tools || !tools.length) return 'HARNESS TOOLS — none';
+  if (tools.length === 1) {
+    const row = tools[0];
+    const invoked = row.invoked ? 'yes' : 'no (catalog only)';
+    const wiredMark = row.wired ? 'yes' : 'no';
+    const inner = [
+      ' name        ' + row.name,
+      ' slash       ' + row.slash,
+      ' route       ' + row.method + ' ' + row.path,
+      ' kind        ' + row.kind,
+      ' invoked     ' + invoked,
+      ' wired       ' + wiredMark,
+      '',
+      ' ' + row.description,
+    ];
+    let width = 0;
+    inner.forEach(line => { if (line.length > width) width = line.length; });
+    const edge = '─'.repeat(width + 1);
+    const title = ' /' + row.name + ' ';
+    const head = title.length < edge.length
+      ? '┌' + title + edge.slice(title.length) + '┐'
+      : '┌' + edge + '┐';
+    const body = inner.map(line => '│' + line.padEnd(width, ' ') + ' │');
+    return [head].concat(body).concat(['└' + edge + '┘']).join('\n');
+  }
+  const lines = ['HARNESS TOOLS — ' + wired + ' wired / ' + total + ' listed', ''];
+  const harness = tools.filter(t => t.kind === 'harness');
+  const mcp = tools.filter(t => t.kind === 'mcp');
+  const treeLines = (row, last, indent) => {
+    const branch = last ? '└─' : '├─';
+    const mark = row.wired ? '●' : '○';
+    const child = last ? '  ' : '│ ';
+    const slash = (row.slash || '').padEnd(16, ' ');
+    return [
+      indent + branch + '[' + row.name + '] ' + mark + '  ' + row.method + ' ' + row.path,
+      indent + child + ' ' + slash + ' ' + row.description,
+    ];
+  };
+  if (harness.length) {
+    lines.push('console');
+    harness.forEach((row, index) => {
+      const last = index === harness.length - 1 && !mcp.length;
+      treeLines(row, last, '').forEach(line => lines.push(line));
+    });
+  }
+  if (mcp.length) {
+    lines.push('└─ mcp (AST catalog; this console does not invoke these)');
+    mcp.forEach((row, index) => {
+      treeLines(row, index === mcp.length - 1, '   ').forEach(line => lines.push(line));
+    });
+  }
+  return lines.join('\n');
+}
+
 /* ── API ── */
 /* The Authorization header is attached HERE, in the helper body, never at a call
    site. tests/test_harness_console_contract.py hand-parses this file: it locates
@@ -440,7 +495,7 @@ const COMMANDS = [
   ['/loop [n]|stop|auto', 'human-gated chat turns toward the goal'],
   ['/model [use <name>]', 'show or select the model'],
   ['/skills', 'skill registry'],
-  ['/tools', 'tool registry'],
+  ['/tools [all|<name>]', 'wired harness tools as a diagram'],
   ['/connectors', 'connector catalog'],
   ['/github', 'agentic GitHub status'],
   ['/agent run|plan|read|checks|confirm|cancel', 'stage and start a real-repo coding run'],
@@ -638,14 +693,42 @@ async function runSlash(line) {
         break;
       }
 
-      case 'skills': case 'tools': case 'connectors': case 'registry': {
+      case 'skills': case 'connectors': case 'registry': {
         const reg = await api('/api/registry');
         if (cmd === 'skills' || cmd === 'registry')
           sys(table(reg.skills.map(s => [s.name, s.source]), ['skill', 'source']));
-        if (cmd === 'tools' || cmd === 'registry')
+        if (cmd === 'registry')
           sys(table(reg.tools.map(t => [t.name, t.description]), ['tool', 'description']));
         if (cmd === 'connectors' || cmd === 'registry')
           sys(table(reg.connectors.map(c => [c.name, c.kind, c.auth]), ['connector', 'kind', 'auth']));
+        break;
+      }
+
+      case 'tools': {
+        if (arg === 'help') {
+          sys(table([
+            ['/tools', 'diagram of harness tools that are actually wired'],
+            ['/tools all', 'include unwired / catalog rows'],
+            ['/tools <name>', 'one-tool box diagram'],
+          ], ['command', 'action']));
+          break;
+        }
+        const inventory = await api('/api/tools');
+        const listed = inventory.tools || [];
+        let rows = listed;
+        if (arg && arg !== 'all') {
+          const needle = arg.replace(/^\//, '');
+          rows = listed.filter(t => t.name === needle || t.name === arg ||
+            (t.slash && t.slash.replace(/^\//, '').split(' ')[0] === needle));
+          if (!rows.length) {
+            sys('unknown tool: ' + arg + ' — /tools to list wired names');
+            break;
+          }
+        } else if (arg !== 'all') {
+          rows = listed.filter(t => t.wired);
+        }
+        sys(renderToolsDiagram(rows, inventory.wired, inventory.total),
+            inventory.wired + ' wired / ' + inventory.total + ' listed');
         break;
       }
 
@@ -1115,7 +1198,7 @@ refreshSessions().catch(() => {});
 refreshRegistry().catch(() => {});
 sys('CyClaw harness — local coding console (PowerShell launcher: cyclaw).');
 sys('System prompt: ponytail + karpathy-guidelines discipline contracts for agentic GitHub coding.');
-sys('Type /help for commands. /goal + /loop are chat-only (rate-limited for local 27b).');
+sys('Type /help for commands. /tools lists wired surfaces as a diagram. /goal + /loop are chat-only (rate-limited for local 27b).');
 input.focus();
 paintGoalLoop();
 </script>

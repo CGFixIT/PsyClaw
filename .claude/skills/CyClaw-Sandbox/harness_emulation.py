@@ -115,6 +115,32 @@ def main() -> int:
             check("/api/registry", False, repr(exc))
         print()
 
+        # ── 2b. GET /api/tools (/tools wiring diagram) ────────────────────
+        print("[2b] GET /api/tools  (/tools slash command)")
+        try:
+            r = client.get("/api/tools")
+            d = r.json()
+            names = {t.get("name") for t in d.get("tools") or []}
+            check(
+                "/api/tools returns a wiring diagram",
+                r.status_code == 200
+                and isinstance(d.get("diagram"), str)
+                and "HARNESS TOOLS" in d.get("diagram", ""),
+                f"status={r.status_code}",
+            )
+            check(
+                "/api/tools lists goal, loop, and hybrid_search",
+                {"goal", "loop", "hybrid_search"} <= names,
+                f"names={sorted(names)}",
+            )
+            check(
+                "/api/tools harness rows are wired",
+                all(t.get("wired") for t in (d.get("tools") or []) if t.get("kind") == "harness"),
+            )
+        except Exception as exc:
+            check("GET /api/tools", False, repr(exc))
+        print()
+
         # ── 3. GET /api/sessions (sidebar sessions pane) ──────────────────
         print("[3] GET /api/sessions  (harness.html sessions pane, pre-create)")
         try:

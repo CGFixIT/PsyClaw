@@ -158,8 +158,10 @@ def test_console_call_extraction_is_not_empty():
     assert "/api/sessions/{}" in paths
     assert "/api/sessions/{}/rename" in paths
     assert "/api/sessions/{}/goal" in paths
+    assert "/api/tools" in paths
     assert ("/api/chat", "POST") in calls
     assert ("/api/sessions/{}/goal", "POST") in calls
+    assert ("/api/tools", "GET") in calls
 
 
 @pytest.mark.parametrize("path,method", sorted(_console_calls()))
@@ -263,6 +265,22 @@ def test_console_documents_goal_and_loop_slash_commands():
     assert "new AbortController()" in html
     assert "aborting the in-flight turn" in html
     assert "function paintGoalLoop()" in html
+
+
+def test_console_documents_tools_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/tools [all|<name>]'" in html
+    assert "case 'tools':" in html
+    assert "api('/api/tools')" in html
+    assert "function renderToolsDiagram(" in html
+    assert "innerHTML" not in html
+    start = html.index("case 'tools':")
+    end = html.index("case 'github':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "renderToolsDiagram(" in body
+    assert "unknown tool:" in body
+
 
 
 def test_loop_command_never_starts_a_real_repo_run():

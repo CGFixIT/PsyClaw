@@ -52,7 +52,9 @@ See [`agentic/README.md`](../agentic/README.md) and
 
 The shipped registry file is empty. That is correct.
 
-Console slash commands include `/goal` (session-scoped, injected into the
+Console slash commands include `/tools` (wired-tool diagram: slash →
+route → one-line description; `/tools all` includes unwired rows,
+`/tools <name>` is a single box), `/goal` (session-scoped, injected into the
 system prompt as read-only data) and `/loop` (human-gated chat turns toward
 that goal; never starts a real-repo run). `/loop` is separately rate-limited
 (default 8 turns / 300s) for a local 27b; `/loop stop` aborts the in-flight
@@ -71,6 +73,7 @@ surfaces (`utils.auth.require_api_key`).
 | GET | `/` | Console HTML |
 | GET | `/api/status` | Health / config flags |
 | GET | `/api/registry` | Merged skills / tools / connectors |
+| GET | `/api/tools` | Wiring inventory + ASCII diagram for `/tools` |
 | GET/POST | `/api/sessions` | List / create |
 | GET | `/api/sessions/{id}` | One session |
 | POST | `/api/sessions/{id}/rename` | Rename |
