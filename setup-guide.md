@@ -118,8 +118,62 @@ the short version is that the `+cpu` wheel Linux and Windows install does not
 exist for macOS, and both `requirements.txt` and `constraints.txt` hardcode
 that `+cpu` pin.
 
-Two ways to do this. **Option A** is the fastest correct path if you also want
-the coding-harness console; **Option B** is the by-hand core-RAG install.
+Three ways to do this. **Option C** is the recommended one-shot after
+`git clone` (install + keys + Ollama + index + both servers). **Option A**
+is the installer only if you already have keys/Ollama handled. **Option B**
+is the by-hand core-RAG install.
+
+### Option C — one-shot after clone (recommended)
+
+`macos/setup-from-clone.sh` is the operator-facing "I just cloned this,
+make it run" path on Apple Silicon. It does **not** reimplement the
+installer or the key bootstrap — it chains them and fills the four holes
+Option A leaves open (Ollama, the retrieval index, API keys, starting
+both servers).
+
+```bash
+git clone https://github.com/CGFixIT/CyClaw.git && cd CyClaw
+bash ./macos/setup-from-clone.sh
+```
+
+It will:
+
+1. Run cyclaw-advisor `verify.sh` (checkout posture — dep-file presence).
+   It does **not** run `bootstrap.sh` (that skill harness git-fetches
+   `origin/main`).
+2. `brew analytics off` if Homebrew is already on PATH
+3. Require Python 3.12.x (offer `brew install python@3.12` if missing)
+4. Run `macos/install-cyclaw.sh --repo-path <this checkout>`
+5. Run `macos/setup-cyclaw-keys.sh` — autogenerates `CYCLAW_API_KEY`
+   (`openssl rand -hex 20`), then prompts (skip allowed) for Telegram,
+   Claude (`ANTHROPIC_API_KEY` — that is the only name `llm/client.py`
+   reads), Grok, and GitHub. Secrets go to Keychain + `~/.CyClaw/.env`
+   (`chmod 600`). They are never written to `config.yaml`, never inlined
+   into an rc file, and never placed on a child-process argv.
+6. Optionally `gh auth login --with-token` from stdin if `GH_TOKEN` was
+   stored (never `--token "$GH_TOKEN"`)
+7. Check Ollama; prefer the signed `.app` (will not `curl | sh` unless
+   you pass `--ollama-install-script`); pull the shipped local model
+   (`qwen3.6:27b`, or `--small-model` for `qwen2.5:7b`)
+8. Build the retrieval index (`python -m retrieval.indexer`)
+9. `exec macos/invoke-cyclaw.sh --repo <this checkout>` so both the
+   terminal (`:8787`) and the harness (`:8790`) start, and Ctrl+C owns
+   the process tree
+
+Useful flags: `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`,
+`--ollama-model TAG`, `--grok-dummy`, `--skip-install`, `--skip-keys`,
+`--skip-ollama`, `--skip-index`, `--no-browser`, `--no-fsconnect`.
+
+What it still will **not** do (deliberate, same contract as the rest of
+`macos/`): enable fsconnect writes or indexing, generate or load
+LaunchAgents (those need `--confirm --reason`), flip `app.mode` or
+`models.*.enabled`, `nltk.download()`, or inline a secret into an rc file.
+
+If `--small-model` (or `--ollama-model`) pulls a tag other than the
+shipped `models.local_llm.model`, you must update **both**
+`models.local_llm.model` and `guardrails.model` in `config.yaml` or
+`/query` will 404 against Ollama (config-guard C11). The script warns;
+it does not edit `config.yaml`.
 
 ### Option A — the installer script (handles the torch difference for you)
 
@@ -158,8 +212,10 @@ It also installs its venv at `~/.CyClaw/venv`, **not** into your clone's
 `.venv` — so after Option A you still have no environment in the clone itself.
 This targets the **harness console** on `127.0.0.1:8790`
 ([`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md)), which is a different thing
-from the core RAG gateway on `:8787`. **If you want the RAG gateway, use
-Option B** — or run both, in which case do Option B as well.
+from the core RAG gateway on `:8787`. **If you want both servers from a
+fresh clone, use Option C.** Option A alone still needs Ollama, the
+index, and keys (table above). Option B is the by-hand core-RAG path.
+
 
 ### Option B — by hand, step by step
 

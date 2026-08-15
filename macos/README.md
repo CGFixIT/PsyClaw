@@ -14,10 +14,11 @@ Console package: [`harness/README.md`](../harness/README.md).
 
 | Script | What it does |
 |---|---|
+| `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. |
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
-| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s the five CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness). |
+| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port`. |
-| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY` (`openssl rand -hex 20`); prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain (secret never on `security` argv) + `~/.CyClaw/.env` (chmod 600) + optional checkout `.env`. rc file sources the home dotenv — never inlines a secret. `--rotate`, `--skip-prompts`, `--grok-dummy`, `--no-profile-edit`, `--no-print-key`, `--repo-path`. |
+| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600). `--rotate`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent). |
 | `setup-fsconnect.sh` | Creates confined `~/CyClaw-FS` (`chmod 700`). Unless `--prepare-only`, enables list/stat/read via `_enable_fsconnect_readlist.py`. |
 | `_enable_fsconnect_readlist.py` | Writes the confined read/list `fsconnect:` profile into `config.yaml` (writes stay off). |
 | `cyclaw-keychain-set.sh` | Interactive Keychain store. Bare `-w` (secret never in argv); `-T /usr/bin/security`. Requires a TTY. |
@@ -26,6 +27,24 @@ Console package: [`harness/README.md`](../harness/README.md).
 
 Target shells: bash (including macOS 3.2) and zsh. BSD userland on macOS —
 no Homebrew required.
+
+## One-shot after clone (Apple Silicon)
+
+`setup-from-clone.sh` is the operator-facing "I just cloned this, make it
+run" path. It does **not** reimplement the scripts above — it chains them
+and fills the four holes `setup-guide.md` documents that Option A leaves
+open (Ollama, the retrieval index, API keys, starting both servers).
+
+```bash
+git clone https://github.com/CGFixIT/CyClaw.git && cd CyClaw
+bash macos/setup-from-clone.sh
+```
+
+Privacy matches `cyclaw-advisor`: secrets are never logged, never written
+to `config.yaml`, never placed on a child process argv. Key persist is
+Keychain + `~/.CyClaw/.env` (chmod 600) via `setup-cyclaw-keys.sh`.
+fsconnect writes and indexing stay off. LaunchAgents are **not** generated
+or loaded (those still need `--confirm --reason`).
 
 ## Key bootstrap
 
@@ -44,6 +63,25 @@ directory instead of `~/.CyClaw`.
 LaunchAgents still read Keychain through `cyclaw-keychain-env.sh`. They do
 not read `.env`, and this script never writes a token into a plist or the
 `cyclaw` shim.
+
+The terminal (`#apiKeyInput`) and harness (`#apiKey`) consoles hold the
+operator key **in the input element only** — never `localStorage`, never a
+cookie. `--fill-browser` injects that field on `127.0.0.1` tabs after
+opening the consoles. A scheduled rotate updates Keychain + `.env`; it
+cannot reach a closed browser, so paste once or re-run `--fill-browser`.
+
+```bash
+# first run (prompts; skip any; fill the consoles if they are up)
+bash macos/setup-cyclaw-keys.sh --grok-dummy --fill-browser
+source ~/.CyClaw/.env
+
+# rotate now, then refill the in-memory fields
+bash ~/.CyClaw/bin/setup-cyclaw-keys.sh --rotate --skip-prompts --fill-browser
+
+# write (do not load) a monthly rotator
+bash ~/.CyClaw/bin/setup-cyclaw-keys.sh --schedule-rotate monthly
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cgfixit.cyclaw.keys-rotate.plist
+```
 
 | Env var | How | Keychain service |
 |---|---|---|
