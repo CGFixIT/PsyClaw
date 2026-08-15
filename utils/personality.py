@@ -364,8 +364,11 @@ class PersonalityManager:
         if scan:
             flags = self._scan_enforced(new_soul)
             if flags:
-                audit_log({"event": "soul_apply_injection_blocked",
-                           "reason": reason, "injection_flag_count": len(flags)})
+                audit_log(
+                    {"event": "soul_apply_injection_blocked",
+                     "reason": reason, "injection_flag_count": len(flags)},
+                    cfg=self.cfg,
+                )
                 raise PromptInjectionError(
                     "Proposed soul contains critical injection patterns; refusing to apply",
                     details={"injection_flags": flags, "injection_flag_count": len(flags)},
