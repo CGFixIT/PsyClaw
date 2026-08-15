@@ -458,7 +458,8 @@ not attacker-chosen at the command level.
   now, not merely a tested-but-standalone module.
 - **The HTTP route is not a new unauthenticated surface.** It is one of the
   harness's P9 routes: `require_api_key` (fail-closed on an unset
-  `CYCLAW_API_KEY`) plus an `Origin`/`Sec-Fetch-Site` same-origin check guard
+  `CYCLAW_API_KEY`; see the ninth amendment for the one operator opt-out, which
+  is denied to non-loopback peers) plus an `Origin`/`Sec-Fetch-Site` check guard
   it, alongside the paired `GET /api/agent/runs/{id}` status read and `POST
   /api/agent/runs/{id}/decision` human approve/reject endpoint — the same
   decision point `real-repo-run-decide` already required at the CLI layer.
@@ -497,7 +498,8 @@ not attacker-chosen at the command level.
 - **So "GitHub writes are un-triggerable over the network" is retired as a
   claim.** Once `EXECUTION_ENABLED` is flipped, an authenticated, same-origin
   caller on loopback can open a draft PR against an approved-and-pushed run.
-  What still bounds it: `CYCLAW_API_KEY` (fail-closed) plus an
+  What still bounds it: `CYCLAW_API_KEY` (fail-closed, opt-out denied to
+  non-loopback peers -- ninth amendment) plus an
   `Origin`/`Sec-Fetch-Site` check on every one of those routes, the run-state
   guards (`require_approved_for_push`, `require_pushed_for_publish`), and the
   six write gates themselves. The per-invocation blast radius is unchanged —
@@ -839,8 +841,8 @@ an unenabled checkout never even imports it.
   the same I6 shape as `agentic/`/`sync`/`guardrails`, applied to a module
   that is registered onto the app (like `gate_ops.py`/`gate_auth.py`) rather
   than reached out-of-band.
-- **Every mutating route requires Bearer `CYCLAW_API_KEY` plus a non-empty
-  `reason`.** `/memory/propose`, `/memory/apply`, and `/memory/reject` all
+- **Every mutating route requires Bearer `CYCLAW_API_KEY` (subject to the
+  ninth amendment's loopback-peer opt-out) plus a non-empty `reason`.** `/memory/propose`, `/memory/apply`, and `/memory/reject` all
   route through `memory/policy.py::require_reason`; `/memory/apply`
   additionally injection-scans the payload before writing, mirroring soul's
   I5 write-path gate without overloading soul's own governance path.
@@ -867,3 +869,48 @@ an unenabled checkout never even imports it.
 Security issues: follow [`.github/SECURITY.md`](../.github/SECURITY.md). Resolved
 findings and their status live in
 [`docs/audits/SECURITY_REVIEW_STATUS.md`](./audits/SECURITY_REVIEW_STATUS.md).
+
+---
+
+## Ninth amendment (2026-08-15) — `security.api_key_optional`
+
+`config.yaml`'s `security.api_key_optional` (ships **false**) is a deliberate
+operator opt-out from the shared-secret gate. When true, `require_api_key`
+returns without checking `CYCLAW_API_KEY` on every route it guards: `gate.py`'s
+`/soul/*`, `/ops/*`, `/memory/*` and `/audit/summary`, and the harness console's
+guarded set including `/api/agent/run|push|publish` and `/api/keys`. Statements
+elsewhere in this document that describe those routes as unconditionally
+fail-closed are qualified by this amendment. It does **not** touch the separate
+session/RBAC `/auth/*` system, which stays governed by `auth.enabled`.
+
+Two controls bound it, and the first is the load-bearing one:
+
+1. **Loopback peer required, per request.** The bypass is granted only when the
+   socket peer is a loopback address. This is keyed on the peer rather than the
+   `Host` header (attacker-supplied; `TrustedHostMiddleware` is a DNS-rebinding
+   control, not authentication) and rather than the bind address (unknown to a
+   request handler, and the bind guards below run only under `main()` — the
+   shipped container's `CMD` is `uvicorn gate:app --host 0.0.0.0`, and
+   `uvicorn harness.server:app` likewise skips the harness's own check). An
+   absent ASGI `client` fails closed. `X-Forwarded-For` does not defeat it:
+   `gate._serve` passes `proxy_headers=False`, and uvicorn's default
+   `forwarded_allow_ips="127.0.0.1"` rewrites `scope["client"]` only when the
+   real peer is already loopback.
+2. **Bind-time refusal, defence in depth.** `_require_loopback_bind` refuses a
+   non-loopback `api.host` while the flag is true, including via the auth+TLS
+   route past loopback — that route proves `/query` carries a session, which
+   says nothing about the API-key routes this flag opens.
+   `CYCLAW_ALLOW_NON_LOOPBACK_BIND` still outranks the bind guard (an explicit
+   "my own auth fronts this"), but never the peer check.
+
+**Docker:** the flag is inert in a container. NAT rewrites the source address,
+so the peer is the bridge gateway rather than loopback and the routes stay
+key-gated. That is not a defect to route around: from inside the container a
+request published on `127.0.0.1:8787` and one published on `0.0.0.0:8787` are
+indistinguishable, so trusting the bridge would re-expose every containerised
+deployment. Containers should set `CYCLAW_API_KEY`.
+
+`config-guard`'s C13 warns when the flag is combined with a non-loopback
+`api.host`. It deliberately does **not** consider `security.allowed_hosts`:
+that list filters `Host` headers and opens no listening socket, so LAN names
+there do not make a loopback-bound server reachable.
