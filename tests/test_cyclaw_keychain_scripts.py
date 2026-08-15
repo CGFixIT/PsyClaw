@@ -11,6 +11,7 @@ composition, all without touching a real macOS Keychain.
 from __future__ import annotations
 
 import os
+import pty
 import shutil
 import stat
 import subprocess
@@ -26,8 +27,16 @@ _BASH = shutil.which("bash") or "bash"
 
 _FAKE_SECURITY = """#!/usr/bin/env bash
 # Stand-in for macOS's `security` CLI, controlled by env vars:
-#   FAKE_SECURITY_ITEMS: "service=secret|service2=secret2" (present items)
-#   FAKE_SECURITY_LOG:   if set, add-generic-password invocations are appended here
+#   FAKE_SECURITY_ITEMS:     "service=secret|service2=secret2" (present items)
+#   FAKE_SECURITY_LOG:       if set, add-generic-password invocations (argv
+#                            only, with -w's value never appended -- see
+#                            below) are appended here
+#   FAKE_SECURITY_STDIN_LOG: if set, whatever add-generic-password reads from
+#                            its own stdin after a bare `-w` token is written
+#                            here -- simulating the real `security` CLI's
+#                            interactive TTY prompt (readpassphrase(3)) for a
+#                            `-w` with no attached value, which is exactly how
+#                            cyclaw-keychain-set.sh invokes it.
 set -euo pipefail
 cmd="$1"; shift
 case "$cmd" in
@@ -52,8 +61,27 @@ case "$cmd" in
     exit 44
     ;;
   add-generic-password)
+    args_log=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -w)
+          # Bare -w, no attached value: read the "password" the same way the
+          # real security CLI's interactive prompt would, from this process's
+          # own stdin -- never from argv.
+          if [ -n "${FAKE_SECURITY_STDIN_LOG:-}" ]; then
+            IFS= read -r secret_from_stdin
+            printf '%s' "$secret_from_stdin" > "${FAKE_SECURITY_STDIN_LOG}"
+          fi
+          shift 1
+          ;;
+        *)
+          args_log="$args_log $1"
+          shift 1
+          ;;
+      esac
+    done
     if [ -n "${FAKE_SECURITY_LOG:-}" ]; then
-      echo "add-generic-password $*" >> "$FAKE_SECURITY_LOG"
+      echo "add-generic-password$args_log" >> "$FAKE_SECURITY_LOG"
     fi
     exit 0
     ;;
@@ -184,34 +212,86 @@ def test_env_script_second_layer_still_fails_closed_on_missing_item(fake_securit
 
 
 def test_set_script_usage_error_without_service_arg(fake_security: Path) -> None:
+    # Wrong arg count is checked before the TTY check, so this still exercises
+    # cleanly over a plain (non-TTY) pipe.
     result = _run(_SET_SCRIPT, fake_security_bin=fake_security, input_text="secret\n")
     assert result.returncode == 1
     assert "usage:" in result.stderr
 
 
-def test_set_script_refuses_empty_secret(fake_security: Path) -> None:
-    result = _run(_SET_SCRIPT, "svc", fake_security_bin=fake_security, input_text="\n")
+def test_set_script_requires_tty_and_refuses_non_interactive_stdin(fake_security: Path) -> None:
+    # cyclaw-keychain-set.sh no longer reads the secret into a shell variable
+    # at all (see its header) -- it hands a bare `security ... -w` to the real
+    # `security` CLI, which prompts via the controlling TTY. That means it can
+    # no longer validate "was the secret empty" itself (it never sees the
+    # value), so it instead refuses outright when stdin isn't a TTY, rather
+    # than silently proceeding into a `security` call that would hang or fail
+    # in a way the operator can't diagnose. This subprocess's stdin is a
+    # regular pipe (matching how a CI/non-interactive caller would invoke it),
+    # never a pty, so the guard must fire.
+    result = _run(_SET_SCRIPT, "svc", fake_security_bin=fake_security, input_text="hunter2\n")
     assert result.returncode == 1
-    assert "empty secret refused" in result.stderr
+    assert "requires an interactive terminal" in result.stderr
+
+
+def _run_set_script_via_pty(
+    *, fake_security_bin: Path, service: str, typed_secret: str, log_path: Path, stdin_log_path: Path
+) -> subprocess.CompletedProcess[str]:
+    """Run cyclaw-keychain-set.sh with a real pty on stdin, matching how an
+    operator actually invokes it at a terminal -- `[ -t 0 ]` must see a TTY,
+    and the fake `security` stub reads the "typed" secret from that same TTY
+    the way the real CLI's bare `-w` prompt would, never from our script's
+    own variables or argv.
+    """
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_security_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["FAKE_SECURITY_LOG"] = str(log_path)
+    env["FAKE_SECURITY_STDIN_LOG"] = str(stdin_log_path)
+
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv, test-only fake security stub
+            [_BASH, str(_SET_SCRIPT), service],
+            stdin=slave_fd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            cwd=_REPO_ROOT,
+            text=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+        os.write(master_fd, f"{typed_secret}\n".encode())
+        stdout, stderr = proc.communicate(timeout=30)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    finally:
+        os.close(master_fd)
+        if slave_fd != -1:
+            os.close(slave_fd)
 
 
 def test_set_script_stores_via_fake_security_and_never_echoes_secret_to_argv(fake_security: Path, tmp_path: Path) -> None:
     log_path = tmp_path / "security-calls.log"
-    env = os.environ.copy()
-    env["PATH"] = f"{fake_security}{os.pathsep}{env.get('PATH', '')}"
-    env["FAKE_SECURITY_LOG"] = str(log_path)
-    result = subprocess.run(
-        [_BASH, str(_SET_SCRIPT), "svc"],
-        check=False,
-        capture_output=True,
-        input="hunter2\n",
-        text=True,
-        env=env,
-        timeout=30,
-        cwd=_REPO_ROOT,
+    stdin_log_path = tmp_path / "security-stdin.log"
+
+    result = _run_set_script_via_pty(
+        fake_security_bin=fake_security,
+        service="svc",
+        typed_secret="hunter2",  # noqa: S106 - fake fixture value, not a real credential
+        log_path=log_path,
+        stdin_log_path=stdin_log_path,
     )
+
     assert result.returncode == 0
     assert "stored Keychain item: service=svc" in result.stdout
+
     logged = log_path.read_text(encoding="utf-8")
     assert "-s svc" in logged
+    assert "-T /usr/bin/security" in logged
     assert "-U" in logged
+    assert "hunter2" not in logged  # the whole point: never in the security process's argv
+
+    # The fake stub *did* receive the real secret -- just via the TTY read
+    # path (its own stdin), proving the mechanism actually delivers the
+    # value end-to-end rather than silently losing it.
+    assert stdin_log_path.read_text(encoding="utf-8") == "hunter2"
