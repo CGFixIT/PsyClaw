@@ -31,7 +31,7 @@ async def _allow_all(_request: Request) -> None:
     return None
 
 
-def _make_query_app(manager, cfg=None):
+def _make_query_app(manager, cfg=None, limiter=None):
     app = FastAPI()
     events = []
 
@@ -43,7 +43,7 @@ def _make_query_app(manager, cfg=None):
         return {"username": getattr(request.state, "auth_username", None), "ok": True}
 
     identity = register_auth_routes(
-        app, cfg or _cfg(), audit=audit, enforce_rate_limit=_allow_all, auth_manager=manager,
+        app, cfg or _cfg(), audit=audit, enforce_rate_limit=limiter or _allow_all, auth_manager=manager,
     )
     if manager is not None:
         attach_identity_to_query(app, identity)
@@ -51,9 +51,9 @@ def _make_query_app(manager, cfg=None):
     return app
 
 
-def _client(manager=None, cfg=None):
+def _client(manager=None, cfg=None, limiter=None):
     cfg = cfg or _cfg()
-    app = _make_query_app(manager, cfg=cfg)
+    app = _make_query_app(manager, cfg=cfg, limiter=limiter)
     return TestClient(app, base_url=_SAME_ORIGIN)  # DevSkim: ignore DS162092,DS137138 - test loopback host
 
 
@@ -79,9 +79,30 @@ class TestQueryAuthDisabled:
 
 class TestQueryAuthEnabled:
     def test_missing_credential_is_401(self, manager, user):
-        r = _client(manager).post("/query", json={})
+        client = _client(manager)
+        r = client.post("/query", json={})
         assert r.status_code == 401
         assert r.json()["detail"]["code"] == "AUTH_REQUIRED"
+        # Finding 5 (PR #940 review): the rejection must reach the audit log
+        # even though it raised inside the dependency, before the endpoint.
+        rejected = [
+            e for e in client.app.state.audit_events
+            if e.get("event") == "auth_credential_rejected"
+        ]
+        assert len(rejected) == 1
+        assert rejected[0]["path"] == "/query"
+
+    def test_rejected_credential_is_rate_limited(self, manager, user):
+        """Finding 2 (PR #940 review): /query's limiter lives in the endpoint
+        body, which dependencies run before -- so the 401 path must enforce
+        the budget itself. A spent budget answers 429, not 401."""
+        from fastapi import HTTPException
+
+        async def deny_all(_request: Request) -> None:
+            raise HTTPException(status_code=429, detail={"code": "RATE_LIMIT"})
+
+        r = _client(manager, limiter=deny_all).post("/query", json={})
+        assert r.status_code == 429
 
     def test_session_cookie_works(self, manager, user):
         username, password = user

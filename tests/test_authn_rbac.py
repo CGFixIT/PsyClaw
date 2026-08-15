@@ -60,6 +60,46 @@ def test_second_admin_allows_demoting_the_first(manager):
     assert manager.get_user(BOOTSTRAP_USERNAME).role == "operator"
 
 
+def test_last_admin_guard_lives_in_the_sql(manager):
+    """PR #940 review (check-then-act race): the guard must hold even when the
+    Python pre-check is bypassed entirely -- raw SQL through the manager's own
+    connection cannot demote, disable, or delete the last enabled admin."""
+    manager.bootstrap_if_empty()
+    cur = manager.conn.execute(
+        manager._sql_set_role, ("operator", BOOTSTRAP_USERNAME, "operator")
+    )
+    assert cur.rowcount == 0
+    cur = manager.conn.execute(manager._sql_disable_user, (BOOTSTRAP_USERNAME,))
+    assert cur.rowcount == 0
+    cur = manager.conn.execute(manager._sql_delete_user, (BOOTSTRAP_USERNAME,))
+    assert cur.rowcount == 0
+    manager.conn.rollback()
+    user = manager.get_user(BOOTSTRAP_USERNAME)
+    assert user.role == "admin"
+    assert user.disabled is False
+
+
+def test_last_admin_guard_holds_across_connections(tmp_path):
+    """A second AuthManager (the `cyclaw-user` CLI process model: separate
+    connection, separate lock) must still be refused."""
+    cfg = {"auth": {"enabled": True, "db_path": str(tmp_path / "auth.db")}}
+    first = AuthManager(cfg)
+    second = AuthManager(cfg)
+    try:
+        first.bootstrap_if_empty()
+        first.create_user("other", _GOOD, role="admin")
+        first.set_role(BOOTSTRAP_USERNAME, "operator")
+        with pytest.raises(AuthLastAdmin):
+            second.set_role("other", "operator")
+        with pytest.raises(AuthLastAdmin):
+            second.disable_user("other")
+        with pytest.raises(AuthLastAdmin):
+            second.delete_user("other")
+    finally:
+        first.close()
+        second.close()
+
+
 def test_delete_user_removes_row(manager):
     manager.create_user("alice", _GOOD)
     manager.delete_user("alice")

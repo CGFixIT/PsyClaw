@@ -139,6 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         keyfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
+        # Best-effort hardening only: on Windows the POSIX mode bits are a
+        # partial no-op against ACLs anyway, and a failed chmod must not
+        # report failure for a cert pair that was written successfully.
         pass
     print(f"wrote {certfile}")
     print(f"wrote {keyfile}")
