@@ -556,6 +556,7 @@ python -m agentic.fsconnect.cli mkdir   --path ... --reason ... --confirm
 python -m agentic.fsconnect.cli move    --src ... --dst ... --reason ... --confirm
 python -m agentic.fsconnect.cli delete  --path ... --reason ... --confirm   # trash; --purge needs allow_hard_delete
 python -m agentic.fsconnect.cli trash-empty / trash-restore / quota-status
+python -m agentic.fsconnect.cli trash-empty-plist   # Darwin-only: generates the launchd plist, never loads it
 python -m agentic.fsconnect.cli index   [--apply] [--reindex]
 python -m agentic.fsconnect.cli reveal
 python -m agentic.fsconnect.cli test
@@ -655,6 +656,7 @@ python -m agentic.sqlconnect.cli test
 | [`docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`](../docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md) | FS security review checklist |
 | [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) | Skills registry governance |
 | [`harness/README.md`](../harness/README.md) | Coding-console package (`:8790`) |
+| [`macos/README.md`](../macos/README.md) | launchd glue — the fsconnect trash-empty plist generator's runtime home |
 | [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md) | macOS/Linux harness install |
 | [`docs/HARNESS_POWERSHELL.md`](../docs/HARNESS_POWERSHELL.md) | Windows harness install |
 | [`docs/THREAT_MODEL.md`](../docs/THREAT_MODEL.md) | Threat-model amendments for this layer |
