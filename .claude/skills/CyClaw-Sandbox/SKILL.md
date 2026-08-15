@@ -11,7 +11,8 @@ description: >
   rate limit, GitHub status, harness runs). Use when asked to verify,
   smoke-test, validate, or test CyClaw; mentions CyClaw swarm, terminal
   consoles, the harness console, triple-gate API, Grok/Claude fallback, key
-  redaction, due diligence invariants, or running the test suite.
+  redaction, due diligence invariants, or running the test suite. Not the
+  Claude Code session-memory skill (memory-orchestrator / docs/memories/).
 ---
 
 # CyClaw Swarm Verification
@@ -27,6 +28,13 @@ invariants, API key redaction, and security invariants. Supports both sandbox
 Three ladders. They are complementary. A green run of one is **not** evidence
 the others would also pass. Always invoke with `python3.12` (never bare
 `python3` — see Gotchas).
+
+**Claude Code `/memory` is not this skill.** In a Claude Code session,
+`/memory` still means `memory-orchestrator` → `docs/memories/`. The harness
+console slash command `/memory` (verified below) is a separate, fail-closed
+operator-note toggle under `~/.CyClaw/memory`. It does not extract session
+memory, does not write `docs/memories/`, and does not replace the
+PreCompact / SessionEnd hooks.
 
 | Ladder | Command | Proves | Does **not** prove |
 |---|---|---|---|
