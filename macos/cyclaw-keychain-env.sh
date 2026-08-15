@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Fetch one secret from the macOS Keychain and inject it into a named
 # environment variable before exec'ing the wrapped command. Generated
-# launchd plists (python -m telegram.cli poll-plist / health-plist) put
-# this in front of ProgramArguments instead of ever writing a token into
-# the plist itself.
+# launchd plists (python -m telegram.cli poll-plist / health-plist,
+# macos/generate_service_plist.py) put this in front of ProgramArguments
+# instead of ever writing a token into the plist itself.
 #
 # Usage:
 #   cyclaw-keychain-env.sh <keychain-service> <env-var-name> -- <command> [args...]

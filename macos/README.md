@@ -21,6 +21,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 | `_enable_fsconnect_readlist.py` | Writes the confined read/list `fsconnect:` profile into `config.yaml` (writes stay off). |
 | `cyclaw-keychain-set.sh` | Interactive Keychain store. Bare `-w` (secret never in argv); `-T /usr/bin/security`. Requires a TTY. |
 | `cyclaw-keychain-env.sh` | Fetch one Keychain item, export it, `exec` the wrapped command. Fail-closed if missing/empty. |
+| `generate_service_plist.py` | Supervised LaunchAgent for `gate.py` or the harness (`--service gate\|harness`). Highest-risk generator: refuses to write without `--confirm` **and** a non-empty `--reason`. `KeepAlive: {SuccessfulExit: false}` (crash-only restart, never after a clean stop), `ThrottleInterval` 30s default, optional `--api-key-service` chains the Keychain wrapper. Never loads the agent itself. |
 
 Target shells: bash (including macOS 3.2) and zsh. BSD userland on macOS —
 no Homebrew required.
