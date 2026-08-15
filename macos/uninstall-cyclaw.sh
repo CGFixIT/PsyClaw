@@ -64,10 +64,12 @@ unschedule_sync_job
 # #910/#911 added generators for telegram-poll (KeepAlive), telegram-health,
 # and fsconnect-trash. Those jobs are NOT registered through sync.cli, so the
 # step above never sees them -- a loaded telegram-poll KeepAlive would keep
-# talking to Telegram after `cyclaw` is gone. Best-effort: if the generated
-# plist is still at the well-known path, bootout (Darwin only) then delete it.
-# Failures print a WARNING and uninstall continues. Gate/harness labels are
-# not listed here -- they belong to a still-open design PR, not landed main.
+# talking to Telegram after `cyclaw` is gone. Best-effort: bootout the
+# launchd label even if the plist file is already gone (a KeepAlive job
+# can stay loaded after a hand-deleted plist). Then delete the file if
+# it is still present. Failures print a WARNING and uninstall continues.
+# Gate/harness labels are not listed here -- they belong to a still-open
+# design PR, not landed main.
 unschedule_landed_launchagents() {
   local uid dest label
   uid="$(id -u 2>/dev/null || echo 0)"
@@ -77,13 +79,13 @@ unschedule_landed_launchagents() {
     com.cgfixit.cyclaw.fsconnect-trash
   do
     dest="$HOME/Library/LaunchAgents/${label}.plist"
+    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+      launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
+    fi
     if [ ! -f "$dest" ]; then
       continue
     fi
     echo "[cyclaw] removing LaunchAgent $label..."
-    if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
-      launchctl bootout "gui/${uid}" "$dest" 2>/dev/null || true
-    fi
     if ! rm -f "$dest"; then
       echo "[cyclaw] WARNING: could not remove $dest" >&2
     fi

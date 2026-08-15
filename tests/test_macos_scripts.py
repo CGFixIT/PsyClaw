@@ -105,6 +105,8 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
         assert label in text
     assert "com.cgfixit.cyclaw.gate" not in text
     assert "com.cgfixit.cyclaw.harness" not in text
+    # Label-domain bootout must run even when the plist file is already gone.
+    assert 'bootout "gui/${uid}/${label}"' in text
 
 
 def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
