@@ -16,11 +16,11 @@ I6: this module is harness-local. It never imports ``gate``, ``graph``,
 
 from __future__ import annotations
 
-import html
 import ipaddress
 import json
 import logging
-from html.parser import HTMLParser
+import socket
+from html import parser, unescape
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
@@ -73,7 +73,7 @@ class WebToolError(AgenticError):
         super().__init__(message, code=code, details=details)
 
 
-class _TextExtractor(HTMLParser):
+class _TextExtractor(parser.HTMLParser):
     """Pull visible text; drop script/style. Stdlib only."""
 
     def __init__(self) -> None:
@@ -214,7 +214,6 @@ def assert_public_host(host: str) -> None:
     check and the socket. A pinned-IP transport is the future fix; this
     module does not add one. See docs/THREAT_MODEL.md tenth amendment.
     """
-    import socket  # noqa: WPS433  # local import keeps module import count low
     # Pre-connect IP check only — httpx will DNS again. Not a pin.
     clean = _host_of(host)
     if not clean or clean in _BLOCKED_HOSTS:
@@ -240,13 +239,13 @@ def extract_text(body: str, content_type: str) -> str:
     """Visible text from HTML; otherwise a clipped plaintext body."""
     lowered = (content_type or "").split(";", 1)[0].strip().lower()
     if "html" in lowered:
-        parser = _TextExtractor()
-        parser.feed(body)
-        parser.close()
-        text = " ".join("".join(parser.parts).split())
+        extractor = _TextExtractor()
+        extractor.feed(body)
+        extractor.close()
+        text = " ".join("".join(extractor.parts).split())
     else:
         text = " ".join(body.split())
-    return html.unescape(text)[:_MAX_BYTES]
+    return unescape(text)[:_MAX_BYTES]
 
 
 def _snippets(text: str, query: str) -> list[str]:
