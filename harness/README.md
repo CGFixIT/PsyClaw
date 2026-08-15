@@ -33,8 +33,11 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | `config.py` | Home layout + read-only view of repo `config.yaml` |
 | `sessions.py` | Per-session JSON + token tallies |
 | `ollama.py` | Local OpenAI-compatible chat client |
-| `prompts.py` | System prompt (repo skills + optional soul + optional session goal) |
+| `prompts.py` | System prompt (repo skills + optional soul + optional session goal + optional `/web` extract) |
 | `registry_view.py` | Read-only merge of skills / tools / connectors |
+| `tools_view.py` | Wired-tool inventory + ASCII diagram (`/tools`) |
+| `skills_view.py` | Wired-skill inventory + ASCII diagram (`/skills`) |
+| `web_search.py` | Allowlist-only GET for `/web` (off by default; no search engine) |
 | `agent_policy.py` | Check-profile names for real-repo runs |
 | `schemas.py` | Request models |
 
@@ -52,17 +55,65 @@ See [`agentic/README.md`](../agentic/README.md) and
 
 The shipped registry file is empty. That is correct.
 
-Console slash commands include `/skills` and `/tools` (wired-surface
-diagrams), `/web` (allowlist-only GET; **off by default**; even when on,
-only operator-allowlisted http(s) hosts can be fetched — no search engine,
-no browser, no private/loopback IPs), `/goal` (session-scoped, injected into the
-system prompt as read-only data) and `/loop` (human-gated chat turns toward
-that goal; never starts a real-repo run). `/loop` is separately rate-limited
-(default 8 turns / 300s) for a local 27b; `/loop stop` aborts the in-flight
-Ollama socket (`POST /api/chat/cancel`) instead of waiting for the turn to
-finish. Loop turns send `{"loop": true}`, use a 1024-token output budget and
-a clipped history window, and share a process-wide single-generation lock
-with ordinary chat so Metal is never double-booked.
+## Console usage
+
+Type these in `harness.html` (they are **not** `/query` RAG commands).
+`/loop` and `/web` never start `/api/agent/*`. `/web` is **off** until you
+turn it on, and even then it can GET only hosts you allowlisted.
+
+### Inventory
+
+```
+/help
+/skills                  # prompt-injected + /agent-check skills (wired only)
+/skills all              # include the repo / governed catalog
+/skills ponytail         # one-skill box
+/tools                   # harness routes that are actually registered
+/tools all               # include MCP hybrid_search (catalog only)
+/tools goal              # one-tool box
+```
+
+### Goal + loop (local 27b)
+
+```
+/goal land the harness /web allowlist
+/goal                    # show current
+/loop 3                  # three chat turns toward the goal (default 3, cap 5)
+/loop stop               # abort the in-flight Ollama socket
+/goal clear
+```
+
+`/loop` is separately rate-limited (default 8 turns / 300s). Turns send
+`{"loop": true}`, use a 1024-token output budget and a clipped history
+window, and share a process-wide single-generation lock with ordinary chat
+so Metal is never double-booked. A loop without a goal is `400 LOOP_REQUIRES_GOAL`.
+
+### Allowlist-only web (offline-safe)
+
+There is no search engine and no browser. “Search” greps pages you already
+allowlisted. Private / loopback / metadata IPs are refused at allow and
+at fetch (DNS is checked at fetch time).
+
+```
+/web                              # status: enabled + allowlist (no page text)
+/web allow https://docs.python.org/3/
+/web allow docs.python.org        # host form; https assumed
+/web on                           # persist enable; still fail-closed if allowlist empty
+/web fetch https://docs.python.org/3/library/os.html
+/web search pathlib               # scan allowlisted pages only
+/web inject                       # last extract → next chat system prompt (untrusted)
+# then type a normal question; the 27b sees the extract as read-only context
+/web forget                       # drop the injected extract
+/web deny docs.python.org
+/web off
+```
+
+Allowing `https://docs.python.org/3/` does **not** allow
+`https://docs.python.org/` or any other host. `/web fetch` against a
+non-allowlisted URL is `WEB_HOST_DENIED`. `/web` off is `409 WEB_DISABLED`.
+
+Refused on purpose: `localhost`, `127.0.0.1`, RFC1918, link-local,
+`169.254.169.254`, `user:pass@host`, `ftp://`, wildcards, redirects.
 
 ## Operator API (loopback)
 
@@ -103,20 +154,22 @@ surfaces (`utils.auth.require_api_key`).
 | POST | `/api/agent/runs/{id}/discard` | Reclaim clone |
 | GET | `/api/harness/runs` | Local run list |
 
-## Verify `/goal` + `/loop`
+## Verify `/goal` + `/loop` + `/web`
 
-Do not run the full 14-phase swarm just to check these two commands. Use
+Do not run the full 14-phase swarm just to check these commands. Use
 ladder **A** in [`.claude/skills/CyClaw-Sandbox/SKILL.md`](../.claude/skills/CyClaw-Sandbox/SKILL.md)
 (operator map):
 
 ```bash
-python3.12 -m pytest tests/test_harness.py tests/test_harness_console_contract.py \
-  tests/test_harness_auth.py tests/test_harness_isolation.py -q --tb=short
+python3.12 -m pytest tests/test_harness.py tests/test_harness_web.py \
+  tests/test_harness_console_contract.py tests/test_harness_auth.py \
+  tests/test_harness_isolation.py -q --tb=short
 python3.12 .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
 ```
 
 That is the contract: goal CRUD + prompt injection, `LOOP_REQUIRES_GOAL`,
-dedicated loop limiter, `/loop stop` cancel, HTML slash wiring, and I6
-(harness never imports `agentic/`). It does **not** prove live 27b quality
-or browser `/loop auto` + `GOAL_DONE`.
+dedicated loop limiter, `/loop stop` cancel, `/web` default-off + allowlist
++ SSRF refusals, HTML slash wiring, and I6 (harness never imports
+`agentic/`). It does **not** prove live 27b quality, browser `/loop auto` +
+`GOAL_DONE`, or a real fetch of an allowlisted host (tests use MockTransport).
 
