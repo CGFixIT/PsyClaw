@@ -17,7 +17,11 @@ existing subsystems rather than duplicating them:
 - **Harness optimizer** — `agentic/harness_optimizer/` run artifacts under
   `data/agentic/harness_optimizer/runs/` surface in the console via `/harness`.
 - **Skills registry** — `.claude/skills/*/SKILL.md` plus the governed
-  `data/agentic/skills_registry.json` (read-only view).
+  `data/agentic/skills_registry.json` (read-only view). `/skills` in the
+  console is a **wiring diagram** of what this process actually injects or
+  runs as `/agent checks`, not a dump of every SKILL.md.
+- **Allowlist-only web** — `/web` (off by default). GET of operator-allowlisted
+  http(s) hosts only; no search engine, no browser, no private/loopback IPs.
 - **Local models** — Ollama via the OpenAI-compatible `local_llm.base_url`
   from `config.yaml`; no keys, no login, offline.
 
@@ -58,11 +62,11 @@ silently answer `python -m harness.server` in place of the venv's.
 
 | Path | Contents |
 |---|---|
-| `config.json` | selected model, soul on/off, port |
-| `sessions/` | one JSON per chat session: messages + token tally |
+| `config.json` | selected model, soul on/off, **web on/off**, port |
+| `sessions/` | one JSON per chat session: messages + token tally + optional `/goal` |
 | `skills/` | user-visible copy of `.claude/skills` (seeded once) |
-| `tools/` | connector/tool state |
-| `memory/` | harness memory log (NOT the governed soul) |
+| `tools/` | `/web` allowlist + last extract (`web_allowlist.json`, `web_last.json`, `web_context.txt`) |
+| `memory/` | harness-local log (NOT the governed `memory/` package or `soul.md`) |
 | `repo/` | the CyClaw checkout (when the installer cloned) |
 | `venv/` | the Python environment |
 | `bin/` | `cyclaw.cmd` + `Invoke-CyClaw.ps1` |
@@ -80,8 +84,13 @@ Slash commands (type `/help` in the console):
 |---|---|
 | `/session new\|list\|use\|rename\|info` | chat session management |
 | `/soul on\|off\|status` | include the governed soul in the system prompt (read-only; `soul.md` writes stay with `utils.personality`) |
+| `/goal [text]\|clear` | session-scoped intent, injected into the chat prompt (not a write authorization) |
+| `/loop [n]\|stop\|auto` | human-gated chat turns toward `/goal` (never starts `/api/agent/*`) |
 | `/model [use <name>]` | show / select the local model |
-| `/skills`, `/tools`, `/connectors` | merged registry views |
+| `/skills [all\|<name>]` | wiring diagram of skills this console actually injects or runs as `/agent checks` |
+| `/tools [all\|<name>]` | wiring diagram of harness routes that are registered; MCP `hybrid_search` is catalog-only |
+| `/web [on\|off\|allow\|fetch\|search]` | allowlist-only GET; **off by default**; no search engine, no browser |
+| `/connectors` | connector catalog |
 | `/github` | agentic GitHub status (read-only subprocess) |
 | `/agent run\|plan\|read\|confirm\|cancel` | stage, refine, authorize, or discard a real-repo coding run |
 | `/agent status\|approve\|reject <id>` | read a run record, or decide a pending one |
@@ -95,6 +104,12 @@ Slash commands (type `/help` in the console):
 
 Every chat reply shows the model name and the prompt/completion token counts
 reported by Ollama; the header bar keeps a running tally across sessions.
+
+Copy-paste examples for `/goal`, `/loop`, `/skills`, `/tools`, and `/web`
+(including the fail-closed `/web` refusals) live in
+[`harness/README.md`](../harness/README.md) § Console usage. `/loop` is
+separately rate-limited for a local 27b; `/web` can GET only hosts you
+allowlisted, and only after `/web on`.
 
 ### Agentic coding runs
 

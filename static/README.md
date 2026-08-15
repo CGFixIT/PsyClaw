@@ -7,7 +7,7 @@ loopback only.
 | File | Served by | What it is |
 |---|---|---|
 | `terminal.html` + `terminal.js` | `gate.py` at `GET /` (plus the `/static` mount) on `127.0.0.1:8787` | The CyClaw Terminal — the operator console for `/query` and the authenticated soul/ops/memory endpoints. |
-| `harness.html` | `harness/server.py` on `127.0.0.1:8790` | The coding-harness console (grok-build-style slash-command UI). |
+| `harness.html` | `harness/server.py` on `127.0.0.1:8790` | The coding-harness console (slash-command UI: `/goal`, `/loop`, `/skills`, `/tools`, `/web`, `/agent`, …). |
 | `extractor.html` + `extractor.js` | reachable at `/static/extractor.html` via the static mount, but nothing links to it — also works opened directly from disk | Standalone keyword-insight extractor utility; calls no CyClaw endpoint. |
 
 ## The console contract
@@ -18,6 +18,13 @@ state-changing POST endpoint must be added to that test's `_POST_PATHS`, and
 any route the console calls must really exist. Treat `terminal.html` as a
 tested artifact, not free-form UI.
 
+`tests/test_harness_console_contract.py` does the same for `harness.html`:
+every `api(...)` path (including concatenations like
+`/api/sessions/{}/goal`) must exist on `harness/server.py` with the method
+the console uses. Slash-command contracts for `/goal`, `/loop`, `/skills`,
+`/tools`, and `/web` live there too. `/web` and `/loop` must never call
+`/api/agent/*`.
+
 Security posture for anything added here: same-origin only, no third-party
 script/font/CDN references (the servers are loopback-bound and offline-first
 — an external reference would both leak and break), and any
@@ -27,3 +34,4 @@ script/font/CDN references (the servers are loopback-bound and offline-first
 
 - Route table and auth requirements per endpoint: `CLAUDE.md` §2 "All HTTP routes"
 - Harness walkthroughs: `docs/HARNESS_POWERSHELL.md`, `docs/HARNESS_MACOS.md`
+- Harness slash-command usage: [`../harness/README.md`](../harness/README.md)

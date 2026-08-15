@@ -3,6 +3,7 @@
 Optional, **default-off** facts + episodes store with propose/apply governance and optional retrieval fusion.
 
 > **Not** `docs/memories/` (sandbox notes). This feature lives under `docs/memory/` and package `memory/`.
+> **Not** the harness home `~/.CyClaw/memory/` (console-local log). `/goal` is session data on the harness, not a memory fact.
 
 ## Defaults
 

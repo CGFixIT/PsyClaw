@@ -49,3 +49,4 @@ Hand-editing a template: replace every `REPLACE_*` value, create
 - Dropbox sync scheduling: [`docs/SYNC_README.md`](../docs/SYNC_README.md)
 - Telegram channel: [`docs/channels/TELEGRAM_DESIGN.md`](../docs/channels/TELEGRAM_DESIGN.md)
 - Agentic / registry: [`agentic/README.md`](../agentic/README.md)
+- Console slash commands (`/goal`, `/loop`, `/skills`, `/tools`, `/web`): [`harness/README.md`](../harness/README.md)

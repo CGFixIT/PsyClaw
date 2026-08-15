@@ -44,7 +44,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped held-handle reads + gated writes over local/SMB shares) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority. When `guardrails.enabled` is the literal `true`, `utils/guardrail_bridge.py` wires visible `guardrail_input` / `guardrail_output` nodes; see [`guardrails/README.md`](guardrails/README.md)
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
-10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies and a home-dir layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
+10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, `/goal` + human-gated `/loop`, wired `/skills` and `/tools` diagrams, and allowlist-only `/web` (off by default). Home layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
 11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
 12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, Stage 2 of `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. The three `/auth/*` routes exist regardless of `auth.enabled` and return 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **Stage 3 (enforcing a credential on `/query` and the console) has not landed** — these routes build sessions/login/logout/device tokens only
 13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, package [`memory/README.md`](memory/README.md), plan in [`docs/memory/README.md`](docs/memory/README.md)) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. Not `docs/memories/` (sandbox notes)
@@ -546,14 +546,17 @@ CyClaw/
 │   ├── rails.py                # offline heuristic rails (injection/soul/grounding)
 │   ├── metrics.py              # separate logs/guardrails.jsonl stream (hashes only)
 │   └── config/                 # NeMo config.yml + rails.co (Colang flows)
-├── harness/                    # (v1.9) coding console on 127.0.0.1:8790 (see README.md)
-│   ├── README.md
+├── harness/                    # (v1.9) coding console on 127.0.0.1:8790 (see harness/README.md)
+│   ├── README.md               # slash-command usage (/goal /loop /skills /tools /web)
 │   ├── server.py               # FastAPI control plane (cyclaw-harness)
-│   ├── sessions.py             # JSON session store with per-session token tallies
+│   ├── sessions.py             # JSON session store with per-session token tallies + /goal
 │   ├── ollama.py               # loopback-only OpenAI-compatible /v1 chat client
 │   ├── config.py               # ~/.CyClaw (or %USERPROFILE%\.CyClaw) home layout
-│   ├── prompts.py              # system prompt from ponytail + karpathy skills (+ soul, read-only)
-│   ├── registry_view.py        # merged skills/tools/connectors view (AST-parses MCP tools)
+│   ├── prompts.py              # ponytail + karpathy (+ optional soul, /goal, /web extract)
+│   ├── registry_view.py        # merged catalog (AST-parses MCP tools; I6)
+│   ├── tools_view.py           # /tools wiring diagram (live routes vs MCP catalog)
+│   ├── skills_view.py          # /skills wiring diagram (prompt + agent-check vs catalog)
+│   ├── web_search.py           # allowlist-only GET; off by default; no search engine
 │   ├── agent_policy.py         # check-profile allowlist — console sends profile names, never argv
 │   └── schemas.py              # request models
 ├── telegram/                   # (v1.9) optional Telegram channel (out-of-band), shipped enabled: false
@@ -959,14 +962,21 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
   token counts; sessions persist as human-inspectable JSON with atomic writes.
 - **Reuse, not duplication:** GitHub actions go through the same
   `utils.ops_runner` subprocess shim as `/ops/agentic` (read mode by default);
-  the skills/tools/connectors panes are read-only registry views — including
-  the governed `data/agentic/skills_registry.json` catalog alongside the
-  repo's own filesystem skills — composed by `harness/registry_view.py`; the
-  system prompt is composed from the repo's own `ponytail` +
-  `karpathy-guidelines` skills, with the governed soul appended read-only when
-  enabled.
+  `/skills` and `/tools` are **wiring diagrams** (what this console actually
+  injects, runs, or has registered) — not a dump of every file on disk.
+  MCP `hybrid_search` appears under `/tools all` as catalog-only; the
+  console does not invoke it. `/goal` is session data in the system prompt;
+  `/loop` is a human-gated sequence of `/api/chat` turns toward that goal
+  and never starts `/api/agent/*`. `/web` is allowlist-only GET, **off by
+  default**, no search engine. The governed
+  `data/agentic/skills_registry.json` catalog is still merged into
+  `GET /api/registry` (read-only here). The system prompt is composed from
+  the repo's own `ponytail` + `karpathy-guidelines` skills, with the
+  governed soul appended read-only when enabled, plus optional `/goal` and
+  `/web inject` extracts.
 
 Full setup, slash-command reference, home layout, and security posture:
+[`harness/README.md`](harness/README.md) (usage examples),
 [`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md) (Windows) and
 [`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md) (macOS/Linux). The macOS doc
 covers only what genuinely differs — install glue, the torch build, git

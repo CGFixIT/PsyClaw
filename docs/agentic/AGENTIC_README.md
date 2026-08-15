@@ -6,6 +6,10 @@ GitHub-context + skills-registry surface, this layer also owns
 `deepagent_github` subgraph code — see §9 and
 `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`. Primary invocation remains
 `python -m agentic.cli` (or authenticated harness/`/ops/*` subprocess shims).
+The harness console (`python -m harness.server`) is a **sibling** package:
+`/skills` / `/tools` are wiring diagrams, `/goal`+`/loop` are chat-only, and
+`/web` is allowlist-only GET — none of them write this registry. See
+[`harness/README.md`](../../harness/README.md).
 
 An **opt-in, out-of-band** layer that gives CyClaw read-only GitHub context and a
 governed local skills registry. It runs strictly as `python -m agentic.cli` and is

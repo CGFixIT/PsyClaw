@@ -132,8 +132,10 @@ the launcher.
 Same slash commands, same routes, same behavior as
 `docs/HARNESS_POWERSHELL.md` describes — the console and the FastAPI app
 underneath it are the same Python code on every platform. See that doc's
-"The console" and "Agentic coding runs" sections; nothing there is
-Windows-specific.
+"The console" and "Agentic coding runs" sections, and
+[`harness/README.md`](../harness/README.md) § Console usage for copy-paste
+`/goal` / `/loop` / `/skills` / `/tools` / `/web` examples. Nothing there is
+Windows-specific. `/web` is allowlist-only and off by default on every OS.
 
 ## Security posture
 

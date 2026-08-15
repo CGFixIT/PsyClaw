@@ -55,13 +55,21 @@ switch + non-empty `reason` + `--confirm` + injection scan + atomic write +
 sha256 history). Design: [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md).
 
 The harness **reads** that store. `harness/registry_view.py` builds a merged
-read-only view of three catalogs:
+read-only view of three catalogs for `GET /api/registry` (sidebar / `/registry`):
 
 | Catalog | Source | Who mutates it |
 |---|---|---|
 | Repo skills | `.claude/skills/*/SKILL.md` frontmatter | humans / PRs, not this layer |
 | Governed registry | `data/agentic/skills_registry.json` | `agentic.cli apply-skill` only |
 | MCP tools | AST-parsed `TOOLS` in `mcp_hybrid_server.py` | never imported (I6) |
+
+The console slash commands `/skills` and `/tools` are **stricter** than that
+merge. `/skills` reports what this console actually injects (`ponytail`,
+`karpathy-guidelines`) or runs as `/agent checks` (`invariant-guard`,
+`config-guard`); `/skills all` adds the repo/governed catalog. `/tools`
+reports live FastAPI routes; MCP `hybrid_search` is catalog-only (`/tools all`).
+`/web` is a separate allowlist-only GET (off by default) and is not an MCP
+tool. Usage: [`harness/README.md`](../harness/README.md).
 
 A fourth surface — the install-time `~/.CyClaw/skills/` copy used by the
 console installers — is home-dir state, not the JSON store.
