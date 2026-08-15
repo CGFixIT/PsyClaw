@@ -3,6 +3,18 @@
 > Subagent: Code-Scanner. Distilled from a full read of CyClaw v1.4.5 (HEAD on
 > `claude/cyclaw-agentic-research-ouvzue`). All claims cite real `file:line`.
 > Read-only research artifact; no code is proposed here.
+>
+> **Staleness note (2026-08-15):** this is a point-in-time snapshot (repo is
+> now v1.9.0 per `pyproject.toml`) kept as the research record behind
+> `CyClaw_Safe_Agentic_Enhancement_Plan.md`, not a live architecture doc — the
+> `file:line` citations below are not re-verified against current HEAD. The
+> §1 graph description in particular is now out of date: `graph.py` is a
+> 10-node topology (`retrieve`, `route_by_score`, `guardrail_input`,
+> `guardrail_output`, `local_llm`, `user_gate`, `grok_fallback`,
+> `claude_fallback`, `offline_best_effort`, `audit_logger`), not the 7-node
+> shape below — the optional guardrail rail and the `claude_fallback` node
+> (second external provider, PR #441) postdate this snapshot. See `CLAUDE.md`
+> §2 for the current, authoritative request-flow diagram.
 
 ## 1. Request path (what must NOT be touched)
 

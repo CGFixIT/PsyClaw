@@ -2,6 +2,16 @@
 
 **Status**: Verified against current main branch HEAD `ce1e07a1add713f881beb34eb132b4c4d82c0944` (Jul 9, 2026) and recent Claude parity work (#445–#449, #435 retrieval error surfacing, redaction standardization, shared fallback helper).
 
+**Update (2026-08-15): both flags are now armed.** `config.yaml` ships
+`models.grok.enabled: true` and `models.claude.enabled: true` since
+2026-08-07 (see `docs/THREAT_MODEL.md`'s eighth amendment and `CLAUDE.md`
+§2's load-bearing-numbers table). Section 1 below ("Changes Required")
+describes the flip that has *already happened* on a fresh clone — it is now
+a reference for what those two lines look like, not a to-do. The triple
+gate's third condition, per-request `user_confirmed_online`, is unaffected:
+it still cannot be pre-set, so no query reaches either provider without an
+explicit user confirmation regardless of these flags.
+
 **Models (verified 2026-08-04 against `config.yaml`):** shipped defaults are
 `grok.model: "grok-4.5"` and `claude.model: "claude-sonnet-5"`. `grok-4.3` still
 resolves as a valid xAI model id (cost / longer context tradeoff) but is **not**
@@ -9,7 +19,7 @@ what a fresh clone ships — examples below use the current defaults.
 
 CyClaw supports **optional external LLM fallbacks** (Grok via xAI and Claude via Anthropic) **only in hybrid mode** when the RAG score is low (vault miss) **and** the user explicitly confirms. This is intentionally gated for safety, cost control, and to preserve the RAG-first + offline-first invariants.
 
-Both providers are **disabled by default** (`enabled: false`) for security and to avoid accidental API spend.
+Both providers **shipped disabled by default** (`enabled: false`) through 2026-08-06 for security and to avoid accidental API spend. As of 2026-08-07 both ship `enabled: true` (armed; see the status update above) — the per-request `user_confirmed_online` gate is what now stands between a query and external spend.
 
 ---
 
@@ -150,7 +160,7 @@ Also run the project's smoke harness or relevant pytest tests (`-k "claude or gr
 
 ## 6. Future Enhancement Note: Web Interface Toggle
 
-**Current state (Jul 2026)**: Requires manual edit of `config.yaml` + server restart. This is deliberate for auditability and to keep the single source of truth in version-controlled config.
+**Current state (2026-08-15)**: both flags now ship `true` (see status update above), so there is no longer an operator flip step on a fresh clone — but changing them back off, or toggling per-deployment, still requires a manual `config.yaml` edit + server restart. This remains deliberate for auditability and to keep the single source of truth in version-controlled config. §6 below (web toggle) is still unbuilt — `static/terminal.html` has no such control as of this check — and remains a proposed future enhancement, not shipped work.
 
 **Recommended future change**:
 - Expose `grok.enabled` and `claude.enabled` (plus perhaps per-query model preference) as **runtime toggles in the browser console** (`static/terminal.html` — already has FS/SQL panels and ops surfaces).
