@@ -258,10 +258,11 @@ def cmd_poll(args: argparse.Namespace) -> int:
 def cmd_poll_plist(args: argparse.Namespace) -> int:
     """Generate (never load) the T2 KeepAlive poller launchd plist.
 
-    Darwin-only. TELEGRAM_BOT_TOKEN (and, optionally, CYCLAW_API_KEY) are
-    injected at process-start time via macos/cyclaw-keychain-env.sh -- never
-    written into the plist itself. See that script's header for how to store
-    the secret first (macos/cyclaw-keychain-set.sh).
+    Darwin-only. The configured telegram.bot_token_env var (and, optionally,
+    telegram.query.api_key_env) are injected at process-start time via
+    macos/cyclaw-keychain-env.sh -- never written into the plist itself. See
+    that script's header for how to store the secret first
+    (macos/cyclaw-keychain-set.sh).
     """
     _heading("CyClaw Telegram Channel -- Generate poll (T2) launchd plist")
     if platform.system() != "Darwin":
@@ -287,9 +288,9 @@ def cmd_poll_plist(args: argparse.Namespace) -> int:
         str(Path(args.config).resolve()),
         "poll",
     ]
-    secrets = [(args.token_service, "TELEGRAM_BOT_TOKEN")]
+    secrets = [(args.token_service, cfg.bot_token_env)]
     if args.api_key_service:
-        secrets.append((args.api_key_service, "CYCLAW_API_KEY"))
+        secrets.append((args.api_key_service, cfg.query.api_key_env))
     wrapper = launchd_plist.keychain_wrapper_path(repo_root)
     program_args = launchd_plist.wrap_with_keychain_secrets(inner_argv, secrets, wrapper)
 
@@ -366,7 +367,7 @@ def cmd_health_plist(args: argparse.Namespace) -> int:
     inner_argv = ["/bin/bash", "-lc", health_cmd]
     wrapper = launchd_plist.keychain_wrapper_path(repo_root)
     program_args = launchd_plist.wrap_with_keychain_secrets(
-        inner_argv, [(args.token_service, "TELEGRAM_BOT_TOKEN")], wrapper
+        inner_argv, [(args.token_service, cfg.bot_token_env)], wrapper
     )
 
     log_path = str(launchd_plist.logs_dir() / "telegram-health.log")

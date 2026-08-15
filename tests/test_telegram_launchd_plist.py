@@ -125,6 +125,48 @@ def test_poll_plist_optional_api_key_service_chains_second_wrapper(tmp_path: Pat
     assert "poll" in args
 
 
+def test_poll_plist_honors_configured_bot_token_env(tmp_path: Path) -> None:
+    # telegram.bot_token_env can be overridden away from the default
+    # TELEGRAM_BOT_TOKEN -- the generated plist's wrapper must export
+    # whatever name resolve_bot_token() will actually read, not a hardcoded
+    # default, or the poller crash-loops on a token env var nothing sets.
+    cp = _write(
+        tmp_path,
+        {"enabled": True, "mode": "chat", "allowed_chat_ids": ["1"], "bot_token_env": "MY_CUSTOM_BOT_TOKEN"},
+    )
+    home = tmp_path / "home"
+
+    assert _run(cp, home, "poll-plist") == EXIT_OK
+
+    plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.telegram-poll.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    args = document["ProgramArguments"]
+    assert args[2] == "MY_CUSTOM_BOT_TOKEN"
+
+
+def test_poll_plist_honors_configured_api_key_env(tmp_path: Path) -> None:
+    cp = _write(
+        tmp_path,
+        {
+            "enabled": True,
+            "mode": "chat",
+            "allowed_chat_ids": ["1"],
+            "query": {"api_key_env": "MY_CUSTOM_API_KEY"},
+        },
+    )
+    home = tmp_path / "home"
+
+    assert (
+        _run(cp, home, "poll-plist", "--api-key-service", "com.cgfixit.cyclaw.api-key")
+        == EXIT_OK
+    )
+
+    plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.telegram-poll.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    args = document["ProgramArguments"]
+    assert args[6] == "MY_CUSTOM_API_KEY"
+
+
 def test_poll_plist_idempotent_overwrite(tmp_path: Path) -> None:
     cp = _write(tmp_path, {"enabled": True, "mode": "chat", "allowed_chat_ids": ["1"]})
     home = tmp_path / "home"
@@ -170,6 +212,21 @@ def test_health_plist_defaults_to_first_allowed_chat_id(tmp_path: Path) -> None:
     assert document["StartInterval"] == 300
     assert "KeepAlive" not in document
     assert document["RunAtLoad"] is False
+
+
+def test_health_plist_honors_configured_bot_token_env(tmp_path: Path) -> None:
+    cp = _write(
+        tmp_path,
+        {"enabled": True, "allowed_chat_ids": ["111"], "bot_token_env": "MY_CUSTOM_BOT_TOKEN"},
+    )
+    home = tmp_path / "home"
+
+    assert _run(cp, home, "health-plist") == EXIT_OK
+
+    plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.telegram-health.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    args = document["ProgramArguments"]
+    assert args[2] == "MY_CUSTOM_BOT_TOKEN"
 
 
 def test_health_plist_rejects_chat_id_not_allowlisted(tmp_path: Path) -> None:
