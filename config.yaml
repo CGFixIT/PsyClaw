@@ -423,21 +423,19 @@ api:
     # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
     # explicitly to opt rate-limiting into Postgres.
     # database_url: null
-  # NOT wired to uvicorn: nothing here reaches ssl_certfile/ssl_keyfile, so
-  # setting this true does not put TLS on the socket (that is Stage 4). It is
-  # read in two places, and both treat it as a STATEMENT that this process
-  # serves HTTPS, not as evidence that it does: gate.py's loopback bind guard
-  # (_auth_and_tls_enabled, alongside auth.enabled below), and gate_auth.py,
-  # which sets the session cookie's Secure flag and the scheme its same-origin
-  # check expects. Turning this on without Stage 4 therefore marks the cookie
-  # Secure while the socket is still plain HTTP, and a browser will refuse to
-  # send it back -- so login stops working. Leave false until Stage 4 ships.
-  # Must be the literal boolean true -- a quoted "true" is a string, and both
-  # readers deliberately treat it as OFF rather than letting stray quotes
-  # decide a security gate.
+  # Stage 4: when enabled is the literal boolean true, gate._serve passes
+  # certfile/keyfile to uvicorn.run(ssl_certfile=..., ssl_keyfile=...).
+  # Missing or unreadable files fail closed at boot (no plaintext socket
+  # with Secure cookies). Quoted "true" is OFF. Generate a LAN self-signed
+  # pair with `cyclaw-gen-cert`. The Docker CMD still bypasses _serve --
+  # this wiring covers `python gate.py` / `cyclaw-server` only.
+  # The same flag also marks the session cookie Secure and participates
+  # in the loopback bind guard (with auth.enabled + the /query probe).
   # Background: docs/AUTHENTICATION_DESIGN.md §5/§7.
   tls:
     enabled: false
+    certfile: "data/tls/cert.pem"
+    keyfile: "data/tls/key.pem"
 
 # Per-user authentication (docs/AUTHENTICATION_DESIGN.md). Ships false, like
 # every other CyClaw subsystem (agentic/telegram/guardrails). Stage 2 wires
@@ -532,6 +530,14 @@ security:
     - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - with port
     - "http://10.0.0.111"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
     - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - with port
+    - "https://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
+    - "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
+    - "https://localhost"  # DevSkim: ignore DS162092,DS137138
+    - "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
+    - "https://10.0.0.112"  # DevSkim: ignore DS137138
+    - "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
+    - "https://10.0.0.111"  # DevSkim: ignore DS137138
+    - "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
     # NOTE: "null" is deliberately absent from this list — do not re-add it.
     # curl/MCP clients send no Origin header at all, so they are never subject
     # to CORS filtering and lose nothing. "null" in allow_origins is invalid

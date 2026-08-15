@@ -118,6 +118,7 @@ cyclaw-metrics = "metrics:main"
 cyclaw-clear-cache = "retrieval.clear_cache:main"
 cyclaw-harness = "harness.server:main"
 cyclaw-user = "utils.authn_cli:main"
+cyclaw-gen-cert = "utils.gen_cert:main"
 
 [tool.hatch.build.targets.wheel]
 # `packages` only pulls in directory packages -- top-level single-file modules

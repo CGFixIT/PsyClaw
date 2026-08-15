@@ -138,6 +138,7 @@ from fastapi import Request
 from utils.config_validation import (
     validate_auth_config,
     validate_boot_timeout_config,
+    validate_tls_config,
     validate_fallback_confirm_placeholder,
     validate_personality_config,
     validate_retrieval_config,
@@ -159,6 +160,7 @@ with open(_BASE_DIR / "config.yaml", encoding="utf-8") as _cfg_f:
 validate_retrieval_config(cfg)
 validate_personality_config(cfg)
 validate_auth_config(cfg)
+validate_tls_config(cfg)
 _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds
@@ -1127,6 +1129,40 @@ def _is_port_in_use(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def _tls_ssl_kwargs() -> tuple[dict[str, str] | None, str | None]:
+    """Return (uvicorn ssl kwargs, error). None kwargs means TLS is off.
+
+    Fail-closed: enabled + missing/unreadable files returns an error string
+    and no kwargs, so ``_serve`` never starts a plaintext socket while
+    cookies would be marked Secure.
+    """
+    api_cfg = cfg.get("api") or {}
+    tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
+    if not _flag_is_true(tls_cfg, "enabled"):
+        return None, None
+    if not isinstance(tls_cfg, dict):
+        return None, "api.tls.enabled is true but api.tls is not a mapping"
+    cert_raw = tls_cfg.get("certfile")
+    key_raw = tls_cfg.get("keyfile")
+    if not isinstance(cert_raw, str) or not cert_raw.strip() or not isinstance(key_raw, str) or not key_raw.strip():
+        return None, "api.tls.enabled is true but certfile/keyfile are missing"
+    cert = Path(cert_raw).expanduser()
+    key = Path(key_raw).expanduser()
+    if not cert.is_absolute():
+        cert = _BASE_DIR / cert
+    if not key.is_absolute():
+        key = _BASE_DIR / key
+    for label, path in (("certfile", cert), ("keyfile", key)):
+        if not path.is_file():
+            return None, f"api.tls.{label} does not exist or is not a file: {path}"
+        try:
+            with path.open("rb") as handle:
+                handle.read(1)
+        except OSError as exc:
+            return None, f"api.tls.{label} is not readable: {path} ({exc})"
+    return {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, None
+
+
 def _serve(host: str, port: int) -> None:
     """Thin wrapper over ``uvicorn.run`` — kept separate so tests can patch the
     serve step without standing up a real server."""
@@ -1139,7 +1175,19 @@ def _serve(host: str, port: int) -> None:
     # bucket on, so any local process could mint a fresh 60/min budget per
     # request just by varying the header. CyClaw sits behind no reverse proxy —
     # the real peer is always the right answer here.
-    uvicorn.run(app, host=host, port=port, proxy_headers=False)  # DevSkim: ignore DS162092 - loopback-only binding by design
+    run_kwargs: dict = {
+        "app": app,
+        "host": host,
+        "port": port,
+        "proxy_headers": False,
+    }
+    ssl_kwargs, tls_error = _tls_ssl_kwargs()
+    if tls_error:
+        print(f"\nRefusing to start: {tls_error}\n", file=sys.stderr)
+        return
+    if ssl_kwargs:
+        run_kwargs.update(ssl_kwargs)
+    uvicorn.run(**run_kwargs)  # DevSkim: ignore DS162092 - loopback-only binding by design
 
 
 def _hold_console() -> None:

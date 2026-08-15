@@ -1045,6 +1045,52 @@ class TestProxyHeaderTrust:
             gate._serve("127.0.0.1", 8787)
         assert mock_run.call_args.kwargs.get("proxy_headers") is False
 
+    def test_serve_tls_off_does_not_pass_ssl_kwargs(self, monkeypatch):
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"api": {"tls": {"enabled": False}}})
+        with patch("uvicorn.run") as mock_run:
+            gate._serve("127.0.0.1", 8787)
+        kwargs = mock_run.call_args.kwargs
+        assert "ssl_certfile" not in kwargs
+        assert "ssl_keyfile" not in kwargs
+
+    def test_serve_tls_on_missing_files_does_not_bind(self, monkeypatch, tmp_path):
+        import gate
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {
+                "api": {
+                    "tls": {
+                        "enabled": True,
+                        "certfile": str(tmp_path / "missing.pem"),
+                        "keyfile": str(tmp_path / "missing.key"),
+                    }
+                }
+            },
+        )
+        with patch("uvicorn.run") as mock_run:
+            gate._serve("127.0.0.1", 8787)
+        mock_run.assert_not_called()
+
+    def test_serve_tls_on_passes_ssl_kwargs(self, monkeypatch, tmp_path):
+        import gate
+        cert = tmp_path / "cert.pem"
+        key = tmp_path / "key.pem"
+        cert.write_text("dummy-cert")
+        key.write_text("dummy-key")
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {"api": {"tls": {"enabled": True, "certfile": str(cert), "keyfile": str(key)}}},
+        )
+        with patch("uvicorn.run") as mock_run:
+            gate._serve("127.0.0.1", 8787)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["ssl_certfile"] == str(cert)
+        assert kwargs["ssl_keyfile"] == str(key)
+        assert kwargs["proxy_headers"] is False
+
     def test_dockerfile_cmd_passes_no_proxy_headers(self):
         from pathlib import Path
         dockerfile = Path(__file__).resolve().parent.parent / "Dockerfile"

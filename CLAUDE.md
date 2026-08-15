@@ -161,6 +161,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/authn_store.py` | SQLite/Postgres backend for `users`/`sessions`/`device_tokens`, mirroring `utils/personality_db.py`'s `connect()` pattern; own `CYCLAW_AUTH_DB_URL` env var, deliberately not shared with personality's `CYCLAW_DB_URL` |
 | `utils/authn_manager.py` | `AuthManager` — ties `utils/authn.py` + `utils/authn_store.py` together: bootstrap, login/logout, session validation, device-token CRUD. No HTTP awareness; `gate_auth.py` is the only caller that knows about cookies/headers/status codes |
 | `utils/authn_cli.py` | `cyclaw-user` console script (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/`token revoke`), local-only by construction (no HTTP route reaches it) |
+| `utils/gen_cert.py` | `cyclaw-gen-cert` — openssl wrapper that writes a self-signed cert + key with hostname/LAN SAN; no new runtime dep |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
 | `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`) |
 | `mcp_hybrid_server.py` | MCP server: `hybrid_search` only, no LLM, `sampling: None` |

@@ -417,6 +417,24 @@ Manage accounts after that with the same local-only `cyclaw-user` CLI
 (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/
 `token revoke`) — it never runs over HTTP.
 
+### TLS (`api.tls`, off by default)
+
+When `api.tls.enabled` is the literal boolean `true`, `cyclaw-server` /
+`python gate.py` listen with HTTPS using `api.tls.certfile` and
+`api.tls.keyfile`. Missing files refuse to start. Generate a self-signed
+cert that includes hostname + LAN IPs in `subjectAltName`:
+
+```bash
+cyclaw-gen-cert
+# writes data/tls/cert.pem and data/tls/key.pem
+```
+
+Leave `enabled: false` until those files exist. The Docker `CMD` does not
+go through `_serve` and is not covered by this wiring. The console CSP
+`connect-src` stays `'self'` (same-origin HTTPS is already `'self'`).
+`security.allowed_origins` includes `https://` twins of the loopback/LAN
+http entries.
+
 ```bash
 # Log in — save the cookie jar and read the csrf_token out of the response.
 curl -s -c cookies.txt -X POST http://127.0.0.1:8787/auth/login \

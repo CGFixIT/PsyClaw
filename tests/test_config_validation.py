@@ -13,6 +13,7 @@ from utils.config_validation import (
     validate_fallback_confirm_placeholder,
     validate_personality_config,
     validate_retrieval_config,
+    validate_tls_config,
 )
 from utils.errors import ConfigError
 
@@ -299,6 +300,34 @@ def test_auth_quoted_yaml_boolean_skips_validation_like_disabled(quoted):
 
     cfg["auth"]["session"] = "not-even-a-mapping"
     validate_auth_config(cfg)  # still must not raise
+
+
+def test_tls_disabled_skips_file_check(tmp_path):
+    validate_tls_config({"api": {"tls": {"enabled": False}}})
+    validate_tls_config({"api": {"tls": {"enabled": "true", "certfile": str(tmp_path / "nope")}}})
+
+
+def test_tls_enabled_missing_files_raises(tmp_path):
+    with pytest.raises(ConfigError):
+        validate_tls_config({
+            "api": {
+                "tls": {
+                    "enabled": True,
+                    "certfile": str(tmp_path / "missing.pem"),
+                    "keyfile": str(tmp_path / "missing.key"),
+                }
+            }
+        })
+
+
+def test_tls_enabled_readable_files_pass(tmp_path):
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("x")
+    key.write_text("y")
+    validate_tls_config({
+        "api": {"tls": {"enabled": True, "certfile": str(cert), "keyfile": str(key)}}
+    })
 
 
 class TestShippedConfigNoDuplicateKeys:

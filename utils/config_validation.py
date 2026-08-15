@@ -11,9 +11,12 @@ Mirrors the dataclass ``__post_init__`` validation that ``sync/config.py`` and
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 from utils.errors import ConfigError
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Tunables that must be positive integers (they index ranked result lists and
 # appear in the RRF weight denominator ``1 / (rrf_k + rank)``).
@@ -229,3 +232,52 @@ def validate_auth_config(cfg: dict[str, Any]) -> None:
             "can never be the one that expires a session",
             details={"idle_timeout_sec": idle, "absolute_timeout_sec": absolute},
         )
+
+
+def validate_tls_config(cfg: dict[str, Any]) -> None:
+    """Validate ``api.tls`` when TLS is the literal boolean True.
+
+    Quoted ``"true"`` / ``"false"`` is OFF, matching ``_flag_is_true``.
+    Missing block is a no-op (shipped default). When enabled, both
+    ``certfile`` and ``keyfile`` must name existing readable files -- fail
+    closed at boot rather than starting a plaintext socket with Secure
+    cookies.
+    """
+    api = cfg.get("api")
+    if api is None:
+        return
+    if not isinstance(api, dict):
+        return
+    tls = api.get("tls")
+    if tls is None:
+        return
+    if not isinstance(tls, dict):
+        raise ConfigError(
+            f"api.tls must be a mapping, got: {type(tls).__name__}",
+            details={"received_type": type(tls).__name__},
+        )
+    if tls.get("enabled") is not True:
+        return
+    for key in ("certfile", "keyfile"):
+        raw = tls.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            raise ConfigError(
+                f"api.tls.{key} must be a non-empty path when api.tls.enabled is true",
+                details={"key": key, "received": raw},
+            )
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = _REPO_ROOT / path
+        if not path.is_file():
+            raise ConfigError(
+                f"api.tls.{key} does not exist or is not a file: {path}",
+                details={"key": key, "path": str(path)},
+            )
+        try:
+            with path.open("rb") as handle:
+                handle.read(1)
+        except OSError as exc:
+            raise ConfigError(
+                f"api.tls.{key} is not readable: {path}",
+                details={"key": key, "path": str(path), "error": str(exc)},
+            ) from exc

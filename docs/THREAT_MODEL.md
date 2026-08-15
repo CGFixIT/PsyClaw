@@ -751,10 +751,11 @@ YAML parses a quoted `enabled: "false"` as the string `"false"`, and every
 non-empty string is truthy in Python — a truthiness read would have let a
 stray pair of quotes open the very gate the operator was trying to keep shut.
 
-What path (2) still does **not** prove is that TLS reached the socket: wiring
-`api.tls.*` into `uvicorn.run` is Stage 4 of the authentication design and has
-not shipped. The guard can demonstrate the credential, not the transport, and
-says so in the warning it logs when it does permit a bind.
+What path (2) now also does (when launched via `python gate.py` /
+`cyclaw-server`) is put TLS on the socket: `_serve` passes
+`ssl_certfile`/`ssl_keyfile` when `api.tls.enabled` is the literal boolean
+true and both files are readable. Missing files fail closed. The Docker
+`CMD` and a hand-run `uvicorn gate:app` still bypass `_serve`.
 
 **The boundary, stated precisely rather than overclaimed.** The guard covers the
 documented entry points — `python gate.py` and the `cyclaw-server` console script.
