@@ -14,6 +14,9 @@ tmp_path root.
 
 from __future__ import annotations
 
+import json
+import logging
+
 import pytest
 import yaml
 
@@ -21,7 +24,7 @@ from agentic.fsconnect import trash
 from agentic.fsconnect import writer as writer_mod
 from agentic.fsconnect.config import load_fsconnect_config
 from agentic.fsconnect.writer import FsWriter
-from utils.errors import FsConnectRuntimeError
+from utils.errors import FsConnectRuntimeError, FsPathError
 from utils.logger import _get_config, reset_config_cache
 
 FIXED_TS = 1_783_000_000.0  # fixed clock => both deletes land in the same second
@@ -97,6 +100,105 @@ def test_same_path_same_second_deletes_both_succeed(env):
     for entry_name, expected in contents.items():
         assert (trash_dir / entry_name).read_bytes() == expected
         assert (trash_dir / f"{entry_name}{trash.META_SUFFIX}").exists()
+
+
+def test_diverging_sidecar_name_field_still_purges_the_real_blob(env):
+    """A sidecar whose "name" field disagrees with its filename must not strand the blob.
+
+    _parse_meta used to prefer the sidecar's self-declared name over the file it
+    was read from. expired() then handed trash_empty an entry naming a path that
+    did not exist, the unlink failed, and the payload stayed on disk forever
+    while trash-list kept advertising it as purgeable -- retention stopped with
+    no error anywhere. Containment was never at risk (ScopedRoots still bounds
+    every path); this is a correctness/GC defect.
+    """
+    cfg, fs_cfg, cp, wz = env
+    fs_cfg.allow_hard_delete = True  # trash_empty is a permanent purge
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        w.fs_write("stray.txt", b"payload", reason="seed")
+        deleted = w.fs_delete("stray.txt", reason="delete it", confirm=True)
+        entry_name = deleted["trash_entry"]
+
+        trash_dir = wz / trash.TRASH_DIR
+        sidecar = trash_dir / f"{entry_name}{trash.META_SUFFIX}"
+        assert (trash_dir / entry_name).exists()
+
+        # Corrupt only the self-declared name, exactly as a truncated write or a
+        # hand edit would.
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+        raw["name"] = "ghost-entry-that-is-not-on-disk"
+        sidecar.write_text(json.dumps(raw), encoding="utf-8")
+
+        entries = trash.list_entries(w._roots, None)
+        assert [e.name for e in entries] == [entry_name], (
+            "list_entries must report the on-disk filename, not the sidecar's claim"
+        )
+
+        res = w.trash_empty(reason="empty all", confirm=True, all_entries=True)
+        assert entry_name in res["purged"]
+
+    # The point of the test: the real payload and its sidecar are actually gone.
+    assert not (wz / trash.TRASH_DIR / entry_name).exists()
+    assert not (wz / trash.TRASH_DIR / f"{entry_name}{trash.META_SUFFIX}").exists()
+
+
+def test_missing_trash_dir_is_silent_but_an_unusable_one_warns(env, caplog):
+    """Absence is the fresh-install case; anything else is observable evidence loss.
+
+    A bare `except Exception: return []` made trash-list, trash-empty and
+    quota_status's trash_entries count all report zero with no trace, so
+    expired() had nothing to purge and retention silently stopped. ENOENT stays
+    quiet (it fires on every install before the first delete); everything else
+    logs.
+    """
+    cfg, fs_cfg, cp, wz = env
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert not caplog.records, "a not-yet-created trash dir must not warn"
+
+        # .cyclaw-trash exists but is a regular file: entries could exist and be
+        # invisible, so this must be logged rather than silently reported empty.
+        (wz / trash.TRASH_DIR).write_text("not a directory", encoding="utf-8")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert caplog.records, "an unusable trash dir must warn, not report empty silently"
+        assert "reporting empty trash" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("details", "should_warn"),
+    [
+        ({"errno": 2}, False),                              # POSIX ENOENT
+        ({"winerror": 2, "path": "x"}, False),              # Windows ERROR_FILE_NOT_FOUND
+        ({"winerror": 3, "path": "x"}, False),              # Windows ERROR_PATH_NOT_FOUND
+        ({"winerror": 5, "path": "x"}, True),               # Windows ERROR_ACCESS_DENIED
+        ({"errno": 13}, True),                              # POSIX EACCES
+        ({}, True),                                         # _list_win's "not a directory"
+    ],
+)
+def test_missing_dir_detection_is_cross_platform(env, caplog, details, should_warn):
+    """Absence must read as absence on BOTH platforms, not just POSIX.
+
+    pathsafe reports a failed Windows CreateFileW through _win_error(), whose
+    FsPathError details carry "winerror" and never an "errno" key. A guard that
+    only checked errno treated a not-yet-created .cyclaw-trash as an unexpected
+    failure on Windows and warned on every trash-list taken before the first
+    delete -- caught by the windows-latest CI leg. Parametrised over the raw
+    detail shapes so it runs on every host rather than only where it regressed.
+    """
+    cfg, fs_cfg, cp, wz = env
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        def boom(*_a, **_kw):
+            raise FsPathError("simulated list_dir failure", details=dict(details))
+
+        w._roots.list_dir = boom  # type: ignore[method-assign]
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert bool(caplog.records) is should_warn, (
+            f"details={details!r} should {'warn' if should_warn else 'stay silent'}"
+        )
 
 
 def test_orphan_sidecar_reclaimed_by_trash_empty(env):

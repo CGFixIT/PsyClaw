@@ -7,12 +7,16 @@ find_entry lookup contract. No filesystem needed for the helper math.
 
 from __future__ import annotations
 
+import errno
+import json
+import logging
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 
 from agentic.fsconnect import trash
-from utils.errors import FsConnectRuntimeError
+from utils.errors import FsConnectRuntimeError, FsPathError
 
 NOW = datetime(2026, 7, 9, 14, 55, 1, tzinfo=UTC)
 
@@ -82,6 +86,78 @@ def test_expired_treats_unparseable_as_expired():
 def test_parse_meta_rejects_garbage():
     assert trash._parse_meta("x.meta.json", b"not json") is None
     assert trash._parse_meta("x.meta.json", b"[]") is None  # not a dict
+
+
+def test_parse_meta_filename_beats_a_diverging_name_field():
+    """The sidecar's filename is authoritative; its "name" field is advisory.
+
+    The blob is ``<name>`` and the sidecar is ``<name>.meta.json``, so the
+    filename is the only value the filesystem enforces. Trusting the contents
+    instead let a divergent sidecar (crash-truncated write, hand edit, a
+    restore-then-repurge race) name an entry that is not on disk, so trash_empty
+    unlinked a path that did not exist and the real blob stayed forever.
+    """
+    entry = trash.make_entry(
+        "notes/x.txt", NOW, reason="cleanup", sha256=None, size=1,
+        kind="file", retention_days=30)
+    raw = json.loads(entry.meta_bytes())
+    raw["name"] = "ghost"  # diverge the field from the filename
+    parsed = trash._parse_meta(f"{entry.name}{trash.META_SUFFIX}", json.dumps(raw).encode())
+    assert parsed is not None
+    assert parsed.name == entry.name, "sidecar contents must not override the on-disk filename"
+    assert parsed.name != "ghost"
+
+
+def test_parse_meta_survives_a_sidecar_with_no_name_field():
+    """A sidecar predating/lacking "name" still resolves from its filename."""
+    entry = trash.make_entry(
+        "notes/y.txt", NOW, reason="cleanup", sha256=None, size=1,
+        kind="file", retention_days=30)
+    raw = json.loads(entry.meta_bytes())
+    raw.pop("name", None)
+    parsed = trash._parse_meta(f"{entry.name}{trash.META_SUFFIX}", json.dumps(raw).encode())
+    assert parsed is not None
+    assert parsed.name == entry.name
+
+
+def test_list_entries_treats_posix_enoent_and_win_not_found_as_absent(caplog):
+    """Fresh-install absence must stay silent on both POSIX errno and Win32 codes.
+
+    pathsafe.list_dir raises FsPathError(details={'errno': ENOENT}) on POSIX and
+    FsPathError(details={'winerror': 2 or 3}) on Windows. Only-ENOENT silence
+    made every first trash-list warn on Windows CI.
+    """
+    roots = MagicMock()
+    roots.list_dir.side_effect = FsPathError("missing", details={"errno": errno.ENOENT})
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+    roots.list_dir.side_effect = FsPathError("missing", details={"winerror": 2})
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+    roots.list_dir.side_effect = FsPathError("missing", details={"winerror": 3})
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert not caplog.records
+
+
+def test_list_entries_warns_on_non_absent_and_survives_none_details(caplog):
+    roots = MagicMock()
+    roots.list_dir.side_effect = FsPathError("denied", details={"winerror": 5})
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert "reporting empty trash" in caplog.text
+
+    roots.list_dir.side_effect = FsPathError("odd", details=None)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+        assert trash.list_entries(roots, None) == []
+    assert "reporting empty trash" in caplog.text
 
 
 def test_find_entry_missing_raises():

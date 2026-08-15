@@ -17,6 +17,7 @@ Never imported by gate.py / graph.py / mcp_hybrid_server.py.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -32,6 +33,28 @@ logger = logging.getLogger(__name__)
 TRASH_DIR = ".cyclaw-trash"
 META_SUFFIX = ".meta.json"
 _MAX_META_BYTES = 64 * 1024  # a sidecar is tiny; cap the read defensively
+# pathsafe._win_error reports these as details["winerror"], never "errno".
+# 2 = ERROR_FILE_NOT_FOUND, 3 = ERROR_PATH_NOT_FOUND (fresh-install absence).
+_WIN_NOT_FOUND = frozenset({2, 3})
+
+
+def _is_absent_trash_error(exc: BaseException) -> bool:
+    """True when list_dir failed because ``.cyclaw-trash`` does not exist yet.
+
+    POSIX FsPathError carries details['errno'] == ENOENT. Windows _win_error
+    carries details['winerror'] in {2, 3} and no errno — treating only ENOENT
+    as silent made every fresh-install list_entries warn on Windows (CI).
+    """
+    details = getattr(exc, "details", None)
+    if not isinstance(details, dict):
+        details = {}
+    errno_ = details.get("errno")
+    if errno_ is None:
+        errno_ = getattr(exc, "errno", None)
+    winerror = details.get("winerror")
+    if winerror is None:
+        winerror = getattr(exc, "winerror", None)
+    return errno_ == errno.ENOENT or winerror in _WIN_NOT_FOUND
 
 
 def _stamp(now: datetime) -> str:
@@ -111,7 +134,18 @@ def _parse_meta(name: str, data: bytes) -> TrashEntry | None:
         return None
     try:
         return TrashEntry(
-            name=str(raw.get("name") or name.removesuffix(META_SUFFIX)),
+            # The on-disk filename is authoritative, NOT the sidecar's own
+            # "name" field. The blob is <name> and its sidecar is
+            # <name>.meta.json, so the filename is the only value the
+            # filesystem actually enforces. Trusting the contents let a sidecar
+            # whose field diverged from its filename (crash-truncated write,
+            # hand edit, a restore-then-repurge race) name an entry that is not
+            # there: expired() then hands trash_empty a path that does not
+            # exist, the unlink fails, and the real blob stays on disk forever
+            # while trash-list still reports it as purgeable. Retention stops
+            # silently. A "name" key in the sidecar is now ignored on read; it
+            # is still written by meta_bytes() for human readability.
+            name=name.removesuffix(META_SUFFIX),
             original_path=str(raw["original_path"]),
             deleted_at=str(raw.get("deleted_at", "")),
             reason=str(raw.get("reason", "")),
@@ -133,7 +167,31 @@ def list_entries(roots: ScopedRoots, root: str | None) -> list[TrashEntry]:
     """
     try:
         listing = roots.list_dir(TRASH_DIR, root=root)
-    except Exception:  # noqa: BLE001 -- absence/permission => empty trash, not an error
+    except Exception as exc:  # noqa: BLE001 -- absence => empty trash, not an error
+        # ENOENT is the ordinary "nothing has been deleted yet" case and must
+        # stay silent -- warning there would fire on every fresh install.
+        # Anything else (a permission blip, or ENOTDIR because .cyclaw-trash
+        # exists but is not a directory) means entries may well exist but are
+        # invisible: trash-list,
+        # trash-empty, and quota_status's trash_entries count all report zero,
+        # and expired() then finds nothing to purge, so retention silently
+        # stops. Log it so the loss is observable -- the same reason the
+        # unreadable-sidecar handler below was upgraded from a silent skip.
+        # Only the exception type and errno/winerror are logged; the message
+        # can carry a resolved path. POSIX absence is details['errno']==ENOENT;
+        # Windows _win_error uses details['winerror'] in {2, 3} instead.
+        if not _is_absent_trash_error(exc):
+            details = getattr(exc, "details", None)
+            if not isinstance(details, dict):
+                details = {}
+            logger.warning(
+                "Cannot list trash dir %r in root %r (%s, errno=%r, winerror=%r); reporting empty trash",
+                TRASH_DIR,
+                root,
+                type(exc).__name__,
+                details.get("errno", getattr(exc, "errno", None)),
+                details.get("winerror", getattr(exc, "winerror", None)),
+            )
         return []
     out: list[TrashEntry] = []
     for item in listing:
