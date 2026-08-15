@@ -128,6 +128,8 @@ destination exceptions are the narrowest safe tuning unit.
   eBPF tripwire and accept host-kernel access for the sidecar.
 - The read-only Docker socket mount still exposes a powerful host API; `:ro`
   protects the socket inode, not the API methods reachable through it.
-- The `0.39.2` image is version-tagged, not digest-pinned. Re-pin and runtime
-  validate a newer Falco in a separate change; Falco 0.44 removed the gVisor
-  engine, so host eBPF cannot provide complete in-sandbox syscall visibility.
+- The `0.39.2` image is digest-pinned in `docker-compose.yml` (multi-arch
+  manifest-list digest resolved 2026-08-12), kept alongside the tag for human
+  readability. Re-pin the digest on any Falco version bump; Falco 0.44 removed
+  the gVisor engine, so host eBPF cannot provide complete in-sandbox syscall
+  visibility.

@@ -19,6 +19,7 @@ modules"; this file groups them by concern.
 | `authn_store.py` | SQLite/Postgres backend for users/sessions/device tokens (`CYCLAW_AUTH_DB_URL`). |
 | `authn_manager.py` | `AuthManager` gluing `authn.py` + `authn_store.py`; no HTTP awareness. |
 | `authn_cli.py` | `cyclaw-user` console script — local-only user/token admin. |
+| `gen_cert.py` | `cyclaw-gen-cert` console script — wraps `openssl req -x509` to write a self-signed TLS cert with hostname/LAN SAN (Stage 4 of `docs/AUTHENTICATION_DESIGN.md`); no new runtime dependency. |
 | `telemetry_kill.py` | Canonical telemetry-kill env mapping. Stdlib-only; must be applied **before** heavy imports (`invariant-guard` G1). |
 | `guardrail_bridge.py` | Inversion shim: the only module through which `graph.py` reaches `guardrails/` (I6). Returns `None` for a disabled rail. |
 
@@ -40,8 +41,9 @@ modules"; this file groups them by concern.
 | `config_validation.py` | Boot-time config validation; fails fast on a broken `config.yaml`. |
 | `ops_runner.py` | `subprocess.run([...])` shim behind the four `/ops/*` endpoints — core never imports `sync`/`agentic` (I6). |
 | `launchd_plist.py` | Stdlib-only plist builder shared by the `macos/` + `sync`/`telegram`/`fsconnect` launchd generators. |
+| `win_schtasks.py` | Stdlib-only Windows Task Scheduler XML helper shared by `sync`/`agentic.fsconnect`/`telegram`/`windows/generate_service_task.py`; never calls `schtasks /Create` itself — returns the command an operator runs by hand. |
 | `agent_identity.py` | Driver-agnostic committer identity + branch-prefix allowlist for all agent write surfaces. |
-| `repo_paths.py` | Repo-root anchoring so nothing resolves paths against cwd. |
+| `repo_paths.py` | Stdlib-only mirror of `agentic`'s repo-relative path-safety rule (no `..`, no absolute/drive-qualified path, no leading `-`), shared by `harness` and `ops_runner` so they can reject the same escapes without importing `agentic` (I6). |
 | `selftest.py` | Shared self-test plumbing used by the out-of-band subsystems' `test` subcommands. |
 
 ## Related

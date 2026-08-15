@@ -8,6 +8,7 @@ loopback only.
 |---|---|---|
 | `terminal.html` + `terminal.js` | `gate.py` at `GET /` (plus the `/static` mount) on `127.0.0.1:8787` | The CyClaw Terminal — the operator console for `/query` and the authenticated soul/ops/memory endpoints. |
 | `harness.html` | `harness/server.py` on `127.0.0.1:8790` | The coding-harness console (slash-command UI: `/goal`, `/loop`, `/skills`, `/tools`, `/web`, `/agent`, …). |
+| `auth_admin.js` | reachable via the `/static` mount on either server; loaded by both `terminal.html` and `harness.html` | Shared Users panel (`/auth/users` list/create/role/disable/enable) — one script, no inline script, used by both consoles. |
 | `extractor.html` + `extractor.js` | reachable at `/static/extractor.html` via the static mount, but nothing links to it — also works opened directly from disk | Standalone keyword-insight extractor utility; calls no CyClaw endpoint. |
 
 ## The console contract

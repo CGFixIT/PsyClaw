@@ -476,8 +476,13 @@ register_memory_routes(
 | POST | `/memory/propose` | API key | **Yes** (body) | 404 if off |
 | POST | `/memory/apply` | API key | **Yes** (body) | 404 if off |
 | POST | `/memory/reject` | API key | **Yes** (body) | 404 if off |
-| DELETE | `/memory/facts/{id}` | API key | **Yes** (body or query — **body preferred** for reason) | soft-deactivate via propose/apply in v1; hard delete only applied proposal path |
 | GET | `/query/export/html` | API key | No | 404 if `export_html.enabled` false |
+
+**As implemented:** no dedicated `DELETE /memory/facts/{id}` route exists. Fact
+deactivation is soft-only, reached exclusively through
+`POST /memory/propose` (`action: "deactivate_fact"`) followed by
+`POST /memory/apply` — the §13.4 "soft deactivate via propose/apply" default,
+with the hard-DELETE alternative not built. See `gate_memory.py`.
 
 Mutating bodies use Pydantic models in `schemas/api.py` (same `extra='forbid', strict=True`):
 

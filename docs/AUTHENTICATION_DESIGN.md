@@ -349,9 +349,13 @@ Each stage is independently reviewable and leaves the tree working.
 
 1. **Username set.** Single account (`operator`), or one per person? One per
    device is handled by named bearer tokens regardless.
-2. **Session lifetime.** Proposed: 12 h idle / 7 d absolute, both configurable.
-3. **Should `/health` stay open?** Proposed yes (§6). It reports status, mode,
-   and timeouts — no corpus content.
+2. **Session lifetime.** **Resolved (2026-08-08):** 12 h idle / 7 d absolute,
+   both configurable (`auth.session.idle_timeout_sec` /
+   `absolute_timeout_sec` in `config.yaml`, 43200 / 604800 shipped). A session
+   dies from either limit, whichever is reached first.
+3. **Should `/health` stay open?** **Resolved: yes** (§6). It reports status,
+   mode, and timeouts — no corpus content — and stays unauthenticated even
+   with `auth.enabled: true`.
 4. **Bootstrap.** Proposed: `cyclaw-user add` refuses to run over HTTP and must
    be run locally, so there is never a window where a default credential exists.
    No default account is ever created.
