@@ -130,11 +130,13 @@ jobs:
               truncatedDiff = true;
               core.warning(`compareCommitsWithBasehead failed: ${err}`);
             }
-            // Truncate by bytes (String.slice counts UTF-16 code units and
-            // could split a surrogate pair on a multi-byte diff).
+            // Truncate by bytes, then back up to the last newline so the cut
+            // lands on a whole diff line and never mid-character.
             const diffBytes = Buffer.from(diff, "utf8");
             if (diffBytes.length > DIFF_MAX_BYTES) {
-              diff = diffBytes.subarray(0, DIFF_MAX_BYTES).toString("utf8");
+              const capped = diffBytes.subarray(0, DIFF_MAX_BYTES);
+              const lastNl = capped.lastIndexOf(0x0a);
+              diff = capped.subarray(0, lastNl > 0 ? lastNl : DIFF_MAX_BYTES).toString("utf8");
               truncatedDiff = true;
             }
             if (truncatedDiff) {

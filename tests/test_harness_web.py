@@ -178,8 +178,8 @@ def test_search_error_record_is_code_only(cfg, monkeypatch, caplog):
     assert record["code"] == "WEB_DNS"
     assert set(record) == {"url", "code"}
     assert "message" not in record
-    assert "broken.example DNS" not in str(found)
     assert "DNS failed" not in str(found)
+    assert str(found["errors"]).count("broken.example") == 1  # the url key only
     assert any("DNS failed for broken.example" in r.message for r in caplog.records)
 
 
