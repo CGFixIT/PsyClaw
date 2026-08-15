@@ -2,7 +2,7 @@
 
 **Not an MCP server.** The directory is named `mcp` because these wrappers are
 the future MCP *tool boundary*. This package does not import or start
-`mcp_hybrid_server.py`, and it does not speak the MCP protocol.
+`mcp_hybrid_server.py`, (<-Which is the mcp server module) and it does not speak the MCP protocol.
 
 Public export: `ProposerWorkspaceTools` (also re-exported from
 `agentic.harness_optimizer`).
