@@ -1147,6 +1147,54 @@ class TestApiKeyOptionalPeer:
         )
         assert resp.status_code == 200
 
+    @pytest.mark.parametrize("header", [
+        "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto",
+        "X-Real-IP", "Forwarded",
+    ])
+    def test_a_forwarded_request_from_a_loopback_peer_is_refused(
+        self, client, monkeypatch, header,
+    ):
+        """A reverse proxy ON THIS HOST defeats the peer check on its own.
+
+        nginx/caddy listening on 0.0.0.0 and proxy_pass-ing to 127.0.0.1:8787
+        terminates the remote connection and opens its own, so every internet
+        caller presents a loopback peer. _serve sets proxy_headers=False, so the
+        real client cannot be recovered from XFF either. The presence of any
+        forwarding header is therefore treated as "something forwarded this" and
+        denies the bypass -- the header VALUE is attacker-controlled and is never
+        parsed or trusted.
+
+        gate.py's own _require_loopback_bind docstring names fronting CyClaw with
+        a reverse proxy as an anticipated deployment, which is why this is not a
+        hypothetical.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        proxied = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert proxied.get("/soul", headers={header: "203.0.113.9"}).status_code == 401
+
+    def test_a_forwarded_request_with_a_real_key_still_works(self, client, monkeypatch):
+        """Proxied deployments are not broken -- only the BYPASS is withheld.
+        A proxy that forwards a valid key is as authorised as it ever was."""
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "real-key-abc")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        proxied = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        resp = proxied.get("/soul", headers={
+            "X-Forwarded-For": "203.0.113.9",
+            "Authorization": "Bearer real-key-abc",
+        })
+        assert resp.status_code == 200
+
+    def test_an_unproxied_loopback_request_still_gets_the_bypass(self, client, monkeypatch):
+        """The supported local-operator case must survive the proxy check."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        direct = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        assert direct.get("/soul").status_code == 200
+
     def test_missing_peer_fails_closed(self):
         """An ASGI scope without a client reads as not-loopback. This backs a
         security bypass, so an unknown peer must not receive it."""

@@ -121,7 +121,15 @@ def require_api_key(
     # never receives it, so the flag cannot silently open soul mutation or the
     # /ops/* subprocess shims to a network. TrustedHostMiddleware is not a
     # substitute -- a Host header is attacker-controlled, a peer address is not.
-    if _api_key_gate_bypassed() and _is_loopback_peer(request):
+    #
+    # The peer alone is still not sufficient: a reverse proxy ON THIS HOST (a
+    # deployment _require_loopback_bind's own docstring explicitly anticipates)
+    # terminates the remote connection and opens its own from 127.0.0.1, so every
+    # internet caller would present a loopback peer. _serve sets
+    # proxy_headers=False, so the real client is not recoverable from XFF either.
+    # Hence: no forwarding headers may be present. Their presence is the signal,
+    # not their value -- the values are attacker-controlled and never parsed.
+    if _api_key_gate_bypassed() and _is_loopback_peer(request) and not _looks_proxied(request):
         return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
@@ -950,6 +958,25 @@ register_memory_routes(
 
 
 _ALLOW_NON_LOOPBACK_ENV = "CYCLAW_ALLOW_NON_LOOPBACK_BIND"
+
+
+# Headers a reverse proxy adds when it forwards a request. Their PRESENCE is the
+# signal, not their value: a proxy on this host makes every remote caller look
+# like a loopback peer, so the peer check alone would hand the api_key_optional
+# bypass to the whole internet. The values are attacker-controlled and are
+# deliberately never parsed or trusted here -- only "did something forward this".
+_FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+
+def _looks_proxied(request: Request) -> bool:
+    """True when any reverse-proxy forwarding header is present."""
+    return any(header in request.headers for header in _FORWARDING_HEADERS)
 
 
 def _is_loopback_peer(request: Request) -> bool:

@@ -528,3 +528,36 @@ def test_api_key_optional_still_serves_a_loopback_peer(cfg, monkeypatch):
     local = _client_with_api_key_optional(cfg, monkeypatch, True)
     resp = local.post("/api/soul", json={"enabled": True}, headers=_csrf(local))
     assert resp.status_code != 401
+
+
+def test_api_key_optional_is_denied_to_a_proxied_request(cfg, monkeypatch):
+    """A reverse proxy on this host defeats the peer check by itself.
+
+    The harness binds 127.0.0.1:8790; an operator fronting it with nginx on
+    0.0.0.0 gives every remote caller a loopback peer. Any forwarding header
+    therefore denies the bypass -- presence is the signal, the value is
+    attacker-controlled and never parsed.
+    """
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = True
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    proxied = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 4321),
+    )
+    resp = proxied.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={"X-Forwarded-For": "203.0.113.9", **_csrf(proxied)},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "UNAUTHORIZED"
