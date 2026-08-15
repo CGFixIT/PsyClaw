@@ -1197,6 +1197,43 @@ def test_run_sync_unbounded_timeout_disables_budget(tmp_path):
     assert seen_timeouts == [None, None]
 
 
+def test_run_sync_budget_deadline_is_measured_on_the_monotonic_clock(tmp_path):
+    """The retry budget must be derived from time.monotonic(), not time.time().
+
+    time.time() can step mid-sync (NTP correction, an operator setting the clock):
+    backwards it silently extends how long the single-instance lock is held past
+    sync_timeout_sec, forwards it raises 'budget exhausted' on a sync that still
+    had budget left. Driving time.monotonic() from a fake clock that advances 3s
+    per rclone invocation pins the arithmetic to that clock -- a time.time()-based
+    deadline would be unaffected by it and hand every attempt ~the full 10s.
+    """
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=10, sync_retries=2, retry_backoff_sec=0)
+    log_path = cfg.log_path
+    seen_timeouts: list[float] = []
+    fake_clock = [0.0]
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        seen_timeouts.append(float(kwargs["timeout"]))
+        fake_clock[0] += 3.0
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("", encoding="utf-8")
+        # Two transient exit-5 results so the budget is consumed across 3 attempts.
+        if len(seen_timeouts) <= 2:
+            return MagicMock(returncode=5, stdout="", stderr="transient")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.time.monotonic", side_effect=lambda: fake_clock[0]), \
+         _patch_audit():
+        run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    # deadline = 0 + 10; each attempt gets 10 - (elapsed on the FAKE clock).
+    assert seen_timeouts == [10.0, 7.0, 4.0]
+
+
 def test_run_sync_check_timeout_is_clipped_to_remaining_budget(tmp_path):
     """The post-sync check phase must not get a fresh full cfg.sync_timeout_sec --
     it inherits whatever wall-clock budget is left under sync.lock after the copy
