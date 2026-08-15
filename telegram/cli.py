@@ -10,9 +10,13 @@ Subcommands:
                  KeepAlive poller. Darwin-only. Injects TELEGRAM_BOT_TOKEN
                  via the Keychain wrapper -- never writes the token into
                  the plist.
+    poll-task    Generate (never register) the Windows scheduled-task XML
+                 for the same T2 poller. CredMan wrapper, not the token.
     health-plist Generate (never load) the macOS launchd plist for T1's
                  periodic /health probe + notify-on-fail. Darwin-only. Same
                  Keychain-wrapper token injection as poll-plist.
+    health-task  Generate (never register) the Windows scheduled-task XML
+                 for the same T1 probe. CredMan wrapper, not the token.
 
 Exit codes (aligned with sync/agentic):
     0    success / clean no-op when telegram.enabled is false (status/test)
@@ -35,7 +39,7 @@ from pathlib import Path
 from telegram.config import TelegramConfig, load_telegram_config
 from telegram.runner import poll_forever, send_notify
 from telegram.selftest import run_self_test
-from utils import launchd_plist
+from utils import launchd_plist, win_schtasks
 from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, TelegramRuntimeError
 
 # Fixed Labels the generated plists own -- match the shipped static templates
@@ -44,6 +48,8 @@ from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, Te
 # path, the templates stay as hand-editable references/fallbacks).
 _POLL_LAUNCHD_LABEL = "com.cgfixit.cyclaw.telegram-poll"
 _HEALTH_LAUNCHD_LABEL = "com.cgfixit.cyclaw.telegram-health"
+_POLL_TASK_NAME = "CyClaw telegram-poll"
+_HEALTH_TASK_NAME = "CyClaw telegram-health"
 _DEFAULT_TOKEN_SERVICE = "com.cgfixit.cyclaw.telegram-bot-token"  # noqa: S105 -- Keychain service NAME, not a secret
 _DEFAULT_HEALTH_INTERVAL_SEC = 300
 
@@ -396,6 +402,126 @@ def cmd_health_plist(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_poll_task(args: argparse.Namespace) -> int:
+    """Generate (never register) the T2 poller Task Scheduler XML.
+
+    Windows-only. TELEGRAM_BOT_TOKEN (and optional API key) are injected at
+    process-start via powershell/CyClaw-CredMan-Env.ps1 -- never written
+    into the XML.
+    """
+    _heading("CyClaw Telegram Channel -- Generate poll (T2) scheduled task")
+    if platform.system() != "Windows":
+        _err("poll-task is Windows-only (writes a Task Scheduler XML).")
+        return EXIT_ENV
+    try:
+        cfg = load_telegram_config(args.config)
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    if not cfg.enabled:
+        return _disabled_notice()
+    if cfg.mode != "chat":
+        _err("poll-task requires telegram.mode: chat (current mode refuses inbound).")
+        return EXIT_ENV
+
+    repo_root = Path(__file__).resolve().parent.parent
+    inner_argv = [
+        win_schtasks.python_executable(),
+        "-m",
+        "telegram.cli",
+        "--config",
+        str(Path(args.config).resolve()),
+        "poll",
+    ]
+    secrets = [(args.token_service, cfg.bot_token_env)]
+    if args.api_key_service:
+        secrets.append((args.api_key_service, cfg.query.api_key_env))
+    wrapper = win_schtasks.credman_wrapper_path(repo_root)
+    argv = win_schtasks.wrap_with_credman_secrets(inner_argv, secrets, wrapper)
+    path, _launcher = win_schtasks.write_generated_task(
+        task_name=_POLL_TASK_NAME,
+        argv=argv,
+        working_directory=str(repo_root),
+        triggers=win_schtasks.logon_trigger(),
+        restart_interval="PT10S",
+        restart_count=999,
+        execution_time_limit="PT0S",
+    )
+
+    _kv("xml", path)
+    _kv("token CredMan target", args.token_service)
+    if args.api_key_service:
+        _kv("api-key CredMan target", args.api_key_service)
+    print()
+    print(f"  Store the token first: powershell -File powershell\\CyClaw-CredMan-Set.ps1 '{args.token_service}'")
+    print("  Run exactly one poller per bot token (T2's own operator checklist).")
+    print(f"  NOT registered. Run to activate: {win_schtasks.register_hint(_POLL_TASK_NAME, path)}")
+    print()
+    print("  IMPORTANT ORDER: this task restarts on failure every 10s. Registering")
+    print("  it before the token is stored means the wrapper exits 1 on every start")
+    print("  -- a tight, log-spamming crash loop, not a security issue.")
+    print("  Store the token FIRST, then schtasks /Create.")
+    return EXIT_OK
+
+
+def cmd_health_task(args: argparse.Namespace) -> int:
+    """Generate (never register) the T1 /health-probe Task Scheduler XML.
+
+    Windows-only. Does NOT start gate.py -- probes loopback /health via
+    curl.exe and sends a Telegram notify only on failure.
+    """
+    _heading("CyClaw Telegram Channel -- Generate health (T1) scheduled task")
+    if platform.system() != "Windows":
+        _err("health-task is Windows-only (writes a Task Scheduler XML).")
+        return EXIT_ENV
+    try:
+        cfg = load_telegram_config(args.config)
+    except TelegramConfigError as exc:
+        _print_typed_error(exc)
+        return EXIT_ENV
+    if not cfg.enabled:
+        return _disabled_notice()
+
+    chat_id = args.chat_id or cfg.allowed_chat_ids[0]
+    if not cfg.is_chat_allowed(chat_id):
+        _err(f"chat_id {chat_id} is not in telegram.allowed_chat_ids")
+        return EXIT_FAIL
+    if args.interval_sec <= 0:
+        _err("--interval-sec must be > 0")
+        return EXIT_FAIL
+
+    repo_root = Path(__file__).resolve().parent.parent
+    py = win_schtasks.python_executable()
+    config_arg = str(Path(args.config).resolve())
+    health_url = f"{cfg.query.base_url}/health"
+    # cmd.exe string: no POSIX shlex. Double quotes around paths/ids.
+    health_cmd = (
+        f'curl.exe -sf --max-time 5 "{health_url}" >nul || '
+        f'"{py}" -m telegram.cli --config "{config_arg}" send '
+        f'--chat-id "{chat_id}" --text "CyClaw /health failed"'
+    )
+    inner_argv = ["cmd.exe", "/c", health_cmd]
+    wrapper = win_schtasks.credman_wrapper_path(repo_root)
+    argv = win_schtasks.wrap_with_credman_secrets(
+        inner_argv, [(args.token_service, cfg.bot_token_env)], wrapper
+    )
+    path, _launcher = win_schtasks.write_generated_task(
+        task_name=_HEALTH_TASK_NAME,
+        argv=argv,
+        working_directory=str(repo_root),
+        triggers=win_schtasks.interval_trigger(args.interval_sec),
+    )
+
+    _kv("xml", path)
+    _kv("chat_id", chat_id)
+    _kv("interval_sec", args.interval_sec)
+    _kv("token CredMan target", args.token_service)
+    print()
+    print(f"  Store the token first: powershell -File powershell\\CyClaw-CredMan-Set.ps1 '{args.token_service}'")
+    print(f"  NOT registered. Run to activate: {win_schtasks.register_hint(_HEALTH_TASK_NAME, path)}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m telegram.cli",
@@ -464,6 +590,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keychain service name holding the bot token (default: %(default)s).",
     )
     p_health_plist.set_defaults(func=cmd_health_plist)
+
+    p_poll_task = sub.add_parser(
+        "poll-task",
+        help="Generate (never register) the Windows scheduled-task XML for the T2 poller.",
+    )
+    p_poll_task.add_argument(
+        "--token-service", default=_DEFAULT_TOKEN_SERVICE,
+        help="Credential Manager target holding the bot token (default: %(default)s).",
+    )
+    p_poll_task.add_argument(
+        "--api-key-service", default="",
+        help="Optional CredMan target holding CYCLAW_API_KEY (unset: not injected).",
+    )
+    p_poll_task.set_defaults(func=cmd_poll_task)
+
+    p_health_task = sub.add_parser(
+        "health-task",
+        help="Generate (never register) the Windows scheduled-task XML for the T1 health probe.",
+    )
+    p_health_task.add_argument("--chat-id", default="", help="Notify target (default: first allowed_chat_ids entry).")
+    p_health_task.add_argument(
+        "--interval-sec", type=int, default=_DEFAULT_HEALTH_INTERVAL_SEC,
+        help="Seconds between probes (default: %(default)s).",
+    )
+    p_health_task.add_argument(
+        "--token-service", default=_DEFAULT_TOKEN_SERVICE,
+        help="Credential Manager target holding the bot token (default: %(default)s).",
+    )
+    p_health_task.set_defaults(func=cmd_health_task)
 
     return parser
 
