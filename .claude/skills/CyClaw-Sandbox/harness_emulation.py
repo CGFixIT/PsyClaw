@@ -31,8 +31,10 @@ Verifies, in the same order harness.html's own on-load + first-use calls fire:
      JSON envelope -- a sandbox may lack a configured git remote)
  12. GET  /api/harness/runs  (/harness command)
  13. GET  /api/agent/checks  (/agent checks) + auth-gate on the write routes
- 14. POST /api/sessions/{id}/goal  (/goal set, persist, clear)
- 15. POST /api/chat/cancel   (/loop stop -- idempotent when nothing is running)
+ 14. POST /api/sessions/{id}/goal  (/goal set, persist; listing omits goal)
+ 15. POST /api/chat {loop: true}   (/loop with goal = chat-only 200/502;
+     clear goal; then 400 LOOP_REQUIRES_GOAL)
+ 16. POST /api/chat/cancel   (/loop stop -- idempotent when nothing is running)
 
 Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
@@ -287,6 +289,19 @@ def main() -> int:
                     "GET /api/sessions listing omits goal",
                     "goal" not in match,
                 )
+                looped = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "emulation loop turn",
+                        "session_id": session_id,
+                        "loop": True,
+                    },
+                )
+                check(
+                    "/loop with goal is chat-only (200 or documented 502)",
+                    looped.status_code in (200, 502),
+                    f"status={looped.status_code}",
+                )
                 cleared = client.post(
                     f"/api/sessions/{session_id}/goal",
                     json={"goal": ""},
@@ -295,14 +310,36 @@ def main() -> int:
                     "/api/sessions/{id}/goal empty string clears",
                     cleared.status_code == 200 and cleared.json().get("goal") == "",
                 )
+                denied = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "emulation loop without goal",
+                        "session_id": session_id,
+                        "loop": True,
+                    },
+                )
+                denied_body = denied.json() if denied.headers.get("content-type", "").startswith("application/json") else {}
+                denied_detail = denied_body.get("detail") if isinstance(denied_body, dict) else {}
+                denied_code = denied_detail.get("code") if isinstance(denied_detail, dict) else None
+                check(
+                    "/loop without goal is 400 LOOP_REQUIRES_GOAL",
+                    denied.status_code == 400 and denied_code == "LOOP_REQUIRES_GOAL",
+                    f"status={denied.status_code} code={denied_code!r}",
+                )
             except Exception as exc:
                 check("POST /api/sessions/{id}/goal", False, repr(exc))
         else:
             check("POST /api/sessions/{id}/goal", False, "no session_id from step 4")
         print()
 
-        # ── 15. Chat cancel (/loop stop) ──────────────────────────────────
-        print("[15] POST /api/chat/cancel  (/loop stop -- idempotent)")
+        # ── 15. /loop (chat-only; never /api/agent/*) ─────────────────────
+        # Step 14 already fired loop-with-goal then LOOP_REQUIRES_GOAL after
+        # clear. This banner exists so the verify.sh log names the command.
+        print("[15] POST /api/chat {loop:true}  (/loop — asserted in step 14)")
+        print()
+
+        # ── 16. Chat cancel (/loop stop) ──────────────────────────────────
+        print("[16] POST /api/chat/cancel  (/loop stop -- idempotent)")
         try:
             r = client.post("/api/chat/cancel")
             check(

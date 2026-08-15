@@ -22,6 +22,65 @@ endpoints, the harness console's REST API and HTML contract, due-diligence
 invariants, API key redaction, and security invariants. Supports both sandbox
 (stub/mock) mode and full-dependency mode with real package installation.
 
+## Operator map — which command proves what
+
+Three ladders. They are complementary. A green run of one is **not** evidence
+the others would also pass. Always invoke with `python3.12` (never bare
+`python3` — see Gotchas).
+
+| Ladder | Command | Proves | Does **not** prove |
+|---|---|---|---|
+| **A. `/goal` + `/loop` only** | subsection below | session goal CRUD, goal in system prompt, `LOOP_REQUIRES_GOAL`, loop limiter ≠ chat limiter, cancel idempotence, HTML slash wiring, I6 (no `agentic` import from `harness/`) | RAG/graph, live 27b quality, browser `/loop auto` + `GOAL_DONE`, `/api/agent/run` |
+| **B. In-process swarm** | `python3.12 .claude/skills/CyClaw-Sandbox/run_full_verification.py` | Skill phases 4–12 (5 queries, triple-gate, redaction, harness `TestClient` including `/goal` + loop, HTML contract) | Live HTTP servers, browser JS, Windows installer |
+| **C. CI lifecycle** | `bash .claude/skills/CyClaw-Sandbox/verify.sh` | 3.12 venv, full pytest, RAG smoke, live `gate.py` + harness + `mock_ollama`, both emulations | Browser `/loop auto`, real `qwen3.6:27b`, Auth Stages 3–4, live NeMo 4b rail |
+| **D. Surface smoke** | `bash .claude/skills/CyClaw-Sandbox/smoke.sh` | 29 out-of-band checks against a live server | Due-diligence classes, harness `/goal`/`/loop`, agent-run routes |
+
+### A. `/goal` + `/loop` only (harness console contract)
+
+From repo root, test extras installed, `CYCLAW_HOME` isolated if you launch a server:
+
+```bash
+python3.12 -m pytest tests/test_harness.py tests/test_harness_console_contract.py \
+  tests/test_harness_auth.py tests/test_harness_isolation.py -q --tb=short
+
+python3.12 .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
+
+# Live HTTP — verify.sh Stage 9 does this with mock_ollama on :11434:
+CYCLAW_HOME=$(mktemp -d) CYCLAW_API_KEY=verify-soul-key-ci \
+  python3.12 -m harness.server &
+python3.12 .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
+```
+
+Rows that must pass before claiming `/goal` / `/loop` work:
+
+| Check | Where it is asserted |
+|---|---|
+| HC-6b goal set / trim / persist / clear / unknown-id 404; listing omits `goal` | pytest + swarm Phase 11 + emulation step 14 |
+| Goal lands in the chat system prompt; blank goal omitted | `tests/test_harness.py` |
+| HC-13b `loop: true` with no goal → 400 `LOOP_REQUIRES_GOAL` | pytest + swarm + emulation step 15 |
+| HC-13d `loop: true` with a goal is chat-only (200, or documented 502 with no backend) | pytest + swarm + emulation step 15 |
+| HC-13c `POST /api/chat/cancel` is idempotent (`/loop stop`) | pytest + swarm + emulation step 16 |
+| Dedicated loop limiter ≠ chat limiter; `CHAT_BUSY` generation gate | pytest only (`test_loop_rate_limit_*`, `test_chat_busy_*`) |
+| `/goal` and `/loop` in `COMMANDS` / `runSlash`; no `innerHTML` | HTML contract + `test_harness_console_contract.py` |
+| `/loop` never calls `/api/agent/*` | `test_loop_command_never_starts_a_real_repo_run` |
+
+### `verify.sh` stage numbers (historical — do not renumber)
+
+Labels are **not** sequential in source order. CI logs and comments cite them;
+do not "fix" the numbers.
+
+| Label | Source order | What runs |
+|---|---|---|
+| Stage 1 | 1st | Python 3.12 venv + deps |
+| Stage 2 | 2nd | `pytest tests/` |
+| Stage 3 | 3rd | emulated RAG (`tests/ci_rag_smoke.py`) |
+| Stage 5 | 4th | `gate_runtime_check.py` |
+| Stage 8 | 5th | `harness_runtime_check.py` (`/goal` + `/api/chat/cancel` registered) |
+| Stage 4 | 6th | live `gate.py` API smoke |
+| Stage 7 | 7th | `terminal_emulation.py` |
+| Stage 9 | 8th | live harness + `harness_emulation.py` (goal, loop, cancel) |
+| Stage 6 | last | write `/tmp/cyclaw-verify-report.md` |
+
 ## Core Workflow
 
 ### Phase 1 -- Clone & Inspect
@@ -596,8 +655,8 @@ What it does:
 20. Verifies terminal.html contract (5 panels, 2 provider buttons)
 21. **Exercises the real harness console app** over a FastAPI `TestClient`
     (status, registry, session CRUD + `/goal`, soul/model toggles, mocked chat,
-    `/api/chat/cancel`, GitHub status, harness runs) plus its rate-limit,
-    auto-docs-disabled, and DNS-rebinding checks
+    `/loop` with and without a goal, `/api/chat/cancel`, GitHub status, harness
+    runs) plus its rate-limit, auto-docs-disabled, and DNS-rebinding checks
 22. Verifies harness.html contract (panes, API endpoints, slash commands
     including `/goal` and `/loop`, no-innerHTML / textContent-only rendering,
     apiKey field for guarded POSTs, no terminal.html `authHeaders()` helper)
@@ -623,7 +682,9 @@ python .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
 ```
 Pair `harness_emulation.py` with `mock_ollama.py` (below) running on
 `127.0.0.1:11434` for a deterministic `/api/chat` 200 instead of the
-documented 502 no-backend fallback.
+documented 502 no-backend fallback. Steps 14–16 cover `/goal` set/persist,
+`/loop` with a goal (200/502), `LOOP_REQUIRES_GOAL` after clear, and
+`/loop stop` cancel.
 
 ### `test_terminal_consoles.py`
 

@@ -89,3 +89,21 @@ surfaces (`utils.auth.require_api_key`).
 | POST | `/api/agent/runs/{id}/publish` | Draft PR |
 | POST | `/api/agent/runs/{id}/discard` | Reclaim clone |
 | GET | `/api/harness/runs` | Local run list |
+
+## Verify `/goal` + `/loop`
+
+Do not run the full 14-phase swarm just to check these two commands. Use
+ladder **A** in [`.claude/skills/CyClaw-Sandbox/SKILL.md`](../.claude/skills/CyClaw-Sandbox/SKILL.md)
+(operator map):
+
+```bash
+python3.12 -m pytest tests/test_harness.py tests/test_harness_console_contract.py \
+  tests/test_harness_auth.py tests/test_harness_isolation.py -q --tb=short
+python3.12 .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
+```
+
+That is the contract: goal CRUD + prompt injection, `LOOP_REQUIRES_GOAL`,
+dedicated loop limiter, `/loop stop` cancel, HTML slash wiring, and I6
+(harness never imports `agentic/`). It does **not** prove live 27b quality
+or browser `/loop auto` + `GOAL_DONE`.
+

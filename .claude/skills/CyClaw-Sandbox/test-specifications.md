@@ -438,6 +438,7 @@ either endpoint; these gate only the harness's own system-prompt composition.
 | HC-13 | POST | `/api/chat` | past `api.rate_limit.max_requests` (config.yaml; default 60/60s) | 429 -- same `utils.ratelimit.RateLimiter` mechanism as `gate.py`'s `/query` |
 | HC-13b | POST | `/api/chat` | `{loop: true}` with no session goal | 400, `detail.code == LOOP_REQUIRES_GOAL` -- `/loop` is chat-only and never starts `/api/agent/*` |
 | HC-13c | POST | `/api/chat/cancel` | - | 200, `{cancelled: true}` (idempotent when nothing is in flight; `/loop stop`) |
+| HC-13d | POST | `/api/chat` | `{loop: true}` with a session goal set | 200 chat-only (or documented 502 with no backend) -- never 4xx `LOOP_REQUIRES_GOAL`, never starts `/api/agent/*` |
 
 ### GitHub Status / Harness Runs
 

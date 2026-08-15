@@ -1189,6 +1189,15 @@ def phase_harness_console() -> PhaseResult:
         "harness_session_goal_persists",
         r.status_code == 200 and r.json().get("goal") == "sandbox goal",
     ))
+    r = client.post(
+        "/api/chat",
+        json={"message": "loop toward sandbox goal", "session_id": sid, "loop": True},
+    )
+    phase.checks.append(Check(
+        "harness_loop_turn_with_goal",
+        r.status_code == 200,
+        f"status={r.status_code}",
+    ))
     r = client.post(f"/api/sessions/{sid}/goal", json={"goal": ""})
     phase.checks.append(Check(
         "harness_session_goal_clear",
