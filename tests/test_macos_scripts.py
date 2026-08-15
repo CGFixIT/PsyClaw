@@ -110,6 +110,15 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     # Label-domain bootout must run even when the plist file is already gone.
     assert 'bootout "gui/${uid}/${label}"' in text
 
+    # Docs must not still claim "three landed" agents or that gate/harness
+    # survive uninstall (#922 landed with #912).
+    harness_doc = (_REPO_ROOT / "docs" / "HARNESS_MACOS.md").read_text(encoding="utf-8")
+    assert "three landed generated LaunchAgents" not in harness_doc
+    assert "future gate/harness agent, are left alone" not in harness_doc
+    assert "com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash,gate,harness}" in harness_doc
+    readme = (_REPO_ROOT / "macos" / "README.md").read_text(encoding="utf-8")
+    assert "gate, harness" in readme
+
 
 def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
     """Every macos/LaunchAgents/*.plist must plistlib-parse.

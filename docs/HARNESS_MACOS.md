@@ -60,10 +60,11 @@ they cannot outlive `cyclaw`:
   `~/Library/LaunchAgents` plist. Silent when no
   `~/.CyClaw/repo/config.yaml` exists; non-fatal on any error (a missing or
   unconfigured `sync:` block just prints a warning).
-- the three landed generated LaunchAgents, if their plists are still at
-  `~/Library/LaunchAgents/com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash}.plist`
-  (`launchctl bootout` on Darwin, then delete the file). Other labels,
-  including a future gate/harness agent, are left alone.
+- the five generated LaunchAgent labels, if still loaded or still on disk
+  at `~/Library/LaunchAgents/com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash,gate,harness}.plist`
+  (`launchctl bootout` on Darwin even when the plist is already gone, then
+  delete the file). Bootout of a never-generated label is a silent no-op.
+  Other, non-CyClaw labels are left alone.
 
 Neither step blocks the rest of uninstall. See `docs/SYNC_README.md`'s
 "Scheduling" section for the sync job.
