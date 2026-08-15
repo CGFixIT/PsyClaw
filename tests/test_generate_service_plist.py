@@ -141,6 +141,33 @@ def test_gate_plist_missing_config_file_errors(tmp_path: Path) -> None:
     assert exc_info.value.code == 3
 
 
+def test_gate_plist_custom_config_warns_of_port_mismatch(tmp_path: Path, capsys) -> None:
+    # gate.py never accepts --config -- it always loads the repo-root config.yaml
+    # (ProgramArguments has no --config flag; see the plist structure assertions
+    # elsewhere in this file). Passing a *different* --config path here only
+    # changes what port this generator *reports*, so the operator must be warned
+    # loudly that the reported port is not necessarily what the supervised
+    # process will actually bind to.
+    config = _write_config(tmp_path, port=9999)
+    home = tmp_path / "home"
+    code = _run(
+        home, "--service", "gate", "--config", str(config), "--confirm", "--reason", "x",
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "gate.py always loads config.yaml from" in out
+    assert str(config) in out
+
+
+def test_gate_plist_default_config_has_no_mismatch_warning(tmp_path: Path, capsys) -> None:
+    # No --config passed: the generator falls back to the real repo config.yaml,
+    # which is exactly what gate.py will load at runtime -- no mismatch, no warning.
+    home = tmp_path / "home"
+    assert _run(home, "--service", "gate", "--confirm", "--reason", "x") == 0
+    out = capsys.readouterr().out
+    assert "gate.py always loads config.yaml from" not in out
+
+
 def test_gate_plist_api_key_service_wraps_keychain(tmp_path: Path) -> None:
     config = _write_config(tmp_path)
     home = tmp_path / "home"
