@@ -91,9 +91,12 @@ models:
     # CYCLAW_EMBED_CACHE_SIZE env var if a deployment needs a different
     # memory/hit-rate trade-off.
   grok:
+    # WARNING: cost-sensitive. Grok is $2.00/$6.00 per Mtok (input/output) vs local LLM free.
+    # Enabled since 2026-08-07. Still triple-gated: requires app.mode="hybrid" AND
+    # GROK_API_KEY set AND user_confirmed_online=true per-request. See docs/THREAT_MODEL.md.
     enabled: true
     base_url: "https://api.x.ai/v1"
-    model: "grok-4.5"   # current xAI flagship (verified 2026-07-20 against https://docs.x.ai/developers/models). Tradeoff vs the previous default grok-4.3: newer + faster, but ~60%/140% pricier per input/output token ($2.00/$6.00 vs $1.25/$2.50 per Mtok) and a 500k context vs 1M. grok-4.3 still resolves — pin it here instead if cost or the longer window matters more than currency. Armed (enabled: true) since 2026-08-07 — still triple-gated: app.mode must be "hybrid" AND user_confirmed_online must be set per-request (see docs/THREAT_MODEL.md eighth amendment).
+    model: "grok-4.5"   # current xAI flagship (verified 2026-07-20 against https://docs.x.ai/developers/models). Tradeoff vs the previous default grok-4.3: newer + faster, but ~60%/140% pricier per input/output token ($2.00/$6.00 vs $1.25/$2.50 per Mtok) and a 500k context vs 1M. grok-4.3 still resolves — pin it here instead if cost or the longer window matters more than currency.
     timeout_sec: 30
     max_tokens: 2048
     temperature: 0.2
