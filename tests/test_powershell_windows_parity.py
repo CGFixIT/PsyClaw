@@ -34,6 +34,41 @@ def test_uninstall_deletes_only_known_task_names() -> None:
     assert "wildcard" in text.lower()
 
 
+def test_uninstall_missing_schtasks_delete_is_noop_under_ps51() -> None:
+    """Bare `/Delete` under `$ErrorActionPreference=Stop` aborts PS 5.1.
+
+    schtasks writes 'ERROR: The system cannot find the file specified.' to
+    stderr when the task is absent; Windows PowerShell 5.1 turns that into a
+    terminating NativeCommandError. The body must query first and relax Stop
+    around the native calls (macOS twin: `launchctl bootout … || true`).
+    """
+    text = (_PS / "Uninstall-CyClaw.ps1").read_text(encoding="utf-8")
+    body = text.split("function Unschedule-KnownTasks", 1)[1]
+    body = body.split("Unschedule-SyncJob", 1)[0]
+    assert "/Query" in body
+    assert "Continue" in body
+    assert "ErrorActionPreference" in body
+    assert "NativeCommandError" in body or "cannot find the file specified" in body
+    assert "2>$null | Out-Null" not in body
+
+
+def test_credman_marshal_sites_carry_devskim_suppression() -> None:
+    """GHAS DevSkim DS104456 flags Marshal/PtrToStructure as restricted.
+
+    CredRead/CredWrite cannot be done fail-closed via cmdkey (argv leak).
+    Each PowerShell Marshal / call-operator site must carry an inline ignore.
+    """
+    env_text = (_PS / "CyClaw-CredMan-Env.ps1").read_text(encoding="utf-8")
+    set_text = (_PS / "CyClaw-CredMan-Set.ps1").read_text(encoding="utf-8")
+    for line in env_text.splitlines():
+        if "InteropServices.Marshal" in line or "PtrToStructure" in line:
+            assert "DevSkim: ignore DS104456" in line, line
+    for line in set_text.splitlines():
+        if "InteropServices.Marshal" in line:
+            assert "DevSkim: ignore DS104456" in line, line
+    assert "Dispose()" in set_text
+
+
 def test_uninstall_and_setup_never_enable_writes_or_indexing() -> None:
     combined = "\n".join(
         (_PS / name).read_text(encoding="utf-8")

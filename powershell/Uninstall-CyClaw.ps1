@@ -52,7 +52,7 @@ function Unschedule-SyncJob {
     $repo = Join-Path $Home_ "repo"
     Push-Location $repo
     try {
-        & $py -m sync.cli --config $cfg unschedule
+        & $py -m sync.cli --config $cfg unschedule  # DevSkim: ignore DS104456 — call operator, not IEX
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[cyclaw] WARNING: could not clean up the sync schedule; remove it manually with 'python -m sync.cli unschedule' if needed" -ForegroundColor Yellow
         }
@@ -66,9 +66,26 @@ function Unschedule-SyncJob {
 function Unschedule-KnownTasks {
     $schtasks = Get-Command schtasks.exe -ErrorAction SilentlyContinue
     if (-not $schtasks) { return }
+    $exe = $schtasks.Source
     foreach ($name in $KnownTaskNames) {
         Write-Host "[cyclaw] checking scheduled task '$name'..."
-        & $schtasks.Source /Delete /TN $name /F 2>$null | Out-Null
+        # PS 5.1 + $ErrorActionPreference=Stop turns schtasks stderr
+        # ("ERROR: The system cannot find the file specified.") into a
+        # terminating NativeCommandError and would abort uninstall. Missing
+        # task is a documented no-op (matches macos launchctl bootout || true).
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $null = & $exe /Query /TN $name 2>&1  # DevSkim: ignore DS104456 — call operator, not IEX
+            if ($LASTEXITCODE -eq 0) {
+                $null = & $exe /Delete /TN $name /F 2>&1  # DevSkim: ignore DS104456 — call operator, not IEX
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "[cyclaw] WARNING: could not delete scheduled task '$name'; remove it manually with schtasks /Delete /TN '$name' /F if needed" -ForegroundColor Yellow
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $prevEap
+        }
     }
 }
 

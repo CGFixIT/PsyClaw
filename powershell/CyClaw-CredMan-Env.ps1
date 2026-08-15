@@ -90,17 +90,17 @@ $credPtr = [IntPtr]::Zero
 $secret = $null
 try {
     if (-not [CyClawCredManRead]::CredRead($Target, [CyClawCredManRead]::CRED_TYPE_GENERIC, 0, [ref]$credPtr)) {
-        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()  # DevSkim: ignore DS104456 — CredRead last-error; cmdkey cannot retrieve the blob
         Write-Error "cyclaw-credman-env: no Credential Manager item for target '$Target' (win32=$err)"
         Write-Error "cyclaw-credman-env: store it first: powershell -File powershell\CyClaw-CredMan-Set.ps1 '$Target'"
         exit 1
     }
-    $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($credPtr, [type][CyClawCredManRead+CREDENTIAL])
+    $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($credPtr, [type][CyClawCredManRead+CREDENTIAL])  # DevSkim: ignore DS104456 — CredRead unmanaged CREDENTIAL; not shellcode
     if ($cred.CredentialBlob -eq [IntPtr]::Zero -or $cred.CredentialBlobSize -le 0) {
         Write-Error "cyclaw-credman-env: Credential Manager item for target '$Target' is empty"
         exit 1
     }
-    $secret = [Runtime.InteropServices.Marshal]::PtrToStringUni($cred.CredentialBlob, [int]($cred.CredentialBlobSize / 2))
+    $secret = [Runtime.InteropServices.Marshal]::PtrToStringUni($cred.CredentialBlob, [int]($cred.CredentialBlobSize / 2))  # DevSkim: ignore DS104456 — CredRead blob to managed string; wiped after env inject
 } finally {
     if ($credPtr -ne [IntPtr]::Zero) {
         [CyClawCredManRead]::CredFree($credPtr)
@@ -123,7 +123,7 @@ if ($rest.Count -gt 1) {
 
 # Inherit this process's environment (including the injected secret).
 # Call operator — not Start-Process — so argv is not re-quoted through cmd.
-& $exe @exeArgs
+& $exe @exeArgs  # DevSkim: ignore DS104456 — call operator, not IEX; argv not re-quoted through cmd
 if ($null -ne $LASTEXITCODE) {
     exit $LASTEXITCODE
 }

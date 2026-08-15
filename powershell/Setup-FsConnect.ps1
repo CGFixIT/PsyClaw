@@ -93,7 +93,7 @@ function Test-ConfigPython([string]$candidate) {
     if (-not $candidate) { return $false }
     $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
     if (-not $cmd -and -not (Test-Path -LiteralPath $candidate)) { return $false }
-    & $candidate -c "import sys, yaml; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" 2>$null
+    & $candidate -c "import sys, yaml; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)" 2>$null  # DevSkim: ignore DS104456 — call operator, not IEX
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -116,7 +116,7 @@ if (-not $python) {
 }
 
 $helper = Join-Path $RepoRoot "macos\_enable_fsconnect_readlist.py"
-& $python $helper --config $ConfigPath --root $FsRoot
+& $python $helper --config $ConfigPath --root $FsRoot  # DevSkim: ignore DS104456 — call operator, not IEX
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

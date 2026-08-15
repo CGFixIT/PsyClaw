@@ -27,7 +27,9 @@ Dropbox sync is already scheduled with `python -m sync.cli schedule`
 names (`CyClaw Dropbox Sync`, `CyClaw fsconnect-trash`,
 `CyClaw telegram-poll`, `CyClaw telegram-health`, `CyClaw gate`,
 `CyClaw harness`) so a later generator cannot outlive uninstall. It never
-uses a wildcard `/TN`.
+uses a wildcard `/TN`. A missing task is a no-op (query-then-delete;
+Windows PowerShell 5.1 must not abort uninstall on `schtasks` stderr).
+Credential Manager items are **not** deleted (same as macOS Keychain).
 
 Telegram / API-key injection for those later generators goes through
 `CyClaw-CredMan-Env.ps1` so tokens never appear in task XML.

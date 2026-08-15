@@ -78,14 +78,16 @@ if ($null -eq $secure -or $secure.Length -eq 0) {
     exit 1
 }
 
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+$bstr = [IntPtr]::Zero
+$ptr = [IntPtr]::Zero
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)  # DevSkim: ignore DS104456 — TTY SecureString to CredWrite blob; never argv
 try {
-    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)  # DevSkim: ignore DS104456
     $bytes = [Text.Encoding]::Unicode.GetBytes($plain)
     $plain = $null
-    $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)  # DevSkim: ignore DS104456
     try {
-        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
+        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)  # DevSkim: ignore DS104456
         for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 0 }
         $cred = New-Object CyClawCredMan+CREDENTIAL
         $cred.Type = [CyClawCredMan]::CRED_TYPE_GENERIC
@@ -96,22 +98,29 @@ try {
         $cred.Persist = [CyClawCredMan]::CRED_PERSIST_LOCAL_MACHINE
         $cred.Comment = "CyClaw generated credential; read only via CyClaw-CredMan-Env.ps1"
         if (-not [CyClawCredMan]::CredWrite([ref]$cred, 0)) {
-            $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()  # DevSkim: ignore DS104456
             Write-Error "cyclaw-credman-set: CredWrite failed (win32=$err)"
             exit 1
         }
     } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)  # DevSkim: ignore DS104456
         $bstr = [IntPtr]::Zero
         if ($ptr -ne [IntPtr]::Zero) {
-            [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+            [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)  # DevSkim: ignore DS104456
+            $ptr = [IntPtr]::Zero
         }
     }
 } catch {
     if ($bstr -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)  # DevSkim: ignore DS104456
+        $bstr = [IntPtr]::Zero
     }
     throw
+} finally {
+    if ($null -ne $secure) {
+        $secure.Dispose()
+        $secure = $null
+    }
 }
 
 Write-Host "[cyclaw] stored Credential Manager item: target=$Target account=$account"
