@@ -396,13 +396,15 @@ def run_post_sync_check(
     """
     argv = build_check_argv(cfg, rclone_bin)
     if remaining_budget_sec is not None and remaining_budget_sec <= 0:
-        return CheckResult(
+        result = CheckResult(
             ok=False,
             missing_local=0,
             missing_remote=0,
             differences=0,
             errors=["rclone check skipped: sync wall-clock budget already exhausted"],
         )
+        audit_log({"event": "sync_check_skipped_budget_exhausted", **result.to_audit_dict()})
+        return result
     if remaining_budget_sec is not None:
         timeout: float | None = remaining_budget_sec
     else:
@@ -417,21 +419,25 @@ def run_post_sync_check(
         )
     except subprocess.TimeoutExpired:
         # Soft-fail: copies already landed; do not drop audits / reindex path.
-        return CheckResult(
+        result = CheckResult(
             ok=False,
             missing_local=0,
             missing_remote=0,
             differences=0,
             errors=[f"rclone check timed out after {timeout}s"],
         )
+        audit_log({"event": "sync_check_timeout", **result.to_audit_dict()})
+        return result
     except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        return CheckResult(
+        result = CheckResult(
             ok=False,
             missing_local=0,
             missing_remote=0,
             differences=0,
             errors=[f"rclone check subprocess failed: {type(exc).__name__}"],
         )
+        audit_log({"event": "sync_check_subprocess_failed", **result.to_audit_dict()})
+        return result
 
     # rclone check writes to stderr (text mode). Combine stdout+stderr defensively
     # in case a future rclone version changes the target stream.

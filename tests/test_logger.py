@@ -101,6 +101,44 @@ class TestAuditLogWriteFailure:
         assert event == {"event": "test_event"}  # caller's dict is never mutated
 
 
+class TestAuditLogSerializationFailure:
+    """audit_log() has ~100 call sites across the repo; a non-JSON-serializable
+    field or a non-string "query" value anywhere in the event dict must degrade
+    to a warning like the OSError write-failure path, not raise -- same I4
+    rationale as TestAuditLogWriteFailure, extended to record-building."""
+
+    def test_non_serializable_field_does_not_raise(self, tmp_path, caplog):
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+        event = {"event": "test_event", "bad_field": object()}
+        with caplog.at_level("WARNING", logger="cyclaw.logger"):
+            logger.audit_log(event, cfg=cfg)  # must not raise
+        assert "audit_log failed to build event" in caplog.text
+        assert not (tmp_path / "audit.jsonl").exists()
+
+    def test_non_string_query_does_not_raise(self, tmp_path, caplog):
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+        event = {"event": "test_event", "query": 12345}
+        with caplog.at_level("WARNING", logger="cyclaw.logger"):
+            logger.audit_log(event, cfg=cfg)  # must not raise
+        assert "audit_log failed to build event" in caplog.text
+
+    def test_failure_leaves_caller_dict_unmutated(self, tmp_path):
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+        event = {"event": "test_event", "bad_field": object()}
+        original_keys = set(event.keys())
+        logger.audit_log(event, cfg=cfg)
+        assert set(event.keys()) == original_keys
+
+    def test_valid_event_still_writes_normally(self, tmp_path):
+        """Regression guard: the new try block must not change the happy path."""
+        cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}}
+        logger.audit_log({"event": "test_event", "detail": "fine"}, cfg=cfg)
+        logger.close_audit_handles()
+        record = json.loads((tmp_path / "audit.jsonl").read_text().splitlines()[0])
+        assert record["event"] == "test_event"
+        assert record["detail"] == "fine"
+
+
 class TestSetupLoggingPathAnchoring:
     def test_relative_log_file_resolves_regardless_of_cwd(self, tmp_path, monkeypatch):
         monkeypatch.setattr(logger, "_REPO_ROOT", tmp_path)

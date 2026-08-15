@@ -91,6 +91,44 @@ class TestAuditIntegrity:
             "rag_events_missing_query_hash": 0,
         }
 
+    def test_blank_lines_are_not_counted_as_malformed(self, tmp_path):
+        """A blank/whitespace-only line (manual editing, log rotation, an
+        interleaved partial write from a concurrent writer) is not corruption
+        and must not trip the same alarm as genuinely bad JSON."""
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            "\n".join([
+                json.dumps({"event": "rag_query", "query_hash": "abc"}),
+                "",
+                "   ",
+                json.dumps({"event": "mcp_rag_query", "query_hash": "def"}),
+                "NOT JSON",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        assert compute_audit_integrity(str(p)) == {
+            "malformed_lines": 1,
+            "events_with_raw_query": 0,
+            "rag_events_missing_query_hash": 0,
+        }
+
+    def test_summarize_audit_blank_lines_are_not_counted_as_malformed(self, tmp_path):
+        """summarize_audit's _events() duplicates compute_audit_integrity's
+        loop for a single-pass optimization; the blank-line guard must hold
+        in both copies."""
+        p = tmp_path / "audit.jsonl"
+        p.write_text(
+            "\n".join([
+                json.dumps({"event": "rag_query", "query_hash": "abc"}),
+                "",
+                "   ",
+                "NOT JSON",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+        summary = summarize_audit(str(p))
+        assert summary["audit_integrity"]["malformed_lines"] == 1
+
     def test_summary_includes_integrity_without_raw_query(self, tmp_path):
         audit_file = _write_audit(
             tmp_path,
