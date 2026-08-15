@@ -107,8 +107,19 @@ def _read_gate_port(config_path: Path) -> int:
         print(f"error: could not read {config_path}: {exc}", file=sys.stderr)
         sys.exit(3)
     api_cfg = doc.get("api") if isinstance(doc, dict) else None
-    port = (api_cfg or {}).get("port", 8787) if isinstance(api_cfg, dict) else 8787
-    return int(port)
+    if not isinstance(api_cfg, dict):
+        return 8787
+    if "port" not in api_cfg:
+        return 8787
+    raw = api_cfg["port"]
+    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
+        print(f"error: api.port must be an integer, got {raw!r}", file=sys.stderr)
+        sys.exit(3)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        print(f"error: api.port must be an integer, got {raw!r}", file=sys.stderr)
+        sys.exit(3)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -156,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         working_directory=str(_REPO_ROOT),
         triggers=win_schtasks.logon_trigger(),
         restart_interval=f"PT{args.throttle_sec}S",
-        restart_count=999,
+        restart_count=5,
         execution_time_limit="PT0S",
         env=env or None,
     )
@@ -164,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Wrote {path}")
     print(f"  service:        {args.service} (port {port})")
     print(f"  reason:         {args.reason.strip()}")
-    print(f"  restart policy: crash-only RestartOnFailure, throttled to {args.throttle_sec}s")
+    print(f"  restart policy: crash-only RestartOnFailure, max 5 restarts, throttled to {args.throttle_sec}s")
     print()
     if args.service == "gate" and args.config != str(_REPO_ROOT / "config.yaml"):
         print("  WARNING: --config was passed, but gate.py always loads config.yaml from")

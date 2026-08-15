@@ -109,6 +109,8 @@ def test_writes_xml_without_registering_or_embedding_key(tmp_path: Path, capsys)
     out = capsys.readouterr().out
     assert "schtasks /Create" in out
     assert "keep RAG up for lab use" in out
+    assert "<Count>5</Count>" in text
+    assert "max 5 restarts" in out
 
 
 def test_harness_sets_nonsecret_home_env(tmp_path: Path) -> None:
@@ -124,3 +126,81 @@ def test_harness_sets_nonsecret_home_env(tmp_path: Path) -> None:
     assert "harness.server" in cmd
     assert "CYCLAW_HOME" in cmd
     assert "CYCLAW_REPO" in cmd
+
+
+def test_write_generated_task_restart_count_is_five(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"api": {"port": 8787}}), encoding="utf-8")
+    with (
+        patch("generate_service_task.platform.system", return_value="Windows"),
+        patch(
+            "generate_service_task.win_schtasks.write_generated_task",
+            return_value=(Path("x.xml"), Path("x.cmd")),
+        ) as mock_write,
+    ):
+        gst.main([
+            "--service",
+            "gate",
+            "--confirm",
+            "--reason",
+            "x",
+            "--config",
+            str(cfg),
+        ])
+    assert mock_write.called
+    assert mock_write.call_args.kwargs["restart_count"] == 5
+    assert mock_write.call_args.kwargs["restart_interval"] == "PT30S"
+    assert mock_write.call_args.kwargs["execution_time_limit"] == "PT0S"
+
+
+def test_non_numeric_api_port_exits_3(tmp_path: Path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"api": {"port": "abc"}}), encoding="utf-8")
+    with (
+        patch("generate_service_task.platform.system", return_value="Windows"),
+        patch("generate_service_task.Path.home", return_value=home),
+        patch("utils.win_schtasks.Path.home", return_value=home),
+    ):
+        try:
+            rc = gst.main([
+                "--service",
+                "gate",
+                "--confirm",
+                "--reason",
+                "x",
+                "--config",
+                str(cfg),
+            ])
+        except SystemExit as exc:
+            rc = exc.code
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "api.port" in err
+    assert "abc" in err
+    assert not (home / ".CyClaw" / "tasks" / "CyClaw-gate.xml").exists()
+
+
+def test_scalar_api_section_falls_back_to_8787(tmp_path: Path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"api": "nope"}), encoding="utf-8")
+    with (
+        patch("generate_service_task.platform.system", return_value="Windows"),
+        patch("generate_service_task.Path.home", return_value=home),
+        patch("utils.win_schtasks.Path.home", return_value=home),
+    ):
+        rc = gst.main([
+            "--service",
+            "gate",
+            "--confirm",
+            "--reason",
+            "x",
+            "--config",
+            str(cfg),
+        ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "service:        gate (port 8787)" in out
