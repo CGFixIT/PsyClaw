@@ -317,6 +317,23 @@ def test_console_documents_web_slash_command():
     assert "api('/api/web/inject'" in body
 
 
+def test_console_documents_memory_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/memory [on|off|add|forget|clear]'" in html
+    assert "case 'memory':" in html
+    assert "api('/api/memory')" in html
+    assert "id=\"sMemory\"" in html
+    start = html.index("case 'memory':")
+    end = html.index("case 'model':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "api('/api/memory/add'" in body
+    assert "api('/api/memory/forget'" in body
+    assert "api('/api/memory/clear'" in body
+    assert "writable_from_harness" in body
+
+
+
 
 
 

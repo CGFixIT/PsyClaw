@@ -4,13 +4,13 @@ The agentic GitHub-coding persona is built from the repo's own discipline
 skills — ``ponytail`` (lazy-senior-dev rules) and ``karpathy-guidelines``
 (LLM-coding-mistake guidelines) — exactly as they ship in ``.claude/skills/``.
 Frontmatter is stripped; bodies are concatenated under explicit headers. When
-the operator has soul/memory enabled, the governed soul fragment is appended
+the operator has soul enabled, the governed soul fragment is appended
 READ-ONLY — this module never mutates ``soul.md`` (invariant I5, write path
 stays with ``utils.personality.apply_evolution``).
 
 An optional session goal (set via the console ``/goal`` command) is appended
-last as read-only session data. It is never a write authorization and never
-changes routing or topology.
+as read-only session data. Operator-pinned ``/memory`` notes are appended
+only while that toggle is on. Neither is a write authorization.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ DISCIPLINE_SKILLS: tuple[str, ...] = ("ponytail", "karpathy-guidelines")
 # the discipline contracts. Keep in sync with harness.schemas._MAX_GOAL_LEN.
 _MAX_GOAL_CHARS = 2000
 _MAX_WEB_CHARS = 4000
+_MAX_MEMORY_CHARS = 3000
 
 _HEADER = (
     "You are the CyClaw coding harness agent operating on the operator's "
@@ -102,6 +103,12 @@ def _append_web(parts: list[str], web_context: str | None) -> None:
         )
 
 
+def _append_memory(parts: list[str], memory_context: str | None) -> None:
+    clipped = (memory_context or "").strip()[:_MAX_MEMORY_CHARS]
+    if clipped:
+        parts.append(f"\n## Operator memory (harness, read-only)\n\n{clipped}")
+
+
 def compose_system_prompt(
     *,
     soul_enabled: bool,
@@ -110,6 +117,7 @@ def compose_system_prompt(
     soul_max_chars: int = 8000,
     goal: str | None = None,
     web_context: str | None = None,
+    memory_context: str | None = None,
 ) -> str:
     """Build the harness system prompt.
 
@@ -130,4 +138,5 @@ def compose_system_prompt(
     )
     _append_goal(parts, goal)
     _append_web(parts, web_context)
+    _append_memory(parts, memory_context)
     return "\n".join(parts)

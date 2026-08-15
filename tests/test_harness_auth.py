@@ -42,6 +42,10 @@ GUARDED = [
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
     ("post", "/api/sessions/does-not-exist/goal", {"goal": "ship the harness slash commands"}),
     ("post", "/api/soul", {"enabled": True}),
+    ("post", "/api/memory", {"enabled": False}),
+    ("post", "/api/memory/add", {"text": "prefer ruff"}),
+    ("post", "/api/memory/forget", {"id": "deadbeef"}),
+    ("post", "/api/memory/clear", None),
     ("post", "/api/model", {"model": "qwen3.6:27b"}),
     ("post", "/api/web", {"enabled": False}),
     ("post", "/api/web/allow", {"url": "https://docs.python.org/"}),
@@ -76,7 +80,7 @@ GUARDED = [
 # hardcodes, spawns nothing, and the console needs it to populate help before a
 # key has been entered.
 OPEN = [
-    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/memory", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
 ]
 
 

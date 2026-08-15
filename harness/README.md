@@ -38,6 +38,7 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | `tools_view.py` | Wired-tool inventory + ASCII diagram (`/tools`) |
 | `skills_view.py` | Wired-skill inventory + ASCII diagram (`/skills`) |
 | `web_search.py` | Allowlist-only GET for `/web` (off by default; no search engine) |
+| `memory_notes.py` | Operator `/memory` notes (off by default; not RAG `memory/`) |
 | `agent_policy.py` | Check-profile names for real-repo runs |
 | `schemas.py` | Request models |
 
@@ -58,7 +59,8 @@ The shipped registry file is empty. That is correct.
 ## Console usage
 
 Type these in `harness.html` (they are **not** `/query` RAG commands).
-`/loop` and `/web` never start `/api/agent/*`. `/web` is **off** until you
+`/loop` and `/web` never start `/api/agent/*`. `/memory` never writes
+`soul.md`, `docs/memories/`, or the RAG `memory/` store. `/web` is **off** until you
 turn it on, and even then it can GET only hosts you allowlisted.
 
 ### Inventory
@@ -87,6 +89,26 @@ turn it on, and even then it can GET only hosts you allowlisted.
 `{"loop": true}`, use a 1024-token output budget and a clipped history
 window, and share a process-wide single-generation lock with ordinary chat
 so Metal is never double-booked. A loop without a goal is `400 LOOP_REQUIRES_GOAL`.
+
+### Operator memory (off by default)
+
+Pinned notes live under the harness home (`memory/notes.json`). They enter
+the system prompt **only** after `/memory on`. They are not soul.md, not
+RAG facts, and not `docs/memories/` snapshots.
+
+```
+/memory                           # status: on/off + notes + read-only RAG flags
+/memory add prefer ruff over flake8
+/memory on                        # inject notes into the next chat turn
+/memory forget <id>
+/memory clear
+/memory off
+```
+
+`/memory add` refuses empty text, a 20-note cap, and the same critical
+injection patterns as a soul write. The RAG `memory:` block in
+`config.yaml` is echoed as `rag.*` and `writable_from_harness` is always
+`false`.
 
 ### Allowlist-only web (offline-safe)
 
@@ -135,6 +157,11 @@ surfaces (`utils.auth.require_api_key`).
 | POST | `/api/web/search` | Scan allowlisted pages for a query (no search engine) |
 | POST | `/api/web/inject` | Put last extract into the next chat system prompt |
 | POST | `/api/web/forget` | Clear injected extract |
+| GET | `/api/memory` | `/memory` status: enable flag + notes + read-only RAG flags |
+| POST | `/api/memory` | Enable / disable prompt injection (`enabled`; default off) |
+| POST | `/api/memory/add` | Pin one injection-scanned operator note |
+| POST | `/api/memory/forget` | Drop one note by id |
+| POST | `/api/memory/clear` | Drop every note |
 | GET/POST | `/api/sessions` | List / create |
 | GET | `/api/sessions/{id}` | One session |
 | POST | `/api/sessions/{id}/rename` | Rename |

@@ -191,8 +191,11 @@
       <div class="statusbar">
         <span><span class="k">provider </span><span class="v" id="sProvider">…</span></span>
         <span><span class="k">session </span><span class="v" id="sSession">none</span></span>
-        <button class="toggle" id="sSoul" title="toggle soul/memory in the system prompt">
+        <button class="toggle" id="sSoul" title="toggle soul.md in the system prompt">
           <span class="k">soul </span><span class="v" id="sSoulV">…</span>
+        </button>
+        <button class="toggle" id="sMemory" title="toggle operator /memory notes in the system prompt">
+          <span class="k">mem </span><span class="v" id="sMemoryV">…</span>
         </button>
         <span title="session /goal"><span class="k">goal </span><span class="v" id="sGoal">none</span></span>
         <span title="human-gated /loop"><span class="k">loop </span><span class="v" id="sLoop">off</span></span>
@@ -243,6 +246,7 @@ const CSRF_TOKEN = csrfMeta ? csrfMeta.content : '';
 
 let currentSession = null;   // session_id string or null
 let soulEnabled = true;
+let memoryEnabled = false;
 /* A staged (not yet sent) agent run. The server's own gate needs an explicit
    reason plus confirm, so the console stages first and shows the operator
    exactly what they are about to authorize; /agent confirm is what sends it.
@@ -484,7 +488,9 @@ async function refreshStatus() {
     $('sHome').textContent = s.home;
     $('sHome').title = 'harness home: ' + s.home + '  ·  repo: ' + s.repo_root;
     soulEnabled = s.soul_enabled;
+    if (typeof s.memory_enabled === 'boolean') memoryEnabled = s.memory_enabled;
     paintSoul();
+    paintMemory();
     $('hDot').style.background = 'var(--accent-green)';
   } catch (e) {
     $('hDot').style.background = 'var(--accent-red)';
@@ -494,6 +500,12 @@ function paintSoul() {
   const v = $('sSoulV');
   v.textContent = soulEnabled ? 'on' : 'off';
   v.className = 'v ' + (soulEnabled ? 'on' : 'off');
+}
+function paintMemory() {
+  const v = $('sMemoryV');
+  if (!v) return;
+  v.textContent = memoryEnabled ? 'on' : 'off';
+  v.className = 'v ' + (memoryEnabled ? 'on' : 'off');
 }
 
 /* ── sessions pane ── */
@@ -549,7 +561,8 @@ async function refreshRegistry() {
 const COMMANDS = [
   ['/help', 'list commands'],
   ['/session new|list|use|rename', 'manage chat sessions'],
-  ['/soul on|off|status', 'memory/soul in system prompt'],
+  ['/soul on|off|status', 'soul.md in system prompt (not /memory)'],
+  ['/memory [on|off|add|forget|clear]', 'operator notes in prompt (off by default)'],
   ['/goal [text]|clear', 'set, show, or clear the session goal'],
   ['/loop [n]|stop|auto', 'human-gated chat turns toward the goal'],
   ['/model [use <name>]', 'show or select the model'],
@@ -732,11 +745,52 @@ async function runSlash(line) {
         if (arg === 'on' || arg === 'off') {
           const r = await api('/api/soul', 'POST', { enabled: arg === 'on' });
           soulEnabled = r.enabled; paintSoul();
-          sys('soul/memory ' + (r.enabled ? 'enabled' : 'disabled') +
+          sys('soul ' + (r.enabled ? 'enabled' : 'disabled') +
               ' (system prompt only — soul.md itself is governed and untouched)');
         } else {
           const r = await api('/api/soul');
-          sys('soul/memory is ' + (r.enabled ? 'ON' : 'OFF'));
+          sys('soul is ' + (r.enabled ? 'ON' : 'OFF'));
+        }
+        break;
+      }
+
+      case 'memory': {
+        const sub = (rest[0] || '').toLowerCase();
+        if (sub === 'on' || sub === 'off') {
+          const r = await api('/api/memory', 'POST', { enabled: sub === 'on' });
+          memoryEnabled = !!r.enabled; paintMemory();
+          sys('memory ' + (r.enabled ? 'ON' : 'OFF') +
+              ' — notes stay in ~/.CyClaw/memory; RAG memory/ is ' +
+              ((r.rag && r.rag.enabled) ? 'on' : 'off') +
+              ' (read-only; this command cannot flip it)');
+        } else if (sub === 'add') {
+          const text = rest.slice(1).join(' ').trim();
+          if (!text) { sys('usage: /memory add <note>'); break; }
+          const r = await api('/api/memory/add', 'POST', { text: text });
+          memoryEnabled = !!r.enabled; paintMemory();
+          sys(table([['id', r.added && r.added.id], ['count', String(r.count)],
+                     ['enabled', r.enabled ? 'on' : 'off']]));
+        } else if (sub === 'forget') {
+          const nid = rest[1] || '';
+          if (!nid) { sys('usage: /memory forget <id>'); break; }
+          const r = await api('/api/memory/forget', 'POST', { id: nid });
+          sys('forgot ' + (r.forgotten || nid) + ' (' + String(r.count) + ' left)');
+        } else if (sub === 'clear') {
+          const r = await api('/api/memory/clear', 'POST');
+          sys('memory notes cleared (' + String(r.count) + ')');
+        } else {
+          const r = await api('/api/memory');
+          memoryEnabled = !!r.enabled; paintMemory();
+          const rag = r.rag || {};
+          sys(table([
+            ['harness /memory', r.enabled ? 'ON (injected)' : 'OFF (stored, not injected)'],
+            ['notes', String(r.count) + ' / ' + String(r.max_notes)],
+            ['RAG memory.enabled', rag.enabled ? 'on' : 'off'],
+            ['RAG writable here', rag.writable_from_harness ? 'yes' : 'no'],
+          ]));
+          if (r.notes && r.notes.length) {
+            sys(table(r.notes.map(n => [n.id, n.text]), ['id', 'note']));
+          }
         }
         break;
       }
@@ -1145,7 +1199,9 @@ async function runSlash(line) {
       case 'status': {
         const s = await api('/api/status');
         sys(table([['version', s.version], ['model', s.model || '(unset)'], ['provider', s.provider],
-                   ['soul', s.soul_enabled ? 'on' : 'off'], ['sessions', String(s.sessions)],
+                   ['soul', s.soul_enabled ? 'on' : 'off'],
+                   ['memory', s.memory_enabled ? 'on' : 'off'],
+                   ['sessions', String(s.sessions)],
                    ['total tokens', String(s.total_tokens)], ['home', s.home],
                    ['goal', sessionGoal || '(none)'],
                    ['loop', loopState ? ((loopState.auto ? 'auto ' : '') + (loopState.total - loopState.remaining) + '/' + loopState.total) : (loopAuto ? 'auto' : 'off')]]));
@@ -1343,6 +1399,7 @@ document.querySelectorAll('.side-tab').forEach(tab => {
   });
 });
 $('sSoul').addEventListener('click', () => runSlash('/soul ' + (soulEnabled ? 'off' : 'on')));
+$('sMemory').addEventListener('click', () => runSlash('/memory ' + (memoryEnabled ? 'off' : 'on')));
 
 buildCommands();
 refreshStatus();

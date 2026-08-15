@@ -1215,6 +1215,22 @@ def phase_harness_console() -> PhaseResult:
         and (deny.json().get("detail") or {}).get("code") == "WEB_DISABLED",
     ))
 
+    r = client.get("/api/memory")
+    mem_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_memory_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_memory_default_off",
+        mem_payload.get("enabled") is False
+        and mem_payload.get("count") == 0
+        and mem_payload.get("rag", {}).get("writable_from_harness") is False,
+    ))
+    added = client.post("/api/memory/add", json={"text": "prefer ruff"})
+    phase.checks.append(Check(
+        "harness_memory_add",
+        added.status_code == 200 and added.json().get("count") == 1,
+    ))
+    client.post("/api/memory/clear")
+
     log("  --- Sessions CRUD ---")
     r = client.post("/api/sessions", json={"title": "sandbox check"})
     phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
@@ -1377,6 +1393,8 @@ def phase_harness_html() -> PhaseResult:
         ("skills", "/api/skills"),
         ("web", "/api/web"),
         ("web_fetch", "/api/web/fetch"),
+        ("memory", "/api/memory"),
+        ("memory_add", "/api/memory/add"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
@@ -1390,7 +1408,7 @@ def phase_harness_html() -> PhaseResult:
 
     log("\n  --- Slash Commands ---")
     slash = (
-        "/session", "/soul", "/model", "/skills", "/tools", "/web", "/github",
+        "/session", "/soul", "/model", "/skills", "/tools", "/web", "/memory", "/github",
         "/harness", "/tokens", "/status", "/goal", "/loop",
     )
     for cmd in slash:

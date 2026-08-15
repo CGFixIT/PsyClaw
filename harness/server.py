@@ -58,6 +58,7 @@ from starlette.responses import Response as StarletteResponse
 from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
+from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
@@ -416,6 +417,7 @@ def create_app(
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
     web = web_tool or WebTool(cfg)
+    notes = MemoryNotes(cfg.memory_dir)
 
     # Per-instance, not module-level: create_app() is the harness's test
     # boundary (mirrors store/client/backend above) -- a module-level
@@ -643,6 +645,7 @@ def create_app(
             "provider": backend.provider,
             "base_url": backend.base_url,
             "soul_enabled": cfg.soul_enabled,
+            "memory_enabled": cfg.memory_enabled,
             "home": str(cfg.home),
             "repo_root": str(cfg.repo_root),
             "sessions": len(sessions),
@@ -740,6 +743,45 @@ def create_app(
     @app.post("/api/web/forget", dependencies=guarded)
     def web_forget() -> dict:
         return web.forget()
+
+    def _memory_err(exc: MemoryNotesError) -> HTTPException:
+        return _err(_HTTP_BAD_REQUEST, exc)
+
+    def _memory_payload() -> dict:
+        parsed = _get_config(str(_CONFIG_PATH))
+        block = parsed if isinstance(parsed, dict) else {}
+        return notes.status(cfg.memory_enabled) | {"rag": rag_flags(block)}
+
+    @app.get("/api/memory")
+    def memory_status() -> dict:
+        """Harness-local /memory status. Open: notes are operator-local."""
+        return _memory_payload()
+
+    @app.post("/api/memory", dependencies=guarded)
+    def memory_toggle(req: SoulToggleRequest) -> dict:
+        cfg.memory_enabled = req.enabled
+        cfg.save()
+        return _memory_payload()
+
+    @app.post("/api/memory/add", dependencies=guarded)
+    def memory_add(req: _harness_schemas.MemoryNoteRequest) -> dict:
+        try:
+            added = notes.add(req.text)
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
+        return _memory_payload() | {"added": added}
+
+    @app.post("/api/memory/forget", dependencies=guarded)
+    def memory_forget(req: _harness_schemas.MemoryForgetRequest) -> dict:
+        try:
+            forgotten = notes.forget(req.id)
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
+        return _memory_payload() | forgotten
+
+    @app.post("/api/memory/clear", dependencies=guarded)
+    def memory_clear() -> dict:
+        return _memory_payload() | notes.clear()
 
     # -- sessions ------------------------------------------------------
     @app.get("/api/sessions")
@@ -863,6 +905,7 @@ def create_app(
             soul_enabled=cfg.soul_enabled,
             goal=session.goal,
             web_context=web.context_text(),
+            memory_context=notes.context_text() if cfg.memory_enabled else None,
         )
         hist_n = _LOOP_HISTORY_TURNS if req.loop else _HISTORY_TURNS
         hist_chars = _LOOP_HISTORY_CHARS if req.loop else _CHAT_HISTORY_CHARS

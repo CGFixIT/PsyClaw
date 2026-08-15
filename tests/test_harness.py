@@ -103,6 +103,10 @@ def test_config_roundtrip_persists_toggles(cfg):
     reloaded = HarnessConfig.load(cfg.home)
     assert reloaded.soul_enabled is False
     assert reloaded.selected_model == "llama3.1:8b"
+    assert reloaded.memory_enabled is False
+    cfg.memory_enabled = True
+    cfg.save()
+    assert HarnessConfig.load(cfg.home).memory_enabled is True
 
 
 # -- prompts ---------------------------------------------------------------------
@@ -222,7 +226,7 @@ def test_tools_endpoint_lists_only_live_routes(client):
     data = client.get("/api/tools").json()
     assert data["wired"] == data["total"]
     names = {row["name"] for row in data["tools"]}
-    assert {"chat", "goal", "loop", "cancel", "tools", "web", "hybrid_search"} <= names
+    assert {"chat", "goal", "loop", "cancel", "tools", "web", "memory", "hybrid_search"} <= names
     for row in data["tools"]:
         if row["kind"] == "harness":
             assert row["wired"] is True
@@ -491,6 +495,7 @@ def test_chat_client_disables_ambient_proxy():
 def test_status_endpoint(client, cfg):
     data = client.get("/api/status").json()
     assert data["soul_enabled"] is True
+    assert data["memory_enabled"] is False
     assert data["home"] == str(cfg.home)
     assert "skills" in data["layout"]
 

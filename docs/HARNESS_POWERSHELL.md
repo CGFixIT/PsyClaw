@@ -84,6 +84,7 @@ Slash commands (type `/help` in the console):
 |---|---|
 | `/session new\|list\|use\|rename\|info` | chat session management |
 | `/soul on\|off\|status` | include the governed soul in the system prompt (read-only; `soul.md` writes stay with `utils.personality`) |
+| `/memory [on\|off\|add\|forget\|clear]` | operator notes in the system prompt (**off by default**; not RAG `memory/`, not `soul.md`) |
 | `/goal [text]\|clear` | session-scoped intent, injected into the chat prompt (not a write authorization) |
 | `/loop [n]\|stop\|auto` | human-gated chat turns toward `/goal` (never starts `/api/agent/*`) |
 | `/model [use <name>]` | show / select the local model |

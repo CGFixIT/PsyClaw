@@ -194,6 +194,33 @@ def main() -> int:
             check("GET /api/web", False, repr(exc))
         print()
 
+        # ── 2e. GET /api/memory (/memory toggle, default off) ────────────
+        print("[2e] GET /api/memory  (/memory slash command)")
+        try:
+            r = client.get("/api/memory")
+            d = r.json()
+            check(
+                "/api/memory defaults to off with zero notes",
+                r.status_code == 200
+                and d.get("enabled") is False
+                and d.get("count") == 0
+                and d.get("rag", {}).get("writable_from_harness") is False,
+                f"status={r.status_code} enabled={d.get('enabled')} count={d.get('count')}",
+            )
+            added = client.post("/api/memory/add", json={"text": "prefer ruff"})
+            check(
+                "/api/memory/add pins one note",
+                added.status_code == 200 and added.json().get("count") == 1,
+                f"status={added.status_code}",
+            )
+            on = client.post("/api/memory", json={"enabled": True})
+            check("/api/memory on flips enabled", on.json().get("enabled") is True)
+            client.post("/api/memory", json={"enabled": False})
+            client.post("/api/memory/clear")
+        except Exception as exc:
+            check("GET /api/memory", False, repr(exc))
+        print()
+
         # ── 3. GET /api/sessions (sidebar sessions pane) ──────────────────
         print("[3] GET /api/sessions  (harness.html sessions pane, pre-create)")
         try:
