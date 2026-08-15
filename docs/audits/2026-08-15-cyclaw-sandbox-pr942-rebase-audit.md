@@ -27,6 +27,7 @@ then `pip install -e . -c constraints.txt`.
 | `OTel-Hardening` `verify.sh` | **ALL PASS** (7/7 mutation self-tests) |
 | `doc-sync` | **2 drift items** — pre-existing, unrelated to #942 (see below) |
 | `run_full_verification.py` (in-process swarm) | 157/189 checks — see "False-positive triage" below; every failure traced to the *skill script* being stale against the current architecture, not a product regression |
+| CI-style coverage (`pytest --cov=` across all 16 `pyproject.toml` sources) | **89.27% total** — clear of the 80% `fail_under` gate |
 
 ## False-positive triage — `run_full_verification.py` is stale, not the product
 
