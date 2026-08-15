@@ -61,9 +61,13 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          load: true
           platforms: linux/amd64
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # cache-to omitted on purpose: mode=max on this torch-heavy image
+          # flakes under GHA cache reservation ("failed to reserve cache")
+          # and must not fail a pure Dockerfile sanity job. publish-ghcr.yml
+          # owns the real cache + push surface.
   # Fast, no-heavy-deps gates that run before the expensive matrix below.
   # Neither needs torch/chromadb/sentence-transformers, so both finish in
   # well under a minute on a cache hit.
