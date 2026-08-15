@@ -64,15 +64,12 @@ jobs:
           persist-credentials: false
           path: trusted
 
-      - name: Checkout PR head as review data
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          ref: ${{ steps.pr.outputs.head-sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: candidate
+      # No actions/checkout of the PR head in this privileged issue_comment job:
+      # it would land an untrusted worktree on the same runner that holds
+      # secrets.CODEX (CodeQL actions/untrusted-checkout, alerts 1096/1093).
+      # Review data comes from the API below as text files inside trusted/.
 
-      - name: Record owner request
+      - name: Record owner request and PR diff
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
           PR_BASE_SHA: ${{ steps.pr.outputs.base-sha }}
@@ -80,6 +77,10 @@ jobs:
         with:
           script: |
             const fs = require("fs");
+            // Hard caps: the posted comment is already capped at 60k chars;
+            // a huge PR must not stall the secret-bearing runner.
+            const DIFF_MAX_BYTES = 512 * 1024;
+            const FILES_MAX = 300;
             const request = context.payload.comment.body
               .replace(/@codex\b/gi, "")
               .trim() || "Review this pull request.";
@@ -93,6 +94,50 @@ jobs:
               }, null, 2) + "\n",
               "utf8",
             );
+            // File list: path + status + sha only, never blob contents.
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+              per_page: 100,
+            });
+            const truncatedFiles = files.length > FILES_MAX;
+            fs.writeFileSync(
+              "trusted/.codex-pr-files.json",
+              JSON.stringify({
+                truncated: truncatedFiles,
+                files: files.slice(0, FILES_MAX).map((f) => ({
+                  path: f.filename,
+                  status: f.status,
+                  sha: f.sha,
+                })),
+              }, null, 2) + "\n",
+              "utf8",
+            );
+            // Unified diff of base...head as review data. Pin by SHAs from
+            // pulls.get (never head.ref) so there is no TOCTOU window.
+            let diff = "";
+            let truncatedDiff = false;
+            try {
+              const resp = await github.rest.repos.compareCommitsWithBasehead({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                basehead: `${process.env.PR_BASE_SHA}...${process.env.PR_HEAD_SHA}`,
+                mediaType: { format: "diff" },
+              });
+              diff = String(resp.data);
+            } catch (err) {
+              truncatedDiff = true;
+              core.warning(`compareCommitsWithBasehead failed: ${err}`);
+            }
+            if (Buffer.byteLength(diff, "utf8") > DIFF_MAX_BYTES) {
+              diff = diff.slice(0, DIFF_MAX_BYTES);
+              truncatedDiff = true;
+            }
+            if (truncatedDiff) {
+              diff += "\n[truncated: diff unavailable or exceeded 512 KiB; review listed files individually via the PR files view]\n";
+            }
+            fs.writeFileSync("trusted/.codex-pr.diff", diff, "utf8");
 
       - name: Run Codex
         id: run_codex

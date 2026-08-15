@@ -19,6 +19,7 @@ from __future__ import annotations
 import html
 import ipaddress
 import json
+import logging
 import socket
 from html.parser import HTMLParser
 from pathlib import Path
@@ -29,6 +30,8 @@ import httpx
 
 from harness.config import HarnessConfig, _atomic_write_json
 from utils.errors import AgenticError
+
+log = logging.getLogger("cyclaw.harness.web_search")
 
 _UTF8: Final = "utf-8"
 _SCHEMES: Final = frozenset(("http", "https"))
@@ -432,7 +435,11 @@ class WebTool:
             try:
                 page = self._get(url, entries)
             except WebToolError as exc:
-                errors.append({"url": url, "code": exc.code, "message": str(exc)})
+                # Code-only record in the HTTP body: str(exc) can carry hosts,
+                # DNS detail, or upstream status text; server.py's _web_err
+                # already follows the same code-only contract for raise paths.
+                log.info("web search skipped %s: %s (%s)", url, exc, exc.code)
+                errors.append({"url": url, "code": exc.code})
                 continue
             snippets = _snippets(page["text"], needle)
             if snippets:

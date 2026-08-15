@@ -154,6 +154,35 @@ def test_fetch_and_search_and_inject(cfg):
     assert tool.context_text() == ""
 
 
+def test_search_error_record_is_code_only(cfg, monkeypatch, caplog):
+    """Per-URL failures must not leak exception text into the search payload
+    (CodeQL py/stack-trace-exposure, alert 1091)."""
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    tool.allow("https://broken.example/")
+
+    real_get = tool._get
+
+    def flaky_get(url, entries):
+        if "broken.example" in url:
+            raise WebToolError("DNS failed for broken.example", code="WEB_DNS")
+        return real_get(url, entries)
+
+    monkeypatch.setattr(tool, "_get", flaky_get)
+    with caplog.at_level("INFO", logger="cyclaw.harness.web_search"):
+        found = tool.search("allowlist")
+    assert found["hits"], "successful URLs still produce hits"
+    assert len(found["errors"]) == 1
+    record = found["errors"][0]
+    assert record["code"] == "WEB_DNS"
+    assert set(record) == {"url", "code"}
+    assert "message" not in record
+    assert "broken.example DNS" not in str(found)
+    assert "DNS failed" not in str(found)
+    assert any("DNS failed for broken.example" in r.message for r in caplog.records)
+
+
 def test_routes_default_off_and_open_status(cfg):
     web = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
     client = _client(cfg, web)
