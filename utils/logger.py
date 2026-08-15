@@ -127,8 +127,69 @@ def setup_logging(cfg: dict | None = None) -> None:
         fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         root.addHandler(fh)
+        _capture_third_party(log_cfg, anchored_log_file, fmt)
 
     _logging_initialized = True
+
+
+# Loggers outside the "cyclaw" namespace: httpx, chromadb, uvicorn, langgraph.
+# Their records never reach the handlers attached to the "cyclaw" logger above,
+# so before this they went wherever the process's root logger happened to point
+# -- in practice stderr, i.e. nowhere durable.
+_THIRD_PARTY_DEFAULT_LEVEL = "INFO"
+
+
+class _ThirdPartyFloor(logging.Filter):
+    """Let ``cyclaw.*`` through at any level; hold everything else at a floor.
+
+    This exists for a security reason, not a noise one. ``logging.level`` is now
+    DEBUG so CyClaw's own modules are fully traced, but attaching that same
+    level to third-party libraries would put ``httpcore``'s wire-level DEBUG
+    output -- which includes the ``Authorization:`` header on every outbound
+    Grok/Claude/Ollama call -- into a file on disk. CyClaw's own DEBUG lines
+    were audited for this: the four in graph.py log chunk counts and budget
+    arithmetic, never query text, prompts, or answers.
+    """
+
+    def __init__(self, floor: int) -> None:
+        super().__init__()
+        self.floor = floor
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name == "cyclaw" or record.name.startswith("cyclaw."):
+            return True
+        return record.levelno >= self.floor
+
+
+def _capture_third_party(
+    log_cfg: dict, log_path: Path, fmt: logging.Formatter,
+) -> None:
+    """Route non-CyClaw loggers into the same file, at a safer level.
+
+    Opt-out via ``logging.capture_third_party: false``. The floor is
+    ``logging.third_party_level`` (default INFO) rather than the global DEBUG --
+    see ``_ThirdPartyFloor`` for why that gap is deliberate.
+
+    A SEPARATE FileHandler on the real root logger, not a second handler on
+    "cyclaw": records from cyclaw.* propagate up to root, so sharing one handler
+    would write every CyClaw line to the file twice.
+    """
+    if log_cfg.get("capture_third_party") is False:
+        return
+    floor_name = str(log_cfg.get("third_party_level", _THIRD_PARTY_DEFAULT_LEVEL)).upper()
+    floor = getattr(logging, floor_name, logging.INFO)
+
+    real_root = logging.getLogger()
+    handler = logging.FileHandler(log_path, encoding="utf-8")
+    handler.setFormatter(fmt)
+    handler.addFilter(_ThirdPartyFloor(floor))
+    # The handler's own level stays at the floor; the filter is what allows
+    # cyclaw.* records through below it. Both are needed -- a handler level
+    # above a record's level drops it before any filter runs.
+    handler.setLevel(min(floor, logging.DEBUG))
+    real_root.addHandler(handler)
+    if real_root.level == logging.NOTSET or real_root.level > floor:
+        real_root.setLevel(floor)
 
 def resolve_config_path(config_path: str = "config.yaml") -> Path:
     """Resolve a config path exactly as ``_get_config`` loads it.

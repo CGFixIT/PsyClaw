@@ -727,6 +727,46 @@ Provide the best general answer you can. Clearly note that your local knowledge 
         out["error"] = error
     return out
 
+def _llm_identity(answer_model: str, cfg: dict) -> dict:
+    """Map the answering node's role to a concrete model identity for the audit.
+
+    Returns two additive fields, never replacing ``model_used``:
+
+    * ``llm_model`` -- the tag from config.yaml that actually served the answer
+      (``qwen3.8:27b``, ``grok-4.5``, ``claude-sonnet-5``), or ``None`` when no
+      model ran. Read from cfg rather than hardcoded, so retagging a model in
+      config.yaml moves the audit with it.
+    * ``llm`` -- a one-line human summary, which is what an operator reading
+      audit.jsonl actually scans for.
+
+    ``offline-best-effort`` reports the LOCAL model, not "none": that node does
+    call the local LLM (graph.py's ``_generate_or_error``), it just answers on
+    partial or absent context. Labelling it separately from ``local`` keeps
+    "answered from the corpus" distinguishable from "answered anyway".
+    """
+    models = cfg.get("models", {}) or {}
+
+    def _tag(section: str) -> str:
+        return str((models.get(section, {}) or {}).get("model", "") or "") or "unknown"
+
+    local_tag = _tag("local_llm")
+    if answer_model == "local":
+        return {"llm": f"RAG local: {local_tag}", "llm_model": local_tag}
+    if answer_model == "offline-best-effort":
+        return {"llm": f"offline best-effort local: {local_tag}", "llm_model": local_tag}
+    if answer_model in {"grok", "claude"}:
+        provider_tag = _tag(answer_model)
+        return {
+            "llm": f"escalated to online api: {answer_model} ({provider_tag})",
+            "llm_model": provider_tag,
+        }
+    if answer_model == "guardrail-blocked":
+        return {"llm": "none: blocked by guardrail", "llm_model": None}
+    # Empty answer_model is the user_gate pause -- the human has not yet chosen
+    # online or offline, so nothing has run.
+    return {"llm": "none: awaiting online confirmation", "llm_model": None}
+
+
 def audit_logger_node(state: GraphState, cfg: dict,
                       personality: PersonalityManager | None = None) -> dict:
     """Node 7: Runs for ALL paths. Writes JSONL audit event.
@@ -747,6 +787,14 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "retrieval_mode": state.get("retrieval_mode", "none"),
         "online_escalated": state.get("answer_model") in {"grok", "claude"},
         "model_used": state.get("answer_model", "unknown"),
+        # Which model actually answered, by name. `model_used` above carries the
+        # ROLE ("local"/"grok"/"claude"/...) and is deliberately left alone --
+        # metrics.py keys its online-escalation count off that value's prefix and
+        # buckets its model histogram on it, so changing its vocabulary would
+        # silently reinterpret every historical audit line. These two are
+        # additive: `llm_model` is the concrete tag from config.yaml, `llm` is
+        # the one-line human summary an operator reads in the JSONL.
+        **_llm_identity(state.get("answer_model", ""), cfg),
         "hit_count": len(state.get("retrieved_docs", [])),
         "guardrail_blocked": state.get("guardrail_blocked", False),
         "guardrail_rails": state.get("guardrail_rails", []),

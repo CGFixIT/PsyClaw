@@ -274,6 +274,64 @@ class TestAuditLogging:
         assert "audit_event" in result
         assert result["audit_event"]["model_used"] == "local"
 
+    def test_audit_names_the_concrete_local_model(self, tmp_path):
+        """model_used carries the ROLE; llm/llm_model carry the identity.
+
+        Both are asserted together because the whole point of the pair is that
+        the old field keeps its vocabulary (metrics.py buckets on it and keys
+        online-escalation detection off its prefix) while the new ones answer
+        "which model actually produced this answer".
+        """
+        cfg = _make_cfg(tmp_path)
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_HIGH_SCORE_RESULTS), llm=MockLocalLLM(),
+            grok=None, cfg=cfg,
+        )
+        event = graph.invoke({"query": "Veeam immutability"})["audit_event"]
+        expected = cfg["models"]["local_llm"]["model"]
+        assert event["model_used"] == "local"
+        assert event["llm_model"] == expected
+        assert event["llm"] == f"RAG local: {expected}"
+
+    def test_audit_llm_model_tracks_config_not_a_hardcoded_tag(self, tmp_path):
+        """Retagging the model in config.yaml must move the audit with it --
+        otherwise the field silently reports a model that no longer runs."""
+        cfg = _make_cfg(tmp_path)
+        cfg["models"]["local_llm"]["model"] = "some-other-model:9b"
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_HIGH_SCORE_RESULTS), llm=MockLocalLLM(),
+            grok=None, cfg=cfg,
+        )
+        event = graph.invoke({"query": "Veeam immutability"})["audit_event"]
+        assert event["llm_model"] == "some-other-model:9b"
+
+    def test_audit_marks_offline_best_effort_as_local_not_none(self, tmp_path):
+        """offline_best_effort DOES call the local LLM (just on partial or no
+        context), so it reports a model -- but a distinguishable label."""
+        cfg = _make_cfg(tmp_path)
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_LOW_SCORE_RESULTS), llm=MockLocalLLM(),
+            grok=None, cfg=cfg,
+        )
+        event = graph.invoke(
+            {"query": "off topic", "user_confirmed_online": False}
+        )["audit_event"]
+        assert event["llm_model"] == cfg["models"]["local_llm"]["model"]
+        assert event["llm"].startswith("offline best-effort local:")
+
+    def test_audit_marks_the_user_gate_pause_as_no_model(self, tmp_path):
+        """The pause path ran no model at all; llm_model must be None rather
+        than defaulting to the local tag, which would imply an answer."""
+        cfg = _make_cfg(tmp_path)
+        cfg["app"]["mode"] = "hybrid"
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_LOW_SCORE_RESULTS), llm=MockLocalLLM(),
+            grok=None, cfg=cfg,
+        )
+        event = graph.invoke({"query": "off topic"})["audit_event"]
+        assert event["llm_model"] is None
+        assert event["llm"].startswith("none:")
+
     def test_audit_event_present_offline_best_effort(self, tmp_path):
         cfg = _make_cfg(tmp_path)
         retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)

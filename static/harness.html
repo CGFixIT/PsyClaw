@@ -586,10 +586,24 @@ const COMMANDS = [
   ['/agent status|approve|reject <id>', 'inspect or decide a pending run'],
   ['/harness', 'harness optimizer runs'],
   ['/tokens', 'token tally'],
+  ['/api [set <KEY> <value>]', 'view or store CyClaw API keys (.env, mode 600)'],
   ['/status', 'server status'],
   ['/users', 'manage CyClaw accounts (same users as the gate)'],
   ['/clear', 'clear the console'],
 ];
+
+/* Renders the /api key table. The server never sends a secret: each row
+   carries only presence, a masked tail, and where the value is coming from
+   (`env` = this process already has it, `file` = written but needs a restart). */
+function renderKeys(keys) {
+  sys(table(keys.map(k => [
+    k.name,
+    k.configured ? k.masked : '(unset)',
+    k.source,
+    k.pending_restart ? 'restart pending' : '',
+  ]), ['key', 'value', 'source', 'state']));
+}
+
 function buildCommands() {
   const pane = $('pane-commands');
   COMMANDS.forEach(([c, d]) => {
@@ -803,6 +817,32 @@ async function runSlash(line) {
           if (r.notes && r.notes.length) {
             sys(table(r.notes.map(n => [n.id, n.text]), ['id', 'note']));
           }
+        }
+        break;
+      }
+
+      case 'api': {
+        if (rest[0] === 'set' && rest[1] && rest[2]) {
+          const name = rest[1].toUpperCase();
+          // Everything after the key name is the value: a DB URL can contain
+          // spaces once percent-decoded, and re-joining is safer than assuming
+          // the operator quoted it.
+          const secret = rest.slice(2).join(' ');
+          const r = await api('/api/keys', 'POST', { keys: { [name]: secret } });
+          sys('saved: ' + r.written.join(', ') + '  ->  ' + r.env_file);
+          if (r.restart_required)
+            sys('restart gate.py to load it: nothing in CyClaw reads .env at runtime, ' +
+                'your shell sources it (see docs/HARNESS_API_KEYS.md)');
+          if (r.self_auth_written && r.self_auth_written.length)
+            sys('note: ' + r.self_auth_written.join(', ') + ' is the key guarding this console. ' +
+                'It was NOT applied live -- your current key keeps working until you restart.');
+          await renderKeys(r.keys);
+        } else if (rest[0] === 'set') {
+          sys('usage: /api set <KEY> <value>');
+        } else {
+          const r = await api('/api/keys');
+          sys('key file: ' + r.env_file);
+          await renderKeys(r.keys);
         }
         break;
       }
