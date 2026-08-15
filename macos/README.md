@@ -38,6 +38,9 @@ source ~/.CyClaw/.env          # this tab
 # new tabs inherit via the `# >>> cyclaw keys >>>` block
 ```
 
+If `CYCLAW_HOME` is set, the dotenv and the rc source block follow that
+directory instead of `~/.CyClaw`.
+
 LaunchAgents still read Keychain through `cyclaw-keychain-env.sh`. They do
 not read `.env`, and this script never writes a token into a plist or the
 `cyclaw` shim.

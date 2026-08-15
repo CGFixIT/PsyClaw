@@ -10,12 +10,12 @@
 #   1. macOS Keychain — the official path. launchd generators chain
 #      cyclaw-keychain-env.sh; they never read .env and never write a token
 #      into a plist or the cyclaw shim.
-#   2. ~/.CyClaw/.env (chmod 600) — operator-requested dotenv. Gitignored
-#      (*.env). Sourced by new shells via a marker block in the rc file.
+#   2. $CYCLAW_HOME/.env (default ~/.CyClaw/.env, chmod 600) — operator-requested
+#      dotenv. Gitignored (*.env). Sourced by new shells via a marker block.
 #   3. Optional checkout .env if a CyClaw repo is found (also gitignored).
-#   4. rc file sources ~/.CyClaw/.env. Secrets are NEVER inlined into
-#      ~/.zshrc / ~/.bash_profile (install-cyclaw.sh already refuses to put
-#      a secret in a profile file).
+#   4. rc file sources the same dotenv this script wrote. Secrets are NEVER
+#      inlined into ~/.zshrc / ~/.bash_profile (install-cyclaw.sh already
+#      refuses to put a secret in a profile file).
 #
 # Keychain store never puts a secret on `security`'s argv (same contract as
 # cyclaw-keychain-set.sh): generated / typed values go through a 0600 temp
@@ -127,7 +127,6 @@ fi
 # hijack `cd` (same class of footgun install-cyclaw.sh documents).
 _SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 HOME_DIR="${CYCLAW_HOME:-$HOME/.CyClaw}"
-ENV_FILE="$HOME_DIR/.env"
 ACCOUNT="$(id -un)"
 
 reject_shell_metachars() {
@@ -176,6 +175,9 @@ _find_repo
 
 mkdir -p "$HOME_DIR"
 chmod 700 "$HOME_DIR" 2>/dev/null || true
+HOME_DIR="$(CDPATH= cd -- "$HOME_DIR" && pwd)"
+reject_shell_metachars "$HOME_DIR"
+ENV_FILE="$HOME_DIR/.env"
 
 # -- quoting / dotenv ---------------------------------------------------------
 
@@ -195,14 +197,15 @@ _validate_secret() {
 # Rewrite one KEY= assignment in a dotenv file. Never prints the value.
 # Accepts both `KEY=` and `export KEY=` forms on the way in; writes `export`.
 _env_upsert() {
-  local file="$1" key="$2" value="$3" tmp quoted
+  local file="$1" key="$2" value="$3" tmp quoted old_umask
   if ! _validate_secret "$value"; then
     echo "[cyclaw] refusing to store an empty or multi-line value for $key" >&2
     return 1
   fi
   quoted="$(_shell_single_quote "$value")"
-  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.env.XXXXXX")"
+  old_umask="$(umask)"
   umask 077
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.env.XXXXXX")"
   if [ -f "$file" ]; then
     # grep -v returns 1 when every line matches (empty result) — do not trip set -e.
     grep -v -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" > "$tmp" || true
@@ -214,12 +217,35 @@ _env_upsert() {
   chmod 600 "$tmp"
   mv "$tmp" "$file"
   chmod 600 "$file"
+  umask "$old_umask"
 }
 
 _env_has() {
   local file="$1" key="$2"
   [ -f "$file" ] || return 1
   grep -E -q "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" 2>/dev/null
+}
+
+# Inverse of _shell_single_quote. Also accepts a bare token or one pair of
+# double quotes (we never write those, but a hand-edited .env might have them).
+_env_unquote() {
+  local raw="$1" inner
+  case "$raw" in
+    \'*\')
+      inner="${raw#\'}"
+      inner="${inner%\'}"
+      # Remaining '\'' is the encoding _shell_single_quote writes for `'`.
+      printf '%s' "$inner" | sed "s/'\\\\''/'/g"
+      ;;
+    \"*\")
+      inner="${raw#\"}"
+      inner="${inner%\"}"
+      printf '%s' "$inner"
+      ;;
+    *)
+      printf '%s' "$raw"
+      ;;
+  esac
 }
 
 # Extract a KEY's value from a dotenv we wrote (export KEY='...').
@@ -229,12 +255,7 @@ _env_get() {
   [ -f "$file" ] || return 1
   line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$file" | tail -n 1)" || return 1
   line="${line#*=}"
-  # Strip one matching pair of single quotes if present.
-  case "$line" in
-    \'*\') line="${line#\'}"; line="${line%\'}" ;;
-    \"*\") line="${line#\"}"; line="${line%\"}" ;;
-  esac
-  printf '%s' "$line"
+  _env_unquote "$line"
 }
 
 # -- Keychain -----------------------------------------------------------------
@@ -295,11 +316,13 @@ EXPECT_EOF
 }
 
 _keychain_store_value() {
-  local service="$1" value="$2" tmp rc
-  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.kc.XXXXXX")"
+  local service="$1" value="$2" tmp rc old_umask
+  old_umask="$(umask)"
   umask 077
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.kc.XXXXXX")"
   printf '%s' "$value" > "$tmp"
   chmod 600 "$tmp"
+  umask "$old_umask"
   rc=0
   _keychain_store_file "$service" "$tmp" || rc=$?
   rm -f "$tmp"
@@ -358,6 +381,9 @@ _persist() {
 
 # -- rc source block (no secrets) ---------------------------------------------
 
+KEYS_START="# >>> cyclaw keys >>>"
+KEYS_END="# <<< cyclaw keys <<<"
+
 detect_rc_file() {
   case "${SHELL:-}" in
     */zsh) echo "$HOME/.zshrc" ;;
@@ -377,26 +403,52 @@ detect_rc_file() {
   esac
 }
 
-_ensure_rc_source() {
-  local rc_file marker
-  [ "$DO_PROFILE" -eq 1 ] || return 0
-  rc_file="$(detect_rc_file)"
-  [ -f "$rc_file" ] || touch "$rc_file"
-  marker="# >>> cyclaw keys >>>"
-  if grep -qF "$marker" "$rc_file" 2>/dev/null; then
-    step "rc already sources ~/.CyClaw/.env ($rc_file)"
-    return 0
-  fi
-  {
-    echo ""
-    echo "$marker"
-    echo "# Loads ~/.CyClaw/.env (chmod 600). Secrets are not stored in this rc file."
+# Print the dotenv source lines (no markers). Default home stays portable
+# (`$HOME/.CyClaw/.env`); a custom CYCLAW_HOME is single-quoted absolutely.
+_rc_source_body() {
+  local quoted
+  if [ "$HOME_DIR" = "$HOME/.CyClaw" ]; then
+    echo "# Loads \$HOME/.CyClaw/.env (chmod 600). Secrets are not stored in this rc file."
     echo "if [ -f \"\$HOME/.CyClaw/.env\" ]; then"
     echo "  . \"\$HOME/.CyClaw/.env\""
     echo "fi"
-    echo "# <<< cyclaw keys <<<"
+  else
+    quoted="$(_shell_single_quote "$ENV_FILE")"
+    echo "# Loads the CYCLAW_HOME dotenv (chmod 600). Secrets are not stored in this rc file."
+    echo "if [ -f $quoted ]; then"
+    echo "  . $quoted"
+    echo "fi"
+  fi
+}
+
+_ensure_rc_source() {
+  local rc_file
+  [ "$DO_PROFILE" -eq 1 ] || return 0
+  rc_file="$(detect_rc_file)"
+  [ -f "$rc_file" ] || touch "$rc_file"
+
+  # Fail closed on a half-written marker block: never append a second copy
+  # and never silently treat a corrupt block as "already installed."
+  if grep -qxF "$KEYS_START" "$rc_file" 2>/dev/null; then
+    if ! grep -qxF "$KEYS_END" "$rc_file" 2>/dev/null; then
+      echo "[cyclaw] malformed cyclaw keys block in $rc_file (start without end); left unchanged" >&2
+      return 1
+    fi
+    step "rc already sources the keys dotenv ($rc_file)"
+    return 0
+  fi
+  if grep -qxF "$KEYS_END" "$rc_file" 2>/dev/null; then
+    echo "[cyclaw] malformed cyclaw keys block in $rc_file (end without start); left unchanged" >&2
+    return 1
+  fi
+
+  {
+    echo ""
+    echo "$KEYS_START"
+    _rc_source_body
+    echo "$KEYS_END"
   } >> "$rc_file"
-  step "added ~/.CyClaw/.env source block to $rc_file (new shells inherit keys)"
+  step "added $ENV_FILE source block to $rc_file (new shells inherit keys)"
 }
 
 # -- prompts ------------------------------------------------------------------
@@ -424,7 +476,14 @@ _prompt_secret() {
       "$label" "$env_name" >&2
   fi
   # -s: no echo. bash 3.2 supports it. Restore echo on any exit path.
-  trap 'stty echo 2>/dev/null || true' EXIT INT TERM
+  # INT/TERM must restore echo AND abort (130 / 143). A restore-only trap
+  # plus `read || true` would treat Ctrl-C as "skip" and keep writing state.
+  _restore_tty_echo() { stty echo 2>/dev/null || true; }
+  _prompt_on_int() { _restore_tty_echo; printf '\n' >&2; exit 130; }
+  _prompt_on_term() { _restore_tty_echo; printf '\n' >&2; exit 143; }
+  trap '_restore_tty_echo' EXIT
+  trap '_prompt_on_int' INT
+  trap '_prompt_on_term' TERM
   stty -echo 2>/dev/null || true
   IFS= read -r typed || true
   stty echo 2>/dev/null || true
