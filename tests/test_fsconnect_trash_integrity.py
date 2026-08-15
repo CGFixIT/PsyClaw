@@ -24,7 +24,7 @@ from agentic.fsconnect import trash
 from agentic.fsconnect import writer as writer_mod
 from agentic.fsconnect.config import load_fsconnect_config
 from agentic.fsconnect.writer import FsWriter
-from utils.errors import FsConnectRuntimeError
+from utils.errors import FsConnectRuntimeError, FsPathError
 from utils.logger import _get_config, reset_config_cache
 
 FIXED_TS = 1_783_000_000.0  # fixed clock => both deletes land in the same second
@@ -165,6 +165,40 @@ def test_missing_trash_dir_is_silent_but_an_unusable_one_warns(env, caplog):
             assert trash.list_entries(w._roots, None) == []
         assert caplog.records, "an unusable trash dir must warn, not report empty silently"
         assert "reporting empty trash" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("details", "should_warn"),
+    [
+        ({"errno": 2}, False),                              # POSIX ENOENT
+        ({"winerror": 2, "path": "x"}, False),              # Windows ERROR_FILE_NOT_FOUND
+        ({"winerror": 3, "path": "x"}, False),              # Windows ERROR_PATH_NOT_FOUND
+        ({"winerror": 5, "path": "x"}, True),               # Windows ERROR_ACCESS_DENIED
+        ({"errno": 13}, True),                              # POSIX EACCES
+        ({}, True),                                         # _list_win's "not a directory"
+    ],
+)
+def test_missing_dir_detection_is_cross_platform(env, caplog, details, should_warn):
+    """Absence must read as absence on BOTH platforms, not just POSIX.
+
+    pathsafe reports a failed Windows CreateFileW through _win_error(), whose
+    FsPathError details carry "winerror" and never an "errno" key. A guard that
+    only checked errno treated a not-yet-created .cyclaw-trash as an unexpected
+    failure on Windows and warned on every trash-list taken before the first
+    delete -- caught by the windows-latest CI leg. Parametrised over the raw
+    detail shapes so it runs on every host rather than only where it regressed.
+    """
+    cfg, fs_cfg, cp, wz = env
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        def boom(*_a, **_kw):
+            raise FsPathError("simulated list_dir failure", details=dict(details))
+
+        w._roots.list_dir = boom  # type: ignore[method-assign]
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert bool(caplog.records) is should_warn, (
+            f"details={details!r} should {'warn' if should_warn else 'stay silent'}"
+        )
 
 
 def test_orphan_sidecar_reclaimed_by_trash_empty(env):
