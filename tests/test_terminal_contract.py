@@ -136,6 +136,36 @@ def test_submit_query_refuses_to_start_while_one_is_in_flight():
     )
 
 
+def test_check_health_treats_a_non_ok_response_as_unreachable():
+    """checkHealth must guard on resp.ok like every other fetch in the file.
+
+    It alone parsed the body unconditionally. A gateway answering 4xx/5xx with a
+    JSON error body (FastAPI's {"detail": ...}) then flowed into the SUCCESS
+    branch: data.status was undefined so the footer rendered "gateway
+    undefined", the dot left its offline state, a bogus graph_timeout_sec could
+    be adopted as the query deadline, and healthBackoffMs was reset to the base
+    interval -- so the console kept polling a failing gateway every 15s while
+    telling the operator it was fine. The backoff reset is the load-bearing part:
+    it must stay unreachable for a non-2xx response.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function checkHealth(", 1)
+    assert len(body) == 2, "checkHealth is no longer declared as expected; update this test"
+    after = body[1].split("\n}", 1)[0]
+    assert "if (!resp.ok)" in after, "checkHealth does not guard on resp.ok"
+    # A non-JSON error body (e.g. the TrustedHost 400's plain text) must not
+    # throw before the status is inspected.
+    assert ".catch(() => ({}))" in after, "checkHealth does not tolerate a non-JSON body"
+    # The ok-guard has to precede every field read and, above all, the backoff reset.
+    assert after.index("if (!resp.ok)") < after.index("healthBackoffMs = HEALTH_BASE_INTERVAL"), (
+        "the resp.ok guard must precede the backoff reset, or a failing gateway "
+        "keeps being polled at the base interval"
+    )
+    assert after.index("if (!resp.ok)") < after.index("statusText.textContent"), (
+        "the resp.ok guard must precede the status text render"
+    )
+
+
 def test_enter_handler_ignores_ime_composition():
     """Enter also commits an IME candidate. Sending on that keystroke submits a
     half-composed query and swallows the key the operator meant for the IME."""
