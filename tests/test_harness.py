@@ -814,6 +814,34 @@ def test_loop_turn_requires_session_id(client):
     assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_SESSION"
 
 
+def test_loop_without_session_id_does_not_create_a_session(client, cfg):
+    before = set(cfg.sessions_dir.glob("*.json"))
+    resp = client.post("/api/chat", json={"message": "go", "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_SESSION"
+    assert set(cfg.sessions_dir.glob("*.json")) == before
+
+
+def test_loop_chat_busy_releases_inflight_lock(client):
+    sid = _goal_session(client)
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post(
+            "/api/chat",
+            json={"message": "go", "session_id": sid, "loop": True},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "CHAT_BUSY"
+    finally:
+        client.app.state.generation_gate.release()
+    retry = client.post(
+        "/api/chat",
+        json={"message": "go", "session_id": sid, "loop": True},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["reply"] == "ok"
+
+
 def test_plain_chat_still_works_without_a_goal(client):
     resp = client.post("/api/chat", json={"message": "hello"})
     assert resp.status_code == 200

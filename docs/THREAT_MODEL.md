@@ -769,6 +769,16 @@ it. It did not. This amendment closes the configuration half; **authentication o
 the query path remains genuinely absent and is still the open item the note
 names.**
 
+### Tenth amendment — harness `/web` DNS TOCTOU residual (2026-08-15)
+
+The harness console `/web` fetch (`harness/web_search.py`) refuses non-global
+resolved addresses in `assert_public_host` before the GET. That is a
+pre-connect snapshot only: httpx re-resolves on connect, so a DNS-rebinding
+window remains between the check and the socket. The residual is accepted for
+this loopback, operator-allowlisted, default-off surface; a pinned-connect
+transport is the future fix and is **not** in this tree. Do not treat the
+pre-check as a connect-time pin.
+
 ---
 
 ## 7. Reporting

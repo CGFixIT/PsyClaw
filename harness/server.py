@@ -932,6 +932,16 @@ def create_app(
     # -- chat ------------------------------------------------------------
     @app.post("/api/chat", dependencies=guarded)
     def chat(req: ChatRequest, request: Request) -> dict:
+        # Loop turns must not create a session: reject before store.get/create
+        # so a missing session_id cannot leave an empty orphan on disk.
+        if req.loop and not req.session_id:
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(
+                    "loop turns require an existing session",
+                    code="LOOP_REQUIRES_SESSION",
+                ),
+            )
         try:
             if req.session_id:
                 session = store.get(req.session_id)
@@ -946,6 +956,10 @@ def create_app(
             _guard_loop_turn(req, session, request)
 
         if not generation_gate.claim():
+            # _guard_loop_turn already claimed loop_inflight; drop it here so
+            # a 409 CHAT_BUSY cannot pin the session for _LOOP_INFLIGHT_TTL_SEC.
+            if req.loop:
+                _release_loop_inflight(session.session_id)
             raise _err(
                 _HTTP_CONFLICT,
                 AgenticError(

@@ -6,8 +6,9 @@ http(s) URLs. There is no search engine, no browser, no JS, no crawl.
 Offline mode is the point: the local 27b still cannot invent a host. A
 fetch is attempted only if (1) ``web_enabled`` is true, (2) the URL's
 host+path matches the allowlist, and (3) DNS resolves to a public
-(non-loopback, non-private, non-link-local) address. Empty allowlist is
-fail-closed.
+(non-loopback, non-private, non-link-local) address *before* the GET.
+httpx re-resolves on connect, so a residual rebinding window remains
+(see ``assert_public_host``). Empty allowlist is fail-closed.
 
 I6: this module is harness-local. It never imports ``gate``, ``graph``,
 ``mcp_hybrid_server``, or ``agentic``. It never starts ``/api/agent/*``.
@@ -107,6 +108,21 @@ def _context_path(cfg: HarnessConfig) -> Path:
     return cfg.tools_dir / "web_context.txt"
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Staged file + Path.replace (os.replace). Matches allowlist JSON writes."""
+    staged = path.with_name(f".staged.{path.name}.tmp")
+    try:
+        _stage_and_replace(staged, path, text)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+
+
+def _stage_and_replace(staged: Path, path: Path, text: str) -> None:
+    staged.write_text(text, encoding=_UTF8)
+    staged.replace(path)
+
+
 def _host_of(raw: str) -> str:
     return (raw or "").strip().lower().rstrip(".")
 
@@ -189,7 +205,14 @@ def url_is_allowed(url: str, entries: list[dict[str, str]]) -> dict[str, str] | 
 
 
 def assert_public_host(host: str) -> None:
-    """Resolve ``host`` and refuse any non-global address (SSRF)."""
+    """Resolve ``host`` and refuse any non-global address (SSRF pre-check).
+
+    Residual DNS TOCTOU: this snapshot is not a pinned connect. httpx
+    re-resolves on the GET, so a rebinding window remains between this
+    check and the socket. A pinned-IP transport is the future fix; this
+    module does not add one. See docs/THREAT_MODEL.md tenth amendment.
+    """
+    # Pre-connect IP check only — httpx will DNS again. Not a pin.
     clean = _host_of(host)
     if not clean or clean in _BLOCKED_HOSTS:
         raise WebToolError("host is not fetchable", code="WEB_SSRF_DENIED")
@@ -343,7 +366,7 @@ class WebTool:
             raise WebToolError("last extract is empty", code="WEB_NO_LAST")
         body = f"Source: {source}\n\n{text}"[:_MAX_CONTEXT]
         dest = _context_path(self._cfg)
-        dest.write_text(body, encoding=_UTF8)
+        _atomic_write_text(dest, body)
         return self.status() | {"chars": len(body)}
 
     def _require_enabled(self) -> list[dict[str, str]]:
@@ -395,7 +418,7 @@ class WebTool:
             body = body[:_MAX_BYTES]
         text = extract_text(body.decode("utf-8", errors="replace"), ctype)
         record = {"url": target, "status": resp.status_code, "content_type": ctype, "text": text, "chars": len(text)}
-        _last_path(self._cfg).write_text(json.dumps(record), encoding=_UTF8)
+        _atomic_write_json(_last_path(self._cfg), record)
         return record
 
     def fetch(self, url: str) -> dict:
