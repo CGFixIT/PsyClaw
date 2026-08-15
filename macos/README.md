@@ -14,6 +14,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 
 | Script | What it does |
 |---|---|
+| `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. |
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
 | `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s the five CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port`. |
@@ -26,6 +27,24 @@ Console package: [`harness/README.md`](../harness/README.md).
 
 Target shells: bash (including macOS 3.2) and zsh. BSD userland on macOS —
 no Homebrew required.
+
+## One-shot after clone (Apple Silicon)
+
+`setup-from-clone.sh` is the operator-facing "I just cloned this, make it
+run" path. It does **not** reimplement the scripts above — it chains them
+and fills the four holes `setup-guide.md` documents that Option A leaves
+open (Ollama, the retrieval index, API keys, starting both servers).
+
+```bash
+git clone https://github.com/CGFixIT/CyClaw.git && cd CyClaw
+bash macos/setup-from-clone.sh
+```
+
+Privacy matches `cyclaw-advisor`: secrets are never logged, never written
+to `config.yaml`, never placed on a child process argv. Key persist is
+Keychain + `~/.CyClaw/.env` (chmod 600) via `setup-cyclaw-keys.sh`.
+fsconnect writes and indexing stay off. LaunchAgents are **not** generated
+or loaded (those still need `--confirm --reason`).
 
 ## Key bootstrap
 
