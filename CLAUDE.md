@@ -130,12 +130,17 @@ not just localhost. It does **not** touch the separate session/RBAC
 `/auth/*` system below, which stays governed by `auth.enabled` regardless.
 `config-guard`'s C13 check warns (does not fail) when this flag is `true`
 alongside a non-loopback `api.host` or a LAN entry in `security.allowed_hosts`.
-The hard control is at the bind: `gate.py`'s `_require_loopback_bind` refuses
-to start on a non-loopback `api.host` while this flag is `true`, including via
-the auth+TLS route past loopback — that route proves `/query` carries a
-session, which says nothing about the API-key routes this flag opens, and the
-two must not compose into a LAN bind. The `CYCLAW_ALLOW_NON_LOOPBACK_BIND`
-env override still outranks it (explicit "I front this with my own auth").
+Two hard controls back it. **Per-request:** the bypass applies only to a
+**loopback peer** — a remote caller always needs the real key, on both apps.
+That is the durable one, because it holds regardless of how the process was
+launched, including `uvicorn gate:app --host 0.0.0.0` (the container's own
+`CMD`) and `uvicorn harness.server:app`, neither of which runs a bind guard.
+It is keyed on the socket peer, never the `Host` header — `TrustedHostMiddleware`
+is a DNS-rebinding control, not authentication. **At bind:** `gate.py`'s
+`_require_loopback_bind` refuses a non-loopback `api.host` while the flag is
+`true`, including via the auth+TLS route past loopback. The
+`CYCLAW_ALLOW_NON_LOOPBACK_BIND` env override still outranks the bind guard
+(explicit "I front this with my own auth"), but never the peer check.
 
 The original three `/auth/*` endpoints (`/auth/login`, `/auth/logout`,
 `/auth/whoami`) were Stage 2 of `docs/AUTHENTICATION_DESIGN.md`

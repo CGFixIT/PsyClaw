@@ -6,6 +6,7 @@ import os
 import pickle
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -188,9 +189,13 @@ class TestAPIKeyAuth:
         from gate import require_api_key
 
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="s\xe9cret-key")
+        # A loopback peer, so the api_key_optional bypass is NOT what produces
+        # the 401 here -- this test is about the byte-comparison path, and a
+        # remote peer would reach the same status for an unrelated reason.
+        request = MagicMock(client=SimpleNamespace(host="127.0.0.1"))
         with patch.dict(os.environ, {"CYCLAW_API_KEY": "expected-key-value"}):
             with pytest.raises(HTTPException) as exc:
-                require_api_key(creds)
+                require_api_key(request, creds)
         assert exc.value.status_code == 401
 
     def test_protected_accepts_correct_key(self, client_with_auth):

@@ -525,11 +525,16 @@ security:
   # on that LAN gets unauthenticated soul mutation, agentic/fsconnect/sqlconnect
   # ops shims, and harness agent-run/push/publish (writes to GitHub). config-
   # guard's C13 check warns (does not fail) when this combination is detected.
-  # Hard control (not just the C13 warning): gate.py's _require_loopback_bind
-  # REFUSES to start when this is true and api.host is non-loopback, even with
-  # auth.enabled + api.tls.enabled + a real /query credential. Those flags prove
-  # the QUERY path carries a session; they say nothing about the API-key routes
-  # this flag opens, and the two must not compose into a LAN bind.
+  # Two hard controls back this up (not just the C13 warning):
+  #  1. PER-REQUEST: the bypass only applies to a LOOPBACK PEER. A remote caller
+  #     always needs the real key, on both apps. This is the durable one -- it
+  #     holds no matter how the process was launched, including the container's
+  #     `uvicorn gate:app --host 0.0.0.0` and `uvicorn harness.server:app`,
+  #     neither of which runs the bind guards below.
+  #  2. AT BIND: gate.py's _require_loopback_bind refuses to start when this is
+  #     true and api.host is non-loopback, even with auth.enabled +
+  #     api.tls.enabled + a real /query credential -- those prove the QUERY path
+  #     carries a session and say nothing about the API-key routes this opens.
   api_key_optional: false
   # Starlette buffers a request's entire raw body into memory before Pydantic
   # validation runs, so schemas/api.py's per-field max_length caps (largest is

@@ -33,6 +33,7 @@ apply_telemetry_kill()
 # [tool.ruff.lint] per-file-ignores and setup.cfg's flake8 per-file-ignores,
 # matching gate.py's identical pattern for the identical reason.
 import hmac
+import ipaddress
 import logging
 import os
 import secrets
@@ -94,6 +95,31 @@ logger = logging.getLogger("cyclaw.harness.server")
 # see the docstring on _require_api_key_or_optional below for why the check
 # itself still lives there, not here.
 _bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    """True when this request arrived from this machine.
+
+    Keyed on the socket peer rather than the Host header or the bind address,
+    because only the peer is outside the caller's control: TrustedHostMiddleware
+    admits a forged ``Host: 127.0.0.1``, and main()'s loopback check never runs
+    when the app is served directly via ``uvicorn harness.server:app``.
+
+    A missing ``client`` reads as NOT loopback -- this backs a security bypass,
+    so an unknown peer fails closed. Mirrors gate.py's helper of the same name;
+    duplicated rather than imported because harness/ must never import gate (I6,
+    enforced by tests/test_harness_isolation.py).
+    """
+    peer = request.client
+    if peer is None:
+        return False
+    host = peer.host or ""
+    if host == "localhost":  # DevSkim: ignore DS162092,DS137138 - loopback name by design
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 _HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -573,16 +599,29 @@ def create_app(
             )
 
     def _require_api_key_or_optional(
+        request: Request,
         credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
     ) -> None:
         """Skip the CYCLAW_API_KEY check when security.api_key_optional is true.
 
         Mirrors gate.py's require_api_key: same config flag, same "checked
         before the env var" ordering so opting in means "no key needed," not
-        "still refused when unset." Delegates to utils.auth.require_api_key
-        for the actual check -- that function stays untouched and always
-        fail-closed when called directly, which is what keeps
-        test_matches_gate_auth_semantics's parity assertion meaningful.
+        "still refused when unset," and the same LOOPBACK-PEER requirement on
+        the bypass. Delegates to utils.auth.require_api_key for the actual
+        check -- that function stays untouched and always fail-closed when
+        called directly, which is what keeps test_matches_gate_auth_semantics's
+        parity assertion meaningful.
+
+        The peer requirement matters more here than in gate.py, because this
+        app's guarded set includes /api/agent/run|push|publish and /api/keys.
+        main() refuses a non-loopback bind, but `uvicorn harness.server:app
+        --host 0.0.0.0` never calls main(); GET / is deliberately open and
+        embeds this instance's CSRF token, and _enforce_same_origin allows a
+        header-less client on purpose. So without this, the whole guarded
+        surface would reduce to "fetch the console page, scrape the token,
+        forge Host: 127.0.0.1" for anyone who can route to the port.
+        TrustedHostMiddleware cannot close that: a Host header is
+        attacker-controlled, a socket peer is not.
 
         Annotated[...] = None (not `= Depends(_bearer_scheme)` as the default
         itself) for the same reason utils/auth.py's own require_api_key uses
@@ -590,7 +629,8 @@ def create_app(
         value") under this file's itemized (not blanket) WPS exemption list
         in setup.cfg -- fixed here in code rather than adding a new grant.
         """
-        if (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True:
+        bypass = (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True
+        if bypass and _is_loopback_peer(request):
             return
         require_api_key(credentials)
 

@@ -67,7 +67,7 @@ except PackageNotFoundError:
 
 import logging
 import yaml
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -97,6 +97,7 @@ from metrics import summarize_audit
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 def require_api_key(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ):
     # Fail-closed (PR #99 #4). Previously, when CYCLAW_API_KEY was unset the
@@ -110,7 +111,17 @@ def require_api_key(
     # entirely across every route it guards (soul/*, ops/*, memory/*,
     # audit/summary). Checked first, before the env var, so opting in also
     # means "no key needed" rather than "still refused when unset."
-    if (cfg.get("security", {}) or {}).get("api_key_optional") is True:
+    #
+    # The bypass additionally requires a LOOPBACK PEER, and that is the load-
+    # bearing half. _require_loopback_bind covers `python gate.py`, but nothing
+    # calls it when the app is served directly -- the shipped container's CMD is
+    # `uvicorn gate:app --host 0.0.0.0`, and any operator can run the same by
+    # hand. Keying the bypass off the socket's peer address instead of the bind
+    # makes it independent of how the process was launched: a remote caller
+    # never receives it, so the flag cannot silently open soul mutation or the
+    # /ops/* subprocess shims to a network. TrustedHostMiddleware is not a
+    # substitute -- a Host header is attacker-controlled, a peer address is not.
+    if _api_key_gate_bypassed() and _is_loopback_peer(request):
         return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
@@ -939,6 +950,34 @@ register_memory_routes(
 
 
 _ALLOW_NON_LOOPBACK_ENV = "CYCLAW_ALLOW_NON_LOOPBACK_BIND"
+
+
+def _is_loopback_peer(request: Request) -> bool:
+    """True when this request arrived from this machine.
+
+    Keyed on the socket peer, NOT on the Host header and NOT on the bind
+    address. Both alternatives fail here: a Host header is attacker-supplied
+    (TrustedHostMiddleware is a DNS-rebinding control, not authentication), and
+    the bind is unknown to a request handler -- ``_require_loopback_bind`` only
+    runs under ``main()``, which the container's ``uvicorn gate:app --host
+    0.0.0.0`` never calls.
+
+    On X-Forwarded-For: ``_serve`` passes ``proxy_headers=False``, so under the
+    documented entry point this is the real peer. When the app is served
+    directly, uvicorn's default ``forwarded_allow_ips="127.0.0.1"`` rewrites
+    ``scope["client"]`` from XFF only when the ACTUAL peer is already loopback
+    -- so a remote caller cannot spoof its way into looking local, and a
+    loopback caller spoofing a remote value only makes this stricter. An
+    operator who runs with ``--forwarded-allow-ips='*'`` has delegated peer
+    identity to their proxy by choice; that is outside what this can assert.
+
+    A missing ``client`` (an ASGI scope without one) reads as NOT loopback:
+    this backs a security bypass, so an unknown peer fails closed.
+    """
+    peer = request.client
+    if peer is None:
+        return False
+    return _is_loopback_host(peer.host or "")
 
 
 def _is_loopback_host(host: str) -> bool:

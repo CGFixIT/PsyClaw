@@ -195,7 +195,13 @@ def _client_with_api_key_optional(cfg, monkeypatch, value: bool) -> TestClient:
         return loaded
 
     monkeypatch.setattr(harness_server, "_get_config", _patched)
-    return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
+    # Explicit loopback peer: starlette defaults to ("testclient", 50000), which
+    # _is_loopback_peer correctly rejects. The remote case is asserted below.
+    return TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 51234),
+    )
 
 
 @pytest.mark.parametrize(("method", "path", "body"), GUARDED)
@@ -473,3 +479,52 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
     })))
     assert secret not in json.dumps(from_json)
     assert from_json["message_count"] == 2
+
+
+def test_api_key_optional_does_not_reach_a_remote_peer(cfg, monkeypatch):
+    """The reported attack, end to end.
+
+    main() refuses a non-loopback bind, but `uvicorn harness.server:app --host
+    0.0.0.0` never calls main(). From there a LAN client can fetch the open
+    console page for this instance's CSRF token, forge Host: 127.0.0.1 past
+    TrustedHostMiddleware, and send no Origin/Sec-Fetch-Site at all (which
+    _enforce_same_origin allows on purpose, for curl). With api_key_optional
+    true, the peer check is the ONLY thing left standing in front of
+    /api/agent/run|push|publish and /api/keys -- so it is asserted here against
+    that full chain rather than against the dependency in isolation.
+    """
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = True
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    remote = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("10.0.0.50", 4321),
+    )
+    # The console page is open by design, so the token really is obtainable.
+    scraped = remote.app.state.csrf_token
+    assert remote.get("/").status_code == 200
+
+    resp = remote.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={"Host": "127.0.0.1", "X-CyClaw-CSRF": scraped},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "UNAUTHORIZED"
+
+
+def test_api_key_optional_still_serves_a_loopback_peer(cfg, monkeypatch):
+    """The supported local-operator case must keep working unchanged."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    local = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = local.post("/api/soul", json={"enabled": True}, headers=_csrf(local))
+    assert resp.status_code != 401

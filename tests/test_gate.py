@@ -80,7 +80,15 @@ def client(tmp_path):
         # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
         # (added at import from the real config.yaml allowed_hosts) admits the
         # request; the default "testserver" host would otherwise 400.
-        client = TestClient(gate.app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        client = TestClient(
+            gate.app,
+            base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+            # Starlette defaults the peer to ("testclient", 50000), which is
+            # deliberately NOT loopback under _is_loopback_peer. Set a real
+            # loopback peer so tests exercise the ordinary local-operator case;
+            # the non-loopback case is asserted explicitly in TestApiKeyOptionalPeer.
+            client=("127.0.0.1", 51234),  # DevSkim: ignore DS162092,DS137138
+        )
         yield client, mock_graph
 
     reset_config_cache()
@@ -1079,6 +1087,71 @@ class TestAuditSummaryEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["total_events"] == 1
+
+
+class TestApiKeyOptionalPeer:
+    """api_key_optional must never open the API-key routes to a REMOTE caller.
+
+    _require_loopback_bind only runs under main(). The shipped container's CMD
+    is `uvicorn gate:app --host 0.0.0.0`, and any operator can run the same by
+    hand, so the bind guard is not reachable on that path at all. Keying the
+    bypass off the socket peer instead makes it independent of how the process
+    was launched -- which is the only form of the control that holds for every
+    launch path.
+    """
+
+    def _client(self, peer_host):
+        import gate
+        return TestClient(gate.app, base_url="http://localhost", client=(peer_host, 4321))
+
+    def test_remote_peer_is_refused_even_with_the_flag_on(self, client, monkeypatch):
+        """The reported attack: reach a directly-served app from the LAN with no
+        credential. The flag is on and no key is set, so ONLY the peer check
+        stands between a remote caller and soul mutation."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        assert self._client("10.0.0.50").get("/soul").status_code == 401
+
+    def test_forged_loopback_host_header_does_not_grant_the_bypass(self, client, monkeypatch):
+        """TrustedHostMiddleware is a DNS-rebinding control, not authentication.
+        A remote client can always send Host: 127.0.0.1; the peer it connected
+        from is the part it cannot choose."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        remote = self._client("192.168.1.77")
+        resp = remote.get("/soul", headers={"Host": "127.0.0.1"})  # DevSkim: ignore DS162092,DS137138
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("peer", ["127.0.0.1", "127.0.0.2", "::1"])
+    def test_loopback_peers_still_get_the_bypass(self, client, monkeypatch, peer):
+        """The supported case must keep working: a local operator with the flag
+        on reaches the route with no key. 127.0.0.2 is included because the
+        whole 127.0.0.0/8 range is loopback, matching _is_loopback_host."""
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        assert self._client(peer).get("/soul").status_code == 200
+
+    def test_remote_peer_with_a_correct_key_still_works(self, client, monkeypatch):
+        """The peer check bounds the BYPASS, not the route. A remote caller
+        holding the real key is exactly as authorised as before this change --
+        otherwise this would be a silent breaking change for anyone fronting
+        CyClaw with their own proxy."""
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "real-key-abc")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = self._client("10.0.0.50").get(
+            "/soul", headers={"Authorization": "Bearer real-key-abc"}
+        )
+        assert resp.status_code == 200
+
+    def test_missing_peer_fails_closed(self):
+        """An ASGI scope without a client reads as not-loopback. This backs a
+        security bypass, so an unknown peer must not receive it."""
+        import gate
+        assert gate._is_loopback_peer(MagicMock(client=None)) is False
 
 
 class TestProxyHeaderTrust:
