@@ -100,6 +100,7 @@ decision.
 | GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; returns `username` + `role`; 503 when `auth.enabled` is false |
 | GET | `/auth/users` | **session; admin or operator** | list users, no hashes; 503 when auth off |
 | POST | `/auth/users` | **session+CSRF or admin bearer** | create user; operator cannot create admin |
+| POST | `/auth/password` | **session+CSRF or admin bearer** | self-service password change; any authenticated role |
 | POST | `/auth/users/{u}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
 | POST | `/auth/users/{u}/role` | **admin only** | set role; last-admin protected |
 | POST | `/auth/users/{u}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
