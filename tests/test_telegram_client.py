@@ -578,6 +578,22 @@ def test_download_file_honors_one_bot_api_429_retry_after(
     assert client_cls.return_value.stream.call_args.kwargs["follow_redirects"] is False
 
 
+def test_bot_api_client_disables_ambient_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token lives in the Bot API URL; HTTP(S)_PROXY must not see it."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-must-not-hit-proxy")
+    cfg = _cfg(tmp_path)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"ok": True, "result": []}
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = mock_resp
+        get_updates(cfg)
+    client_cls.assert_called_once_with(trust_env=False)
+
+
 def test_post_query_uses_proxy_disabled_loopback_client(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     mock_resp = MagicMock()

@@ -44,9 +44,10 @@ _RETRY_LOCK = threading.Lock()
 
 
 def _get_http_client() -> httpx.Client:
+    """Bot API pool. trust_env=False: the token is path-embedded (bot_api_url)."""
     global _http_client
     if _http_client is None:
-        _http_client = httpx.Client()
+        _http_client = httpx.Client(trust_env=False)
     return _http_client
 
 
