@@ -11,7 +11,6 @@ composition, all without touching a real macOS Keychain.
 from __future__ import annotations
 
 import os
-import pty
 import shutil
 import stat
 import subprocess
@@ -19,6 +18,16 @@ import sys
 from pathlib import Path
 
 import pytest
+
+if os.name != "nt":
+    # pty (and the tty/termios modules it imports) is POSIX-only. This whole
+    # module is skipif(os.name == "nt")'d below, but that's a runtime skip --
+    # it doesn't stop pytest from importing the module during collection, so
+    # an unconditional `import pty` at module level would abort collection
+    # for the entire test run on Windows instead of cleanly skipping this
+    # file (confirmed: this crashed the windows-latest CI leg with
+    # ModuleNotFoundError: No module named 'termios' before this guard).
+    import pty
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ENV_SCRIPT = _REPO_ROOT / "macos" / "cyclaw-keychain-env.sh"
