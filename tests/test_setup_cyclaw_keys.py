@@ -341,6 +341,83 @@ def test_refuses_non_tty_without_skip_prompts(
     assert "TTY" in result.stderr
 
 
+def test_schedule_rotate_plist_has_no_secret(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        "--no-copy-key",
+        "--schedule-rotate",
+        "monthly",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.keys-rotate.plist"
+    assert plist.is_file()
+    text = plist.read_text(encoding="utf-8")
+    assert "--rotate" in text
+    assert "--skip-prompts" in text
+    assert "--no-print-key" in text
+    assert "CYCLAW_API_KEY=" not in text
+    assert "dummy" not in text
+    assert not re.search(r"[0-9a-f]{40}", text)
+    helper = tmp_path / ".CyClaw" / "bin" / "setup-cyclaw-keys.sh"
+    assert helper.is_file()
+    assert helper.stat().st_mode & stat.S_IXUSR
+
+
+def test_schedule_rotate_rejects_unknown_interval(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    result = _run(
+        "--schedule-rotate",
+        "daily",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+    )
+    assert result.returncode == 1
+    assert "monthly" in result.stderr
+
+
+def test_unschedule_rotate_removes_plist(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    first = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        "--no-copy-key",
+        "--schedule-rotate",
+        "weekly",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+    )
+    assert first.returncode == 0, first.stderr
+    plist = tmp_path / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.keys-rotate.plist"
+    assert plist.is_file()
+    second = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        "--no-copy-key",
+        "--unschedule-rotate",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+    )
+    assert second.returncode == 0, second.stderr
+    assert not plist.exists()
+
+
+def test_help_lists_browser_and_schedule_flags(
+    fake_security: Path, tmp_path: Path
+) -> None:
+    result = _run("--help", fake_security_bin=fake_security, home=tmp_path)
+    assert result.returncode == 0
+    assert "--fill-browser" in result.stdout
+    assert "--schedule-rotate" in result.stdout
+    assert "--copy-key" in result.stdout
+
+
 def test_custom_cyclaw_home_rc_sources_that_env(
     fake_security: Path, tmp_path: Path
 ) -> None:
