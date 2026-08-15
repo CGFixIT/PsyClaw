@@ -192,19 +192,23 @@ def test_harness_plist_structure(tmp_path: Path, capsys) -> None:
     assert "keep console up" in out
 
 
-def test_harness_plist_with_api_key_service_prints_no_effect_note(tmp_path: Path, capsys) -> None:
-    # harness/server.py never reads CYCLAW_API_KEY -- the wrapper still runs
-    # and exports it, but nothing downstream consumes it, so the operator
-    # gets told rather than believing the flag did something for harness.
+def test_harness_plist_with_api_key_service_wraps_keychain(tmp_path: Path) -> None:
+    # harness/server.py DOES guard its routes with require_api_key, so
+    # --api-key-service is meaningful for harness. The wrapper runs and
+    # exports CYCLAW_API_KEY, which harness/server.py consumes. No warning.
     home = tmp_path / "home"
     code = _run(
         home, "--service", "harness", "--api-key-service", "com.cgfixit.cyclaw.api-key",
         "--confirm", "--reason", "x",
     )
     assert code == 0
-    out = capsys.readouterr().out
-    assert "does not currently read CYCLAW_API_KEY" in out
-    assert "no effect for --service harness" in out
+    plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.harness.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    args = document["ProgramArguments"]
+    assert args[0].endswith("cyclaw-keychain-env.sh")
+    assert args[1] == "com.cgfixit.cyclaw.api-key"
+    assert args[2] == "CYCLAW_API_KEY"
+    assert args[3] == "--"
 
 
 def test_gate_plist_with_api_key_service_has_no_no_effect_note(tmp_path: Path, capsys) -> None:
