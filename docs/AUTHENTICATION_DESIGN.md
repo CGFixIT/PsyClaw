@@ -12,12 +12,12 @@ related:
 # CyClaw Authentication — Design
 
 **Status: in progress.** Stage 1 (`utils/authn.py`, PR #829), Stage 2
-(sessions, login/logout, per-device tokens, `gate_auth.py`, PR #830), and
-Stage 5 (re-keying the #825 bind guard, landed as part of #825 itself) have
-landed on `main`. `auth.enabled` and `api.tls.enabled` both still ship
-`false`, so no existing install's behavior changed. Stages 3–4 (enforcing a
-credential on `/query`; TLS wiring into `uvicorn.run`) remain pending — see
-§8.
+(sessions, login/logout, per-device tokens, `gate_auth.py`, PR #830),
+Stage 3 (credential on `/query` + console login when `auth.enabled` is
+true), and Stage 5 (re-keying the #825 bind guard, landed as part of
+#825 itself) have landed. `auth.enabled` and `api.tls.enabled` both still
+ship `false`, so no existing install's behavior changed. Stage 4 (TLS
+wiring into `uvicorn.run`) remains pending — see §8.
 
 This document exists because the operator wrote the requirement down first, in
 `docs/zIdeas/note.txt`:
@@ -82,8 +82,10 @@ false, matching `gate_ops.py`'s convention for `/ops/*`) — so the
 unauthenticated-route row above is stale too: `/auth/login` carries no
 authentication either, by necessity (a caller has no credential yet to
 present), gated only by the standard rate limit and the same-origin check.
-None of this enforces a credential on `/query` yet — that is still Stage 3,
-not landed.
+Stage 3 now attaches `require_session_or_token` to `POST /query` when
+`auth.enabled` is the literal boolean `true` (session cookie or device
+token; no CSRF on the query path). The shipped default still leaves
+`/query` open.
 
 Two consequences worth stating plainly.
 
@@ -259,9 +261,11 @@ statement of *intent*; an operator who sets `auth.enabled: true` reasonably
 believes authentication is on, which is false until Stage 3 attaches a
 credential dependency to `/query`. `gate.py`'s
 `_request_path_enforcement_active()` probes the live FastAPI app for that
-dependency rather than trusting the flags, so this path past loopback cannot
-open until Stage 3 genuinely ships, and opens by itself the moment it does —
-no further edit to the guard is required. This is a strictly better gate than
+dependency rather than trusting the flags. Stage 3 attaches the dependency
+when `auth.enabled` is the literal boolean `true`, so the path past
+loopback opens by itself once both flags are on — no further edit to the
+guard is required. The shipped default (auth off) still leaves the probe
+false. This is a strictly better gate than
 the env-var-only guard: it permits the operator's goal (LAN + TLS + auth) once
 both Stage 3 and Stage 4 land, and refuses the genuinely unsafe case (LAN + no
 auth, LAN + auth claimed but not enforced). It **does not** refuse LAN + auth
@@ -283,7 +287,7 @@ Each stage is independently reviewable and leaves the tree working.
 |---|---|---|
 | **1** — landed, PR #829 | This document + `utils/authn.py` (scrypt hash/verify, lockout arithmetic) + tests. Pure functions only — no database, no HTTP, no CLI. **No request path touched.** | None at merge time; Stage 2 (below) is now the caller |
 | **2** — landed, PR #830 | Account store (`utils/authn_store.py`), `AuthManager` (`utils/authn_manager.py`), `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/`token`), session store, `/auth/login`, `/auth/logout`, `/auth/whoami`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` (ships false, unchanged) |
-| **3** | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
+| **3** — landed | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
 | **4** | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
 | **5** — landed, PR #825 | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition (implemented as three — see §7) |
 

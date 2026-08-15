@@ -1,4 +1,4 @@
-"""Per-user authentication endpoints (docs/AUTHENTICATION_DESIGN.md, Stage 2).
+"""Per-user authentication endpoints (docs/AUTHENTICATION_DESIGN.md, Stage 2+3).
 
 ``/auth/login``, ``/auth/logout``, ``/auth/whoami`` -- registered onto
 gate.py's app the same way gate_ops.py registers ``/ops/*``: a registration
@@ -7,21 +7,16 @@ core request-path functionality, not out-of-band like agentic/sync/guardrails,
 but the split still keeps gate.py from growing without bound and reuses an
 established pattern rather than inventing a new one.
 
-Stage 2 builds sessions, login/logout, and per-device bearer tokens. It does
-NOT enforce anything: ``/query`` and the console are untouched here, exactly
-as docs/AUTHENTICATION_DESIGN.md's staged table specifies -- enforcing a
-credential on ``/query`` is Stage 3. When ``auth.enabled`` is false (the
-shipped default) every route below returns 503 rather than 404, so the
-routes' mere presence never discloses whether the feature is turned on --
-the same reasoning gate_ops.py's routes stay registered regardless of
-``agentic.enabled``.
+When ``auth.enabled`` is false (the shipped default) every ``/auth/*`` route
+below returns 503 rather than 404, so the routes' mere presence never
+discloses whether the feature is turned on -- the same reasoning
+gate_ops.py's routes stay registered regardless of ``agentic.enabled``.
 
-``require_session_or_token`` is the dependency Stage 3 will need to attach to
-``/query`` and the console. It is a closure built inside
-``register_auth_routes`` -- not a module-level export -- so gate.py currently
-locates it by NAME (``_AUTH_DEPENDENCY_NAME``) rather than importing it; see
-that constant's own comment in gate.py for why. Only ``/auth/whoami`` calls it
-in this module today.
+``require_session_or_token`` is a closure built inside ``register_auth_routes``.
+Stage 3 attaches it to ``POST /query`` only when ``auth_manager`` is not None
+(via ``attach_identity_to_query``). gate.py's bind-guard probe locates it by
+NAME (``_AUTH_DEPENDENCY_NAME``). A named no-op on the disabled default would
+false-open a LAN bind, so the shipped app (auth off) does not carry it.
 """
 
 from __future__ import annotations
@@ -33,6 +28,8 @@ from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.dependencies.utils import get_parameterless_sub_dependant
+from fastapi.routing import APIRoute
 
 from schemas.api import AuthLoginRequest, AuthLoginResponse, AuthWhoamiResponse
 from utils.authn_manager import AuthManager, SessionInfo
@@ -57,17 +54,43 @@ _DETAILS_KEY = "details"
 _EVENT_KEY = "event"
 
 
+def attach_identity_to_query(app: FastAPI, identity_dep: Callable[..., str]) -> None:
+    """Attach ``identity_dep`` to POST /query so the bind-guard probe can see it.
+
+    Route-level ``dependencies=`` run for side effects; the return value is
+    discarded, so ``require_session_or_token`` also stamps
+    ``request.state.auth_username`` for ``query_endpoint`` to read. FastAPI
+    builds ``route.dependant`` at registration time, so a late attach must
+    update both ``route.dependencies`` and the dependant tree -- the probe
+    walks names in that tree, not the decorator list.
+    """
+    depends = Depends(identity_dep)
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if route.path != "/query" or "POST" not in (route.methods or set()):
+            continue
+        route.dependencies.append(depends)
+        route.dependant.dependencies.insert(
+            0,
+            get_parameterless_sub_dependant(depends=depends, path=route.path_format),
+        )
+        return
+
+
 def register_auth_routes(
     app: FastAPI,
     cfg: dict,
     audit: Callable[[dict], Awaitable[None]],
     enforce_rate_limit: Callable[[Request], Awaitable[None]],
     auth_manager: AuthManager | None,
-) -> None:
+) -> Callable[..., str]:
     """Register /auth/login, /auth/logout, /auth/whoami on ``app``.
 
     ``auth_manager`` is None when auth.enabled is false -- every handler
     below checks for that first (via ``_require_enabled``) and returns 503.
+    Returns the ``require_session_or_token`` closure so the caller can attach
+    it to ``/query`` when a manager exists.
     """
     api_cfg = cfg.get("api", {}) or {}
     tls_cfg = api_cfg.get("tls", {}) if isinstance(api_cfg, dict) else {}
@@ -227,28 +250,35 @@ def register_auth_routes(
         return session
 
     def require_session_or_token(
+        request: Request,
         cyclaw_session: str | None = Cookie(default=None),
         authorization: str | None = Header(default=None),
     ) -> str:
         """Return the authenticated username via EITHER a live session cookie
         OR a bearer device token -- whichever the caller presented. No CSRF
-        check here: this is meant for read paths (whoami today; /query in
-        Stage 3), and CSRF only ever guards state-changing requests.
+        check here: this is meant for read paths (whoami and /query), and
+        CSRF only ever guards state-changing requests.
+
+        Also stamps ``request.state.auth_username`` so a route-level
+        ``Depends`` on ``/query`` (return value discarded) still attributes
+        the audit record.
         """
         manager = _require_enabled()
+        username: str | None = None
         if cyclaw_session:
             session_info = manager.validate_session(cyclaw_session)
             if session_info is not None:
-                return session_info.username
-        if authorization and authorization.lower().startswith(_BEARER_PREFIX):
+                username = session_info.username
+        if username is None and authorization and authorization.lower().startswith(_BEARER_PREFIX):
             token = authorization[len(_BEARER_PREFIX):].strip()
             username = manager.verify_device_token(token)
-            if username is not None:
-                return username
-        raise HTTPException(
-            status_code=_HTTP_UNAUTHORIZED,
-            detail={_CODE_KEY: "AUTH_REQUIRED", _MESSAGE_KEY: "authentication required", _DETAILS_KEY: {}},
-        )
+        if username is None:
+            raise HTTPException(
+                status_code=_HTTP_UNAUTHORIZED,
+                detail={_CODE_KEY: "AUTH_REQUIRED", _MESSAGE_KEY: "authentication required", _DETAILS_KEY: {}},
+            )
+        request.state.auth_username = username
+        return username
 
     @app.post("/auth/login", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_login(request: Request, response: Response, req: AuthLoginRequest) -> AuthLoginResponse:
@@ -310,3 +340,5 @@ def register_auth_routes(
     @app.get("/auth/whoami", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_whoami(username: str = Depends(require_session_or_token)) -> AuthWhoamiResponse:
         return AuthWhoamiResponse(username=username)
+
+    return require_session_or_token

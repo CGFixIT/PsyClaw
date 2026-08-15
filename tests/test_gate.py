@@ -1113,8 +1113,9 @@ class TestLoopbackBindGuard:
         """Config intent is not a delivered control.
 
         An operator who sets auth.enabled: true reasonably believes they turned
-        authentication on. Stage 3 has not shipped, so /query is still
-        unauthenticated -- and that belief must not be what opens a LAN bind.
+        authentication on. Patching cfg on the already-imported app does not
+        attach require_session_or_token, so the probe stays False -- and that
+        belief must not be what opens a LAN bind.
         A log warning cannot substitute: the bind happens either way, and the
         operator who most needs the warning is the least likely to read it.
         """
@@ -1131,8 +1132,7 @@ class TestLoopbackBindGuard:
         """The durable path docs/AUTHENTICATION_DESIGN.md §7 designs toward: once
         both flags are on AND /query actually enforces a credential, a LAN bind
         no longer needs the env-var escape hatch. Patching the probe here stands
-        in for Stage 3 having shipped -- when it really does, this opens with no
-        edit to gate.py at all."""
+        in for an enabled app whose /query actually carries the dependency."""
         import gate
         monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
         monkeypatch.setattr(
@@ -1184,10 +1184,10 @@ class TestLoopbackBindGuard:
                 assert gate._request_path_enforcement_active() is expected
 
     def test_shipped_app_does_not_yet_enforce_a_credential_on_query(self):
-        """Pins the current staged reality: Stage 3 has not landed, so the
-        probe is False against the real app. When Stage 3 attaches the
-        dependency this test flips -- update it to assert True then, do not
-        delete it."""
+        """Shipped auth.enabled is false, so Stage 3 does not attach the
+        named dependency to the live app. Probe stays False. Do not flip
+        this to True -- that would mean we attached on the disabled default.
+        """
         import gate
         assert gate._request_path_enforcement_active() is False
 
@@ -1234,9 +1234,9 @@ class TestLoopbackBindGuard:
         serve.assert_called_once_with("10.0.0.50", 8787)
 
     def test_main_refuses_a_lan_bind_on_the_flags_alone(self, monkeypatch):
-        """The same config as above, with Stage 3 genuinely absent, must never
-        reach _serve -- this is the whole point of probing the capability
-        rather than trusting the flags."""
+        """The same config as above, with the live app still unattached
+        (shipped auth off), must never reach _serve -- this is the whole
+        point of probing the capability rather than trusting the flags."""
         import gate
         monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
         monkeypatch.setattr(

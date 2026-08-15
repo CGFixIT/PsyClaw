@@ -79,6 +79,75 @@ function authHeaders() {
   return h;
 }
 
+// /query uses the HttpOnly cyclaw_session cookie (same-origin), not the
+// shared ops API key. Sending CYCLAW_API_KEY as Bearer here would be
+// treated as a device token and 401 once auth.enabled is on.
+function queryHeaders() {
+  return { 'Content-Type': 'application/json' };
+}
+
+let csrfToken = null;
+const authLoginBox = document.getElementById('authLoginBox');
+const authSessionBox = document.getElementById('authSessionBox');
+const authUserInput = document.getElementById('authUser');
+const authPassInput = document.getElementById('authPass');
+const authStatus = document.getElementById('authStatus');
+
+async function refreshAuthUi() {
+  try {
+    const resp = await fetchWithTimeout(`${API}/auth/whoami`, {}, 5000);
+    if (resp.status === 503) {
+      if (authLoginBox) authLoginBox.hidden = true;
+      if (authSessionBox) authSessionBox.hidden = true;
+      csrfToken = null;
+      return;
+    }
+    if (resp.ok) {
+      const data = await resp.json();
+      if (authLoginBox) authLoginBox.hidden = true;
+      if (authSessionBox) authSessionBox.hidden = false;
+      if (authStatus) authStatus.textContent = data.username || '';
+      return;
+    }
+    if (authLoginBox) authLoginBox.hidden = false;
+    if (authSessionBox) authSessionBox.hidden = true;
+    csrfToken = null;
+  } catch {
+    // Leave the last-known UI; /health already reports reachability.
+  }
+}
+
+async function login() {
+  if (!authUserInput || !authPassInput) return;
+  const username = authUserInput.value.trim();
+  const password = authPassInput.value;
+  authPassInput.value = '';
+  const resp = await fetchWithTimeout(`${API}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  }, 15000);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    if (authStatus) {
+      if (authSessionBox) authSessionBox.hidden = false;
+      authStatus.textContent = extractErrorMessage(err, 'login failed');
+    }
+    return;
+  }
+  const data = await resp.json();
+  csrfToken = data.csrf_token || null;
+  await refreshAuthUi();
+}
+
+async function logout() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (csrfToken) headers['X-CyClaw-CSRF'] = csrfToken;
+  await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+  csrfToken = null;
+  await refreshAuthUi();
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -210,7 +279,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     timeoutId = window.setTimeout(() => activeQueryController.abort(), queryDeadlineMs);
     const resp = await fetch(`${API}/query`, {
       method: 'POST',
-      headers: authHeaders(),
+      headers: queryHeaders(),
       body: JSON.stringify(body),
       signal: activeQueryController.signal
     });
@@ -1057,4 +1126,19 @@ document.getElementById('sqlExplainBtn').addEventListener('click', sqlExplainCmd
 // arguments, matching the original onclick="submitQuery()" contract.
 document.getElementById('sendBtn').addEventListener('click', () => submitQuery());
 document.getElementById('agenticReason').addEventListener('input', refreshAgenticGates);
+if (document.getElementById('authLoginBtn')) {
+  document.getElementById('authLoginBtn').addEventListener('click', () => login());
+}
+if (document.getElementById('authLogoutBtn')) {
+  document.getElementById('authLogoutBtn').addEventListener('click', () => logout());
+}
+if (authPassInput) {
+  authPassInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      login();
+    }
+  });
+}
+refreshAuthUi();
 document.getElementById('agenticConfirm').addEventListener('change', refreshAgenticGates);

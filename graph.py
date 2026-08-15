@@ -117,6 +117,9 @@ class RetrievedDoc(TypedDict, total=False):
 class GraphState(TypedDict, total=False):
     # Inputs
     query: str
+    # Optional identity from gate.py when auth.enabled (Stage 3). Absent when
+    # auth is off so existing callers and tests keep working (total=False).
+    username: str
 
     # Retrieval outputs
     retrieved_docs: list[RetrievedDoc]
@@ -762,6 +765,9 @@ def audit_logger_node(state: GraphState, cfg: dict,
         ],
         "error": state.get("error")
     }
+    username = state.get("username")
+    if username:
+        event["username"] = username
 
     # Record to personality DB before audit_log so a failure is durable in the
     # JSONL event (personality_db_error), not only in process logs. The call is

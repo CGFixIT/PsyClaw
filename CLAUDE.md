@@ -83,7 +83,7 @@ decision.
 |---|---|---|---|
 | GET | `/` | none | serves `static/terminal.html` |
 | GET | `/static/*` | none | static mount |
-| POST | `/query` | none | rate-limited, sanitized; 400/429/503/504/500 |
+| POST | `/query` | **session or device token when `auth.enabled`** | rate-limited, sanitized; 400/401/429/503/504/500. Unchanged (no credential) when auth is off |
 | GET | `/health` | none | `degraded` without Ollama is NORMAL |
 | GET | `/soul` | **API key** | rate-limited |
 | POST | `/soul/propose` | **API key** | advisory scan, never writes |
@@ -115,9 +115,10 @@ The three `/auth/*` endpoints are Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
 (`gate_auth.py`, registered the same way `gate_ops.py` registers `/ops/*`).
 They exist regardless of `auth.enabled` — every handler checks the flag first
 and returns 503 rather than 404, so a route's mere presence never discloses
-whether the feature is on. **Stage 3 (enforcing a credential on `/query` and
-the console) has not landed** — these routes build sessions/login/logout/
-device tokens only; nothing yet requires a credential to reach `/query`.
+whether the feature is on. **Stage 3** attaches `require_session_or_token`
+to `POST /query` when `auth.enabled` is the literal boolean `true` (session
+cookie or named device token; no CSRF on `/query`). The shipped default
+leaves `/query` unauthenticated.
 
 The `/memory/*` and `/query/export/html` endpoints are the optional memory
 subsystem (`gate_memory.py` + package `memory/`, plan in
@@ -134,7 +135,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
-| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is the closure Stage 3 will need to attach to `/query` -- gate.py locates it by name (`_AUTH_DEPENDENCY_NAME`), not by importing it (not yet wired) |
+| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
 | `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
 | `memory/` | Optional facts + episodes SQLite+FTS5 store with propose/apply governance and optional retrieval fusion (all switches false in shipped `config.yaml`) |
 | `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |

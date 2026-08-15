@@ -90,7 +90,7 @@ from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
-from gate_auth import register_auth_routes
+from gate_auth import attach_identity_to_query, register_auth_routes
 from gate_memory import register_memory_routes
 from metrics import summarize_audit
 
@@ -202,6 +202,19 @@ async def _audit(event: dict) -> None:
     diverges from what's on disk, which is exactly the case in tests.
     """
     await asyncio.to_thread(audit_log, event, cfg=cfg)
+
+
+def _request_username(request: Request) -> str | None:
+    """Username stamped by require_session_or_token, or None when auth is off."""
+    return getattr(request.state, "auth_username", None)
+
+
+async def _audit_query(request: Request, event: dict) -> None:
+    """Audit a /query-path event, attaching username when a session/token resolved."""
+    username = _request_username(request)
+    if username:
+        event = {**event, "username": username}
+    await _audit(event)
 
 
 async def _check_rate_limit_async(client_ip: str) -> bool:
@@ -627,7 +640,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         # truncating here yields a hash of only the first 50 chars that diverges
         # from the canonical full-query hash written by the graph audit node and
         # the MCP path. No raw text is persisted either way.
-        await _audit({"event": "prompt_injection_blocked", "query": req.query})
+        await _audit_query(request, {"event": "prompt_injection_blocked", "query": req.query})
         raise HTTPException(
             status_code=400,
             detail={"error": e.message, "code": e.code, "details": e.details}
@@ -638,6 +651,9 @@ async def query_endpoint(request: Request, req: QueryRequest):
         "user_confirmed_online": req.user_confirmed_online,
         "online_provider": req.online_provider,
     }
+    username = _request_username(request)
+    if username:
+        initial_state["username"] = username
 
     # Overall server-side deadline: a stalled Ollama / retrieval must not hold
     # the request (and a worker thread) open indefinitely. The per-call LLM
@@ -649,7 +665,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             timeout=graph_timeout,
         )
     except TimeoutError as e:
-        await _audit({"event": "graph_timeout", "query": req.query, "timeout_sec": graph_timeout})
+        await _audit_query(request, {"event": "graph_timeout", "query": req.query, "timeout_sec": graph_timeout})
         logger.warning("graph invoke exceeded %ss deadline", graph_timeout)
         raise HTTPException(
             status_code=504,
@@ -666,7 +682,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         ) from e
     except Exception as e:
         safe_msg = _sanitize_error(e)
-        await _audit({"event": "graph_error", "query": req.query, "error": safe_msg})
+        await _audit_query(request, {"event": "graph_error", "query": req.query, "error": safe_msg})
         raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "GRAPH_ERROR"}) from e
 
     needs_confirm = result.get("needs_user_confirm", False)
@@ -736,7 +752,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             skipped_sources += 1
     if skipped_sources:
         logger.warning("Dropped %d non-dict source(s) from /query response", skipped_sources)
-        await _audit({"event": "skipped_sources", "query": req.query,
+        await _audit_query(request, {"event": "skipped_sources", "query": req.query,
                        "skipped_count": skipped_sources,
                        "total_sources": len(docs)})
 
@@ -869,18 +885,23 @@ register_ops_routes(
     require_api_key=require_api_key,
 )
 
-# Stage 2 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
+# Stage 2+3 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
 # /auth/whoami. Same registration-function shape as register_ops_routes
 # above, for the same reason -- gate_auth never imports anything gate.py
 # doesn't already inject into it. auth_manager is None when auth.enabled is
 # false; every handler in gate_auth.py checks for that and returns 503.
-register_auth_routes(
+# Stage 3 attaches require_session_or_token to /query ONLY when a manager
+# exists -- attaching the named closure while auth is off would 503 every
+# query and, worse, flip the bind-guard probe on a no-op.
+require_identity = register_auth_routes(
     app,
     cfg=cfg,
     audit=_audit,
     enforce_rate_limit=_enforce_rate_limit,
     auth_manager=auth_manager,
 )
+if auth_manager is not None:
+    attach_identity_to_query(app, require_identity)
 
 # Optional memory admin surface (default-off). gate_memory lazy-imports memory.*
 # inside handlers only — same registration-injection shape as ops/auth.
@@ -975,14 +996,13 @@ _AUTH_DEPENDENCY_NAME = "require_session_or_token"
 def _request_path_enforcement_active() -> bool:
     """True when ``/query`` actually carries an authentication dependency.
 
-    A capability probe, not a config read, and the reason the auth+TLS bind
-    path is safe to have landed before Stage 3 exists. ``auth.enabled: true``
-    states an intention; this answers whether the intention was delivered. As
-    of this commit Stage 3 has not shipped -- ``/query`` is registered with no
-    ``dependencies=[...]`` -- so this returns False and the auth+TLS route
-    past loopback cannot open, no matter what the two booleans say. It starts
-    returning True on its own the moment Stage 3 attaches the dependency; no
-    edit here is required, and none should be made to force it.
+    A capability probe, not a config read. ``auth.enabled: true`` states an
+    intention; this answers whether the intention was delivered. Stage 3
+    attaches ``require_session_or_token`` to ``/query`` only when
+    ``auth_manager`` is constructed (literal ``auth.enabled: true``). The
+    shipped default leaves that manager None, so this stays False and the
+    auth+TLS route past loopback cannot open on an unmodified config. Do not
+    hard-code this True.
     """
     for route in app.routes:
         if getattr(route, "path", None) != "/query":
@@ -1083,9 +1103,10 @@ def _require_loopback_bind(host: str) -> bool:
         "Set api.host back to 127.0.0.1 in config.yaml.\n"  # DevSkim: ignore DS162092 - loopback host by design
         "\n"
         "Setting auth.enabled and api.tls.enabled to true is not enough on its\n"
-        "own: this guard also checks that /query actually enforces a credential,\n"
-        "which docs/AUTHENTICATION_DESIGN.md's Stage 3 has not yet delivered. Once\n"
-        "it has, those two flags allow this bind with no override needed.\n"
+        "own: this guard also checks that /query actually enforces a credential\n"
+        "(Stage 3 attaches require_session_or_token only when auth.enabled is the\n"
+        "literal boolean true). Both flags plus that attachment allow this bind\n"
+        "with no override needed.\n"
         f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
         "put your own authentication in front of it first.\n",
         file=sys.stderr,

@@ -536,6 +536,18 @@
     min-width: 180px;
     margin-left: auto;
   }
+  .toolbar-auth {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .toolbar-auth .api-key-input {
+    margin-left: 0;
+    flex: 0 1 140px;
+    min-width: 100px;
+  }
   .api-key-input::placeholder {
     color: var(--text-muted);
   }
@@ -819,7 +831,18 @@
     <button class="toolbar-btn" id="fsToggleBtn" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
     <button class="toolbar-btn" id="sqlToggleBtn" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
     <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
-    <input class="api-key-input" id="apiKeyInput" type="password" placeholder="API key (optional)" autocomplete="off">
+    <span class="toolbar-auth" id="toolbarAuth">
+      <span id="authLoginBox" hidden>
+        <input class="api-key-input" id="authUser" type="text" placeholder="username" autocomplete="username">
+        <input class="api-key-input" id="authPass" type="password" placeholder="password" autocomplete="current-password">
+        <button class="toolbar-btn" id="authLoginBtn" type="button">Log in</button>
+      </span>
+      <span id="authSessionBox" hidden>
+        <span id="authStatus" class="toolbar-hint"></span>
+        <button class="toolbar-btn" id="authLogoutBtn" type="button">Log out</button>
+      </span>
+      <input class="api-key-input" id="apiKeyInput" type="password" placeholder="API key (optional)" autocomplete="off">
+    </span>
   </div>
 
   <div class="soul-panel" id="soulPanel">

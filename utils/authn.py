@@ -14,7 +14,8 @@ Stage 2 builds on this and DOES reach the request path -- utils/authn_store.py
 gate_auth.py (/auth/login, /auth/logout, /auth/whoami) all sit above it. This
 module still imports none of them: the dependency runs one way only, which is
 what keeps these primitives testable in isolation. Enforcing a credential on
-/query is Stage 3 and has not landed; TLS on the socket is Stage 4.
+/query enforcement is Stage 3 (attached only when auth.enabled is true);
+TLS on the socket is Stage 4.
 """
 
 from __future__ import annotations

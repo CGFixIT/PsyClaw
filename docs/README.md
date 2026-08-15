@@ -22,7 +22,7 @@ grepping.
 | `channels/TELEGRAM_DESIGN.md` | Telegram channel architecture, T1–T4 phase gates. |
 | `agentic/AGENTIC_README.md`, `agentic/SKILLS_REGISTRY_GOVERNANCE.md`, `agentic/GITHUB_WRITE_ENABLEMENT.md` | Agentic layer governance (binding). |
 | `HARNESS_POWERSHELL.md` / `HARNESS_MACOS.md` | Coding-harness OS walkthroughs (install glue). Slash-command usage (`/goal`, `/loop`, `/skills`, `/tools`, `/web`) lives in [`../harness/README.md`](../harness/README.md). |
-| `AUTHENTICATION_DESIGN.md` | Per-user auth staging (`/auth/*` is Stage 2; Stage 3 not landed). |
+| `AUTHENTICATION_DESIGN.md` | Per-user auth staging (`/auth/*` is Stage 2; Stage 3 enforces `/query` when `auth.enabled`; Stage 4 TLS pending). |
 | `memory/` | Optional memory subsystem plan and README. |
 | `DOCKER.md`, `SECCOMP_EBPF_HARDENING.md`, `POSTGRES_BACKEND.md` | Deployment: containers, hardening (see also `../deploy/README.md`), Postgres backends. |
 | `online-llm/`, `NeMo/`, `security-philosophy/` | Provider notes, guardrails background, telemetry-kill reference env. |
