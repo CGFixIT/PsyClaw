@@ -42,7 +42,8 @@ def test_installer_preserves_patched_config_across_updates() -> None:
 
 
 def test_macos_scripts_never_enable_writes_or_indexing() -> None:
-    script_names = ("install-cyclaw.sh", "setup-fsconnect.sh")
+    script_names = ("install-cyclaw.sh", "setup-fsconnect.sh", "setup-from-clone.sh")
+
     combined = "\n".join(
         (_REPO_ROOT / "macos" / name).read_text(encoding="utf-8") for name in script_names
     )

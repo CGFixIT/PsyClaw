@@ -24,7 +24,8 @@
 # Usage:
 #   bash macos/setup-cyclaw-keys.sh
 #   bash macos/setup-cyclaw-keys.sh --skip-prompts --no-print-key
-#   bash macos/setup-cyclaw-keys.sh --rotate
+#   bash macos/setup-cyclaw-keys.sh --rotate --skip-prompts --fill-browser
+#   bash macos/setup-cyclaw-keys.sh --schedule-rotate monthly
 #   source ~/.CyClaw/.env          # load into THIS tab after a non-sourced run
 #
 # Options:
@@ -37,6 +38,22 @@
 #   --no-profile-edit   do not add the rc source block
 #   --no-print-key      do not print the generated CYCLAW_API_KEY
 #   --print-key         print it (default when a new key is generated)
+#   --copy-key          put CYCLAW_API_KEY on the pasteboard (pbcopy; not argv)
+#   --no-copy-key       do not touch the pasteboard
+#   --clipboard-ttl N   clear the pasteboard after N seconds if it still holds
+#                       the key (default 90; 0 = leave it)
+#   --open-consoles     open the loopback RAG + harness consoles
+#   --fill-browser      inject the key into #apiKeyInput / #apiKey on
+#                       127.0.0.1 only (never localStorage / never a cookie —
+#                       that is the console contract). Implies --open-consoles
+#                       and --copy-key.
+#   --schedule-rotate monthly|weekly|never
+#                       write (never load) a LaunchAgent that re-runs
+#                       --rotate --skip-prompts --no-print-key. Prints the
+#                       launchctl bootstrap command.
+#   --unschedule-rotate bootout + delete that LaunchAgent
+#   --gate-port PORT    RAG console (default 8787 / CYCLAW_GATE_PORT)
+#   --harness-port PORT harness console (default 8790 / CYCLAW_HARNESS_PORT)
 #   --repo-path PATH    CyClaw checkout to receive a sibling .env
 #   --help
 #
@@ -50,7 +67,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '3,42p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,68p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 step() { printf '[cyclaw] %s\n' "$1"; }
@@ -72,7 +89,28 @@ DO_ENV_FILE=1
 DO_REPO_ENV=1
 DO_PROFILE=1
 PRINT_KEY="auto"
+COPY_KEY="auto"
+CLIP_TTL=90
+OPEN_CONSOLES=0
+FILL_BROWSER=0
+SCHEDULE_ROTATE=""
+UNSCHEDULE_ROTATE=0
+GATE_PORT="${CYCLAW_GATE_PORT:-8787}"
+HARNESS_PORT="${CYCLAW_HARNESS_PORT:-8790}"
 REPO_PATH=""
+
+require_port() {
+  case "$2" in
+    ''|*[!0-9]*)
+      echo "$1 requires a numeric port (got '$2')" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then
+    echo "$1 must be between 1 and 65535 (got '$2')" >&2
+    exit 1
+  fi
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,11 +123,49 @@ while [ $# -gt 0 ]; do
     --no-profile-edit) DO_PROFILE=0; shift ;;
     --no-print-key) PRINT_KEY="never"; shift ;;
     --print-key) PRINT_KEY="always"; shift ;;
+    --copy-key) COPY_KEY="always"; shift ;;
+    --no-copy-key) COPY_KEY="never"; shift ;;
+    --clipboard-ttl)
+      CLIP_TTL="${2:?--clipboard-ttl requires a value}"
+      case "$CLIP_TTL" in
+        ''|*[!0-9]*)
+          echo "--clipboard-ttl requires a non-negative integer (got '$CLIP_TTL')" >&2
+          exit 1
+          ;;
+      esac
+      shift 2
+      ;;
+    --open-consoles) OPEN_CONSOLES=1; shift ;;
+    --fill-browser) FILL_BROWSER=1; OPEN_CONSOLES=1; COPY_KEY="always"; shift ;;
+    --schedule-rotate)
+      SCHEDULE_ROTATE="${2:?--schedule-rotate requires monthly, weekly, or never}"
+      shift 2
+      ;;
+    --unschedule-rotate) UNSCHEDULE_ROTATE=1; shift ;;
+    --gate-port)
+      GATE_PORT="${2:?--gate-port requires a value}"
+      shift 2
+      ;;
+    --harness-port)
+      HARNESS_PORT="${2:?--harness-port requires a value}"
+      shift 2
+      ;;
     --repo-path) REPO_PATH="${2:?--repo-path requires a value}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+require_port "gate port (--gate-port / CYCLAW_GATE_PORT)" "$GATE_PORT"
+require_port "harness port (--harness-port / CYCLAW_HARNESS_PORT)" "$HARNESS_PORT"
+
+case "$SCHEDULE_ROTATE" in
+  ""|monthly|weekly|never) ;;
+  *)
+    echo "[cyclaw] --schedule-rotate accepts monthly, weekly, or never (got '$SCHEDULE_ROTATE')" >&2
+    exit 1
+    ;;
+esac
 
 # -- platform -----------------------------------------------------------------
 
@@ -115,6 +191,10 @@ _require_platform() {
 }
 
 _require_platform
+
+if [ "$UNSCHEDULE_ROTATE" -eq 1 ] && [ ! -t 0 ]; then
+  SKIP_PROMPTS=1
+fi
 
 if [ "$SKIP_PROMPTS" -eq 0 ] && [ ! -t 0 ]; then
   echo "[cyclaw] interactive prompts need a TTY. Re-run in a terminal, or pass --skip-prompts." >&2
@@ -451,7 +531,241 @@ _ensure_rc_source() {
   step "added $ENV_FILE source block to $rc_file (new shells inherit keys)"
 }
 
+ROTATE_LABEL="com.cgfixit.cyclaw.keys-rotate"
+ROTATE_PLIST="$HOME/Library/LaunchAgents/${ROTATE_LABEL}.plist"
+
+_install_self() {
+  local dest="$HOME_DIR/bin/setup-cyclaw-keys.sh" src
+  src="${BASH_SOURCE[0]:-$0}"
+  mkdir -p "$HOME_DIR/bin"
+  if [ ! -f "$dest" ] || ! cmp -s "$src" "$dest" 2>/dev/null; then
+    cp "$src" "$dest"
+  fi
+  chmod 755 "$dest"
+  reject_shell_metachars "$dest"
+  printf '%s' "$dest"
+}
+
+_unschedule_rotate() {
+  local uid dest
+  uid="$(id -u 2>/dev/null || echo 0)"
+  dest="$ROTATE_PLIST"
+  if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+    launchctl bootout "gui/${uid}/${ROTATE_LABEL}" 2>/dev/null || true
+  fi
+  if [ -f "$dest" ]; then
+    rm -f "$dest"
+    step "removed LaunchAgent $ROTATE_LABEL"
+  else
+    step "no $ROTATE_LABEL LaunchAgent on disk"
+  fi
+}
+
+# Write (never load) a crash-only calendar LaunchAgent. No secret in the plist.
+_schedule_rotate() {
+  local interval="$1" dest script_path uid logs
+  if [ "$interval" = "never" ]; then
+    _unschedule_rotate
+    return 0
+  fi
+  script_path="$(_install_self)"
+  dest="$ROTATE_PLIST"
+  uid="$(id -u 2>/dev/null || echo 0)"
+  logs="$HOME/Library/Logs/CyClaw"
+  mkdir -p "$(dirname "$dest")" "$logs"
+  if [ "$interval" = "weekly" ]; then
+    cal_xml="    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>0</integer>"
+  else
+    cal_xml="    <key>Day</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>0</integer>"
+  fi
+  cat > "$dest" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${ROTATE_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>${script_path}</string>
+    <string>--rotate</string>
+    <string>--skip-prompts</string>
+    <string>--no-print-key</string>
+    <string>--no-copy-key</string>
+    <string>--no-profile-edit</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+${cal_xml}
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${logs}/keys-rotate.log</string>
+  <key>StandardErrorPath</key>
+  <string>${logs}/keys-rotate.log</string>
+</dict>
+</plist>
+EOF
+  chmod 644 "$dest"
+  step "wrote $dest ($interval). NOT loaded."
+  step "to activate: launchctl bootstrap gui/${uid} $dest"
+  step "the job rotates CYCLAW_API_KEY only. Consoles hold the key in memory — re-run --fill-browser after a rotate, or paste once."
+}
+
+_copy_key() {
+  local tmp
+  if ! command -v pbcopy >/dev/null 2>&1; then
+    warn "pbcopy not found — skip pasteboard (expected off macOS)"
+    return 0
+  fi
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.clip.XXXXXX")"
+  umask 077
+  printf '%s' "$_api_value" > "$tmp"
+  chmod 600 "$tmp"
+  # stdin, not argv
+  pbcopy < "$tmp"
+  rm -f "$tmp"
+  step "CYCLAW_API_KEY copied to the pasteboard (not echoed)"
+  if [ "$CLIP_TTL" -gt 0 ] 2>/dev/null; then
+    (
+      sleep "$CLIP_TTL"
+      if command -v pbpaste >/dev/null 2>&1; then
+        current="$(pbpaste 2>/dev/null || true)"
+        if [ "$current" = "$_api_value" ]; then
+          printf '' | pbcopy
+        fi
+      fi
+    ) >/dev/null 2>&1 &
+    step "pasteboard will clear in ${CLIP_TTL}s if it still holds this key"
+  fi
+}
+
+_open_consoles() {
+  local gate harness
+  gate="http://127.0.0.1:${GATE_PORT}"
+  harness="http://127.0.0.1:${HARNESS_PORT}"
+  if ! command -v open >/dev/null 2>&1; then
+    warn "open(1) not found — open $gate and $harness yourself"
+    return 0
+  fi
+  open "$gate" >/dev/null 2>&1 || warn "could not open $gate"
+  open "$harness" >/dev/null 2>&1 || warn "could not open $harness"
+  step "opened $gate (terminal) and $harness (harness)"
+}
+
+# Inject into the in-memory #apiKeyInput / #apiKey fields on loopback tabs
+# only. CyClaw's consoles refuse localStorage and cookies on purpose
+# (harness.html: "never localStorage, never a cookie").
+_fill_browser() {
+  local secret_file scpt
+  if ! command -v osascript >/dev/null 2>&1; then
+    warn "osascript not found — paste the key into the console yourself"
+    return 0
+  fi
+  secret_file="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fillkey.XXXXXX")"
+  scpt="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fill.XXXXXX")"
+  umask 077
+  printf '%s' "$_api_value" > "$secret_file"
+  chmod 600 "$secret_file"
+  cat > "$scpt" <<'APPLESCRIPT'
+on run argv
+  if (count of argv) < 3 then return
+  set secretFile to item 1 of argv
+  set gatePort to item 2 of argv
+  set harnessPort to item 3 of argv
+  set theKey to do shell script "/bin/cat " & quoted form of secretFile
+  if theKey is "" then return
+  set js to "var el=document.getElementById('apiKeyInput')||document.getElementById('apiKey');if(el){el.value=" & my jsonString(theKey) & ";try{el.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}}"
+  my fillChrome(js, gatePort, harnessPort)
+  my fillSafari(js, gatePort, harnessPort)
+end run
+
+on jsonString(s)
+  set s to my replaceText(s, "\\", "\\\\")
+  set s to my replaceText(s, "\"", "\\\"")
+  return "\"" & s & "\""
+end jsonString
+
+on replaceText(t, f, r)
+  set AppleScript's text item delimiters to f
+  set bits to text items of t
+  set AppleScript's text item delimiters to r
+  set out to bits as text
+  set AppleScript's text item delimiters to ""
+  return out
+end replaceText
+
+on urlAllowed(u, gatePort, harnessPort)
+  if u is missing value or u is "" then return false
+  set prefixes to {"http://127.0.0.1:" & gatePort, "http://[::1]:" & gatePort, "http://127.0.0.1:" & harnessPort, "http://[::1]:" & harnessPort}
+  repeat with p in prefixes
+    if u is p then return true
+    if u starts with (p & "/") then return true
+    if u starts with (p & "?") then return true
+    if u starts with (p & "#") then return true
+  end repeat
+  return false
+end urlAllowed
+
+on fillChrome(js, gatePort, harnessPort)
+  tell application "System Events"
+    if not (exists process "Google Chrome") then return
+  end tell
+  try
+    tell application "Google Chrome"
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            if my urlAllowed(URL of t, gatePort, harnessPort) then
+              execute t javascript js
+            end if
+          end try
+        end repeat
+      end repeat
+    end tell
+  end try
+end fillChrome
+
+on fillSafari(js, gatePort, harnessPort)
+  tell application "System Events"
+    if not (exists process "Safari") then return
+  end tell
+  try
+    tell application "Safari"
+      repeat with w in windows
+        repeat with t in tabs of w
+          try
+            if my urlAllowed(URL of t, gatePort, harnessPort) then
+              do JavaScript js in t
+            end if
+          end try
+        end repeat
+      end repeat
+    end tell
+  end try
+end fillSafari
+APPLESCRIPT
+  chmod 600 "$scpt"
+  if osascript "$scpt" "$secret_file" "$GATE_PORT" "$HARNESS_PORT" >/dev/null 2>&1; then
+    step "filled #apiKeyInput / #apiKey on loopback tabs (memory only — reload clears it)"
+  else
+    warn "browser fill failed (Safari/Chrome must allow JavaScript from Apple Events). Paste from the clipboard into the key field."
+  fi
+  rm -f "$secret_file" "$scpt"
+}
+
 # -- prompts ------------------------------------------------------------------
+
 
 # Read a secret with no echo. Empty / "skip" / "s" / "n" means skip.
 # Existing presence is announced without revealing the value.
@@ -584,6 +898,31 @@ fi
 
 _ensure_rc_source
 
+if [ "$UNSCHEDULE_ROTATE" -eq 1 ]; then
+  _unschedule_rotate
+fi
+if [ -n "$SCHEDULE_ROTATE" ]; then
+  _schedule_rotate "$SCHEDULE_ROTATE"
+fi
+
+_should_copy=0
+if [ "$COPY_KEY" = "always" ]; then
+  _should_copy=1
+elif [ "$COPY_KEY" = "auto" ] && [ "$GENERATED_NEW" -eq 1 ]; then
+  _should_copy=1
+fi
+if [ "$_should_copy" -eq 1 ]; then
+  _copy_key
+fi
+if [ "$OPEN_CONSOLES" -eq 1 ]; then
+  _open_consoles
+fi
+if [ "$FILL_BROWSER" -eq 1 ]; then
+  # Give the just-opened tabs a moment to load, matching invoke-cyclaw.sh.
+  sleep 1.5
+  _fill_browser
+fi
+
 # -- summary (names and paths only) -------------------------------------------
 
 echo ""
@@ -597,6 +936,10 @@ fi
 step "this tab    : source $ENV_FILE"
 step "new tabs    : inherit via the rc source block after you open them"
 step "launchd     : still uses Keychain via cyclaw-keychain-env.sh — never .env"
+step "browser     : consoles keep the key in the #apiKey field only (never localStorage)"
+if [ "$FILL_BROWSER" -eq 0 ]; then
+  step "            : paste once, or re-run with --fill-browser after cyclaw is up"
+fi
 
 if [ "$GENERATED_NEW" -eq 1 ] && [ "$PRINT_KEY" != "never" ]; then
   echo ""
