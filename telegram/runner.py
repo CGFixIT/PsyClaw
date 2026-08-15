@@ -267,7 +267,31 @@ def handle_inbound_text(
         online_provider=online_provider,
     )
     answer = _extract_answer(result)
-    outbound = tg_client.send_message(cfg, chat_id=chat_id, text=answer)
+    try:
+        outbound = tg_client.send_message(cfg, chat_id=chat_id, text=answer)
+    except TelegramRuntimeError:
+        # The T3 confirm token was already claimed (and deleted) above, and if
+        # online_provider is set post_query() already billed Grok/Claude for
+        # this answer. A failed send here loses that paid answer silently: the
+        # token is gone, so a Telegram redelivery of this same update falls
+        # back to an offline-only reply with no trace that a confirmation was
+        # spent. Emit a durable audit record before propagating so the loss is
+        # observable even though the send itself is not retried here (retrying
+        # the query instead of the send would double-bill the provider).
+        if online_provider is not None:
+            audit_log(
+                {
+                    "event": "telegram_hybrid_answer_undelivered",
+                    "channel": "telegram",
+                    "chat_id": str(chat_id),
+                    "chat_type": "private",
+                    "update_id": update_id,
+                    "provider": online_provider,
+                    "query_hash": hash_query(text),
+                },
+                config_path=cfg._config_path,
+            )
+        raise
     return {"query_response": result, "outbound": outbound, "answer": answer}
 
 

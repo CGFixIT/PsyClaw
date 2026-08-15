@@ -578,6 +578,67 @@ def test_download_file_honors_one_bot_api_429_retry_after(
     assert client_cls.return_value.stream.call_args.kwargs["follow_redirects"] is False
 
 
+class _UnreadUntilReadResponse:
+    """Mimics httpx's real streaming-response contract for .json().
+
+    A MagicMock's .json() returns whatever it's told to regardless of whether
+    .read() was ever called, so it cannot catch a missing .read() before
+    .json() on a streamed response. Real httpx raises ResponseNotRead (a bare
+    RuntimeError -- not ValueError, not HTTPError) until the body is buffered.
+    """
+
+    def __init__(self, status_code: int, *, json_payload: object, headers: dict | None = None) -> None:
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._json_payload = json_payload
+        self._read = False
+
+    def read(self) -> None:
+        self._read = True
+
+    def json(self) -> object:
+        if not self._read:
+            raise RuntimeError(
+                "Attempted to access streaming response content, without having called `read()`."
+            )
+        return self._json_payload
+
+    def iter_bytes(self):
+        yield from ()
+
+
+def test_download_file_reads_the_429_body_before_parsing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 429 mid-download must retry, not crash the whole poller.
+
+    download_file() used to call resp.json() on a streamed response before
+    resp.read(), which raises httpx.ResponseNotRead -- caught by neither the
+    inline except ValueError nor the outer except httpx.HTTPError -- so the
+    very first flood-control response during a media download took down the
+    entire T2/T4 poll loop instead of performing the documented bounded retry.
+    """
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    limited = _UnreadUntilReadResponse(429, json_payload={"ok": False, "parameters": {"retry_after": 1}})
+    success = _UnreadUntilReadResponse(200, json_payload=None, headers={"content-length": "3"})
+    success.iter_bytes = lambda: iter([b"abc"])  # type: ignore[method-assign]
+    limited_stream = MagicMock()
+    limited_stream.__enter__.return_value = limited
+    limited_stream.__exit__.return_value = False
+    success_stream = MagicMock()
+    success_stream.__enter__.return_value = success
+    success_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+    ):
+        client_cls.return_value.stream.side_effect = [limited_stream, success_stream]
+        data = download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert data == b"abc"
+    sleep.assert_called_once_with(1.0)
+
+
 def test_bot_api_client_disables_ambient_proxy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
