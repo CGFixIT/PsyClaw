@@ -144,16 +144,20 @@ one side's edit (the "lost changes" failure mode). Non-adjacent edits to the sam
 file 3-way-merge cleanly, but verify rather than trust luck.
 
 **Verify before opening PRs** — for every pair of branches that share a file, do
-a throwaway 3-way merge locally and confirm both edits survive with no conflict:
+a throwaway 3-way merge locally in an isolated worktree and confirm both edits survive with no conflict:
 
 ```bash
-git checkout -B _trial origin/main
+ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+git worktree add -b _trial /tmp/cyclaw-trial origin/main
+cd /tmp/cyclaw-trial
 git merge --no-ff origin/<branch-A> && git merge --no-ff origin/<branch-B>
 grep -q '<A-marker>' <shared-file> && grep -q '<B-marker>' <shared-file> && echo "both present"
 grep -rc '<<<<<<<' <shared-file>           # must be 0
 python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"  # still valid
-git checkout main && git branch -D _trial
+cd - && git worktree remove /tmp/cyclaw-trial
 ```
+
+After trial succeeds, return to the original chunk branch before proceeding to Step 4.
 
 > Verified this session: two PRs both appended to `ci.yml` (one to the pytest
 > list, one to the `--cov` list) in **non-adjacent** regions. Trial merges in
@@ -242,28 +246,34 @@ GROK_API_KEY=dummy pytest tests/test_graph.py -q --tb=short
 
 > Gotcha (verified this session): a freshly-cloned web container has **no
 > Python deps installed** — `pytest` import fails outright. Install first via
-> the `/run-cyclaw` or `/sandbox-runtime-verification` skill (note the CyClaw
-> install quirks: `torch==2.13.0+cpu` before `requirements.txt`, and
-> `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`). For
-> CI-/docs-/workflow-only PRs that touch no Python, the YAML/lint changes are
+> the `.codex/skills/cyclaw-run-cyclaw/` or `.codex/skills/cyclaw-sandbox-test/`
+> skills (note the CyClaw install quirks: `torch==2.13.0+cpu` before
+> `requirements.txt`, and `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`).
+> For CI-/docs-/workflow-only PRs that touch no Python, the YAML/lint changes are
 > validated by the repo's own CI on push — a local pytest run is not required.
 
 Optionally run `/code-review` on the diff before opening the PR.
 
 ---
 
-## Branch Permissions (pre-granted for this skill)
+## Branch Permissions (explicit authorization required)
 
-When **CyClaw-Optimize** is invoked, the user pre-authorises creation and push
-of per-chunk branches named `agent/cyclaw-optimize-<topic>` (or the env
-override of `CYCLAW_AGENT_BRANCH_PREFIX`), each cut from the **topology base**
-Step 3.5 assigned (session start / first independent chunk from `origin/main`;
-stacked children from their parent branch). Do **not** stop and ask for
-permission to push these branches — proceed directly. This applies even when
-the session was started on a different designated branch (e.g. `agent/<name>`
-from a session-start hook). Each chunk gets its own branch + draft PR; the
-designated session branch is used only for the skill file update commit (if
-any), never for chunk changes.
+**Read-only invocations** (e.g. "audit for risk", "propose improvements", "find competitive advantages"):
+- Do NOT create or push branches without explicit user approval
+- Prepare a summary of findings and ask before opening PRs
+- The skill description alone does not authorize remote mutation
+
+**Write invocations** (e.g. "open optimization PRs", explicit user request to create/push):
+- The user pre-authorises creation and push of per-chunk branches named
+  `agent/cyclaw-optimize-<topic>` (or the env override of
+  `CYCLAW_AGENT_BRANCH_PREFIX`), each cut from the **topology base** Step 3.5
+  assigned (session start / first independent chunk from `origin/main`; stacked
+  children from their parent branch)
+- Do **not** stop and ask for permission to push these branches — proceed directly
+- This applies even when the session was started on a different designated branch
+  (e.g. `agent/<name>` from a session-start hook)
+- Each chunk gets its own branch + draft PR; the designated session branch is
+  used only for the skill file update commit (if any), never for chunk changes
 
 ---
 
@@ -275,9 +285,14 @@ any), never for chunk changes.
 - **All PRs are draft**; the human decides when to merge/close.
 - Do not re-open an area already covered by an open PR; skip the
   null-allowed-origins `config.yaml` item.
-- Respect the five security invariants — RAG-first, topology=policy,
-  triple-gated external (Grok and/or Claude), audit convergence, soul governance. Never
-  weaken a graph-edge policy to "optimize."
+- **Respect the six security invariants:**
+  - I1: RAG-first — `retrieve` is unconditional entry
+  - I2: Topology = policy — routing is graph edges only, never LLM decisions
+  - I3: Triple-gated external — requires mode="hybrid" AND provider.enabled AND user_confirmed_online
+  - I4: Audit convergence — all paths reach `audit_logger` before END
+  - I5: Soul governance — mutations require a human `reason` string
+  - I6: Module isolation — `gate.py`, `graph.py`, `mcp_hybrid_server.py` never import `agentic`, `sync`, `guardrails`, `harness`, or `telegram`; those never import the core three
+  - Never weaken a graph-edge policy or import structure to "optimize"
 - Workflow enhancements must need **no license, secret, or key**.
 - Never mutate `data/personality/soul.md` without an explicit human `reason`.
 
