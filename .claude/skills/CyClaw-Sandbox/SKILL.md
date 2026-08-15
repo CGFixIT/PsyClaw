@@ -50,7 +50,7 @@ Verify config invariants:
 - `fsconnect` block present (default `enabled: false`)
 - `sqlconnect` block present (default `enabled: false`, `read_only: true`, `allow_write: false`)
 - `sync` block present (default `enabled: false`)
-- `agentic` block present (default `enabled: false`, `mode: read`, `writes_enabled: false`)
+- `agentic` block present (default `enabled: false`; eighth amendment armed `mode: write` and `writes_enabled: true` — `enabled` remains the standing layer switch)
 - `auth` block present (default `enabled: false`, matching every other opt-in
   subsystem above); `/auth/login`, `/auth/logout`, `/auth/whoami` (`gate_auth.py`,
   Stage 2 of `docs/AUTHENTICATION_DESIGN.md`) exist regardless and return `503`
@@ -58,7 +58,7 @@ Verify config invariants:
 - `policy.fallback.require_user_confirm`: present but **unwired** (hardcoded in user_gate_router)
 - `policy.fallback.grok_max_prompt_chars`: 8000
 - `policy.fallback.claude_max_prompt_chars`: 8000
-- `logging.audit.redact_secrets_like`: includes `sk-ant-*` pattern for Anthropic keys
+- `policy.privacy.redact_secrets_like`: includes `sk-ant-*` pattern for Anthropic keys
 
 Verify module isolation invariants:
 - `agentic/` NEVER imported by `gate.py`, `graph.py`, `mcp_hybrid_server.py`
@@ -254,7 +254,7 @@ Verify in `gate.py::_sanitize_error`:
    (real Anthropic keys like `sk-ant-api03-...` contain hyphens)
 
 Verify in `config.yaml`:
-- `logging.audit.redact_secrets_like` includes `sk-ant-*` pattern
+- `policy.privacy.redact_secrets_like` includes `sk-ant-*` pattern
 
 Test: Simulate an exception message containing `sk-ant-api03-testkey123` and
 verify it is redacted to `[REDACTED]` before the HTTP response body.

@@ -363,7 +363,9 @@ def phase_config_invariants() -> PhaseResult:
         ("sqlconnect.read_only == true", cfg.get("sqlconnect", {}).get("read_only") is True),
         ("sync block present", "sync" in cfg),
         ("agentic block present", "agentic" in cfg),
-        ("agentic.writes_enabled == false", cfg.get("agentic", {}).get("writes_enabled") is False),
+        ("agentic.enabled == false", cfg.get("agentic", {}).get("enabled") is False),
+        ("agentic.mode == 'write'", cfg.get("agentic", {}).get("mode") == "write"),
+        ("agentic.writes_enabled == true", cfg.get("agentic", {}).get("writes_enabled") is True),
         ("grok_max_prompt_chars == 8000", cfg.get("policy", {}).get("fallback", {}).get("grok_max_prompt_chars") == 8000),
         ("claude_max_prompt_chars == 8000", cfg.get("policy", {}).get("fallback", {}).get("claude_max_prompt_chars") == 8000),
         ("send_local_context_to_grok == false", cfg.get("policy", {}).get("fallback", {}).get("send_local_context_to_grok") is False),
@@ -371,11 +373,11 @@ def phase_config_invariants() -> PhaseResult:
         ("require_user_confirm present (unwired)", "require_user_confirm" in cfg.get("policy", {}).get("fallback", {})),
     ]
 
-    # Check Anthropic key redaction in config
-    audit_cfg = cfg.get("logging", {}).get("audit", {})
-    redact_patterns = audit_cfg.get("redact_secrets_like", [])
+    # Check Anthropic key redaction in config (policy.privacy, not logging.audit)
+    privacy_cfg = cfg.get("policy", {}).get("privacy", {})
+    redact_patterns = privacy_cfg.get("redact_secrets_like", [])
     has_sk_ant = any("sk-ant" in str(p) for p in redact_patterns)
-    checks.append(("audit redact sk-ant-* pattern", has_sk_ant))
+    checks.append(("privacy redact sk-ant-* pattern", has_sk_ant))
 
     for name, passed in checks:
         status = f"{G}PASS{N}" if passed else f"{R}FAIL{N}"
