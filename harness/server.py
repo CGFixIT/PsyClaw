@@ -98,6 +98,23 @@ logger = logging.getLogger("cyclaw.harness.server")
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
+# Headers a reverse proxy adds when forwarding. Presence is the signal, not
+# value: a proxy on this host makes every remote caller present a loopback peer,
+# which would hand the api_key_optional bypass to anyone who can reach the proxy.
+_FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
+
+
+def _looks_proxied(request: Request) -> bool:
+    """True when any reverse-proxy forwarding header is present."""
+    return any(header in request.headers for header in _FORWARDING_HEADERS)
+
+
 def _is_loopback_peer(request: Request) -> bool:
     """True when this request arrived from this machine.
 
@@ -632,7 +649,7 @@ def create_app(
         in setup.cfg -- fixed here in code rather than adding a new grant.
         """
         bypass = (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True
-        if bypass and _is_loopback_peer(request):
+        if bypass and _is_loopback_peer(request) and not _looks_proxied(request):
             return
         require_api_key(credentials)
 

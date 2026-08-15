@@ -885,8 +885,17 @@ session/RBAC `/auth/*` system, which stays governed by `auth.enabled`.
 
 Two controls bound it, and the first is the load-bearing one:
 
-1. **Loopback peer required, per request.** The bypass is granted only when the
-   socket peer is a loopback address. This is keyed on the peer rather than the
+1. **Loopback peer AND no forwarding header, per request.** The bypass is
+   granted only when the socket peer is loopback *and* the request carries no
+   `X-Forwarded-For`/`-Host`/`-Proto`, `X-Real-IP` or `Forwarded` header. The
+   second half is not redundant: a reverse proxy on this host (a deployment the
+   `CYCLAW_ALLOW_NON_LOOPBACK_BIND` escape hatch explicitly anticipates)
+   terminates the remote connection and opens its own from `127.0.0.1`, so the
+   peer check alone would grant the bypass to every caller behind that proxy.
+   Header presence is the signal; the value is attacker-controlled and never
+   parsed. **Residual gap:** a proxy that strips those headers is
+   indistinguishable from none, so this flag must not be enabled on a host where
+   anything fronts CyClaw. This is keyed on the peer rather than the
    `Host` header (attacker-supplied; `TrustedHostMiddleware` is a DNS-rebinding
    control, not authentication) and rather than the bind address (unknown to a
    request handler, and the bind guards below run only under `main()` — the

@@ -542,8 +542,17 @@ security:
   # Ships false: unchanged fail-closed behavior (an unset CYCLAW_API_KEY
   # refuses the endpoint; a wrong key 401s).
   #
-  # When true, the bypass is granted ONLY to a request whose socket peer is a
-  # loopback address. A remote caller still needs the real key, on both apps.
+  # When true, the bypass is granted ONLY to a request that (a) has a loopback
+  # socket peer AND (b) carries no reverse-proxy forwarding header
+  # (X-Forwarded-For/-Host/-Proto, X-Real-IP, Forwarded). Both halves are
+  # required: a proxy running ON THIS HOST terminates the remote connection and
+  # opens its own from 127.0.0.1, so the peer alone would hand the bypass to
+  # anyone who can reach the proxy. Header PRESENCE is the signal; the value is
+  # attacker-controlled and is never parsed.
+  #
+  # RESIDUAL GAP, stated plainly: a proxy that strips those headers is
+  # indistinguishable from no proxy at all. Do NOT enable this flag on a host
+  # where anything fronts CyClaw. The flag is for a machine you use directly.
   # That is deliberately keyed on the peer rather than:
   #   * the Host header -- attacker-supplied; TrustedHostMiddleware is a
   #     DNS-rebinding control, not authentication; or
