@@ -350,7 +350,7 @@ def _probe_openai_models(
     url = f"{base_url.rstrip('/')}/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        with httpx.Client(timeout=_client_timeout(timeout_sec)) as client:
+        with httpx.Client(timeout=_client_timeout(timeout_sec), trust_env=False) as client:
             resp = client.get(url, headers=headers)
             resp.raise_for_status()
             return True
@@ -509,7 +509,7 @@ class LocalLLMClient:
         # fallback's base_url whenever the fallback has no api_key of its own
         # configured -- a real backend/credential mismatch, not a convenience.
         self.api_key = resolved.api_key
-        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout), trust_env=False)
         self._label = _provider_label(self.provider)
         # Kept so a boot that found nothing reachable can be re-resolved later
         # (see _readopt_backend_if_degraded); resolve_local_backend is pure with

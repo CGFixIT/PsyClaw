@@ -176,6 +176,11 @@ class TestClientTimeoutIsolation:
         assert client._client.timeout.read == 600
         client.close()
 
+    def test_local_llm_client_disables_ambient_proxy(self, tmp_path):
+        client = LocalLLMClient(_write_config(tmp_path))
+        assert client._client.trust_env is False
+        client.close()
+
     def test_grok_client_uses_isolated_connect_timeout(self, tmp_path):
         client = GrokClient(_write_config(tmp_path))
         assert client._client.timeout.connect == 5.0
