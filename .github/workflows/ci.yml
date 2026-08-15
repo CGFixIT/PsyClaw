@@ -154,9 +154,10 @@ jobs:
           # acceptance already encoded in .osv-scanner.toml (GHSA-f4j7-r4q5-qw2c /
           # PYSEC-2026-311) and pip-audit.yml (--ignore-vuln CVE-2026-45829) -- all
           # aliases of one advisory. dependency-review was the one gate still missing
-          # it, so it failed on every PR that touches chromadb's pin. Allow-list both
-          # the GHSA and CVE forms for resilience against future re-issuance; every
-          # other high/critical advisory still fails this gate. See SECURITY.md.
+          # it, so it failed on every PR that touches chromadb's pin. Allow-list the
+          # GHSA form only (the action supports GHSA IDs only); if a new CVE form is
+          # issued or the advisory is re-catalogued, this list will need updating.
+          # Every other high/critical advisory still fails this gate. See SECURITY.md.
           allow-ghsas: GHSA-f4j7-r4q5-qw2c
 
   windows-installer-smoke:
