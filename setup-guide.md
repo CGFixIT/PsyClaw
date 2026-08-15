@@ -406,6 +406,21 @@ device token (the console login form, or `cyclaw-user token create`).
 | `/auth/login` | POST | `{"username", "password"}` → sets an `HttpOnly` session cookie and returns a CSRF token |
 | `/auth/logout` | POST | requires the session cookie **and** the CSRF token in an `X-CyClaw-CSRF` header; revokes the session |
 | `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
+| `/auth/users` | GET | list users (no password hashes); session, `admin` or `operator` role |
+| `/auth/users` | POST | create a user; session+CSRF or an admin bearer token; `operator` cannot create an `admin` |
+| `/auth/password` | POST | self-service password change for the caller's own account; any authenticated role |
+| `/auth/users/{username}/password` | POST | reset another user's password; session+CSRF or admin bearer; `operator` cannot touch `admin` accounts |
+| `/auth/users/{username}/role` | POST | set a user's role; admin only |
+| `/auth/users/{username}/disable` | POST | disable a user; admin, or operator on non-admins |
+| `/auth/users/{username}/enable` | POST | re-enable a user; admin, or operator on non-admins |
+| `/auth/users/{username}` | DELETE | hard delete a user (after revoking their sessions/tokens); admin only |
+| `/auth/audit/summary` | GET | reduced audit view; session, `admin` or `audit` role — not the `CYCLAW_API_KEY` ops view |
+
+Three roles exist: `admin` (full access), `operator` (manage non-admin users,
+no delete/set-role), and `audit` (`/auth/audit/summary` only, `/query`
+denied). The last enabled `admin` account is protected — disable/delete/
+role-change on it is refused. See `docs/AUTHENTICATION_DESIGN.md` §12 for the
+full role matrix.
 
 Turning `auth.enabled` on for the first time with no existing accounts
 creates one — username `admin`, with **no usable password**: the account is

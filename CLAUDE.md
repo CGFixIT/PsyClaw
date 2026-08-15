@@ -83,7 +83,7 @@ decision.
 |---|---|---|---|
 | GET | `/` | none | serves `static/terminal.html` |
 | GET | `/static/*` | none | static mount |
-| POST | `/query` | **session or device token when `auth.enabled`** | rate-limited, sanitized; 400/401/429/503/504/500. Unchanged (no credential) when auth is off |
+| POST | `/query` | **session or device token when `auth.enabled`** | rate-limited, sanitized; the `audit` role is denied (403 `AUTH_ROLE_DENIED`); 400/401/403/429/503/504/500. Unchanged (no credential) when auth is off |
 | GET | `/health` | none | `degraded` without Ollama is NORMAL |
 | GET | `/soul` | **API key** | rate-limited |
 | POST | `/soul/propose` | **API key** | advisory scan, never writes |
@@ -101,10 +101,10 @@ decision.
 | GET | `/auth/users` | **session; admin or operator** | list users, no hashes; 503 when auth off |
 | POST | `/auth/users` | **session+CSRF or admin bearer** | create user; operator cannot create admin |
 | POST | `/auth/password` | **session+CSRF or admin bearer** | self-service password change; any authenticated role |
-| POST | `/auth/users/{u}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
-| POST | `/auth/users/{u}/role` | **admin only** | set role; last-admin protected |
-| POST | `/auth/users/{u}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
-| DELETE | `/auth/users/{u}` | **admin only** | hard delete after revoke; last-admin protected |
+| POST | `/auth/users/{username}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
+| POST | `/auth/users/{username}/role` | **admin only** | set role; last-admin protected |
+| POST | `/auth/users/{username}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
+| DELETE | `/auth/users/{username}` | **admin only** | hard delete after revoke; last-admin protected |
 | GET | `/auth/audit/summary` | **session; admin or audit** | reduced audit view; not the ops API key |
 | GET | `/memory/status` | **API key** | rate-limited; always 200 + flags (default-off memory) |
 | GET | `/memory/facts` | **API key** | rate-limited; 404 when `memory.enabled` is false |
@@ -119,14 +119,19 @@ The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 `utils/ops_runner.py` (a `subprocess.run([...])` shim). They never import those
 subsystems.
 
-The three `/auth/*` endpoints are Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
+The original three `/auth/*` endpoints (`/auth/login`, `/auth/logout`,
+`/auth/whoami`) were Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
 (`gate_auth.py`, registered the same way `gate_ops.py` registers `/ops/*`).
-They exist regardless of `auth.enabled` — every handler checks the flag first
-and returns 503 rather than 404, so a route's mere presence never discloses
-whether the feature is on. **Stage 3** attaches `require_session_or_token`
-to `POST /query` when `auth.enabled` is the literal boolean `true` (session
-cookie or named device token; no CSRF on `/query`). The shipped default
-leaves `/query` unauthenticated.
+Every `/auth/*` handler — including the RBAC/admin routes `gate_auth.py` has
+since grown (`docs/AUTHENTICATION_DESIGN.md` §12 "Roles") — exists regardless
+of `auth.enabled` and checks the flag first, returning 503 rather than 404, so
+a route's mere presence never discloses whether the feature is on. The full
+route set (login/logout/whoami, the `/auth/users*` admin/RBAC routes,
+self-service `/auth/password`, and `/auth/audit/summary`) is in the route
+table above. **Stage 3** attaches `require_session_or_token` to `POST /query`
+when `auth.enabled` is the literal boolean `true` (session cookie or named
+device token; no CSRF on `/query`). The shipped default leaves `/query`
+unauthenticated.
 
 The `/memory/*` and `/query/export/html` endpoints are the optional memory
 subsystem (`gate_memory.py` + package `memory/`, plan in
