@@ -92,13 +92,26 @@ def bat_quote(s: str) -> str:
     return '"' + s.replace("%", "%%") + '"'
 
 
-def write_cmd_launcher(path: Path, argv: list[str]) -> None:
-    """Atomically write a one-shot ``.cmd`` that execs *argv* with quoted tokens."""
+def write_cmd_launcher(
+    path: Path, argv: list[str], env: dict[str, str] | None = None
+) -> None:
+    """Atomically write a one-shot ``.cmd`` that execs *argv* with quoted tokens.
+
+    Optional *env* becomes ``set "NAME=value"`` lines (non-secret only —
+    callers must not pass tokens here).
+    """
     if not argv:
         raise ValueError("argv must be non-empty")
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = " ".join(bat_quote(part) for part in argv)
-    content = "@echo off\r\n" + line + "\r\n"
+    lines = ["@echo off"]
+    for name, value in (env or {}).items():
+        if not name.isidentifier() or not name.isascii():
+            raise ValueError(f"refusing invalid env name: {name!r}")
+        if '"' in value or "\n" in value or "\r" in value:
+            raise ValueError(f"refusing env value with quotes/newlines: {name}")
+        lines.append(f'set "{name}={value.replace("%", "%%")}"')
+    lines.append(" ".join(bat_quote(part) for part in argv))
+    content = "\r\n".join(lines) + "\r\n"
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(content.encode("utf-8"))
     os.replace(tmp, path)
@@ -300,6 +313,7 @@ def write_generated_task(
     restart_interval: str | None = None,
     restart_count: int = 3,
     execution_time_limit: str = "PT4H",
+    env: dict[str, str] | None = None,
 ) -> tuple[Path, Path]:
     """Write ``.cmd`` + UTF-16 XML. Returns ``(xml_path, cmd_path)``.
 
@@ -307,7 +321,7 @@ def write_generated_task(
     inside the ``.cmd`` (same reason ``sync.scheduler`` uses a ``.bat``).
     """
     launcher = cmd_path(task_name)
-    write_cmd_launcher(launcher, argv)
+    write_cmd_launcher(launcher, argv, env=env)
     document = build_task_xml(
         task_name=task_name,
         command=os.environ.get("COMSPEC", "cmd.exe"),
