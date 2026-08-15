@@ -206,7 +206,8 @@ def test_health_plist_defaults_to_first_allowed_chat_id(tmp_path: Path) -> None:
     plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.telegram-health.plist"
     document = plistlib.loads(plist_path.read_bytes())
     args = document["ProgramArguments"]
-    # args: [wrapper, svc, VAR, --, /bin/bash, -lc, <script>]
+    # args: [wrapper, svc, VAR, --, /bin/bash, -c, <script>]
+    assert args[-3:-1] == ["/bin/bash", "-c"]
     script = args[-1]
     assert "--chat-id 111" in script
     assert document["StartInterval"] == 300

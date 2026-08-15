@@ -9,6 +9,14 @@ construction (see "NOT run" below). All five follow-up items in "Next
 integrations" below have since shipped as four separate draft PRs
 (#909-#912).
 
+**Post-merge (`origin/main` @ `e8bbc29`, 2026-08-15):** #911 shipped
+`macos/cyclaw-keychain-env.sh` / `cyclaw-keychain-set.sh` — the "No Keychain
+helper" row in "Verified gap" below is the original #908-era snapshot, not
+current code. `uninstall-cyclaw.sh` now also best-effort bootouts the three
+landed generated labels (telegram-poll / telegram-health / fsconnect-trash);
+it still does not load LaunchAgents and still does not touch a gate/harness
+agent.
+
 ## Method
 
 Every claim below was checked against the actual file/line in a fresh clone of

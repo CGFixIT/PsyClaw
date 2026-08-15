@@ -88,6 +88,25 @@ def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
     assert b"mkdir -p ~/Library/Logs/CyClaw" in plist_bytes
 
 
+def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
+    """After #910/#911, uninstall must name the three generated labels.
+
+    Sync is handled by sync.cli unschedule; these three are not. Gate/harness
+    labels stay off this list until that design PR lands.
+    """
+    text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
+    assert "unschedule_landed_launchagents" in text
+    assert "launchctl bootout" in text
+    for label in (
+        "com.cgfixit.cyclaw.telegram-poll",
+        "com.cgfixit.cyclaw.telegram-health",
+        "com.cgfixit.cyclaw.fsconnect-trash",
+    ):
+        assert label in text
+    assert "com.cgfixit.cyclaw.gate" not in text
+    assert "com.cgfixit.cyclaw.harness" not in text
+
+
 def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
     """Every macos/LaunchAgents/*.plist must plistlib-parse.
 

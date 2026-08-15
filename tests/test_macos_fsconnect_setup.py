@@ -367,3 +367,35 @@ def test_uninstall_unschedule_is_nonfatal_on_broken_sync_config(tmp_path: Path) 
     assert "checking for a registered sync schedule" in result.stdout
     assert "WARNING: could not clean up the sync schedule" in result.stderr
     assert "uninstall complete" in result.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX uninstall integration")
+def test_uninstall_removes_landed_launchagent_plists(tmp_path: Path) -> None:
+    """Generated telegram/fsconnect plists at the well-known path must not survive uninstall.
+
+    launchctl bootout is Darwin-only; the file delete is what this test pins
+    (Linux CI has no launchd). Missing plists are a silent no-op.
+    """
+    config = _copy_config(tmp_path)
+    home = tmp_path / "home"
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    keep = agents / "com.example.unrelated.plist"
+    keep.write_text("keep", encoding="utf-8")
+    landed = (
+        "com.cgfixit.cyclaw.telegram-poll.plist",
+        "com.cgfixit.cyclaw.telegram-health.plist",
+        "com.cgfixit.cyclaw.fsconnect-trash.plist",
+    )
+    for name in landed:
+        (agents / name).write_text("generated", encoding="utf-8")
+    (agents / "com.cgfixit.cyclaw.gate.plist").write_text("not-yet", encoding="utf-8")
+
+    result = _run_script(_UNINSTALLER, home=home, config=config)
+    assert result.returncode == 0, result.stderr
+    for name in landed:
+        assert not (agents / name).exists(), name
+        assert f"removing LaunchAgent {name.removesuffix('.plist')}" in result.stdout
+    assert keep.is_file()
+    assert (agents / "com.cgfixit.cyclaw.gate.plist").is_file()
+    assert "uninstall complete" in result.stdout
