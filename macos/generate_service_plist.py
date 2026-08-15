@@ -167,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.service == "gate":
         port = _read_gate_port(Path(args.config).resolve())
         inner_argv = [launchd_plist.python_executable(), str(_REPO_ROOT / "gate.py")]
+        # NOTE: gate.py does not accept --config; it always loads config.yaml from
+        # the repo root (anchored via _BASE_DIR). The --config flag above is for the
+        # operator's verification only ("what port will this use?"); the actual plist
+        # will always run against repo config.yaml. If you need a different config at
+        # runtime, modify config.yaml directly or bind-mount a custom one in a
+        # container context.
     else:
         port = _DEFAULT_HARNESS_PORT
         inner_argv = [launchd_plist.python_executable(), "-m", "harness.server"]
@@ -203,6 +209,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  reason:         {args.reason.strip()}")
     print(f"  restart policy: crash-only (KeepAlive.SuccessfulExit=false), throttled to {args.throttle_sec}s")
     print()
+    if args.service == "gate" and args.config != str(_REPO_ROOT / "config.yaml"):
+        print("  ⚠️  WARNING: --config was passed, but gate.py always loads config.yaml from")
+        print(f"  the repo root, NOT from {args.config}. Verify config.yaml has the correct")
+        print("  port and settings before loading the plist. (Adding --config support to")
+        print("  gate.py would require code changes; for now, update config.yaml directly.)")
+        print()
     print("  This makes the service ALWAYS-ON: it survives logout/reboot and")
     print("  auto-restarts on crash. To stop it for good, use 'launchctl bootout'")
     print("  (not just 'launchctl stop', which a crash-restart plist may still")
@@ -213,13 +225,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _maybe_print_harness_api_key_note(args: argparse.Namespace) -> None:
-    if args.service != "harness" or not args.api_key_service:
-        return
-    print()
-    print("  NOTE: harness/server.py does not currently read CYCLAW_API_KEY --")
-    print("  --api-key-service has no effect for --service harness today. The")
-    print("  Keychain wrapper still runs and exports the variable, but nothing")
-    print("  in the harness process consumes it.")
+    # Removed: harness/server.py does guard its routes with require_api_key,
+    # so --api-key-service is meaningful for harness. No warning needed.
+    pass
 
 
 if __name__ == "__main__":
