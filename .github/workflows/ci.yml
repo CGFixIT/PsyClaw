@@ -1118,6 +1118,20 @@ jobs:
           # Some skill scripts invoke `python3.12` explicitly; ensure it resolves.
           command -v python3.12 >/dev/null 2>&1 || sudo ln -sf "$(command -v python)" /usr/local/bin/python3.12
 
+      - name: Cache embeddings model (sentence-transformers)
+        # See ci.yml's identical step in the `test` job for the full rationale:
+        # the CyClaw-Sandbox skill's verify.sh calls `python -m retrieval.indexer`,
+        # which fetches models.embeddings.model (~90MB) from HuggingFace on a cold
+        # cache. Without this step every matrix leg running that skill re-downloads
+        # it fresh, unlike the `test` job and python-package-conda.yml, which both
+        # already cache it under the identical key.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .emb_cache
+          key: emb-model-${{ hashFiles('config.yaml') }}
+          restore-keys: |
+            emb-model-
+
       - name: Prepare hermetic env
         shell: bash
         run: |
