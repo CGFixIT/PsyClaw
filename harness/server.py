@@ -1387,7 +1387,7 @@ def create_app(
             path="/",
         )
         account = manager.get_user(login_result.username)
-        role = account.role if account is not None else _ROLE_OPERATOR
+        role = _ROLE_OPERATOR if account is None else account.role
         return {
             _USERNAME_KEY: login_result.username,
             _ROLE_KEY: role,
