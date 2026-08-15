@@ -251,7 +251,7 @@ $env:CYCLAW_API_KEY = "your-strong-local-secret"
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Persist across sessions (writes to the current user's environment permanently):
+Persist API key across sessions (writes to the current user's environment permanently):
 
 ```powershell
 [System.Environment]::SetEnvironmentVariable(
@@ -268,6 +268,7 @@ Verify it is set before launching:
 ```powershell
 echo $env:CYCLAW_API_KEY
 ```
+> https://cyclaw-keygen.grok.me
 
 ### Windows — Command Prompt (cmd.exe)
 
