@@ -114,8 +114,13 @@ def test_orphan_sidecar_reclaimed_by_trash_empty(env):
         w._roots.write_bytes(sidecar_rel, entry.meta_bytes(), root=None, overwrite=False)
         assert entry.name in [e.name for e in trash.list_entries(w._roots, None)]
 
+        before = w.quota_status()["used_bytes"]
         res = w.trash_empty(reason="empty all", confirm=True, all_entries=True)
+        after = w.quota_status()["used_bytes"]
         assert entry.name in res["purged"]
         assert trash.list_entries(w._roots, None) == []
+        # Orphan sidecar: no payload bytes existed, so the ledger must not
+        # drop by the sidecar's recorded size.
+        assert after == before
 
     assert not (wz / trash.TRASH_DIR / f"{entry.name}{trash.META_SUFFIX}").exists()

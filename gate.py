@@ -776,7 +776,10 @@ async def apply_soul_evolution(request: Request, req: SoulEvolutionRequest):
     try:
         result = await asyncio.to_thread(personality.apply_evolution, req.new_soul, req.reason)
     except PromptInjectionError as e:
-        await _audit({"event": "soul_apply_injection_blocked", "reason": req.reason})
+        # PersonalityManager.apply_evolution already audited
+        # soul_apply_injection_blocked (with flag_count) before raising.
+        # Do not emit a second event here -- it doubled metrics and looked
+        # like two distinct blocks.
         raise HTTPException(
             status_code=400,
             detail={"error": e.message, "code": e.code, "details": e.details},

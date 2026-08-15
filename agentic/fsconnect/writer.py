@@ -678,7 +678,8 @@ class FsWriter:
         for e in targets:
             intent_id = uuid.uuid4().hex
             self._audit_intent("trash_empty", reason, e.name, intent_id, {"trash_entry": e.name})
-            if not self._purge_trash_entry(sr, e, root):
+            reclaimed, had_payload = self._purge_trash_entry(sr, e, root)
+            if not reclaimed:
                 # Purge silently failed (e.g. a permission error mid-purge) -- no
                 # applied event, no ledger credit. The intent event above still
                 # records the attempt; an auditor sees intent with no matching
@@ -691,8 +692,10 @@ class FsWriter:
             # Mirrors fs_delete's own purge-path convention (see d_bytes/d_files
             # above): a directory's stat().size is its inode size, not a recursive
             # walk, so directories are a quota no-op here too -- only files credit
-            # the freed bytes/file-count back to the ledger.
-            if e.kind != "dir":
+            # the freed bytes/file-count back to the ledger. Orphan sidecars
+            # (payload never landed) still reclaim the entry but must not
+            # credit e.size -- those bytes never existed on disk.
+            if e.kind != "dir" and had_payload:
                 freed_bytes += e.size
                 freed_files += 1
         swept = self._sweep_orphan_tmp(sr, root)
@@ -700,12 +703,20 @@ class FsWriter:
         return {"status": "applied", "op": "trash_empty", "executed": True, "reason": reason,
                 "purged": purged, "swept_tmp": swept}
 
-    def _purge_trash_entry(self, sr: SafeRoot, entry: trash.TrashEntry, root: str | None) -> bool:
-        """Purge one trash entry. Returns True iff the entry was reclaimed (payload
-        removed or already absent, sidecar unlinked) -- the caller must not report
-        success (audit event, purged list, ledger credit) for an entry whose
-        removal silently failed."""
+    def _purge_trash_entry(
+        self, sr: SafeRoot, entry: trash.TrashEntry, root: str | None
+    ) -> tuple[bool, bool]:
+        """Purge one trash entry.
+
+        Returns ``(reclaimed, had_payload)``. ``reclaimed`` is True iff the
+        entry was removed (payload gone or already absent, sidecar unlinked).
+        ``had_payload`` is True iff a payload file existed -- the caller must
+        not credit ``entry.size`` to the freed-bytes ledger for an orphan
+        sidecar. Do not report success for an entry whose removal silently
+        failed.
+        """
         payload = f"{trash.TRASH_DIR}/{entry.name}"
+        had_payload = True
         try:
             self._roots.stat(payload, root=root)
         except FsConnectError:
@@ -713,15 +724,15 @@ class FsWriter:
             # sidecar write and the payload move in _to_trash). Nothing to remove,
             # but the entry is still reclaimed -- fall through to unlink the
             # sidecar so trash-list stops reporting it.
-            pass
+            had_payload = False
         else:
             try:
                 self._purge_tree(sr, payload, root)
             except FsConnectError:
-                return False
+                return False, False
         with suppress(FsConnectError):
             self._roots.unlink(f"{payload}{trash.META_SUFFIX}", root=root, sha_max_bytes=0)
-        return True
+        return True, had_payload
 
     def _purge_tree(self, sr: SafeRoot, rel: str, root: str | None) -> None:
         """Recursively remove a trash payload (file or whole dir) via pathsafe.
