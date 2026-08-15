@@ -7,6 +7,7 @@ find_entry lookup contract. No filesystem needed for the helper math.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -82,6 +83,38 @@ def test_expired_treats_unparseable_as_expired():
 def test_parse_meta_rejects_garbage():
     assert trash._parse_meta("x.meta.json", b"not json") is None
     assert trash._parse_meta("x.meta.json", b"[]") is None  # not a dict
+
+
+def test_parse_meta_filename_beats_a_diverging_name_field():
+    """The sidecar's filename is authoritative; its "name" field is advisory.
+
+    The blob is ``<name>`` and the sidecar is ``<name>.meta.json``, so the
+    filename is the only value the filesystem enforces. Trusting the contents
+    instead let a divergent sidecar (crash-truncated write, hand edit, a
+    restore-then-repurge race) name an entry that is not on disk, so trash_empty
+    unlinked a path that did not exist and the real blob stayed forever.
+    """
+    entry = trash.make_entry(
+        "notes/x.txt", NOW, reason="cleanup", sha256=None, size=1,
+        kind="file", retention_days=30)
+    raw = json.loads(entry.meta_bytes())
+    raw["name"] = "ghost"  # diverge the field from the filename
+    parsed = trash._parse_meta(f"{entry.name}{trash.META_SUFFIX}", json.dumps(raw).encode())
+    assert parsed is not None
+    assert parsed.name == entry.name, "sidecar contents must not override the on-disk filename"
+    assert parsed.name != "ghost"
+
+
+def test_parse_meta_survives_a_sidecar_with_no_name_field():
+    """A sidecar predating/lacking "name" still resolves from its filename."""
+    entry = trash.make_entry(
+        "notes/y.txt", NOW, reason="cleanup", sha256=None, size=1,
+        kind="file", retention_days=30)
+    raw = json.loads(entry.meta_bytes())
+    raw.pop("name", None)
+    parsed = trash._parse_meta(f"{entry.name}{trash.META_SUFFIX}", json.dumps(raw).encode())
+    assert parsed is not None
+    assert parsed.name == entry.name
 
 
 def test_find_entry_missing_raises():

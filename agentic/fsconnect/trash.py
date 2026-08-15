@@ -17,6 +17,7 @@ Never imported by gate.py / graph.py / mcp_hybrid_server.py.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -111,7 +112,18 @@ def _parse_meta(name: str, data: bytes) -> TrashEntry | None:
         return None
     try:
         return TrashEntry(
-            name=str(raw.get("name") or name.removesuffix(META_SUFFIX)),
+            # The on-disk filename is authoritative, NOT the sidecar's own
+            # "name" field. The blob is <name> and its sidecar is
+            # <name>.meta.json, so the filename is the only value the
+            # filesystem actually enforces. Trusting the contents let a sidecar
+            # whose field diverged from its filename (crash-truncated write,
+            # hand edit, a restore-then-repurge race) name an entry that is not
+            # there: expired() then hands trash_empty a path that does not
+            # exist, the unlink fails, and the real blob stays on disk forever
+            # while trash-list still reports it as purgeable. Retention stops
+            # silently. A "name" key in the sidecar is now ignored on read; it
+            # is still written by meta_bytes() for human readability.
+            name=name.removesuffix(META_SUFFIX),
             original_path=str(raw["original_path"]),
             deleted_at=str(raw.get("deleted_at", "")),
             reason=str(raw.get("reason", "")),
@@ -133,7 +145,24 @@ def list_entries(roots: ScopedRoots, root: str | None) -> list[TrashEntry]:
     """
     try:
         listing = roots.list_dir(TRASH_DIR, root=root)
-    except Exception:  # noqa: BLE001 -- absence/permission => empty trash, not an error
+    except Exception as exc:  # noqa: BLE001 -- absence => empty trash, not an error
+        # ENOENT is the ordinary "nothing has been deleted yet" case and must
+        # stay silent -- warning there would fire on every fresh install.
+        # Anything else (a permission blip, or ENOTDIR because .cyclaw-trash
+        # exists but is not a directory) means entries may well exist but are
+        # invisible: trash-list,
+        # trash-empty, and quota_status's trash_entries count all report zero,
+        # and expired() then finds nothing to purge, so retention silently
+        # stops. Log it so the loss is observable -- the same reason the
+        # unreadable-sidecar handler below was upgraded from a silent skip.
+        # Only the exception type and errno are logged; the message can carry a
+        # resolved path.
+        errno_ = getattr(exc, "details", {}).get("errno")
+        if errno_ != errno.ENOENT:
+            logger.warning(
+                "Cannot list trash dir %r in root %r (%s, errno=%r); reporting empty trash",
+                TRASH_DIR, root, type(exc).__name__, errno_,
+            )
         return []
     out: list[TrashEntry] = []
     for item in listing:

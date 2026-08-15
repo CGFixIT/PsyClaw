@@ -14,6 +14,9 @@ tmp_path root.
 
 from __future__ import annotations
 
+import json
+import logging
+
 import pytest
 import yaml
 
@@ -97,6 +100,71 @@ def test_same_path_same_second_deletes_both_succeed(env):
     for entry_name, expected in contents.items():
         assert (trash_dir / entry_name).read_bytes() == expected
         assert (trash_dir / f"{entry_name}{trash.META_SUFFIX}").exists()
+
+
+def test_diverging_sidecar_name_field_still_purges_the_real_blob(env):
+    """A sidecar whose "name" field disagrees with its filename must not strand the blob.
+
+    _parse_meta used to prefer the sidecar's self-declared name over the file it
+    was read from. expired() then handed trash_empty an entry naming a path that
+    did not exist, the unlink failed, and the payload stayed on disk forever
+    while trash-list kept advertising it as purgeable -- retention stopped with
+    no error anywhere. Containment was never at risk (ScopedRoots still bounds
+    every path); this is a correctness/GC defect.
+    """
+    cfg, fs_cfg, cp, wz = env
+    fs_cfg.allow_hard_delete = True  # trash_empty is a permanent purge
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        w.fs_write("stray.txt", b"payload", reason="seed")
+        deleted = w.fs_delete("stray.txt", reason="delete it", confirm=True)
+        entry_name = deleted["trash_entry"]
+
+        trash_dir = wz / trash.TRASH_DIR
+        sidecar = trash_dir / f"{entry_name}{trash.META_SUFFIX}"
+        assert (trash_dir / entry_name).exists()
+
+        # Corrupt only the self-declared name, exactly as a truncated write or a
+        # hand edit would.
+        raw = json.loads(sidecar.read_text(encoding="utf-8"))
+        raw["name"] = "ghost-entry-that-is-not-on-disk"
+        sidecar.write_text(json.dumps(raw), encoding="utf-8")
+
+        entries = trash.list_entries(w._roots, None)
+        assert [e.name for e in entries] == [entry_name], (
+            "list_entries must report the on-disk filename, not the sidecar's claim"
+        )
+
+        res = w.trash_empty(reason="empty all", confirm=True, all_entries=True)
+        assert entry_name in res["purged"]
+
+    # The point of the test: the real payload and its sidecar are actually gone.
+    assert not (wz / trash.TRASH_DIR / entry_name).exists()
+    assert not (wz / trash.TRASH_DIR / f"{entry_name}{trash.META_SUFFIX}").exists()
+
+
+def test_missing_trash_dir_is_silent_but_an_unusable_one_warns(env, caplog):
+    """Absence is the fresh-install case; anything else is observable evidence loss.
+
+    A bare `except Exception: return []` made trash-list, trash-empty and
+    quota_status's trash_entries count all report zero with no trace, so
+    expired() had nothing to purge and retention silently stopped. ENOENT stays
+    quiet (it fires on every install before the first delete); everything else
+    logs.
+    """
+    cfg, fs_cfg, cp, wz = env
+    with FsWriter(cfg, fs_cfg, config_path=cp, clock=lambda: FIXED_TS) as w:
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert not caplog.records, "a not-yet-created trash dir must not warn"
+
+        # .cyclaw-trash exists but is a regular file: entries could exist and be
+        # invisible, so this must be logged rather than silently reported empty.
+        (wz / trash.TRASH_DIR).write_text("not a directory", encoding="utf-8")
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="agentic.fsconnect.trash"):
+            assert trash.list_entries(w._roots, None) == []
+        assert caplog.records, "an unusable trash dir must warn, not report empty silently"
+        assert "reporting empty trash" in caplog.text
 
 
 def test_orphan_sidecar_reclaimed_by_trash_empty(env):
