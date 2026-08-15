@@ -104,7 +104,7 @@ agentic:
     enabled: false               # also gates real-repo-run / real-repo-run-plan
     provider: "ollama"           # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"   # loopback only (validated)
-    model: "qwen3.6:27b"
+    model: "qwen3.8:27b"
     planner_timeout_sec: 600
     planner_max_tokens: 2048
     allow_deepagents_dependency: false
@@ -197,7 +197,7 @@ agentic:
   enabled: true
   deepagent_github:
     enabled: true
-    model: "qwen3.6:27b"          # required for local planner
+    model: "qwen3.8:27b"          # required for local planner
     allow_git_write_tools: true   # required to write/commit/push in the clone
 ```
 

@@ -293,9 +293,9 @@ def main() -> int:
         # ── 9. Model selection (/model use <name>) ────────────────────────
         print("[9] POST /api/model  (/model use)")
         try:
-            r = client.post("/api/model", json={"model": "qwen3.6:27b"})
+            r = client.post("/api/model", json={"model": "qwen3.8:27b"})
             d = r.json()
-            check("/api/model select echoes model", d.get("model") == "qwen3.6:27b", f"model={d.get('model')!r}")
+            check("/api/model select echoes model", d.get("model") == "qwen3.8:27b", f"model={d.get('model')!r}")
         except Exception as exc:
             check("POST /api/model", False, repr(exc))
         print()

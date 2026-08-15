@@ -4,6 +4,8 @@
 
 **Provenance of this note:** written 2026-08-10 by a research pass (four parallel web-research agents plus a synthesis pass) during the Phase 1 optimize routine, for Phase 2 to re-verify. Every claim here is web-sourced and post-dates the researching model's January 2026 training cutoff, so nothing in it carries offline corroboration. Confidence tags are inline per section.
 
+**Superseded note (2026-08-15):** `config.yaml`'s `models.local_llm.model` (and the paired `agentic.deepagent_github.model` / `guardrails.model` knobs) moved from `qwen3.6:27b` to `qwen3.8:27b`. Everything below — the model-identity findings, the GGUF/llama.cpp friction analysis, and every citation in the "Qwen3.6 verification" Sources section — was researched against `qwen3.6:27b` specifically and does **not** carry over to `qwen3.8:27b`. Treat this note as a historical record of the `qwen3.6:27b` investigation, not as current guidance; a fresh research pass against `qwen3.8:27b` is a prerequisite before trusting any of its conclusions for the model CyClaw now ships.
+
 ---
 
 ## Qwen3.6 Model Identity and GGUF Support
