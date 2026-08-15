@@ -141,3 +141,7 @@ elseif (-not $RemoveFsConnect -and (Test-Path -LiteralPath $FsConnectDir)) {
 }
 
 Write-Host "[cyclaw] uninstall complete."
+# Explicit success: the last native schtasks query of a missing name leaves
+# $LASTEXITCODE=1. GitHub Actions' Windows PowerShell wrapper uses that as
+# the step exit code even when this script otherwise completed.
+exit 0

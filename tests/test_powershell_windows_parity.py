@@ -50,6 +50,7 @@ def test_uninstall_missing_schtasks_delete_is_noop_under_ps51() -> None:
     assert "ErrorActionPreference =" not in body
     assert "cannot find" in body
     assert "2>$null | Out-Null" not in body
+    assert "exit 0" in text
 
 
 def test_credman_marshal_sites_carry_devskim_suppression() -> None:
