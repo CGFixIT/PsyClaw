@@ -7,13 +7,15 @@ interesting values never appear in one:
 * an arbitrary env name is refused (this is a dotenv writer -- a free-form name
   would be an environment-injection primitive),
 * a value carrying a newline is refused (it would forge a second assignment),
-* the file lands mode 0600 and is written atomically,
+* the file lands mode 0600 (POSIX; Windows cannot express it -- see
+  ``env_keys._FILE_MODE``) and is written atomically,
 * unrelated lines written by macos/setup-cyclaw-keys.sh survive a web write,
 * and no route, log line, or response ever carries a secret back out.
 """
 
 from __future__ import annotations
 
+import os
 import stat
 
 import httpx
@@ -97,6 +99,7 @@ def test_no_partial_write_when_one_key_in_the_batch_is_bad(home):
     assert env_keys.env_file_path().read_text(encoding="utf-8") == before
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
 def test_file_is_written_owner_only(home):
     env_keys.write_keys({"GROK_API_KEY": _SECRET})
     mode = stat.S_IMODE(env_keys.env_file_path().stat().st_mode)
