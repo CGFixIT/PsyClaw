@@ -89,10 +89,12 @@ def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
 
 
 def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
-    """After #910/#911, uninstall must name the three generated labels.
+    """Uninstall must name every generated CyClaw LaunchAgent label.
 
-    Sync is handled by sync.cli unschedule; these three are not. Gate/harness
-    labels stay off this list until that design PR lands.
+    Sync is handled by sync.cli unschedule; these five are not. Gate/harness
+    labels are included even before #912 lands: bootout of an unloaded
+    label is a no-op, and uninstall must not leave a supervised listener
+    behind if the operator generated one from that PR (or by hand).
     """
     text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
     assert "unschedule_landed_launchagents" in text
@@ -101,10 +103,10 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
         "com.cgfixit.cyclaw.telegram-poll",
         "com.cgfixit.cyclaw.telegram-health",
         "com.cgfixit.cyclaw.fsconnect-trash",
+        "com.cgfixit.cyclaw.gate",
+        "com.cgfixit.cyclaw.harness",
     ):
         assert label in text
-    assert "com.cgfixit.cyclaw.gate" not in text
-    assert "com.cgfixit.cyclaw.harness" not in text
     # Label-domain bootout must run even when the plist file is already gone.
     assert 'bootout "gui/${uid}/${label}"' in text
 
