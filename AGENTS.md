@@ -402,7 +402,8 @@ treat absence as identity/governance drift rather than a startup blocker.
 
 Covered by `CLAUDE.md` §4 (torch-first install order, persistence paths for
 `data/personality/soul.md`/`index/`/`logs/`, `/soul/*` fail-closed without
-`CYCLAW_API_KEY`, loopback-only binding, `sync/` needs `rclone` and tests should
+`CYCLAW_API_KEY` (unless `security.api_key_optional` is true AND the request
+comes from a loopback peer -- see `CLAUDE.md` §2), loopback-only binding, `sync/` needs `rclone` and tests should
 mock it). Two with no `CLAUDE.md` equivalent:
 
 - Agentic GitHub context needs `gh` in local environments, but core CyClaw does not.
