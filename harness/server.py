@@ -692,7 +692,13 @@ def create_app(
             status = _HTTP_CONFLICT
         if exc.code in {"WEB_FETCH_FAILED", "WEB_DNS"}:
             status = _HTTP_BAD_GATEWAY
-        return _err(status, exc)
+        # Code only — do not pass the exception object into the HTTP
+        # envelope (py/stack-trace-exposure).
+        code = exc.code
+        return HTTPException(
+            status_code=status,
+            detail={_CODE_KEY: code, _MESSAGE_KEY: code, _DETAILS_KEY: {}},
+        )
 
     @app.get("/api/web")
     def web_status() -> dict:

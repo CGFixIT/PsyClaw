@@ -268,22 +268,16 @@ def _snippets(text: str, query: str) -> list[str]:
     return found
 
 
-def _safe_target(match: dict[str, str], parsed) -> str:
-    """Rebuild the GET URL from the allowlist host + a charset-gated path.
-
-    Host comes from the persisted allowlist entry, not the raw operator
-    string. Query/fragment are refused so a fetch cannot be steered by
-    user-controlled suffix after the SSRF checks.
-    """
-    scheme = parsed.scheme if parsed.scheme in _SCHEMES else "https"
-    path = parsed.path or "/"
+def _allowlist_target(match: dict[str, str]) -> str:
+    """GET URL from the persisted allowlist row only — no user-URL pieces."""
+    scheme = match["scheme"] if match.get("scheme") in _SCHEMES else "https"
+    host = match["host"]
+    path = match["path"] or "/"
     if not path.startswith("/"):
         path = f"/{path}"
-    if parsed.query or parsed.params or parsed.fragment:
-        raise WebToolError("query or fragment is not allowed", code="WEB_BAD_URL")
-    if not path.startswith("/") or any(ch not in _PATH_CHARS for ch in path):
-        raise WebToolError("path has disallowed characters", code="WEB_BAD_URL")
-    return f"{scheme}://{match['host']}{path}"
+    if any(ch not in _PATH_CHARS for ch in path):
+        raise WebToolError("allowlist path is invalid", code="WEB_BAD_URL")
+    return f"{scheme}://{host}{path}"
 
 
 class WebTool:
@@ -397,13 +391,15 @@ class WebTool:
         if match is None:
             raise WebToolError("URL is not on the allowlist", code="WEB_HOST_DENIED", details={"url": url})
         parsed = urlparse(url if "://" in url else f"https://{url}")
+        if parsed.query or parsed.params or parsed.fragment:
+            raise WebToolError("query or fragment is not allowed", code="WEB_BAD_URL")
         self._resolver(match["host"])
-        target = _safe_target(match, parsed)
+        target = _allowlist_target(match)
         with self._client() as client:
             try:
                 resp = client.get(target)
-            except httpx.HTTPError as exc:
-                raise WebToolError(f"fetch failed: {exc.__class__.__name__}", code="WEB_FETCH_FAILED") from exc
+            except httpx.HTTPError:
+                raise WebToolError("fetch failed", code="WEB_FETCH_FAILED") from None
         if resp.status_code >= _HTTP_OK_BELOW:
             raise WebToolError(
                 f"upstream HTTP {resp.status_code}",
