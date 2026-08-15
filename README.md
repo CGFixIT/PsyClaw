@@ -36,12 +36,12 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
 7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped held-handle reads + gated writes over local/SMB shares) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
-8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority (graph topology stays the sole policy)
+8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority. When `guardrails.enabled` is the literal `true`, `utils/guardrail_bridge.py` wires visible `guardrail_input` / `guardrail_output` nodes; see [`guardrails/README.md`](guardrails/README.md)
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
-10. **Ships a local PowerShell coding-harness console** (v1.9, `harness/` + `powershell/`, merged 2026-07-22) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, a seeded skills catalog under `%USERPROFILE%\.CyClaw`, and the same I6 isolation as every other out-of-band layer
+10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies and a home-dir layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
 11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
 12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, Stage 2 of `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. The three `/auth/*` routes exist regardless of `auth.enabled` and return 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **Stage 3 (enforcing a credential on `/query` and the console) has not landed** — these routes build sessions/login/logout/device tokens only
-13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, plan in `docs/memory/README.md`) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints
+13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, package [`memory/README.md`](memory/README.md), plan in [`docs/memory/README.md`](docs/memory/README.md)) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. Not `docs/memories/` (sandbox notes)
 
 ---
 
@@ -493,14 +493,15 @@ CyClaw/
 ├── config.yaml                 # single source of truth
 ├── README.md
 ├── mcp_hybrid_server.py        # retrieval-only MCP server
-├── memory/                     # optional facts + episodes SQLite+FTS5 store (default-off, see gate_memory.py)
+├── memory/                     # optional facts + episodes store (default-off)
+│   ├── README.md               # package pointer (not docs/memories/)
 │   ├── store.py                # SQLite + FTS5 backend for facts/episodes
 │   ├── policy.py               # propose/apply governance (reason required, injection scan)
 │   ├── retrieval_adapter.py    # optional fusion hook into hybrid retrieval
 │   ├── mirror.py               # episode staging (lazy, non-fatal)
-│   ├── consolidation.py        # episode -> fact consolidation
+│   ├── consolidation.py        # stub — stay false in v1
 │   └── models.py               # typed request/response shapes
-├── agentic/                    # out-of-band GitHub context + governed registry
+├── agentic/                    # out-of-band GitHub context + governed registry (see README.md)
 │   ├── cli.py
 │   ├── context.py
 │   ├── gh_client.py
@@ -524,18 +525,20 @@ CyClaw/
 │       ├── builder.py          # lazy create_deep_agent() seam, never imported unless enabled
 │       ├── permissions.py      # phase-5 no-write policy refusal
 │       └── subagents.py        # validated SubAgent specs, no bare-string tools
-├── guardrails/                 # (v1.8) optional NeMo Guardrails layer (out-of-band)
+├── guardrails/                 # (v1.8) opt-in rails; graph nodes via guardrail_bridge
+│   ├── README.md
 │   ├── cli.py
 │   ├── config.py
 │   ├── integration.py          # soft-imports nemoguardrails; degrades gracefully
 │   ├── rails.py                # offline heuristic rails (injection/soul/grounding)
 │   ├── metrics.py              # separate logs/guardrails.jsonl stream (hashes only)
 │   └── config/                 # NeMo config.yml + rails.co (Colang flows)
-├── harness/                    # (v1.9) PowerShell coding-harness console (out-of-band)
-│   ├── server.py               # FastAPI control plane, 127.0.0.1:8790 (cyclaw-harness)
+├── harness/                    # (v1.9) coding console on 127.0.0.1:8790 (see README.md)
+│   ├── README.md
+│   ├── server.py               # FastAPI control plane (cyclaw-harness)
 │   ├── sessions.py             # JSON session store with per-session token tallies
 │   ├── ollama.py               # loopback-only OpenAI-compatible /v1 chat client
-│   ├── config.py               # %USERPROFILE%\.CyClaw home layout + config.json
+│   ├── config.py               # ~/.CyClaw (or %USERPROFILE%\.CyClaw) home layout
 │   ├── prompts.py              # system prompt from ponytail + karpathy skills (+ soul, read-only)
 │   ├── registry_view.py        # merged skills/tools/connectors view (AST-parses MCP tools)
 │   └── schemas.py              # request models
@@ -551,6 +554,13 @@ CyClaw/
 │   ├── Install-CyClaw.ps1      # home + venv + PATH shim + profile function
 │   ├── Invoke-CyClaw.ps1
 │   └── Uninstall-CyClaw.ps1
+├── macos/                      # macOS/Linux installer/launchd glue (see macos/README.md)
+│   ├── install-cyclaw.sh
+│   ├── uninstall-cyclaw.sh
+│   ├── invoke-cyclaw.sh        # gate :8787 + harness :8790
+│   ├── setup-fsconnect.sh      # confined ~/CyClaw-FS list/stat/read
+│   ├── cyclaw-keychain-*.sh    # Keychain inject/store for launchd jobs
+│   └── LaunchAgents/           # templates only — never auto-loaded
 ├── .claude/                    # local operator workflows and prompts
 │   ├── commands/
 │   ├── hooks/
@@ -619,7 +629,7 @@ See [`docs/! How-To-Guides/Dropbox_Sync_Guide.md`](docs/%21%20How-To-Guides/Drop
 
 ## Agentic Layer (v1.6.0)
 
-CyClaw now includes a **concise, governed agentic layer** for local operator workflows. It is **opt-in, disabled by default, and fully out-of-band**: it is never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`.
+CyClaw now includes a **concise, governed agentic layer** for local operator workflows. It is **opt-in, disabled by default, and fully out-of-band**: it is never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`. The coding console (`harness/`) is a **sibling** package, not a subpackage; `data/agentic/skills_registry.json` is a governed store that ships empty (the harness reads it, `apply-skill` writes it). Package guide: [`agentic/README.md`](agentic/README.md).
 
 ### What it adds
 
@@ -745,7 +755,7 @@ sqlconnect:
 
 ## NeMo Guardrails (v1.8)
 
-An **opt-in** content-safety layer in `guardrails/`. Absence of the `guardrails:` block, or `enabled: false` (the shipped default), is a pure no-op. Since Phase 2, when enabled, `utils/guardrail_bridge.py` wires its offline input rail into one visible `graph.py` node (`guardrail_input`, between `route_by_score` and `local_llm`) — still **defense-in-depth only, never a routing authority**: the graph's own `guardrail_router` edge (topology, not guardrails code) decides where a blocked query goes. `guardrails` itself is still never imported directly by `gate.py` or `graph.py` — `utils/guardrail_bridge.py` is the only seam, preserving module isolation (invariant I6). `mcp_hybrid_server.py` never touches it at all.
+An **opt-in** content-safety layer in `guardrails/` ([package README](guardrails/README.md)). Absence of the `guardrails:` block, or `enabled: false` (the shipped default), is a pure no-op. When enabled, `utils/guardrail_bridge.py` wires two visible `graph.py` nodes — `guardrail_input` (after `route_by_score`) and `guardrail_output` (after generation; grounding check on the **`local_llm` path only**) — still **defense-in-depth only, never a routing authority**: the graph's own edges decide where a blocked query goes. `gate.py` / `graph.py` / `mcp_hybrid_server.py` never import `guardrails` directly (I6). Status table: [`docs/NeMo/README.md`](docs/NeMo/README.md).
 
 - **`nemoguardrails` is an optional dependency.** The layer **soft-imports** it and, when it is absent, degrades to **offline heuristic rails** that need no second LLM call:
   - **input** — light prompt-injection marker scan + soul/identity-mutation intent detection (the content-layer arm of the Soul-Governance invariant);
@@ -769,8 +779,9 @@ guardrails:
   metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
 ```
 
-> Full design / wiring plan: `docs/NeMo/later_development_guideline.md`. Phase 2
-> implementation contract: `docs/NeMo/phase2_implementation_plan.md`.
+> Package map: [`guardrails/README.md`](guardrails/README.md). Canonical status:
+> [`docs/NeMo/README.md`](docs/NeMo/README.md). Phased history:
+> `docs/NeMo/later_development_guideline.md`, `docs/NeMo/phase2_implementation_plan.md`.
 
 ---
 
