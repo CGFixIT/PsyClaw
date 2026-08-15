@@ -109,9 +109,11 @@ the harness console's 26 `guarded` routes. It is orthogonal to everything in
 this document: it does not touch `auth.enabled`, sessions, device tokens, or
 `/auth/*`, and an operator can run with `auth.enabled: true` (this design)
 and `api_key_optional: true` (bypassing the older mechanism) at the same
-time without either one affecting the other. `config-guard`'s C13 check
-warns when it is combined with a non-loopback `api.host` or a LAN entry in
-`security.allowed_hosts`.
+time without either one affecting the other. The bypass is granted only to
+a **loopback socket peer**, so it never widens what a remote caller can
+reach; `config-guard`'s C13 check warns when it is combined with a
+non-loopback `api.host`. (C13 deliberately ignores `security.allowed_hosts`:
+that list filters `Host` headers and opens no listening socket.)
 
 One place the two systems **do** interact, and must not: §7's rule below
 ("a non-loopback bind is allowed when authentication is enabled and TLS is
@@ -123,6 +125,12 @@ and the `/ops/*` subprocess shims sit unauthenticated. `_require_loopback_bind`
 therefore refuses that route while `api_key_optional` is true; the
 `CYCLAW_ALLOW_NON_LOOPBACK_BIND` env override (an explicit operator
 statement of "my own auth is in front") still outranks it.
+
+That bind-time refusal is defence in depth, not the primary control. The
+primary one is per-request: the bypass requires a loopback peer, which holds
+regardless of how the process was launched — including the container's
+`uvicorn gate:app --host 0.0.0.0` and `uvicorn harness.server:app`, neither
+of which reaches a bind guard at all.
 
 Two consequences worth stating plainly.
 
