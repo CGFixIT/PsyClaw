@@ -511,8 +511,13 @@ logging:
   third_party_level: "INFO"
   audit_file: "logs/audit.jsonl"
   # Only include_query_hash is read (utils/logger.py). The audit record's
-  # other fields (top_score, retrieval_mode, online_escalated, model_used)
-  # are always written; there are no per-field include toggles.
+  # other fields (top_score, retrieval_mode, online_escalated, model_used,
+  # llm, llm_model) are always written; there are no per-field include toggles.
+  # model_used carries the ROLE ("local"/"grok"/"claude"/"offline-best-effort");
+  # llm_model carries the concrete tag that answered, and llm a human summary.
+  # model_used's vocabulary is deliberately frozen -- metrics.py buckets on it
+  # and detects online escalation from its prefix, so historical lines stay
+  # comparable. See graph.py's _llm_identity.
   audit_fields:
     include_query_hash: true
     # include_top_score: true  #currently placeholders
