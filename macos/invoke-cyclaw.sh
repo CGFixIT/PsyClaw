@@ -29,6 +29,24 @@ NO_GATE=0
 NO_HARNESS=0
 REPO_OVERRIDE=""
 
+# Validate a port before it reaches `uvicorn --port` and the printed URLs.
+# Without this a typo ("--port 87go") is echoed as a working-looking URL and
+# then fails deep inside uvicorn's own argument parsing, or -- worse for the
+# harness, which reads CYCLAW_HARNESS_PORT from the environment -- surfaces as
+# a confusing config error far from the actual mistake.
+require_port() {
+  case "$2" in
+    ''|*[!0-9]*)
+      echo "$1 requires a numeric port (got '$2')" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then
+    echo "$1 must be between 1 and 65535 (got '$2')" >&2
+    exit 1
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --port)
@@ -61,6 +79,12 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+# Validated after the parse loop so the env-var defaults above (CYCLAW_*_PORT)
+# get the same check as the flags -- an operator who exports a bad value in
+# their rc file would otherwise skip validation entirely.
+require_port "harness port (--port / CYCLAW_HARNESS_PORT)" "$PORT"
+require_port "gate port (--gate-port / CYCLAW_GATE_PORT)" "$GATE_PORT"
 
 HOME_DIR="${CYCLAW_HOME:-$HOME/.CyClaw}"
 if [ -n "$REPO_OVERRIDE" ]; then
@@ -134,12 +158,36 @@ if [ "$NO_GATE" -eq 0 ]; then
     exit 1
   fi
   GATE_PID=$!
+  # Poll /health, but check the process is still alive on each pass. gate.py
+  # exits fast on a missing retrieval index, an already-bound port, or an
+  # invalid config -- and the old loop only ever polled the socket, so a gate
+  # that died on startup fell through silently: the harness still started, a
+  # browser still opened on a dead port, and `wait "$HARNESS_PID"` below then
+  # blocked forever with no diagnostic. Surface the real cause instead.
+  GATE_READY=0
   for i in 1 2 3 4 5; do
+    if ! kill -0 "$GATE_PID" 2>/dev/null; then
+      wait "$GATE_PID" 2>/dev/null || true
+      # Cleared first so the EXIT trap's cleanup() does not try to kill a pid
+      # that has already been reaped.
+      GATE_PID=""
+      echo "[cyclaw] error: RAG gateway exited during startup (port $GATE_PORT)." >&2
+      echo "[cyclaw]        Common causes: the retrieval index is not built" >&2
+      echo "[cyclaw]        (run '\"$VENV_PY\" -m retrieval.indexer'), port $GATE_PORT is" >&2
+      echo "[cyclaw]        already in use, or config.yaml is invalid." >&2
+      exit 1
+    fi
     if curl -sf "http://127.0.0.1:$GATE_PORT/health" >/dev/null 2>&1; then
+      GATE_READY=1
       break
     fi
     sleep 0.4
   done
+  # Still alive but not answering yet is normal on a cold start (the embedding
+  # model and index load lazily), so warn rather than abort.
+  if [ "$GATE_READY" -eq 0 ]; then
+    echo "[cyclaw] warn : RAG gateway not answering /health yet; still starting (pid $GATE_PID)" >&2
+  fi
 fi
 
 # --- start coding harness ---

@@ -14,7 +14,15 @@
   This hand-editable template remains as a reference/fallback. To enable
   it directly instead:
     1. Copy to ~/Library/LaunchAgents/ and edit:
-         - CYCLAW_REPO path (WorkingDirectory + ProgramArguments python -m)
+         - CYCLAW_REPO path (WorkingDirectory)
+         - REPLACE_WITH_VENV_OR_SYSTEM_PYTHON in the ProgramArguments shell
+           string: an ABSOLUTE interpreter path, e.g. ~/.CyClaw/venv/bin/python.
+           launchd hands the job a minimal PATH and macOS has shipped no
+           /usr/bin/python since 12.3, so a bare `python` here resolves to
+           nothing and the notify half fails silently, precisely when
+           /health is already down.
+         - the probe URL if api.port is not the default 8787 (the generator
+           below derives it from telegram.query.base_url; this template cannot)
          - TELEGRAM_BOT_TOKEN in EnvironmentVariables (or use a wrapper that sources a root-owned env file)
          - chat id in the send subcommand's chat-id argument
     2. Ensure config.yaml has telegram.enabled: true, mode: notify, allowed_chat_ids set.
@@ -34,7 +42,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-c</string>
-    <string>curl -sf --max-time 5 http://127.0.0.1:8787/health &gt;/dev/null || python -m telegram.cli send --chat-id REPLACE_CHAT_ID --text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"</string>
+    <string>curl -sf --max-time 5 http://127.0.0.1:8787/health &gt;/dev/null || REPLACE_WITH_VENV_OR_SYSTEM_PYTHON -m telegram.cli send --chat-id REPLACE_CHAT_ID --text "CyClaw /health failed $(date -u +%Y-%m-%dT%H:%MZ)"</string>
   </array>
   <key>StartInterval</key>
   <integer>300</integer>
