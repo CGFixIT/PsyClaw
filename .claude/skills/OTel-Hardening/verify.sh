@@ -65,8 +65,23 @@ fi
 rm -rf "$a"
 
 # 4. T3 FAIL: shrink _TRACING_CREDENTIALS to two names.
+# Rewritten by regex over the whole tuple rather than an exact-text sed: the
+# previous version hardcoded the one-line three-name spelling, so reformatting
+# the tuple (or adding a name to it) silently turned this mutation into a no-op
+# and the test then "passed" without ever mutating anything.
 a="$(_mktree)"
-sed -i.bak 's/_TRACING_CREDENTIALS = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT")/_TRACING_CREDENTIALS = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY")/' "$a/utils/telemetry_kill.py"
+python3 - "$a/utils/telemetry_kill.py" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+src, n = re.subn(
+    r"_TRACING_CREDENTIALS\s*=\s*\([^)]*\)",
+    '_TRACING_CREDENTIALS = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY")',
+    src, count=1, flags=re.S,
+)
+assert n == 1, "T3 mutation matched nothing -- _TRACING_CREDENTIALS shape changed"
+open(path, "w", encoding="utf-8").write(src)
+PY
 out="$(python3 "$checker" --repo-root "$a" 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ] && echo "$out" | grep -q "FAIL  \[T3\]"; then
   echo "T3 shrunk-credentials mutation: PASS (correctly FAILed)"
@@ -113,8 +128,13 @@ fi
 rm -rf "$a"
 
 # 7. T5 WARN: bump a tracked vendor pin past the recorded baseline in a temp pyproject.toml.
+# The version is matched by pattern, not by literal: the old sed hardcoded
+# langgraph==1.2.6, so once the real pin moved the mutation became a no-op --
+# and the test still "passed" only because the clean tree was by then WARNing
+# about that very drift, which is the thing this mutation was supposed to
+# induce itself. Any 1.9.9 bump is past every plausible baseline.
 a="$(_mktree)"
-sed -i.bak 's/langgraph==1\.2\.6/langgraph==1.9.9/' "$a/pyproject.toml"
+sed -i.bak -E 's/langgraph==[0-9]+\.[0-9]+\.[0-9]+/langgraph==1.9.9/' "$a/pyproject.toml"
 out="$(python3 "$checker" --repo-root "$a" 2>&1)"; rc=$?
 if [ "$rc" -eq 0 ] && echo "$out" | grep -q "WARN  \[T5\]"; then
   echo "T5 vendor-pin-drift mutation: PASS (WARN, exit 0)"

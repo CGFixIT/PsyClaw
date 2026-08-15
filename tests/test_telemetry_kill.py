@@ -67,17 +67,61 @@ def _assert_subprocess_ok(result: subprocess.CompletedProcess, label: str) -> No
 # ---------------------------------------------------------------------------
 
 def test_langchain_tracing_disabled():
-    """LANGCHAIN_TRACING_V2 and LANGSMITH_TRACING must be 'false' after import."""
+    """Every name in the tracing namespace must be 'false' after import.
+
+    All four are one switch, not four: langsmith's get_env_var resolves
+    LANGSMITH_TRACING_V2 > LANGCHAIN_TRACING_V2 > LANGSMITH_TRACING >
+    LANGCHAIN_TRACING and stops at the first non-empty value, so any single
+    unpinned name would win over every pinned one below it.
+    """
     snippet = (
         "import gate, os, sys\n"
-        "assert os.environ['LANGCHAIN_TRACING_V2'] == 'false', "
-        "  f\"LANGCHAIN_TRACING_V2={os.environ.get('LANGCHAIN_TRACING_V2')!r}\"\n"
-        "assert os.environ['LANGSMITH_TRACING'] == 'false', "
-        "  f\"LANGSMITH_TRACING={os.environ.get('LANGSMITH_TRACING')!r}\"\n"
+        "for name in ('LANGSMITH_TRACING_V2', 'LANGCHAIN_TRACING_V2',\n"
+        "             'LANGSMITH_TRACING', 'LANGCHAIN_TRACING'):\n"
+        "    assert os.environ[name] == 'false', f'{name}={os.environ.get(name)!r}'\n"
         "assert os.environ['LANGGRAPH_CLI_NO_ANALYTICS'] == '1'\n"
     )
     result = _run_in_subprocess(snippet)
     _assert_subprocess_ok(result, "langchain_tracing_disabled")
+
+
+def test_ambient_langsmith_tracing_v2_cannot_re_enable_upload():
+    """The highest-precedence tracing name must not survive a hostile ambient set.
+
+    LANGSMITH_TRACING_V2 is the FIRST name langsmith's tracing_is_enabled()
+    consults, and it is the name LangSmith's own docs now recommend -- so it is
+    the likeliest stray var to find in an operator's shell profile or a
+    container base image. It was also the one name the kill dict originally
+    omitted: an ambient 'true' there beat the pinned LANGCHAIN_TRACING_V2
+    'false', latched permanently in get_env_var's lru_cache, attached
+    LangChainTracer to every graph invocation, and uploaded every run to
+    api.smith.langchain.com. No API key was needed -- langsmith's
+    missing-key check only warns -- so the credential scrub did not prevent
+    egress. This pins the full namespace against exactly that environment.
+    """
+    hostile = {
+        "LANGSMITH_TRACING_V2": "true",
+        "LANGCHAIN_TRACING_V2": "true",
+        "LANGSMITH_TRACING": "true",
+        "LANGCHAIN_TRACING": "true",
+    }
+    snippet = (
+        "import gate, os\n"
+        "for name in ('LANGSMITH_TRACING_V2', 'LANGCHAIN_TRACING_V2',\n"
+        "             'LANGSMITH_TRACING', 'LANGCHAIN_TRACING'):\n"
+        "    assert os.environ[name] == 'false', f'{name}={os.environ.get(name)!r}'\n"
+        # The behavioural assertion, not just the env one: ask langsmith itself
+        # whether it considers tracing on. Skipped rather than failed when the
+        # package is absent, so this stays green in a minimal environment.
+        "try:\n"
+        "    from langsmith.utils import tracing_is_enabled\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "else:\n"
+        "    assert tracing_is_enabled() is False, 'langsmith still reports tracing enabled'\n"
+    )
+    result = _run_in_subprocess(snippet, extra_env=hostile)
+    _assert_subprocess_ok(result, "ambient_langsmith_tracing_v2_cannot_re_enable_upload")
 
 
 # ---------------------------------------------------------------------------
@@ -148,28 +192,30 @@ def test_nemo_usage_stats_disabled_by_standalone_guardrails_package():
 # ---------------------------------------------------------------------------
 
 def test_api_keys_hard_removed():
-    """Pre-seed LANGCHAIN_API_KEY / LANGSMITH_API_KEY / LANGCHAIN_ENDPOINT,
-    then importing gate must scrub all three from os.environ.
+    """Pre-seed every name in _TRACING_CREDENTIALS, then importing gate must
+    scrub all of them from os.environ.
+
+    Driven off the module's own tuple rather than a hardcoded list, so a name
+    added to the scrub set is covered here automatically instead of silently
+    going untested (which is how the LANGSMITH_ endpoint twins stayed absent).
 
     Runs in a subprocess so we never have to reload gate (which would
     re-fire FastAPI app construction and the ChromaDB client init).
     """
+    from utils.telemetry_kill import _TRACING_CREDENTIALS
+
     snippet = (
         "import gate, os\n"
-        "assert 'LANGCHAIN_API_KEY'  not in os.environ, "
-        "  f\"LANGCHAIN_API_KEY still set: {os.environ.get('LANGCHAIN_API_KEY')!r}\"\n"
-        "assert 'LANGSMITH_API_KEY'  not in os.environ, "
-        "  f\"LANGSMITH_API_KEY still set: {os.environ.get('LANGSMITH_API_KEY')!r}\"\n"
-        "assert 'LANGCHAIN_ENDPOINT' not in os.environ, "
-        "  f\"LANGCHAIN_ENDPOINT still set: {os.environ.get('LANGCHAIN_ENDPOINT')!r}\"\n"
+        "from utils.telemetry_kill import _TRACING_CREDENTIALS\n"
+        "leaked = [k for k in _TRACING_CREDENTIALS if k in os.environ]\n"
+        "assert not leaked, f'tracing credentials survived: {leaked}'\n"
     )
     result = _run_in_subprocess(
         snippet,
-        extra_env={
-            "LANGCHAIN_API_KEY": "sk-test123",
-            "LANGSMITH_API_KEY": "sk-lssmith",
-            "LANGCHAIN_ENDPOINT": "https://evil.example.com",
-        },
+        # A non-empty hostile value for every scrubbed name, whatever the tuple
+        # currently holds -- a blank would pass a mere `not in os.environ` check
+        # for the wrong reason.
+        extra_env=dict.fromkeys(_TRACING_CREDENTIALS, "hostile-value-should-be-removed"),
     )
     _assert_subprocess_ok(result, "api_keys_hard_removed")
 
@@ -218,21 +264,32 @@ _HOSTILE_ENV = {
     "OTEL_SDK_DISABLED": "false",
     "OTEL_TRACES_EXPORTER": "otlp",
     "ANONYMIZED_TELEMETRY": "True",
+    # Every name in the tracing namespace, not just the two originally listed:
+    # LANGSMITH_TRACING_V2 outranks all of them, so an ambient 'true' there is
+    # the single most dangerous value this dict can carry.
+    "LANGSMITH_TRACING_V2": "true",
     "LANGCHAIN_TRACING_V2": "true",
+    "LANGSMITH_TRACING": "true",
+    "LANGCHAIN_TRACING": "true",
     "LANGSMITH_OTEL_ENABLED": "true",
     "LANGCHAIN_API_KEY": "leaked-key-should-be-removed",
     "LANGSMITH_API_KEY": "leaked-key-should-be-removed",
+    "LANGSMITH_ENDPOINT": "https://collector.example.invalid",
+    "LANGSMITH_RUNS_ENDPOINTS": '{"https://collector.example.invalid": "k"}',
     "HF_HUB_DISABLE_TELEMETRY": "0",
     "DO_NOT_TRACK": "0",
 }
 
+# Both halves are derived from the module's own constants rather than a
+# hardcoded list, so any name added to either one is enforced here without a
+# matching edit -- the drift that let the LANGSMITH_ tracing/endpoint names go
+# unpinned in the first place.
 _ASSERT_KILLED = (
-    "from utils.telemetry_kill import TELEMETRY_KILL\n"
+    "from utils.telemetry_kill import TELEMETRY_KILL, _TRACING_CREDENTIALS\n"
     "bad = [f'{k}: expected={v!r} actual={os.environ.get(k)!r}'\n"
     "       for k, v in TELEMETRY_KILL.items() if os.environ.get(k) != v]\n"
     "assert not bad, 'kill vars not enforced: ' + '; '.join(bad)\n"
-    "leaked = [k for k in ('LANGCHAIN_API_KEY', 'LANGSMITH_API_KEY', 'LANGCHAIN_ENDPOINT')\n"
-    "          if k in os.environ]\n"
+    "leaked = [k for k in _TRACING_CREDENTIALS if k in os.environ]\n"
     "assert not leaked, f'tracing credentials survived: {leaked}'\n"
 )
 
