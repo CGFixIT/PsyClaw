@@ -148,7 +148,8 @@ def test_fetch_and_search_and_inject(cfg):
     assert "allowlist" in found["hits"][0]["snippets"][0].casefold()
     injected = tool.inject()
     assert injected["injected"] is True
-    assert "docs.python.org" in tool.context_text()
+    source = next(line for line in tool.context_text().splitlines() if line.startswith("Source: "))
+    assert source == "Source: https://docs.python.org/"
     tool.forget()
     assert tool.context_text() == ""
 

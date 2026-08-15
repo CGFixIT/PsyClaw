@@ -50,6 +50,9 @@ _BLOCKED_HOSTS: Final = frozenset((
     "metadata.goog",
 ))
 _SKIP_TAGS: Final = frozenset(("script", "style", "noscript", "template"))
+_PATH_CHARS: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~/=+-"
+)
 _BREAK_TAGS: Final = frozenset(("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "pre"))
 _TEXT_TYPES: Final = (
     "text/",
@@ -242,6 +245,24 @@ def _snippets(text: str, query: str) -> list[str]:
     return found
 
 
+def _safe_target(match: dict[str, str], parsed) -> str:
+    """Rebuild the GET URL from the allowlist host + a charset-gated path.
+
+    Host comes from the persisted allowlist entry, not the raw operator
+    string. Query/fragment are refused so a fetch cannot be steered by
+    user-controlled suffix after the SSRF checks.
+    """
+    scheme = parsed.scheme if parsed.scheme in _SCHEMES else "https"
+    path = parsed.path or "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if parsed.query or parsed.params or parsed.fragment:
+        raise WebToolError("query or fragment is not allowed", code="WEB_BAD_URL")
+    if not path.startswith("/") or any(ch not in _PATH_CHARS for ch in path):
+        raise WebToolError("path has disallowed characters", code="WEB_BAD_URL")
+    return f"{scheme}://{match['host']}{path}"
+
+
 class WebTool:
     """Persist allowlist + last extract; perform gated GETs."""
 
@@ -353,11 +374,8 @@ class WebTool:
         if match is None:
             raise WebToolError("URL is not on the allowlist", code="WEB_HOST_DENIED", details={"url": url})
         parsed = urlparse(url if "://" in url else f"https://{url}")
-        host = _host_of(parsed.hostname or "")
-        self._resolver(host)
-        target = f"{parsed.scheme}://{host}{parsed.path or '/'}"
-        if parsed.query:
-            target = f"{target}?{parsed.query}"
+        self._resolver(match["host"])
+        target = _safe_target(match, parsed)
         with self._client() as client:
             try:
                 resp = client.get(target)

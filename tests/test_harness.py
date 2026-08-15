@@ -153,7 +153,8 @@ def test_system_prompt_includes_session_goal():
 def test_system_prompt_includes_web_extract():
     prompt = compose_system_prompt(soul_enabled=False, web_context="Source: https://docs.python.org/\n\nHello")
     assert "Allowlisted web extract" in prompt
-    assert "https://docs.python.org/" in prompt
+    source = next(line for line in prompt.splitlines() if line.startswith("Source: "))
+    assert source == "Source: https://docs.python.org/"
     assert "untrusted page content" in prompt
     assert "Allowlisted web extract" not in compose_system_prompt(soul_enabled=False)
 

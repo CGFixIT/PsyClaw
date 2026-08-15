@@ -708,14 +708,14 @@ def create_app(
         try:
             return web.allow(req.url)
         except WebToolError as exc:
-            raise _web_err(exc) from exc
+            raise _web_err(exc) from None
 
     @app.post("/api/web/deny", dependencies=guarded)
     def web_deny(req: _harness_schemas.WebUrlRequest) -> dict:
         try:
             return web.deny(req.url)
         except WebToolError as exc:
-            raise _web_err(exc) from exc
+            raise _web_err(exc) from None
 
     @app.post("/api/web/fetch", dependencies=guarded)
     def web_fetch(req: _harness_schemas.WebUrlRequest, request: Request) -> dict:
@@ -723,7 +723,7 @@ def create_app(
         try:
             return web.fetch(req.url)
         except WebToolError as exc:
-            raise _web_err(exc) from exc
+            raise _web_err(exc) from None
 
     @app.post("/api/web/search", dependencies=guarded)
     def web_search(req: _harness_schemas.WebSearchRequest, request: Request) -> dict:
@@ -731,14 +731,14 @@ def create_app(
         try:
             return web.search(req.query)
         except WebToolError as exc:
-            raise _web_err(exc) from exc
+            raise _web_err(exc) from None
 
     @app.post("/api/web/inject", dependencies=guarded)
     def web_inject() -> dict:
         try:
             return web.inject()
         except WebToolError as exc:
-            raise _web_err(exc) from exc
+            raise _web_err(exc) from None
 
     @app.post("/api/web/forget", dependencies=guarded)
     def web_forget() -> dict:
