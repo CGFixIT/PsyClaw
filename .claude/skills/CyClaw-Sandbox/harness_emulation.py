@@ -30,6 +30,9 @@ Verifies, in the same order harness.html's own on-load + first-use calls fire:
  11. GET  /api/github/status  (subprocess-backed; accepts any well-formed
      JSON envelope -- a sandbox may lack a configured git remote)
  12. GET  /api/harness/runs  (/harness command)
+ 13. GET  /api/agent/checks  (/agent checks) + auth-gate on the write routes
+ 14. POST /api/sessions/{id}/goal  (/goal set, persist, clear)
+ 15. POST /api/chat/cancel   (/loop stop -- idempotent when nothing is running)
 
 Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
@@ -258,6 +261,57 @@ def main() -> int:
                       f"HTTP {unauthed.status_code}")
             except Exception as exc:
                 check(f"POST {path} auth gate", False, repr(exc))
+        print()
+
+        # ── 14. Session goal (/goal) ──────────────────────────────────────
+        print("[14] POST /api/sessions/{id}/goal  (/goal set|clear)")
+        if session_id:
+            try:
+                r = client.post(
+                    f"/api/sessions/{session_id}/goal",
+                    json={"goal": "  emulation goal  "},
+                )
+                check(
+                    "/api/sessions/{id}/goal set trims and echoes",
+                    r.status_code == 200 and r.json().get("goal") == "emulation goal",
+                    f"status={r.status_code} goal={r.json().get('goal')!r}",
+                )
+                fetched = client.get(f"/api/sessions/{session_id}").json()
+                check(
+                    "GET /api/sessions/{id} persists goal",
+                    fetched.get("goal") == "emulation goal",
+                )
+                listed = client.get("/api/sessions").json().get("sessions") or []
+                match = next((s for s in listed if s.get("session_id") == session_id), {})
+                check(
+                    "GET /api/sessions listing omits goal",
+                    "goal" not in match,
+                )
+                cleared = client.post(
+                    f"/api/sessions/{session_id}/goal",
+                    json={"goal": ""},
+                )
+                check(
+                    "/api/sessions/{id}/goal empty string clears",
+                    cleared.status_code == 200 and cleared.json().get("goal") == "",
+                )
+            except Exception as exc:
+                check("POST /api/sessions/{id}/goal", False, repr(exc))
+        else:
+            check("POST /api/sessions/{id}/goal", False, "no session_id from step 4")
+        print()
+
+        # ── 15. Chat cancel (/loop stop) ──────────────────────────────────
+        print("[15] POST /api/chat/cancel  (/loop stop -- idempotent)")
+        try:
+            r = client.post("/api/chat/cancel")
+            check(
+                "/api/chat/cancel is idempotent",
+                r.status_code == 200 and r.json().get("cancelled") is True,
+                f"status={r.status_code}",
+            )
+        except Exception as exc:
+            check("POST /api/chat/cancel", False, repr(exc))
         print()
 
     print()

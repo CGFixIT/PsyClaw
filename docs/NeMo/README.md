@@ -9,7 +9,8 @@ checks and output grounding on the local-LLM path.
 > Development contract and phased history:
 > [`later_development_guideline.md`](./later_development_guideline.md),
 > [`phase2_implementation_plan.md`](./phase2_implementation_plan.md),
-> [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md).
+> [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md),
+> [`phase4b_soul_leak.md`](./phase4b_soul_leak.md).
 
 ## TL;DR
 
@@ -22,7 +23,7 @@ checks and output grounding on the local-LLM path.
 - **Metrics:** separate `logs/guardrails.jsonl` (hashes only); core audit stream
   stays `logs/audit.jsonl`
 
-## Status (2026-08-04, verified against code)
+## Status (2026-08-15, verified against code)
 
 | Phase | Status | What it does |
 |---|---|---|
@@ -30,7 +31,7 @@ checks and output grounding on the local-LLM path.
 | **2** Input rail | **Shipped** | Graph node `guardrail_input` via bridge; pass-through when disabled |
 | **3** Scanner consolidation | **Shipped** (see phase3 plan) | Shared offline floor helpers |
 | **4a** Output grounding | **Shipped** | Graph node `guardrail_output`; grounding check on **`local_llm` only** |
-| **4b** Soul-leak output rail | **Not fully built** | Listed in config `output_rails` as accepted candidate only; offline floor does not activate a full soul-leak check yet (see config comments + phase4 plan Decision 2) |
+| **4b** Soul-leak output rail | **Contract only — not wired** | Listed in config `output_rails` as an accepted candidate; offline `check_output` stays grounding-only. Colang polarity is `$allowed` / `if not $allowed`. A future rail needs a **new** primitive (not `scan_injection` reuse) and a measured FP sweep before any live wire. See [`phase4b_soul_leak.md`](./phase4b_soul_leak.md). |
 
 Default posture remains **safe**: `guardrails.enabled: false` → both graph nodes
 are pure pass-through and do not import the package.

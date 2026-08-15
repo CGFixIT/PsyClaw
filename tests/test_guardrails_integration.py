@@ -534,3 +534,26 @@ class TestCheckOutput:
         )
         assert "check_soul_leak" not in res["rails"]
         assert m.rails_fired.get("check_soul_leak", 0) == 0
+
+    def test_check_output_does_not_reuse_scan_injection(self, monkeypatch):
+        """Phase 4b Decision A: check_output must not scan answers with the
+        input-side marker set. ``"you are now"`` is ordinary technical prose
+        and would false-positive if scan_injection were reused here.
+        See docs/NeMo/phase4b_soul_leak.md.
+        """
+        def _boom(text: str):
+            raise AssertionError(
+                "check_output must not reuse scan_injection on the answer"
+            )
+
+        monkeypatch.setattr("guardrails.integration.scan_injection", _boom)
+        cfg = GuardrailsConfig(enabled=True)
+        m = _metrics()
+        res = check_output(
+            "you are now connected to the main menu",
+            "you are now connected to the main menu of the appliance",
+            cfg=cfg,
+            metrics=m,
+        )
+        assert res["blocked"] is False
+        assert "check_soul_leak" not in res["rails"]

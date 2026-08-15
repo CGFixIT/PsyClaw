@@ -430,9 +430,11 @@ against the live app rather than grepping source text.
 | `/api/sessions` | GET / POST | List sessions; create returns HTTP 201 with `session_id` |
 | `/api/sessions/{id}` | GET | Session summary + `messages` (`content`/`role`/`ts`); unknown id -> 404 |
 | `/api/sessions/{id}/rename` | POST | Applies a new title; unknown id -> 404 |
+| `/api/sessions/{id}/goal` | POST | Sets or clears the session `/goal` (empty string clears); unknown id -> 404; value is session data injected into the chat prompt, never a write authorization |
 | `/api/soul` | GET / POST | Harness-local soul/memory toggle (`soul.md` itself untouched -- distinct from `gate.py`'s `/soul/*`) |
 | `/api/model` | POST | Selects and persists the active model |
-| `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend |
+| `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend. `{loop: true}` is chat-only and returns 400 `LOOP_REQUIRES_GOAL` when no goal is set; it must never call `/api/agent/*` |
+| `/api/chat/cancel` | POST | Idempotent abort of the in-flight Ollama POST (`/loop stop`); 200 `{cancelled: true}` even when nothing is running |
 | `/api/github/status` | GET | Subprocess-backed via `utils.ops_runner.run_agentic_op` (read-only, mirrors `/ops/agentic`'s delegation pattern) |
 | `/api/harness/runs` | GET | Harness-optimizer run listing, `runs` + `count` |
 | `/api/agent/checks` | GET | Lists named check profiles (Bearer-gated) |
@@ -466,21 +468,21 @@ Verify `static/harness.html` contracts:
   markers (`data-pane="commands"` etc.)
 - All `/api/*` endpoints the console calls are present: `/api/status`,
   `/api/registry`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
-  `/api/github/status`, `/api/harness/runs`
+  `/api/chat/cancel`, `/api/github/status`, `/api/harness/runs`, plus the
+  session-scoped `/goal` POST built as `/api/sessions/{id}/goal`
 - All documented slash commands are wired: `/session`, `/soul`, `/model`,
-  `/skills`, `/github`, `/harness`, `/tokens`, `/status`
+  `/skills`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
 - **XSS safety**: no `innerHTML` usage anywhere -- the console's own comment
   documents this invariant explicitly ("Model output and registry data are
   DATA, never HTML"); rendering goes through `textContent` and
   `createElement` only, since chat replies, skill descriptions, and session
   titles are all untrusted-origin strings that must never be interpreted as
   markup
-- **No API-key affordance**: unlike `terminal.html`'s `authHeaders()` +
-  `apiKeyInput`, `harness.html` has neither -- confirming their absence
-  checks that the loopback-only + `TrustedHostMiddleware` threat model
-  (`harness/server.py`'s own docstring) is the documented posture, not a
-  forgotten gap; a stray `Authorization`-header helper appearing later would
-  mean the UI and the threat-model doc had silently diverged
+- **API-key field for guarded writes**: `harness.html` has `#apiKey` /
+  `apiKeyInput` so `/goal`, `/api/chat`, `/api/chat/cancel`, and `/api/agent/*`
+  can send `Authorization: Bearer`. It must **not** reuse `terminal.html`'s
+  `authHeaders()` helper — that would couple the two consoles. Loopback bind
+  + `TrustedHostMiddleware` remain the rest of the boundary.
 
 ### Phase 13 -- Unit & Integration Test Suite
 
@@ -593,11 +595,12 @@ What it does:
 19. Verifies rate limiter is initialized with config values
 20. Verifies terminal.html contract (5 panels, 2 provider buttons)
 21. **Exercises the real harness console app** over a FastAPI `TestClient`
-    (status, registry, session CRUD, soul/model toggles, mocked chat, GitHub
-    status, harness runs) plus its rate-limit, auto-docs-disabled, and
-    DNS-rebinding checks
-22. Verifies harness.html contract (panes, API endpoints, slash commands,
-    no-innerHTML / textContent-only rendering, no API-key affordance)
+    (status, registry, session CRUD + `/goal`, soul/model toggles, mocked chat,
+    `/api/chat/cancel`, GitHub status, harness runs) plus its rate-limit,
+    auto-docs-disabled, and DNS-rebinding checks
+22. Verifies harness.html contract (panes, API endpoints, slash commands
+    including `/goal` and `/loop`, no-innerHTML / textContent-only rendering,
+    apiKey field for guarded POSTs, no terminal.html `authHeaders()` helper)
 
 ### `gate_runtime_check.py` / `harness_runtime_check.py`
 
