@@ -15,7 +15,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 | Script | What it does |
 |---|---|
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
-| `uninstall-cyclaw.sh` | Removes the rc function and PATH entry. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Also best-effort unschedules Dropbox sync. |
+| `uninstall-cyclaw.sh` | Removes the rc function and PATH entry. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s the five CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port`. |
 | `setup-fsconnect.sh` | Creates confined `~/CyClaw-FS` (`chmod 700`). Unless `--prepare-only`, enables list/stat/read via `_enable_fsconnect_readlist.py`. |
 | `_enable_fsconnect_readlist.py` | Writes the confined read/list `fsconnect:` profile into `config.yaml` (writes stay off). |
