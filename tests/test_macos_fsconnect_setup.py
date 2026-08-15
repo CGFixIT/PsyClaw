@@ -386,10 +386,11 @@ def test_uninstall_removes_landed_launchagent_plists(tmp_path: Path) -> None:
         "com.cgfixit.cyclaw.telegram-poll.plist",
         "com.cgfixit.cyclaw.telegram-health.plist",
         "com.cgfixit.cyclaw.fsconnect-trash.plist",
+        "com.cgfixit.cyclaw.gate.plist",
+        "com.cgfixit.cyclaw.harness.plist",
     )
     for name in landed:
         (agents / name).write_text("generated", encoding="utf-8")
-    (agents / "com.cgfixit.cyclaw.gate.plist").write_text("not-yet", encoding="utf-8")
 
     result = _run_script(_UNINSTALLER, home=home, config=config)
     assert result.returncode == 0, result.stderr
@@ -397,5 +398,4 @@ def test_uninstall_removes_landed_launchagent_plists(tmp_path: Path) -> None:
         assert not (agents / name).exists(), name
         assert f"removing LaunchAgent {name.removesuffix('.plist')}" in result.stdout
     assert keep.is_file()
-    assert (agents / "com.cgfixit.cyclaw.gate.plist").is_file()
     assert "uninstall complete" in result.stdout
