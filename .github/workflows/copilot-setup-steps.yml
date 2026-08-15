@@ -68,5 +68,3 @@ jobs:
         # (same failure mode ci.yml documents in its "Prepare hermetic env" step).
         run: |
           mkdir -p data/personality index logs
-          [ -f data/personality/soul.md ] || printf '# Soul\n' > data/personality/soul.md
-
