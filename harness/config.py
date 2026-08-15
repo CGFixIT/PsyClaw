@@ -8,11 +8,11 @@ itself is never written to.
 Layout created on first run::
 
     ~/.CyClaw/
-      config.json        harness settings (selected model, soul on/off)
+      config.json        harness settings (selected model, soul on/off, memory on/off)
       sessions/          one JSON file per chat session (messages + tokens)
       skills/            copy of .claude/skills for user browsing/custom edits
-      tools/             user-local tool notes / connector state
-      memory/            harness memory log (audit JSONL, NOT the soul)
+      tools/             /web allowlist + last extract
+      memory/            operator /memory notes (NOT soul.md, NOT the RAG memory/ package)
       registry.json      cached merged registry snapshot
 
 Config values that belong to CyClaw proper (model names, URLs, timeouts) are
@@ -146,6 +146,8 @@ class HarnessConfig:
     port: int = DEFAULT_PORT
     soul_enabled: bool = True
     selected_model: str = ""
+    web_enabled: bool = False
+    memory_enabled: bool = False
     repo_root: Path = field(default=_REPO_ROOT)
     config_path: Path = field(init=False)
     sessions_dir: Path = field(init=False)
@@ -177,6 +179,8 @@ class HarnessConfig:
         _atomic_write_json(self.config_path, {
             "soul_enabled": self.soul_enabled,
             "selected_model": self.selected_model,
+            "web_enabled": self.web_enabled,
+            "memory_enabled": self.memory_enabled,
             "port": self.port,
         })
 
@@ -185,6 +189,10 @@ class HarnessConfig:
             self.soul_enabled = stored["soul_enabled"]
         if isinstance(stored.get("selected_model"), str):
             self.selected_model = stored["selected_model"]
+        if isinstance(stored.get("web_enabled"), bool):
+            self.web_enabled = stored["web_enabled"]
+        if isinstance(stored.get("memory_enabled"), bool):
+            self.memory_enabled = stored["memory_enabled"]
         port = stored.get("port")
         if isinstance(port, int) and _MIN_USER_PORT <= port <= _MAX_PORT:
             self.port = port

@@ -195,3 +195,21 @@ def test_set_hallucination_threshold_rejects_out_of_range() -> None:
         set_hallucination_threshold(1.5)
     with pytest.raises(ValueError, match="hallucination_threshold"):
         set_hallucination_threshold(-0.1)
+
+
+def test_check_soul_leak_colang_uses_allowed_polarity():
+    """Phase 4b contract: Colang True=allowed, matching every other flow.
+
+    ``check_injection`` returns True when the text is ALLOWED. Naming the
+    result ``$leaked`` inverted the English so the next editor who "fixed"
+    ``if not $leaked`` would refuse every clean answer (or disable the rail).
+    The live /query path still does not run this flow — see
+    docs/NeMo/phase4b_soul_leak.md.
+    """
+    colang = Path("guardrails/config/rails.co").read_text(encoding="utf-8")
+    start = colang.index("define flow check soul leak")
+    end = colang.find("define flow", start + 1)
+    body = colang[start:end if end != -1 else None]
+    assert "$allowed = execute check_injection(text=$bot_message)" in body
+    assert "if not $allowed" in body
+    assert "$leaked" not in body

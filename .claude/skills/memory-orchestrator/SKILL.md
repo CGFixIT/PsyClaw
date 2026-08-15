@@ -112,6 +112,11 @@ docs/memories/
 
 ## Gotchas
 
+- **Not the harness console `/memory`.** Claude Code `/memory` is this
+  skill (extract → `docs/memories/`). The harness.html `/memory` command is
+  a separate, fail-closed operator-note toggle under `~/.CyClaw/memory`. It
+  does not run this driver, does not write snapshots, and does not replace
+  the PreCompact / SessionEnd hooks.
 - **Hooks can't run an LLM turn.** A shell hook cannot, by itself, do the
   semantic extraction. `PreCompact` works around this by injecting
   `additionalContext` so the *agent* runs extraction before compaction. At

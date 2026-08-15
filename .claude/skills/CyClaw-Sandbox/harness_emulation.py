@@ -30,6 +30,11 @@ Verifies, in the same order harness.html's own on-load + first-use calls fire:
  11. GET  /api/github/status  (subprocess-backed; accepts any well-formed
      JSON envelope -- a sandbox may lack a configured git remote)
  12. GET  /api/harness/runs  (/harness command)
+ 13. GET  /api/agent/checks  (/agent checks) + auth-gate on the write routes
+ 14. POST /api/sessions/{id}/goal  (/goal set, persist; listing omits goal)
+ 15. POST /api/chat {loop: true}   (/loop with goal = chat-only 200/502;
+     clear goal; then 400 LOOP_REQUIRES_GOAL)
+ 16. POST /api/chat/cancel   (/loop stop -- idempotent when nothing is running)
 
 Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
@@ -108,6 +113,112 @@ def main() -> int:
                   all(k in d and isinstance(d[k], list) for k in ("skills", "tools", "connectors")))
         except Exception as exc:
             check("/api/registry", False, repr(exc))
+        print()
+
+        # ── 2b. GET /api/tools (/tools wiring diagram) ────────────────────
+        print("[2b] GET /api/tools  (/tools slash command)")
+        try:
+            r = client.get("/api/tools")
+            d = r.json()
+            names = {t.get("name") for t in d.get("tools") or []}
+            check(
+                "/api/tools returns a wiring diagram",
+                r.status_code == 200
+                and isinstance(d.get("diagram"), str)
+                and "HARNESS TOOLS" in d.get("diagram", ""),
+                f"status={r.status_code}",
+            )
+            check(
+                "/api/tools lists goal, loop, and hybrid_search",
+                {"goal", "loop", "hybrid_search"} <= names,
+                f"names={sorted(names)}",
+            )
+            check(
+                "/api/tools harness rows are wired",
+                all(t.get("wired") for t in (d.get("tools") or []) if t.get("kind") == "harness"),
+            )
+        except Exception as exc:
+            check("GET /api/tools", False, repr(exc))
+        print()
+
+        # ── 2c. GET /api/skills (/skills wiring diagram) ──────────────────
+        print("[2c] GET /api/skills  (/skills slash command)")
+        try:
+            r = client.get("/api/skills")
+            d = r.json()
+            names = {s.get("name") for s in d.get("skills") or []}
+            check(
+                "/api/skills returns a wiring diagram",
+                r.status_code == 200
+                and isinstance(d.get("diagram"), str)
+                and "HARNESS SKILLS" in d.get("diagram", ""),
+                f"status={r.status_code}",
+            )
+            check(
+                "/api/skills lists ponytail and invariant-guard",
+                {"ponytail", "invariant-guard"} <= names,
+                f"names={sorted(names)}",
+            )
+            check(
+                "/api/skills prompt/check rows are wired",
+                all(
+                    s.get("wired")
+                    for s in (d.get("skills") or [])
+                    if s.get("role") in {"prompt", "check"}
+                ),
+            )
+        except Exception as exc:
+            check("GET /api/skills", False, repr(exc))
+        print()
+
+        # ── 2d. GET /api/web (/web allowlist status) ─────────────────────
+        print("[2d] GET /api/web  (/web slash command)")
+        try:
+            r = client.get("/api/web")
+            d = r.json()
+            check(
+                "/api/web defaults to off with an empty allowlist",
+                r.status_code == 200
+                and d.get("enabled") is False
+                and d.get("allowlist") == [],
+                f"status={r.status_code} enabled={d.get('enabled')}",
+            )
+            denied = client.post("/api/web/fetch", json={"url": "https://example.com/"})
+            code = (denied.json().get("detail") or {}).get("code")
+            check(
+                "/api/web/fetch is 409 WEB_DISABLED when off",
+                denied.status_code == 409 and code == "WEB_DISABLED",
+                f"status={denied.status_code} code={code}",
+            )
+        except Exception as exc:
+            check("GET /api/web", False, repr(exc))
+        print()
+
+        # ── 2e. GET /api/memory (/memory toggle, default off) ────────────
+        print("[2e] GET /api/memory  (/memory slash command)")
+        try:
+            r = client.get("/api/memory")
+            d = r.json()
+            check(
+                "/api/memory defaults to off with zero notes",
+                r.status_code == 200
+                and d.get("enabled") is False
+                and d.get("count") == 0
+                and d.get("rag", {}).get("writable_from_harness") is False,
+                f"status={r.status_code} enabled={d.get('enabled')} count={d.get('count')}",
+            )
+            added = client.post("/api/memory/add", json={"text": "prefer ruff"})
+            check(
+                "/api/memory/add pins one note",
+                added.status_code == 200 and added.json().get("count") == 1,
+                f"status={added.status_code}",
+            )
+            on = client.post("/api/memory", json={"enabled": True})
+            check("/api/memory on flips enabled", on.json().get("enabled") is True)
+            client.post("/api/memory", json={"enabled": False})
+            client.post("/api/memory/clear")
+        except Exception as exc:
+            check("GET /api/memory", False, repr(exc))
         print()
 
         # ── 3. GET /api/sessions (sidebar sessions pane) ──────────────────
@@ -258,6 +369,92 @@ def main() -> int:
                       f"HTTP {unauthed.status_code}")
             except Exception as exc:
                 check(f"POST {path} auth gate", False, repr(exc))
+        print()
+
+        # ── 14. Session goal (/goal) ──────────────────────────────────────
+        print("[14] POST /api/sessions/{id}/goal  (/goal set|clear)")
+        if session_id:
+            try:
+                r = client.post(
+                    f"/api/sessions/{session_id}/goal",
+                    json={"goal": "  emulation goal  "},
+                )
+                check(
+                    "/api/sessions/{id}/goal set trims and echoes",
+                    r.status_code == 200 and r.json().get("goal") == "emulation goal",
+                    f"status={r.status_code} goal={r.json().get('goal')!r}",
+                )
+                fetched = client.get(f"/api/sessions/{session_id}").json()
+                check(
+                    "GET /api/sessions/{id} persists goal",
+                    fetched.get("goal") == "emulation goal",
+                )
+                listed = client.get("/api/sessions").json().get("sessions") or []
+                match = next((s for s in listed if s.get("session_id") == session_id), {})
+                check(
+                    "GET /api/sessions listing omits goal",
+                    "goal" not in match,
+                )
+                looped = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "emulation loop turn",
+                        "session_id": session_id,
+                        "loop": True,
+                    },
+                )
+                check(
+                    "/loop with goal is chat-only (200 or documented 502)",
+                    looped.status_code in (200, 502),
+                    f"status={looped.status_code}",
+                )
+                cleared = client.post(
+                    f"/api/sessions/{session_id}/goal",
+                    json={"goal": ""},
+                )
+                check(
+                    "/api/sessions/{id}/goal empty string clears",
+                    cleared.status_code == 200 and cleared.json().get("goal") == "",
+                )
+                denied = client.post(
+                    "/api/chat",
+                    json={
+                        "message": "emulation loop without goal",
+                        "session_id": session_id,
+                        "loop": True,
+                    },
+                )
+                denied_body = denied.json() if denied.headers.get("content-type", "").startswith("application/json") else {}
+                denied_detail = denied_body.get("detail") if isinstance(denied_body, dict) else {}
+                denied_code = denied_detail.get("code") if isinstance(denied_detail, dict) else None
+                check(
+                    "/loop without goal is 400 LOOP_REQUIRES_GOAL",
+                    denied.status_code == 400 and denied_code == "LOOP_REQUIRES_GOAL",
+                    f"status={denied.status_code} code={denied_code!r}",
+                )
+            except Exception as exc:
+                check("POST /api/sessions/{id}/goal", False, repr(exc))
+        else:
+            check("POST /api/sessions/{id}/goal", False, "no session_id from step 4")
+        print()
+
+        # ── 15. /loop (chat-only; never /api/agent/*) ─────────────────────
+        # Step 14 already fired loop-with-goal then LOOP_REQUIRES_GOAL after
+        # clear. This banner exists so the verify.sh log names the command.
+        print("[15] POST /api/chat {loop:true}  (/loop — asserted in step 14)")
+        print()
+
+        # ── 16. Chat cancel (/loop stop) ──────────────────────────────────
+        print("[16] POST /api/chat/cancel  (/loop stop -- idempotent)")
+        try:
+            r = client.post("/api/chat/cancel")
+            check(
+                "/api/chat/cancel is idempotent",
+                r.status_code == 200 and r.json().get("cancelled") is True,
+                f"status={r.status_code}",
+            )
+        except Exception as exc:
+            check("POST /api/chat/cancel", False, repr(exc))
         print()
 
     print()

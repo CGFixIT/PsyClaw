@@ -30,5 +30,7 @@ precedes it.
 
 - Corpus location and rules: [`data/README.md`](../data/README.md)
 - Retrieval-only MCP surface: `mcp_hybrid_server.py` (no LLM path,
-  `sampling: None`)
+  `sampling: None`). The harness `/tools` command AST-catalogs `hybrid_search`
+  but does not invoke it (`invoked=false`). Live search stays on
+  `POST /query` or a Claude Desktop MCP client.
 - Index health tooling: `.claude/skills/index-doctor/`

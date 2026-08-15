@@ -1167,6 +1167,70 @@ def phase_harness_console() -> PhaseResult:
         all(isinstance(reg.get(k), list) for k in ("skills", "tools", "connectors")),
     ))
 
+    r = client.get("/api/tools")
+    tools_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_tools_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_tools_shape",
+        isinstance(tools_payload.get("tools"), list)
+        and isinstance(tools_payload.get("diagram"), str)
+        and "HARNESS TOOLS" in (tools_payload.get("diagram") or ""),
+    ))
+    tool_names = {t.get("name") for t in tools_payload.get("tools") or []}
+    phase.checks.append(Check(
+        "harness_tools_includes_goal_and_hybrid_search",
+        {"goal", "loop", "hybrid_search"} <= tool_names,
+    ))
+    phase.checks.append(Check(
+        "harness_tools_all_harness_rows_wired",
+        all(t.get("wired") for t in (tools_payload.get("tools") or []) if t.get("kind") == "harness"),
+    ))
+
+    r = client.get("/api/skills")
+    skills_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_skills_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_skills_shape",
+        isinstance(skills_payload.get("skills"), list)
+        and isinstance(skills_payload.get("diagram"), str)
+        and "HARNESS SKILLS" in (skills_payload.get("diagram") or ""),
+    ))
+    skill_names = {s.get("name") for s in skills_payload.get("skills") or []}
+    phase.checks.append(Check(
+        "harness_skills_includes_prompt_and_check",
+        {"ponytail", "karpathy-guidelines", "invariant-guard"} <= skill_names,
+    ))
+
+    r = client.get("/api/web")
+    web_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_web_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_web_default_off_empty_allowlist",
+        web_payload.get("enabled") is False and web_payload.get("allowlist") == [],
+    ))
+    deny = client.post("/api/web/fetch", json={"url": "https://example.com/"})
+    phase.checks.append(Check(
+        "harness_web_fetch_disabled_is_409",
+        deny.status_code == 409
+        and (deny.json().get("detail") or {}).get("code") == "WEB_DISABLED",
+    ))
+
+    r = client.get("/api/memory")
+    mem_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_memory_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_memory_default_off",
+        mem_payload.get("enabled") is False
+        and mem_payload.get("count") == 0
+        and mem_payload.get("rag", {}).get("writable_from_harness") is False,
+    ))
+    added = client.post("/api/memory/add", json={"text": "prefer ruff"})
+    phase.checks.append(Check(
+        "harness_memory_add",
+        added.status_code == 200 and added.json().get("count") == 1,
+    ))
+    client.post("/api/memory/clear")
+
     log("  --- Sessions CRUD ---")
     r = client.post("/api/sessions", json={"title": "sandbox check"})
     phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
@@ -1178,6 +1242,33 @@ def phase_harness_console() -> PhaseResult:
 
     r = client.post(f"/api/sessions/{sid}/rename", json={"title": "renamed"})
     phase.checks.append(Check("harness_session_rename", r.status_code == 200 and r.json().get("title") == "renamed"))
+
+    r = client.post(f"/api/sessions/{sid}/goal", json={"goal": "  sandbox goal  "})
+    phase.checks.append(Check(
+        "harness_session_goal_set",
+        r.status_code == 200 and r.json().get("goal") == "sandbox goal",
+    ))
+    r = client.get(f"/api/sessions/{sid}")
+    phase.checks.append(Check(
+        "harness_session_goal_persists",
+        r.status_code == 200 and r.json().get("goal") == "sandbox goal",
+    ))
+    r = client.post(
+        "/api/chat",
+        json={"message": "loop toward sandbox goal", "session_id": sid, "loop": True},
+    )
+    phase.checks.append(Check(
+        "harness_loop_turn_with_goal",
+        r.status_code == 200,
+        f"status={r.status_code}",
+    ))
+    r = client.post(f"/api/sessions/{sid}/goal", json={"goal": ""})
+    phase.checks.append(Check(
+        "harness_session_goal_clear",
+        r.status_code == 200 and r.json().get("goal") == "",
+    ))
+    r = client.post("/api/sessions/000000000000/goal", json={"goal": "nope"})
+    phase.checks.append(Check("harness_session_goal_unknown_404", r.status_code == 404))
 
     r = client.get("/api/sessions/000000000000")
     phase.checks.append(Check("harness_session_unknown_404", r.status_code == 404))
@@ -1199,6 +1290,22 @@ def phase_harness_console() -> PhaseResult:
         "harness_chat_fields", all(k in cd for k in ("session_id", "reply", "model", "usage", "tally")),
     ))
     phase.checks.append(Check("harness_chat_reply_matches_mock", cd.get("reply") == "mock harness reply"))
+
+    r = client.post("/api/chat/cancel")
+    phase.checks.append(Check(
+        "harness_chat_cancel_idempotent",
+        r.status_code == 200 and r.json().get("cancelled") is True,
+    ))
+
+    r = client.post("/api/chat", json={"message": "loop without goal", "session_id": sid, "loop": True})
+    loop_body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    loop_detail = loop_body.get("detail") if isinstance(loop_body, dict) else {}
+    loop_code = loop_detail.get("code") if isinstance(loop_detail, dict) else None
+    phase.checks.append(Check(
+        "harness_loop_requires_goal",
+        r.status_code == 400 and loop_code == "LOOP_REQUIRES_GOAL",
+        f"status={r.status_code} code={loop_code!r}",
+    ))
 
     log("  --- GitHub status / harness runs ---")
     r = client.get("/api/github/status")
@@ -1279,16 +1386,32 @@ def phase_harness_html() -> PhaseResult:
         ("soul", "/api/soul"),
         ("model", "/api/model"),
         ("chat", "/api/chat"),
+        ("chat_cancel", "/api/chat/cancel"),
         ("github_status", "/api/github/status"),
         ("harness_runs", "/api/harness/runs"),
+        ("tools", "/api/tools"),
+        ("skills", "/api/skills"),
+        ("web", "/api/web"),
+        ("web_fetch", "/api/web/fetch"),
+        ("memory", "/api/memory"),
+        ("memory_add", "/api/memory/add"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
         log(f"    [{status}] {name} -> {endpoint}")
         phase.checks.append(Check(f"harness_html_api_{name}", found))
 
+    phase.checks.append(Check(
+        "harness_html_api_session_goal",
+        "+ '/goal'" in html or "/goal', 'POST'" in html,
+    ))
+
     log("\n  --- Slash Commands ---")
-    for cmd in ("/session", "/soul", "/model", "/skills", "/github", "/harness", "/tokens", "/status"):
+    slash = (
+        "/session", "/soul", "/model", "/skills", "/tools", "/web", "/memory", "/github",
+        "/harness", "/tokens", "/status", "/goal", "/loop",
+    )
+    for cmd in slash:
         found = f"'{cmd}" in html or f'"{cmd}' in html or f"case '{cmd.lstrip('/')}" in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
         log(f"    [{status}] {cmd}")
@@ -1308,16 +1431,17 @@ def phase_harness_html() -> PhaseResult:
     log(f"    [{'PASS' if has_text_content else 'FAIL'}] renders via textContent")
     phase.checks.append(Check("harness_html_uses_text_content", has_text_content))
 
-    log("\n  --- No API-Key Gating (documented threat model) ---")
-    # Unlike terminal.html, harness.html has no authHeaders()/apiKeyInput --
-    # loopback-only bind + TrustedHostMiddleware is its whole boundary
-    # (harness/server.py's own docstring). Confirming the ABSENCE of an auth
-    # affordance here checks that this is the documented posture, not a
-    # forgotten gap: a stray Authorization-header helper appearing later
-    # would mean the threat-model doc and the UI have silently diverged.
-    no_auth_affordance = "authHeaders" not in html and "apiKeyInput" not in html
-    log(f"    [{'PASS' if no_auth_affordance else 'FAIL'}] no API-key affordance (matches loopback-only threat model)")
-    phase.checks.append(Check("harness_html_no_auth_affordance", no_auth_affordance))
+    log("\n  --- API-key field (Bearer-gated writes) ---")
+    # Guarded POSTs (/goal, /chat, /chat/cancel, /agent/*) require
+    # Authorization: Bearer. harness.html reads #apiKey via apiKeyInput
+    # inside api(); it must NOT reuse terminal.html's authHeaders() helper
+    # (that would mean the two consoles had silently coupled).
+    has_key_field = "apiKeyInput" in html and 'id="apiKey"' in html
+    log(f"    [{'PASS' if has_key_field else 'FAIL'}] apiKeyInput present for guarded POSTs")
+    phase.checks.append(Check("harness_html_has_api_key_field", has_key_field))
+    no_terminal_helper = "authHeaders" not in html
+    log(f"    [{'PASS' if no_terminal_helper else 'FAIL'}] no terminal.html authHeaders() helper")
+    phase.checks.append(Check("harness_html_no_terminal_auth_helper", no_terminal_helper))
 
     return phase
 

@@ -1,7 +1,10 @@
 # Governed Skills Registry — Design & Governance
 
 > Implemented in `agentic/registry.py`. This doc explains *why* it is shaped like
-> the soul layer and what guarantees it inherits.
+> the soul layer and what guarantees it inherits. The harness console **reads**
+> this file (`GET /api/registry`, `/skills all`) and never writes it.
+> `/skills` without `all` is a wiring diagram of what the console injects or
+> runs, not this store. See [`harness/README.md`](../../harness/README.md).
 
 ## Motivation
 Hermes/ClawHub show the value of a *named, versioned, reusable* skills catalog.

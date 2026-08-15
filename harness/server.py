@@ -38,9 +38,12 @@ import os
 import secrets
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
 import sys
+import threading
+import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
+from math import ceil
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -52,8 +55,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
+from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
+from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
@@ -68,6 +73,9 @@ from harness.schemas import (
     SoulToggleRequest,
 )
 from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError, TokenTally
+from harness.skills_view import list_wired_skills
+from harness.tools_view import list_wired_tools
+from harness.web_search import WebTool, WebToolError
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
@@ -83,12 +91,33 @@ _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
 _RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
+# /loop on a local 27b (qwen3.6:27b / Apple Silicon) must not replay the full
+# 20-turn window: each completion is large and Ollama reserves max_tokens up
+# front. Eight prior turns is enough to steer without blowing num_ctx.
+_LOOP_HISTORY_TURNS = 8
 _MAX_RUNS = 50
 _HTTP_CREATED = 201
 _HTTP_BAD_REQUEST = 400
 _HTTP_FORBIDDEN = 403
 _HTTP_NOT_FOUND = 404
+_HTTP_CONFLICT = 409
 _HTTP_TOO_MANY_REQUESTS = 429
+# Defaults for the dedicated /loop limiter. 60 chat/min is fine for a
+# mis-click; it is not fine for 27b auto-continues saturating Metal.
+_DEFAULT_LOOP_MAX_REQUESTS = 8
+_DEFAULT_LOOP_WINDOW_SEC = 300
+# A 27b turn can sit in Ollama for minutes. The in-flight lock must outlast
+# that or a retry looks like a concurrent loop.
+_LOOP_INFLIGHT_TTL_SEC = 900
+# Ollama reserves max_tokens up front. A loop turn that reuses the shipped
+# 3000-token chat budget on top of soul+skills+goal+history stalls at
+# "0% processing" on a 10-12k num_ctx 27b. 1024 is enough for a concise
+# coding turn and leaves room for the system prompt.
+_DEFAULT_LOOP_MAX_TOKENS = 1024
+# Character budgets for prior turns forwarded to the model. Turn-count caps
+# alone do not protect Metal: eight 3000-token replies already blow num_ctx.
+_LOOP_HISTORY_CHARS = 4000
+_CHAT_HISTORY_CHARS = 8000
 _HTTP_UNPROCESSABLE = 422
 _HTTP_BAD_GATEWAY = 502
 _HTTP_GATEWAY_TIMEOUT = 504
@@ -131,6 +160,10 @@ _CSRF_HEADER = "x-cyclaw-csrf"
 # same size Python's own docs use as the "good enough for a security token"
 # example -- comfortably beyond brute-force range for a per-process secret.
 _CSRF_TOKEN_BYTES = 32
+# OpenAI-chat history keys. Named so clip_history + /api/chat do not trip
+# WPS226 on the same two literals.
+_ROLE_KEY = "role"
+_CONTENT_KEY = "content"
 
 
 def _llm_settings() -> dict:
@@ -156,6 +189,79 @@ def _rate_limit_settings() -> dict:
         return {}
     api = parsed.get("api", {})
     return api.get("rate_limit", {}) if isinstance(api, dict) else {}
+
+
+def _loop_rate_limit_settings() -> dict:
+    """Optional ``api.harness_loop_rate_limit`` override; empty = code defaults.
+
+    Kept off the shipped config.yaml on purpose (INVARIANTS: do not churn the
+    shipped file for an out-of-band console knob). Operators who need to
+    retune the 8/300s 27b budget can add the block locally.
+    """
+    parsed = _get_config(str(_CONFIG_PATH))
+    if not isinstance(parsed, dict):
+        return {}
+    api = parsed.get("api", {})
+    if not isinstance(api, dict):
+        return {}
+    block = api.get("harness_loop_rate_limit")
+    return block if isinstance(block, dict) else {}
+
+
+def _loop_max_tokens() -> int:
+    """Optional ``api.harness_loop_rate_limit.max_tokens``; default 1024."""
+    raw = _loop_rate_limit_settings().get("max_tokens", _DEFAULT_LOOP_MAX_TOKENS)
+    try:
+        token_budget = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_LOOP_MAX_TOKENS
+    return token_budget if token_budget > 0 else _DEFAULT_LOOP_MAX_TOKENS
+
+
+def clip_history(messages: list[dict], max_chars: int) -> list[dict]:
+    """Keep the newest prior turns that fit ``max_chars``.
+
+    Oldest messages drop first. If the newest message alone is over budget,
+    its tail is kept so the model still sees the end of the last reply.
+    """
+    if max_chars <= 0:
+        return []
+    clipped: list[dict] = []
+    used = 0
+    for msg in reversed(messages):
+        if used >= max_chars:
+            break
+        text = str(msg.get(_CONTENT_KEY) or "")
+        room = max_chars - used
+        if len(text) > room:
+            text = text[-room:]
+        clipped.append({_ROLE_KEY: msg.get(_ROLE_KEY, "user"), _CONTENT_KEY: text})
+        used += len(text)
+    clipped.reverse()
+    return clipped
+
+
+class GenerationGate:
+    """At most one local-LLM generation at a time.
+
+    qwen3.6:27b on Apple Silicon is single-stream. A second concurrent chat
+    (two tabs, jammed Enter, /loop + a typed line) queues behind Metal and
+    looks like a hang. Non-blocking claim: the second caller gets 409
+    instead of waiting minutes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def claim(self) -> bool:
+        return self._lock.acquire(blocking=False)
+
+    def release(self) -> None:
+        if self._lock.locked():
+            try:
+                self._lock.release()
+            except RuntimeError:
+                return
 
 
 def _resolve_backend() -> ResolvedLocalBackend:
@@ -299,13 +405,19 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
+def create_app(
+    config: HarnessConfig | None = None,
+    chat_client: HarnessChatClient | None = None,
+    web_tool: WebTool | None = None,
+) -> FastAPI:
     """App factory — tests inject a tmp-home config and a MockTransport client."""
     cfg = config or HarnessConfig.load()
     store = SessionStore(cfg.sessions_dir)
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
+    web = web_tool or WebTool(cfg)
+    notes = MemoryNotes(cfg.memory_dir)
 
     # Per-instance, not module-level: create_app() is the harness's test
     # boundary (mirrors store/client/backend above) -- a module-level
@@ -316,6 +428,29 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         max_requests=rl_cfg.get("max_requests", 60),
         window_seconds=rl_cfg.get("window_seconds", 60),
     )
+    loop_rl_cfg = _loop_rate_limit_settings()
+    loop_rate_limiter = RateLimiter(
+        max_requests=int(loop_rl_cfg.get("max_requests", _DEFAULT_LOOP_MAX_REQUESTS) or _DEFAULT_LOOP_MAX_REQUESTS),
+        window_seconds=float(loop_rl_cfg.get("window_seconds", _DEFAULT_LOOP_WINDOW_SEC) or _DEFAULT_LOOP_WINDOW_SEC),
+    )
+    loop_inflight: dict[str, float] = {}
+    loop_inflight_lock = threading.Lock()
+    generation_gate = GenerationGate()
+
+    def _retry_after_http(limiter: RateLimiter, client_ip: str, code: str, label: str) -> HTTPException:
+        wait = max(1, ceil(limiter.retry_after_sec(client_ip)))
+        return HTTPException(
+            status_code=_HTTP_TOO_MANY_REQUESTS,
+            detail={
+                _CODE_KEY: code,
+                _MESSAGE_KEY: (
+                    f"{label} ({limiter.max_requests} req / "
+                    f"{int(limiter.window_seconds)}s); retry in {wait}s"
+                ),
+                _DETAILS_KEY: {"retry_after_sec": wait},
+            },
+            headers={"Retry-After": str(wait)},
+        )
 
     def _enforce_rate_limit(request: Request) -> None:
         """Per-IP throttle for the expensive routes, mirroring gate.py's _enforce_rate_limit.
@@ -338,15 +473,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         """
         client_ip = request.client.host if request.client else "unknown"
         if not rate_limiter.allow(client_ip):
-            raise HTTPException(
-                status_code=_HTTP_TOO_MANY_REQUESTS,
-                detail={
-                    _CODE_KEY: "RATE_LIMIT",
-                    _MESSAGE_KEY: f"Rate limit exceeded ({rate_limiter.max_requests} req / "
-                    f"{rate_limiter.window_seconds}s)",
-                    _DETAILS_KEY: {},
-                },
-            )
+            raise _retry_after_http(rate_limiter, client_ip, "RATE_LIMIT", "Rate limit exceeded")
 
     def _enforce_same_origin(request: Request) -> None:
         """Reject browser-initiated cross-site requests to a state-changing route.
@@ -486,6 +613,8 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         ) from exc
     console_html = console_source.replace(_CSRF_PLACEHOLDER, csrf_token)
     app.state.csrf_token = csrf_token
+    app.state.generation_gate = generation_gate
+    app.state.chat_client = client
 
     @app.get("/", response_class=HTMLResponse)
     def console() -> HTMLResponse:
@@ -516,6 +645,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             "provider": backend.provider,
             "base_url": backend.base_url,
             "soul_enabled": cfg.soul_enabled,
+            "memory_enabled": cfg.memory_enabled,
             "home": str(cfg.home),
             "repo_root": str(cfg.repo_root),
             "sessions": len(sessions),
@@ -532,6 +662,132 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     @app.get("/api/registry")
     def registry() -> dict:
         return full_registry()
+
+    @app.get("/api/tools")
+    def tools() -> dict:
+        """Wiring inventory for the /tools slash command. Read-only, open.
+
+        Same reason /api/registry is open: the console must populate the
+        diagram before an operator key is entered. ``wired`` is computed
+        against this app's live route table; MCP rows are AST-catalog only.
+        """
+        registered = frozenset(
+            getattr(route, "path", "") or "" for route in app.routes
+        )
+        return list_wired_tools(registered)
+
+    @app.get("/api/skills")
+    def skills() -> dict:
+        """Wiring inventory for the /skills slash command. Read-only, open.
+
+        Same reason /api/registry is open: the console must populate the
+        diagram before an operator key is entered. ``wired`` means the
+        harness actually injects (prompt) or runs (agent-check) the skill.
+        """
+        return list_wired_skills()
+
+    def _web_err(exc: WebToolError) -> HTTPException:
+        status = _HTTP_BAD_REQUEST
+        if exc.code in {"WEB_DISABLED", "WEB_ALLOWLIST_EMPTY"}:
+            status = _HTTP_CONFLICT
+        if exc.code in {"WEB_FETCH_FAILED", "WEB_DNS"}:
+            status = _HTTP_BAD_GATEWAY
+        # Code only — do not pass the exception object into the HTTP
+        # envelope (py/stack-trace-exposure).
+        code = exc.code
+        return HTTPException(
+            status_code=status,
+            detail={_CODE_KEY: code, _MESSAGE_KEY: code, _DETAILS_KEY: {}},
+        )
+
+    @app.get("/api/web")
+    def web_status() -> dict:
+        """Allowlist + enable flag. Open: hosts only, no page text."""
+        return web.status()
+
+    @app.post("/api/web", dependencies=guarded)
+    def web_toggle(req: SoulToggleRequest) -> dict:
+        return web.set_enabled(req.enabled)
+
+    @app.post("/api/web/allow", dependencies=guarded)
+    def web_allow(req: _harness_schemas.WebUrlRequest) -> dict:
+        try:
+            return web.allow(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from None
+
+    @app.post("/api/web/deny", dependencies=guarded)
+    def web_deny(req: _harness_schemas.WebUrlRequest) -> dict:
+        try:
+            return web.deny(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from None
+
+    @app.post("/api/web/fetch", dependencies=guarded)
+    def web_fetch(req: _harness_schemas.WebUrlRequest, request: Request) -> dict:
+        _enforce_rate_limit(request)
+        try:
+            return web.fetch(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from None
+
+    @app.post("/api/web/search", dependencies=guarded)
+    def web_search(req: _harness_schemas.WebSearchRequest, request: Request) -> dict:
+        _enforce_rate_limit(request)
+        try:
+            return web.search(req.query)
+        except WebToolError as exc:
+            raise _web_err(exc) from None
+
+    @app.post("/api/web/inject", dependencies=guarded)
+    def web_inject() -> dict:
+        try:
+            return web.inject()
+        except WebToolError as exc:
+            raise _web_err(exc) from None
+
+    @app.post("/api/web/forget", dependencies=guarded)
+    def web_forget() -> dict:
+        return web.forget()
+
+    def _memory_err(exc: MemoryNotesError) -> HTTPException:
+        return _err(_HTTP_BAD_REQUEST, exc)
+
+    def _memory_payload() -> dict:
+        parsed = _get_config(str(_CONFIG_PATH))
+        block = parsed if isinstance(parsed, dict) else {}
+        return notes.status(cfg.memory_enabled) | {"rag": rag_flags(block)}
+
+    @app.get("/api/memory")
+    def memory_status() -> dict:
+        """Harness-local /memory status. Open: notes are operator-local."""
+        return _memory_payload()
+
+    @app.post("/api/memory", dependencies=guarded)
+    def memory_toggle(req: SoulToggleRequest) -> dict:
+        cfg.memory_enabled = req.enabled
+        cfg.save()
+        return _memory_payload()
+
+    @app.post("/api/memory/add", dependencies=guarded)
+    def memory_add(req: _harness_schemas.MemoryNoteRequest) -> dict:
+        try:
+            added = notes.add(req.text)
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
+        return _memory_payload() | {"added": added}
+
+    @app.post("/api/memory/forget", dependencies=guarded)
+    def memory_forget(req: _harness_schemas.MemoryForgetRequest) -> dict:
+        try:
+            forgotten = notes.forget(req.id)
+        except MemoryNotesError as exc:
+            raise _memory_err(exc) from exc
+        return _memory_payload() | forgotten
+
+    @app.post("/api/memory/clear", dependencies=guarded)
+    def memory_clear() -> dict:
+        return _memory_payload() | notes.clear()
 
     # -- sessions ------------------------------------------------------
     @app.get("/api/sessions")
@@ -558,10 +814,10 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
         messages = [
-            {"role": msg.role, "content": msg.text, "ts": msg.ts}
+            {_ROLE_KEY: msg.role, _CONTENT_KEY: msg.text, "ts": msg.ts}
             for msg in session.messages
         ]
-        return session.summary() | {"messages": messages}
+        return session.summary() | {"messages": messages, "goal": session.goal}
 
     @app.post("/api/sessions/{session_id}/rename", dependencies=guarded)
     def rename_session(session_id: str, req: RenameRequest) -> dict:
@@ -571,6 +827,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             # A write that could not land is the server's fault, not a bad id.
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
+
+    @app.post("/api/sessions/{session_id}/goal", dependencies=guarded)
+    def session_goal(session_id: str, req: _harness_schemas.GoalRequest) -> dict:
+        """Set or clear the session-scoped /goal. Guarded: goal is operator data.
+
+        Empty string clears. The value is injected into the chat system prompt
+        as read-only session data; this route never reaches agentic/ or git.
+        """
+        try:
+            session = store.rename(session_id, goal=req.goal)
+        except SessionStoreError as exc:
+            status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
+            raise _err(status, exc) from exc
+        return session.summary() | {"goal": session.goal}
 
     # -- soul / model toggles (harness-local; soul.md itself untouched) --
     @app.get("/api/soul")
@@ -589,9 +859,95 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         cfg.save()
         return {_MODEL_KEY: _current_model()}
 
+    def _claim_loop_inflight(session_id: str) -> None:
+        now = time.time()
+        with loop_inflight_lock:
+            started = loop_inflight.get(session_id)
+            if started is not None and now - started < _LOOP_INFLIGHT_TTL_SEC:
+                raise _err(
+                    _HTTP_CONFLICT,
+                    AgenticError(
+                        "a loop turn is already in flight for this session",
+                        code="LOOP_IN_FLIGHT",
+                        details={"session_id": session_id},
+                    ),
+                )
+            loop_inflight[session_id] = now
+
+    def _release_loop_inflight(session_id: str) -> None:
+        with loop_inflight_lock:
+            loop_inflight.pop(session_id, None)
+
+    def _guard_loop_turn(req: ChatRequest, session, request: Request) -> None:
+        if not req.session_id:
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(
+                    "loop turns require an existing session",
+                    code="LOOP_REQUIRES_SESSION",
+                ),
+            )
+        if not (session.goal or "").strip():
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError("set a /goal before /loop", code="LOOP_REQUIRES_GOAL"),
+            )
+        client_ip = request.client.host if request.client else "unknown"
+        if not loop_rate_limiter.allow(client_ip):
+            raise _retry_after_http(
+                loop_rate_limiter, client_ip, "LOOP_RATE_LIMIT", "loop rate limit exceeded"
+            )
+        _claim_loop_inflight(session.session_id)
+
+    def _prior_chat_turns(session, turn_cap: int) -> list[dict]:
+        return [
+            {_ROLE_KEY: msg.role, _CONTENT_KEY: msg.text}
+            for msg in session.messages[-turn_cap:]
+            if msg.role in {"user", "assistant"}
+        ]
+
+    def _run_model_turn(req: ChatRequest, session):
+        system_prompt = compose_system_prompt(
+            soul_enabled=cfg.soul_enabled,
+            goal=session.goal,
+            web_context=web.context_text(),
+            memory_context=notes.context_text() if cfg.memory_enabled else None,
+        )
+        hist_n = _LOOP_HISTORY_TURNS if req.loop else _HISTORY_TURNS
+        hist_chars = _LOOP_HISTORY_CHARS if req.loop else _CHAT_HISTORY_CHARS
+        history = clip_history(_prior_chat_turns(session, hist_n), hist_chars)
+        history.append({_ROLE_KEY: "user", _CONTENT_KEY: req.message})
+        max_tokens = _loop_max_tokens() if req.loop else int(
+            _llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)
+        )
+        return client.chat(
+            system_prompt=system_prompt,
+            messages=history,
+            # req.model (a genuine per-request override) wins; otherwise
+            # fall back to the operator's persisted /model selection, not
+            # straight to the backend default -- omitting cfg.selected_model
+            # here meant /api/status and the session record could report a
+            # model the chat call never actually used.
+            model=req.model or _current_model(),
+            # _llm_settings() is lru-cached upstream, so the per-request
+            # inline reads cost a dict lookup, not a config re-parse
+            max_tokens=max_tokens,
+            temperature=float(_llm_settings().get("temperature", _DEFAULT_TEMPERATURE)),
+        )
+
     # -- chat ------------------------------------------------------------
     @app.post("/api/chat", dependencies=guarded)
-    def chat(req: ChatRequest) -> dict:
+    def chat(req: ChatRequest, request: Request) -> dict:
+        # Loop turns must not create a session: reject before store.get/create
+        # so a missing session_id cannot leave an empty orphan on disk.
+        if req.loop and not req.session_id:
+            raise _err(
+                _HTTP_BAD_REQUEST,
+                AgenticError(
+                    "loop turns require an existing session",
+                    code="LOOP_REQUIRES_SESSION",
+                ),
+            )
         try:
             if req.session_id:
                 session = store.get(req.session_id)
@@ -602,30 +958,29 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
 
-        system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled)
-        history = [
-            {"role": msg.role, "content": msg.text}
-            for msg in session.messages[-_HISTORY_TURNS:]
-            if msg.role in {"user", "assistant"}
-        ]
-        history.append({"role": "user", "content": req.message})
-        try:
-            reply = client.chat(
-                system_prompt=system_prompt,
-                messages=history,
-                # req.model (a genuine per-request override) wins; otherwise
-                # fall back to the operator's persisted /model selection, not
-                # straight to the backend default -- omitting cfg.selected_model
-                # here meant /api/status and the session record could report a
-                # model the chat call never actually used.
-                model=req.model or _current_model(),
-                # _llm_settings() is lru-cached upstream, so the per-request
-                # inline reads cost a dict lookup, not a config re-parse
-                max_tokens=int(_llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)),
-                temperature=float(_llm_settings().get("temperature", _DEFAULT_TEMPERATURE)),
+        if req.loop:
+            _guard_loop_turn(req, session, request)
+
+        if not generation_gate.claim():
+            # _guard_loop_turn already claimed loop_inflight; drop it here so
+            # a 409 CHAT_BUSY cannot pin the session for _LOOP_INFLIGHT_TTL_SEC.
+            if req.loop:
+                _release_loop_inflight(session.session_id)
+            raise _err(
+                _HTTP_CONFLICT,
+                AgenticError(
+                    "a local model turn is already running",
+                    code="CHAT_BUSY",
+                ),
             )
+        try:
+            reply = _run_model_turn(req, session)
         except HarnessLLMError as exc:
             raise _err(_HTTP_BAD_GATEWAY, exc) from exc
+        finally:
+            generation_gate.release()
+            if req.loop:
+                _release_loop_inflight(session.session_id)
 
         # Guarded because the model call has ALREADY succeeded by this point --
         # an unguarded persist failure here threw away a completed (and possibly
@@ -653,6 +1008,19 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             },
             "tally": updated.summary()["tokens"],
         }
+
+    @app.post("/api/chat/cancel", dependencies=guarded)
+    def cancel_chat() -> dict:
+        """Drop the in-flight Ollama POST so /loop stop frees Metal.
+
+        Closing the shared httpx client aborts the blocked socket; chat()
+        then raises HarnessLLMError and the generation gate releases in
+        finally. Idempotent when nothing is running.
+        """
+        abort = getattr(client, "abort_in_flight", None)
+        if callable(abort):
+            abort()
+        return {"cancelled": True}
 
     # -- GitHub (agentic) ------------------------------------------------
     # Rate-limited: unlike every other GET here, this one spawns a Python

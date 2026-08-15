@@ -37,6 +37,7 @@ test files are auto-discovered and need neither.
 |---|---|
 | `conftest.py` | Shared fixtures; mocks every external dependency. `test_config` is a **deepcopy** on purpose — a shallow copy leaks mutations across tests (`test_conftest_fixtures` guards this). |
 | `fixtures/github_coding_repo/` | Canned repo used by the agentic real-repo-loop tests. |
+| `test_harness*.py` | Out-of-band coding console: `/goal`, `/loop`, `/skills`, `/tools`, `/memory`, allowlist-only `/web`, auth, HTML contract, I6. |
 | `ci_rag_smoke.py` | Deliberately NOT `test_*`-named so pytest ignores it; runs as a separate CI step against a real index. Renaming it double-runs it and drags ChromaDB into the unit lane. |
 | `TEST_SUITE_AUDIT.md`, `VERIFICATION_REPORT_3.12.md` | Point-in-time audit reports, kept beside the suite they audited. |
 | `apipsTest.ps1`, `cmd2index.bat` | Windows-side manual helpers; not collected by pytest. |

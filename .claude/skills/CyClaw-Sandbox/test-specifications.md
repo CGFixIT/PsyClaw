@@ -406,6 +406,10 @@ boundary). Every test below is exercisable through a real FastAPI
 |------|--------|----------|----------|
 | HC-1 | GET | `/api/status` | 200, `{version, model, provider, base_url, soul_enabled, home, repo_root, sessions, total_tokens, layout}` |
 | HC-2 | GET | `/api/registry` | 200, `{skills: [...], tools: [...], connectors: [...]}` |
+| HC-2b | GET | `/api/tools` | 200, `{tools: [...], wired, total, diagram}`; every `kind=harness` row has `wired=true` against live routes; `hybrid_search` is `kind=mcp` / `invoked=false`; `diagram` starts with `HARNESS TOOLS` |
+| HC-2c | GET | `/api/skills` | 200, `{skills: [...], wired, total, diagram}`; `ponytail`/`karpathy-guidelines` are `role=prompt` and wired; `invariant-guard`/`config-guard` are `role=check` and wired; repo catalog rows are unwired; `diagram` starts with `HARNESS SKILLS` |
+| HC-2d | GET | `/api/web` | 200, `{enabled: false, allowlist: [], ...}` shipped default; POST `/api/web/fetch` is 409 `WEB_DISABLED` until `/web on` and a non-empty allowlist |
+| HC-2e | GET | `/api/memory` | 200, `{enabled: false, count: 0, rag.writable_from_harness: false}`; POST `/api/memory/add` pins a note; POST `/api/memory` `{enabled}` toggles prompt injection only |
 
 ### Session Lifecycle
 
@@ -415,6 +419,7 @@ boundary). Every test below is exercisable through a real FastAPI
 | HC-4 | GET | `/api/sessions` | - | 200, `{sessions: [...]}` |
 | HC-5 | GET | `/api/sessions/{id}` | - | 200, session summary + `messages: [{role, content, ts}]`; unknown id -> 404 |
 | HC-6 | POST | `/api/sessions/{id}/rename` | `{title}` | 200, updated summary; unknown id -> 404 |
+| HC-6b | POST | `/api/sessions/{id}/goal` | `{goal}` | 200, summary + trimmed `goal`; empty string clears; unknown id -> 404; listing (`GET /api/sessions`) omits `goal` |
 
 ### Soul / Model Toggles
 
@@ -435,6 +440,9 @@ either endpoint; these gate only the harness's own system-prompt composition.
 | HC-11 | POST | `/api/chat` | unknown `session_id` | 404 |
 | HC-12 | POST | `/api/chat` | no live chat backend | 502, `HarnessLLMError` envelope (`detail.code`/`detail.message`) |
 | HC-13 | POST | `/api/chat` | past `api.rate_limit.max_requests` (config.yaml; default 60/60s) | 429 -- same `utils.ratelimit.RateLimiter` mechanism as `gate.py`'s `/query` |
+| HC-13b | POST | `/api/chat` | `{loop: true}` with no session goal | 400, `detail.code == LOOP_REQUIRES_GOAL` -- `/loop` is chat-only and never starts `/api/agent/*` |
+| HC-13c | POST | `/api/chat/cancel` | - | 200, `{cancelled: true}` (idempotent when nothing is in flight; `/loop stop`) |
+| HC-13d | POST | `/api/chat` | `{loop: true}` with a session goal set | 200 chat-only (or documented 502 with no backend) -- never 4xx `LOOP_REQUIRES_GOAL`, never starts `/api/agent/*` |
 
 ### GitHub Status / Harness Runs
 

@@ -19,6 +19,8 @@ from harness.config import HarnessConfig, default_home
 from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_governed_skills, list_mcp_tools, list_repo_skills
+from harness.skills_view import list_wired_skills, render_skills_diagram
+from harness.tools_view import list_wired_tools, render_tools_diagram
 from harness import server as harness_server
 from harness.server import create_app
 from harness.sessions import SessionStore, SessionStoreError, TokenTally
@@ -101,6 +103,10 @@ def test_config_roundtrip_persists_toggles(cfg):
     reloaded = HarnessConfig.load(cfg.home)
     assert reloaded.soul_enabled is False
     assert reloaded.selected_model == "llama3.1:8b"
+    assert reloaded.memory_enabled is False
+    cfg.memory_enabled = True
+    cfg.save()
+    assert HarnessConfig.load(cfg.home).memory_enabled is True
 
 
 # -- prompts ---------------------------------------------------------------------
@@ -135,6 +141,31 @@ def test_system_prompt_adopts_soul_file_without_scanning(tmp_path):
     assert payload in prompt, "soul content no longer adopted verbatim -- if you added a scan, update the docs"
 
 
+def test_system_prompt_includes_session_goal():
+    prompt = compose_system_prompt(soul_enabled=False, goal="land /goal and /loop")
+    assert "Operator goal" in prompt
+    assert "land /goal and /loop" in prompt
+    assert "not a write authorization" in prompt
+    bare = compose_system_prompt(soul_enabled=False)
+    assert "Operator goal" not in bare
+
+
+def test_system_prompt_includes_web_extract():
+    prompt = compose_system_prompt(soul_enabled=False, web_context="Source: https://docs.python.org/\n\nHello")
+    assert "Allowlisted web extract" in prompt
+    source = next(line for line in prompt.splitlines() if line.startswith("Source: "))
+    assert source == "Source: https://docs.python.org/"
+    assert "untrusted page content" in prompt
+    assert "Allowlisted web extract" not in compose_system_prompt(soul_enabled=False)
+
+
+
+def test_system_prompt_omits_blank_goal():
+    assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal="   ")
+    assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal=None)
+
+
+
 # -- registry --------------------------------------------------------------------
 
 def test_repo_skills_include_ponytail_and_karpathy():
@@ -152,6 +183,131 @@ def test_full_registry_shape():
     reg = full_registry()
     assert set(reg) == {"skills", "tools", "connectors"}
     assert any(c["id"] == "github" for c in reg["connectors"])
+
+
+def test_list_wired_tools_marks_registered_harness_routes():
+    paths = frozenset({
+        "/api/chat",
+        "/api/sessions/{session_id}/goal",
+        "/api/tools",
+    })
+    payload = list_wired_tools(paths)
+    by_name = {row["name"]: row for row in payload["tools"]}
+    assert by_name["chat"]["wired"] is True
+    assert by_name["goal"]["wired"] is True
+    assert by_name["tools"]["wired"] is True
+    assert by_name["github"]["wired"] is False
+    assert by_name["hybrid_search"]["kind"] == "mcp"
+    assert by_name["hybrid_search"]["invoked"] is False
+    assert by_name["hybrid_search"]["wired"] is True
+    assert payload["wired"] >= 4
+    assert "HARNESS TOOLS" in payload["diagram"]
+    assert "[goal]" in payload["diagram"]
+
+
+def test_render_tools_diagram_single_tool_is_a_box():
+    row = {
+        "name": "goal",
+        "slash": "/goal",
+        "method": "POST",
+        "path": "/api/sessions/{session_id}/goal",
+        "description": "session-scoped operator intent",
+        "kind": "harness",
+        "invoked": True,
+        "wired": True,
+    }
+    diagram = render_tools_diagram([row], wired=1, total=1)
+    assert diagram.startswith("┌")
+    assert "POST /api/sessions/{session_id}/goal" in diagram
+    assert "session-scoped operator intent" in diagram
+    assert diagram.endswith("┘")
+
+
+def test_tools_endpoint_lists_only_live_routes(client):
+    data = client.get("/api/tools").json()
+    assert data["wired"] == data["total"]
+    names = {row["name"] for row in data["tools"]}
+    assert {"chat", "goal", "loop", "cancel", "tools", "web", "memory", "hybrid_search"} <= names
+    for row in data["tools"]:
+        if row["kind"] == "harness":
+            assert row["wired"] is True
+            assert row["invoked"] is True
+        if row["name"] == "hybrid_search":
+            assert row["kind"] == "mcp"
+            assert row["invoked"] is False
+    assert data["diagram"].startswith("HARNESS TOOLS")
+    assert "console" in data["diagram"]
+    assert "[goal]" in data["diagram"]
+    assert "mcp (AST catalog" in data["diagram"]
+    assert "/api/agent/" in data["diagram"]
+
+
+def test_tools_endpoint_is_open(client):
+    # /tools must work before an operator key is entered, same as /api/registry.
+    bare = TestClient(client.app, base_url="http://127.0.0.1")
+    resp = bare.get("/api/tools")
+    assert resp.status_code == 200
+    assert resp.json()["diagram"]
+
+
+def test_list_wired_skills_marks_prompt_and_check_roles():
+    payload = list_wired_skills()
+    by_name = {row["name"]: row for row in payload["skills"]}
+    assert by_name["ponytail"]["role"] == "prompt"
+    assert by_name["ponytail"]["wired"] is True
+    assert by_name["ponytail"]["invoked"] is True
+    assert by_name["karpathy-guidelines"]["role"] == "prompt"
+    assert by_name["invariant-guard"]["role"] == "check"
+    assert by_name["invariant-guard"]["wired"] is True
+    assert by_name["config-guard"]["role"] == "check"
+    assert by_name["python-coding-agent"]["role"] == "repo"
+    assert by_name["python-coding-agent"]["wired"] is False
+    assert by_name["python-coding-agent"]["invoked"] is False
+    assert payload["wired"] >= 4
+    assert "HARNESS SKILLS" in payload["diagram"]
+    assert "[ponytail]" in payload["diagram"]
+    assert "python-coding-agent" not in payload["diagram"]
+
+
+def test_render_skills_diagram_single_skill_is_a_box():
+    row = {
+        "name": "ponytail",
+        "role": "prompt",
+        "path": ".claude/skills/ponytail/SKILL.md",
+        "description": "lazy-senior-dev rules",
+        "source": "repo",
+        "invoked": True,
+        "wired": True,
+    }
+    diagram = render_skills_diagram([row], wired=1, total=1)
+    assert diagram.startswith("┌")
+    assert "ponytail" in diagram
+    assert "lazy-senior-dev rules" in diagram
+    assert diagram.endswith("┘")
+
+
+def test_skills_endpoint_lists_live_wiring(client):
+    data = client.get("/api/skills").json()
+    names = {row["name"] for row in data["skills"]}
+    assert {"ponytail", "karpathy-guidelines", "invariant-guard", "config-guard"} <= names
+    for row in data["skills"]:
+        if row["role"] in {"prompt", "check"}:
+            assert row["wired"] is True
+            assert row["invoked"] is True
+        if row["role"] == "repo":
+            assert row["wired"] is False
+    assert data["diagram"].startswith("HARNESS SKILLS")
+    assert "prompt (injected" in data["diagram"]
+    assert "agent-check" in data["diagram"]
+
+
+def test_skills_endpoint_is_open(client):
+    bare = TestClient(client.app, base_url="http://127.0.0.1")
+    resp = bare.get("/api/skills")
+    assert resp.status_code == 200
+    assert resp.json()["diagram"]
+
+
 
 
 # -- governed skills registry view --------------------------------------------------
@@ -340,6 +496,7 @@ def test_chat_client_disables_ambient_proxy():
 def test_status_endpoint(client, cfg):
     data = client.get("/api/status").json()
     assert data["soul_enabled"] is True
+    assert data["memory_enabled"] is False
     assert data["home"] == str(cfg.home)
     assert "skills" in data["layout"]
 
@@ -476,6 +633,8 @@ def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
     resp = limited_client.post("/api/chat", json={"message": "three"})
     assert resp.status_code == 429
     assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+    assert resp.json()["detail"]["details"]["retry_after_sec"] >= 1
+    assert resp.headers.get("retry-after")
 
 
 def test_rate_limit_scoped_to_expensive_routes_only(cfg, monkeypatch):
@@ -564,6 +723,300 @@ def test_sessions_listing_and_rename(client):
     sid = sessions[0]["session_id"]
     renamed = client.post(f"/api/sessions/{sid}/rename", json={"title": "work"})
     assert renamed.json()["title"] == "work"
+
+
+def test_session_goal_set_clear_and_survives_reload(client, cfg):
+    created = client.post("/api/sessions", json={"title": "goal-session"}).json()
+    sid = created["session_id"]
+    assert "goal" not in created  # listing/create summaries stay title-only
+
+    set_resp = client.post(f"/api/sessions/{sid}/goal", json={"goal": "  ship slash commands  "})
+    assert set_resp.status_code == 200
+    assert set_resp.json()["goal"] == "ship slash commands"
+
+    fetched = client.get(f"/api/sessions/{sid}").json()
+    assert fetched["goal"] == "ship slash commands"
+
+    payload = json.loads((cfg.home / "sessions" / f"{sid}.json").read_text(encoding="utf-8"))
+    assert payload["goal"] == "ship slash commands"
+
+    cleared = client.post(f"/api/sessions/{sid}/goal", json={"goal": ""})
+    assert cleared.json()["goal"] == ""
+    assert client.get(f"/api/sessions/{sid}").json()["goal"] == ""
+
+
+def test_session_listing_does_not_leak_goal(client):
+    created = client.post("/api/sessions", json={"title": "secret-goal"}).json()
+    sid = created["session_id"]
+    secret = "SECRET-GOAL do not leak this via the open listing"
+    client.post(f"/api/sessions/{sid}/goal", json={"goal": secret})
+    listing = client.get("/api/sessions").json()
+    blob = json.dumps(listing)
+    assert secret not in blob
+    assert "SECRET-GOAL" not in blob
+    assert "goal" not in listing["sessions"][0]
+
+
+def test_chat_injects_session_goal_into_system_prompt(cfg, monkeypatch):
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    test_client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = test_client.post("/api/sessions", json={"title": "g"}).json()["session_id"]
+    test_client.post(f"/api/sessions/{sid}/goal", json={"goal": "finish the loop feature"})
+    resp = test_client.post("/api/chat", json={"message": "status", "session_id": sid})
+    assert resp.status_code == 200
+    system = captured["body"]["messages"][0]["content"]
+    assert "finish the loop feature" in system
+    assert "Operator goal" in system
+
+
+def test_legacy_session_file_without_goal_still_loads(cfg):
+    store = SessionStore(cfg.sessions_dir)
+    session = store.create(model="qwen3.6:27b", title="legacy")
+    path = cfg.sessions_dir / f"{session.session_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("goal", None)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    reloaded = store.get(session.session_id)
+    assert reloaded.goal == ""
+
+
+def _goal_session(client) -> str:
+    sid = client.post("/api/sessions", json={"title": "loop"}).json()["session_id"]
+    client.post(f"/api/sessions/{sid}/goal", json={"goal": "finish the loop feature"})
+    return sid
+
+
+def test_loop_turn_requires_goal(client):
+    sid = client.post("/api/sessions", json={"title": "nogoal"}).json()["session_id"]
+    resp = client.post("/api/chat", json={"message": "go", "session_id": sid, "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_GOAL"
+
+
+def test_loop_turn_requires_session_id(client):
+    resp = client.post("/api/chat", json={"message": "go", "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_SESSION"
+
+
+def test_loop_without_session_id_does_not_create_a_session(client, cfg):
+    before = set(cfg.sessions_dir.glob("*.json"))
+    resp = client.post("/api/chat", json={"message": "go", "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_SESSION"
+    assert set(cfg.sessions_dir.glob("*.json")) == before
+
+
+def test_loop_chat_busy_releases_inflight_lock(client):
+    sid = _goal_session(client)
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post(
+            "/api/chat",
+            json={"message": "go", "session_id": sid, "loop": True},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "CHAT_BUSY"
+    finally:
+        client.app.state.generation_gate.release()
+    retry = client.post(
+        "/api/chat",
+        json={"message": "go", "session_id": sid, "loop": True},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["reply"] == "ok"
+
+
+def test_plain_chat_still_works_without_a_goal(client):
+    resp = client.post("/api/chat", json={"message": "hello"})
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "ok"
+
+
+def test_loop_rate_limit_is_independent_of_plain_chat(cfg, monkeypatch):
+    monkeypatch.setattr(
+        harness_server, "_loop_rate_limit_settings",
+        lambda: {"max_requests": 2, "window_seconds": 60},
+    )
+    app = create_app(cfg, _loopback_chat())
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post("/api/chat", json={"message": "t1", "session_id": sid, "loop": True}).status_code == 200
+    assert c.post("/api/chat", json={"message": "t2", "session_id": sid, "loop": True}).status_code == 200
+    blocked = c.post("/api/chat", json={"message": "t3", "session_id": sid, "loop": True})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "LOOP_RATE_LIMIT"
+    assert blocked.headers.get("retry-after")
+    # Ordinary chatbot turns must not be starved by the loop budget.
+    plain = c.post("/api/chat", json={"message": "still chatting", "session_id": sid})
+    assert plain.status_code == 200
+
+
+def test_loop_turn_uses_shorter_history(cfg):
+    captured: list[list] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    for i in range(12):
+        assert c.post("/api/chat", json={"message": f"plain-{i}", "session_id": sid}).status_code == 200
+    captured.clear()
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    roles = [m["role"] for m in captured[0]]
+    assert roles[0] == "system"
+    assert roles[-1] == "user"
+    assert len(captured[0]) <= 1 + 8 + 1
+    assert "finish the loop feature" in captured[0][0]["content"]
+
+
+def test_clip_history_keeps_newest_tail():
+    from harness.server import clip_history
+
+    msgs = [
+        {"role": "user", "content": "AAAA"},
+        {"role": "assistant", "content": "BBBB"},
+        {"role": "user", "content": "CCCC"},
+    ]
+    clipped = clip_history(msgs, 6)
+    assert clipped[-1]["content"] == "CCCC"
+    assert "".join(m["content"] for m in clipped) == "BBCCCC" or "".join(
+        m["content"] for m in clipped
+    ).endswith("CCCC")
+    assert sum(len(m["content"]) for m in clipped) <= 6
+
+
+def test_generation_gate_is_non_blocking():
+    from harness.server import GenerationGate
+
+    gate = GenerationGate()
+    assert gate.claim() is True
+    assert gate.claim() is False
+    gate.release()
+    assert gate.claim() is True
+    gate.release()
+
+
+def test_chat_busy_when_generation_already_held(client):
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post("/api/chat", json={"message": "hello"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "CHAT_BUSY"
+    finally:
+        client.app.state.generation_gate.release()
+
+
+def test_loop_turn_uses_smaller_max_tokens(cfg):
+    captured: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["max_tokens"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post("/api/chat", json={"message": "plain", "session_id": sid}).status_code == 200
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    assert captured[0] == 3000
+    assert captured[1] == 1024
+
+
+def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):
+    monkeypatch.setattr(harness_server, "_LOOP_HISTORY_CHARS", 20)
+    captured: list[list] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post(
+        "/api/chat",
+        json={"message": "x" * 80, "session_id": sid},
+    ).status_code == 200
+    captured.clear()
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    prior = captured[0][1:-1]  # drop system + current user
+    assert sum(len(m["content"]) for m in prior) <= 20
+
+
+def test_chat_cancel_is_idempotent(client):
+    resp = client.post("/api/chat/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is True
+    # A follow-up chat must still work after the client was recycled.
+    assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
+
+
+def test_chat_cancel_calls_abort_in_flight(cfg):
+    chat = _loopback_chat()
+    called = {"n": 0}
+    original = chat.abort_in_flight
+
+    def spy() -> None:
+        called["n"] += 1
+        original()
+
+    chat.abort_in_flight = spy  # type: ignore[method-assign]
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    assert c.post("/api/chat/cancel").status_code == 200
+    assert called["n"] == 1
 
 
 def test_chat_unknown_session_404(client):

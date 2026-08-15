@@ -157,7 +157,16 @@ def test_console_call_extraction_is_not_empty():
     # literal-only extractor would silently drop
     assert "/api/sessions/{}" in paths
     assert "/api/sessions/{}/rename" in paths
+    assert "/api/sessions/{}/goal" in paths
+    assert "/api/tools" in paths
+    assert "/api/skills" in paths
     assert ("/api/chat", "POST") in calls
+    assert ("/api/sessions/{}/goal", "POST") in calls
+    assert ("/api/tools", "GET") in calls
+    assert ("/api/skills", "GET") in calls
+    assert ("/api/web", "GET") in calls
+    assert ("/api/web/fetch", "POST") in calls
+    assert ("/api/web/search", "POST") in calls
 
 
 @pytest.mark.parametrize("path,method", sorted(_console_calls()))
@@ -238,3 +247,106 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "Object.assign({}, stagedRun, { reason: why, confirm: true })" in commands
     assert "confirm failed — staged run kept" in commands
     assert "pendingAgentRun = stagedRun" in commands
+
+
+def test_console_documents_goal_and_loop_slash_commands():
+    from harness.schemas import _MAX_GOAL_LEN
+
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/goal [text]|clear'" in html
+    assert "['/loop [n]|stop|auto'" in html
+    assert "case 'goal':" in html
+    assert "case 'loop':" in html
+    assert f"const MAX_GOAL_CHARS = {_MAX_GOAL_LEN};" in html
+    assert "const MAX_LOOP_TURNS = 5;" in html
+    assert "const DEFAULT_LOOP_TURNS = 3;" in html
+    assert "const LOOP_COOLDOWN_MS = 2000;" in html
+    assert "const MAX_LOOP_COMPLETION_TOKENS = 12000;" in html
+    assert "body.loop = true" in html
+    assert "LOOP_RATE_LIMIT" in html
+    assert "CHAT_BUSY" in html
+    assert "function requestLoopStop(" in html
+    assert "api('/api/chat/cancel', 'POST')" in html
+    assert "new AbortController()" in html
+    assert "aborting the in-flight turn" in html
+    assert "function paintGoalLoop()" in html
+
+
+def test_console_documents_tools_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/tools [all|<name>]'" in html
+    assert "case 'tools':" in html
+    assert "api('/api/tools')" in html
+    assert "function renderToolsDiagram(" in html
+    assert "innerHTML" not in html
+    start = html.index("case 'tools':")
+    end = html.index("case 'github':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "renderToolsDiagram(" in body
+    assert "unknown tool:" in body
+
+
+def test_console_documents_skills_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/skills [all|<name>]'" in html
+    assert "case 'skills':" in html
+    assert "api('/api/skills')" in html
+    assert "function renderSkillsDiagram(" in html
+    start = html.index("case 'skills':")
+    end = html.index("case 'tools':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "renderSkillsDiagram(" in body
+    assert "unknown skill:" in body
+
+
+def test_console_documents_web_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/web [on|off|allow|fetch|search]'" in html
+    assert "case 'web':" in html
+    assert "api('/api/web')" in html
+    assert "function renderWebStatus(" in html
+    start = html.index("case 'web':")
+    end = html.index("case 'github':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "api('/api/web/fetch'" in body
+    assert "api('/api/web/search'" in body
+    assert "api('/api/web/allow'" in body
+    assert "api('/api/web/inject'" in body
+
+
+def test_console_documents_memory_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/memory [on|off|add|forget|clear]'" in html
+    assert "case 'memory':" in html
+    assert "api('/api/memory')" in html
+    assert "id=\"sMemory\"" in html
+    start = html.index("case 'memory':")
+    end = html.index("case 'model':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "api('/api/memory/add'" in body
+    assert "api('/api/memory/forget'" in body
+    assert "api('/api/memory/clear'" in body
+    assert "writable_from_harness" in body
+
+
+
+
+
+
+def test_loop_command_never_starts_a_real_repo_run():
+    """ /loop is chat-only. Auto-invoking /api/agent/* would bypass the human
+    /agent confirm + reason gate. """
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("case 'loop':")
+    end = html.index("case 'tokens':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "GOAL_DONE" in html
+    assert "function runLoopTurns()" in html
+    assert "function replyHasGoalDone(" in html
+    assert "never starts a real-repo run" in body
+

@@ -107,6 +107,9 @@ class Session:
     model: str
     messages: list[Message] = field(default_factory=list)
     tally: TokenTally = field(default_factory=TokenTally)
+    # Operator-set session goal (/goal). Data only — never in summary()
+    # because GET /api/sessions is unauthenticated.
+    goal: str = ""
 
     def summary(self) -> dict:
         # Deliberately carries NO message content. summary() is what
@@ -161,6 +164,8 @@ def _session_path(sessions_dir: Path, session_id: str) -> Path:
 def _session_from_dict(parsed: dict) -> Session:
     tally = parsed.get("tally", {})
     messages = [Message(**msg) for msg in parsed.get(_MSGS_KEY, [])]
+    raw_goal = parsed.get("goal", "")
+    goal = raw_goal.strip() if isinstance(raw_goal, str) else ""
     return Session(
         session_id=parsed[_SID_KEY],
         title=parsed.get("title", ""),
@@ -172,6 +177,7 @@ def _session_from_dict(parsed: dict) -> Session:
             completion_tokens=int(tally.get("completion_tokens", 0)),
             exchanges=int(tally.get("exchanges", 0)),
         ),
+        goal=goal,
     )
 
 
@@ -244,10 +250,22 @@ class SessionStore:
             self._write(session)
             return session
 
-    def rename(self, session_id: str, title: str) -> Session:
+    def rename(
+        self,
+        session_id: str,
+        title: str | None = None,
+        *,
+        goal: str | None = None,
+    ) -> Session:
+        # Title and goal share this locked mutate+write so SessionStore stays
+        # under WPS214 (7 methods). goal=None leaves the field alone; goal=""
+        # clears it. Existing rename(id, "new title") callers are unchanged.
         with _LOCK:
             session = self.get(session_id)
-            session.title = title.strip() or session.title
+            if title is not None:
+                session.title = title.strip() or session.title
+            if goal is not None:
+                session.goal = goal.strip() if isinstance(goal, str) else ""
             self._write(session)
             return session
 
@@ -259,6 +277,7 @@ class SessionStore:
             "model": session.model,
             _MSGS_KEY: [asdict(msg) for msg in session.messages],
             "tally": asdict(session.tally),
+            "goal": session.goal,
         }
         # TypeError/ValueError cover json.dump refusing the payload (a
         # non-serializable field, a circular reference). Today every field above

@@ -40,9 +40,22 @@ GUARDED = [
     # characters of the last message, so the "title-only" claim did not hold.
     ("get", "/api/sessions/does-not-exist", None),
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
+    ("post", "/api/sessions/does-not-exist/goal", {"goal": "ship the harness slash commands"}),
     ("post", "/api/soul", {"enabled": True}),
+    ("post", "/api/memory", {"enabled": False}),
+    ("post", "/api/memory/add", {"text": "prefer ruff"}),
+    ("post", "/api/memory/forget", {"id": "deadbeef"}),
+    ("post", "/api/memory/clear", None),
     ("post", "/api/model", {"model": "qwen3.6:27b"}),
+    ("post", "/api/web", {"enabled": False}),
+    ("post", "/api/web/allow", {"url": "https://docs.python.org/"}),
+    ("post", "/api/web/deny", {"url": "https://docs.python.org/"}),
+    ("post", "/api/web/fetch", {"url": "https://docs.python.org/"}),
+    ("post", "/api/web/search", {"query": "cyclaw"}),
+    ("post", "/api/web/inject", None),
+    ("post", "/api/web/forget", None),
     ("post", "/api/chat", {"message": "hi"}),
+    ("post", "/api/chat/cancel", None),
     ("get", "/api/github/status", None),
     # The agentic coding routes. The decision route is guarded like the rest --
     # the limiter runs first in the chain precisely so it bounds key guessing,
@@ -67,7 +80,7 @@ GUARDED = [
 # hardcodes, spawns nothing, and the console needs it to populate help before a
 # key has been entered.
 OPEN = [
-    "/", "/api/status", "/api/registry", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/memory", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
 ]
 
 
@@ -398,6 +411,7 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
     assert summary["session_id"] == "c11f67fd89ea"
     assert summary["title"] == "Quarterly plan"
     assert summary["message_count"] == 2
+    assert "goal" not in summary
 
     # summarize_json is the path the listing route really takes; it must agree.
     from_json = Session.summarize_json(json.loads(json.dumps({

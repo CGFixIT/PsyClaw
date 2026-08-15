@@ -44,7 +44,8 @@ jobs:
         include:
           - language: python
             build-mode: none
-          # Add other language entries only if your repo contains them.
+          - language: actions
+            build-mode: none
     timeout-minutes: 30
 
     steps:

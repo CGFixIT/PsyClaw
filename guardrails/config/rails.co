@@ -115,9 +115,14 @@ define flow check grounding
 
 # Block soul/config leakage in the OUTPUT (e.g., the model echoing its system
 # framing). Reuses the injection action on the bot message as a cheap floor.
+# Polarity matches every other flow in this file: the action returns True when
+# ALLOWED. `$leaked` was the previous name and inverted the English so the
+# next editor who "fixed" `if not $leaked` would silently disable the rail
+# (or refuse every clean answer). Offline /query does NOT run this flow —
+# check_output is grounding-only until Phase 4b (docs/NeMo/phase4b_soul_leak.md).
 define flow check soul leak
-  $leaked = execute check_injection(text=$bot_message)
-  if not $leaked
+  $allowed = execute check_injection(text=$bot_message)
+  if not $allowed
     bot refuse prompt extraction
     stop
 

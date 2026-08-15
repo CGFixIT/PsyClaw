@@ -250,6 +250,20 @@ class RateLimiter:
             self._persist(client_ip, now)
             return True
 
+    def retry_after_sec(self, client_ip: str) -> float:
+        """Seconds until the oldest in-window hit expires. 0 if under the limit.
+
+        Read-only peek: does not record a hit and does not persist. Used by
+        the harness (and callers that want a Retry-After) after allow()
+        returned False.
+        """
+        now = self._clock()
+        with self._lock:
+            recent = [t for t in self._hits[client_ip] if now - t < self.window_seconds]
+            if len(recent) < self.max_requests:
+                return 0.0
+            return max(0.0, self.window_seconds - (now - min(recent)))
+
     def tracked_ips(self) -> int:
         """Number of IPs currently held in the map (for eviction tests/metrics)."""
         with self._lock:

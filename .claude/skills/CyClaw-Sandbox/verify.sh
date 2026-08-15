@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # CyClaw sandbox runtime verification — proves the entire main branch runs
-# under a clean Python 3.12 runtime. Six stages, fail-fast on required ones.
+# under a clean Python 3.12 runtime. Nine labeled stages, fail-fast on required
+# ones. Labels are historical and NOT sequential in source order (1, 2, 3, 5,
+# 8, 4, 7, 9, 6) — do not renumber; CI logs cite them. See SKILL.md
+# "Operator map" for what each stage proves vs does not prove.
 # Run from the repo root: bash .claude/skills/CyClaw-Sandbox/verify.sh
 set -uo pipefail
 
@@ -287,7 +290,7 @@ if [ "$HUP" -ne 1 ]; then
   fail "harness console server startup" "server did not come up — see /tmp/cyclaw-verify-harness-server.log"
 else
   if "$VPY" "$SKILL_DIR/harness_emulation.py" "$HARNESS_BASE" > /tmp/cyclaw-verify-harness-emulation.txt 2>&1; then
-    pass "harness.html API emulation" "all endpoint flows matched (status, registry, sessions, soul, model, chat, github, runs)"
+    pass "harness.html API emulation" "all endpoint flows matched (status, registry, sessions, soul, model, chat, /goal, /loop, cancel, github, runs)"
   else
     fail "harness.html API emulation" "see /tmp/cyclaw-verify-harness-emulation.txt"
     cat /tmp/cyclaw-verify-harness-emulation.txt

@@ -24,6 +24,13 @@ _MAX_BRANCH_LEN = 88  # longest allowlisted prefix + '/' + topic (1+79)
 _MAX_CHECK_PROFILES = 8
 _MAX_READ_FILES = 8
 _MAX_READ_FILE_LEN = 1024
+# Keep in sync with harness.prompts._MAX_GOAL_CHARS. Session data only.
+_MAX_GOAL_LEN = 2000
+_MAX_WEB_URL_LEN = 500
+_MAX_WEB_QUERY_LEN = 200
+# Keep in sync with harness.memory_notes._MAX_NOTE_CHARS.
+_MAX_NOTE_LEN = 500
+_MAX_NOTE_ID_LEN = 32
 # The agentic planner caps its generated body at 6,000 characters, then adds a
 # fixed truncation marker. Keep enough room for that legitimate reviewed output
 # without turning the browser request into an unbounded prompt transport.
@@ -69,6 +76,11 @@ class ChatRequest(_ForbidModel):
     message: str = Field(min_length=1, max_length=_MAX_MESSAGE_LEN)
     session_id: str | None = None
     model: str | None = None
+    # True only for console /loop turns. Triggers the tighter loop limiter,
+    # the in-flight lock, a shorter clipped history window, a 1024-token
+    # output budget, and the "goal required" check. Default False so ordinary
+    # chatbot turns are unchanged aside from the shared single-generation lock.
+    loop: bool = False
 
 
 class SessionCreateRequest(_ForbidModel):
@@ -81,6 +93,36 @@ class RenameRequest(_ForbidModel):
 
 class SoulToggleRequest(_ForbidModel):
     enabled: bool
+
+
+class MemoryNoteRequest(_ForbidModel):
+    """One operator-authored /memory note. Scanned before persist."""
+
+    text: str = Field(min_length=1, max_length=_MAX_NOTE_LEN)
+
+
+class MemoryForgetRequest(_ForbidModel):
+    id: str = Field(min_length=1, max_length=_MAX_NOTE_ID_LEN)
+
+
+class WebUrlRequest(_ForbidModel):
+    """Add, remove, or fetch one allowlisted URL."""
+
+    url: str = Field(min_length=1, max_length=_MAX_WEB_URL_LEN)
+
+
+class WebSearchRequest(_ForbidModel):
+    query: str = Field(min_length=1, max_length=_MAX_WEB_QUERY_LEN)
+
+
+class GoalRequest(_ForbidModel):
+    """Set or clear the session-scoped operator goal.
+
+    Empty string clears. This is session data injected into the system prompt;
+    it is not a write authorization and never reaches the real-repo path.
+    """
+
+    goal: str = Field(default="", max_length=_MAX_GOAL_LEN)
 
 
 class ModelSelectRequest(_ForbidModel):

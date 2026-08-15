@@ -76,7 +76,7 @@ def test_harness_does_not_import_sibling_out_of_band():
     # directly either -- GitHub operations go through utils.ops_runner's
     # subprocess shim into agentic.cli, exactly like /ops/agentic, per
     # harness/server.py's own module docstring.
-    forbidden = {"agentic", "sync", "guardrails"}
+    forbidden = {"agentic", "sync", "guardrails", "memory"}
     for py in (REPO_ROOT / "harness").rglob("*.py"):
         imported = _imports(py.read_text(encoding="utf-8"))
         leaked = forbidden & imported

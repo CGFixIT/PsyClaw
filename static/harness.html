@@ -143,6 +143,10 @@
   .statusbar .k { color: var(--text-muted); }
   .statusbar .v { color: var(--text-primary); }
   .statusbar .spacer { flex: 1; }
+  #sGoal {
+    max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; display: inline-block; vertical-align: bottom;
+  }
   .toggle { cursor: pointer; background: none; border: none; font: inherit; color: inherit; padding: 0; }
   .toggle .v.on { color: var(--accent-green); }
   .toggle .v.off { color: var(--accent-red); }
@@ -187,9 +191,14 @@
       <div class="statusbar">
         <span><span class="k">provider </span><span class="v" id="sProvider">…</span></span>
         <span><span class="k">session </span><span class="v" id="sSession">none</span></span>
-        <button class="toggle" id="sSoul" title="toggle soul/memory in the system prompt">
+        <button class="toggle" id="sSoul" title="toggle soul.md in the system prompt">
           <span class="k">soul </span><span class="v" id="sSoulV">…</span>
         </button>
+        <button class="toggle" id="sMemory" title="toggle operator /memory notes in the system prompt">
+          <span class="k">mem </span><span class="v" id="sMemoryV">…</span>
+        </button>
+        <span title="session /goal"><span class="k">goal </span><span class="v" id="sGoal">none</span></span>
+        <span title="human-gated /loop"><span class="k">loop </span><span class="v" id="sLoop">off</span></span>
         <span class="spacer"></span>
         <span><span class="k">key </span><input class="apikey" id="apiKey" type="password" autocomplete="off"
           spellcheck="false" placeholder="CYCLAW_API_KEY" title="operator API key; held in memory only"></span>
@@ -212,6 +221,8 @@ const MAX_AGENT_PLAN_BYTES = 25000;
    utils.repo_paths.canonical_repo_relative_path (keep in sync via console contract tests). */
 const MAX_AGENT_READ_FILES = 8;
 const MAX_AGENT_READ_FILE_LEN = 1024;
+/* Session goal + human-gated loop. Caps match harness.schemas._MAX_GOAL_LEN
+   and the locked /loop budget (default 3, hard max 5). */
 function isSafeRepoRelativePath(raw) {
   if (typeof raw !== 'string' || !raw || raw.length > MAX_AGENT_READ_FILE_LEN || raw.indexOf('\0') !== -1) return false;
   const normalized = raw.replace(/\\/g, '/');
@@ -235,11 +246,45 @@ const CSRF_TOKEN = csrfMeta ? csrfMeta.content : '';
 
 let currentSession = null;   // session_id string or null
 let soulEnabled = true;
+let memoryEnabled = false;
 /* A staged (not yet sent) agent run. The server's own gate needs an explicit
    reason plus confirm, so the console stages first and shows the operator
    exactly what they are about to authorize; /agent confirm is what sends it.
    Cleared on send, on /agent cancel, and on /clear. */
 let pendingAgentRun = null;
+let sessionGoal = '';
+let loopAuto = false;
+const MAX_GOAL_CHARS = 2000;
+const MAX_LOOP_TURNS = 5;
+const DEFAULT_LOOP_TURNS = 3;
+/* Local 27b (qwen3.6:27b on Apple Silicon) needs a breath between auto
+   turns so /loop stop can land and Metal is not hammered. */
+const LOOP_COOLDOWN_MS = 2000;
+const MAX_LOOP_COMPLETION_TOKENS = 12000;
+const MAX_LOOP_FAILURES = 2;
+const LOOP_RETRY_CAP_SEC = 30;
+/* Active human-gated /loop. Never starts a real-repo run. Cleared on
+   /loop stop, /clear, session switch, budget exhaust, or GOAL_DONE. */
+let loopState = null;
+/* AbortController for the in-flight POST /api/chat. /loop stop aborts
+   the browser wait AND tells the server to drop the Ollama socket. */
+let inflightChat = null;
+
+function paintGoalLoop() {
+  const g = $('sGoal');
+  if (g) {
+    g.textContent = sessionGoal ? sessionGoal : 'none';
+    g.title = sessionGoal || 'no session goal';
+  }
+  const l = $('sLoop');
+  if (!l) return;
+  if (!loopState) {
+    l.textContent = loopAuto ? 'auto' : 'off';
+    return;
+  }
+  const done = loopState.total - loopState.remaining;
+  l.textContent = (loopState.auto ? 'auto ' : '') + done + '/' + loopState.total;
+}
 
 /* ── stream rendering ── */
 function addMsg(kind, who, body, meta) {
@@ -273,6 +318,120 @@ function table(rows, headers) {
   return t;
 }
 
+function renderToolsDiagram(tools, wired, total) {
+  if (!tools || !tools.length) return 'HARNESS TOOLS — none';
+  if (tools.length === 1) {
+    const row = tools[0];
+    const invoked = row.invoked ? 'yes' : 'no (catalog only)';
+    const wiredMark = row.wired ? 'yes' : 'no';
+    const inner = [
+      ' name        ' + row.name,
+      ' slash       ' + row.slash,
+      ' route       ' + row.method + ' ' + row.path,
+      ' kind        ' + row.kind,
+      ' invoked     ' + invoked,
+      ' wired       ' + wiredMark,
+      '',
+      ' ' + row.description,
+    ];
+    let width = 0;
+    inner.forEach(line => { if (line.length > width) width = line.length; });
+    const edge = '─'.repeat(width + 1);
+    const title = ' /' + row.name + ' ';
+    const head = title.length < edge.length
+      ? '┌' + title + edge.slice(title.length) + '┐'
+      : '┌' + edge + '┐';
+    const body = inner.map(line => '│' + line.padEnd(width, ' ') + ' │');
+    return [head].concat(body).concat(['└' + edge + '┘']).join('\n');
+  }
+  const lines = ['HARNESS TOOLS — ' + wired + ' wired / ' + total + ' listed', ''];
+  const harness = tools.filter(t => t.kind === 'harness');
+  const mcp = tools.filter(t => t.kind === 'mcp');
+  const treeLines = (row, last, indent) => {
+    const branch = last ? '└─' : '├─';
+    const mark = row.wired ? '●' : '○';
+    const child = last ? '  ' : '│ ';
+    const slash = (row.slash || '').padEnd(16, ' ');
+    return [
+      indent + branch + '[' + row.name + '] ' + mark + '  ' + row.method + ' ' + row.path,
+      indent + child + ' ' + slash + ' ' + row.description,
+    ];
+  };
+  if (harness.length) {
+    lines.push('console');
+    harness.forEach((row, index) => {
+      const last = index === harness.length - 1 && !mcp.length;
+      treeLines(row, last, '').forEach(line => lines.push(line));
+    });
+  }
+  if (mcp.length) {
+    lines.push('└─ mcp (AST catalog; this console does not invoke these)');
+    mcp.forEach((row, index) => {
+      treeLines(row, index === mcp.length - 1, '   ').forEach(line => lines.push(line));
+    });
+  }
+  return lines.join('\n');
+}
+
+function renderSkillsDiagram(skills, wired, total) {
+  if (!skills || !skills.length) return 'HARNESS SKILLS — none';
+  if (skills.length === 1) {
+    const row = skills[0];
+    const invoked = row.invoked ? 'yes' : 'no (catalog only)';
+    const wiredMark = row.wired ? 'yes' : 'no';
+    const inner = [
+      ' name        ' + row.name,
+      ' role        ' + row.role,
+      ' path        ' + row.path,
+      ' source      ' + row.source,
+      ' invoked     ' + invoked,
+      ' wired       ' + wiredMark,
+      '',
+      ' ' + row.description,
+    ];
+    let width = 0;
+    inner.forEach(line => { if (line.length > width) width = line.length; });
+    const edge = '─'.repeat(width + 1);
+    const title = ' /' + row.name + ' ';
+    const head = title.length < edge.length
+      ? '┌' + title + edge.slice(title.length) + '┐'
+      : '┌' + edge + '┐';
+    const body = inner.map(line => '│' + line.padEnd(width, ' ') + ' │');
+    return [head].concat(body).concat(['└' + edge + '┘']).join('\n');
+  }
+  const lines = ['HARNESS SKILLS — ' + wired + ' wired / ' + total + ' listed', ''];
+  const groups = [
+    ['prompt', 'prompt (injected into every chat turn)'],
+    ['check', 'agent-check (named /agent checks profiles)'],
+    ['repo', 'repo catalog (present; this console does not invoke these)'],
+    ['governed', 'governed registry (read-only; mutations stay behind agentic CLI)'],
+  ];
+  groups.forEach(pair => {
+    const rows = skills.filter(s => s.role === pair[0]);
+    if (!rows.length) return;
+    lines.push(pair[1]);
+    rows.forEach((row, index) => {
+      const last = index === rows.length - 1;
+      const branch = last ? '└─' : '├─';
+      const mark = row.wired ? '●' : '○';
+      const child = last ? '  ' : '│ ';
+      lines.push(branch + '[' + row.name + '] ' + mark + '  ' + row.path);
+      lines.push(child + ' ' + (row.description || ''));
+    });
+  });
+  return lines.join('\n');
+}
+
+function renderWebStatus(data) {
+  const rows = [
+    ['enabled', data.enabled ? 'yes' : 'no (fail-closed)'],
+    ['allowlist', (data.allowlist && data.allowlist.length) ? data.allowlist.join('\n') : '(empty — /web allow <url>)'],
+    ['injected', data.injected ? 'yes' : 'no'],
+    ['last extract', data.has_last ? 'yes — /web inject to put it in chat' : 'none'],
+  ];
+  return table(rows, ['field', 'value']);
+}
+
 /* ── API ── */
 /* The Authorization header is attached HERE, in the helper body, never at a call
    site. tests/test_harness_console_contract.py hand-parses this file: it locates
@@ -285,6 +444,11 @@ function table(rows, headers) {
    avoid writing the helper's name followed by an open paren. */
 async function api(path, method, body) {
   const opts = { method: method || 'GET', headers: {} };
+  /* Attach the in-flight chat AbortController here (body only) so the
+     contract parser that hand-reads call sites stays valid. */
+  if (inflightChat && path === '/api/chat' && (method || 'GET') === 'POST') {
+    opts.signal = inflightChat.signal;
+  }
   const key = apiKeyInput ? apiKeyInput.value.trim() : '';
   /* Sent on every request, not just the guarded ones: the open read routes
      ignore it, and branching per-path here would drift from the server's guard
@@ -304,7 +468,12 @@ async function api(path, method, body) {
   try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
   if (!resp.ok) {
     const d = data && data.detail;
-    throw new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+    const err = new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+    err.code = d && d.code ? d.code : '';
+    const headerWait = parseInt(resp.headers.get('Retry-After') || '0', 10);
+    const bodyWait = d && d.details && d.details.retry_after_sec;
+    err.retryAfter = headerWait || (typeof bodyWait === 'number' ? bodyWait : 0);
+    throw err;
   }
   return data;
 }
@@ -319,7 +488,9 @@ async function refreshStatus() {
     $('sHome').textContent = s.home;
     $('sHome').title = 'harness home: ' + s.home + '  ·  repo: ' + s.repo_root;
     soulEnabled = s.soul_enabled;
+    if (typeof s.memory_enabled === 'boolean') memoryEnabled = s.memory_enabled;
     paintSoul();
+    paintMemory();
     $('hDot').style.background = 'var(--accent-green)';
   } catch (e) {
     $('hDot').style.background = 'var(--accent-red)';
@@ -329,6 +500,12 @@ function paintSoul() {
   const v = $('sSoulV');
   v.textContent = soulEnabled ? 'on' : 'off';
   v.className = 'v ' + (soulEnabled ? 'on' : 'off');
+}
+function paintMemory() {
+  const v = $('sMemoryV');
+  if (!v) return;
+  v.textContent = memoryEnabled ? 'on' : 'off';
+  v.className = 'v ' + (memoryEnabled ? 'on' : 'off');
 }
 
 /* ── sessions pane ── */
@@ -384,10 +561,14 @@ async function refreshRegistry() {
 const COMMANDS = [
   ['/help', 'list commands'],
   ['/session new|list|use|rename', 'manage chat sessions'],
-  ['/soul on|off|status', 'memory/soul in system prompt'],
+  ['/soul on|off|status', 'soul.md in system prompt (not /memory)'],
+  ['/memory [on|off|add|forget|clear]', 'operator notes in prompt (off by default)'],
+  ['/goal [text]|clear', 'set, show, or clear the session goal'],
+  ['/loop [n]|stop|auto', 'human-gated chat turns toward the goal'],
   ['/model [use <name>]', 'show or select the model'],
-  ['/skills', 'skill registry'],
-  ['/tools', 'tool registry'],
+  ['/skills [all|<name>]', 'wired harness skills as a diagram'],
+  ['/tools [all|<name>]', 'wired harness tools as a diagram'],
+  ['/web [on|off|allow|fetch|search]', 'allowlist-only web fetch (off by default)'],
   ['/connectors', 'connector catalog'],
   ['/github', 'agentic GitHub status'],
   ['/agent run|plan|read|checks|confirm|cancel', 'stage and start a real-repo coding run'],
@@ -525,12 +706,18 @@ async function runSlash(line) {
         if (sub === 'new') {
           const s = await api('/api/sessions', 'POST', { title: rest.slice(1).join(' ') });
           currentSession = s.session_id;
+          sessionGoal = '';
+          loopState = null;
+          paintGoalLoop();
           sys('session created: ' + s.session_id + ' — ' + s.title);
         } else if (sub === 'use') {
           const s = await api('/api/sessions/' + encodeURIComponent(rest[1] || ''));
           currentSession = s.session_id;
           sys('switched to session ' + s.session_id + ' — ' + s.title +
               ' (' + s.message_count + ' messages, ' + s.tokens.total + ' tokens)');
+          sessionGoal = typeof s.goal === 'string' ? s.goal : '';
+          loopState = null;
+          paintGoalLoop();
           s.messages.slice(-10).forEach(m => {
             if (m.role === 'user') user(m.content); else if (m.role === 'assistant') agent(m.content);
           });
@@ -558,11 +745,52 @@ async function runSlash(line) {
         if (arg === 'on' || arg === 'off') {
           const r = await api('/api/soul', 'POST', { enabled: arg === 'on' });
           soulEnabled = r.enabled; paintSoul();
-          sys('soul/memory ' + (r.enabled ? 'enabled' : 'disabled') +
+          sys('soul ' + (r.enabled ? 'enabled' : 'disabled') +
               ' (system prompt only — soul.md itself is governed and untouched)');
         } else {
           const r = await api('/api/soul');
-          sys('soul/memory is ' + (r.enabled ? 'ON' : 'OFF'));
+          sys('soul is ' + (r.enabled ? 'ON' : 'OFF'));
+        }
+        break;
+      }
+
+      case 'memory': {
+        const sub = (rest[0] || '').toLowerCase();
+        if (sub === 'on' || sub === 'off') {
+          const r = await api('/api/memory', 'POST', { enabled: sub === 'on' });
+          memoryEnabled = !!r.enabled; paintMemory();
+          sys('memory ' + (r.enabled ? 'ON' : 'OFF') +
+              ' — notes stay in ~/.CyClaw/memory; RAG memory/ is ' +
+              ((r.rag && r.rag.enabled) ? 'on' : 'off') +
+              ' (read-only; this command cannot flip it)');
+        } else if (sub === 'add') {
+          const text = rest.slice(1).join(' ').trim();
+          if (!text) { sys('usage: /memory add <note>'); break; }
+          const r = await api('/api/memory/add', 'POST', { text: text });
+          memoryEnabled = !!r.enabled; paintMemory();
+          sys(table([['id', r.added && r.added.id], ['count', String(r.count)],
+                     ['enabled', r.enabled ? 'on' : 'off']]));
+        } else if (sub === 'forget') {
+          const nid = rest[1] || '';
+          if (!nid) { sys('usage: /memory forget <id>'); break; }
+          const r = await api('/api/memory/forget', 'POST', { id: nid });
+          sys('forgot ' + (r.forgotten || nid) + ' (' + String(r.count) + ' left)');
+        } else if (sub === 'clear') {
+          const r = await api('/api/memory/clear', 'POST');
+          sys('memory notes cleared (' + String(r.count) + ')');
+        } else {
+          const r = await api('/api/memory');
+          memoryEnabled = !!r.enabled; paintMemory();
+          const rag = r.rag || {};
+          sys(table([
+            ['harness /memory', r.enabled ? 'ON (injected)' : 'OFF (stored, not injected)'],
+            ['notes', String(r.count) + ' / ' + String(r.max_notes)],
+            ['RAG memory.enabled', rag.enabled ? 'on' : 'off'],
+            ['RAG writable here', rag.writable_from_harness ? 'yes' : 'no'],
+          ]));
+          if (r.notes && r.notes.length) {
+            sys(table(r.notes.map(n => [n.id, n.text]), ['id', 'note']));
+          }
         }
         break;
       }
@@ -579,14 +807,134 @@ async function runSlash(line) {
         break;
       }
 
-      case 'skills': case 'tools': case 'connectors': case 'registry': {
+      case 'connectors': case 'registry': {
         const reg = await api('/api/registry');
-        if (cmd === 'skills' || cmd === 'registry')
+        if (cmd === 'registry')
           sys(table(reg.skills.map(s => [s.name, s.source]), ['skill', 'source']));
-        if (cmd === 'tools' || cmd === 'registry')
+        if (cmd === 'registry')
           sys(table(reg.tools.map(t => [t.name, t.description]), ['tool', 'description']));
         if (cmd === 'connectors' || cmd === 'registry')
           sys(table(reg.connectors.map(c => [c.name, c.kind, c.auth]), ['connector', 'kind', 'auth']));
+        break;
+      }
+
+      case 'skills': {
+        if (arg === 'help') {
+          sys(table([
+            ['/skills', 'diagram of harness skills that are actually wired'],
+            ['/skills all', 'include repo / governed catalog'],
+            ['/skills <name>', 'one-skill box diagram'],
+          ], ['command', 'action']));
+          break;
+        }
+        const inventory = await api('/api/skills');
+        const listed = inventory.skills || [];
+        let rows = listed;
+        if (arg && arg !== 'all') {
+          const needle = arg.replace(/^\//, '');
+          rows = listed.filter(s => s.name === needle || s.name === arg);
+          if (!rows.length) {
+            sys('unknown skill: ' + arg + ' — /skills to list wired names');
+            break;
+          }
+        } else if (arg !== 'all') {
+          rows = listed.filter(s => s.wired);
+        }
+        sys(renderSkillsDiagram(rows, inventory.wired, inventory.total),
+            inventory.wired + ' wired / ' + inventory.total + ' listed');
+        break;
+      }
+
+      case 'tools': {
+        if (arg === 'help') {
+          sys(table([
+            ['/tools', 'diagram of harness tools that are actually wired'],
+            ['/tools all', 'include unwired / catalog rows'],
+            ['/tools <name>', 'one-tool box diagram'],
+          ], ['command', 'action']));
+          break;
+        }
+        const inventory = await api('/api/tools');
+        const listed = inventory.tools || [];
+        let rows = listed;
+        if (arg && arg !== 'all') {
+          const needle = arg.replace(/^\//, '');
+          rows = listed.filter(t => t.name === needle || t.name === arg ||
+            (t.slash && t.slash.replace(/^\//, '').split(' ')[0] === needle));
+          if (!rows.length) {
+            sys('unknown tool: ' + arg + ' — /tools to list wired names');
+            break;
+          }
+        } else if (arg !== 'all') {
+          rows = listed.filter(t => t.wired);
+        }
+        sys(renderToolsDiagram(rows, inventory.wired, inventory.total),
+            inventory.wired + ' wired / ' + inventory.total + ' listed');
+        break;
+      }
+
+      case 'web': {
+        const sub = rest[0] || 'status';
+        if (sub === 'help') {
+          sys(table([
+            ['/web', 'status: enabled + allowlist (no page text)'],
+            ['/web on|off', 'enable or disable fetches (persisted)'],
+            ['/web allow <url>', 'add a host or URL-prefix (no wildcards)'],
+            ['/web deny <url>', 'remove one allowlist entry'],
+            ['/web fetch <url>', 'GET one allowlisted URL (text only)'],
+            ['/web search <query>', 'scan allowlisted pages; no search engine'],
+            ['/web inject', 'put last extract in the next chat prompt'],
+            ['/web forget', 'clear injected extract'],
+          ], ['command', 'action']));
+          break;
+        }
+        if (sub === 'on' || sub === 'off') {
+          sys(renderWebStatus(await api('/api/web', 'POST', { enabled: sub === 'on' })));
+          break;
+        }
+        if (sub === 'allow') {
+          const url = rest.slice(1).join(' ').trim();
+          if (!url) { sys('usage: /web allow <https://host/path>'); break; }
+          sys(renderWebStatus(await api('/api/web/allow', 'POST', { url: url })));
+          break;
+        }
+        if (sub === 'deny') {
+          const url = rest.slice(1).join(' ').trim();
+          if (!url) { sys('usage: /web deny <https://host/path>'); break; }
+          sys(renderWebStatus(await api('/api/web/deny', 'POST', { url: url })));
+          break;
+        }
+        if (sub === 'fetch') {
+          const url = rest.slice(1).join(' ').trim();
+          if (!url) { sys('usage: /web fetch <https://host/path>'); break; }
+          const page = await api('/api/web/fetch', 'POST', { url: url });
+          sys((page.text || '').slice(0, 2000), (page.url || url) + ' · ' + (page.chars || 0) + ' chars');
+          break;
+        }
+        if (sub === 'search') {
+          const q = rest.slice(1).join(' ').trim();
+          if (!q) { sys('usage: /web search <query>'); break; }
+          const found = await api('/api/web/search', 'POST', { query: q });
+          const rows = (found.hits || []).flatMap(h =>
+            (h.snippets || []).map(s => [h.url, s]));
+          if (!rows.length) {
+            sys('no hits on allowlisted pages for: ' + q);
+          } else {
+            sys(table(rows, ['url', 'snippet']));
+          }
+          break;
+        }
+        if (sub === 'inject') {
+          const r = await api('/api/web/inject', 'POST');
+          sys('last extract will be in the next chat prompt (' + (r.chars || 0) + ' chars)');
+          break;
+        }
+        if (sub === 'forget') {
+          await api('/api/web/forget', 'POST');
+          sys('cleared injected web extract');
+          break;
+        }
+        sys(renderWebStatus(await api('/api/web')));
         break;
       }
 
@@ -754,6 +1102,90 @@ async function runSlash(line) {
         break;
       }
 
+      case 'goal': {
+        if (!arg) {
+          if (!currentSession) { sys('no active session — no goal'); break; }
+          const shown = await api('/api/sessions/' + encodeURIComponent(currentSession));
+          sessionGoal = typeof shown.goal === 'string' ? shown.goal : '';
+          paintGoalLoop();
+          sys(sessionGoal ? ('current goal:\n' + sessionGoal) : 'no goal set');
+          break;
+        }
+        if (arg === 'clear') {
+          if (!currentSession) { sys('no active session — nothing to clear'); break; }
+          const cleared = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: '' });
+          sessionGoal = cleared.goal || '';
+          paintGoalLoop();
+          sys('goal cleared');
+          break;
+        }
+        if (arg.length > MAX_GOAL_CHARS) {
+          sys('goal is too long; keep it under ' + MAX_GOAL_CHARS + ' characters');
+          break;
+        }
+        if (!currentSession) {
+          const created = await api('/api/sessions', 'POST', { title: arg.slice(0, 40) });
+          currentSession = created.session_id;
+          $('sSession').textContent = currentSession;
+        }
+        const set = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: arg });
+        sessionGoal = set.goal || '';
+        paintGoalLoop();
+        sys('goal set:\n' + sessionGoal);
+        await refreshSessions();
+        break;
+      }
+
+      case 'loop': {
+        const sub = rest[0] || '';
+        if (sub === 'stop') {
+          requestLoopStop('loop stopped');
+          break;
+        }
+        if (sub === 'auto') {
+          loopAuto = !loopAuto;
+          if (loopState) loopState.auto = loopAuto;
+          paintGoalLoop();
+          sys('loop auto-continue is ' + (loopAuto
+            ? 'ON (continues until GOAL_DONE, stall, budget, or rate limit; still chat-only)'
+            : 'OFF (one turn, then wait)'));
+          break;
+        }
+        if (loopState && loopState.running) {
+          sys('a loop turn is already in flight — /loop stop to abort after it returns');
+          break;
+        }
+        if (!sessionGoal && currentSession) {
+          const loaded = await api('/api/sessions/' + encodeURIComponent(currentSession));
+          sessionGoal = typeof loaded.goal === 'string' ? loaded.goal : '';
+          paintGoalLoop();
+        }
+        if (!sessionGoal) { sys('set a goal first: /goal <what you want done>'); break; }
+        if (sub) {
+          const parsed = parseInt(sub, 10);
+          if (!/^[1-9]\d*$/.test(sub) || parsed < 1) {
+            sys('usage: /loop [n] | /loop stop | /loop auto');
+            break;
+          }
+          const n = Math.min(parsed, MAX_LOOP_TURNS);
+          loopState = {
+            remaining: n, total: n, auto: loopAuto, stop: false,
+            running: false, failures: 0, lastReply: '', completionTokens: 0,
+          };
+          sys('loop ' + n + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
+        } else if (!loopState || loopState.remaining <= 0) {
+          loopState = {
+            remaining: DEFAULT_LOOP_TURNS, total: DEFAULT_LOOP_TURNS,
+            auto: loopAuto, stop: false, running: false, failures: 0,
+            lastReply: '', completionTokens: 0,
+          };
+          sys('loop ' + DEFAULT_LOOP_TURNS + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
+        }
+        paintGoalLoop();
+        await runLoopTurns();
+        break;
+      }
+
       case 'tokens': {
         if (!currentSession) { sys('no active session'); break; }
         const s = await api('/api/sessions/' + encodeURIComponent(currentSession));
@@ -767,8 +1199,12 @@ async function runSlash(line) {
       case 'status': {
         const s = await api('/api/status');
         sys(table([['version', s.version], ['model', s.model || '(unset)'], ['provider', s.provider],
-                   ['soul', s.soul_enabled ? 'on' : 'off'], ['sessions', String(s.sessions)],
-                   ['total tokens', String(s.total_tokens)], ['home', s.home]]));
+                   ['soul', s.soul_enabled ? 'on' : 'off'],
+                   ['memory', s.memory_enabled ? 'on' : 'off'],
+                   ['sessions', String(s.sessions)],
+                   ['total tokens', String(s.total_tokens)], ['home', s.home],
+                   ['goal', sessionGoal || '(none)'],
+                   ['loop', loopState ? ((loopState.auto ? 'auto ' : '') + (loopState.total - loopState.remaining) + '/' + loopState.total) : (loopAuto ? 'auto' : 'off')]]));
         break;
       }
 
@@ -778,6 +1214,8 @@ async function runSlash(line) {
            wiped, so leaving it armed would let a later /agent confirm
            authorize a run the operator can no longer see */
         pendingAgentRun = null;
+        loopState = null;
+        paintGoalLoop();
         break;
 
       default:
@@ -789,20 +1227,140 @@ async function runSlash(line) {
 }
 
 /* ── chat ── */
-async function sendChat(text) {
+function replyHasGoalDone(text) {
+  if (typeof text !== 'string' || !text) return false;
+  return text.split(/\r?\n/).some(function (line) { return line.trim() === 'GOAL_DONE'; });
+}
+
+function sleepMs(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+function stopLoop(reason) {
+  if (loopState) loopState.stop = true;
+  loopState = null;
+  paintGoalLoop();
+  if (reason) sys(reason);
+}
+
+async function runLoopTurns() {
+  if (!loopState || loopState.running) return;
+  loopState.running = true;
+  paintGoalLoop();
+  try {
+    while (loopState && !loopState.stop && loopState.remaining > 0) {
+      const turn = loopState.total - loopState.remaining + 1;
+      const framed = 'Continue toward the session goal. Be concise (local 27b). If the goal is fully satisfied, end with GOAL_DONE on its own line. Stay in this chat; do not request a real-repo write.';
+      const reply = await sendChat(framed, true);
+      if (!loopState || loopState.stop) {
+        stopLoop(loopState && loopState.stop ? 'loop stop honored' : '');
+        return;
+      }
+      if (reply === null) {
+        loopState.failures += 1;
+        if (loopState.failures >= MAX_LOOP_FAILURES) {
+          stopLoop('loop aborted — ' + MAX_LOOP_FAILURES + ' consecutive chat failures');
+          return;
+        }
+        sys('loop turn failed (' + loopState.failures + '/' + MAX_LOOP_FAILURES + ') — /loop to retry, /loop stop to abort');
+        return;
+      }
+      loopState.failures = 0;
+      loopState.remaining -= 1;
+      if (loopState.lastReply && reply.trim() === loopState.lastReply) {
+        stopLoop('loop stopped — model repeated the previous reply (stall)');
+        return;
+      }
+      loopState.lastReply = reply.trim();
+      if (replyHasGoalDone(reply)) {
+        stopLoop('model signaled GOAL_DONE — loop stopped');
+        return;
+      }
+      if (loopState.completionTokens >= MAX_LOOP_COMPLETION_TOKENS) {
+        stopLoop('loop token budget exhausted (' + loopState.completionTokens + ' completion tokens)');
+        return;
+      }
+      if (loopState.remaining <= 0) {
+        stopLoop('loop budget exhausted (' + loopState.total + ' turn(s))');
+        return;
+      }
+      paintGoalLoop();
+      if (!loopState.auto) {
+        sys('turn ' + turn + '/' + loopState.total + ' done. /loop to continue, /loop stop to abort, /loop auto then /loop to run the rest.');
+        return;
+      }
+      sys('auto-continue in ' + (LOOP_COOLDOWN_MS / 1000) + 's — /loop stop to abort');
+      await sleepMs(LOOP_COOLDOWN_MS);
+    }
+  } finally {
+    if (loopState) loopState.running = false;
+    paintGoalLoop();
+  }
+}
+
+function requestLoopStop(reason) {
+  if (loopState) loopState.stop = true;
+  if (inflightChat) {
+    try { inflightChat.abort(); } catch (e) { /* already finished */ }
+  }
+  api('/api/chat/cancel', 'POST').catch(function () { /* best-effort Metal release */ });
+  stopLoop(reason);
+}
+
+async function sendChat(text, asLoop) {
   user(text);
   sendBtn.disabled = true;
+  inflightChat = new AbortController();
+  const body = { message: text, session_id: currentSession };
+  if (asLoop) body.loop = true;
   try {
-    const r = await api('/api/chat', 'POST', { message: text, session_id: currentSession });
+    const r = await api('/api/chat', 'POST', body);
     currentSession = r.session_id;
     $('sSession').textContent = currentSession;
+    if (loopState && r.usage) {
+      loopState.completionTokens += Number(r.usage.completion_tokens) || 0;
+    }
     agent(r.reply, r.model + ' · +' + r.usage.prompt_tokens + '/' + r.usage.completion_tokens +
           ' tok · session total ' + r.tally.total);
     await refreshStatus();
     await refreshSessions();
+    return r.reply;
   } catch (e) {
+    if (e && e.name === 'AbortError') return null;
+    const code = e && e.code ? e.code : '';
+    const wait = e && e.retryAfter ? e.retryAfter : 0;
+    if (asLoop && loopState && (code === 'LOOP_RATE_LIMIT' || code === 'RATE_LIMIT') && wait > 0 && wait <= LOOP_RETRY_CAP_SEC && loopState.auto && !loopState.stop) {
+      sys('rate limited (' + code + ') — waiting ' + wait + 's then retrying this turn');
+      await sleepMs(wait * 1000);
+      if (!loopState || loopState.stop) return null;
+      try {
+        const retry = await api('/api/chat', 'POST', body);
+        currentSession = retry.session_id;
+        $('sSession').textContent = currentSession;
+        if (loopState && retry.usage) {
+          loopState.completionTokens += Number(retry.usage.completion_tokens) || 0;
+        }
+        agent(retry.reply, retry.model + ' · +' + retry.usage.prompt_tokens + '/' + retry.usage.completion_tokens +
+              ' tok · session total ' + retry.tally.total);
+        await refreshStatus();
+        await refreshSessions();
+        return retry.reply;
+      } catch (e2) {
+        if (e2 && e2.name === 'AbortError') return null;
+        sys('error: ' + e2.message);
+        stopLoop('loop stopped — ' + ((e2 && e2.code) || code));
+        return null;
+      }
+    }
+    if (asLoop && (code === 'LOOP_RATE_LIMIT' || code === 'RATE_LIMIT' || code === 'LOOP_IN_FLIGHT' || code === 'CHAT_BUSY')) {
+      sys('error: ' + e.message);
+      stopLoop('loop stopped — ' + code);
+      return null;
+    }
     sys('error: ' + e.message);
+    return null;
   } finally {
+    inflightChat = null;
     sendBtn.disabled = false;
     input.focus();
   }
@@ -813,12 +1371,20 @@ async function onSend() {
      sendChat and /agent confirm above); the Enter-key handler below calls
      onSend() directly and bypasses the button's own disabled state, so a
      second Enter during a blocking /agent confirm launched a concurrent
-     clone/model/verification run for the same staged proposal. */
-  if (sendBtn.disabled) return;
+     clone/model/verification run for the same staged proposal.
+     /loop stop is the exception: it must be accepted while a 27b turn is
+     in flight so the operator can halt auto-continue. */
   const text = input.value.trim();
   if (!text) return;
+  if (sendBtn.disabled) {
+    if (text === '/loop stop' || text.indexOf('/loop stop ') === 0) {
+      input.value = '';
+      requestLoopStop('loop stop requested — aborting the in-flight turn');
+    }
+    return;
+  }
   input.value = '';
-  if (text.startsWith('/')) { await runSlash(text); } else { await sendChat(text); }
+  if (text.startsWith('/')) { await runSlash(text); } else { await sendChat(text, false); }
 }
 
 /* ── wiring ── */
@@ -833,6 +1399,7 @@ document.querySelectorAll('.side-tab').forEach(tab => {
   });
 });
 $('sSoul').addEventListener('click', () => runSlash('/soul ' + (soulEnabled ? 'off' : 'on')));
+$('sMemory').addEventListener('click', () => runSlash('/memory ' + (memoryEnabled ? 'off' : 'on')));
 
 buildCommands();
 refreshStatus();
@@ -840,8 +1407,9 @@ refreshSessions().catch(() => {});
 refreshRegistry().catch(() => {});
 sys('CyClaw harness — local coding console (PowerShell launcher: cyclaw).');
 sys('System prompt: ponytail + karpathy-guidelines discipline contracts for agentic GitHub coding.');
-sys('Type /help for commands.');
+sys('Type /help for commands. /skills and /tools list wired surfaces. /web is allowlist-only and off by default. /goal + /loop are chat-only (rate-limited for local 27b).');
 input.focus();
+paintGoalLoop();
 </script>
 </body>
 </html>

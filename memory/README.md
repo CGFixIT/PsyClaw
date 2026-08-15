@@ -5,6 +5,10 @@ governance (non-empty human `reason` + injection scan on apply). Soul
 (`data/personality/soul.md`) stays identity; this package is not soul mutation.
 
 **Not** [`docs/memories/`](../docs/memories/) (sandbox session notes).
+**Not** `~/.CyClaw/memory/` (harness-console `/memory` notes; see
+[`harness/README.md`](../harness/README.md)). The harness `/memory` command
+cannot enable this package. This package is the optional
+facts/episodes store on the RAG path.
 
 Every `memory:` switch in `config.yaml` ships `false`. With defaults, `/query`
 behavior matches pre-memory CyClaw. Failures in this layer never fail `/query`.

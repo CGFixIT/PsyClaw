@@ -10,7 +10,8 @@ banner that used to say "DESIGN ONLY / no code written" as current.
 Still open relative to this design doc:
 
 - Full `check_soul_leak` implementation (config may list the flow name; offline
-  floor does not fully activate it — see `config.yaml` comments).
+  floor does not fully activate it — see `config.yaml` comments and
+  [`phase4b_soul_leak.md`](./phase4b_soul_leak.md)).
 - Any widening of output-rail scope beyond `local_llm` (Phase 4a deliberately
   left external fallbacks and offline-best-effort unrailed for grounding).
 
@@ -184,6 +185,28 @@ Practical effect: `check_output` above computes grounding only. No
 `scan_injection`/soul-leak call exists in the Phase 4a code at all — there is
 nothing to gate behind a config flag because there is nothing built yet to gate.
 
+### Addendum (2026-08-15) — Phase 4b contract, still not wired
+
+The design note this Decision asked for now lives at
+[`phase4b_soul_leak.md`](./phase4b_soul_leak.md). Three load-bearing rules,
+none of which implement the rail:
+
+1. **New primitive.** Do not reuse `scan_injection` / `_INJECTION_MARKERS`
+   (`"you are now"` etc.) on model output. A future 4b PR adds
+   `detect_soul_leak` aimed at identity/config exfiltration.
+2. **Wire after the FP sweep, not before.** Listing `check_soul_leak` in
+   `output_rails` is still not enforcement. `check_output` stays
+   grounding-only until the sweep in that note is green.
+3. **Colang polarity is `True` = allowed.** The leftover
+   `check soul leak` flow is now `$allowed` / `if not $allowed`, matching
+   every other flow. `$leaked` must not return.
+
+`test_check_output_does_not_reuse_scan_injection` and
+`test_check_soul_leak_colang_uses_allowed_polarity` pin (1) and (3).
+The original open question below stays open: 4b is still not funded as
+code.
+
+---
 ---
 
 ## Decision 3 — Bridge: `build_output_guard`, mirroring `build_input_guard` exactly

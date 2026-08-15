@@ -204,7 +204,9 @@ def check_output(
     before generation and can skip an LLM call; this runs after generation and can
     only replace an answer that already exists. Grounding-only in this cut --
     callers decide WHICH answer paths reach this function at all; it does not
-    re-derive that policy itself.
+    re-derive that policy itself. Phase 4b soul-leak is deliberately not
+    implemented here (docs/NeMo/phase4b_soul_leak.md): do not reuse
+    ``scan_injection`` on the answer.
 
     Returns ``{"blocked": bool, "message": str, "rails": list[str]}``.
     """

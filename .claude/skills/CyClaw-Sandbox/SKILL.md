@@ -11,7 +11,8 @@ description: >
   rate limit, GitHub status, harness runs). Use when asked to verify,
   smoke-test, validate, or test CyClaw; mentions CyClaw swarm, terminal
   consoles, the harness console, triple-gate API, Grok/Claude fallback, key
-  redaction, due diligence invariants, or running the test suite.
+  redaction, due diligence invariants, or running the test suite. Not the
+  Claude Code session-memory skill (memory-orchestrator / docs/memories/).
 ---
 
 # CyClaw Swarm Verification
@@ -21,6 +22,72 @@ triple-gated online API fallback (Grok + Claude), all terminal console REST
 endpoints, the harness console's REST API and HTML contract, due-diligence
 invariants, API key redaction, and security invariants. Supports both sandbox
 (stub/mock) mode and full-dependency mode with real package installation.
+
+## Operator map — which command proves what
+
+Three ladders. They are complementary. A green run of one is **not** evidence
+the others would also pass. Always invoke with `python3.12` (never bare
+`python3` — see Gotchas).
+
+**Claude Code `/memory` is not this skill.** In a Claude Code session,
+`/memory` still means `memory-orchestrator` → `docs/memories/`. The harness
+console slash command `/memory` (verified below) is a separate, fail-closed
+operator-note toggle under `~/.CyClaw/memory`. It does not extract session
+memory, does not write `docs/memories/`, and does not replace the
+PreCompact / SessionEnd hooks.
+
+| Ladder | Command | Proves | Does **not** prove |
+|---|---|---|---|
+| **A. `/goal` + `/loop` only** | subsection below | session goal CRUD, goal in system prompt, `LOOP_REQUIRES_GOAL`, loop limiter ≠ chat limiter, cancel idempotence, HTML slash wiring, I6 (no `agentic` import from `harness/`) | RAG/graph, live 27b quality, browser `/loop auto` + `GOAL_DONE`, `/api/agent/run` |
+| **B. In-process swarm** | `python3.12 .claude/skills/CyClaw-Sandbox/run_full_verification.py` | Skill phases 4–12 (5 queries, triple-gate, redaction, harness `TestClient` including `/goal` + loop, HTML contract) | Live HTTP servers, browser JS, Windows installer |
+| **C. CI lifecycle** | `bash .claude/skills/CyClaw-Sandbox/verify.sh` | 3.12 venv, full pytest, RAG smoke, live `gate.py` + harness + `mock_ollama`, both emulations | Browser `/loop auto`, real `qwen3.6:27b`, Auth Stages 3–4, live NeMo 4b rail |
+| **D. Surface smoke** | `bash .claude/skills/CyClaw-Sandbox/smoke.sh` | 29 out-of-band checks against a live server | Due-diligence classes, harness `/goal`/`/loop`, agent-run routes |
+
+### A. `/goal` + `/loop` only (harness console contract)
+
+From repo root, test extras installed, `CYCLAW_HOME` isolated if you launch a server:
+
+```bash
+python3.12 -m pytest tests/test_harness.py tests/test_harness_console_contract.py \
+  tests/test_harness_auth.py tests/test_harness_isolation.py -q --tb=short
+
+python3.12 .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
+
+# Live HTTP — verify.sh Stage 9 does this with mock_ollama on :11434:
+CYCLAW_HOME=$(mktemp -d) CYCLAW_API_KEY=verify-soul-key-ci \
+  python3.12 -m harness.server &
+python3.12 .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
+```
+
+Rows that must pass before claiming `/goal` / `/loop` work:
+
+| Check | Where it is asserted |
+|---|---|
+| HC-6b goal set / trim / persist / clear / unknown-id 404; listing omits `goal` | pytest + swarm Phase 11 + emulation step 14 |
+| Goal lands in the chat system prompt; blank goal omitted | `tests/test_harness.py` |
+| HC-13b `loop: true` with no goal → 400 `LOOP_REQUIRES_GOAL` | pytest + swarm + emulation step 15 |
+| HC-13d `loop: true` with a goal is chat-only (200, or documented 502 with no backend) | pytest + swarm + emulation step 15 |
+| HC-13c `POST /api/chat/cancel` is idempotent (`/loop stop`) | pytest + swarm + emulation step 16 |
+| Dedicated loop limiter ≠ chat limiter; `CHAT_BUSY` generation gate | pytest only (`test_loop_rate_limit_*`, `test_chat_busy_*`) |
+| `/goal` and `/loop` in `COMMANDS` / `runSlash`; no `innerHTML` | HTML contract + `test_harness_console_contract.py` |
+| `/loop` never calls `/api/agent/*` | `test_loop_command_never_starts_a_real_repo_run` |
+
+### `verify.sh` stage numbers (historical — do not renumber)
+
+Labels are **not** sequential in source order. CI logs and comments cite them;
+do not "fix" the numbers.
+
+| Label | Source order | What runs |
+|---|---|---|
+| Stage 1 | 1st | Python 3.12 venv + deps |
+| Stage 2 | 2nd | `pytest tests/` |
+| Stage 3 | 3rd | emulated RAG (`tests/ci_rag_smoke.py`) |
+| Stage 5 | 4th | `gate_runtime_check.py` |
+| Stage 8 | 5th | `harness_runtime_check.py` (`/goal` + `/api/chat/cancel` registered) |
+| Stage 4 | 6th | live `gate.py` API smoke |
+| Stage 7 | 7th | `terminal_emulation.py` |
+| Stage 9 | 8th | live harness + `harness_emulation.py` (goal, loop, cancel) |
+| Stage 6 | last | write `/tmp/cyclaw-verify-report.md` |
 
 ## Core Workflow
 
@@ -427,12 +494,18 @@ against the live app rather than grepping source text.
 | `/` | GET | Serves `static/harness.html`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY` |
 | `/api/status` | GET | Returns `version`, `model`, `provider`, `base_url`, `soul_enabled`, `home`, `repo_root`, `sessions`, `total_tokens`, `layout` |
 | `/api/registry` | GET | Returns `skills`, `tools`, `connectors` lists (merged repo + governed-registry + MCP + connector catalog) |
+| `/api/tools` | GET | Wiring inventory for `/tools`: each harness surface + MCP catalog row, `wired` against the live route table, plus an ASCII `diagram`. Read-only; open (same reason as `/api/registry`). MCP rows are AST-catalog only — the console does not invoke them |
+| `/api/skills` | GET | Wiring inventory for `/skills`: prompt-injected discipline skills + skill-backed `/agent checks` profiles + repo/governed catalog. `wired` means the harness actually injects or runs the skill. Read-only; open |
+| `/api/web` | GET | Allowlist + enable flag for `/web`. Open (hosts only, no page text). Fetches stay fail-closed until `/web on` and a non-empty allowlist |
+| `/api/memory` | GET / POST | Harness-local `/memory` toggle + notes. **Off by default.** Does not write `soul.md`, `docs/memories/`, or the RAG `memory/` store. `rag.writable_from_harness` is always false |
 | `/api/sessions` | GET / POST | List sessions; create returns HTTP 201 with `session_id` |
 | `/api/sessions/{id}` | GET | Session summary + `messages` (`content`/`role`/`ts`); unknown id -> 404 |
 | `/api/sessions/{id}/rename` | POST | Applies a new title; unknown id -> 404 |
-| `/api/soul` | GET / POST | Harness-local soul/memory toggle (`soul.md` itself untouched -- distinct from `gate.py`'s `/soul/*`) |
+| `/api/sessions/{id}/goal` | POST | Sets or clears the session `/goal` (empty string clears); unknown id -> 404; value is session data injected into the chat prompt, never a write authorization |
+| `/api/soul` | GET / POST | Harness-local soul-in-prompt toggle (`soul.md` itself untouched -- distinct from `gate.py`'s `/soul/*` and from `/memory`) |
 | `/api/model` | POST | Selects and persists the active model |
-| `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend |
+| `/api/chat` | POST | Rate-limited (per-IP, `config.yaml`'s `api.rate_limit` block, same mechanism as `/query`); returns `session_id`, `reply`, `model`, `usage`, `tally`; 502 (`HarnessLLMError`) with no live chat backend. `{loop: true}` is chat-only and returns 400 `LOOP_REQUIRES_GOAL` when no goal is set; it must never call `/api/agent/*` |
+| `/api/chat/cancel` | POST | Idempotent abort of the in-flight Ollama POST (`/loop stop`); 200 `{cancelled: true}` even when nothing is running |
 | `/api/github/status` | GET | Subprocess-backed via `utils.ops_runner.run_agentic_op` (read-only, mirrors `/ops/agentic`'s delegation pattern) |
 | `/api/harness/runs` | GET | Harness-optimizer run listing, `runs` + `count` |
 | `/api/agent/checks` | GET | Lists named check profiles (Bearer-gated) |
@@ -465,22 +538,22 @@ Verify `static/harness.html` contracts:
 - All 3 sidebar panes exist (commands, sessions, registry) with their tab
   markers (`data-pane="commands"` etc.)
 - All `/api/*` endpoints the console calls are present: `/api/status`,
-  `/api/registry`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
-  `/api/github/status`, `/api/harness/runs`
+  `/api/registry`, `/api/tools`, `/api/skills`, `/api/web`, `/api/memory`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
+  `/api/chat/cancel`, `/api/github/status`, `/api/harness/runs`, plus the
+  session-scoped `/goal` POST built as `/api/sessions/{id}/goal`
 - All documented slash commands are wired: `/session`, `/soul`, `/model`,
-  `/skills`, `/github`, `/harness`, `/tokens`, `/status`
+  `/skills`, `/tools`, `/web`, `/memory`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
 - **XSS safety**: no `innerHTML` usage anywhere -- the console's own comment
   documents this invariant explicitly ("Model output and registry data are
   DATA, never HTML"); rendering goes through `textContent` and
   `createElement` only, since chat replies, skill descriptions, and session
   titles are all untrusted-origin strings that must never be interpreted as
   markup
-- **No API-key affordance**: unlike `terminal.html`'s `authHeaders()` +
-  `apiKeyInput`, `harness.html` has neither -- confirming their absence
-  checks that the loopback-only + `TrustedHostMiddleware` threat model
-  (`harness/server.py`'s own docstring) is the documented posture, not a
-  forgotten gap; a stray `Authorization`-header helper appearing later would
-  mean the UI and the threat-model doc had silently diverged
+- **API-key field for guarded writes**: `harness.html` has `#apiKey` /
+  `apiKeyInput` so `/goal`, `/api/chat`, `/api/chat/cancel`, and `/api/agent/*`
+  can send `Authorization: Bearer`. It must **not** reuse `terminal.html`'s
+  `authHeaders()` helper — that would couple the two consoles. Loopback bind
+  + `TrustedHostMiddleware` remain the rest of the boundary.
 
 ### Phase 13 -- Unit & Integration Test Suite
 
@@ -593,11 +666,12 @@ What it does:
 19. Verifies rate limiter is initialized with config values
 20. Verifies terminal.html contract (5 panels, 2 provider buttons)
 21. **Exercises the real harness console app** over a FastAPI `TestClient`
-    (status, registry, session CRUD, soul/model toggles, mocked chat, GitHub
-    status, harness runs) plus its rate-limit, auto-docs-disabled, and
-    DNS-rebinding checks
-22. Verifies harness.html contract (panes, API endpoints, slash commands,
-    no-innerHTML / textContent-only rendering, no API-key affordance)
+    (status, registry, session CRUD + `/goal`, soul/model toggles, mocked chat,
+    `/loop` with and without a goal, `/api/chat/cancel`, GitHub status, harness
+    runs) plus its rate-limit, auto-docs-disabled, and DNS-rebinding checks
+22. Verifies harness.html contract (panes, API endpoints, slash commands
+    including `/goal` and `/loop`, no-innerHTML / textContent-only rendering,
+    apiKey field for guarded POSTs, no terminal.html `authHeaders()` helper)
 
 ### `gate_runtime_check.py` / `harness_runtime_check.py`
 
@@ -620,7 +694,9 @@ python .claude/skills/CyClaw-Sandbox/harness_emulation.py http://127.0.0.1:8790
 ```
 Pair `harness_emulation.py` with `mock_ollama.py` (below) running on
 `127.0.0.1:11434` for a deterministic `/api/chat` 200 instead of the
-documented 502 no-backend fallback.
+documented 502 no-backend fallback. Steps 14–16 cover `/goal` set/persist,
+`/loop` with a goal (200/502), `LOOP_REQUIRES_GOAL` after clear, and
+`/loop stop` cancel.
 
 ### `test_terminal_consoles.py`
 

@@ -9,9 +9,12 @@ related:
   - docs/NeMo/README.md
 ---
 
-**Status banner (2026-08-04):** Phases **1?3 and 4a are implemented** on main
+**Status banner (2026-08-15):** Phases **1–3 and 4a are implemented** on main
 (input rail + output grounding on `local_llm`, both via
 `utils/guardrail_bridge.py`, still `guardrails.enabled: false` by default).
+Phase **4b** (soul-leak output rail) is **contract only** — Colang polarity
+is fixed, live `/query` stays grounding-only, and a new primitive + FP sweep
+are required before any wire. See [`phase4b_soul_leak.md`](./phase4b_soul_leak.md).
 This guideline remains the **historical contract and decision log**. Prefer
 [`README.md`](./README.md) for current status. Body below still mentions LM
 Studio in places because it was written against an earlier local-LLM default;
@@ -110,7 +113,7 @@ says.
 |---|---|---|---|
 | `detect_soul_mutation_intent` | `check_soul_mutation` | `check soul mutation` (input) | Refuse "rewrite/override your soul/identity" — content-layer arm of Soul-Governance |
 | `is_soul_topic` | — | (gates topical rails) | Flag a turn as identity-related → record `soul_topic` metric |
-| `scan_injection` | `check_injection` | `check injection` (input), `check soul leak` (output) | Block obvious injection / config-exfiltration |
+| `scan_injection` | `check_injection` | `check injection` (input); leftover `check soul leak` (output, cheap floor only) | Block obvious **input** injection. Do **not** treat the leftover output reuse as the 4b design — a dedicated `detect_soul_leak` + FP sweep is required first (`phase4b_soul_leak.md`) |
 | `grounding_score` | `get_grounding_score` | `check grounding` (output) | Token-overlap RAG faithfulness floor |
 
 Legitimate identity *questions* ("who are you?") are answered safely via

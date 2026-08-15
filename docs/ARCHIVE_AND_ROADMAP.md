@@ -30,7 +30,9 @@ not moved** (cross-refs from remaining_work / phase plans). **Update
 2026-08-04:** Phase 4a (`guardrail_output` grounding on `local_llm`) has
 landed on main; the phase4 design lives at
 `docs/NeMo/!phase4_implementation_plan.md` with a status banner reflecting
-shipped 4a vs open 4b (soul-leak). Phase3 stays in `docs/NeMo/` for history.
+shipped 4a vs open 4b (soul-leak). The 4b contract (new primitive, FP sweep
+before wire, Colang polarity) is `docs/NeMo/phase4b_soul_leak.md`. Phase3
+stays in `docs/NeMo/` for history.
 
 **Follow-up from the prior "before deletion" list — completed 2026-08-02**
 (tracked here so it isn't lost):
