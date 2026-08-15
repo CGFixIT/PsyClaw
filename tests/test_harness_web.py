@@ -100,7 +100,7 @@ def test_assert_public_host_refuses_loopback(monkeypatch):
     def fake_getaddrinfo(host, _port):
         return [(0, 0, 0, "", ("127.0.0.1", 0))]
 
-    monkeypatch.setattr("harness.web_search.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
     with pytest.raises(WebToolError) as exc:
         assert_public_host("docs.python.org")
     assert exc.value.code == "WEB_SSRF_DENIED"
@@ -110,7 +110,7 @@ def test_assert_public_host_accepts_global(monkeypatch):
     def fake_getaddrinfo(host, _port):
         return [(0, 0, 0, "", ("1.1.1.1", 0))]
 
-    monkeypatch.setattr("harness.web_search.socket.getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
     assert_public_host("one.one.one.one")
     assert ipaddress.ip_address("1.1.1.1").is_global
 
@@ -152,6 +152,35 @@ def test_fetch_and_search_and_inject(cfg):
     assert source == "Source: https://docs.python.org/"
     tool.forget()
     assert tool.context_text() == ""
+
+
+def test_search_error_record_is_code_only(cfg, monkeypatch, caplog):
+    """Per-URL failures must not leak exception text into the search payload
+    (CodeQL py/stack-trace-exposure, alert 1091)."""
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    tool.allow("https://broken.example/")
+
+    real_get = tool._get
+
+    def flaky_get(url, entries):
+        if "broken.example" in url:
+            raise WebToolError("DNS failed for broken.example", code="WEB_DNS")
+        return real_get(url, entries)
+
+    monkeypatch.setattr(tool, "_get", flaky_get)
+    with caplog.at_level("INFO", logger="cyclaw.harness.web_search"):
+        found = tool.search("allowlist")
+    assert found["hits"], "successful URLs still produce hits"
+    assert len(found["errors"]) == 1
+    record = found["errors"][0]
+    assert record["code"] == "WEB_DNS"
+    assert set(record) == {"url", "code"}
+    assert "message" not in record
+    assert "DNS failed" not in str(found)
+    assert str(found["errors"]).count("broken.example") == 1  # the url key only
+    assert any("DNS failed for broken.example" in r.message for r in caplog.records)
 
 
 def test_routes_default_off_and_open_status(cfg):

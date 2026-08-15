@@ -27,7 +27,10 @@ on:
 jobs:
   analyze:
     concurrency:
-      group: codeql-${{ github.workflow }}-${{ github.ref }}
+      # matrix.language MUST be in the group: this is job-level concurrency on
+      # a 2-language matrix. Omitting it makes python and actions share a group,
+      # so the second start cancels the first on PRs (cancel-in-progress).
+      group: codeql-${{ github.workflow }}-${{ github.ref }}-${{ matrix.language }}
       # Exempt main so every commit landed on main keeps a complete scan history;
       # superseded runs on other refs are cancelled to save CI minutes (matches
       # the cancel-in-progress policy used across the other workflows).

@@ -16,11 +16,11 @@ I6: this module is harness-local. It never imports ``gate``, ``graph``,
 
 from __future__ import annotations
 
-import html
 import ipaddress
 import json
+import logging
 import socket
-from html.parser import HTMLParser
+from html import parser, unescape
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
@@ -29,6 +29,8 @@ import httpx
 
 from harness.config import HarnessConfig, _atomic_write_json
 from utils.errors import AgenticError
+
+log = logging.getLogger("cyclaw.harness.web_search")
 
 _UTF8: Final = "utf-8"
 _SCHEMES: Final = frozenset(("http", "https"))
@@ -71,7 +73,7 @@ class WebToolError(AgenticError):
         super().__init__(message, code=code, details=details)
 
 
-class _TextExtractor(HTMLParser):
+class _TextExtractor(parser.HTMLParser):
     """Pull visible text; drop script/style. Stdlib only."""
 
     def __init__(self) -> None:
@@ -237,13 +239,13 @@ def extract_text(body: str, content_type: str) -> str:
     """Visible text from HTML; otherwise a clipped plaintext body."""
     lowered = (content_type or "").split(";", 1)[0].strip().lower()
     if "html" in lowered:
-        parser = _TextExtractor()
-        parser.feed(body)
-        parser.close()
-        text = " ".join("".join(parser.parts).split())
+        extractor = _TextExtractor()
+        extractor.feed(body)
+        extractor.close()
+        text = " ".join("".join(extractor.parts).split())
     else:
         text = " ".join(body.split())
-    return html.unescape(text)[:_MAX_BYTES]
+    return unescape(text)[:_MAX_BYTES]
 
 
 def _snippets(text: str, query: str) -> list[str]:
@@ -432,7 +434,11 @@ class WebTool:
             try:
                 page = self._get(url, entries)
             except WebToolError as exc:
-                errors.append({"url": url, "code": exc.code, "message": str(exc)})
+                # Code-only record in the HTTP body: str(exc) can carry hosts,
+                # DNS detail, or upstream status text; server.py's _web_err
+                # already follows the same code-only contract for raise paths.
+                log.info("web search skipped %s: %s (%s)", url, exc, exc.code)
+                errors.append({"url": url, "code": exc.code})
                 continue
             snippets = _snippets(page["text"], needle)
             if snippets:

@@ -62,7 +62,9 @@ jobs:
         run: pip install -r requirements.txt -c constraints.txt pytest pytest-cov
 
       - name: Prepare runtime directories
+        # Stub only when absent: data/personality/soul.md is tracked with real
+        # content, and an unconditional write here leaves it stubbed in the
+        # agent's working tree, where it risks being swept into commits
+        # (same failure mode ci.yml documents in its "Prepare hermetic env" step).
         run: |
           mkdir -p data/personality index logs
-          printf '# Soul\n' > data/personality/soul.md
-
