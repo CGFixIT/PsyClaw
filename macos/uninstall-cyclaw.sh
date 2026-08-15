@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Removes the CyClaw harness integration from the current user's environment
-# (macOS/Linux). Removes the cyclaw() shell function and the ~/.CyClaw/bin
-# PATH entry -- install-cyclaw.sh's two independent marker blocks in the shell
-# rc file. The home directory (sessions, venv, repo clone) is KEPT by default
+# (macOS/Linux). Removes the cyclaw() shell function, the ~/.CyClaw/bin
+# PATH entry, and the `# >>> cyclaw keys >>>` source block -- install-cyclaw.sh
+# and setup-cyclaw-keys.sh's independent marker blocks in the shell rc file.
+# The home directory (sessions, venv, repo clone, .env) is KEPT by default
 # so no data is lost; pass --remove-home to delete it (prompts first).
 #
 # Usage:
@@ -99,6 +100,8 @@ PATH_START="# >>> cyclaw harness path >>>"
 PATH_END="# <<< cyclaw harness path <<<"
 FUNC_START="# >>> cyclaw harness >>>"
 FUNC_END="# <<< cyclaw harness <<<"
+KEYS_START="# >>> cyclaw keys >>>"
+KEYS_END="# <<< cyclaw keys <<<"
 
 resolve_edit_path() {
   local path="$1" target dir hops=0
@@ -126,7 +129,8 @@ resolve_edit_path() {
 remove_managed_blocks() {
   local edit_path="$1" display_path="$2" tmp_dir tmp
   if ! grep -qxF "$PATH_START" "$edit_path" 2>/dev/null && \
-     ! grep -qxF "$FUNC_START" "$edit_path" 2>/dev/null; then
+     ! grep -qxF "$FUNC_START" "$edit_path" 2>/dev/null && \
+     ! grep -qxF "$KEYS_START" "$edit_path" 2>/dev/null; then
     return 0
   fi
 
@@ -138,7 +142,8 @@ remove_managed_blocks() {
   fi
 
   if awk -v ps="$PATH_START" -v pe="$PATH_END" \
-         -v fs="$FUNC_START" -v fe="$FUNC_END" '
+         -v fs="$FUNC_START" -v fe="$FUNC_END" \
+         -v ks="$KEYS_START" -v ke="$KEYS_END" '
     $0 == ps {
       if (block != "") bad = 1
       block = "path"
@@ -149,6 +154,11 @@ remove_managed_blocks() {
       block = "func"
       next
     }
+    $0 == ks {
+      if (block != "") bad = 1
+      block = "keys"
+      next
+    }
     $0 == pe {
       if (block != "path") bad = 1
       else block = ""
@@ -156,6 +166,11 @@ remove_managed_blocks() {
     }
     $0 == fe {
       if (block != "func") bad = 1
+      else block = ""
+      next
+    }
+    $0 == ke {
+      if (block != "keys") bad = 1
       else block = ""
       next
     }

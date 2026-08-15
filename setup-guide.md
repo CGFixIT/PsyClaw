@@ -218,23 +218,27 @@ uvicorn gate:app --reload --host 127.0.0.1 --port 8787
 
 Open `http://127.0.0.1:8787` → the terminal UI loads automatically.
 
-`export` lasts only for that Terminal tab. To persist both keys, append them to
-your shell rc file — zsh is the macOS default since Catalina, so that is
-`~/.zshrc` unless you switched:
+`export` lasts only for that Terminal tab. **Do not paste secrets into
+`~/.zshrc`.** The preferred persist path is
+[`macos/setup-cyclaw-keys.sh`](macos/setup-cyclaw-keys.sh):
 
 ```bash
-cat >> ~/.zshrc <<'EOF'
-export GROK_API_KEY=dummy
-export CYCLAW_API_KEY="paste-the-value-you-generated"
-EOF
-source ~/.zshrc
-echo "$CYCLAW_API_KEY"          # confirm it survived
+bash macos/setup-cyclaw-keys.sh
+source ~/.CyClaw/.env          # this tab; new tabs inherit via the rc source block
 ```
 
-Check which shell you are actually in with `echo $SHELL` first. On bash, append
-to the first existing login file in this order: `~/.bash_profile`,
-`~/.bash_login`, `~/.profile`; create `~/.bash_profile` only when none exists.
-macOS bash login shells do not read `~/.bashrc`.
+That generates `CYCLAW_API_KEY` (`openssl rand -hex 20`), prompts for Telegram /
+Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip any), and stores them in the
+macOS Keychain plus `~/.CyClaw/.env` (`chmod 600`). The rc file only *sources*
+that dotenv — it never inlines a secret. LaunchAgents still read Keychain via
+`cyclaw-keychain-env.sh`. Flags and service names: [`macos/README.md`](macos/README.md).
+
+If you only need the keys in the current tab and do not want the bootstrap:
+
+```bash
+export GROK_API_KEY=dummy
+export CYCLAW_API_KEY="$(openssl rand -hex 20)"
+```
 
 ### Running both servers on macOS
 
