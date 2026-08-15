@@ -38,6 +38,36 @@ It is **never imported** by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
 
 ---
 
+## How `harness/` and `skills_registry.json` relate
+
+`harness/` is a **sibling** package, not a subpackage of `agentic/`. It is the
+loopback coding console on `127.0.0.1:8790` (`python -m harness.server`). It
+never imports `agentic` write paths; GitHub actions go through
+`utils.ops_runner` → `python -m agentic.cli`, the same shim as `POST /ops/agentic`.
+See [`harness/README.md`](../harness/README.md).
+
+`data/agentic/skills_registry.json` is the **governed store** named by
+`agentic.registry_path` (must resolve under the repo `data/` tree). The file
+ships empty (`version: 0`, `skills: {}`, `history: []`). That is correct: it is
+not a catalog of installed procedures, and it does not execute skills or feed
+the RAG graph. Mutations are `propose-skill` / `apply-skill` only (master
+switch + non-empty `reason` + `--confirm` + injection scan + atomic write +
+sha256 history). Design: [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md).
+
+The harness **reads** that store. `harness/registry_view.py` builds a merged
+read-only view of three catalogs:
+
+| Catalog | Source | Who mutates it |
+|---|---|---|
+| Repo skills | `.claude/skills/*/SKILL.md` frontmatter | humans / PRs, not this layer |
+| Governed registry | `data/agentic/skills_registry.json` | `agentic.cli apply-skill` only |
+| MCP tools | AST-parsed `TOOLS` in `mcp_hybrid_server.py` | never imported (I6) |
+
+A fourth surface — the install-time `~/.CyClaw/skills/` copy used by the
+console installers — is home-dir state, not the JSON store.
+
+---
+
 ## Default config (shipped `config.yaml`)
 
 Master switch is **off**. Mode / writes flags may be pre-armed in YAML so that
@@ -624,4 +654,7 @@ python -m agentic.sqlconnect.cli test
 | [`docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md`](../docs/agentic/FSCONNECT_WRITE_ENABLEMENT_PLAYBOOK.md) | FS write enablement |
 | [`docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md`](../docs/agentic/FSCONNECT_SECURITY_REVIEW_CHECKLIST.md) | FS security review checklist |
 | [`docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md`](../docs/agentic/SKILLS_REGISTRY_GOVERNANCE.md) | Skills registry governance |
+| [`harness/README.md`](../harness/README.md) | Coding-console package (`:8790`) |
+| [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md) | macOS/Linux harness install |
+| [`docs/HARNESS_POWERSHELL.md`](../docs/HARNESS_POWERSHELL.md) | Windows harness install |
 | [`docs/THREAT_MODEL.md`](../docs/THREAT_MODEL.md) | Threat-model amendments for this layer |

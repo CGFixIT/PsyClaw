@@ -1,4 +1,4 @@
-"""NeMo Guardrails integration wrapper for CyClaw -- skeleton, out-of-band.
+"""NeMo Guardrails integration wrapper for CyClaw.
 
 This is the single seam between CyClaw and ``nemoguardrails``. It is designed to:
 
@@ -6,12 +6,13 @@ This is the single seam between CyClaw and ``nemoguardrails``. It is designed to
   * degrade to a transparent "guardrails skipped" path when the dependency or
     the NeMo config is absent, or when ``guardrails.enabled`` is false;
   * record every decision to the SEPARATE guardrail metrics stream;
-  * expose a LangGraph-compatible node helper (:func:`guardrail_safety_node`)
-    that is provided for FUTURE wiring only -- it is NOT imported by graph.py in
-    this skeleton (see docs/NeMo/later_development_guideline.md for the plan).
+  * export ``check_input`` / ``check_output`` for the live graph nodes
+    (reached only via ``utils/guardrail_bridge.py``; ``graph.py`` never
+    imports this module -- I6).
 
-Nothing here is imported by gate.py, graph.py, or mcp_hybrid_server.py. The
-module-isolation rule (PROJECT_RULES.md) is preserved by construction.
+``guardrail_safety_node`` below is an unused example helper, not the live
+path. ``gate.py`` / ``graph.py`` / ``mcp_hybrid_server.py`` must not import
+this package (``tests/test_guardrails_isolation.py``).
 """
 
 from __future__ import annotations
@@ -354,10 +355,8 @@ async def safe_generate(
     )
 
 
-# --- LangGraph-compatible node helper (PROVIDED FOR FUTURE WIRING ONLY) ------
-# This is intentionally NOT imported by graph.py in the skeleton. The wiring plan
-# (a visible node + conditional edge, never hidden middleware -- topology=policy)
-# is documented in docs/NeMo/later_development_guideline.md.
+# Unused example helper. Live graph nodes are guardrail_input / guardrail_output
+# in graph.py; they call check_input / check_output via utils/guardrail_bridge.py.
 
 
 async def guardrail_safety_node(state: dict[str, Any], cfg: GuardrailsConfig | None = None) -> dict[str, Any]:
