@@ -491,6 +491,8 @@ def test_chat_rate_limited_after_max_requests(cfg, monkeypatch):
     resp = limited_client.post("/api/chat", json={"message": "three"})
     assert resp.status_code == 429
     assert resp.json()["detail"]["code"] == "RATE_LIMIT"
+    assert resp.json()["detail"]["details"]["retry_after_sec"] >= 1
+    assert resp.headers.get("retry-after")
 
 
 def test_rate_limit_scoped_to_expensive_routes_only(cfg, monkeypatch):
@@ -649,6 +651,202 @@ def test_legacy_session_file_without_goal_still_loads(cfg):
     path.write_text(json.dumps(payload), encoding="utf-8")
     reloaded = store.get(session.session_id)
     assert reloaded.goal == ""
+
+
+def _goal_session(client) -> str:
+    sid = client.post("/api/sessions", json={"title": "loop"}).json()["session_id"]
+    client.post(f"/api/sessions/{sid}/goal", json={"goal": "finish the loop feature"})
+    return sid
+
+
+def test_loop_turn_requires_goal(client):
+    sid = client.post("/api/sessions", json={"title": "nogoal"}).json()["session_id"]
+    resp = client.post("/api/chat", json={"message": "go", "session_id": sid, "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_GOAL"
+
+
+def test_loop_turn_requires_session_id(client):
+    resp = client.post("/api/chat", json={"message": "go", "loop": True})
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["code"] == "LOOP_REQUIRES_SESSION"
+
+
+def test_plain_chat_still_works_without_a_goal(client):
+    resp = client.post("/api/chat", json={"message": "hello"})
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "ok"
+
+
+def test_loop_rate_limit_is_independent_of_plain_chat(cfg, monkeypatch):
+    monkeypatch.setattr(
+        harness_server, "_loop_rate_limit_settings",
+        lambda: {"max_requests": 2, "window_seconds": 60},
+    )
+    app = create_app(cfg, _loopback_chat())
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post("/api/chat", json={"message": "t1", "session_id": sid, "loop": True}).status_code == 200
+    assert c.post("/api/chat", json={"message": "t2", "session_id": sid, "loop": True}).status_code == 200
+    blocked = c.post("/api/chat", json={"message": "t3", "session_id": sid, "loop": True})
+    assert blocked.status_code == 429
+    assert blocked.json()["detail"]["code"] == "LOOP_RATE_LIMIT"
+    assert blocked.headers.get("retry-after")
+    # Ordinary chatbot turns must not be starved by the loop budget.
+    plain = c.post("/api/chat", json={"message": "still chatting", "session_id": sid})
+    assert plain.status_code == 200
+
+
+def test_loop_turn_uses_shorter_history(cfg):
+    captured: list[list] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    for i in range(12):
+        assert c.post("/api/chat", json={"message": f"plain-{i}", "session_id": sid}).status_code == 200
+    captured.clear()
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    roles = [m["role"] for m in captured[0]]
+    assert roles[0] == "system"
+    assert roles[-1] == "user"
+    assert len(captured[0]) <= 1 + 8 + 1
+    assert "finish the loop feature" in captured[0][0]["content"]
+
+
+def test_clip_history_keeps_newest_tail():
+    from harness.server import clip_history
+
+    msgs = [
+        {"role": "user", "content": "AAAA"},
+        {"role": "assistant", "content": "BBBB"},
+        {"role": "user", "content": "CCCC"},
+    ]
+    clipped = clip_history(msgs, 6)
+    assert clipped[-1]["content"] == "CCCC"
+    assert "".join(m["content"] for m in clipped) == "BBCCCC" or "".join(
+        m["content"] for m in clipped
+    ).endswith("CCCC")
+    assert sum(len(m["content"]) for m in clipped) <= 6
+
+
+def test_generation_gate_is_non_blocking():
+    from harness.server import GenerationGate
+
+    gate = GenerationGate()
+    assert gate.claim() is True
+    assert gate.claim() is False
+    gate.release()
+    assert gate.claim() is True
+    gate.release()
+
+
+def test_chat_busy_when_generation_already_held(client):
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post("/api/chat", json={"message": "hello"})
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "CHAT_BUSY"
+    finally:
+        client.app.state.generation_gate.release()
+
+
+def test_loop_turn_uses_smaller_max_tokens(cfg):
+    captured: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["max_tokens"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post("/api/chat", json={"message": "plain", "session_id": sid}).status_code == 200
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    assert captured[0] == 3000
+    assert captured[1] == 1024
+
+
+def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):
+    monkeypatch.setattr(harness_server, "_LOOP_HISTORY_CHARS", 20)
+    captured: list[list] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content)["messages"])
+        return httpx.Response(200, json={
+            "model": "qwen3.6:27b",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.6:27b",
+        transport=httpx.MockTransport(handler),
+    )
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    sid = _goal_session(c)
+    assert c.post(
+        "/api/chat",
+        json={"message": "x" * 80, "session_id": sid},
+    ).status_code == 200
+    captured.clear()
+    assert c.post(
+        "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
+    ).status_code == 200
+    prior = captured[0][1:-1]  # drop system + current user
+    assert sum(len(m["content"]) for m in prior) <= 20
+
+
+def test_chat_cancel_is_idempotent(client):
+    resp = client.post("/api/chat/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is True
+    # A follow-up chat must still work after the client was recycled.
+    assert client.post("/api/chat", json={"message": "hello"}).status_code == 200
+
+
+def test_chat_cancel_calls_abort_in_flight(cfg):
+    chat = _loopback_chat()
+    called = {"n": 0}
+    original = chat.abort_in_flight
+
+    def spy() -> None:
+        called["n"] += 1
+        original()
+
+    chat.abort_in_flight = spy  # type: ignore[method-assign]
+    app = create_app(cfg, chat)
+    c = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    assert c.post("/api/chat/cancel").status_code == 200
+    assert called["n"] == 1
 
 
 def test_chat_unknown_session_404(client):

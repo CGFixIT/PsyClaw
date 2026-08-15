@@ -253,6 +253,16 @@ def test_console_documents_goal_and_loop_slash_commands():
     assert f"const MAX_GOAL_CHARS = {_MAX_GOAL_LEN};" in html
     assert "const MAX_LOOP_TURNS = 5;" in html
     assert "const DEFAULT_LOOP_TURNS = 3;" in html
+    assert "const LOOP_COOLDOWN_MS = 2000;" in html
+    assert "const MAX_LOOP_COMPLETION_TOKENS = 12000;" in html
+    assert "body.loop = true" in html
+    assert "LOOP_RATE_LIMIT" in html
+    assert "CHAT_BUSY" in html
+    assert "function requestLoopStop(" in html
+    assert "api('/api/chat/cancel', 'POST')" in html
+    assert "new AbortController()" in html
+    assert "aborting the in-flight turn" in html
+    assert "function paintGoalLoop()" in html
 
 
 def test_loop_command_never_starts_a_real_repo_run():

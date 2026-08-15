@@ -110,10 +110,27 @@ class HarnessChatClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key.strip()
+        self._timeout_sec = timeout_sec
+        self._transport = transport
         self._client = httpx.Client(timeout=timeout_sec, transport=transport, trust_env=False)
 
     def close(self) -> None:
         self._client.close()
+
+    def abort_in_flight(self) -> None:
+        """Close the current HTTP client (drops an in-flight POST) and open a fresh one.
+
+        /loop stop on a local 27b would otherwise wait for the current
+        completion (minutes) before Metal is free. Recreate rather than
+        reuse: httpx.Client.close() is terminal.
+        """
+        old = self._client
+        self._client = httpx.Client(
+            timeout=self._timeout_sec,
+            transport=self._transport,
+            trust_env=False,
+        )
+        old.close()
 
     def chat(
         self,

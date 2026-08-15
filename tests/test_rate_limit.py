@@ -72,6 +72,20 @@ def test_blocks_over_limit():
     assert rl.allow("10.0.0.1") is False, "6th request should be blocked"
 
 
+def test_retry_after_sec_is_zero_under_limit_and_positive_when_blocked():
+    clock = FakeClock()
+    rl = RateLimiter(max_requests=2, window_seconds=10, clock=clock)
+    assert rl.retry_after_sec("10.0.0.1") == 0.0
+    rl.allow("10.0.0.1")
+    rl.allow("10.0.0.1")
+    assert rl.allow("10.0.0.1") is False
+    assert rl.retry_after_sec("10.0.0.1") == 10.0
+    clock.advance(4.0)
+    assert rl.retry_after_sec("10.0.0.1") == 6.0
+    clock.advance(6.1)
+    assert rl.retry_after_sec("10.0.0.1") == 0.0
+
+
 def test_window_expiry_via_clock():
     """After the window elapses, the IP is allowed again (no time.sleep)."""
     clock = FakeClock()

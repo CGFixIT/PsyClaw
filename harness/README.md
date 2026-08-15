@@ -54,7 +54,12 @@ The shipped registry file is empty. That is correct.
 
 Console slash commands include `/goal` (session-scoped, injected into the
 system prompt as read-only data) and `/loop` (human-gated chat turns toward
-that goal; never starts a real-repo run).
+that goal; never starts a real-repo run). `/loop` is separately rate-limited
+(default 8 turns / 300s) for a local 27b; `/loop stop` aborts the in-flight
+Ollama socket (`POST /api/chat/cancel`) instead of waiting for the turn to
+finish. Loop turns send `{"loop": true}`, use a 1024-token output budget and
+a clipped history window, and share a process-wide single-generation lock
+with ordinary chat so Metal is never double-booked.
 
 ## Operator API (loopback)
 
@@ -73,7 +78,8 @@ surfaces (`utils.auth.require_api_key`).
 | GET | `/api/soul` | Harness-local soul-in-prompt flag (does not write `soul.md`) |
 | POST | `/api/soul` | Toggle that flag |
 | POST | `/api/model` | Select local model |
-| POST | `/api/chat` | Chat turn |
+| POST | `/api/chat` | Chat turn (`loop: true` for `/loop`; 409 `CHAT_BUSY` if a generation is already running) |
+| POST | `/api/chat/cancel` | Abort the in-flight Ollama POST (`/loop stop`) |
 | GET | `/api/github/status` | `gh` / agentic status via ops runner |
 | GET | `/api/agent/checks` | Named check profiles |
 | POST | `/api/agent/run` | Start a real-repo run |

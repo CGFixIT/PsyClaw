@@ -143,6 +143,10 @@
   .statusbar .k { color: var(--text-muted); }
   .statusbar .v { color: var(--text-primary); }
   .statusbar .spacer { flex: 1; }
+  #sGoal {
+    max-width: 140px; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; display: inline-block; vertical-align: bottom;
+  }
   .toggle { cursor: pointer; background: none; border: none; font: inherit; color: inherit; padding: 0; }
   .toggle .v.on { color: var(--accent-green); }
   .toggle .v.off { color: var(--accent-red); }
@@ -190,6 +194,8 @@
         <button class="toggle" id="sSoul" title="toggle soul/memory in the system prompt">
           <span class="k">soul </span><span class="v" id="sSoulV">…</span>
         </button>
+        <span title="session /goal"><span class="k">goal </span><span class="v" id="sGoal">none</span></span>
+        <span title="human-gated /loop"><span class="k">loop </span><span class="v" id="sLoop">off</span></span>
         <span class="spacer"></span>
         <span><span class="k">key </span><input class="apikey" id="apiKey" type="password" autocomplete="off"
           spellcheck="false" placeholder="CYCLAW_API_KEY" title="operator API key; held in memory only"></span>
@@ -247,9 +253,34 @@ let loopAuto = false;
 const MAX_GOAL_CHARS = 2000;
 const MAX_LOOP_TURNS = 5;
 const DEFAULT_LOOP_TURNS = 3;
+/* Local 27b (qwen3.6:27b on Apple Silicon) needs a breath between auto
+   turns so /loop stop can land and Metal is not hammered. */
+const LOOP_COOLDOWN_MS = 2000;
+const MAX_LOOP_COMPLETION_TOKENS = 12000;
+const MAX_LOOP_FAILURES = 2;
+const LOOP_RETRY_CAP_SEC = 30;
 /* Active human-gated /loop. Never starts a real-repo run. Cleared on
    /loop stop, /clear, session switch, budget exhaust, or GOAL_DONE. */
 let loopState = null;
+/* AbortController for the in-flight POST /api/chat. /loop stop aborts
+   the browser wait AND tells the server to drop the Ollama socket. */
+let inflightChat = null;
+
+function paintGoalLoop() {
+  const g = $('sGoal');
+  if (g) {
+    g.textContent = sessionGoal ? sessionGoal : 'none';
+    g.title = sessionGoal || 'no session goal';
+  }
+  const l = $('sLoop');
+  if (!l) return;
+  if (!loopState) {
+    l.textContent = loopAuto ? 'auto' : 'off';
+    return;
+  }
+  const done = loopState.total - loopState.remaining;
+  l.textContent = (loopState.auto ? 'auto ' : '') + done + '/' + loopState.total;
+}
 
 /* ── stream rendering ── */
 function addMsg(kind, who, body, meta) {
@@ -295,6 +326,11 @@ function table(rows, headers) {
    avoid writing the helper's name followed by an open paren. */
 async function api(path, method, body) {
   const opts = { method: method || 'GET', headers: {} };
+  /* Attach the in-flight chat AbortController here (body only) so the
+     contract parser that hand-reads call sites stays valid. */
+  if (inflightChat && path === '/api/chat' && (method || 'GET') === 'POST') {
+    opts.signal = inflightChat.signal;
+  }
   const key = apiKeyInput ? apiKeyInput.value.trim() : '';
   /* Sent on every request, not just the guarded ones: the open read routes
      ignore it, and branching per-path here would drift from the server's guard
@@ -314,7 +350,12 @@ async function api(path, method, body) {
   try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
   if (!resp.ok) {
     const d = data && data.detail;
-    throw new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+    const err = new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+    err.code = d && d.code ? d.code : '';
+    const headerWait = parseInt(resp.headers.get('Retry-After') || '0', 10);
+    const bodyWait = d && d.details && d.details.retry_after_sec;
+    err.retryAfter = headerWait || (typeof bodyWait === 'number' ? bodyWait : 0);
+    throw err;
   }
   return data;
 }
@@ -537,6 +578,9 @@ async function runSlash(line) {
         if (sub === 'new') {
           const s = await api('/api/sessions', 'POST', { title: rest.slice(1).join(' ') });
           currentSession = s.session_id;
+          sessionGoal = '';
+          loopState = null;
+          paintGoalLoop();
           sys('session created: ' + s.session_id + ' — ' + s.title);
         } else if (sub === 'use') {
           const s = await api('/api/sessions/' + encodeURIComponent(rest[1] || ''));
@@ -545,6 +589,7 @@ async function runSlash(line) {
               ' (' + s.message_count + ' messages, ' + s.tokens.total + ' tokens)');
           sessionGoal = typeof s.goal === 'string' ? s.goal : '';
           loopState = null;
+          paintGoalLoop();
           s.messages.slice(-10).forEach(m => {
             if (m.role === 'user') user(m.content); else if (m.role === 'assistant') agent(m.content);
           });
@@ -773,6 +818,7 @@ async function runSlash(line) {
           if (!currentSession) { sys('no active session — no goal'); break; }
           const shown = await api('/api/sessions/' + encodeURIComponent(currentSession));
           sessionGoal = typeof shown.goal === 'string' ? shown.goal : '';
+          paintGoalLoop();
           sys(sessionGoal ? ('current goal:\n' + sessionGoal) : 'no goal set');
           break;
         }
@@ -780,6 +826,7 @@ async function runSlash(line) {
           if (!currentSession) { sys('no active session — nothing to clear'); break; }
           const cleared = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: '' });
           sessionGoal = cleared.goal || '';
+          paintGoalLoop();
           sys('goal cleared');
           break;
         }
@@ -794,6 +841,7 @@ async function runSlash(line) {
         }
         const set = await api('/api/sessions/' + encodeURIComponent(currentSession) + '/goal', 'POST', { goal: arg });
         sessionGoal = set.goal || '';
+        paintGoalLoop();
         sys('goal set:\n' + sessionGoal);
         await refreshSessions();
         break;
@@ -802,22 +850,26 @@ async function runSlash(line) {
       case 'loop': {
         const sub = rest[0] || '';
         if (sub === 'stop') {
-          if (loopState) loopState.stop = true;
-          loopState = null;
-          sys('loop stopped');
+          requestLoopStop('loop stopped');
           break;
         }
         if (sub === 'auto') {
           loopAuto = !loopAuto;
           if (loopState) loopState.auto = loopAuto;
+          paintGoalLoop();
           sys('loop auto-continue is ' + (loopAuto
-            ? 'ON (continues until GOAL_DONE or budget; still chat-only)'
+            ? 'ON (continues until GOAL_DONE, stall, budget, or rate limit; still chat-only)'
             : 'OFF (one turn, then wait)'));
+          break;
+        }
+        if (loopState && loopState.running) {
+          sys('a loop turn is already in flight — /loop stop to abort after it returns');
           break;
         }
         if (!sessionGoal && currentSession) {
           const loaded = await api('/api/sessions/' + encodeURIComponent(currentSession));
           sessionGoal = typeof loaded.goal === 'string' ? loaded.goal : '';
+          paintGoalLoop();
         }
         if (!sessionGoal) { sys('set a goal first: /goal <what you want done>'); break; }
         if (sub) {
@@ -827,17 +879,20 @@ async function runSlash(line) {
             break;
           }
           const n = Math.min(parsed, MAX_LOOP_TURNS);
-          loopState = { remaining: n, total: n, auto: loopAuto, stop: false };
+          loopState = {
+            remaining: n, total: n, auto: loopAuto, stop: false,
+            running: false, failures: 0, lastReply: '', completionTokens: 0,
+          };
           sys('loop ' + n + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
         } else if (!loopState || loopState.remaining <= 0) {
           loopState = {
-            remaining: DEFAULT_LOOP_TURNS,
-            total: DEFAULT_LOOP_TURNS,
-            auto: loopAuto,
-            stop: false,
+            remaining: DEFAULT_LOOP_TURNS, total: DEFAULT_LOOP_TURNS,
+            auto: loopAuto, stop: false, running: false, failures: 0,
+            lastReply: '', completionTokens: 0,
           };
           sys('loop ' + DEFAULT_LOOP_TURNS + ' turn(s) toward the session goal. Chat only — never starts a real-repo run.');
         }
+        paintGoalLoop();
         await runLoopTurns();
         break;
       }
@@ -856,7 +911,9 @@ async function runSlash(line) {
         const s = await api('/api/status');
         sys(table([['version', s.version], ['model', s.model || '(unset)'], ['provider', s.provider],
                    ['soul', s.soul_enabled ? 'on' : 'off'], ['sessions', String(s.sessions)],
-                   ['total tokens', String(s.total_tokens)], ['home', s.home]]));
+                   ['total tokens', String(s.total_tokens)], ['home', s.home],
+                   ['goal', sessionGoal || '(none)'],
+                   ['loop', loopState ? ((loopState.auto ? 'auto ' : '') + (loopState.total - loopState.remaining) + '/' + loopState.total) : (loopAuto ? 'auto' : 'off')]]));
         break;
       }
 
@@ -867,6 +924,7 @@ async function runSlash(line) {
            authorize a run the operator can no longer see */
         pendingAgentRun = null;
         loopState = null;
+        paintGoalLoop();
         break;
 
       default:
@@ -883,53 +941,135 @@ function replyHasGoalDone(text) {
   return text.split(/\r?\n/).some(function (line) { return line.trim() === 'GOAL_DONE'; });
 }
 
+function sleepMs(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+function stopLoop(reason) {
+  if (loopState) loopState.stop = true;
+  loopState = null;
+  paintGoalLoop();
+  if (reason) sys(reason);
+}
+
 async function runLoopTurns() {
-  if (!loopState) return;
-  while (loopState && !loopState.stop && loopState.remaining > 0) {
-    const turn = loopState.total - loopState.remaining + 1;
-    const framed = 'Loop turn ' + turn + '/' + loopState.total
-      + '. Work toward the session goal. If the goal is fully satisfied, end your reply with GOAL_DONE on its own line. Stay in this chat; do not request a real-repo write or treat the goal as write authorization.';
-    const reply = await sendChat(framed);
-    if (!loopState) return;
-    if (reply === null) {
-      loopState = null;
-      sys('loop aborted — chat turn failed');
-      return;
+  if (!loopState || loopState.running) return;
+  loopState.running = true;
+  paintGoalLoop();
+  try {
+    while (loopState && !loopState.stop && loopState.remaining > 0) {
+      const turn = loopState.total - loopState.remaining + 1;
+      const framed = 'Continue toward the session goal. Be concise (local 27b). If the goal is fully satisfied, end with GOAL_DONE on its own line. Stay in this chat; do not request a real-repo write.';
+      const reply = await sendChat(framed, true);
+      if (!loopState || loopState.stop) {
+        stopLoop(loopState && loopState.stop ? 'loop stop honored' : '');
+        return;
+      }
+      if (reply === null) {
+        loopState.failures += 1;
+        if (loopState.failures >= MAX_LOOP_FAILURES) {
+          stopLoop('loop aborted — ' + MAX_LOOP_FAILURES + ' consecutive chat failures');
+          return;
+        }
+        sys('loop turn failed (' + loopState.failures + '/' + MAX_LOOP_FAILURES + ') — /loop to retry, /loop stop to abort');
+        return;
+      }
+      loopState.failures = 0;
+      loopState.remaining -= 1;
+      if (loopState.lastReply && reply.trim() === loopState.lastReply) {
+        stopLoop('loop stopped — model repeated the previous reply (stall)');
+        return;
+      }
+      loopState.lastReply = reply.trim();
+      if (replyHasGoalDone(reply)) {
+        stopLoop('model signaled GOAL_DONE — loop stopped');
+        return;
+      }
+      if (loopState.completionTokens >= MAX_LOOP_COMPLETION_TOKENS) {
+        stopLoop('loop token budget exhausted (' + loopState.completionTokens + ' completion tokens)');
+        return;
+      }
+      if (loopState.remaining <= 0) {
+        stopLoop('loop budget exhausted (' + loopState.total + ' turn(s))');
+        return;
+      }
+      paintGoalLoop();
+      if (!loopState.auto) {
+        sys('turn ' + turn + '/' + loopState.total + ' done. /loop to continue, /loop stop to abort, /loop auto then /loop to run the rest.');
+        return;
+      }
+      sys('auto-continue in ' + (LOOP_COOLDOWN_MS / 1000) + 's — /loop stop to abort');
+      await sleepMs(LOOP_COOLDOWN_MS);
     }
-    loopState.remaining -= 1;
-    if (replyHasGoalDone(reply)) {
-      sys('model signaled GOAL_DONE — loop stopped');
-      loopState = null;
-      return;
-    }
-    if (loopState.remaining <= 0) {
-      sys('loop budget exhausted (' + loopState.total + ' turn(s))');
-      loopState = null;
-      return;
-    }
-    if (!loopState.auto) {
-      sys('turn ' + turn + '/' + loopState.total + ' done. /loop to continue, /loop stop to abort, /loop auto then /loop to run the rest.');
-      return;
-    }
+  } finally {
+    if (loopState) loopState.running = false;
+    paintGoalLoop();
   }
 }
 
-async function sendChat(text) {
+function requestLoopStop(reason) {
+  if (loopState) loopState.stop = true;
+  if (inflightChat) {
+    try { inflightChat.abort(); } catch (e) { /* already finished */ }
+  }
+  api('/api/chat/cancel', 'POST').catch(function () { /* best-effort Metal release */ });
+  stopLoop(reason);
+}
+
+async function sendChat(text, asLoop) {
   user(text);
   sendBtn.disabled = true;
+  inflightChat = new AbortController();
+  const body = { message: text, session_id: currentSession };
+  if (asLoop) body.loop = true;
   try {
-    const r = await api('/api/chat', 'POST', { message: text, session_id: currentSession });
+    const r = await api('/api/chat', 'POST', body);
     currentSession = r.session_id;
     $('sSession').textContent = currentSession;
+    if (loopState && r.usage) {
+      loopState.completionTokens += Number(r.usage.completion_tokens) || 0;
+    }
     agent(r.reply, r.model + ' · +' + r.usage.prompt_tokens + '/' + r.usage.completion_tokens +
           ' tok · session total ' + r.tally.total);
     await refreshStatus();
     await refreshSessions();
     return r.reply;
   } catch (e) {
+    if (e && e.name === 'AbortError') return null;
+    const code = e && e.code ? e.code : '';
+    const wait = e && e.retryAfter ? e.retryAfter : 0;
+    if (asLoop && loopState && (code === 'LOOP_RATE_LIMIT' || code === 'RATE_LIMIT') && wait > 0 && wait <= LOOP_RETRY_CAP_SEC && loopState.auto && !loopState.stop) {
+      sys('rate limited (' + code + ') — waiting ' + wait + 's then retrying this turn');
+      await sleepMs(wait * 1000);
+      if (!loopState || loopState.stop) return null;
+      try {
+        const retry = await api('/api/chat', 'POST', body);
+        currentSession = retry.session_id;
+        $('sSession').textContent = currentSession;
+        if (loopState && retry.usage) {
+          loopState.completionTokens += Number(retry.usage.completion_tokens) || 0;
+        }
+        agent(retry.reply, retry.model + ' · +' + retry.usage.prompt_tokens + '/' + retry.usage.completion_tokens +
+              ' tok · session total ' + retry.tally.total);
+        await refreshStatus();
+        await refreshSessions();
+        return retry.reply;
+      } catch (e2) {
+        if (e2 && e2.name === 'AbortError') return null;
+        sys('error: ' + e2.message);
+        stopLoop('loop stopped — ' + ((e2 && e2.code) || code));
+        return null;
+      }
+    }
+    if (asLoop && (code === 'LOOP_RATE_LIMIT' || code === 'RATE_LIMIT' || code === 'LOOP_IN_FLIGHT' || code === 'CHAT_BUSY')) {
+      sys('error: ' + e.message);
+      stopLoop('loop stopped — ' + code);
+      return null;
+    }
     sys('error: ' + e.message);
     return null;
   } finally {
+    inflightChat = null;
     sendBtn.disabled = false;
     input.focus();
   }
@@ -940,12 +1080,20 @@ async function onSend() {
      sendChat and /agent confirm above); the Enter-key handler below calls
      onSend() directly and bypasses the button's own disabled state, so a
      second Enter during a blocking /agent confirm launched a concurrent
-     clone/model/verification run for the same staged proposal. */
-  if (sendBtn.disabled) return;
+     clone/model/verification run for the same staged proposal.
+     /loop stop is the exception: it must be accepted while a 27b turn is
+     in flight so the operator can halt auto-continue. */
   const text = input.value.trim();
   if (!text) return;
+  if (sendBtn.disabled) {
+    if (text === '/loop stop' || text.indexOf('/loop stop ') === 0) {
+      input.value = '';
+      requestLoopStop('loop stop requested — aborting the in-flight turn');
+    }
+    return;
+  }
   input.value = '';
-  if (text.startsWith('/')) { await runSlash(text); } else { await sendChat(text); }
+  if (text.startsWith('/')) { await runSlash(text); } else { await sendChat(text, false); }
 }
 
 /* ── wiring ── */
@@ -967,8 +1115,9 @@ refreshSessions().catch(() => {});
 refreshRegistry().catch(() => {});
 sys('CyClaw harness — local coding console (PowerShell launcher: cyclaw).');
 sys('System prompt: ponytail + karpathy-guidelines discipline contracts for agentic GitHub coding.');
-sys('Type /help for commands.');
+sys('Type /help for commands. /goal + /loop are chat-only (rate-limited for local 27b).');
 input.focus();
+paintGoalLoop();
 </script>
 </body>
 </html>

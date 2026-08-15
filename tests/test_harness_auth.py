@@ -44,6 +44,7 @@ GUARDED = [
     ("post", "/api/soul", {"enabled": True}),
     ("post", "/api/model", {"model": "qwen3.6:27b"}),
     ("post", "/api/chat", {"message": "hi"}),
+    ("post", "/api/chat/cancel", None),
     ("get", "/api/github/status", None),
     # The agentic coding routes. The decision route is guarded like the rest --
     # the limiter runs first in the chain precisely so it bounds key guessing,
