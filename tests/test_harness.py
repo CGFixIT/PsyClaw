@@ -146,6 +146,15 @@ def test_system_prompt_includes_session_goal():
     assert "Operator goal" not in bare
 
 
+def test_system_prompt_includes_web_extract():
+    prompt = compose_system_prompt(soul_enabled=False, web_context="Source: https://docs.python.org/\n\nHello")
+    assert "Allowlisted web extract" in prompt
+    assert "https://docs.python.org/" in prompt
+    assert "untrusted page content" in prompt
+    assert "Allowlisted web extract" not in compose_system_prompt(soul_enabled=False)
+
+
+
 def test_system_prompt_omits_blank_goal():
     assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal="   ")
     assert "Operator goal" not in compose_system_prompt(soul_enabled=False, goal=None)
@@ -213,7 +222,7 @@ def test_tools_endpoint_lists_only_live_routes(client):
     data = client.get("/api/tools").json()
     assert data["wired"] == data["total"]
     names = {row["name"] for row in data["tools"]}
-    assert {"chat", "goal", "loop", "cancel", "tools", "hybrid_search"} <= names
+    assert {"chat", "goal", "loop", "cancel", "tools", "web", "hybrid_search"} <= names
     for row in data["tools"]:
         if row["kind"] == "harness":
             assert row["wired"] is True

@@ -171,6 +171,29 @@ def main() -> int:
             check("GET /api/skills", False, repr(exc))
         print()
 
+        # ── 2d. GET /api/web (/web allowlist status) ─────────────────────
+        print("[2d] GET /api/web  (/web slash command)")
+        try:
+            r = client.get("/api/web")
+            d = r.json()
+            check(
+                "/api/web defaults to off with an empty allowlist",
+                r.status_code == 200
+                and d.get("enabled") is False
+                and d.get("allowlist") == [],
+                f"status={r.status_code} enabled={d.get('enabled')}",
+            )
+            denied = client.post("/api/web/fetch", json={"url": "https://example.com/"})
+            code = (denied.json().get("detail") or {}).get("code")
+            check(
+                "/api/web/fetch is 409 WEB_DISABLED when off",
+                denied.status_code == 409 and code == "WEB_DISABLED",
+                f"status={denied.status_code} code={code}",
+            )
+        except Exception as exc:
+            check("GET /api/web", False, repr(exc))
+        print()
+
         # ── 3. GET /api/sessions (sidebar sessions pane) ──────────────────
         print("[3] GET /api/sessions  (harness.html sessions pane, pre-create)")
         try:

@@ -75,11 +75,13 @@ def main() -> int:
     # 4. Expected endpoints are registered.
     routes = {getattr(r, "path", None) for r in getattr(app, "routes", [])}
     expected = {
-        "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/sessions",
+        "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/sessions",
         "/api/sessions/{session_id}", "/api/sessions/{session_id}/rename",
         "/api/soul", "/api/model", "/api/chat", "/api/chat/cancel", "/api/github/status",
         "/api/harness/runs",
         "/api/sessions/{session_id}/goal",
+        "/api/web", "/api/web/allow", "/api/web/deny",
+        "/api/web/fetch", "/api/web/search", "/api/web/inject", "/api/web/forget",
         # agentic coding runs: start (blocking), read a record, decide on it.
         # `missing = expected - routes` is a SUBSET check, so a new route is
         # never a failure here -- it is silently uncovered until it is listed.

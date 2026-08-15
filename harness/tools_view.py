@@ -89,6 +89,12 @@ _HARNESS_SURFACES: tuple[tuple[str, str, str, str, str], ...] = (
              "local harness-optimizer run listing"),
     _surface("tools", "/tools", _GET, "/api/tools",
              "this inventory — wired-tool diagram"),
+    _surface("skills", "/skills", _GET, "/api/skills",
+             "wired skill diagram (prompt + agent-check)"),
+    _surface("web", "/web", _GET, "/api/web",
+             "allowlist-only web fetch (off until /web on)"),
+    _surface("web-fetch", "/web fetch", _POST, "/api/web/fetch",
+             "GET one allowlisted URL; no crawl, no search engine"),
 )
 
 

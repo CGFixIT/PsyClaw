@@ -1201,6 +1201,20 @@ def phase_harness_console() -> PhaseResult:
         {"ponytail", "karpathy-guidelines", "invariant-guard"} <= skill_names,
     ))
 
+    r = client.get("/api/web")
+    web_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check("harness_web_200", r.status_code == 200))
+    phase.checks.append(Check(
+        "harness_web_default_off_empty_allowlist",
+        web_payload.get("enabled") is False and web_payload.get("allowlist") == [],
+    ))
+    deny = client.post("/api/web/fetch", json={"url": "https://example.com/"})
+    phase.checks.append(Check(
+        "harness_web_fetch_disabled_is_409",
+        deny.status_code == 409
+        and (deny.json().get("detail") or {}).get("code") == "WEB_DISABLED",
+    ))
+
     log("  --- Sessions CRUD ---")
     r = client.post("/api/sessions", json={"title": "sandbox check"})
     phase.checks.append(Check("harness_session_create_201", r.status_code == 201))
@@ -1361,6 +1375,8 @@ def phase_harness_html() -> PhaseResult:
         ("harness_runs", "/api/harness/runs"),
         ("tools", "/api/tools"),
         ("skills", "/api/skills"),
+        ("web", "/api/web"),
+        ("web_fetch", "/api/web/fetch"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
@@ -1374,7 +1390,7 @@ def phase_harness_html() -> PhaseResult:
 
     log("\n  --- Slash Commands ---")
     slash = (
-        "/session", "/soul", "/model", "/skills", "/tools", "/github",
+        "/session", "/soul", "/model", "/skills", "/tools", "/web", "/github",
         "/harness", "/tokens", "/status", "/goal", "/loop",
     )
     for cmd in slash:

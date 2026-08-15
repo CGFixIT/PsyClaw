@@ -53,8 +53,9 @@ See [`agentic/README.md`](../agentic/README.md) and
 The shipped registry file is empty. That is correct.
 
 Console slash commands include `/skills` and `/tools` (wired-surface
-diagrams: slash or skill path → one-line description; `/… all` includes
-catalog rows, `/… <name>` is a single box), `/goal` (session-scoped, injected into the
+diagrams), `/web` (allowlist-only GET; **off by default**; even when on,
+only operator-allowlisted http(s) hosts can be fetched — no search engine,
+no browser, no private/loopback IPs), `/goal` (session-scoped, injected into the
 system prompt as read-only data) and `/loop` (human-gated chat turns toward
 that goal; never starts a real-repo run). `/loop` is separately rate-limited
 (default 8 turns / 300s) for a local 27b; `/loop stop` aborts the in-flight
@@ -75,6 +76,14 @@ surfaces (`utils.auth.require_api_key`).
 | GET | `/api/registry` | Merged skills / tools / connectors |
 | GET | `/api/tools` | Wiring inventory + ASCII diagram for `/tools` |
 | GET | `/api/skills` | Wiring inventory + ASCII diagram for `/skills` |
+| GET | `/api/web` | `/web` status: enable flag + allowlist hosts (no page text) |
+| POST | `/api/web` | Enable / disable allowlist-only fetch (`enabled`) |
+| POST | `/api/web/allow` | Add a host or URL-prefix |
+| POST | `/api/web/deny` | Remove one allowlist entry |
+| POST | `/api/web/fetch` | GET one allowlisted URL (SSRF-checked, text only) |
+| POST | `/api/web/search` | Scan allowlisted pages for a query (no search engine) |
+| POST | `/api/web/inject` | Put last extract into the next chat system prompt |
+| POST | `/api/web/forget` | Clear injected extract |
 | GET/POST | `/api/sessions` | List / create |
 | GET | `/api/sessions/{id}` | One session |
 | POST | `/api/sessions/{id}/rename` | Rename |

@@ -26,6 +26,8 @@ _MAX_READ_FILES = 8
 _MAX_READ_FILE_LEN = 1024
 # Keep in sync with harness.prompts._MAX_GOAL_CHARS. Session data only.
 _MAX_GOAL_LEN = 2000
+_MAX_WEB_URL_LEN = 500
+_MAX_WEB_QUERY_LEN = 200
 # The agentic planner caps its generated body at 6,000 characters, then adds a
 # fixed truncation marker. Keep enough room for that legitimate reviewed output
 # without turning the browser request into an unbounded prompt transport.
@@ -88,6 +90,16 @@ class RenameRequest(_ForbidModel):
 
 class SoulToggleRequest(_ForbidModel):
     enabled: bool
+
+
+class WebUrlRequest(_ForbidModel):
+    """Add, remove, or fetch one allowlisted URL."""
+
+    url: str = Field(min_length=1, max_length=_MAX_WEB_URL_LEN)
+
+
+class WebSearchRequest(_ForbidModel):
+    query: str = Field(min_length=1, max_length=_MAX_WEB_QUERY_LEN)
 
 
 class GoalRequest(_ForbidModel):

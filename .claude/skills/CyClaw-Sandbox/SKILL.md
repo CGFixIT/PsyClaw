@@ -488,6 +488,7 @@ against the live app rather than grepping source text.
 | `/api/registry` | GET | Returns `skills`, `tools`, `connectors` lists (merged repo + governed-registry + MCP + connector catalog) |
 | `/api/tools` | GET | Wiring inventory for `/tools`: each harness surface + MCP catalog row, `wired` against the live route table, plus an ASCII `diagram`. Read-only; open (same reason as `/api/registry`). MCP rows are AST-catalog only — the console does not invoke them |
 | `/api/skills` | GET | Wiring inventory for `/skills`: prompt-injected discipline skills + skill-backed `/agent checks` profiles + repo/governed catalog. `wired` means the harness actually injects or runs the skill. Read-only; open |
+| `/api/web` | GET | Allowlist + enable flag for `/web`. Open (hosts only, no page text). Fetches stay fail-closed until `/web on` and a non-empty allowlist |
 | `/api/sessions` | GET / POST | List sessions; create returns HTTP 201 with `session_id` |
 | `/api/sessions/{id}` | GET | Session summary + `messages` (`content`/`role`/`ts`); unknown id -> 404 |
 | `/api/sessions/{id}/rename` | POST | Applies a new title; unknown id -> 404 |
@@ -528,11 +529,11 @@ Verify `static/harness.html` contracts:
 - All 3 sidebar panes exist (commands, sessions, registry) with their tab
   markers (`data-pane="commands"` etc.)
 - All `/api/*` endpoints the console calls are present: `/api/status`,
-  `/api/registry`, `/api/tools`, `/api/skills`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
+  `/api/registry`, `/api/tools`, `/api/skills`, `/api/web`, `/api/sessions`, `/api/soul`, `/api/model`, `/api/chat`,
   `/api/chat/cancel`, `/api/github/status`, `/api/harness/runs`, plus the
   session-scoped `/goal` POST built as `/api/sessions/{id}/goal`
 - All documented slash commands are wired: `/session`, `/soul`, `/model`,
-  `/skills`, `/tools`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
+  `/skills`, `/tools`, `/web`, `/github`, `/harness`, `/tokens`, `/status`, `/goal`, `/loop`
 - **XSS safety**: no `innerHTML` usage anywhere -- the console's own comment
   documents this invariant explicitly ("Model output and registry data are
   DATA, never HTML"); rendering goes through `textContent` and

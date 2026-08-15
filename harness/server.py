@@ -74,6 +74,7 @@ from harness.schemas import (
 from harness.sessions import PERSIST_ERROR_CODE, SessionStore, SessionStoreError, TokenTally
 from harness.skills_view import list_wired_skills
 from harness.tools_view import list_wired_tools
+from harness.web_search import WebTool, WebToolError
 from llm.client import ResolvedLocalBackend, resolve_local_backend
 from utils.auth import require_api_key
 from utils.errors import AgenticError
@@ -403,13 +404,18 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
+def create_app(
+    config: HarnessConfig | None = None,
+    chat_client: HarnessChatClient | None = None,
+    web_tool: WebTool | None = None,
+) -> FastAPI:
     """App factory — tests inject a tmp-home config and a MockTransport client."""
     cfg = config or HarnessConfig.load()
     store = SessionStore(cfg.sessions_dir)
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
+    web = web_tool or WebTool(cfg)
 
     # Per-instance, not module-level: create_app() is the harness's test
     # boundary (mirrors store/client/backend above) -- a module-level
@@ -677,6 +683,64 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         """
         return list_wired_skills()
 
+    def _web_err(exc: WebToolError) -> HTTPException:
+        status = _HTTP_BAD_REQUEST
+        if exc.code in {"WEB_DISABLED", "WEB_ALLOWLIST_EMPTY"}:
+            status = _HTTP_CONFLICT
+        if exc.code in {"WEB_FETCH_FAILED", "WEB_DNS"}:
+            status = _HTTP_BAD_GATEWAY
+        return _err(status, exc)
+
+    @app.get("/api/web")
+    def web_status() -> dict:
+        """Allowlist + enable flag. Open: hosts only, no page text."""
+        return web.status()
+
+    @app.post("/api/web", dependencies=guarded)
+    def web_toggle(req: SoulToggleRequest) -> dict:
+        return web.set_enabled(req.enabled)
+
+    @app.post("/api/web/allow", dependencies=guarded)
+    def web_allow(req: _harness_schemas.WebUrlRequest) -> dict:
+        try:
+            return web.allow(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from exc
+
+    @app.post("/api/web/deny", dependencies=guarded)
+    def web_deny(req: _harness_schemas.WebUrlRequest) -> dict:
+        try:
+            return web.deny(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from exc
+
+    @app.post("/api/web/fetch", dependencies=guarded)
+    def web_fetch(req: _harness_schemas.WebUrlRequest, request: Request) -> dict:
+        _enforce_rate_limit(request)
+        try:
+            return web.fetch(req.url)
+        except WebToolError as exc:
+            raise _web_err(exc) from exc
+
+    @app.post("/api/web/search", dependencies=guarded)
+    def web_search(req: _harness_schemas.WebSearchRequest, request: Request) -> dict:
+        _enforce_rate_limit(request)
+        try:
+            return web.search(req.query)
+        except WebToolError as exc:
+            raise _web_err(exc) from exc
+
+    @app.post("/api/web/inject", dependencies=guarded)
+    def web_inject() -> dict:
+        try:
+            return web.inject()
+        except WebToolError as exc:
+            raise _web_err(exc) from exc
+
+    @app.post("/api/web/forget", dependencies=guarded)
+    def web_forget() -> dict:
+        return web.forget()
+
     # -- sessions ------------------------------------------------------
     @app.get("/api/sessions")
     def list_sessions() -> dict:
@@ -795,7 +859,11 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         ]
 
     def _run_model_turn(req: ChatRequest, session):
-        system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled, goal=session.goal)
+        system_prompt = compose_system_prompt(
+            soul_enabled=cfg.soul_enabled,
+            goal=session.goal,
+            web_context=web.context_text(),
+        )
         hist_n = _LOOP_HISTORY_TURNS if req.loop else _HISTORY_TURNS
         hist_chars = _LOOP_HISTORY_CHARS if req.loop else _CHAT_HISTORY_CHARS
         history = clip_history(_prior_chat_turns(session, hist_n), hist_chars)

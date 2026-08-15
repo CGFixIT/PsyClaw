@@ -164,6 +164,9 @@ def test_console_call_extraction_is_not_empty():
     assert ("/api/sessions/{}/goal", "POST") in calls
     assert ("/api/tools", "GET") in calls
     assert ("/api/skills", "GET") in calls
+    assert ("/api/web", "GET") in calls
+    assert ("/api/web/fetch", "POST") in calls
+    assert ("/api/web/search", "POST") in calls
 
 
 @pytest.mark.parametrize("path,method", sorted(_console_calls()))
@@ -296,6 +299,23 @@ def test_console_documents_skills_slash_command():
     assert "/api/agent/" not in body
     assert "renderSkillsDiagram(" in body
     assert "unknown skill:" in body
+
+
+def test_console_documents_web_slash_command():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "['/web [on|off|allow|fetch|search]'" in html
+    assert "case 'web':" in html
+    assert "api('/api/web')" in html
+    assert "function renderWebStatus(" in html
+    start = html.index("case 'web':")
+    end = html.index("case 'github':", start)
+    body = html[start:end]
+    assert "/api/agent/" not in body
+    assert "api('/api/web/fetch'" in body
+    assert "api('/api/web/search'" in body
+    assert "api('/api/web/allow'" in body
+    assert "api('/api/web/inject'" in body
+
 
 
 

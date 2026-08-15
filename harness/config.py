@@ -146,6 +146,7 @@ class HarnessConfig:
     port: int = DEFAULT_PORT
     soul_enabled: bool = True
     selected_model: str = ""
+    web_enabled: bool = False
     repo_root: Path = field(default=_REPO_ROOT)
     config_path: Path = field(init=False)
     sessions_dir: Path = field(init=False)
@@ -177,6 +178,7 @@ class HarnessConfig:
         _atomic_write_json(self.config_path, {
             "soul_enabled": self.soul_enabled,
             "selected_model": self.selected_model,
+            "web_enabled": self.web_enabled,
             "port": self.port,
         })
 
@@ -185,6 +187,8 @@ class HarnessConfig:
             self.soul_enabled = stored["soul_enabled"]
         if isinstance(stored.get("selected_model"), str):
             self.selected_model = stored["selected_model"]
+        if isinstance(stored.get("web_enabled"), bool):
+            self.web_enabled = stored["web_enabled"]
         port = stored.get("port")
         if isinstance(port, int) and _MIN_USER_PORT <= port <= _MAX_PORT:
             self.port = port
