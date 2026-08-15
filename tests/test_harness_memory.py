@@ -13,7 +13,6 @@ from harness.config import HarnessConfig
 from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
 from harness.ollama import HarnessChatClient
 from harness.prompts import compose_system_prompt
-from harness.server import create_app
 
 from tests.test_harness import _auth_headers
 
@@ -28,7 +27,7 @@ def cfg(tmp_path, monkeypatch):
 
 
 def _client(cfg: HarnessConfig) -> TestClient:
-    app = create_app(cfg)
+    app = harness_server.create_app(cfg)
     return TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
 
 
@@ -148,7 +147,7 @@ def test_chat_injects_memory_only_when_on(cfg, monkeypatch):
         model="qwen3.6:27b",
         transport=httpx.MockTransport(handler),
     )
-    app = create_app(cfg, chat)
+    app = harness_server.create_app(cfg, chat)
     test_client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
     sid = test_client.post("/api/sessions", json={"title": "m"}).json()["session_id"]
     test_client.post("/api/memory/add", json={"text": "always run ruff first"})
