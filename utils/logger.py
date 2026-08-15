@@ -243,26 +243,37 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
         cfg = _get_config(config_path)
     log_path = _anchor(cfg["logging"]["audit_file"])
     audit_fields = cfg["logging"].get("audit_fields", {})
-    record = dict(event)  # work on a shallow copy — never mutate the caller's dict
-    if "query" in record and audit_fields.get("include_query_hash", True):
-        raw_query = record.pop("query")
-        record["query_hash"] = hash_query(raw_query)
-    for key, value in list(record.items()):
-        if key in _AUDIT_SKIP_KEYS:
-            continue
-        record[key] = _redact_value(value, cfg)
-    record["timestamp"] = datetime.now(UTC).isoformat()
-    line = json.dumps(record) + "\n"
+    try:
+        record = dict(event)  # work on a shallow copy — never mutate the caller's dict
+        if "query" in record and audit_fields.get("include_query_hash", True):
+            raw_query = record.pop("query")
+            record["query_hash"] = hash_query(raw_query)
+        for key, value in list(record.items()):
+            if key in _AUDIT_SKIP_KEYS:
+                continue
+            record[key] = _redact_value(value, cfg)
+        record["timestamp"] = datetime.now(UTC).isoformat()
+        line = json.dumps(record) + "\n"
+    except (TypeError, ValueError, AttributeError, UnicodeError) as exc:
+        # audit_logger is the unconditional terminal node every graph path
+        # converges on (invariant I4) -- it runs AFTER the answer is already
+        # computed. This function has ~100 call sites across the repo, several
+        # passing through caller-supplied **fields; a non-string "query" value
+        # (hash_query()'s .encode('utf-8') would raise) or any non-JSON-
+        # serializable field anywhere in `event` must not turn an already-good
+        # response into an HTTP 500 purely because the audit trail couldn't be
+        # built. Same rationale as the OSError guard below, extended to cover
+        # record-building/serialization, not just the write.
+        logger.warning("audit_log failed to build event %r: %s", event.get("event"), exc)
+        return
     try:
         with _AUDIT_WRITE_LOCK:
             handle = _audit_handle(log_path)
             handle.write(line)
             handle.flush()
     except OSError as exc:
-        # audit_logger is the unconditional terminal node every graph path
-        # converges on (invariant I4) -- it runs AFTER the answer is already
-        # computed. Letting a disk-full/permission failure here escape would
-        # turn an already-good response into an HTTP 500 purely because the
-        # audit trail couldn't be persisted. Degrade loudly to the app log
-        # instead of raising; the caller still gets its answer.
+        # Letting a disk-full/permission failure here escape would turn an
+        # already-good response into an HTTP 500 purely because the audit
+        # trail couldn't be persisted. Degrade loudly to the app log instead
+        # of raising; the caller still gets its answer.
         logger.warning("audit_log write failed for %s: %s", log_path, exc)

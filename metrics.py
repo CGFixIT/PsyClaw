@@ -76,6 +76,13 @@ def compute_audit_integrity(audit_file: str) -> dict:
         return stats
     with open(path, encoding="utf-8") as f:
         for line in f:
+            if not line.strip():
+                # A blank or whitespace-only line (manual editing, log rotation,
+                # an interleaved partial write from a concurrent writer) is not
+                # corruption -- counting it as malformed_lines alongside genuine
+                # bad JSON produces a false data-integrity alarm on an audit
+                # trail whose actual event data is intact.
+                continue
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -287,6 +294,10 @@ def summarize_audit(audit_file: str) -> dict:
             return
         with open(path, encoding="utf-8") as f:
             for line in f:
+                if not line.strip():
+                    # See compute_audit_integrity's identical guard: a blank
+                    # line is not corruption and must not trip the alarm.
+                    continue
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:

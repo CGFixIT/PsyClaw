@@ -897,10 +897,29 @@ def test_run_post_sync_check_timeout_soft_fails(tmp_path):
     """Timeout must not raise: callers need audits + reindex after successful copy."""
     cfg = _make_cfg(tmp_path, sync_timeout_sec=1)
     with patch("sync.runner.subprocess.run",
-               side_effect=subprocess.TimeoutExpired(cmd=["rclone"], timeout=1)):
+               side_effect=subprocess.TimeoutExpired(cmd=["rclone"], timeout=1)), \
+         _patch_audit() as audit:
         cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE)
     assert cr.ok is False
     assert any("timed out" in e for e in cr.errors)
+    # The docstring's "audit event is emitted whether the check passes or not"
+    # claim must hold for this early-return path too, not only the normal
+    # completed-subprocess path -- a hung/missing rclone is exactly the
+    # failure mode most in need of a durable record.
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(e.get("event") == "sync_check_timeout" and e.get("ok") is False for e in events)
+
+
+def test_run_post_sync_check_subprocess_failure_is_audited(tmp_path):
+    """FileNotFoundError/SubprocessError must be audited like the other soft-fails."""
+    cfg = _make_cfg(tmp_path)
+    with patch("sync.runner.subprocess.run", side_effect=FileNotFoundError("no rclone binary")), \
+         _patch_audit() as audit:
+        cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE)
+    assert cr.ok is False
+    assert any("subprocess failed" in e for e in cr.errors)
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(e.get("event") == "sync_check_subprocess_failed" and e.get("ok") is False for e in events)
 
 
 def test_run_post_sync_check_honors_remaining_budget_override(tmp_path):
@@ -927,12 +946,17 @@ def test_run_post_sync_check_skips_subprocess_when_budget_exhausted(tmp_path):
     so running the check with a meaningless near-zero timeout would just be a
     wasted subprocess spawn on the way to the same soft-fail."""
     cfg = _make_cfg(tmp_path, sync_timeout_sec=3600)
-    with patch("sync.runner.subprocess.run") as mock_run:
+    with patch("sync.runner.subprocess.run") as mock_run, _patch_audit() as audit:
         cr = run_post_sync_check(cfg, rclone_bin=FAKE_RCLONE, remaining_budget_sec=0.0)
 
     mock_run.assert_not_called()
     assert cr.ok is False
     assert any("budget" in e for e in cr.errors)
+    # Budget-exhausted is the failure mode most likely to recur silently (a
+    # slow copy phase eating the whole sync_timeout_sec ceiling every run) --
+    # it must leave a trace, not just a soft-fail return value nobody sees.
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(e.get("event") == "sync_check_skipped_budget_exhausted" and e.get("ok") is False for e in events)
 
 
 def test_run_sync_calls_check_on_success_when_configured(tmp_path):
