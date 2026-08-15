@@ -40,7 +40,7 @@ def _http_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx
     if _http_client is None:
         with _http_client_lock:
             if _http_client is None:
-                _http_client = httpx.Client(timeout=timeout)
+                _http_client = httpx.Client(timeout=timeout, trust_env=False)
     return _http_client.get(url, timeout=timeout, headers=headers)
 
 

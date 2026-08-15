@@ -110,7 +110,7 @@ class HarnessChatClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key.strip()
-        self._client = httpx.Client(timeout=timeout_sec, transport=transport)
+        self._client = httpx.Client(timeout=timeout_sec, transport=transport, trust_env=False)
 
     def close(self) -> None:
         self._client.close()

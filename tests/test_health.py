@@ -520,6 +520,27 @@ class TestSharedClientLifecycle:
         finally:
             health._http_client = None
 
+    def test_shared_client_disables_ambient_proxy(self, monkeypatch):
+        captured: dict = {}
+
+        class _FakeClient:
+            def __init__(self, **kw):
+                captured.update(kw)
+
+            def get(self, url, **kw):
+                return _OKResp()
+
+            def close(self):
+                return None
+
+        monkeypatch.setattr(health.httpx, "Client", _FakeClient)
+        health._http_client = None
+        try:
+            health._http_get(_HOST_MODELS, timeout=1.0)
+        finally:
+            health._http_client = None
+        assert captured.get("trust_env") is False
+
 
 class TestSafeErrorRedactsCredentials:
     """/health is UNAUTHENTICATED (gate.py), so every string _safe_error lets

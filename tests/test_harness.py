@@ -325,6 +325,16 @@ def test_chat_client_refuses_non_loopback():
         HarnessChatClient(base_url="http://169.254.1.1/v1", model="x")
 
 
+def test_chat_client_disables_ambient_proxy():
+    chat = HarnessChatClient(
+        base_url="http://127.0.0.1:11434/v1", model="x", transport=_mock_transport()
+    )
+    try:
+        assert chat._client.trust_env is False
+    finally:
+        chat.close()
+
+
 # -- HTTP API -----------------------------------------------------------------------
 
 def test_status_endpoint(client, cfg):
