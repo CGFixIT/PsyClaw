@@ -59,6 +59,32 @@ def _read_skill_body(name: str, skills_dir: Path | None = None) -> str | None:
         return None
 
 
+def _append_soul(
+    parts: list[str],
+    *,
+    soul_enabled: bool,
+    soul_path: Path | None,
+    soul_max_chars: int,
+) -> None:
+    if not soul_enabled:
+        return
+    soul = soul_path or _SOUL
+    try:
+        text = soul.read_text(encoding="utf-8")[:soul_max_chars].strip()
+    except OSError:
+        text = ""
+    if text:
+        parts.append(f"\n## Operator persona (soul, read-only)\n\n{text}")
+
+
+def _append_goal(parts: list[str], goal: str | None) -> None:
+    clipped = (goal or "").strip()[:_MAX_GOAL_CHARS]
+    if clipped:
+        parts.append(
+            f"\n## Operator goal (session, read-only)\n\n{_GOAL_PREAMBLE}\n\n{clipped}"
+        )
+
+
 def compose_system_prompt(
     *,
     soul_enabled: bool,
@@ -78,15 +104,11 @@ def compose_system_prompt(
         body = _read_skill_body(name, skills_dir)
         if body:
             parts.append(f"\n## Discipline contract: {name}\n\n{body}")
-    if soul_enabled:
-        soul = soul_path or _SOUL
-        try:
-            text = soul.read_text(encoding="utf-8")[:soul_max_chars].strip()
-        except OSError:
-            text = ""
-        if text:
-            parts.append(f"\n## Operator persona (soul, read-only)\n\n{text}")
-    clipped = (goal or "").strip()[:_MAX_GOAL_CHARS]
-    if clipped:
-        parts.append(f"\n## Operator goal (session, read-only)\n\n{_GOAL_PREAMBLE}\n\n{clipped}")
+    _append_soul(
+        parts,
+        soul_enabled=soul_enabled,
+        soul_path=soul_path,
+        soul_max_chars=soul_max_chars,
+    )
+    _append_goal(parts, goal)
     return "\n".join(parts)

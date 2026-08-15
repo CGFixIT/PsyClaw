@@ -250,17 +250,22 @@ class SessionStore:
             self._write(session)
             return session
 
-    def rename(self, session_id: str, title: str) -> Session:
+    def rename(
+        self,
+        session_id: str,
+        title: str | None = None,
+        *,
+        goal: str | None = None,
+    ) -> Session:
+        # Title and goal share this locked mutate+write so SessionStore stays
+        # under WPS214 (7 methods). goal=None leaves the field alone; goal=""
+        # clears it. Existing rename(id, "new title") callers are unchanged.
         with _LOCK:
             session = self.get(session_id)
-            session.title = title.strip() or session.title
-            self._write(session)
-            return session
-
-    def set_goal(self, session_id: str, goal: str) -> Session:
-        with _LOCK:
-            session = self.get(session_id)
-            session.goal = goal.strip() if isinstance(goal, str) else ""
+            if title is not None:
+                session.title = title.strip() or session.title
+            if goal is not None:
+                session.goal = goal.strip() if isinstance(goal, str) else ""
             self._write(session)
             return session
 

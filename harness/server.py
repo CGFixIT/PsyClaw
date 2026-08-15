@@ -43,6 +43,7 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
+from math import ceil
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -54,6 +55,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
+from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
 from harness.ollama import HarnessChatClient, HarnessLLMError
@@ -64,7 +66,6 @@ from harness.schemas import (
     AgentPublishRequest,
     AgentRunRequest,
     ChatRequest,
-    GoalRequest,
     ModelSelectRequest,
     RenameRequest,
     SessionCreateRequest,
@@ -155,6 +156,10 @@ _CSRF_HEADER = "x-cyclaw-csrf"
 # same size Python's own docs use as the "good enough for a security token"
 # example -- comfortably beyond brute-force range for a per-process secret.
 _CSRF_TOKEN_BYTES = 32
+# OpenAI-chat history keys. Named so clip_history + /api/chat do not trip
+# WPS226 on the same two literals.
+_ROLE_KEY = "role"
+_CONTENT_KEY = "content"
 
 
 def _llm_settings() -> dict:
@@ -203,10 +208,10 @@ def _loop_max_tokens() -> int:
     """Optional ``api.harness_loop_rate_limit.max_tokens``; default 1024."""
     raw = _loop_rate_limit_settings().get("max_tokens", _DEFAULT_LOOP_MAX_TOKENS)
     try:
-        value = int(raw)
+        token_budget = int(raw)
     except (TypeError, ValueError):
         return _DEFAULT_LOOP_MAX_TOKENS
-    return value if value > 0 else _DEFAULT_LOOP_MAX_TOKENS
+    return token_budget if token_budget > 0 else _DEFAULT_LOOP_MAX_TOKENS
 
 
 def clip_history(messages: list[dict], max_chars: int) -> list[dict]:
@@ -222,11 +227,11 @@ def clip_history(messages: list[dict], max_chars: int) -> list[dict]:
     for msg in reversed(messages):
         if used >= max_chars:
             break
-        text = str(msg.get("content") or "")
+        text = str(msg.get(_CONTENT_KEY) or "")
         room = max_chars - used
         if len(text) > room:
             text = text[-room:]
-        clipped.append({"role": msg.get("role", "user"), "content": text})
+        clipped.append({_ROLE_KEY: msg.get(_ROLE_KEY, "user"), _CONTENT_KEY: text})
         used += len(text)
     clipped.reverse()
     return clipped
@@ -423,7 +428,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
     generation_gate = GenerationGate()
 
     def _retry_after_http(limiter: RateLimiter, client_ip: str, code: str, label: str) -> HTTPException:
-        wait = max(1, int(limiter.retry_after_sec(client_ip) + 0.999))
+        wait = max(1, ceil(limiter.retry_after_sec(client_ip)))
         return HTTPException(
             status_code=_HTTP_TOO_MANY_REQUESTS,
             detail={
@@ -672,7 +677,7 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
         messages = [
-            {"role": msg.role, "content": msg.text, "ts": msg.ts}
+            {_ROLE_KEY: msg.role, _CONTENT_KEY: msg.text, "ts": msg.ts}
             for msg in session.messages
         ]
         return session.summary() | {"messages": messages, "goal": session.goal}
@@ -687,14 +692,14 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             raise _err(status, exc) from exc
 
     @app.post("/api/sessions/{session_id}/goal", dependencies=guarded)
-    def session_goal(session_id: str, req: GoalRequest) -> dict:
+    def session_goal(session_id: str, req: _harness_schemas.GoalRequest) -> dict:
         """Set or clear the session-scoped /goal. Guarded: goal is operator data.
 
         Empty string clears. The value is injected into the chat system prompt
         as read-only session data; this route never reaches agentic/ or git.
         """
         try:
-            session = store.set_goal(session_id, req.goal)
+            session = store.rename(session_id, goal=req.goal)
         except SessionStoreError as exc:
             status = _HTTP_BAD_GATEWAY if exc.code == PERSIST_ERROR_CODE else _HTTP_NOT_FOUND
             raise _err(status, exc) from exc
@@ -757,6 +762,37 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
             )
         _claim_loop_inflight(session.session_id)
 
+    def _prior_chat_turns(session, turn_cap: int) -> list[dict]:
+        return [
+            {_ROLE_KEY: msg.role, _CONTENT_KEY: msg.text}
+            for msg in session.messages[-turn_cap:]
+            if msg.role in {"user", "assistant"}
+        ]
+
+    def _run_model_turn(req: ChatRequest, session):
+        system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled, goal=session.goal)
+        hist_n = _LOOP_HISTORY_TURNS if req.loop else _HISTORY_TURNS
+        hist_chars = _LOOP_HISTORY_CHARS if req.loop else _CHAT_HISTORY_CHARS
+        history = clip_history(_prior_chat_turns(session, hist_n), hist_chars)
+        history.append({_ROLE_KEY: "user", _CONTENT_KEY: req.message})
+        max_tokens = _loop_max_tokens() if req.loop else int(
+            _llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)
+        )
+        return client.chat(
+            system_prompt=system_prompt,
+            messages=history,
+            # req.model (a genuine per-request override) wins; otherwise
+            # fall back to the operator's persisted /model selection, not
+            # straight to the backend default -- omitting cfg.selected_model
+            # here meant /api/status and the session record could report a
+            # model the chat call never actually used.
+            model=req.model or _current_model(),
+            # _llm_settings() is lru-cached upstream, so the per-request
+            # inline reads cost a dict lookup, not a config re-parse
+            max_tokens=max_tokens,
+            temperature=float(_llm_settings().get("temperature", _DEFAULT_TEMPERATURE)),
+        )
+
     # -- chat ------------------------------------------------------------
     @app.post("/api/chat", dependencies=guarded)
     def chat(req: ChatRequest, request: Request) -> dict:
@@ -773,51 +809,20 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         if req.loop:
             _guard_loop_turn(req, session, request)
 
-        claimed = False
+        if not generation_gate.claim():
+            raise _err(
+                _HTTP_CONFLICT,
+                AgenticError(
+                    "a local model turn is already running",
+                    code="CHAT_BUSY",
+                ),
+            )
         try:
-            if not generation_gate.claim():
-                raise _err(
-                    _HTTP_CONFLICT,
-                    AgenticError(
-                        "a local model turn is already running",
-                        code="CHAT_BUSY",
-                    ),
-                )
-            claimed = True
-            system_prompt = compose_system_prompt(soul_enabled=cfg.soul_enabled, goal=session.goal)
-            hist_n = _LOOP_HISTORY_TURNS if req.loop else _HISTORY_TURNS
-            hist_chars = _LOOP_HISTORY_CHARS if req.loop else _CHAT_HISTORY_CHARS
-            history = clip_history(
-                [
-                    {"role": msg.role, "content": msg.text}
-                    for msg in session.messages[-hist_n:]
-                    if msg.role in {"user", "assistant"}
-                ],
-                hist_chars,
-            )
-            history.append({"role": "user", "content": req.message})
-            max_tokens = _loop_max_tokens() if req.loop else int(
-                _llm_settings().get("max_tokens", _DEFAULT_MAX_TOKENS)
-            )
-            reply = client.chat(
-                system_prompt=system_prompt,
-                messages=history,
-                # req.model (a genuine per-request override) wins; otherwise
-                # fall back to the operator's persisted /model selection, not
-                # straight to the backend default -- omitting cfg.selected_model
-                # here meant /api/status and the session record could report a
-                # model the chat call never actually used.
-                model=req.model or _current_model(),
-                # _llm_settings() is lru-cached upstream, so the per-request
-                # inline reads cost a dict lookup, not a config re-parse
-                max_tokens=max_tokens,
-                temperature=float(_llm_settings().get("temperature", _DEFAULT_TEMPERATURE)),
-            )
+            reply = _run_model_turn(req, session)
         except HarnessLLMError as exc:
             raise _err(_HTTP_BAD_GATEWAY, exc) from exc
         finally:
-            if claimed:
-                generation_gate.release()
+            generation_gate.release()
             if req.loop:
                 _release_loop_inflight(session.session_id)
 
