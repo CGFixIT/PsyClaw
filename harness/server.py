@@ -47,7 +47,10 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response as StarletteResponse
 
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
@@ -267,6 +270,35 @@ def _timeout_err(action: str, exc: subprocess.TimeoutExpired) -> HTTPException:
     )
 
 
+class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    # Mirrors gate.py's middleware of the same name. The harness had only
+    # TrustedHostMiddleware, so its ~20 /api/* JSON routes carried no nosniff,
+    # no framing control, and no CSP at all -- on the MORE privileged of the two
+    # surfaces (these routes run checks, push branches, and open PRs), while the
+    # read-mostly gateway on 8787 was fully hardened.
+    #
+    # setdefault, not assignment, for one load-bearing reason: the GET /
+    # console handler sets its own Content-Security-Policy and must keep it.
+    # static/harness.html embeds an INLINE <script> (unlike terminal.html, which
+    # loads /static/terminal.js), so gate.py's `script-src 'self'` would render
+    # the console blank. The strict default-src 'none' below therefore applies
+    # only to responses that do not set their own policy -- i.e. the JSON API,
+    # where it is exactly right and costs nothing, since a JSON document loads
+    # no subresources.
+    async def dispatch(self, request: StarletteRequest, call_next):  # type: ignore[override]
+        response: StarletteResponse = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
+        return response
+
+
 def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClient | None = None) -> FastAPI:
     """App factory — tests inject a tmp-home config and a MockTransport client."""
     cfg = config or HarnessConfig.load()
@@ -424,6 +456,11 @@ def create_app(config: HarnessConfig | None = None, chat_client: HarnessChatClie
         lifespan=lifespan,
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(_LOOPBACK_HOSTS))
+    # Added AFTER TrustedHost so (per Starlette's outside-in add_middleware
+    # ordering) it is the OUTERMOST middleware and therefore stamps its headers
+    # on every response, including the 400 a rejected Host produces. Same
+    # ordering rationale gate.py documents for its own copy.
+    app.add_middleware(_SecurityHeadersMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def _on_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:

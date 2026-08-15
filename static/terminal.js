@@ -123,7 +123,19 @@ function setSoulStatus(message, tone = '') {
 async function checkHealth() {
   try {
     const resp = await fetchWithTimeout(`${API}/health`, {}, 3000);
-    const data = await resp.json();
+    // Every other fetch in this file guards on resp.ok and tolerates a
+    // non-JSON body; this one did neither. A gateway answering 4xx/5xx with a
+    // JSON error body (FastAPI's {"detail": ...}) flowed into the success
+    // branch: data.status was undefined, so the footer rendered "gateway
+    // undefined" while the dot left the offline state, a bogus
+    // graph_timeout_sec could be adopted as the query deadline, and -- worst --
+    // healthBackoffMs was reset to the base interval, so the console kept
+    // polling a failing gateway every 15s while telling the operator it was
+    // fine. Treat any non-2xx as unreachable and fall through to the catch.
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(extractErrorMessage(data, `health check failed (${resp.status})`));
+    }
     statusDot.className = 'status-dot';
     statusText.textContent = `gateway ${data.status}`;
     modeBadge.textContent = data.mode || 'offline';
