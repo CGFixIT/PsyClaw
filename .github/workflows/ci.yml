@@ -41,6 +41,29 @@ permissions:
   contents: read
 
 jobs:
+  docker-build:
+    name: docker-build (Dockerfile sanity)
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7.1.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
   # Fast, no-heavy-deps gates that run before the expensive matrix below.
   # Neither needs torch/chromadb/sentence-transformers, so both finish in
   # well under a minute on a cache hit.
@@ -658,7 +681,7 @@ jobs:
           try {
             $mock = Start-CyClawProcess -Name "mock-ollama" -WorkingDirectory $RuntimeDir -Arguments @(
               (Join-Path $env:GITHUB_WORKSPACE ".claude\skills\CyClaw-Sandbox\mock_ollama.py"),
-              "--host", "127.0.0.1", "--port", "11434", "--model", "qwen3.6:27b"
+              "--host", "127.0.0.1", "--port", "11434", "--model", "qwen3.8:27b"
             )
             Wait-CyClawEndpoint -Name "mock Ollama" -Uri "http://127.0.0.1:11434/api/tags" -Process $mock
 
