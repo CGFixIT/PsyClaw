@@ -155,8 +155,9 @@ jobs:
           # PYSEC-2026-311) and pip-audit.yml (--ignore-vuln CVE-2026-45829) -- all
           # aliases of one advisory. dependency-review was the one gate still missing
           # it, so it failed on every PR that touches chromadb's pin. Allow-list the
-          # single documented GHSA only; every other high/critical advisory (including
-          # any future chromadb CVE) still fails this gate. See SECURITY.md.
+          # GHSA form only (the action supports GHSA IDs only); if a new CVE form is
+          # issued or the advisory is re-catalogued, this list will need updating.
+          # Every other high/critical advisory still fails this gate. See SECURITY.md.
           allow-ghsas: GHSA-f4j7-r4q5-qw2c
 
   windows-installer-smoke:
@@ -794,10 +795,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: |
-            constraints.txt
-            pyproject.toml
 
       - name: Install ollama-mock-smoke test deps (no torch/chromadb needed)
         # pytest always imports tests/conftest.py regardless of which test file
@@ -843,10 +840,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: |
-            constraints.txt
-            pyproject.toml
 
       - name: Install real-repo-run-smoke test deps (no torch/chromadb needed)
         # Same minimal set ollama-mock-smoke installs, for the same reason
@@ -889,10 +882,6 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: |
-            pyproject.toml
-            constraints.txt
 
       - name: Install optional Deep Agents harness dependencies
         shell: bash
