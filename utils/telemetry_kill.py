@@ -66,8 +66,30 @@ import os
 # Names and values are contractual: tests/test_telemetry_kill.py asserts each
 # one, and treats a failure as P0 (live telemetry leakage).
 TELEMETRY_KILL: dict[str, str] = {
+    # The four names below are ONE switch with a namespace precedence order,
+    # not four mechanisms. Verified 2026-08-15 against the installed
+    # langsmith 0.10.15 (which langchain-core 1.5.0's _tracing_v2_is_enabled
+    # now fully delegates to, tracers/context.py:132-135): tracing_is_enabled()
+    # calls get_env_var("TRACING_V2", default=get_env_var("TRACING")) at
+    # utils.py:141, and get_env_var (utils.py:418-442) tries the LANGSMITH_
+    # prefix before LANGCHAIN_ and skips only EMPTY values -- so the live
+    # precedence is LANGSMITH_TRACING_V2 > LANGCHAIN_TRACING_V2 >
+    # LANGSMITH_TRACING > LANGCHAIN_TRACING, the value must be exactly "true"
+    # to enable, and a non-empty "false" at a higher-precedence name shadows
+    # everything after it. All four must be pinned: an ambient value at any
+    # single unpinned name would win over every pinned lower-precedence one,
+    # latch permanently via get_env_var's @functools.lru_cache, and upload
+    # every run -- langsmith attempts the upload even with NO API key
+    # (client.py:712-738 only warns), so the credential pop below is not a
+    # substitute. "false" is inert on every reader: langsmith requires
+    # exactly "true", and langchain_core's env_var_is_set treats "false" as
+    # unset (utils/env.py:18-23), which also keeps the legacy
+    # LANGCHAIN_TRACING v1 check (callbacks/manager.py:2492-2506) from
+    # raising its RuntimeError on an ambient truthy value.
+    "LANGSMITH_TRACING_V2": "false",
     "LANGCHAIN_TRACING_V2": "false",
     "LANGSMITH_TRACING": "false",
+    "LANGCHAIN_TRACING": "false",
     # LangSmith's newer OTel-based trace route (langsmith[otel] +
     # LANGSMITH_OTEL_ENABLED=true), separate from the LANGSMITH_TRACING flag
     # above. OTEL_SDK_DISABLED below already neuters the OTel SDK generally,
@@ -126,7 +148,23 @@ TELEMETRY_KILL: dict[str, str] = {
 # Credentials that, if present, would let a tracing SDK authenticate to a remote
 # collector. Removed rather than blanked so no SDK can read an empty-but-present
 # value and treat it as configured.
-_TRACING_CREDENTIALS = ("LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT")
+#
+# The two LANGSMITH_ destination names are defense-in-depth, added 2026-08-15
+# alongside the tracing-namespace fix above: with tracing pinned off at all
+# four names nothing should read them at all, but the pop tuple used to carry
+# LANGCHAIN_ENDPOINT without its LANGSMITH_ twin, so a future regression that
+# re-enabled tracing could still have been pointed at an arbitrary host by an
+# ambient value. LANGSMITH_RUNS_ENDPOINTS (langsmith run_trees.py:1344) is the
+# same exposure with an attacker-chosen fan-out list rather than one URL.
+# Popping only ever removes a destination override; it can never enable an
+# upload, so this is safe unconditionally.
+_TRACING_CREDENTIALS = (
+    "LANGCHAIN_API_KEY",
+    "LANGSMITH_API_KEY",
+    "LANGCHAIN_ENDPOINT",
+    "LANGSMITH_ENDPOINT",
+    "LANGSMITH_RUNS_ENDPOINTS",
+)
 
 
 def apply_telemetry_kill() -> dict[str, str]:

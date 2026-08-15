@@ -61,7 +61,14 @@ from pathlib import Path
 # dict but absent here is new and expected -- T2 reports it as INFO so this
 # list gets updated, not because it is dangerous by itself.
 BASELINE_KEYS = frozenset({
-    "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING", "LANGSMITH_OTEL_ENABLED",
+    # All four tracing names, not just two: langsmith's get_env_var resolves
+    # LANGSMITH_TRACING_V2 > LANGCHAIN_TRACING_V2 > LANGSMITH_TRACING >
+    # LANGCHAIN_TRACING, so leaving any one unpinned lets an ambient value at
+    # that name win over every pinned name below it (verified 2026-08-15
+    # against installed langsmith 0.10.15 -- see utils/telemetry_kill.py).
+    "LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING_V2",
+    "LANGSMITH_TRACING", "LANGCHAIN_TRACING",
+    "LANGSMITH_OTEL_ENABLED",
     "LANGGRAPH_CLI_NO_ANALYTICS",
     "NEMO_GUARDRAILS_NO_USAGE_STATS", "ANONYMIZED_TELEMETRY",
     "HF_HUB_DISABLE_TELEMETRY", "DO_NOT_TRACK", "ORT_TELEMETRY_OPT_OUT",
@@ -70,7 +77,12 @@ BASELINE_KEYS = frozenset({
     "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER",
 })
 
-BASELINE_CREDENTIALS = frozenset({"LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT"})
+BASELINE_CREDENTIALS = frozenset({
+    "LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT",
+    # Destination overrides, popped as defense-in-depth since 2026-08-15 so a
+    # future tracing regression cannot also be aimed at an arbitrary host.
+    "LANGSMITH_ENDPOINT", "LANGSMITH_RUNS_ENDPOINTS",
+})
 
 # Vendor pins whose telemetry surface this dict targets, and the version last
 # verified against that vendor's actual source (not just its docs). Pulled
@@ -79,9 +91,14 @@ BASELINE_CREDENTIALS = frozenset({"LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LAN
 # live-search half of this skill against that vendor's current release notes.
 LAST_VERIFIED_VENDOR_PINS = {
     "chromadb": "1.5.9",
-    "langchain": "1.3.11",
-    "langchain-core": "1.4.8",
-    "langgraph": "1.2.6",
+    # The three langchain-family pins were re-verified 2026-08-15 by reading
+    # the installed source directly (langchain-core 1.5.0 delegates tracing
+    # entirely to langsmith 0.10.15; langgraph 1.2.9 + sdk/checkpoint/prebuilt
+    # carry no telemetry mechanism of their own). That pass found and closed
+    # the LANGSMITH_TRACING_V2 precedence gap -- see utils/telemetry_kill.py.
+    "langchain": "1.3.14",
+    "langchain-core": "1.5.0",
+    "langgraph": "1.2.9",
     "nemoguardrails": "0.23.0",
     "sentence-transformers": "5.6.0",
 }
@@ -96,7 +113,7 @@ TRANSITIVE_VENDORS_TO_REPORT = ("huggingface_hub", "onnxruntime", "opentelemetry
 # rule; vendors do not ship telemetry changes on a schedule.
 STALE_AFTER_DAYS = 120
 
-_TODAY = date(2026, 7, 29)  # scan-day anchor for THIS script's own last edit; see SKILL.md Step 4
+_TODAY = date(2026, 8, 15)  # scan-day anchor for THIS script's own last edit; see SKILL.md Step 4
 
 _VERIFIED_DATE_RE = re.compile(r"[Vv]erified\s+(\d{4}-\d{2}-\d{2})")
 
