@@ -354,6 +354,67 @@ def test_hybrid_confirmation_state_error_is_audited_without_query(tmp_path: Path
     )
 
 
+def test_failed_send_after_a_paid_confirm_is_audited_before_propagating(tmp_path: Path) -> None:
+    """A billed hybrid answer that fails to deliver must leave a durable trace.
+
+    The T3 token is claimed (and deleted) before post_query() bills the
+    provider and before send_message() delivers the reply. If send_message()
+    then fails, the token is already gone: a Telegram redelivery of the same
+    update falls back to an offline-only answer with no signal that a paid
+    confirmation was spent and lost. handle_inbound_text must emit a distinct
+    audit event for this case before re-raising.
+    """
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    with (
+        patch("telegram.runner.claim_hybrid_confirm", return_value="grok"),
+        patch("telegram.runner.audit_log") as audit,
+        patch(
+            "telegram.client.post_query",
+            return_value={"answer": "external, already billed"},
+        ),
+        patch(
+            "telegram.client.send_message",
+            side_effect=TelegramRuntimeError(
+                "transport error", details={"method": "sendMessage", "retryable": True}
+            ),
+        ),
+        pytest.raises(TelegramRuntimeError),
+    ):
+        handle_inbound_text(cfg, chat_id=42, text="paid but undelivered", update_id=21)
+
+    events = [call.args[0] for call in audit.call_args_list]
+    assert any(
+        event.get("event") == "telegram_hybrid_answer_undelivered"
+        and event.get("provider") == "grok"
+        and event.get("update_id") == 21
+        for event in events
+    )
+
+
+def test_free_answer_send_failure_does_not_emit_the_paid_loss_event(tmp_path: Path) -> None:
+    """Only a provider-billed answer needs the undelivered-answer audit event."""
+    cfg = _cfg(tmp_path, allow_hybrid_confirm=True)
+    with (
+        patch("telegram.runner.claim_hybrid_confirm", return_value=None),
+        patch("telegram.runner.audit_log") as audit,
+        patch(
+            "telegram.client.post_query",
+            return_value={"answer": "offline only"},
+        ),
+        patch(
+            "telegram.client.send_message",
+            side_effect=TelegramRuntimeError(
+                "transport error", details={"method": "sendMessage", "retryable": True}
+            ),
+        ),
+        pytest.raises(TelegramRuntimeError),
+    ):
+        handle_inbound_text(cfg, chat_id=42, text="free and undelivered", update_id=22)
+
+    events = [call.args[0] for call in audit.call_args_list]
+    assert not any(event.get("event") == "telegram_hybrid_answer_undelivered" for event in events)
+
+
 def test_poll_once_ignores_edited_message_without_spending_t3(tmp_path: Path) -> None:
     """An edit is not a new inbound: ack it, do not query or claim T3."""
     cfg = _cfg(tmp_path, allow_hybrid_confirm=True)

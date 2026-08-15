@@ -650,6 +650,14 @@ def download_file(cfg: TelegramConfig, *, file_path: str, max_bytes: int) -> byt
             ) as resp:
                 if resp.status_code == 429:
                     try:
+                        # This is a streaming response (httpx.Client.stream()); the body
+                        # is not buffered yet, and .json() on an unread stream raises
+                        # httpx.ResponseNotRead -- a bare RuntimeError, not a ValueError
+                        # and not an httpx.HTTPError, so it would otherwise fall through
+                        # both except clauses below and crash the whole poller on the
+                        # first 429 mid-download. .read() buffers the body so .json()
+                        # can parse it.
+                        resp.read()
                         raw_data = resp.json()
                     except ValueError:
                         raw_data = {}
