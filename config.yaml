@@ -511,40 +511,44 @@ security:
   # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
   require_env:
     - "GROK_API_KEY"
-  # Global bypass for the CYCLAW_API_KEY Bearer-token gate (require_api_key in
-  # gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/* system,
-  # which stays governed by auth.enabled regardless of this flag. Read by both
-  # gate.py (soul/*, ops/*, memory/*, audit/summary -- 17 routes) and
-  # harness/server.py (26 routes behind its `guarded` dependency list,
-  # including /api/agent/run+push+publish). Defaults false: unchanged,
-  # fail-closed behavior (unset CYCLAW_API_KEY refuses the endpoint; a wrong
-  # key 401s). Set true only for a genuinely trusted, fully loopback-isolated
-  # deployment -- it removes authentication from every route above for ANY
-  # caller that can reach the bound host/port. If allowed_hosts/allowed_origins
-  # below carry LAN entries (as this operator's does), true means every device
-  # on that LAN gets unauthenticated soul mutation, agentic/fsconnect/sqlconnect
-  # ops shims, and harness agent-run/push/publish (writes to GitHub). config-
-  # guard's C13 check warns (does not fail) when this combination is detected.
-  # Two hard controls back this up (not just the C13 warning):
-  # DOCKER: this flag does NOT apply inside a container. docker-compose
-  # publishes 127.0.0.1:8787:8787, but Docker's NAT rewrites the source address,
-  # so the peer gate.py sees is the bridge gateway (172.x), never loopback --
-  # the bypass is therefore denied and the routes stay key-gated. That is
-  # deliberate and cannot be safely relaxed: from inside the container a
-  # request published on 127.0.0.1 and one published on 0.0.0.0 are
-  # indistinguishable, so trusting the bridge would reopen the LAN hole for
-  # anyone who changed that publish line. Set CYCLAW_API_KEY in the container
-  # instead (compose does not set one today).
+  # Operator opt-out from the CYCLAW_API_KEY Bearer-token gate (require_api_key
+  # in gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/*
+  # system, which stays governed by auth.enabled regardless of this flag.
+  # Read by both gate.py (soul/*, ops/*, memory/*, audit/summary -- 17 routes)
+  # and harness/server.py (26 routes behind its `guarded` list, including
+  # /api/agent/run+push+publish and /api/keys).
   #
-  #  1. PER-REQUEST: the bypass only applies to a LOOPBACK PEER. A remote caller
-  #     always needs the real key, on both apps. This is the durable one -- it
-  #     holds no matter how the process was launched, including the container's
-  #     `uvicorn gate:app --host 0.0.0.0` and `uvicorn harness.server:app`,
-  #     neither of which runs the bind guards below.
-  #  2. AT BIND: gate.py's _require_loopback_bind refuses to start when this is
-  #     true and api.host is non-loopback, even with auth.enabled +
-  #     api.tls.enabled + a real /query credential -- those prove the QUERY path
-  #     carries a session and say nothing about the API-key routes this opens.
+  # Ships false: unchanged fail-closed behavior (an unset CYCLAW_API_KEY
+  # refuses the endpoint; a wrong key 401s).
+  #
+  # When true, the bypass is granted ONLY to a request whose socket peer is a
+  # loopback address. A remote caller still needs the real key, on both apps.
+  # That is deliberately keyed on the peer rather than:
+  #   * the Host header -- attacker-supplied; TrustedHostMiddleware is a
+  #     DNS-rebinding control, not authentication; or
+  #   * the bind address -- unknown to a request handler, and the bind guard
+  #     below runs only under main(), which `uvicorn gate:app --host 0.0.0.0`
+  #     (the shipped container CMD) and `uvicorn harness.server:app` skip.
+  # So entries in allowed_hosts / allowed_origins below do NOT widen this: they
+  # filter Host/Origin headers on requests that already arrived and open no
+  # listening socket. LAN names there cannot make a loopback-bound server
+  # reachable from the LAN, and even a genuinely remote request is refused the
+  # bypass. config-guard's C13 ignores those lists for exactly this reason.
+  #
+  # What DOES matter is the bind. gate.py's _require_loopback_bind refuses to
+  # start when this is true and api.host is non-loopback -- including via the
+  # auth.enabled + api.tls.enabled route past loopback, since those prove the
+  # QUERY path carries a session and say nothing about the API-key routes this
+  # flag opens. C13 warns on that same pair. This is defence in depth; the
+  # per-request peer check above is the control that holds everywhere.
+  #
+  # DOCKER: the flag is inert in a container. NAT rewrites the source address,
+  # so the peer is the bridge gateway (172.x), never loopback, and the routes
+  # stay key-gated. Not a defect to route around: from inside the container a
+  # request published on 127.0.0.1:8787 and one published on 0.0.0.0:8787 are
+  # indistinguishable, so trusting the bridge would re-expose every
+  # containerised deployment. Set CYCLAW_API_KEY in the container instead
+  # (docker-compose.yml does not set one today).
   api_key_optional: false
   # Starlette buffers a request's entire raw body into memory before Pydantic
   # validation runs, so schemas/api.py's per-field max_length caps (largest is
