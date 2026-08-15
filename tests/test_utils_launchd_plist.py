@@ -137,3 +137,35 @@ def test_is_loaded_true_and_false() -> None:
             assert launchd_plist.is_loaded("com.example.job") is True
         with patch("utils.launchd_plist.subprocess.run", return_value=_completed(returncode=1)):
             assert launchd_plist.is_loaded("com.example.job") is False
+
+
+def test_keychain_wrapper_path(tmp_path: Path) -> None:
+    assert launchd_plist.keychain_wrapper_path(tmp_path) == str(
+        tmp_path / "macos" / "cyclaw-keychain-env.sh"
+    )
+
+
+def test_wrap_with_keychain_secrets_empty_list_is_noop() -> None:
+    argv = ["python", "-m", "telegram.cli", "poll"]
+    assert launchd_plist.wrap_with_keychain_secrets(argv, [], "/wrapper.sh") == argv
+
+
+def test_wrap_with_keychain_secrets_single_secret() -> None:
+    argv = ["python", "-m", "telegram.cli", "poll"]
+    wrapped = launchd_plist.wrap_with_keychain_secrets(
+        argv, [("svc-a", "VAR_A")], "/wrapper.sh"
+    )
+    assert wrapped == ["/wrapper.sh", "svc-a", "VAR_A", "--", "python", "-m", "telegram.cli", "poll"]
+
+
+def test_wrap_with_keychain_secrets_chains_in_order() -> None:
+    argv = ["python", "poll"]
+    wrapped = launchd_plist.wrap_with_keychain_secrets(
+        argv, [("svc-a", "VAR_A"), ("svc-b", "VAR_B")], "/wrapper.sh"
+    )
+    # Outermost layer resolves the FIRST secret in the list.
+    assert wrapped == [
+        "/wrapper.sh", "svc-a", "VAR_A", "--",
+        "/wrapper.sh", "svc-b", "VAR_B", "--",
+        "python", "poll",
+    ]

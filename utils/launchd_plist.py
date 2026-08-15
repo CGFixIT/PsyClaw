@@ -19,7 +19,9 @@ Design contract every caller follows (see
   - No secrets in the file. Whether a generated plist's
     ``EnvironmentVariables`` (if any) stays secret-free is the caller's
     responsibility -- this module only writes/removes/probes whatever
-    document dict it is given.
+    document dict it is given. Use :func:`wrap_with_keychain_secrets` to
+    inject a runtime secret via the macOS Keychain instead of ever writing
+    one into ``EnvironmentVariables``.
 
 This module intentionally does NOT depend on ``sync.scheduler``'s
 ``LaunchdScheduler`` (and vice versa): both implement a small, similar
@@ -36,6 +38,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Repo-relative path to the Keychain env-injection wrapper -- see
+# macos/cyclaw-keychain-env.sh's own header for the full contract.
+KEYCHAIN_WRAPPER_RELATIVE_PATH = "macos/cyclaw-keychain-env.sh"
 
 
 def python_executable() -> str:
@@ -158,3 +164,30 @@ def is_loaded(label: str) -> bool | None:
         check=False,
     )
     return probe.returncode == 0
+
+
+def keychain_wrapper_path(repo_root: str | Path) -> str:
+    """Absolute path to ``cyclaw-keychain-env.sh`` within *repo_root*."""
+    return str(Path(repo_root) / KEYCHAIN_WRAPPER_RELATIVE_PATH)
+
+
+def wrap_with_keychain_secrets(
+    argv: list[str], secrets: list[tuple[str, str]], wrapper_path: str
+) -> list[str]:
+    """Prepend one Keychain-wrapper layer per ``(service, env_var_name)`` pair.
+
+    Each layer is ``<wrapper_path> <service> <env_var_name> --``; the
+    innermost layer's ``exec "$@"`` finally reaches *argv*. Composable: N
+    secrets means N nested wrapper invocations chained via ``exec`` inside
+    ``cyclaw-keychain-env.sh``, each exporting one more variable into the
+    inherited environment before re-exec'ing into the next layer (or the
+    real command on the last one). No secret is ever a literal value in the
+    plist this argv gets embedded into -- each wrapper layer resolves its
+    one secret from the Keychain at process-start time, not generation time.
+
+    An empty *secrets* list returns *argv* unchanged.
+    """
+    result = list(argv)
+    for service, var_name in reversed(secrets):
+        result = [wrapper_path, service, var_name, "--", *result]
+    return result

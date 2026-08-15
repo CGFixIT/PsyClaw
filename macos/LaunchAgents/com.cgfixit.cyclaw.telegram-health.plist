@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  CyClaw Telegram T1 — health probe → notify on failure.
+  CyClaw Telegram T1 — health probe, notify on failure.
 
-  DISABLED BY DEFAULT. Operator steps:
+  DISABLED BY DEFAULT.
+
+  Recommended path: `python -m telegram.cli health-plist` generates the
+  same plist from real, resolved install paths and injects the bot token
+  via macos/cyclaw-keychain-env.sh (Keychain), never as a plaintext
+  EnvironmentVariables value. It still never loads the agent; it only
+  prints the `launchctl bootstrap` command to run by hand.
+
+  This hand-editable template remains as a reference/fallback. To enable
+  it directly instead:
     1. Copy to ~/Library/LaunchAgents/ and edit:
          - CYCLAW_REPO path (WorkingDirectory + ProgramArguments python -m)
          - TELEGRAM_BOT_TOKEN in EnvironmentVariables (or use a wrapper that sources a root-owned env file)
-         - chat id in the send --chat-id argument
+         - chat id in the send subcommand's chat-id argument
     2. Ensure config.yaml has telegram.enabled: true, mode: notify, allowed_chat_ids set.
     3. launchctl load ~/Library/LaunchAgents/com.cgfixit.cyclaw.telegram-health.plist
     4. Logs: ~/Library/Logs/CyClaw/telegram-health.log
