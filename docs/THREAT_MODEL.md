@@ -624,7 +624,7 @@ describing its own point in time and is retained as a historical record.
   CORS-simple — could trigger. Those probes are now opt-in via
   `api.health_probe_external_providers`, which ships `false`.
 - **A posture regression cannot fail a build, though a config *error* can.**
-  `invariant-guard` passes 33/33 because I1–I6 and G1–G5 are structural and none
+  `invariant-guard` passes 35/35 because I1–I6 and G1–G5 are structural and none
   encodes a shipped-default posture. `config-guard` **is** build-blocking:
   `ci.yml`'s `discover-skills` job finds every `.claude/skills/*/verify.sh` by
   `find` and runs them as the `verify-skills` matrix, and `config-guard`'s
