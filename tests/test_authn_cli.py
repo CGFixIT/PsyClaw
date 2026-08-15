@@ -94,6 +94,22 @@ class TestAddListDisableEnable:
         assert code == EXIT_FAIL
         assert "unknown user" in capsys.readouterr().err
 
+    def test_add_role_and_list_shows_it(self, config_path, capsys):
+        assert main([
+            "--config", config_path, "add", "eve", "--password", _GOOD_PASSWORD, "--role", "audit",
+        ]) == EXIT_OK
+        capsys.readouterr()
+        assert main(["--config", config_path, "list"]) == EXIT_OK
+        assert "eve" in capsys.readouterr().out
+        assert main(["--config", config_path, "list"]) == EXIT_OK
+        assert "audit" in capsys.readouterr().out
+
+    def test_add_invalid_role_is_exit_fail(self, config_path, capsys):
+        code = main([
+            "--config", config_path, "add", "eve", "--password", _GOOD_PASSWORD, "--role", "root",
+        ])
+        assert code == EXIT_FAIL
+
 
 class TestPasswd:
     def test_passwd_changes_the_password(self, config_path):

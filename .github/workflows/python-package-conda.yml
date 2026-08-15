@@ -133,6 +133,7 @@ jobs:
           --cov=utils.authn_store \
           --cov=utils.authn_manager \
           --cov=utils.authn_cli \
+          --cov=utils.gen_cert \
           --cov=utils.sanitizer \
           --cov=utils.telemetry_kill \
           --cov=utils.config_validation \

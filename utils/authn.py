@@ -78,6 +78,25 @@ class PasswordPolicyError(ValueError):
     """A password or username was rejected before hashing."""
 
 
+ROLES = frozenset({"admin", "operator", "audit"})
+DEFAULT_ROLE = "operator"
+# Single hook for later high-privilege tasks. Do not invent product features
+# here — add a name when a new destructive action exists.
+HIGH_PRIVILEGE = frozenset({"delete_user", "set_role", "disable_last_admin", "dump_secrets"})
+
+
+def validate_role(role: str) -> str:
+    """Return the canonical role, or raise like ``validate_username``."""
+    if not isinstance(role, str):
+        raise PasswordPolicyError("role must be a string")
+    canonical = role.strip().lower()
+    if canonical not in ROLES:
+        raise PasswordPolicyError(
+            f"role must be one of {', '.join(sorted(ROLES))}"
+        )
+    return canonical
+
+
 def validate_username(username: str) -> str:
     """Return the canonical form, or raise.
 

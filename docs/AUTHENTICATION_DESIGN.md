@@ -47,12 +47,14 @@ credential is not readable on the wire.
   Every authenticated user still reaches the same corpus, the same soul, and the
   same model. `docs/THREAT_MODEL.md` §1 stays single-tenant, and this document
   does not change that.
-- **The harness (`:8790`) and MCP server.** Both are separate apps with their
-  own posture. The harness already refuses a non-loopback bind and has its own
-  API-key + origin + CSRF chain; MCP is stdio with `sampling: None`. Neither is
-  touched here.
-- **Authorization / roles.** Every account is equivalent. Role separation is a
-  later question and should not be smuggled in.
+- **MCP server.** Separate app, stdio, `sampling: None`. Untouched.
+- **The harness (`:8790`).** Still loopback-only with its own API-key +
+  origin + CSRF chain on coding routes. Stage 6 shares the **same users
+  table** and a separate `cyclaw_harness_session` cookie. It is not a LAN
+  app.
+- **Authorization / roles.** **Amended (Stage 6).** Accounts now carry a
+  `role` of `admin`, `operator`, or `audit`. This is authorization on the
+  same single-tenant corpus, not multi-tenancy. See §12.
 - **Federation, SSO, OAuth, MFA.** Not now. §11 notes where MFA would attach if
   it is ever wanted.
 
@@ -291,6 +293,7 @@ Each stage is independently reviewable and leaves the tree working.
 | **3** — landed | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
 | **4** — landed | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
 | **5** — landed, PR #825 | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition (implemented as three — see §7) |
+| **6** — landed | Roles (`admin`/`operator`/`audit`), HTTP user admin, shared web Users panel, audit tab | Gated by `auth.enabled` |
 
 ---
 
@@ -346,3 +349,23 @@ A TOTP secret column on `users` and a second step between password verification
 and session issuance. Deliberately not built now — it is the wrong thing to add
 before per-user accounts and TLS exist, and adding it later requires no
 redesign.
+
+---
+
+## 12. Roles (Stage 6)
+
+Three canonical lowercase roles on `users.role`. Bootstrap `admin` is
+`admin`. Existing rows without a column become `operator` except
+`BOOTSTRAP_USERNAME`.
+
+| Role | `/query` | Users panel | Audit tab | delete / set-role |
+|---|---|---|---|---|
+| `admin` | yes | yes | yes | yes (not the last enabled admin) |
+| `operator` | yes | yes (no delete / set-role / touch admins) | no | no |
+| `audit` | **denied** | no | yes | no |
+
+`HIGH_PRIVILEGE` in `utils/authn.py` is the hook for later destructive
+ops. HTTP admin lives on `gate_auth.py` (`/auth/users*`,
+`/auth/audit/summary`). The harness exposes the same store at
+`/api/auth/*` with a separate cookie. Telegram still uses a named
+device token (`cyclaw-user token create <user> telegram`).

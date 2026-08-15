@@ -830,6 +830,8 @@
     <button class="toolbar-btn" id="agenticToggleBtn" aria-label="Toggle Agentic Console (Escape to close)">Agentic Console</button>
     <button class="toolbar-btn" id="fsToggleBtn" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
     <button class="toolbar-btn" id="sqlToggleBtn" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
+    <button class="toolbar-btn" id="usersToggleBtn" hidden aria-label="Toggle Users panel">Users</button>
+    <button class="toolbar-btn" id="auditToggleBtn" hidden aria-label="Toggle Audit panel">Audit</button>
     <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
     <span class="toolbar-auth" id="toolbarAuth">
       <span id="authLoginBox" hidden>
@@ -1011,6 +1013,20 @@
     </div>
   </div>
 
+  <div class="soul-panel" id="usersPanel">
+    <div class="soul-header">
+      <div class="soul-title">Users</div>
+    </div>
+    <div id="usersPanelBody"></div>
+  </div>
+
+  <div class="soul-panel" id="auditPanel">
+    <div class="soul-header">
+      <div class="soul-title">Audit</div>
+    </div>
+    <pre class="proposal-preview" id="auditSummary">Load the Audit panel after login.</pre>
+  </div>
+
   <div class="results" id="results">
     <div class="empty-state" id="emptyState">
       <div class="logo-large">CyClaw</div>
@@ -1042,6 +1058,7 @@
   <span id="footerRight"></span>
 </div>
 
+<script src="/static/auth_admin.js"></script>
 <script src="/static/terminal.js"></script>
 </body>
 </html>

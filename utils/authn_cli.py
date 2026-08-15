@@ -90,7 +90,7 @@ def _prompt_password(*, confirm: bool = True) -> str:
 
 def cmd_add(manager: AuthManager, args: argparse.Namespace) -> int:
     password = args.password or _prompt_password()
-    username = manager.create_user(args.username, password)
+    username = manager.create_user(args.username, password, role=args.role)
     print(f"created user: {username}")
     return EXIT_OK
 
@@ -103,7 +103,7 @@ def cmd_list(manager: AuthManager, _args: argparse.Namespace) -> int:
     for u in users:
         state = "disabled" if u.disabled else "enabled"
         locked = " LOCKED" if u.locked_until_ts else ""
-        print(f"{u.username}\t{state}{locked}\tfailed_count={u.failed_count}")
+        print(f"{u.username}\t{u.role}\t{state}{locked}\tfailed_count={u.failed_count}")
     return EXIT_OK
 
 
@@ -123,6 +123,12 @@ def cmd_passwd(manager: AuthManager, args: argparse.Namespace) -> int:
     password = args.password or _prompt_password()
     manager.set_password(args.username, password)
     print(f"password updated: {args.username}")
+    return EXIT_OK
+
+
+def cmd_role(manager: AuthManager, args: argparse.Namespace) -> int:
+    manager.set_role(args.username, args.role)
+    print(f"role updated: {args.username} -> {args.role}")
     return EXIT_OK
 
 
@@ -168,7 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_add = sub.add_parser("add", help="Create a new account.")
     p_add.add_argument("username")
     p_add.add_argument("--password", help="Omit to be prompted (recommended).")
+    p_add.add_argument("--role", default="operator", help="admin, operator, or audit (default: operator).")
     p_add.set_defaults(func=cmd_add)
+
+    p_role = sub.add_parser("role", help="Set an account's role.")
+    p_role.add_argument("username")
+    p_role.add_argument("role")
+    p_role.set_defaults(func=cmd_role)
 
     p_list = sub.add_parser("list", help="List accounts.")
     p_list.set_defaults(func=cmd_list)

@@ -4,7 +4,7 @@
 
 # 2)
 - upon first launch account auto gen, learn how the rest works and make it more user friendly through web app and add rbac not just accounts 
-> *
+> DONE — first-launch `admin` is still discard-hash + `cyclaw-user passwd admin`; login UI + Users panel on both consoles; roles admin/operator/audit. Not internet-safe.
 
 # 3)
 - Verify certs, in flight encryption, and *telegram* apparently once inside their network/servers I mean it may be encrypted but the point is it’s like meta where their ais resd it - tldr there were some shitty sounding workarounds otherwise just never use telegram for anything I think is worth money or stuff I’d put in keep pass (or do I use a different ;))

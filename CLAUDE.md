@@ -97,7 +97,14 @@ decision.
 | POST | `/ops/sqlconnect` | **API key** | rate-limited; subprocess shim |
 | POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
 | POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
-| GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; 503 when `auth.enabled` is false |
+| GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; returns `username` + `role`; 503 when `auth.enabled` is false |
+| GET | `/auth/users` | **session; admin or operator** | list users, no hashes; 503 when auth off |
+| POST | `/auth/users` | **session+CSRF or admin bearer** | create user; operator cannot create admin |
+| POST | `/auth/users/{u}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
+| POST | `/auth/users/{u}/role` | **admin only** | set role; last-admin protected |
+| POST | `/auth/users/{u}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
+| DELETE | `/auth/users/{u}` | **admin only** | hard delete after revoke; last-admin protected |
+| GET | `/auth/audit/summary` | **session; admin or audit** | reduced audit view; not the ops API key |
 | GET | `/memory/status` | **API key** | rate-limited; always 200 + flags (default-off memory) |
 | GET | `/memory/facts` | **API key** | rate-limited; 404 when `memory.enabled` is false |
 | GET | `/memory/episodes` | **API key** | rate-limited; 404 when `memory.enabled` is false |

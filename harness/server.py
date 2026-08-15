@@ -47,7 +47,7 @@ from math import ceil
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -77,6 +77,7 @@ from harness.skills_view import list_wired_skills
 from harness.tools_view import list_wired_tools
 from harness.web_search import WebTool, WebToolError
 from llm.client import ResolvedLocalBackend, resolve_local_backend
+from schemas.api import AuthCreateUserRequest, AuthLoginRequest, AuthSetPasswordRequest, AuthSetRoleRequest
 from utils.auth import require_api_key
 from utils.errors import AgenticError
 from utils.logger import _get_config, redact_sensitive
@@ -413,6 +414,13 @@ def create_app(
     """App factory — tests inject a tmp-home config and a MockTransport client."""
     cfg = config or HarnessConfig.load()
     store = SessionStore(cfg.sessions_dir)
+    cyclaw_cfg = _get_config(str(_CONFIG_PATH))
+    harness_auth = None
+    auth_block = cyclaw_cfg.get("auth") if isinstance(cyclaw_cfg, dict) else None
+    if isinstance(auth_block, dict) and auth_block.get("enabled") is True:
+        from utils.authn_manager import AuthManager as _AuthManager
+
+        harness_auth = _AuthManager(cyclaw_cfg)
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
@@ -1298,6 +1306,119 @@ def create_app(
             for path in json_files[:_MAX_RUNS]:
                 runs.append({"run_id": path.stem, "path": str(path)})
         return {"runs": runs, "count": len(runs)}
+
+    _HARNESS_SESSION_COOKIE = "cyclaw_harness_session"
+
+    def _require_harness_auth():
+        if harness_auth is None:
+            raise HTTPException(
+                status_code=503,
+                detail={_CODE_KEY: "AUTH_DISABLED", _MESSAGE_KEY: "authentication is not enabled", _DETAILS_KEY: {}},
+            )
+        return harness_auth
+
+    def _harness_actor(cyclaw_harness_session: str | None = Cookie(default=None)):
+        manager = _require_harness_auth()
+        session_info = manager.validate_session(cyclaw_harness_session or "")
+        if session_info is None:
+            raise HTTPException(
+                status_code=401,
+                detail={_CODE_KEY: "AUTH_REQUIRED", _MESSAGE_KEY: "authentication required", _DETAILS_KEY: {}},
+            )
+        user = manager.get_user(session_info.username)
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail={_CODE_KEY: "AUTH_REQUIRED", _MESSAGE_KEY: "authentication required", _DETAILS_KEY: {}},
+            )
+        return user
+
+    auth_open = [Depends(_enforce_rate_limit), Depends(_enforce_same_origin)]
+    auth_sess = [
+        Depends(_enforce_rate_limit),
+        Depends(_enforce_same_origin),
+        Depends(_enforce_csrf_token),
+    ]
+
+    @app.post("/api/auth/login", dependencies=auth_open)
+    async def harness_login(req: AuthLoginRequest, response: Response) -> dict:
+        from utils.errors import AuthAccountLocked, AuthLoginFailed
+
+        manager = _require_harness_auth()
+        try:
+            result = manager.login(req.username, req.password)
+        except AuthAccountLocked as exc:
+            raise HTTPException(status_code=423, detail={_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: {}}) from exc
+        except AuthLoginFailed as exc:
+            raise HTTPException(status_code=401, detail={_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: {}}) from exc
+        response.set_cookie(
+            key=_HARNESS_SESSION_COOKIE,
+            value=result.session_id,
+            httponly=True,
+            samesite="strict",
+            secure=False,
+            path="/",
+        )
+        user = manager.get_user(result.username)
+        return {"username": result.username, "role": user.role if user else "operator", "csrf_token": result.csrf_token}
+
+    @app.post("/api/auth/logout", dependencies=auth_sess)
+    def harness_logout(response: Response, cyclaw_harness_session: str | None = Cookie(default=None)) -> dict:
+        manager = _require_harness_auth()
+        if cyclaw_harness_session:
+            manager.logout(cyclaw_harness_session)
+        response.delete_cookie(key=_HARNESS_SESSION_COOKIE, path="/")
+        return {"ok": True}
+
+    @app.get("/api/auth/whoami", dependencies=auth_open)
+    def harness_whoami(actor=Depends(_harness_actor)) -> dict:
+        return {"username": actor.username, "role": actor.role}
+
+    @app.get("/api/auth/users", dependencies=auth_open)
+    def harness_list_users(actor=Depends(_harness_actor)) -> list:
+        if actor.role not in {"admin", "operator"}:
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        manager = _require_harness_auth()
+        return [
+            {"username": u.username, "role": u.role, "disabled": u.disabled, "created_ts": u.created_ts, "last_login_ts": u.last_login_ts, "locked": u.locked_until_ts is not None}
+            for u in manager.list_users()
+        ]
+
+    @app.post("/api/auth/users", dependencies=auth_sess)
+    def harness_create_user(req: AuthCreateUserRequest, actor=Depends(_harness_actor)) -> dict:
+        if actor.role == "operator" and req.role == "admin":
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        if actor.role not in {"admin", "operator"}:
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        manager = _require_harness_auth()
+        created = manager.create_user(req.username, req.password, req.role)
+        user = manager.get_user(created)
+        return {"username": user.username, "role": user.role, "disabled": user.disabled, "created_ts": user.created_ts, "last_login_ts": user.last_login_ts, "locked": False}
+
+    @app.post("/api/auth/users/{username}/password", dependencies=auth_sess)
+    def harness_set_password(username: str, req: AuthSetPasswordRequest, actor=Depends(_harness_actor)) -> dict:
+        manager = _require_harness_auth()
+        target = manager.get_user(username)
+        if target is None:
+            raise HTTPException(status_code=404, detail={_CODE_KEY: "AUTH_USER_NOT_FOUND", _MESSAGE_KEY: "unknown user", _DETAILS_KEY: {}})
+        if actor.role != "admin" and (actor.role != "operator" or target.role == "admin"):
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        manager.set_password(username, req.password)
+        return {"ok": True}
+
+    @app.post("/api/auth/users/{username}/role", dependencies=auth_sess)
+    def harness_set_role(username: str, req: AuthSetRoleRequest, actor=Depends(_harness_actor)) -> dict:
+        if actor.role != "admin":
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        _require_harness_auth().set_role(username, req.role)
+        return {"ok": True}
+
+    @app.delete("/api/auth/users/{username}", dependencies=auth_sess)
+    def harness_delete_user(username: str, actor=Depends(_harness_actor)) -> dict:
+        if actor.role != "admin":
+            raise HTTPException(status_code=403, detail={_CODE_KEY: "AUTH_PERMISSION_DENIED", _MESSAGE_KEY: "denied", _DETAILS_KEY: {}})
+        _require_harness_auth().delete_user(username)
+        return {"ok": True}
 
     return app
 

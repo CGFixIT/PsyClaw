@@ -22,6 +22,7 @@ from pathlib import Path
 from utils import authn, authn_store
 from utils.errors import (
     AuthAccountLocked,
+    AuthLastAdmin,
     AuthLoginFailed,
     AuthTokenLabelExists,
     AuthUserExists,
@@ -76,6 +77,7 @@ class UserSummary:
     last_login_ts: float | None
     failed_count: int
     locked_until_ts: float | None
+    role: str
 
 
 @dataclass
@@ -151,8 +153,13 @@ class AuthManager:
         self._sql_get_user = f"SELECT * FROM users WHERE username = {ph}"
         self._sql_insert_user = (
             "INSERT INTO users "
-            "(username, password_hash, created_ts, disabled, last_login_ts, failed_count, locked_until_ts) "
-            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
+            "(username, password_hash, created_ts, disabled, last_login_ts, failed_count, locked_until_ts, role) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
+        )
+        self._sql_set_role = f"UPDATE users SET role = {ph} WHERE username = {ph}"
+        self._sql_delete_user = f"DELETE FROM users WHERE username = {ph}"
+        self._sql_count_enabled_admins = (
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND disabled = 0"
         )
         self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
         self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
@@ -219,6 +226,11 @@ class AuthManager:
         self.conn.execute(authn_store.ddl_device_tokens())
         for index_ddl in authn_store.ddl_indexes():
             self.conn.execute(index_ddl)
+        authn_store.ensure_users_role_column(self.conn, self.backend)
+        self.conn.execute(
+            f"UPDATE users SET role = {self._ph} WHERE username = {self._ph} AND role = {self._ph}",
+            (authn.validate_role("admin"), BOOTSTRAP_USERNAME, authn.DEFAULT_ROLE),
+        )
         self.conn.commit()
 
     def _now(self) -> float:
@@ -276,14 +288,16 @@ class AuthManager:
             record = authn.hash_password(authn.generate_bootstrap_password())
             now = self._now()
             self.conn.execute(
-                self._sql_insert_user, (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None)
+                self._sql_insert_user,
+                (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None, "admin"),
             )
             self.conn.commit()
             return True
 
-    def create_user(self, username: str, password: str) -> str:
+    def create_user(self, username: str, password: str, role: str = authn.DEFAULT_ROLE) -> str:
         """Validate, hash, and insert a new user. Returns the canonical username."""
         canonical = authn.validate_username(username)
+        canonical_role = authn.validate_role(role)
         record = authn.hash_password(password)  # raises PasswordPolicyError if invalid
         now = self._now()
         with self._lock:
@@ -291,25 +305,73 @@ class AuthManager:
             if existing is not None:
                 self._end_read_txn()
                 raise AuthUserExists(f"user already exists: {canonical}", details={"username": canonical})
-            self.conn.execute(self._sql_insert_user, (canonical, record, now, 0, None, 0, None))
+            self.conn.execute(
+                self._sql_insert_user, (canonical, record, now, 0, None, 0, None, canonical_role)
+            )
             self.conn.commit()
         return canonical
+
+    def _summary_from_row(self, row: object) -> UserSummary:
+        role = row["role"] if "role" in row.keys() and row["role"] else authn.DEFAULT_ROLE  # type: ignore[index]
+        return UserSummary(
+            username=row["username"],  # type: ignore[index]
+            created_ts=row["created_ts"],  # type: ignore[index]
+            disabled=bool(row["disabled"]),  # type: ignore[index]
+            last_login_ts=row["last_login_ts"],  # type: ignore[index]
+            failed_count=row["failed_count"],  # type: ignore[index]
+            locked_until_ts=row["locked_until_ts"],  # type: ignore[index]
+            role=str(role),
+        )
+
+    def get_user(self, username: str) -> UserSummary | None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        with self._lock:
+            row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
+            self._end_read_txn()
+        if row is None:
+            return None
+        return self._summary_from_row(row)
 
     def list_users(self) -> list[UserSummary]:
         with self._lock:
             rows = self.conn.execute(self._sql_list_users).fetchall()
             self._end_read_txn()
-        return [
-            UserSummary(
-                username=r["username"],
-                created_ts=r["created_ts"],
-                disabled=bool(r["disabled"]),
-                last_login_ts=r["last_login_ts"],
-                failed_count=r["failed_count"],
-                locked_until_ts=r["locked_until_ts"],
-            )
-            for r in rows
-        ]
+        return [self._summary_from_row(r) for r in rows]
+
+    def count_enabled_admins(self) -> int:
+        with self._lock:
+            row = self.conn.execute(self._sql_count_enabled_admins).fetchone()
+            self._end_read_txn()
+        return int(row["n"]) if row else 0
+
+    def _is_last_enabled_admin(self, username: str) -> bool:
+        user = self.get_user(username)
+        if user is None or user.role != "admin" or user.disabled:
+            return False
+        return self.count_enabled_admins() <= 1
+
+    def set_role(self, username: str, role: str) -> None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        canonical_role = authn.validate_role(role)
+        if canonical_role != "admin" and self._is_last_enabled_admin(canonical):
+            raise AuthLastAdmin(details={"username": canonical, "action": "set_role"})
+        with self._lock:
+            cur = self.conn.execute(self._sql_set_role, (canonical_role, canonical))
+            self.conn.commit()
+            if not cur.rowcount:
+                raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
+
+    def delete_user(self, username: str) -> None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        if self._is_last_enabled_admin(canonical):
+            raise AuthLastAdmin(details={"username": canonical, "action": "delete_user"})
+        with self._lock:
+            self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
+            self.conn.execute(self._sql_revoke_tokens_for_user, (canonical,))
+            cur = self.conn.execute(self._sql_delete_user, (canonical,))
+            self.conn.commit()
+            if not cur.rowcount:
+                raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
 
     def _set_disabled(self, username: str, disabled: bool) -> None:
         canonical = username.strip().lower() if isinstance(username, str) else ""
@@ -342,6 +404,8 @@ class AuthManager:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
 
     def disable_user(self, username: str) -> None:
+        if self._is_last_enabled_admin(username):
+            raise AuthLastAdmin(details={"username": username, "action": "disable_user"})
         self._set_disabled(username, True)
 
     def enable_user(self, username: str) -> None:

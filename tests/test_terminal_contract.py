@@ -195,6 +195,21 @@ def test_login_form_controls_exist():
         assert marker in html, f"missing login-form marker {marker!r}"
 
 
+def test_users_and_audit_markup_exist():
+    html = _console_source()
+    for marker in (
+        'id="usersToggleBtn"',
+        'id="usersPanel"',
+        'id="usersPanelBody"',
+        'id="auditToggleBtn"',
+        'id="auditPanel"',
+        'id="auditSummary"',
+        "query === '/users'",
+        "/static/auth_admin.js",
+    ):
+        assert marker in html, f"missing {marker!r}"
+
+
 def test_query_does_not_send_api_key_as_bearer():
     """Once auth.enabled is on, Authorization on /query is a device token.
     The typed CYCLAW_API_KEY must stay on /soul/* and /ops/* only."""

@@ -211,6 +211,18 @@ def _request_username(request: Request) -> str | None:
     return getattr(request.state, "auth_username", None)
 
 
+def _forbid_audit_query(username: str | None) -> None:
+    """Audit role may log in but cannot run RAG queries."""
+    if not username or auth_manager is None:
+        return
+    actor = auth_manager.get_user(username)
+    if actor is not None and actor.role == "audit":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "audit role cannot call /query", "code": "AUTH_ROLE_DENIED"},
+        )
+
+
 async def _audit_query(request: Request, event: dict) -> None:
     """Audit a /query-path event, attaching username when a session/token resolved."""
     username = _request_username(request)
@@ -635,6 +647,9 @@ async def query_endpoint(request: Request, req: QueryRequest):
                     "code": "INDEX_NOT_FOUND"}
         )
 
+    username = _request_username(request)
+    _forbid_audit_query(username)
+
     try:
         check_input(req.query)
     except PromptInjectionError as e:
@@ -653,7 +668,6 @@ async def query_endpoint(request: Request, req: QueryRequest):
         "user_confirmed_online": req.user_confirmed_online,
         "online_provider": req.online_provider,
     }
-    username = _request_username(request)
     if username:
         initial_state["username"] = username
 
