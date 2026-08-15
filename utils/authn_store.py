@@ -93,7 +93,8 @@ def ddl_users() -> str:
             disabled INTEGER NOT NULL DEFAULT 0,
             last_login_ts REAL,
             failed_count INTEGER NOT NULL DEFAULT 0,
-            locked_until_ts REAL
+            locked_until_ts REAL,
+            role TEXT NOT NULL DEFAULT 'operator'
         )
     """
 
@@ -144,3 +145,25 @@ def ddl_indexes() -> list[str]:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_tokens_live_label "
         + "ON device_tokens(username, label) WHERE revoked = 0",
     ]
+
+
+def users_column_names(conn: object, backend: str) -> set[str]:
+    """Column names on ``users`` (SQLite PRAGMA or Postgres information_schema)."""
+    if backend == "postgres":
+        rows = conn.execute(  # type: ignore[union-attr]
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'users'"
+        ).fetchall()
+        return {str(r["column_name"]) for r in rows}
+    rows = conn.execute("PRAGMA table_info(users)").fetchall()  # type: ignore[union-attr]
+    return {str(r["name"]) for r in rows}
+
+
+def ensure_users_role_column(conn: object, backend: str) -> None:
+    """Add ``role`` if this is a pre-Stage-6 database. Idempotent."""
+    names = {n.lower() for n in users_column_names(conn, backend)}
+    if "role" in names:
+        return
+    conn.execute(  # type: ignore[union-attr]
+        "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'"
+    )

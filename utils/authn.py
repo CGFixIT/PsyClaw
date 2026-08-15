@@ -14,7 +14,8 @@ Stage 2 builds on this and DOES reach the request path -- utils/authn_store.py
 gate_auth.py (/auth/login, /auth/logout, /auth/whoami) all sit above it. This
 module still imports none of them: the dependency runs one way only, which is
 what keeps these primitives testable in isolation. Enforcing a credential on
-/query is Stage 3 and has not landed; TLS on the socket is Stage 4.
+/query enforcement is Stage 3 (attached only when auth.enabled is true);
+TLS on the socket is Stage 4.
 """
 
 from __future__ import annotations
@@ -75,6 +76,25 @@ _LOCKOUT_CEILING_SEC = 900.0  # 15 min. A ceiling, not a permanent lock -- see
 
 class PasswordPolicyError(ValueError):
     """A password or username was rejected before hashing."""
+
+
+ROLES = frozenset({"admin", "operator", "audit"})
+DEFAULT_ROLE = "operator"
+# Single hook for later high-privilege tasks. Do not invent product features
+# here — add a name when a new destructive action exists.
+HIGH_PRIVILEGE = frozenset({"delete_user", "set_role", "disable_last_admin", "dump_secrets"})
+
+
+def validate_role(role: str) -> str:
+    """Return the canonical role, or raise like ``validate_username``."""
+    if not isinstance(role, str):
+        raise PasswordPolicyError("role must be a string")
+    canonical = role.strip().lower()
+    if canonical not in ROLES:
+        raise PasswordPolicyError(
+            f"role must be one of {', '.join(sorted(ROLES))}"
+        )
+    return canonical
 
 
 def validate_username(username: str) -> str:

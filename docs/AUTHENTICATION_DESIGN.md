@@ -1,7 +1,7 @@
 ---
 title: "CyClaw Authentication — Design"
 date: 2026-08-08
-status: in-progress
+status: landed
 tags: [security, authentication, tls, threat-model, lan]
 related:
   - docs/THREAT_MODEL.md
@@ -11,13 +11,17 @@ related:
 
 # CyClaw Authentication — Design
 
-**Status: in progress.** Stage 1 (`utils/authn.py`, PR #829), Stage 2
-(sessions, login/logout, per-device tokens, `gate_auth.py`, PR #830), and
-Stage 5 (re-keying the #825 bind guard, landed as part of #825 itself) have
-landed on `main`. `auth.enabled` and `api.tls.enabled` both still ship
-`false`, so no existing install's behavior changed. Stages 3–4 (enforcing a
-credential on `/query`; TLS wiring into `uvicorn.run`) remain pending — see
-§8.
+**Status: all six stages landed.** Stage 1 (`utils/authn.py`, PR #829),
+Stage 2 (sessions, login/logout, per-device tokens, `gate_auth.py`,
+PR #830), Stage 3 (credential on `/query` + console login when
+`auth.enabled` is true, PR #940), Stage 4 (TLS wired into `uvicorn.run` via
+`gate._serve`, `cyclaw-gen-cert`, PR #940), Stage 5 (re-keying the #825
+bind guard, landed as part of #825 itself), and Stage 6 (roles
+`admin`/`operator`/`audit`, HTTP user admin, web Users panel + audit tab,
+PR #940) have landed. `auth.enabled` and `api.tls.enabled` both still
+ship `false`, so no existing install's behavior changed. Enabling TLS
+without real cert files fails closed at boot instead of marking cookies
+Secure on plaintext.
 
 This document exists because the operator wrote the requirement down first, in
 `docs/zIdeas/note.txt`:
@@ -46,12 +50,14 @@ credential is not readable on the wire.
   Every authenticated user still reaches the same corpus, the same soul, and the
   same model. `docs/THREAT_MODEL.md` §1 stays single-tenant, and this document
   does not change that.
-- **The harness (`:8790`) and MCP server.** Both are separate apps with their
-  own posture. The harness already refuses a non-loopback bind and has its own
-  API-key + origin + CSRF chain; MCP is stdio with `sampling: None`. Neither is
-  touched here.
-- **Authorization / roles.** Every account is equivalent. Role separation is a
-  later question and should not be smuggled in.
+- **MCP server.** Separate app, stdio, `sampling: None`. Untouched.
+- **The harness (`:8790`).** Still loopback-only with its own API-key +
+  origin + CSRF chain on coding routes. Stage 6 shares the **same users
+  table** and a separate `cyclaw_harness_session` cookie. It is not a LAN
+  app.
+- **Authorization / roles.** **Amended (Stage 6).** Accounts now carry a
+  `role` of `admin`, `operator`, or `audit`. This is authorization on the
+  same single-tenant corpus, not multi-tenancy. See §12.
 - **Federation, SSO, OAuth, MFA.** Not now. §11 notes where MFA would attach if
   it is ever wanted.
 
@@ -69,21 +75,29 @@ credential is not readable on the wire.
 | Telegram **already sends** one to `/query` | `telegram/client.py:745`; config field documented *"Optional CyClaw API key for POST /query"* |
 | No password, session, or TLS infrastructure exists | no argon2/bcrypt/passlib/itsdangerous/`SessionMiddleware`/`ssl_keyfile` anywhere |
 
-**Amendment (2026-08-09, Stages 1-2 landed).** The table above reflects the
-state at proposal time. `utils/authn.py` (Stage 1, PR #829) and the account
-/session/token store (Stage 2 — `utils/authn_store.py`,
-`utils/authn_manager.py`, `gate_auth.py`, PR #830) have since landed: password
-and session infrastructure now exists (the "No password, session, or TLS
-infrastructure exists" row is stale for its password/session half; TLS
-infrastructure, Stage 4, genuinely still does not exist — no `ssl_keyfile`
-anywhere). `/auth/login`, `/auth/logout`, and `/auth/whoami` also now exist
-and are registered regardless of `auth.enabled` (returning 503 when it is
-false, matching `gate_ops.py`'s convention for `/ops/*`) — so the
+**Amendment (2026-08-09, Stages 1-2 landed; amended 2026-08-15, Stages 3-4
+and 6 landed, PR #940).** The table above reflects the state at proposal
+time. Several rows are now stale. Password, session, AND TLS infrastructure
+all exist: `utils/authn.py` (Stage 1, PR #829), the account/session/token
+store (Stage 2, PR #830), and `gate._serve` passing
+`ssl_certfile`/`ssl_keyfile` to `uvicorn.run` when `api.tls.enabled` is the
+literal boolean true (Stage 4, PR #940 — missing or unreadable files fail
+closed at boot). `/auth/login`, `/auth/logout`, and `/auth/whoami` also now
+exist and are registered regardless of `auth.enabled` (returning 503 when
+it is false, matching `gate_ops.py`'s convention for `/ops/*`) — so the
 unauthenticated-route row above is stale too: `/auth/login` carries no
 authentication either, by necessity (a caller has no credential yet to
 present), gated only by the standard rate limit and the same-origin check.
-None of this enforces a credential on `/query` yet — that is still Stage 3,
-not landed.
+Stage 3 attaches `require_session_or_token` to `POST /query` when
+`auth.enabled` is the literal boolean `true` (session cookie or device
+token; no CSRF on the query path). The shipped default still leaves
+`/query` open. The console row is stale as well: `terminal.js` no longer
+sends the typed API key on `/query` at all — once auth is on, `/query`
+authenticates with the `cyclaw_session` cookie (or a named device token
+for programmatic clients), and the key field serves `/soul/*` and `/ops/*`
+only. The Telegram row stays accurate in form — it still sends a bearer
+token to `/query` — but the token must now be a named device token, not
+the shared `CYCLAW_API_KEY`.
 
 Two consequences worth stating plainly.
 
@@ -159,11 +173,21 @@ different subsystem.
 users(username TEXT PRIMARY KEY, password_hash TEXT NOT NULL,
       created_ts REAL, disabled INTEGER DEFAULT 0,
       last_login_ts REAL, failed_count INTEGER DEFAULT 0,
-      locked_until_ts REAL)
+      locked_until_ts REAL, role TEXT NOT NULL DEFAULT 'operator')
 sessions(session_id TEXT PRIMARY KEY, username TEXT NOT NULL,
          created_ts REAL, expires_ts REAL, revoked INTEGER DEFAULT 0,
          label TEXT)
+device_tokens(token_hash TEXT PRIMARY KEY, username TEXT NOT NULL,
+              label TEXT NOT NULL, created_ts REAL, last_used_ts REAL,
+              revoked INTEGER DEFAULT 0)
 ```
+
+(`role` arrived with Stage 6; `ensure_users_role_column` migrates pre-Stage-6
+databases in place, promoting `BOOTSTRAP_USERNAME` to `admin` and defaulting
+every other existing row to `operator`. The `sessions` block above is the
+proposal-time sketch — the shipped table also carries `csrf_token` and
+`last_seen_ts`, and no `label`; see `utils/authn_store.py` for the DDL of
+record.)
 
 Sessions are **server-side records**, not signed self-contained cookies. That is
 the deliberate choice: a server-side row can be revoked instantly, which is the
@@ -183,9 +207,13 @@ bearer path issues *named, per-device, individually revocable* tokens stored as
 hashes — not the current single shared key. The existing `CYCLAW_API_KEY`
 continues to govern `/soul/*` and `/ops/*` unchanged, so this is additive.
 
-CSRF reuses the harness's proven pattern (`harness/server.py`: per-process
-`secrets.token_urlsafe(32)`, `hmac.compare_digest`, `<meta>` tag) rather than a
-new mechanism.
+CSRF reuses the harness's proven pattern (`harness/server.py`:
+`secrets.token_urlsafe(32)`, `hmac.compare_digest`) rather than a new
+mechanism — with one deliberate deviation: the gate's token is **per
+session**, minted at login and returned in the `/auth/login` response body,
+then echoed back by the browser in the `X-CyClaw-CSRF` header on
+state-changing routes. (The harness's own variant stores its token in a
+`<meta>` tag; that is the harness surface, not the gate's.)
 
 ### 4.4 Lockout
 
@@ -256,19 +284,25 @@ implemented in `gate.py`'s `_require_loopback_bind`/`_auth_and_tls_enabled` is
 
 The third condition is load-bearing, not optional. The two config flags are a
 statement of *intent*; an operator who sets `auth.enabled: true` reasonably
-believes authentication is on, which is false until Stage 3 attaches a
-credential dependency to `/query`. `gate.py`'s
-`_request_path_enforcement_active()` probes the live FastAPI app for that
-dependency rather than trusting the flags, so this path past loopback cannot
-open until Stage 3 genuinely ships, and opens by itself the moment it does —
-no further edit to the guard is required. This is a strictly better gate than
-the env-var-only guard: it permits the operator's goal (LAN + TLS + auth) once
-both Stage 3 and Stage 4 land, and refuses the genuinely unsafe case (LAN + no
-auth, LAN + auth claimed but not enforced). It **does not** refuse LAN + auth
-over plaintext when both `auth.enabled` and `api.tls.enabled` are set, since
-Stage 4 (wiring TLS into uvicorn) has not shipped — see `docs/THREAT_MODEL.md`'s ninth
-amendment §5 for the precise scope: the guard proves the credential, not the
-transport. `CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a
+believes authentication is on. `gate.py`'s
+`_request_path_enforcement_active()` probes the live FastAPI app for the
+`/query` credential dependency rather than trusting the flag. Stage 3
+(PR #940) attaches that dependency when `auth.enabled` is the literal
+boolean `true`, so the path past loopback opens by itself once both flags
+are on — no further edit to the guard is required. The shipped default
+(auth off) still leaves the probe false. This is a strictly better gate
+than the env-var-only guard: it permits the operator's goal (LAN + TLS +
+auth) and refuses the genuinely unsafe case (LAN + no auth, LAN + auth
+claimed but not enforced). With Stage 4 landed in the same PR, the guard's
+TLS half is now real too: `gate._serve` passes
+`ssl_certfile`/`ssl_keyfile` to `uvicorn.run` when `api.tls.enabled` is the
+literal boolean true, and missing or unreadable cert files refuse to boot
+rather than falling back to plaintext. The residual gap is narrower than
+the one this section previously documented: the Docker `CMD` and a hand-run
+`uvicorn gate:app` bypass `_serve` entirely, so the guard's proof covers
+the documented entry points (`python gate.py`, `cyclaw-server`) only — see
+`docs/THREAT_MODEL.md`'s ninth amendment §5 for the precise scope.
+`CYCLAW_ALLOW_NON_LOOPBACK_BIND` is retained only as a
 deliberate escape hatch for someone fronting CyClaw with their own reverse
 proxy. See `docs/THREAT_MODEL.md`'s ninth amendment for the fully verified,
 currently-accurate statement of this rule.
@@ -283,9 +317,10 @@ Each stage is independently reviewable and leaves the tree working.
 |---|---|---|
 | **1** — landed, PR #829 | This document + `utils/authn.py` (scrypt hash/verify, lockout arithmetic) + tests. Pure functions only — no database, no HTTP, no CLI. **No request path touched.** | None at merge time; Stage 2 (below) is now the caller |
 | **2** — landed, PR #830 | Account store (`utils/authn_store.py`), `AuthManager` (`utils/authn_manager.py`), `cyclaw-user` CLI (`add`/`list`/`disable`/`enable`/`passwd`/`token`), session store, `/auth/login`, `/auth/logout`, `/auth/whoami`, cookie issuance, CSRF, per-device bearer tokens | None while `auth.enabled: false` (ships false, unchanged) |
-| **3** | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
-| **4** | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
+| **3** — landed, PR #940 | Enforce on `/query` and the console; audit log gains a `username` field | Behaviour change, gated by `auth.enabled` |
+| **4** — landed, PR #940 | TLS config, `cyclaw-gen-cert`, origin/CSP updates, docs | Config surface only |
 | **5** — landed, PR #825 | Re-key the #825 bind guard per §7; update `THREAT_MODEL.md` §1 and add an amendment | Docs + one condition (implemented as three — see §7) |
+| **6** — landed, PR #940 | Roles (`admin`/`operator`/`audit`), HTTP user admin, shared web Users panel, audit tab | Gated by `auth.enabled` |
 
 ---
 
@@ -341,3 +376,25 @@ A TOTP secret column on `users` and a second step between password verification
 and session issuance. Deliberately not built now — it is the wrong thing to add
 before per-user accounts and TLS exist, and adding it later requires no
 redesign.
+
+---
+
+## 12. Roles (Stage 6)
+
+Three canonical lowercase roles on `users.role`. Bootstrap `admin` is
+`admin`. Existing rows without a column become `operator` except
+`BOOTSTRAP_USERNAME`.
+
+| Role | `/query` | Users panel | Audit tab | delete / set-role |
+|---|---|---|---|---|
+| `admin` | yes | yes | yes | yes (not the last enabled admin) |
+| `operator` | yes | yes (no delete / set-role / touch admins) | no | no |
+| `audit` | **denied** | no | yes | no |
+
+`HIGH_PRIVILEGE` in `utils/authn.py` is the hook for later destructive
+ops. HTTP admin lives on `gate_auth.py` (`/auth/users*`,
+`/auth/audit/summary`, plus the self-service `POST /auth/password` any
+authenticated role can call for its own account); `/auth/whoami` returns
+`username` + `role`. The harness exposes the same store at `/api/auth/*`
+with a separate cookie. Telegram still uses a named
+device token (`cyclaw-user token create <user> telegram`).

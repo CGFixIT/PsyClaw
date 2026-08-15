@@ -22,6 +22,7 @@ from pathlib import Path
 from utils import authn, authn_store
 from utils.errors import (
     AuthAccountLocked,
+    AuthLastAdmin,
     AuthLoginFailed,
     AuthTokenLabelExists,
     AuthUserExists,
@@ -76,6 +77,7 @@ class UserSummary:
     last_login_ts: float | None
     failed_count: int
     locked_until_ts: float | None
+    role: str
 
 
 @dataclass
@@ -151,8 +153,32 @@ class AuthManager:
         self._sql_get_user = f"SELECT * FROM users WHERE username = {ph}"
         self._sql_insert_user = (
             "INSERT INTO users "
-            "(username, password_hash, created_ts, disabled, last_login_ts, failed_count, locked_until_ts) "
-            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
+            "(username, password_hash, created_ts, disabled, last_login_ts, failed_count, locked_until_ts, role) "
+            f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
+        )
+        # Last-admin guard, folded INTO each mutating statement (PR #940
+        # review, check-then-act race): a separate SELECT-then-WRITE pair
+        # leaves two windows open -- two threads through this instance if the
+        # check runs outside self._lock, and two PROCESSES regardless (the
+        # HTTP admin surface and a concurrent `cyclaw-user role/disable`,
+        # each with its own AuthManager and its own lock). One conditional
+        # statement makes the database serialize it, the same
+        # compare-and-swap shape _sql_claim_login uses below: the loser's
+        # rowcount is 0, and _raise_guarded_write_error_locked's follow-up
+        # SELECT only decides WHICH error to report -- it cannot re-open the
+        # race, because the mutation it explains was already refused.
+        last_admin_guard = (
+            "NOT (role = 'admin' AND disabled = 0 AND "
+            "(SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0) <= 1)"
+        )
+        self._sql_set_role = (
+            f"UPDATE users SET role = {ph} WHERE username = {ph} "
+            f"AND ({ph} = 'admin' OR {last_admin_guard})"
+        )
+        self._sql_delete_user = f"DELETE FROM users WHERE username = {ph} AND {last_admin_guard}"
+        self._sql_disable_user = f"UPDATE users SET disabled = 1 WHERE username = {ph} AND {last_admin_guard}"
+        self._sql_count_enabled_admins = (
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND disabled = 0"
         )
         self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
         self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
@@ -219,6 +245,11 @@ class AuthManager:
         self.conn.execute(authn_store.ddl_device_tokens())
         for index_ddl in authn_store.ddl_indexes():
             self.conn.execute(index_ddl)
+        authn_store.ensure_users_role_column(self.conn, self.backend)
+        self.conn.execute(
+            f"UPDATE users SET role = {self._ph} WHERE username = {self._ph} AND role = {self._ph}",
+            (authn.validate_role("admin"), BOOTSTRAP_USERNAME, authn.DEFAULT_ROLE),
+        )
         self.conn.commit()
 
     def _now(self) -> float:
@@ -276,14 +307,16 @@ class AuthManager:
             record = authn.hash_password(authn.generate_bootstrap_password())
             now = self._now()
             self.conn.execute(
-                self._sql_insert_user, (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None)
+                self._sql_insert_user,
+                (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None, "admin"),
             )
             self.conn.commit()
             return True
 
-    def create_user(self, username: str, password: str) -> str:
+    def create_user(self, username: str, password: str, role: str = authn.DEFAULT_ROLE) -> str:
         """Validate, hash, and insert a new user. Returns the canonical username."""
         canonical = authn.validate_username(username)
+        canonical_role = authn.validate_role(role)
         record = authn.hash_password(password)  # raises PasswordPolicyError if invalid
         now = self._now()
         with self._lock:
@@ -291,30 +324,86 @@ class AuthManager:
             if existing is not None:
                 self._end_read_txn()
                 raise AuthUserExists(f"user already exists: {canonical}", details={"username": canonical})
-            self.conn.execute(self._sql_insert_user, (canonical, record, now, 0, None, 0, None))
+            self.conn.execute(
+                self._sql_insert_user, (canonical, record, now, 0, None, 0, None, canonical_role)
+            )
             self.conn.commit()
         return canonical
+
+    def _summary_from_row(self, row: object) -> UserSummary:
+        role = row["role"] if "role" in row.keys() and row["role"] else authn.DEFAULT_ROLE  # type: ignore[index]
+        return UserSummary(
+            username=row["username"],  # type: ignore[index]
+            created_ts=row["created_ts"],  # type: ignore[index]
+            disabled=bool(row["disabled"]),  # type: ignore[index]
+            last_login_ts=row["last_login_ts"],  # type: ignore[index]
+            failed_count=row["failed_count"],  # type: ignore[index]
+            locked_until_ts=row["locked_until_ts"],  # type: ignore[index]
+            role=str(role),
+        )
+
+    def get_user(self, username: str) -> UserSummary | None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        with self._lock:
+            row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
+            self._end_read_txn()
+        if row is None:
+            return None
+        return self._summary_from_row(row)
 
     def list_users(self) -> list[UserSummary]:
         with self._lock:
             rows = self.conn.execute(self._sql_list_users).fetchall()
             self._end_read_txn()
-        return [
-            UserSummary(
-                username=r["username"],
-                created_ts=r["created_ts"],
-                disabled=bool(r["disabled"]),
-                last_login_ts=r["last_login_ts"],
-                failed_count=r["failed_count"],
-                locked_until_ts=r["locked_until_ts"],
-            )
-            for r in rows
-        ]
+        return [self._summary_from_row(r) for r in rows]
+
+    def count_enabled_admins(self) -> int:
+        with self._lock:
+            row = self.conn.execute(self._sql_count_enabled_admins).fetchone()
+            self._end_read_txn()
+        return int(row["n"]) if row else 0
+
+    def _raise_guarded_write_error_locked(self, canonical: str, action: str) -> None:
+        """Map a zero-rowcount guarded admin write to the correct error.
+
+        Caller must hold ``self._lock``; always raises. The guarded
+        statements fail for exactly two reasons -- the user does not exist,
+        or the guard refused to remove the last enabled admin.
+        """
+        row = self.conn.execute(self._sql_get_user, (canonical,)).fetchone()
+        self._end_read_txn()
+        if row is None:
+            raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
+        raise AuthLastAdmin(details={"username": canonical, "action": action})
+
+    def set_role(self, username: str, role: str) -> None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        canonical_role = authn.validate_role(role)
+        with self._lock:
+            cur = self.conn.execute(self._sql_set_role, (canonical_role, canonical, canonical_role))
+            if not cur.rowcount:
+                self._raise_guarded_write_error_locked(canonical, "set_role")
+            self.conn.commit()
+
+    def delete_user(self, username: str) -> None:
+        canonical = username.strip().lower() if isinstance(username, str) else ""
+        with self._lock:
+            cur = self.conn.execute(self._sql_delete_user, (canonical,))
+            if not cur.rowcount:
+                self._raise_guarded_write_error_locked(canonical, "delete_user")
+            self.conn.execute(self._sql_revoke_sessions_for_user, (canonical,))
+            self.conn.execute(self._sql_revoke_tokens_for_user, (canonical,))
+            self.conn.commit()
 
     def _set_disabled(self, username: str, disabled: bool) -> None:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         with self._lock:
-            cur = self.conn.execute(self._sql_set_disabled, (int(disabled), canonical))
+            if disabled:
+                cur = self.conn.execute(self._sql_disable_user, (canonical,))
+                if not cur.rowcount:
+                    self._raise_guarded_write_error_locked(canonical, "disable_user")
+            else:
+                cur = self.conn.execute(self._sql_set_disabled, (int(disabled), canonical))
             if disabled and cur.rowcount:
                 # A disabled account must lose every live credential
                 # immediately, not just future logins -- otherwise an
@@ -342,6 +431,8 @@ class AuthManager:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
 
     def disable_user(self, username: str) -> None:
+        # The last-admin refusal lives inside _set_disabled's guarded UPDATE
+        # (see _prepare_sql), not in a pre-check here.
         self._set_disabled(username, True)
 
     def enable_user(self, username: str) -> None:

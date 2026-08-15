@@ -331,6 +331,33 @@ class TestAuditLogging:
         assert result["audit_event"]["event"] == "user_gate_pause"
         personality.record_interaction.assert_not_called()
 
+    def test_audit_event_includes_username_when_present(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        state = {
+            "query": "who am i",
+            "username": "alice",
+            "answer_model": "local",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.9,
+            "retrieval_mode": "hybrid",
+        }
+        result = audit_logger_node(state, cfg=cfg, personality=None)
+        assert result["audit_event"]["username"] == "alice"
+
+    def test_audit_event_omits_username_when_absent(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        state = {
+            "query": "who am i",
+            "answer_model": "local",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.9,
+            "retrieval_mode": "hybrid",
+        }
+        result = audit_logger_node(state, cfg=cfg, personality=None)
+        assert "username" not in result["audit_event"]
+
 
 # Soul preamble used to assert identity ownership in the offline node.
 _SOUL_PREAMBLE = "# CyClaw Soul\nYou are CyClaw, a precise offline-first assistant."

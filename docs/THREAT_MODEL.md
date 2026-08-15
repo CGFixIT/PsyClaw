@@ -28,7 +28,7 @@ consolidates the threat-model assumptions previously scattered across
 
 | Assumption | Value |
 |---|---|
-| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` via **two** documented exceptions, both of which a deployment review must check: `CYCLAW_ALLOW_NON_LOOPBACK_BIND` being set, **or** `auth.enabled` + `api.tls.enabled` both literally `true` **and** `/query` demonstrably enforcing a credential (that third condition is probed at runtime, and is false until the authentication design's Stage 3 ships, so this second path cannot open today). See the ninth amendment in §5 for why this was previously a convention rather than a control, and for what the second path does and does not prove. |
+| Network exposure | Host exposure is **exclusively** `127.0.0.1:8787` — never a non-loopback host interface. Bare-metal runs bind loopback directly; the container deployment publishes only to host loopback (`127.0.0.1:8787:8787`) while uvicorn binds the container-private network namespace (`0.0.0.0` inside the container) so the publish can reach it. **Enforced at runtime since 2026-08-08:** `gate.py`'s `main()` refuses to serve on a non-loopback `api.host` via **two** documented exceptions, both of which a deployment review must check: `CYCLAW_ALLOW_NON_LOOPBACK_BIND` being set, **or** `auth.enabled` + `api.tls.enabled` both literally `true` **and** `/query` demonstrably enforcing a credential (that third condition is probed at runtime, and is false until Stage 3 has attached `require_session_or_token` to `/query`, which happens only when `auth.enabled` is the literal boolean true). See the ninth amendment in §5 for why this was previously a convention rather than a control, and for what the second path does and does not prove. |
 | Operators | **Single trusted operator** (or a small trusted home-lab/LAN). |
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
@@ -703,13 +703,15 @@ either: it ships as
 `TrustedHostMiddleware` **admits** those LAN Hosts rather than rejecting them —
 verified by probing the middleware directly with the shipped list.
 
-**Why it matters here specifically.** `/query`, `/health`, `/`, `/static/*`,
-and `/auth/login` carry no authentication (`/auth/login` necessarily so -- a
-caller has no credential yet to present; it is still rate-limited and
-same-origin-checked). A non-loopback bind therefore exposes the corpus (via
-answers), the soul-informed system prompt, and the local model's compute to
-anything that can route to the port. That is not a subtle degradation of the
-threat model; it is a different threat model.
+**Why it matters here specifically.** `/health`, `/`, `/static/*`, and `/auth/login` carry no authentication
+(`/auth/login` necessarily so -- a caller has no credential yet to present;
+it is still rate-limited and same-origin-checked). `/query` is unauthenticated
+when `auth.enabled` is false (the shipped default) and requires a session
+or device token when it is true. A non-loopback bind with auth still off
+therefore exposes the corpus (via answers), the soul-informed system prompt,
+and the local model's compute to anything that can route to the port. That
+is not a subtle degradation of the threat model; it is a different threat
+model.
 
 **The control.** `main()` now calls `_require_loopback_bind()` before it probes
 the port or serves, and refuses with an actionable message. The whole of
@@ -734,24 +736,26 @@ bind decision never depends on DNS.
 
 The third condition on (2) is load-bearing and is checked at runtime rather
 than assumed. The two config flags are a statement of *intent*; an operator who
-sets `auth.enabled: true` reasonably believes they turned authentication on,
-and while Stage 3 of the authentication design remains unbuilt that belief is
-wrong — `/query` is still unauthenticated. `gate.py`'s
-`_request_path_enforcement_active()` therefore probes the live app for the
-dependency instead of trusting the flag, so path (2) cannot open until the
-enforcement genuinely exists, and opens by itself when it does. A log warning
-was considered and rejected for this: the bind happens either way, and the
-operator who most needs the warning is the least likely to read it.
+sets `auth.enabled: true` reasonably believes they turned authentication on.
+Stage 3 attaches `require_session_or_token` to `/query` only when that flag
+is the literal boolean `true`. `gate.py`'s
+`_request_path_enforcement_active()` still probes the live app for the
+dependency instead of trusting the flag, so path (2) cannot open on a
+quoted/`false` config and opens by itself when enforcement is actually
+attached. A log warning was considered and rejected for this: the bind
+happens either way, and the operator who most needs the warning is the
+least likely to read it.
 
 Both flags are compared against the literal boolean `True`, not with `bool()`.
 YAML parses a quoted `enabled: "false"` as the string `"false"`, and every
 non-empty string is truthy in Python — a truthiness read would have let a
 stray pair of quotes open the very gate the operator was trying to keep shut.
 
-What path (2) still does **not** prove is that TLS reached the socket: wiring
-`api.tls.*` into `uvicorn.run` is Stage 4 of the authentication design and has
-not shipped. The guard can demonstrate the credential, not the transport, and
-says so in the warning it logs when it does permit a bind.
+What path (2) now also does (when launched via `python gate.py` /
+`cyclaw-server`) is put TLS on the socket: `_serve` passes
+`ssl_certfile`/`ssl_keyfile` when `api.tls.enabled` is the literal boolean
+true and both files are readable. Missing files fail closed. The Docker
+`CMD` and a hand-run `uvicorn gate:app` still bypass `_serve`.
 
 **The boundary, stated precisely rather than overclaimed.** The guard covers the
 documented entry points — `python gate.py` and the `cyclaw-server` console script.
@@ -765,9 +769,10 @@ outside the supported launch path and owns the resulting exposure.
 `docs/zIdeas/note.txt`: *"curl requests or powershell api commands can still query
 cyclaw if on same lan - need to add authentication before truly considering this
 secure."* The note was investigated on the assumption the loopback bind refuted
-it. It did not. This amendment closes the configuration half; **authentication on
-the query path remains genuinely absent and is still the open item the note
-names.**
+it. It did not. This amendment closes the configuration half. Stage 3 now
+enforces a credential on `/query` **when `auth.enabled` is true**; the
+shipped default still leaves that path open. This still does not make
+CyClaw internet-safe.
 
 ### Tenth amendment — harness `/web` DNS TOCTOU residual (2026-08-15)
 

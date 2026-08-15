@@ -292,7 +292,7 @@ class TestLogin:
         now = manager._now()
         with manager._lock:
             manager.conn.execute(
-                manager._sql_insert_user, ("alice", weak_record, now, 0, None, 0, None)
+                manager._sql_insert_user, ("alice", weak_record, now, 0, None, 0, None, "operator")
             )
             manager.conn.commit()
 

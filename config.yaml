@@ -423,29 +423,27 @@ api:
     # fall back to CYCLAW_DB_URL (the personality DB URL) — set this
     # explicitly to opt rate-limiting into Postgres.
     # database_url: null
-  # NOT wired to uvicorn: nothing here reaches ssl_certfile/ssl_keyfile, so
-  # setting this true does not put TLS on the socket (that is Stage 4). It is
-  # read in two places, and both treat it as a STATEMENT that this process
-  # serves HTTPS, not as evidence that it does: gate.py's loopback bind guard
-  # (_auth_and_tls_enabled, alongside auth.enabled below), and gate_auth.py,
-  # which sets the session cookie's Secure flag and the scheme its same-origin
-  # check expects. Turning this on without Stage 4 therefore marks the cookie
-  # Secure while the socket is still plain HTTP, and a browser will refuse to
-  # send it back -- so login stops working. Leave false until Stage 4 ships.
-  # Must be the literal boolean true -- a quoted "true" is a string, and both
-  # readers deliberately treat it as OFF rather than letting stray quotes
-  # decide a security gate.
+  # Stage 4: when enabled is the literal boolean true, gate._serve passes
+  # certfile/keyfile to uvicorn.run(ssl_certfile=..., ssl_keyfile=...).
+  # Missing or unreadable files fail closed at boot (no plaintext socket
+  # with Secure cookies). Quoted "true" is OFF. Generate a LAN self-signed
+  # pair with `cyclaw-gen-cert`. The Docker CMD still bypasses _serve --
+  # this wiring covers `python gate.py` / `cyclaw-server` only.
+  # The same flag also marks the session cookie Secure and participates
+  # in the loopback bind guard (with auth.enabled + the /query probe).
   # Background: docs/AUTHENTICATION_DESIGN.md §5/§7.
   tls:
     enabled: false
+    certfile: "data/tls/cert.pem"
+    keyfile: "data/tls/key.pem"
 
 # Per-user authentication (docs/AUTHENTICATION_DESIGN.md). Ships false, like
 # every other CyClaw subsystem (agentic/telegram/guardrails). Stage 2 wires
 # /auth/login, /auth/logout, /auth/whoami, sessions, and per-device bearer
-# tokens (utils/authn_manager.AuthManager) -- but Stage 3 (enforcing a
-# credential on /query and the console) has NOT landed yet, so setting this
-# true today creates the account/session machinery WITHOUT yet requiring a
-# credential to use /query.
+# tokens (utils/authn_manager.AuthManager). Stage 3 attaches
+# require_session_or_token to POST /query when this flag is the literal
+# boolean true (session cookie or named device token). The shipped false
+# leaves /query open. Quoted "true" is still OFF.
 #
 # It also participates in gate.py's loopback bind guard, alongside
 # api.tls.enabled below: a non-loopback bind is allowed only when BOTH flags
@@ -453,11 +451,12 @@ api:
 # -- gate.py does not let stray quotes decide a security gate) AND /query is
 # demonstrably carrying an authentication dependency, checked at runtime
 # rather than assumed. That third condition is what stops these two flags
-# alone from opening a LAN bind while Stage 3 leaves /query unauthenticated:
-# the guard refuses rather than binding with a warning, and it starts passing
-# on its own once Stage 3 ships, so a LAN operator is not stuck carrying
-# CYCLAW_ALLOW_NON_LOOPBACK_BIND forever. Read the design doc before enabling
-# this on a non-loopback bind.
+# alone from opening a LAN bind if /query is not actually carrying the
+# dependency (the probe is runtime, not a third config flag). Stage 3
+# attaches that dependency when this flag is on, so a LAN operator who also
+# sets api.tls.enabled is not stuck carrying CYCLAW_ALLOW_NON_LOOPBACK_BIND.
+# Read the design doc before enabling this on a non-loopback bind. TLS on
+# the socket is still Stage 4.
 #
 # Turning this on for the first time with no existing accounts creates one:
 # username "admin", with NO usable password -- the account is seeded with the
@@ -531,6 +530,14 @@ security:
     - "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - with port
     - "http://10.0.0.111"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
     - "http://10.0.0.111:8787"  # DevSkim: ignore DS137138 - with port
+    - "https://127.0.0.1"  # DevSkim: ignore DS162092,DS137138
+    - "https://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138
+    - "https://localhost"  # DevSkim: ignore DS162092,DS137138
+    - "https://localhost:8787"  # DevSkim: ignore DS162092,DS137138
+    - "https://10.0.0.112"  # DevSkim: ignore DS137138
+    - "https://10.0.0.112:8787"  # DevSkim: ignore DS137138
+    - "https://10.0.0.111"  # DevSkim: ignore DS137138
+    - "https://10.0.0.111:8787"  # DevSkim: ignore DS137138
     # NOTE: "null" is deliberately absent from this list — do not re-add it.
     # curl/MCP clients send no Origin header at all, so they are never subject
     # to CORS filtering and lose nothing. "null" in allow_origins is invalid

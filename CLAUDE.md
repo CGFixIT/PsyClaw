@@ -83,7 +83,7 @@ decision.
 |---|---|---|---|
 | GET | `/` | none | serves `static/terminal.html` |
 | GET | `/static/*` | none | static mount |
-| POST | `/query` | none | rate-limited, sanitized; 400/429/503/504/500 |
+| POST | `/query` | **session or device token when `auth.enabled`** | rate-limited, sanitized; 400/401/429/503/504/500. Unchanged (no credential) when auth is off |
 | GET | `/health` | none | `degraded` without Ollama is NORMAL |
 | GET | `/soul` | **API key** | rate-limited |
 | POST | `/soul/propose` | **API key** | advisory scan, never writes |
@@ -97,7 +97,15 @@ decision.
 | POST | `/ops/sqlconnect` | **API key** | rate-limited; subprocess shim |
 | POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
 | POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
-| GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; 503 when `auth.enabled` is false |
+| GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; returns `username` + `role`; 503 when `auth.enabled` is false |
+| GET | `/auth/users` | **session; admin or operator** | list users, no hashes; 503 when auth off |
+| POST | `/auth/users` | **session+CSRF or admin bearer** | create user; operator cannot create admin |
+| POST | `/auth/password` | **session+CSRF or admin bearer** | self-service password change; any authenticated role |
+| POST | `/auth/users/{u}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
+| POST | `/auth/users/{u}/role` | **admin only** | set role; last-admin protected |
+| POST | `/auth/users/{u}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
+| DELETE | `/auth/users/{u}` | **admin only** | hard delete after revoke; last-admin protected |
+| GET | `/auth/audit/summary` | **session; admin or audit** | reduced audit view; not the ops API key |
 | GET | `/memory/status` | **API key** | rate-limited; always 200 + flags (default-off memory) |
 | GET | `/memory/facts` | **API key** | rate-limited; 404 when `memory.enabled` is false |
 | GET | `/memory/episodes` | **API key** | rate-limited; 404 when `memory.enabled` is false |
@@ -115,9 +123,10 @@ The three `/auth/*` endpoints are Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
 (`gate_auth.py`, registered the same way `gate_ops.py` registers `/ops/*`).
 They exist regardless of `auth.enabled` — every handler checks the flag first
 and returns 503 rather than 404, so a route's mere presence never discloses
-whether the feature is on. **Stage 3 (enforcing a credential on `/query` and
-the console) has not landed** — these routes build sessions/login/logout/
-device tokens only; nothing yet requires a credential to reach `/query`.
+whether the feature is on. **Stage 3** attaches `require_session_or_token`
+to `POST /query` when `auth.enabled` is the literal boolean `true` (session
+cookie or named device token; no CSRF on `/query`). The shipped default
+leaves `/query` unauthenticated.
 
 The `/memory/*` and `/query/export/html` endpoints are the optional memory
 subsystem (`gate_memory.py` + package `memory/`, plan in
@@ -134,7 +143,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
 | `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
-| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; `require_session_or_token` is the closure Stage 3 will need to attach to `/query` -- gate.py locates it by name (`_AUTH_DEPENDENCY_NAME`), not by importing it (not yet wired) |
+| `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
 | `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
 | `memory/` | Optional facts + episodes SQLite+FTS5 store with propose/apply governance and optional retrieval fusion (all switches false in shipped `config.yaml`) |
 | `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
@@ -160,6 +169,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/authn_store.py` | SQLite/Postgres backend for `users`/`sessions`/`device_tokens`, mirroring `utils/personality_db.py`'s `connect()` pattern; own `CYCLAW_AUTH_DB_URL` env var, deliberately not shared with personality's `CYCLAW_DB_URL` |
 | `utils/authn_manager.py` | `AuthManager` — ties `utils/authn.py` + `utils/authn_store.py` together: bootstrap, login/logout, session validation, device-token CRUD. No HTTP awareness; `gate_auth.py` is the only caller that knows about cookies/headers/status codes |
 | `utils/authn_cli.py` | `cyclaw-user` console script (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/`token revoke`), local-only by construction (no HTTP route reaches it) |
+| `utils/gen_cert.py` | `cyclaw-gen-cert` — openssl wrapper that writes a self-signed cert + key with hostname/LAN SAN; no new runtime dep |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
 | `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`) |
 | `mcp_hybrid_server.py` | MCP server: `hybrid_search` only, no LLM, `sampling: None` |

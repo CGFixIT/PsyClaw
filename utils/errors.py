@@ -374,6 +374,20 @@ class AuthUserNotFound(AuthError):
         super().__init__(message, code="AUTH_USER_NOT_FOUND", details=details)
 
 
+class AuthPermissionDenied(AuthError):
+    """An authenticated user is not allowed to perform this admin action."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="AUTH_PERMISSION_DENIED", details=details)
+
+
+class AuthLastAdmin(AuthError):
+    """Refused because it would leave the system with no enabled admin."""
+
+    def __init__(self, message: str = "cannot modify the last enabled admin", details: dict | None = None):
+        super().__init__(message, code="AUTH_LAST_ADMIN", details=details)
+
+
 class AuthTokenLabelExists(AuthError):
     """create_device_token was called with a label the account already has live.
 

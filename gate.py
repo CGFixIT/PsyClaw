@@ -90,7 +90,7 @@ from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
-from gate_auth import register_auth_routes
+from gate_auth import attach_identity_to_query, register_auth_routes
 from gate_memory import register_memory_routes
 from metrics import summarize_audit
 
@@ -138,6 +138,7 @@ from fastapi import Request
 from utils.config_validation import (
     validate_auth_config,
     validate_boot_timeout_config,
+    validate_tls_config,
     validate_fallback_confirm_placeholder,
     validate_personality_config,
     validate_retrieval_config,
@@ -159,6 +160,7 @@ with open(_BASE_DIR / "config.yaml", encoding="utf-8") as _cfg_f:
 validate_retrieval_config(cfg)
 validate_personality_config(cfg)
 validate_auth_config(cfg)
+validate_tls_config(cfg)
 _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds
@@ -202,6 +204,31 @@ async def _audit(event: dict) -> None:
     diverges from what's on disk, which is exactly the case in tests.
     """
     await asyncio.to_thread(audit_log, event, cfg=cfg)
+
+
+def _request_username(request: Request) -> str | None:
+    """Username stamped by require_session_or_token, or None when auth is off."""
+    return getattr(request.state, "auth_username", None)
+
+
+def _forbid_audit_query(username: str | None) -> None:
+    """Audit role may log in but cannot run RAG queries."""
+    if not username or auth_manager is None:
+        return
+    actor = auth_manager.get_user(username)
+    if actor is not None and actor.role == "audit":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "audit role cannot call /query", "code": "AUTH_ROLE_DENIED"},
+        )
+
+
+async def _audit_query(request: Request, event: dict) -> None:
+    """Audit a /query-path event, attaching username when a session/token resolved."""
+    username = _request_username(request)
+    if username:
+        event = {**event, "username": username}
+    await _audit(event)
 
 
 async def _check_rate_limit_async(client_ip: str) -> bool:
@@ -620,6 +647,9 @@ async def query_endpoint(request: Request, req: QueryRequest):
                     "code": "INDEX_NOT_FOUND"}
         )
 
+    username = _request_username(request)
+    _forbid_audit_query(username)
+
     try:
         check_input(req.query)
     except PromptInjectionError as e:
@@ -627,7 +657,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         # truncating here yields a hash of only the first 50 chars that diverges
         # from the canonical full-query hash written by the graph audit node and
         # the MCP path. No raw text is persisted either way.
-        await _audit({"event": "prompt_injection_blocked", "query": req.query})
+        await _audit_query(request, {"event": "prompt_injection_blocked", "query": req.query})
         raise HTTPException(
             status_code=400,
             detail={"error": e.message, "code": e.code, "details": e.details}
@@ -638,6 +668,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
         "user_confirmed_online": req.user_confirmed_online,
         "online_provider": req.online_provider,
     }
+    if username:
+        initial_state["username"] = username
 
     # Overall server-side deadline: a stalled Ollama / retrieval must not hold
     # the request (and a worker thread) open indefinitely. The per-call LLM
@@ -649,7 +681,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             timeout=graph_timeout,
         )
     except TimeoutError as e:
-        await _audit({"event": "graph_timeout", "query": req.query, "timeout_sec": graph_timeout})
+        await _audit_query(request, {"event": "graph_timeout", "query": req.query, "timeout_sec": graph_timeout})
         logger.warning("graph invoke exceeded %ss deadline", graph_timeout)
         raise HTTPException(
             status_code=504,
@@ -666,7 +698,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         ) from e
     except Exception as e:
         safe_msg = _sanitize_error(e)
-        await _audit({"event": "graph_error", "query": req.query, "error": safe_msg})
+        await _audit_query(request, {"event": "graph_error", "query": req.query, "error": safe_msg})
         raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "GRAPH_ERROR"}) from e
 
     needs_confirm = result.get("needs_user_confirm", False)
@@ -736,7 +768,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             skipped_sources += 1
     if skipped_sources:
         logger.warning("Dropped %d non-dict source(s) from /query response", skipped_sources)
-        await _audit({"event": "skipped_sources", "query": req.query,
+        await _audit_query(request, {"event": "skipped_sources", "query": req.query,
                        "skipped_count": skipped_sources,
                        "total_sources": len(docs)})
 
@@ -869,18 +901,23 @@ register_ops_routes(
     require_api_key=require_api_key,
 )
 
-# Stage 2 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
+# Stage 2+3 of docs/AUTHENTICATION_DESIGN.md: /auth/login, /auth/logout,
 # /auth/whoami. Same registration-function shape as register_ops_routes
 # above, for the same reason -- gate_auth never imports anything gate.py
 # doesn't already inject into it. auth_manager is None when auth.enabled is
 # false; every handler in gate_auth.py checks for that and returns 503.
-register_auth_routes(
+# Stage 3 attaches require_session_or_token to /query ONLY when a manager
+# exists -- attaching the named closure while auth is off would 503 every
+# query and, worse, flip the bind-guard probe on a no-op.
+require_identity = register_auth_routes(
     app,
     cfg=cfg,
     audit=_audit,
     enforce_rate_limit=_enforce_rate_limit,
     auth_manager=auth_manager,
 )
+if auth_manager is not None:
+    attach_identity_to_query(app, require_identity)
 
 # Optional memory admin surface (default-off). gate_memory lazy-imports memory.*
 # inside handlers only — same registration-injection shape as ops/auth.
@@ -975,14 +1012,13 @@ _AUTH_DEPENDENCY_NAME = "require_session_or_token"
 def _request_path_enforcement_active() -> bool:
     """True when ``/query`` actually carries an authentication dependency.
 
-    A capability probe, not a config read, and the reason the auth+TLS bind
-    path is safe to have landed before Stage 3 exists. ``auth.enabled: true``
-    states an intention; this answers whether the intention was delivered. As
-    of this commit Stage 3 has not shipped -- ``/query`` is registered with no
-    ``dependencies=[...]`` -- so this returns False and the auth+TLS route
-    past loopback cannot open, no matter what the two booleans say. It starts
-    returning True on its own the moment Stage 3 attaches the dependency; no
-    edit here is required, and none should be made to force it.
+    A capability probe, not a config read. ``auth.enabled: true`` states an
+    intention; this answers whether the intention was delivered. Stage 3
+    attaches ``require_session_or_token`` to ``/query`` only when
+    ``auth_manager`` is constructed (literal ``auth.enabled: true``). The
+    shipped default leaves that manager None, so this stays False and the
+    auth+TLS route past loopback cannot open on an unmodified config. Do not
+    hard-code this True.
     """
     for route in app.routes:
         if getattr(route, "path", None) != "/query":
@@ -1083,9 +1119,10 @@ def _require_loopback_bind(host: str) -> bool:
         "Set api.host back to 127.0.0.1 in config.yaml.\n"  # DevSkim: ignore DS162092 - loopback host by design
         "\n"
         "Setting auth.enabled and api.tls.enabled to true is not enough on its\n"
-        "own: this guard also checks that /query actually enforces a credential,\n"
-        "which docs/AUTHENTICATION_DESIGN.md's Stage 3 has not yet delivered. Once\n"
-        "it has, those two flags allow this bind with no override needed.\n"
+        "own: this guard also checks that /query actually enforces a credential\n"
+        "(Stage 3 attaches require_session_or_token only when auth.enabled is the\n"
+        "literal boolean true). Both flags plus that attachment allow this bind\n"
+        "with no override needed.\n"
         f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
         "put your own authentication in front of it first.\n",
         file=sys.stderr,
@@ -1106,6 +1143,40 @@ def _is_port_in_use(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
+def _tls_ssl_kwargs() -> tuple[dict[str, str] | None, str | None]:
+    """Return (uvicorn ssl kwargs, error). None kwargs means TLS is off.
+
+    Fail-closed: enabled + missing/unreadable files returns an error string
+    and no kwargs, so ``_serve`` never starts a plaintext socket while
+    cookies would be marked Secure.
+    """
+    api_cfg = cfg.get("api") or {}
+    tls_cfg = api_cfg.get("tls") if isinstance(api_cfg, dict) else None
+    if not _flag_is_true(tls_cfg, "enabled"):
+        return None, None
+    if not isinstance(tls_cfg, dict):
+        return None, "api.tls.enabled is true but api.tls is not a mapping"
+    cert_raw = tls_cfg.get("certfile")
+    key_raw = tls_cfg.get("keyfile")
+    if not isinstance(cert_raw, str) or not cert_raw.strip() or not isinstance(key_raw, str) or not key_raw.strip():
+        return None, "api.tls.enabled is true but certfile/keyfile are missing"
+    cert = Path(cert_raw).expanduser()
+    key = Path(key_raw).expanduser()
+    if not cert.is_absolute():
+        cert = _BASE_DIR / cert
+    if not key.is_absolute():
+        key = _BASE_DIR / key
+    for label, path in (("certfile", cert), ("keyfile", key)):
+        if not path.is_file():
+            return None, f"api.tls.{label} does not exist or is not a file: {path}"
+        try:
+            with path.open("rb") as handle:
+                handle.read(1)
+        except OSError as exc:
+            return None, f"api.tls.{label} is not readable: {path} ({exc})"
+    return {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}, None
+
+
 def _serve(host: str, port: int) -> None:
     """Thin wrapper over ``uvicorn.run`` — kept separate so tests can patch the
     serve step without standing up a real server."""
@@ -1118,7 +1189,19 @@ def _serve(host: str, port: int) -> None:
     # bucket on, so any local process could mint a fresh 60/min budget per
     # request just by varying the header. CyClaw sits behind no reverse proxy —
     # the real peer is always the right answer here.
-    uvicorn.run(app, host=host, port=port, proxy_headers=False)  # DevSkim: ignore DS162092 - loopback-only binding by design
+    run_kwargs: dict = {
+        "app": app,
+        "host": host,
+        "port": port,
+        "proxy_headers": False,
+    }
+    ssl_kwargs, tls_error = _tls_ssl_kwargs()
+    if tls_error:
+        print(f"\nRefusing to start: {tls_error}\n", file=sys.stderr)
+        return
+    if ssl_kwargs:
+        run_kwargs.update(ssl_kwargs)
+    uvicorn.run(**run_kwargs)  # DevSkim: ignore DS162092 - loopback-only binding by design
 
 
 def _hold_console() -> None:

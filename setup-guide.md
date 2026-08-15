@@ -357,7 +357,7 @@ AUTH="Authorization: Bearer $CYCLAW_API_KEY"
 | `/` | GET | serves `static/terminal.html` — the browser console |
 | `/static/*` | GET | static assets for that page |
 | `/health` | GET | readiness: per-service status, `index_ready`, `graph_ready`, `mode` |
-| `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized |
+| `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized. When `auth.enabled` is true, also requires a session cookie or `Authorization: Bearer <device-token>` |
 
 ```bash
 # Readiness. "degraded" without Ollama running is NORMAL, not an error.
@@ -395,9 +395,11 @@ curl -s -X POST http://127.0.0.1:8787/query \
 
 Per-user authentication (`docs/AUTHENTICATION_DESIGN.md`), separate from the
 single shared `CYCLAW_API_KEY` above. Ships `auth.enabled: false` in
-`config.yaml` — every route below returns `503` until you turn it on. Stage 2
-only: sessions, login/logout, and per-device bearer tokens exist, but
-**nothing yet requires a credential to reach `/query`** (that is Stage 3).
+`config.yaml` — every `/auth/*` route below returns `503` until you turn it on.
+When it is on, `POST /query` also requires the session cookie or a named
+device token (the console login form, or `cyclaw-user token create`).
+`/health` stays open. The shared `CYCLAW_API_KEY` still gates `/soul/*` and
+`/ops/*`.
 
 | Route | Method | What it does |
 |---|---|---|
@@ -419,6 +421,24 @@ Manage accounts after that with the same local-only `cyclaw-user` CLI
 (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/
 `token revoke`) — it never runs over HTTP.
 
+### TLS (`api.tls`, off by default)
+
+When `api.tls.enabled` is the literal boolean `true`, `cyclaw-server` /
+`python gate.py` listen with HTTPS using `api.tls.certfile` and
+`api.tls.keyfile`. Missing files refuse to start. Generate a self-signed
+cert that includes hostname + LAN IPs in `subjectAltName`:
+
+```bash
+cyclaw-gen-cert
+# writes data/tls/cert.pem and data/tls/key.pem
+```
+
+Leave `enabled: false` until those files exist. The Docker `CMD` does not
+go through `_serve` and is not covered by this wiring. The console CSP
+`connect-src` stays `'self'` (same-origin HTTPS is already `'self'`).
+`security.allowed_origins` includes `https://` twins of the loopback/LAN
+http entries.
+
 ```bash
 # Log in — save the cookie jar and read the csrf_token out of the response.
 curl -s -c cookies.txt -X POST http://127.0.0.1:8787/auth/login \
@@ -427,6 +447,18 @@ curl -s -c cookies.txt -X POST http://127.0.0.1:8787/auth/login \
 
 # Who am I, using the saved session cookie.
 curl -s -b cookies.txt http://127.0.0.1:8787/auth/whoami | python3 -m json.tool
+
+# Query with the session cookie (required once auth.enabled is true).
+curl -s -b cookies.txt -X POST http://127.0.0.1:8787/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"What is RRF fusion?"}' | python3 -m json.tool
+
+# Telegram / curl without a cookie: issue a named device token locally, then:
+#   cyclaw-user token create admin telegram
+curl -s -X POST http://127.0.0.1:8787/query \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $DEVICE_TOKEN" \
+  -d '{"query":"What is RRF fusion?"}' | python3 -m json.tool
 
 # Log out — the CSRF token from the login response is required here.
 curl -s -b cookies.txt -X POST http://127.0.0.1:8787/auth/logout \

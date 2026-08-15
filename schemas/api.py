@@ -167,6 +167,34 @@ class AuthLoginResponse(BaseModel):
 class AuthWhoamiResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     username: str
+    role: str
+
+
+class AuthUserRecord(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str
+    role: str
+    disabled: bool
+    created_ts: float
+    last_login_ts: float | None
+    locked: bool
+
+
+class AuthCreateUserRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    username: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=1024)
+    role: str = Field(default="operator", min_length=1, max_length=32)
+
+
+class AuthSetPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class AuthSetRoleRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    role: str = Field(min_length=1, max_length=32)
 
 # --- Memory subsystem (docs/memory/) -------------------------------------------
 # Propose/apply mirrors soul governance: non-empty reason, closed action Literal,
