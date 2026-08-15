@@ -62,21 +62,23 @@ unschedule_sync_job
 
 # -- Landed LaunchAgent cleanup -----------------------------------------------
 # #910/#911 added generators for telegram-poll (KeepAlive), telegram-health,
-# and fsconnect-trash. Those jobs are NOT registered through sync.cli, so the
-# step above never sees them -- a loaded telegram-poll KeepAlive would keep
-# talking to Telegram after `cyclaw` is gone. Best-effort: bootout the
+# and fsconnect-trash. #912's generate_service_plist.py uses the gate/harness
+# labels. None of these jobs go through sync.cli, so the step above never
+# sees them -- a loaded telegram-poll KeepAlive or crash-restart gate agent
+# would keep running after `cyclaw` is gone. Best-effort: bootout the
 # launchd label even if the plist file is already gone (a KeepAlive job
 # can stay loaded after a hand-deleted plist). Then delete the file if
 # it is still present. Failures print a WARNING and uninstall continues.
-# Gate/harness labels are not listed here -- they belong to a still-open
-# design PR, not landed main.
+# Booting out a label that was never generated is a silent no-op.
 unschedule_landed_launchagents() {
   local uid dest label
   uid="$(id -u 2>/dev/null || echo 0)"
   for label in \
     com.cgfixit.cyclaw.telegram-poll \
     com.cgfixit.cyclaw.telegram-health \
-    com.cgfixit.cyclaw.fsconnect-trash
+    com.cgfixit.cyclaw.fsconnect-trash \
+    com.cgfixit.cyclaw.gate \
+    com.cgfixit.cyclaw.harness
   do
     dest="$HOME/Library/LaunchAgents/${label}.plist"
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
