@@ -46,9 +46,9 @@ def test_uninstall_missing_schtasks_delete_is_noop_under_ps51() -> None:
     body = text.split("function Unschedule-KnownTasks", 1)[1]
     body = body.split("Unschedule-SyncJob", 1)[0]
     assert "/Query" in body
-    assert "Continue" in body
-    assert "ErrorActionPreference" in body
-    assert "NativeCommandError" in body or "cannot find the file specified" in body
+    assert "cmd.exe" in body
+    assert "ErrorActionPreference =" not in body
+    assert "cannot find" in body
     assert "2>$null | Out-Null" not in body
 
 

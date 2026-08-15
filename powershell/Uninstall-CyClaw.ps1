@@ -66,25 +66,21 @@ function Unschedule-SyncJob {
 function Unschedule-KnownTasks {
     $schtasks = Get-Command schtasks.exe -ErrorAction SilentlyContinue
     if (-not $schtasks) { return }
-    $exe = $schtasks.Source
     foreach ($name in $KnownTaskNames) {
         Write-Host "[cyclaw] checking scheduled task '$name'..."
-        # PS 5.1 + $ErrorActionPreference=Stop turns schtasks stderr
-        # ("ERROR: The system cannot find the file specified.") into a
-        # terminating NativeCommandError and would abort uninstall. Missing
-        # task is a documented no-op (matches macos launchctl bootout || true).
-        $prevEap = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $null = & $exe /Query /TN $name 2>&1  # DevSkim: ignore DS104456 — call operator, not IEX
-            if ($LASTEXITCODE -eq 0) {
-                $null = & $exe /Delete /TN $name /F 2>&1  # DevSkim: ignore DS104456 — call operator, not IEX
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host "[cyclaw] WARNING: could not delete scheduled task '$name'; remove it manually with schtasks /Delete /TN '$name' /F if needed" -ForegroundColor Yellow
-                }
-            }
-        } finally {
-            $ErrorActionPreference = $prevEap
+        # Route through cmd.exe with inner stdout/stderr discarded so
+        # Windows PowerShell 5.1 cannot wrap schtasks stderr as a
+        # terminating NativeCommandError ("ERROR: The system cannot find
+        # the file specified."). Missing task is a no-op (macOS twin:
+        # launchctl bootout … || true). Names are a fixed literal list.
+        # Do not flip $ErrorActionPreference — it leaks into the caller
+        # when GitHub Actions dot-sources the CI wrapper.
+        $safeName = $name.Replace('"', '')
+        cmd.exe /c "schtasks.exe /Query /TN `"$safeName`" >NUL 2>&1" | Out-Null
+        if ($LASTEXITCODE -ne 0) { continue }
+        cmd.exe /c "schtasks.exe /Delete /TN `"$safeName`" /F >NUL 2>&1" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[cyclaw] WARNING: could not delete scheduled task '$name'; remove it manually with schtasks /Delete /TN '$name' /F if needed" -ForegroundColor Yellow
         }
     }
 }
