@@ -526,6 +526,16 @@ security:
   # ops shims, and harness agent-run/push/publish (writes to GitHub). config-
   # guard's C13 check warns (does not fail) when this combination is detected.
   # Two hard controls back this up (not just the C13 warning):
+  # DOCKER: this flag does NOT apply inside a container. docker-compose
+  # publishes 127.0.0.1:8787:8787, but Docker's NAT rewrites the source address,
+  # so the peer gate.py sees is the bridge gateway (172.x), never loopback --
+  # the bypass is therefore denied and the routes stay key-gated. That is
+  # deliberate and cannot be safely relaxed: from inside the container a
+  # request published on 127.0.0.1 and one published on 0.0.0.0 are
+  # indistinguishable, so trusting the bridge would reopen the LAN hole for
+  # anyone who changed that publish line. Set CYCLAW_API_KEY in the container
+  # instead (compose does not set one today).
+  #
   #  1. PER-REQUEST: the bypass only applies to a LOOPBACK PEER. A remote caller
   #     always needs the real key, on both apps. This is the durable one -- it
   #     holds no matter how the process was launched, including the container's
