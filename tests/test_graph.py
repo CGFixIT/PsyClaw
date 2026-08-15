@@ -1461,3 +1461,79 @@ class TestGuardrailOutputGraphIntegration:
         assert result["answer_model"] == "grok"
         assert result["answer"] == "A completely ungrounded grok answer unrelated to anything retrieved."
         assert result.get("guardrail_blocked", False) is False
+
+    def test_claude_fallback_passes_through_unchecked_even_when_enabled(self, tmp_path, monkeypatch):
+        # Same scope exclusion as the grok leg above, proven independently for
+        # the second external provider (armed 2026-08-07, PR #441): claude_fallback
+        # is wired to guardrail_output identically to grok_fallback, but only the
+        # grok/offline_best_effort legs had a build_graph()-level test pinning
+        # this class' docstring claim -- a wiring regression specific to the
+        # claude leg would not have been caught by any test at this level.
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="never used")
+        claude = MockClaudeClient(response="A completely ungrounded claude answer unrelated to anything retrieved.")
+
+        graph = build_graph(
+            retriever=retriever, llm=llm, grok=None, claude=claude, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        result = graph.invoke({
+            "query": "off topic",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "claude"
+        assert result["answer"] == "A completely ungrounded claude answer unrelated to anything retrieved."
+        assert result.get("guardrail_blocked", False) is False
+
+    def test_claude_fallback_actually_routes_through_the_guardrail_output_node(
+        self, tmp_path, monkeypatch
+    ):
+        """guardrail_output_node no-ops (returns {}) for any answer_model other
+        than "local" -- so a state-only assertion cannot distinguish "routed
+        through the node and it no-op'd" from "never reached the node at all".
+        The two prior tests prove the *answer* passes through unchanged; this
+        one proves the *edge* is actually there, by spying on the node
+        function build_graph() wires in, mirroring what invariant-guard's
+        static EXPECTED_UNCONDITIONAL_EDGES check already pins for grok but
+        that check lives in a separate CI script, not in this pytest suite.
+        """
+        import graph as graph_module
+        from utils.guardrail_bridge import build_output_guard
+
+        self._patch_guardrails_config(monkeypatch, tmp_path)
+        cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        cfg["guardrails"] = {"enabled": True}
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="never used")
+        claude = MockClaudeClient(response="claude answer")
+
+        seen_answer_models = []
+        original_node = graph_module.guardrail_output_node
+
+        def spy(state, **kwargs):
+            seen_answer_models.append(state.get("answer_model"))
+            return original_node(state, **kwargs)
+
+        monkeypatch.setattr(graph_module, "guardrail_output_node", spy)
+
+        built = graph_module.build_graph(
+            retriever=retriever, llm=llm, grok=None, claude=claude, cfg=cfg,
+            output_guard=build_output_guard(cfg),
+        )
+        built.invoke({
+            "query": "off topic",
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert "claude" in seen_answer_models, (
+            "claude_fallback never reached guardrail_output_node -- the edge "
+            "wiring regressed"
+        )
