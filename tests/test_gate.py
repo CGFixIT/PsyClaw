@@ -1238,6 +1238,58 @@ class TestLoopbackBindGuard:
         monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
         assert gate._require_loopback_bind("10.0.0.50") is True
 
+    def test_api_key_optional_closes_the_auth_and_tls_bind_route(self, monkeypatch):
+        """security.api_key_optional must not compose with the auth+TLS route.
+
+        The two flags govern DIFFERENT credentials. auth.enabled + TLS + a real
+        /query dependency proves the QUERY path carries a session -- which is
+        the whole basis on which the test directly above admits a LAN bind. But
+        api_key_optional: true simultaneously removes the CYCLAW_API_KEY gate
+        from /soul/*, /ops/*, /memory/* and /audit/summary. Composed, a LAN
+        caller reaches soul mutation and the /ops/* subprocess shims with no
+        credential at all, admitted on the strength of a session that never
+        guarded those routes. config-guard's C13 warns on this pair; by this
+        module's own "a warning is not a control" standard, the bind guard is
+        where it has to be refused.
+        """
+        import gate
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(gate, "cfg", {
+            "auth": {"enabled": True},
+            "api": {"tls": {"enabled": True}},
+            "security": {"api_key_optional": True},
+        })
+        monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
+        # Every precondition of the allow-path above is satisfied except this one.
+        assert gate._auth_and_tls_enabled() is True
+        assert gate._api_key_gate_bypassed() is True
+        assert gate._require_loopback_bind("10.0.0.50") is False
+
+    def test_api_key_optional_does_not_affect_a_loopback_bind(self, monkeypatch):
+        """The flag is only refused as a LAN-bind combination. A loopback bind
+        with api_key_optional: true is the configuration the flag exists for and
+        must still start -- otherwise the guard breaks the supported use case."""
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": True}})
+        assert gate._require_loopback_bind("127.0.0.1") is True
+
+    def test_api_key_optional_does_not_revoke_the_explicit_env_override(self, monkeypatch):
+        """The env escape hatch means "I am fronting this with my own auth" --
+        an explicit operator override that outranks the composition guard."""
+        import gate
+        monkeypatch.setenv(gate._ALLOW_NON_LOOPBACK_ENV, "1")
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": True}})
+        assert gate._require_loopback_bind("10.0.0.50") is True
+
+    @pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
+    def test_api_key_optional_quoted_yaml_fails_open_to_the_safe_side(self, quoted, monkeypatch):
+        """A quoted "true" is the STRING "true", not the boolean -- so the gate
+        is NOT bypassed and the bind route stays available. Same literal-True
+        discipline as _flag_is_true, pointed the safe way for this flag."""
+        import gate
+        monkeypatch.setattr(gate, "cfg", {"security": {"api_key_optional": quoted}})
+        assert gate._api_key_gate_bypassed() is False
+
     @pytest.mark.parametrize("quoted", ["false", "true", "no", "0", "off"])
     def test_a_quoted_yaml_boolean_fails_closed(self, quoted, monkeypatch):
         """YAML parses `enabled: "false"` as the STRING "false", and every

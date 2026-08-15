@@ -113,6 +113,17 @@ time without either one affecting the other. `config-guard`'s C13 check
 warns when it is combined with a non-loopback `api.host` or a LAN entry in
 `security.allowed_hosts`.
 
+One place the two systems **do** interact, and must not: §7's rule below
+("a non-loopback bind is allowed when authentication is enabled and TLS is
+enabled") is satisfied by `auth.enabled` + `api.tls.enabled` + a real
+`/query` credential — all properties of the SESSION system. None of them
+say anything about the API-key routes `api_key_optional` opens. Composed,
+they would admit a LAN bind on the strength of a session while `/soul/*`
+and the `/ops/*` subprocess shims sit unauthenticated. `_require_loopback_bind`
+therefore refuses that route while `api_key_optional` is true; the
+`CYCLAW_ALLOW_NON_LOOPBACK_BIND` env override (an explicit operator
+statement of "my own auth is in front") still outranks it.
+
 Two consequences worth stating plainly.
 
 **The transport is already built.** Both real clients speak `Authorization:

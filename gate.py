@@ -1009,6 +1009,16 @@ def _auth_and_tls_enabled() -> bool:
     return _flag_is_true(cfg.get("auth") or {}, "enabled") and _flag_is_true(tls_cfg, "enabled")
 
 
+def _api_key_gate_bypassed() -> bool:
+    """True when ``security.api_key_optional`` disables the CYCLAW_API_KEY gate.
+
+    Same literal-``True`` discipline as ``_flag_is_true`` above, and for the
+    same reason: this backs a bind-time security decision, so a quoted
+    ``"false"`` must not read as enabled.
+    """
+    return _flag_is_true(cfg.get("security") or {}, "api_key_optional")
+
+
 # gate_auth.register_auth_routes exports this dependency for Stage 3 to attach
 # to /query. Matched by NAME rather than by identity because it is a closure
 # built inside that function and gate.py never holds a reference to it -- the
@@ -1095,11 +1105,23 @@ def _require_loopback_bind(host: str) -> bool:
     capability instead means this route past loopback simply cannot open
     today, and opens by itself when the stage that makes it true ships.
 
+    (1) additionally requires that ``security.api_key_optional`` is NOT set.
+    That flag governs a different credential from the one this route checks:
+    ``_request_path_enforcement_active`` proves ``/query`` carries a session,
+    but ``api_key_optional: true`` simultaneously removes the CYCLAW_API_KEY
+    gate from ``/soul/*``, ``/ops/*``, ``/memory/*`` and ``/audit/summary``.
+    Without this clause the two flags compose into the exact hole the rest of
+    this docstring exists to prevent: a LAN bind admitted on the strength of
+    ``/query``'s session while soul mutation and the ``/ops/*`` subprocess
+    shims sit open to anything that can route to the port. config-guard's C13
+    warns on the same combination, but by this module's own standard above a
+    warning is not a control -- this is the control.
+
     Returns True when it is safe to proceed.
     """
     if _is_loopback_host(host):
         return True
-    if _auth_and_tls_enabled() and _request_path_enforcement_active():
+    if _auth_and_tls_enabled() and _request_path_enforcement_active() and not _api_key_gate_bypassed():
         logger.warning(
             "Binding %s — beyond loopback, allowed because auth.enabled and "
             "api.tls.enabled are both set and /query enforces a credential. "
@@ -1131,6 +1153,12 @@ def _require_loopback_bind(host: str) -> bool:
         "(Stage 3 attaches require_session_or_token only when auth.enabled is the\n"
         "literal boolean true). Both flags plus that attachment allow this bind\n"
         "with no override needed.\n"
+        "\n"
+        "That auth+TLS route is ALSO refused while security.api_key_optional is\n"
+        "true: that flag removes the CYCLAW_API_KEY gate from /soul/*, /ops/*,\n"
+        "/memory/* and /audit/summary, so a session on /query would not stop a\n"
+        "LAN caller reaching soul mutation or the /ops/* subprocess shims. Set\n"
+        "security.api_key_optional back to false to use that route.\n"
         f"If the exposure is deliberate today, set {_ALLOW_NON_LOOPBACK_ENV}=1 and\n"
         "put your own authentication in front of it first.\n",
         file=sys.stderr,
