@@ -193,6 +193,8 @@ CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`
 
 > **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated.
 
+> **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once. Leave it `false` unless you are certain the deployment is fully loopback-isolated — flipping it `true` on a host also reachable from a LAN (i.e. `security.allowed_hosts` carries non-loopback entries) hands every device on that LAN unauthenticated access to soul mutation, the `/ops/*` shims, and harness agent writes. `config-guard`'s C13 check warns on that exact combination.
+
 ### macOS — zsh (the default shell) or bash
 
 Set for the current Terminal tab. Generate a real value instead of typing one —

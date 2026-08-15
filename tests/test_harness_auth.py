@@ -178,6 +178,58 @@ def test_open_route_needs_no_key(client, path):
     assert client.get(path).status_code == 200
 
 
+# --- security.api_key_optional bypass (config.yaml flag, default false) ----
+
+
+def _client_with_api_key_optional(cfg, monkeypatch, value: bool) -> TestClient:
+    """Build a harness TestClient against a config.yaml view where
+    security.api_key_optional is overridden to ``value``, leaving every other
+    key untouched (real repo config, not a synthetic one)."""
+    import copy
+
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = value
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
+
+
+@pytest.mark.parametrize(("method", "path", "body"), GUARDED)
+def test_api_key_optional_true_bypasses_every_guarded_route(cfg, monkeypatch, method, path, body):
+    """The flag covers the same 26-route `guarded` surface the coverage tests
+    above pin -- no Authorization header, no CYCLAW_API_KEY env var, still not
+    a 401. CSRF is a separate, independent check and still applies."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    c = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = _call(c, method, path, body, headers=_csrf(c))
+    assert resp.status_code != 401
+
+
+def test_api_key_optional_true_accepts_a_wrong_key_too(cfg, monkeypatch):
+    """Once bypassed, the dependency never inspects whatever token was sent."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    c = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = c.post(
+        "/api/soul", json={"enabled": True},
+        headers={"Authorization": "Bearer garbage", **_csrf(c)},
+    )
+    assert resp.status_code != 401
+
+
+def test_api_key_optional_false_matches_the_default(cfg, monkeypatch):
+    """Explicit false behaves exactly like the flag being absent (the
+    pre-existing fail-closed default) -- the regression this flag must not
+    introduce."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    c = _client_with_api_key_optional(cfg, monkeypatch, False)
+    resp = c.post("/api/soul", json={"enabled": True}, headers=_csrf(c))
+    assert resp.status_code == 401
+
+
 # --- fail-closed -----------------------------------------------------------
 
 

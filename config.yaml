@@ -511,6 +511,21 @@ security:
   # not an enforced boot gate. See CLAUDE.md §4 "Environment & install".
   require_env:
     - "GROK_API_KEY"
+  # Global bypass for the CYCLAW_API_KEY Bearer-token gate (require_api_key in
+  # gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/* system,
+  # which stays governed by auth.enabled regardless of this flag. Read by both
+  # gate.py (soul/*, ops/*, memory/*, audit/summary -- 17 routes) and
+  # harness/server.py (26 routes behind its `guarded` dependency list,
+  # including /api/agent/run+push+publish). Defaults false: unchanged,
+  # fail-closed behavior (unset CYCLAW_API_KEY refuses the endpoint; a wrong
+  # key 401s). Set true only for a genuinely trusted, fully loopback-isolated
+  # deployment -- it removes authentication from every route above for ANY
+  # caller that can reach the bound host/port. If allowed_hosts/allowed_origins
+  # below carry LAN entries (as this operator's does), true means every device
+  # on that LAN gets unauthenticated soul mutation, agentic/fsconnect/sqlconnect
+  # ops shims, and harness agent-run/push/publish (writes to GitHub). config-
+  # guard's C13 check warns (does not fail) when this combination is detected.
+  api_key_optional: false
   # Starlette buffers a request's entire raw body into memory before Pydantic
   # validation runs, so schemas/api.py's per-field max_length caps (largest is
   # 65536 chars) don't bound memory use for an oversized POST -- they only

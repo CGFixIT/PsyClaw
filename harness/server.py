@@ -50,6 +50,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -85,6 +86,13 @@ from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
 
 logger = logging.getLogger("cyclaw.harness.server")
+
+# Own scheme instance rather than importing utils.auth's: that module's is a
+# private (non-`__all__`) module-level name, and this file already treats
+# utils.auth.require_api_key as the one thing it borrows from that module --
+# see the docstring on _require_api_key_or_optional below for why the check
+# itself still lives there, not here.
+_bearer_scheme = HTTPBearer(auto_error=False)
 
 _HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -563,6 +571,22 @@ def create_app(
                 },
             )
 
+    def _require_api_key_or_optional(
+        credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+    ) -> None:
+        """Skip the CYCLAW_API_KEY check when security.api_key_optional is true.
+
+        Mirrors gate.py's require_api_key: same config flag, same "checked
+        before the env var" ordering so opting in means "no key needed," not
+        "still refused when unset." Delegates to utils.auth.require_api_key
+        for the actual check -- that function stays untouched and always
+        fail-closed when called directly, which is what keeps
+        test_matches_gate_auth_semantics's parity assertion meaningful.
+        """
+        if (cyclaw_cfg.get("security", {}) or {}).get("api_key_optional") is True:
+            return
+        require_api_key(credentials)
+
     # Dependency order is load-bearing and mirrors gate.py:624 -- throttle FIRST,
     # then origin, then auth, then CSRF. A wrong key against a spent budget must
     # return 429, not 401, or the limiter stops bounding key-guessing. CSRF runs
@@ -572,7 +596,7 @@ def create_app(
     guarded = [
         Depends(_enforce_rate_limit),
         Depends(_enforce_same_origin),
-        Depends(require_api_key),
+        Depends(_require_api_key_or_optional),
         Depends(_enforce_csrf_token),
     ]
 

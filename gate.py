@@ -104,6 +104,14 @@ def require_api_key(
     # /soul/* mutation endpoint unauthenticated. Now, if no key is configured the
     # endpoint is REFUSED rather than left open — no key is generated, logged, or
     # stored. Set CYCLAW_API_KEY to enable soul mutations.
+    #
+    # security.api_key_optional (default false) is the one deliberate escape
+    # hatch: an operator who explicitly opts in gets this dependency skipped
+    # entirely across every route it guards (soul/*, ops/*, memory/*,
+    # audit/summary). Checked first, before the env var, so opting in also
+    # means "no key needed" rather than "still refused when unset."
+    if (cfg.get("security", {}) or {}).get("api_key_optional") is True:
+        return
     api_key = os.environ.get("CYCLAW_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=401,

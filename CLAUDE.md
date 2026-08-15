@@ -119,6 +119,18 @@ The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 `utils/ops_runner.py` (a `subprocess.run([...])` shim). They never import those
 subsystems.
 
+Every route marked **API key** above — plus the harness console's 26
+`guarded` routes (`harness/server.py`, including `/api/agent/run`/`push`/
+`publish`) — is gated by `require_api_key` (two independent implementations,
+one per app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
+`security.api_key_optional` (default `false`) is the one deliberate bypass:
+set it `true` and every one of those routes stops checking `CYCLAW_API_KEY`
+entirely, on both apps, for any caller that can reach the bound host/port —
+not just localhost. It does **not** touch the separate session/RBAC
+`/auth/*` system below, which stays governed by `auth.enabled` regardless.
+`config-guard`'s C13 check warns (does not fail) when this flag is `true`
+alongside a non-loopback `api.host` or a LAN entry in `security.allowed_hosts`.
+
 The original three `/auth/*` endpoints (`/auth/login`, `/auth/logout`,
 `/auth/whoami`) were Stage 2 of `docs/AUTHENTICATION_DESIGN.md`
 (`gate_auth.py`, registered the same way `gate_ops.py` registers `/ops/*`).
@@ -169,7 +181,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/config_validation.py` | Boot-time config validation; fails fast |
 | `utils/ops_runner.py` | Subprocess shim behind the four `/ops/*` endpoints |
 | `utils/guardrail_bridge.py` | Inversion shim: builds the `guardrail_input` and `guardrail_output` nodes' callables, or `None` for either when disabled; the only module through which `graph.py` reaches `guardrails/` (never a direct import) |
-| `utils/auth.py` | Harness-only API-key auth: fail-closed on unset `CYCLAW_API_KEY`, `hmac.compare_digest` on UTF-8 bytes. `gate.py` keeps its own separate copy (see §4's mypy/CI trap) — never refactored onto this module |
+| `utils/auth.py` | Harness-only API-key auth: fail-closed on unset `CYCLAW_API_KEY`, `hmac.compare_digest` on UTF-8 bytes. `gate.py` keeps its own separate copy (see §4's mypy/CI trap) — never refactored onto this module. Both copies honor `security.api_key_optional` (default `false`); harness wraps the call in a `create_app()`-local closure rather than teaching this module to read `config.yaml` itself |
 | `utils/authn.py` | **Not `utils/auth.py` above** — per-user authentication primitives (`docs/AUTHENTICATION_DESIGN.md`): scrypt password hash/verify, per-account lockout arithmetic, session/CSRF/device-token id generation. Pure functions, no DB, no HTTP |
 | `utils/authn_store.py` | SQLite/Postgres backend for `users`/`sessions`/`device_tokens`, mirroring `utils/personality_db.py`'s `connect()` pattern; own `CYCLAW_AUTH_DB_URL` env var, deliberately not shared with personality's `CYCLAW_DB_URL` |
 | `utils/authn_manager.py` | `AuthManager` — ties `utils/authn.py` + `utils/authn_store.py` together: bootstrap, login/logout, session validation, device-token CRUD. No HTTP awareness; `gate_auth.py` is the only caller that knows about cookies/headers/status codes |
@@ -688,7 +700,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | Skill | Type | Purpose | Runs pre-install? |
 |---|---|---|---|
 | `/invariant-guard` | check | Static-assert the six invariants + guards against a diff | Yes (stdlib) |
-| `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture) | Needs PyYAML |
+| `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture, `api_key_optional` vs. LAN exposure) | Needs PyYAML |
 | `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints + environment.yml (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
 | `/verify-deps` | check | Extends dep-guard: adds the requirements.txt cross-check dep-guard skips, a dry-run of each install surface's actual command, and a PyPI currency + CVE sweep. Reports only — never auto-bumps a runtime pin | extract_pins.py yes (stdlib); currency sweep needs network |
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |

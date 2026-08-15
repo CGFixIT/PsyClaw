@@ -99,6 +99,20 @@ only. The Telegram row stays accurate in form — it still sends a bearer
 token to `/query` — but the token must now be a named device token, not
 the shared `CYCLAW_API_KEY`.
 
+**Amendment (2026-08-15).** A second, independent escape hatch landed
+alongside the session/RBAC system this document specifies:
+`config.yaml`'s `security.api_key_optional` (default `false`). It bypasses
+`require_api_key` — the shared-secret mechanism row 2 above describes, in
+both its `gate.py` and `harness/server.py` (`utils/auth.py`) copies — for
+every route it gates, not just `/soul/*`/`/ops/*`/`/audit/summary` but also
+the harness console's 26 `guarded` routes. It is orthogonal to everything in
+this document: it does not touch `auth.enabled`, sessions, device tokens, or
+`/auth/*`, and an operator can run with `auth.enabled: true` (this design)
+and `api_key_optional: true` (bypassing the older mechanism) at the same
+time without either one affecting the other. `config-guard`'s C13 check
+warns when it is combined with a non-loopback `api.host` or a LAN entry in
+`security.allowed_hosts`.
+
 Two consequences worth stating plainly.
 
 **The transport is already built.** Both real clients speak `Authorization:

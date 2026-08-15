@@ -760,6 +760,57 @@ class TestSoulAndErrorPaths:
         assert "version" in body
         assert "source" in body
 
+    # ------------------------------------------------------------------
+    # security.api_key_optional bypass (config.yaml flag, default false)
+    # ------------------------------------------------------------------
+
+    def test_api_key_optional_false_still_requires_key(self, client, monkeypatch):
+        """Explicit api_key_optional=false behaves exactly like the flag being
+        absent (the pre-existing fail-closed default)."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = False
+        resp = test_client.get("/soul")
+        assert resp.status_code == 401
+
+    def test_api_key_optional_true_bypasses_auth_with_no_key_set(self, client, monkeypatch):
+        """api_key_optional=true skips require_api_key entirely -- no
+        Authorization header, no CYCLAW_API_KEY env var, still 200."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = test_client.get("/soul")
+        assert resp.status_code == 200
+        assert "soul" in resp.json()
+
+    def test_api_key_optional_true_bypasses_auth_with_wrong_key_sent(self, client, monkeypatch):
+        """api_key_optional=true means a wrong/garbage Bearer token still
+        passes -- the dependency never inspects it once bypassed."""
+        test_client, _ = client
+        import gate
+        monkeypatch.setenv("CYCLAW_API_KEY", "correct-key-xyz")
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        resp = test_client.get(
+            "/soul", headers={"Authorization": "Bearer definitely-not-the-key"}
+        )
+        assert resp.status_code == 200
+
+    def test_api_key_optional_covers_ops_endpoint_too(self, client, monkeypatch):
+        """The same flag also bypasses gate_ops.py's injected require_api_key
+        (POST /ops/sync), not just gate.py's own /soul route."""
+        test_client, _ = client
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        with patch("gate_ops.run_sync_op") as mock_run:
+            mock_run.return_value = MagicMock(
+                exit_code=0, label="status", to_dict=lambda: {"exit_code": 0, "label": "status"}
+            )
+            resp = test_client.post("/ops/sync", json={"action": "status", "dry_run": True})
+        assert resp.status_code != 401
+
     def test_get_soul_audit_logged(self, client, monkeypatch, tmp_path):
         """GET /soul writes a soul_read audit event on every authenticated call."""
         import json

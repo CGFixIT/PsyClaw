@@ -147,6 +147,14 @@ below is different: it is the harness's own per-user login (Stage 6 of
 the shared `auth.enabled` config flag is `true`. The console's `/users`
 slash command drives it.
 
+`config.yaml`'s `security.api_key_optional` (default `false`, shared with
+`gate.py`) can remove the `CYCLAW_API_KEY` requirement from every guarded
+route below — including the agent run/push/publish routes — for any caller
+that reaches `127.0.0.1:8790` (or a LAN address, if `security.allowed_hosts`
+carries one). It never touches the `/api/auth/*` session system above. See
+`config-guard`'s C13 check and the main README's "API Key Setup" section
+before enabling it.
+
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/` | Console HTML |
