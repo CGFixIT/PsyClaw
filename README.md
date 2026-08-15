@@ -402,11 +402,17 @@ pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
     --ignore-installed PyYAML
 ```
 
-Prefer a script? `bash ./macos/install-cyclaw.sh` branches on `uname -s` and
-handles the torch difference for you — it prepares the **harness console**,
-and the installed `cyclaw` command also boots the RAG gateway on `:8787`,
-which stays degraded (503 on `/query`) until you do the Ollama / index /
-API-key steps yourself — the installer skips all three. The
+Just cloned on Apple Silicon? `bash ./macos/setup-from-clone.sh` is the
+one-shot path: installer + Keychain keys (Telegram / Claude / Grok / GitHub)
++ Ollama check + retrieval index + both servers. It chains the existing
+`macos/` scripts rather than reimplementing them. Flags and privacy notes:
+[`macos/README.md`](macos/README.md#one-shot-after-clone-apple-silicon).
+
+Prefer the installer only? `bash ./macos/install-cyclaw.sh` branches on
+`uname -s` and handles the torch difference for you — it prepares the
+**harness console**, and the installed `cyclaw` command also boots the RAG
+gateway on `:8787`, which stays degraded (503 on `/query`) until you do the
+Ollama / index / API-key steps yourself — the installer skips all three. The
 tradeoffs are tabulated in
 [`setup-guide.md`](setup-guide.md#option-a--the-installer-script-handles-the-torch-difference-for-you).
 
@@ -573,9 +579,11 @@ CyClaw/
 │   ├── Invoke-CyClaw.ps1
 │   └── Uninstall-CyClaw.ps1
 ├── macos/                      # macOS/Linux installer/launchd glue (see macos/README.md)
+│   ├── setup-from-clone.sh     # one-shot after git clone (Apple Silicon)
 │   ├── install-cyclaw.sh
 │   ├── uninstall-cyclaw.sh
 │   ├── invoke-cyclaw.sh        # gate :8787 + harness :8790
+│   ├── setup-cyclaw-keys.sh    # Keychain + ~/.CyClaw/.env (never config.yaml)
 │   ├── setup-fsconnect.sh      # confined ~/CyClaw-FS list/stat/read
 │   ├── cyclaw-keychain-*.sh    # Keychain inject/store for launchd jobs
 │   ├── generate_service_plist.py  # supervised gate/harness LaunchAgent — requires --confirm + --reason, never loads
@@ -942,7 +950,9 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 - **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
   sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
   a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
-- **Install (macOS / Linux):** `bash ./macos/install-cyclaw.sh` sets up the
+- **Install (macOS / Linux):** `bash ./macos/setup-from-clone.sh` is the
+  one-shot after `git clone` (keys + Ollama + index + both servers). Or
+  `bash ./macos/install-cyclaw.sh` sets up the
   same `~/.CyClaw` layout, a venv, a `cyclaw` shim, and a PATH entry plus a
   `cyclaw()` function in your rc file (`~/.zshrc` on zsh; macOS bash preserves
   the first existing login file among `.bash_profile`, `.bash_login`, and
