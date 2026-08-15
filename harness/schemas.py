@@ -36,6 +36,13 @@ _MAX_NOTE_ID_LEN = 32
 # without turning the browser request into an unbounded prompt transport.
 _MAX_PLAN_CHARS = 6_100
 _MAX_ITERATIONS_CEILING = 10
+# One console save touches a handful of credentials at most; the real
+# allowlist is harness.env_keys.MANAGED_KEYS (9 entries today).
+_MAX_API_KEYS_PER_REQUEST = 16
+# Mirrors harness.env_keys._MAX_VALUE_LEN. Restated rather than imported so
+# schemas.py keeps its no-sibling-import shape; env_keys re-checks anyway.
+_MAX_API_KEY_LEN = 4096
+_MAX_ENV_NAME_LEN = 64
 
 
 _READ_PATH_ERR = (
@@ -229,3 +236,31 @@ class AgentPublishRequest(_ForbidModel):
 
     reason: str = Field(min_length=1, max_length=_MAX_REASON_LEN)
     confirm: bool = False
+
+
+class ApiKeysRequest(_ForbidModel):
+    """Set one or more allowlisted CyClaw credentials from the console.
+
+    ``keys`` is a name -> secret mapping. Both halves are re-validated by
+    ``harness.env_keys.write_keys`` (allowlist membership, control characters,
+    length) before anything touches disk -- the bounds here only stop an
+    absurd payload from being buffered and parsed, they are not the security
+    check. The authoritative one lives next to the writer so a non-HTTP caller
+    cannot skip it.
+
+    Deliberately NOT a fixed set of optional named fields: the allowlist lives
+    in ``harness.env_keys.MANAGED_KEYS`` and duplicating it here would let the
+    two drift, with the schema silently becoming the looser of the pair.
+    """
+
+    keys: dict[str, str] = Field(min_length=1, max_length=_MAX_API_KEYS_PER_REQUEST)
+
+    @field_validator("keys")
+    @classmethod
+    def _bound_each_value(cls, supplied: dict[str, str]) -> dict[str, str]:
+        for name, secret in supplied.items():
+            if len(name) > _MAX_ENV_NAME_LEN:
+                raise ValueError("key name too long")
+            if len(secret) > _MAX_API_KEY_LEN:
+                raise ValueError(f"{name} value too long")
+        return supplied

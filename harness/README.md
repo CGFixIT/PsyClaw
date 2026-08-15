@@ -137,6 +137,32 @@ non-allowlisted URL is `WEB_HOST_DENIED`. `/web` off is `409 WEB_DISABLED`.
 Refused on purpose: `localhost`, `127.0.0.1`, RFC1918, link-local,
 `169.254.169.254`, `user:pass@host`, `ftp://`, wildcards, redirects.
 
+## `/api` — credentials
+
+```
+/api                          # masked status of every managed key
+/api set GROK_API_KEY sk-...   # store one
+```
+
+Writes `$CYCLAW_HOME/.env` (default `~/.CyClaw/.env`, mode 600) — the same
+file `macos/setup-cyclaw-keys.sh` manages, in the same `export KEY='value'`
+form, so the two are interchangeable and unrelated lines survive a web write.
+
+**It does not load the value into a running process.** Nothing in CyClaw reads
+`.env` at runtime (there is no `python-dotenv` dependency); the operator's
+shell sources it. So a save persists the key and `restart_required` comes back
+true — restart `gate.py` for it to take effect. The status table labels each
+key `env` (the process has it) or `file` (written, awaiting a restart).
+
+`CYCLAW_API_KEY` is settable here too, and is deliberately *not* applied live:
+`require_api_key` reads the environment per request, so writing it into the
+running process would invalidate the credential the caller is currently using.
+The response flags it under `self_auth_written`.
+
+Values are never echoed back, never logged (the audit line records key NAMES
+only), and the key name must be one of `harness.env_keys.MANAGED_KEYS` — an
+arbitrary name would make this an environment-injection primitive.
+
 ## Operator API (loopback)
 
 Guarded routes require the same Bearer `CYCLAW_API_KEY` as other admin
@@ -163,6 +189,8 @@ enabling it.
 |---|---|---|
 | GET | `/` | Console HTML |
 | GET | `/api/status` | Health / config flags |
+| GET | `/api/keys` | Allowlisted credentials: presence + masked tail only, never a value |
+| POST | `/api/keys` | Store credentials in `$CYCLAW_HOME/.env` (mode 600). File-only: reports `restart_required` |
 | GET | `/api/registry` | Merged skills / tools / connectors |
 | GET | `/api/tools` | Wiring inventory + ASCII diagram for `/tools` |
 | GET | `/api/skills` | Wiring inventory + ASCII diagram for `/skills` |

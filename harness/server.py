@@ -58,6 +58,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
+from harness import env_keys
 from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
@@ -158,6 +159,7 @@ _HTTP_LOCKED = 423
 _HTTP_UNAVAILABLE = 503
 _HTTP_CONFLICT = 409
 _HTTP_TOO_MANY_REQUESTS = 429
+_HTTP_SERVER_ERROR = 500
 # Defaults for the dedicated /loop limiter. 60 chat/min is fine for a
 # mis-click; it is not fine for 27b auto-continues saturating Metal.
 _DEFAULT_LOOP_MAX_REQUESTS = 8
@@ -968,6 +970,63 @@ def create_app(
         cfg.selected_model = req.model.strip()
         cfg.save()
         return {_MODEL_KEY: _current_model()}
+
+    @app.get("/api/keys", dependencies=guarded)
+    def api_keys_status() -> dict:
+        """Presence + masked tail for every allowlisted credential.
+
+        Guarded rather than open even though it returns no secret: the set of
+        which providers an operator has configured is itself worth withholding
+        from an unauthenticated local caller, and this route has no bootstrap
+        role (the console's own key field does not depend on it).
+        """
+        return {
+            "keys": env_keys.read_status(),
+            "env_file": str(env_keys.env_file_path()),
+        }
+
+    @app.post("/api/keys", dependencies=guarded)
+    def api_keys_set(req: _harness_schemas.ApiKeysRequest) -> dict:
+        """Persist allowlisted credentials to $CYCLAW_HOME/.env (mode 600).
+
+        Writes the FILE only, never this process's environment. Nothing in
+        CyClaw reads .env at runtime -- it is sourced by the operator's shell
+        -- so a live mutation here would make the harness disagree with
+        gate.py rather than make the key work. ``restart_required`` in the
+        response says so explicitly instead of leaving the operator to infer it.
+
+        CYCLAW_API_KEY is settable like any other entry, and is likewise NOT
+        applied live: require_api_key reads os.environ per request, so writing
+        it into this process would invalidate the very credential the caller
+        just authenticated with, mid-session.
+
+        The audit line records key NAMES only. env_keys.write_keys returns a
+        name-only dict for exactly this reason, so no redaction pass stands
+        between a secret and the log.
+        """
+        try:
+            written = env_keys.write_keys(req.keys)
+        except env_keys.EnvKeyError as exc:
+            raise HTTPException(
+                status_code=_HTTP_BAD_REQUEST,
+                detail={
+                    _CODE_KEY: "ENV_KEY_REJECTED",
+                    _MESSAGE_KEY: str(exc),
+                    _DETAILS_KEY: {},
+                },
+            ) from exc
+        except OSError as exc:
+            logger.warning("writing %s failed", env_keys.env_file_path(), exc_info=True)
+            raise HTTPException(
+                status_code=_HTTP_SERVER_ERROR,
+                detail={
+                    _CODE_KEY: "ENV_KEY_WRITE_FAILED",
+                    _MESSAGE_KEY: "could not write the key file",
+                    _DETAILS_KEY: {},
+                },
+            ) from exc
+        logger.info("api keys updated: %s", ",".join(written["written"]))
+        return {**written, "keys": env_keys.read_status()}
 
     def _claim_loop_inflight(session_id: str) -> None:
         now = time.time()

@@ -7,6 +7,8 @@ which previously stayed cwd-relative -- silent until CyClaw is launched from
 a cwd other than the repo root (the same fragility gate.py's _BASE_DIR exists
 to prevent for config.yaml/static/).
 """
+import pathlib
+import logging
 
 import json
 
@@ -163,3 +165,85 @@ class TestSetupLoggingPathAnchoring:
             for handler in list(root.handlers):
                 handler.close()
                 root.removeHandler(handler)
+
+
+class TestThirdPartyLogCapture:
+    """logging.level is DEBUG for CyClaw's own modules; third-party loggers
+    reach the same file but are held at a floor.
+
+    The gap is a security control, not a noise preference: httpcore's DEBUG
+    output is wire-level and carries the Authorization header of every outbound
+    Grok/Claude/Ollama call, so a single shared DEBUG level would write live API
+    keys into logs/cyclaw.log.
+    """
+
+    def test_cyclaw_records_pass_below_the_floor(self):
+        from utils.logger import _ThirdPartyFloor
+
+        floor = _ThirdPartyFloor(logging.INFO)
+        record = logging.LogRecord(
+            "cyclaw.graph", logging.DEBUG, __file__, 1, "chunk budget", None, None
+        )
+        assert floor.filter(record) is True
+
+    def test_third_party_debug_is_dropped(self):
+        from utils.logger import _ThirdPartyFloor
+
+        floor = _ThirdPartyFloor(logging.INFO)
+        leaky = logging.LogRecord(
+            "httpcore.http11", logging.DEBUG, __file__, 1,
+            "send_request_headers.started request=<Request [b'POST']> "
+            "headers=[(b'authorization', b'Bearer sk-live-secret')]",
+            None, None,
+        )
+        assert floor.filter(leaky) is False
+
+    def test_third_party_warnings_still_reach_the_file(self):
+        """The floor holds DEBUG back; it must not silence real problems."""
+        from utils.logger import _ThirdPartyFloor
+
+        floor = _ThirdPartyFloor(logging.INFO)
+        for level in (logging.INFO, logging.WARNING, logging.ERROR):
+            record = logging.LogRecord("chromadb", level, __file__, 1, "x", None, None)
+            assert floor.filter(record) is True
+
+    def test_shipped_config_keeps_the_gap(self):
+        """config.yaml must not set third_party_level to DEBUG. If someone
+        raises it, this fails loudly rather than leaking keys quietly."""
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        cfg = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+        log_cfg = cfg["logging"]
+        assert log_cfg["level"] == "DEBUG"
+        assert log_cfg["third_party_level"] != "DEBUG"
+
+    def test_stray_loggers_land_in_the_configured_file(self, tmp_path, monkeypatch):
+        """The actual ask: a logger outside the cyclaw.* namespace must end up in
+        cyclaw.log rather than only on stderr."""
+        import utils.logger as logger_mod
+
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+        real_root = logging.getLogger()
+        before = list(real_root.handlers)
+        try:
+            logger_mod.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": True,
+                "third_party_level": "INFO",
+            }})
+            logging.getLogger("chromadb.telemetry").warning("third-party line")
+            logging.getLogger("cyclaw.graph").debug("cyclaw debug line")
+            for handler in real_root.handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8")
+        finally:
+            for handler in list(real_root.handlers):
+                if handler not in before:
+                    real_root.removeHandler(handler)
+                    handler.close()
+            logger_mod._logging_initialized = False
+        assert "third-party line" in text
+        assert "cyclaw debug line" in text

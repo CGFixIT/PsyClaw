@@ -491,12 +491,33 @@ auth:
     absolute_timeout_sec: 604800
 
 logging:
-  level: "INFO"
+  # DEBUG for CyClaw's OWN loggers (the cyclaw.* namespace). Audited before
+  # turning this up: the only logger.debug calls in the request path are
+  # graph.py's four, which log chunk counts and context-budget arithmetic --
+  # never query text, prompts, or answers. The audit log's SHA-256-only
+  # contract (CLAUDE.md's "no raw query text" rule) is unaffected: that is a
+  # separate JSONL stream written by utils/logger.py's audit_log().
+  level: "DEBUG"
   log_file: "logs/cyclaw.log"
+  # Loggers OUTSIDE the cyclaw.* namespace (httpx, chromadb, uvicorn,
+  # langgraph) previously reached no file at all -- they went to whatever the
+  # process root logger pointed at. They now land in log_file above too.
+  capture_third_party: true
+  # ...but at their own floor, NOT the DEBUG above. This gap is deliberate and
+  # load-bearing: httpcore's DEBUG output is wire-level and includes the
+  # Authorization header of every outbound Grok/Claude/Ollama call, so raising
+  # this to DEBUG would write live API keys into logs/cyclaw.log. Raise it only
+  # for a scoped debugging session, and treat the resulting file as secret.
+  third_party_level: "INFO"
   audit_file: "logs/audit.jsonl"
   # Only include_query_hash is read (utils/logger.py). The audit record's
-  # other fields (top_score, retrieval_mode, online_escalated, model_used)
-  # are always written; there are no per-field include toggles.
+  # other fields (top_score, retrieval_mode, online_escalated, model_used,
+  # llm, llm_model) are always written; there are no per-field include toggles.
+  # model_used carries the ROLE ("local"/"grok"/"claude"/"offline-best-effort");
+  # llm_model carries the concrete tag that answered, and llm a human summary.
+  # model_used's vocabulary is deliberately frozen -- metrics.py buckets on it
+  # and detects online escalation from its prefix, so historical lines stay
+  # comparable. See graph.py's _llm_identity.
   audit_fields:
     include_query_hash: true
     # include_top_score: true  #currently placeholders
