@@ -103,7 +103,7 @@ Phone (Telegram cloud)
 ```yaml
 telegram:
   enabled: false
-  mode: "notify"                 # notify | chat
+  mode: "chat"                   # shipped YAML; "notify" is T1 outbound-only. Enable T1 first.
   bot_token_env: "TELEGRAM_BOT_TOKEN"
   allowed_chat_ids: []           # REQUIRED non-empty when enabled
   api_base: "https://api.telegram.org"

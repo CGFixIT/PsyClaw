@@ -218,7 +218,7 @@ fi
 # surprising as `ollama pull` argv or a later config.yaml paste.
 case "$OLLAMA_MODEL" in
   ""|*[!A-Za-z0-9._:/-]*|-*|*" "*)
-    die "refusing ollama tag '$OLLAMA_MODEL' (expected name:tag, e.g. qwen3.6:27b)"
+    die "refusing ollama tag '$OLLAMA_MODEL' (expected name:tag, e.g. qwen3.8:27b-mlx)"
     ;;
 esac
 
@@ -507,7 +507,7 @@ if [ "$SKIP_OLLAMA" -eq 0 ]; then
         else
           step "skipping ollama pull of $OLLAMA_MODEL under --skip-prompts (multi-GB). Re-run without --skip-prompts, or pass --small-model."
         fi
-      elif _confirm "Pull Ollama model '$OLLAMA_MODEL'? (qwen3.6:27b is multi-GB; pass --small-model for 7B)" "y"; then
+      elif _confirm "Pull Ollama model '$OLLAMA_MODEL'? (qwen3.8:27b-mlx is multi-GB; pass --small-model for 7B)" "y"; then
         _do_pull=1
       fi
       if [ "$_do_pull" -eq 1 ]; then
