@@ -157,12 +157,22 @@ class TestLogin:
 
     def test_locked_account_is_423_with_retry_after(self, manager, user):
         username, password = user
-        client = _client(manager)
-        for _ in range(5):
-            client.post("/auth/login", json={"username": username, "password": "wrong"})
-        r = client.post("/auth/login", json={"username": username, "password": password})
-        assert r.status_code == 423
-        assert r.json()["detail"]["details"]["retry_after_sec"] > 0
+        # Threshold-5 lockout is only _LOCKOUT_BASE_SEC (2.0s). login() snapshots
+        # manager._now() before scrypt; on Windows CI five hashes can exceed that
+        # window, so the sixth request sees an expired lock and returns 200.
+        # Freeze the clock so this asserts lockout policy, not hasher wall time.
+        frozen = manager._now()
+        real_now = manager._now
+        manager._now = lambda: frozen
+        try:
+            client = _client(manager)
+            for _ in range(5):
+                client.post("/auth/login", json={"username": username, "password": "wrong"})
+            r = client.post("/auth/login", json={"username": username, "password": password})
+            assert r.status_code == 423
+            assert r.json()["detail"]["details"]["retry_after_sec"] > 0
+        finally:
+            manager._now = real_now
 
     def test_extra_field_is_422(self, manager, user):
         username, password = user
