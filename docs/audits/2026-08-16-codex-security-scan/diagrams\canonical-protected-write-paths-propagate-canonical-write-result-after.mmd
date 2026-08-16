@@ -1,0 +1,8 @@
+flowchart LR
+    P["planner raw path"] --> W["write_file resolves + writes"]
+    W --> C["canonical landed target"]
+    C --> G["protected-path check"]
+    G -->|"safe"| R["canonical changed_files"]
+    G -->|"protected"| Q["quarantine before verification"]
+    R --> V["review diff + verification"]
+    R --> S["finalize add/commit same list"]
