@@ -30,7 +30,7 @@ models:
     # no Authorization header is sent. Only set this if you have configured Ollama
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-    model: "qwen3.8:27b"
+    model: "qwen3.8:27b-mlx" # lol you fool now you have to do it by hand this time (was wondering why a 3 second video took 10 min)
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
