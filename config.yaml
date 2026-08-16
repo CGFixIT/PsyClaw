@@ -509,6 +509,7 @@ logging:
   # for a scoped debugging session, and treat the resulting file as secret.
   third_party_level: "INFO"
   audit_file: "logs/audit.jsonl"
+  spend_file: "logs/spend.jsonl"
   # Only include_query_hash is read (utils/logger.py). The audit record's
   # other fields (top_score, retrieval_mode, online_escalated, model_used,
   # llm, llm_model) are always written; there are no per-field include toggles.
