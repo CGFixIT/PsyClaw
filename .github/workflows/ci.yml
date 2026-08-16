@@ -775,6 +775,7 @@ jobs:
             --cov=retrieval.stemmer \
             --cov=retrieval.vector_store \
             --cov=retrieval.clear_cache \
+            --cov=retrieval.results \
             --cov=mcp_hybrid_server \
             --cov=metrics \
             --cov=sync.selftest \
