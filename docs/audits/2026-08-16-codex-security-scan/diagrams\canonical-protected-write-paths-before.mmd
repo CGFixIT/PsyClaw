@@ -1,0 +1,9 @@
+flowchart LR
+    P["planner raw path"] --> G["protected-path check on alias"]
+    G --> W["write_file resolves and writes canonical target"]
+    W --> I["return value ignored"]
+    I --> R["written/changed_files keep alias"]
+    R --> V["verification + human diff"]
+    R --> S["finalize add/commit"]
+    L["in-repo symlink"] --> W
+    L --> T["protected tests/config target"]
