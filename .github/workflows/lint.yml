@@ -1,4 +1,4 @@
-# Fast lint gate for pull requests and claude/* feature branches.
+# Fast lint gate for pull requests and documented vendor feature prefixes.
 # Sequence: Ruff (fast, modern rules exactly matching pyproject.toml) → wemake-python-styleguide (strict WPS + flake8 plugins).
 # No project deps (torch, ChromaDB, LangGraph, etc.) — full CI (tests + coverage) runs separately.
 #
@@ -32,6 +32,9 @@ on:
   push:
     branches:
       - 'claude/**'
+      - 'grok/**'
+      - 'codex/**'
+      - 'kimi/**'
   pull_request:
     branches: [main, cc]
 
