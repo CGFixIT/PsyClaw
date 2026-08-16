@@ -228,6 +228,17 @@ policy:
     # per-call token spend. Set <= 0 to disable the cap entirely.
     grok_max_prompt_chars: 8000
     claude_max_prompt_chars: 8000
+    # Pre-action hook for external provider calls (issue #963).
+    # The configured command receives a JSON payload on stdin with keys:
+    #   action, provider, model, query_hash
+    # and decides via exit code:
+    #   0 -> allow the call; 2 -> deny (route to audit_logger instead).
+    # Any crash, timeout, or other non-zero exit fails closed (deny + audit).
+    # Disabled by default; when disabled the pre-action checkpoint is a no-op.
+    pre_action_hook:
+      enabled: false
+      command: []          # argv list, e.g. ["numbat", "hook", "pre-tool", "--agent", "cyclaw"]
+      timeout_sec: 5
   prompt_filter:
     enabled: true
     # Regex patterns (single-quoted so backslashes reach the regex engine

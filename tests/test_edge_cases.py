@@ -182,13 +182,13 @@ class TestUserGateRouter:
         )
         assert result == "offline_best_effort"
 
-    def test_confirmed_with_available_grok_routes_grok(self):
+    def test_confirmed_with_available_grok_routes_to_hook(self):
         from graph import user_gate_router
         grok = MockGrokClient(available=True)
         result = user_gate_router(
             {"user_confirmed_online": True}, grok=grok
         )
-        assert result == "grok_fallback"
+        assert result == "pre_action_hook_grok"
 
     def test_confirmed_with_unavailable_grok_routes_offline(self):
         from graph import user_gate_router
@@ -198,7 +198,7 @@ class TestUserGateRouter:
         )
         assert result == "offline_best_effort"
 
-    def test_confirmed_with_available_claude_routes_claude(self):
+    def test_confirmed_with_available_claude_routes_to_hook(self):
         from graph import user_gate_router
         claude = MockClaudeClient(available=True)
         result = user_gate_router(
@@ -206,7 +206,7 @@ class TestUserGateRouter:
             grok=None,
             claude=claude,
         )
-        assert result == "claude_fallback"
+        assert result == "pre_action_hook_claude"
 
     def test_confirmed_with_unavailable_claude_routes_offline(self):
         from graph import user_gate_router

@@ -24,6 +24,7 @@ import ast
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -288,6 +289,31 @@ class TestAuditConvergence:
                 result = graph.invoke(state)
                 assert "audit_event" in result, f"path {expected!r} skipped audit_logger"
                 assert result.get("answer_model", "") == expected
+
+    def test_hook_denied_path_emits_audit_event(self, tmp_path):
+        # I4 extension (issue #963): a query denied by the pre-action hook still
+        # converges at audit_logger with a distinguishable model_used.
+        hook_script = tmp_path / "deny_hook.py"
+        hook_script.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
+        cfg = _cfg(mode="hybrid", grok_enabled=True)
+        cfg["policy"] = {**cfg.get("policy", {})}
+        cfg["policy"]["fallback"] = {**cfg["policy"].get("fallback", {})}
+        cfg["policy"]["fallback"]["pre_action_hook"] = {
+            "enabled": True,
+            "command": [sys.executable, str(hook_script)],
+            "timeout_sec": 5,
+        }
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_LOW_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=MockGrokClient(response="x", available=True),
+            claude=None,
+            cfg=cfg,
+        )
+        result = graph.invoke({"query": "anything", "user_confirmed_online": True})
+        assert "audit_event" in result
+        assert result["answer_model"] == "hook-denied"
+        assert result["audit_event"]["pre_action_hook_denied"] is True
 
     def test_audit_logger_edges_to_end_only(self):
         # Structural lock: audit_logger's only outgoing edge is END. A new edge

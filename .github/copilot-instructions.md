@@ -13,11 +13,12 @@ CyClaw is a **Python 3.12, offline-first FastAPI/LangGraph RAG gateway** and a s
 
 ```
 HTTP POST /query → gate.py (TrustedHost, rate-limit, injection filter, soul init)
-  → graph.py (10-node LangGraph state machine)
+  → graph.py (12-node LangGraph state machine)
     retrieve → route_by_score
       ├─ score ≥ min_score → guardrail_input → local_llm
       └─ score < min_score → user_gate
-            ├─ confirmed + hybrid + provider key → grok_fallback | claude_fallback
+            ├─ confirmed + hybrid + provider key
+            │    → pre_action_hook_<provider> → grok_fallback | claude_fallback
             └─ otherwise → guardrail_input → offline_best_effort
     → guardrail_output → audit_logger → END
   HybridRetriever: ChromaDB (semantic) + BM25Okapi (keyword), RRF fusion k=60
@@ -28,7 +29,7 @@ HTTP POST /query → gate.py (TrustedHost, rate-limit, injection filter, soul in
 | Path | Role |
 |---|---|
 | `gate.py` | FastAPI entry, auth, rate-limit, sanitizer, telemetry kill |
-| `graph.py` | 10-node LangGraph topology; all security policy lives in edges |
+| `graph.py` | 12-node LangGraph topology; all security policy lives in edges |
 | `retrieval/` | Hybrid search, indexer, embeddings (CPU-only), BM25, vector store |
 | `llm/client.py` | LocalLLMClient + GrokClient + ClaudeClient |
 | `utils/` | Sanitizer, personality/soul, audit logger, rate-limit, errors, config validation |

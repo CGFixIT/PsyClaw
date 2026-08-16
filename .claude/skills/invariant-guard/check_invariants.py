@@ -34,7 +34,7 @@ from pathlib import Path
 CORE_FILES = ("gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py", "graph.py", "mcp_hybrid_server.py")
 OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness", "telegram")
 
-# The full documented graph shape (CLAUDE.md's "9-node LangGraph topology").
+# The full documented graph shape (CLAUDE.md's "12-node LangGraph topology").
 # I1/I2 previously checked only that specific expected edges/sources were
 # PRESENT (membership), never that the graph declares nothing else -- an
 # extra graph.add_edge("retrieve", "local_llm") alongside the real edge, or
@@ -42,6 +42,7 @@ OUT_OF_BAND_PKGS = ("agentic", "sync", "guardrails", "harness", "telegram")
 # that gap by asserting exact equality against the full node/edge shape.
 EXPECTED_NODES = frozenset({
     "retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
+    "pre_action_hook_grok", "pre_action_hook_claude",
     "grok_fallback", "claude_fallback", "offline_best_effort", "guardrail_output",
     "audit_logger",
 })
@@ -63,6 +64,8 @@ COND_SOURCE_ROUTERS = {
     "route_by_score": "score_router",
     "guardrail_input": "guardrail_router",
     "user_gate": "user_gate_router",
+    "pre_action_hook_grok": "pre_action_hook_router",
+    "pre_action_hook_claude": "pre_action_hook_router",
 }
 # Phrases the shipped config must block — mirror tests/test_sanitizer.py
 # TestShippedConfigContract. Deleting coverage for any of these is a regression.
@@ -301,9 +304,9 @@ def main(argv: list[str] | None = None) -> int:
     print("I2 Topology = policy")
     expected_cond_sources = set(COND_SOURCE_ROUTERS)
     if set(cond) == expected_cond_sources:
-        ok("conditional routing only at route_by_score, guardrail_input, and user_gate")
+        ok("conditional routing only at route_by_score, guardrail_input, user_gate, and pre_action_hook nodes")
     else:
-        fail("conditional routing only at route_by_score, guardrail_input, and user_gate",
+        fail("conditional routing only at route_by_score, guardrail_input, user_gate, and pre_action_hook nodes",
              f"conditional sources: {sorted(cond)}")
     # Real targets, not raw router-return strings: score_router returns the
     # string "local_llm" for a high-confidence score, but route_by_score's
@@ -335,11 +338,11 @@ def main(argv: list[str] | None = None) -> int:
     # here is guardrail_input. A path_map edit that points it straight at
     # offline_best_effort again would re-open the un-railed offline path, and
     # this equality is what catches it.
-    expected_gate_targets = {"grok_fallback", "claude_fallback", "guardrail_input", "audit_logger"}
+    expected_gate_targets = {"pre_action_hook_grok", "pre_action_hook_claude", "guardrail_input", "audit_logger"}
     if gate_targets == expected_gate_targets:
-        ok("user_gate's real targets are exactly the documented provider/railed-offline/audit targets")
+        ok("user_gate's real targets are exactly the documented hook/railed-offline/audit targets")
     else:
-        fail("user_gate's real targets are the documented provider/railed-offline/audit targets",
+        fail("user_gate's real targets are the documented hook/railed-offline/audit targets",
              f"real targets: {sorted(gate_targets)}")
     actual_nodes = node_names(graph_tree)
     if actual_nodes == EXPECTED_NODES:
@@ -403,6 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         # string "local_llm" score_router happens to return internally.
         adj.setdefault(src, set()).update(conditional_edge_targets(graph_tree, src, router))
     nodes = {"retrieve", "route_by_score", "guardrail_input", "local_llm", "user_gate",
+             "pre_action_hook_grok", "pre_action_hook_claude",
              "grok_fallback", "claude_fallback", "offline_best_effort", "guardrail_output"}
 
     def reaches_audit(start: str, seen: set[str] | None = None) -> bool:
