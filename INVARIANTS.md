@@ -48,7 +48,9 @@ three:**
 - `graph.user_gate_router` enforces only: confirmed, the selected `online_provider`
   matches, and that provider's client `is not None and is_available()`. It **does
   not read `app.mode` or `models.<provider>.enabled`.** Its return set is
-  `{grok_fallback, claude_fallback, offline_best_effort, audit_logger}`.
+  `{pre_action_hook_grok, pre_action_hook_claude, offline_best_effort, audit_logger}`
+  (the hook nodes then decide, per provider, whether to proceed to the fallback
+  or deny and route to `audit_logger`).
 - `app.mode == "hybrid"` and `models.<provider>.enabled` are enforced **exclusively**
   by `gate.py`'s client construction: each of `grok` / `claude` stays `None` unless
   both hold. A `None` client makes the router fall back to `offline_best_effort`.
@@ -70,8 +72,9 @@ an `if` mentioning both `hybrid` and `enabled`), and the tripwire
 
 ## Rule 3 — every path converges at `audit_logger` before END
 
-**Must never change:** all nine upstream nodes (`retrieve`, `route_by_score`,
-`guardrail_input`, `local_llm`, `user_gate`, `grok_fallback`, `claude_fallback`,
+**Must never change:** all eleven upstream nodes (`retrieve`, `route_by_score`,
+`guardrail_input`, `local_llm`, `user_gate`, `pre_action_hook_grok`,
+`pre_action_hook_claude`, `grok_fallback`, `claude_fallback`,
 `offline_best_effort`, `guardrail_output`) reach `audit_logger`, and `audit_logger`'s only outgoing edge is `END`
 (`add_edge("audit_logger", END)`). Do not add an edge out of `audit_logger`; do not
 add a node with a path to `END` that skips it. Every query — including the

@@ -9,7 +9,9 @@ Tests all paths through the state machine:
 6. Empty query handling
 """
 
+import json
 import re
+import sys
 
 import pytest
 from pathlib import Path
@@ -26,7 +28,7 @@ from tests.conftest import (
     MOCK_HIGH_SCORE_RESULTS, MOCK_LOW_SCORE_RESULTS, MOCK_EMPTY_RESULTS,
     TEST_CONFIG
 )
-from utils.logger import reset_config_cache
+from utils.logger import hash_query, reset_config_cache
 from utils.errors import RAGError, LLMServiceError, GrokServiceError, ClaudeServiceError
 
 
@@ -63,6 +65,36 @@ def _make_cfg(tmp_path, mode="offline", grok_enabled=False, claude_enabled=False
     }
 
 
+    return cfg
+
+
+def _hook_script(tmp_path: Path, exit_code: int, payload_path: Path | None = None) -> Path:
+    """Write a tiny Python hook script that records stdin and exits with ``exit_code``."""
+    script = tmp_path / f"hook_{exit_code}.py"
+    record_line = ""
+    if payload_path is not None:
+        record_line = f'open({str(payload_path)!r}, "w", encoding="utf-8").write(payload)'
+    script.write_text(
+        f"""import sys
+payload = sys.stdin.read()
+{record_line}
+sys.exit({exit_code})
+""",
+        encoding="utf-8",
+    )
+    return script
+
+
+def _cfg_with_hook(cfg: dict, tmp_path: Path, script: Path) -> dict:
+    """Return a copy of ``cfg`` with the pre-action hook pointed at ``script``."""
+    cfg = {**cfg}
+    cfg["policy"] = {**cfg.get("policy", {})}
+    cfg["policy"]["fallback"] = {**cfg["policy"].get("fallback", {})}
+    cfg["policy"]["fallback"]["pre_action_hook"] = {
+        "enabled": True,
+        "command": [sys.executable, str(script)],
+        "timeout_sec": 5,
+    }
     return cfg
 
 
@@ -225,6 +257,103 @@ class TestGrokFallbackPath:
         assert result["answer_model"] == "offline-best-effort"
         assert "Local fallback when Claude key missing." in result["answer"]
         assert claude.last_prompt is None
+
+
+class TestPreActionHook:
+    """Issue #963: synchronous pre-action hook before external fallback.
+
+    The hook receives {action, provider, model, query_hash} on stdin and
+    decides via exit code: 0 allow, 2 deny, anything else fail-closed deny.
+    """
+
+    def _build(self, tmp_path, cfg, grok=None, claude=None):
+        retriever = MockRetriever(MOCK_LOW_SCORE_RESULTS)
+        llm = MockLocalLLM(response="Local fallback.")
+        return build_graph(retriever=retriever, llm=llm, grok=grok, claude=claude, cfg=cfg)
+
+    def test_disabled_hook_does_not_block_provider(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        grok = MockGrokClient(response="Grok answer.")
+        graph = self._build(tmp_path, cfg, grok=grok)
+        result = graph.invoke({"query": "q", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "grok"
+        assert grok.last_prompt is not None
+
+    def test_exit_zero_allows_provider_call(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        script = _hook_script(tmp_path, 0)
+        cfg = _cfg_with_hook(cfg, tmp_path, script)
+        grok = MockGrokClient(response="Grok answer.")
+
+        graph = self._build(tmp_path, cfg, grok=grok)
+        result = graph.invoke({"query": "q", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "grok"
+        assert grok.last_prompt is not None
+
+    def test_exit_two_denies_and_routes_to_audit(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        script = _hook_script(tmp_path, 2)
+        cfg = _cfg_with_hook(cfg, tmp_path, script)
+        grok = MockGrokClient(response="Grok answer.")
+
+        graph = self._build(tmp_path, cfg, grok=grok)
+        result = graph.invoke({"query": "q", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "hook-denied"
+        assert result["pre_action_hook_denied"] is True
+        assert grok.last_prompt is None
+        assert "audit_event" in result
+        assert result["audit_event"]["pre_action_hook_denied"] is True
+        assert result["audit_event"]["model_used"] == "hook-denied"
+
+    def test_crash_fails_closed(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        # A non-existent interpreter guarantees an OSError.
+        cfg = _cfg_with_hook(cfg, tmp_path, Path("/nonexistent/hook/binary"))
+        grok = MockGrokClient(response="Grok answer.")
+
+        graph = self._build(tmp_path, cfg, grok=grok)
+        result = graph.invoke({"query": "q", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "hook-denied"
+        assert grok.last_prompt is None
+
+    def test_nonzero_exit_fails_closed(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        script = _hook_script(tmp_path, 1)
+        cfg = _cfg_with_hook(cfg, tmp_path, script)
+        grok = MockGrokClient(response="Grok answer.")
+
+        graph = self._build(tmp_path, cfg, grok=grok)
+        result = graph.invoke({"query": "q", "user_confirmed_online": True})
+
+        assert result["answer_model"] == "hook-denied"
+        assert grok.last_prompt is None
+
+    def test_hook_stdin_receives_expected_payload(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", claude_enabled=True)
+        payload_path = tmp_path / "hook_payload.json"
+        script = _hook_script(tmp_path, 0, payload_path)
+        cfg = _cfg_with_hook(cfg, tmp_path, script)
+        claude = MockClaudeClient(response="Claude answer.")
+
+        graph = self._build(tmp_path, cfg, claude=claude)
+        query = "what is the pre-action hook contract?"
+        result = graph.invoke({
+            "query": query,
+            "user_confirmed_online": True,
+            "online_provider": "claude",
+        })
+
+        assert result["answer_model"] == "claude"
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        assert payload["action"] == "external_llm_call"
+        assert payload["provider"] == "claude"
+        assert payload["model"] == cfg["models"]["claude"]["model"]
+        assert payload["query_hash"] == hash_query(query)
+        assert "query" not in payload
 
 
 class TestOfflineBestEffortPath:

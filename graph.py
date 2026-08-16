@@ -3,8 +3,10 @@
 Graph flow (matching CyClaw final diagram):
   retrieve -> route_by_score -> guardrail_input -> local_llm (high score, rail passed)
                               -> user_gate (low score)
-                                  -> grok_fallback (confirmed + hybrid, provider=grok)
-                                  -> claude_fallback (confirmed + hybrid, provider=claude)
+                                  -> pre_action_hook_grok -> grok_fallback
+                                     (confirmed + hybrid, provider=grok, hook allows)
+                                  -> pre_action_hook_claude -> claude_fallback
+                                     (confirmed + hybrid, provider=claude, hook allows)
                                   -> guardrail_input -> offline_best_effort (denied or offline)
   guardrail_input -> audit_logger (blocked by the offline input rail)
   local_llm | grok_fallback | claude_fallback | offline_best_effort -> guardrail_output
@@ -15,6 +17,18 @@ Invariants enforced by graph edges, not prompts:
 2. No LLM is called before score gate.
 3. No Grok without explicit user confirmation AND hybrid mode.
 4. Every response passes through audit logging.
+
+CHANGES (issue #963 — pre-action hook before external fallback):
+  - New provider-specific hook nodes `pre_action_hook_grok` and
+    `pre_action_hook_claude` sit between `user_gate` and the corresponding
+    fallback node.
+  - `utils/external_pre_hook.py` runs the configured command synchronously
+    with a JSON stdin payload; exit 0 allows, exit 2 denies (Numbat convention),
+    any other exit/timeout/crash fails closed (deny + audit).
+  - The hook is disabled by default (`policy.fallback.pre_action_hook.enabled`)
+    so existing deployments are unaffected; when disabled the hook node is a
+    transparent pass-through.
+  - A deny verdict routes to `audit_logger` with `answer_model == "hook-denied"`.
 
 CHANGES (Phase 2 NeMo Guardrails wiring, docs/NeMo/phase2_implementation_plan.md):
   - New node guardrail_input between route_by_score and local_llm: a sync,
@@ -79,6 +93,7 @@ from langgraph.graph import END, StateGraph
 from llm.client import ClaudeClient, GrokClient, LocalLLMClient
 from retrieval.hybrid_search import HybridRetriever
 from utils.errors import RAGError
+from utils.external_pre_hook import run_pre_action_hook
 from utils.logger import audit_log, hash_query
 from utils.personality import PersonalityManager
 
@@ -133,7 +148,7 @@ class GraphState(TypedDict, total=False):
 
     # Model outputs
     answer: str
-    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked"
+    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked" | "hook-denied"
     answer_sources: list[RetrievedDoc]
 
     # Guardrail (Phase 2 offline input rail; only set when a guard is configured)
@@ -142,6 +157,9 @@ class GraphState(TypedDict, total=False):
     # True when a configured guard raised and the node failed open (Decision 3).
     # Distinct from guardrail_blocked so audit can tell "passed" from "degraded".
     guardrail_degraded: bool
+
+    # Pre-action hook (issue #963)
+    pre_action_hook_denied: bool
 
     # Audit
     audit_event: dict
@@ -799,6 +817,7 @@ def audit_logger_node(state: GraphState, cfg: dict,
         "guardrail_blocked": state.get("guardrail_blocked", False),
         "guardrail_rails": state.get("guardrail_rails", []),
         "guardrail_degraded": state.get("guardrail_degraded", False),
+        "pre_action_hook_denied": state.get("pre_action_hook_denied", False),
         # now corpus files and hits are visible in audit but not query
         "sources": [
             {
@@ -886,11 +905,53 @@ def guardrail_router(state: GraphState) -> Literal["local_llm", "offline_best_ef
         return "offline_best_effort"
     return "local_llm"
 
+def pre_action_hook_node(state: GraphState, cfg: dict, *, provider: str) -> dict[str, Any]:
+    """Synchronous checkpoint before an external provider node.
+
+    Runs the configured pre-action hook with a JSON payload describing the
+    proposed call (provider, model, query_hash). Exit code 0 allows the call;
+    exit code 2 denies it; any crash, timeout, or other non-zero exit fails
+    closed (deny + audit). When disabled or unconfigured this node is a no-op.
+
+    On deny the node short-circuits straight to audit_logger with a dedicated
+    answer_model so the audit trail records that the hook shrank the reachable
+    state space rather than reaching the provider.
+    """
+    query = state.get("query", "")
+    model = _llm_identity(provider, cfg).get("llm_model") or "unknown"
+    query_hash = hash_query(query)
+
+    result = run_pre_action_hook(provider, model, query_hash, cfg)
+    if result.get("verdict") == "allow":
+        return {"pre_action_hook_denied": False}
+
+    reason = result.get("reason") or "pre-action hook denied external provider call"
+    logger.warning("pre_action_hook denied %s: %s", provider, reason)
+    return {
+        "answer": f"[External call denied by pre-action hook: {provider}]",
+        "answer_model": "hook-denied",
+        "answer_sources": [],
+        "error": reason,
+        "pre_action_hook_denied": True,
+    }
+
+
+def pre_action_hook_router(state: GraphState) -> Literal["grok_fallback", "claude_fallback", "audit_logger"]:
+    """After a pre-action hook node: allow proceeds to the provider, deny goes to audit."""
+    if state.get("pre_action_hook_denied"):
+        return "audit_logger"
+    # The hook node is bound to a specific provider, so the only legal allow
+    # target is that same provider node. We recover it from answer_model only
+    # when it was not denied; otherwise we stay with the bound provider.
+    provider = state.get("online_provider") or "grok"
+    return "grok_fallback" if provider == "grok" else "claude_fallback"
+
+
 def user_gate_router(
     state: GraphState,
     grok: GrokClient | None = None,
     claude: ClaudeClient | None = None,
-) -> Literal["grok_fallback", "claude_fallback", "offline_best_effort", "audit_logger"]:
+) -> Literal["pre_action_hook_grok", "pre_action_hook_claude", "offline_best_effort", "audit_logger"]:
     """After user_gate: route based on confirmation and selected provider availability.
 
     The active external provider is chosen by ``state["online_provider"]``
@@ -898,6 +959,10 @@ def user_gate_router(
     absent). Only that ONE provider's client is consulted — a confirmed query
     with ``online_provider="claude"`` never touches ``grok`` even if it is
     present and usable, and vice versa.
+
+    Confirmed, available external calls are routed to the provider-specific
+    pre-action hook node (issue #963). The hook node then decides whether to
+    proceed to the provider or short-circuit to audit_logger.
 
     ``grok``/``claude`` are bound at build time (``build_graph`` passes the same
     clients it injects into ``grok_fallback_node``/``claude_fallback_node``).
@@ -928,9 +993,9 @@ def user_gate_router(
 
     provider = state.get("online_provider") or "grok"
     if provider == "claude" and claude is not None and claude.is_available():
-        return "claude_fallback"
+        return "pre_action_hook_claude"
     if provider == "grok" and grok is not None and grok.is_available():
-        return "grok_fallback"
+        return "pre_action_hook_grok"
     return "offline_best_effort"
 
 # =============================================================================
@@ -993,6 +1058,8 @@ def build_graph(
     graph.add_node("guardrail_output", partial(guardrail_output_node,  output_guard=output_guard))
     graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
+    graph.add_node("pre_action_hook_grok",   partial(pre_action_hook_node, cfg=cfg, provider="grok"))
+    graph.add_node("pre_action_hook_claude", partial(pre_action_hook_node, cfg=cfg, provider="claude"))
     graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))
     graph.add_node("claude_fallback", partial(claude_fallback_node,    claude=claude, cfg=cfg))
     graph.add_node("offline_best_effort", partial(offline_best_effort_node, llm=llm, cfg=cfg, personality=personality))
@@ -1031,14 +1098,17 @@ def build_graph(
     # local_llm → guardrail_output (always)
     graph.add_edge("local_llm", "guardrail_output")
 
-    # user_gate → grok_fallback | claude_fallback | guardrail_input | audit_logger
-    # The offline branch is routed BACK THROUGH guardrail_input (2026-08-02,
-    # closing the gap that used to be documented here): the offline input rail
-    # previously covered only the high-score route, so an injection-pattern
-    # query that scored below min_score — or one whose escalation the operator
-    # declined — reached the local LLM un-railed while its high-score twin was
-    # blocked. user_gate_router still returns "offline_best_effort"; the
-    # path_map is what redirects it, so provider gating (I3) is untouched.
+    # user_gate → pre_action_hook_grok | pre_action_hook_claude | guardrail_input | audit_logger
+    # Confirmed external calls pause at a provider-specific pre-action hook node
+    # (issue #963) before the provider itself. The hook can only shrink the
+    # reachable state space: allow proceeds to the provider, deny routes straight
+    # to audit_logger. The offline branch is routed BACK THROUGH guardrail_input
+    # (2026-08-02, closing the gap that used to be documented here): the offline
+    # input rail previously covered only the high-score route, so an injection-
+    # pattern query that scored below min_score — or one whose escalation the
+    # operator declined — reached the local LLM un-railed while its high-score
+    # twin was blocked. user_gate_router still returns "offline_best_effort";
+    # the path_map is what redirects it, so provider gating (I3) is untouched.
     # guardrail_router then forwards to the real offline node, or to
     # audit_logger if the rail blocked — so audit convergence (I4) holds on
     # both legs. The external-provider legs deliberately do NOT pass through
@@ -1048,10 +1118,30 @@ def build_graph(
         "user_gate",
         partial(user_gate_router, grok=grok, claude=claude),
         {
-            "grok_fallback":        "grok_fallback",
-            "claude_fallback":      "claude_fallback",
-            "offline_best_effort":  "guardrail_input",
-            "audit_logger":         "audit_logger"
+            "pre_action_hook_grok":   "pre_action_hook_grok",
+            "pre_action_hook_claude": "pre_action_hook_claude",
+            "offline_best_effort":    "guardrail_input",
+            "audit_logger":           "audit_logger"
+        }
+    )
+
+    # pre_action_hook_grok → grok_fallback | audit_logger
+    graph.add_conditional_edges(
+        "pre_action_hook_grok",
+        pre_action_hook_router,
+        {
+            "grok_fallback": "grok_fallback",
+            "audit_logger":  "audit_logger"
+        }
+    )
+
+    # pre_action_hook_claude → claude_fallback | audit_logger
+    graph.add_conditional_edges(
+        "pre_action_hook_claude",
+        pre_action_hook_router,
+        {
+            "claude_fallback": "claude_fallback",
+            "audit_logger":    "audit_logger"
         }
     )
 
