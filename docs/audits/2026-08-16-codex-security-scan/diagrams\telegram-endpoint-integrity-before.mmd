@@ -1,0 +1,6 @@
+flowchart LR
+    C["config.yaml api_base"] --> V["HTTPS syntax validation only"]
+    T["TELEGRAM_BOT_TOKEN"] --> U["bot_api_url"]
+    V --> U
+    U --> H["arbitrary HTTPS host"]
+    H --> B["Bot API request with token in URL path"]
