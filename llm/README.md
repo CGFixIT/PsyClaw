@@ -10,8 +10,8 @@ decided entirely by `graph.py`'s edges and `gate.py`'s construction gates
 | Class | Backend | Protocol |
 |---|---|---|
 | `LocalLLMClient` | Ollama (default) or LM Studio | OpenAI-compatible `/chat/completions` on loopback; ignores ambient `HTTP(S)_PROXY` (`trust_env=False`) so localhost traffic can't be redirected off-box |
-| `GrokClient` | x.ai | OpenAI-compatible `/chat/completions`; proxy-aware (legitimate outbound) |
-| `ClaudeClient` | Anthropic | Messages API; proxy-aware (legitimate outbound) |
+| `GrokClient` | x.ai | OpenAI-compatible `/chat/completions`; ignores ambient `HTTP(S)_PROXY` (`trust_env=False`) so `GROK_API_KEY` cannot transit an operator proxy |
+| `ClaudeClient` | Anthropic | Messages API; ignores ambient `HTTP(S)_PROXY` (`trust_env=False`) so `ANTHROPIC_API_KEY` cannot transit an operator proxy |
 
 The two external clients are only ever **constructed** when
 `mode == "hybrid"` and the provider's `enabled` flag is true, and only ever

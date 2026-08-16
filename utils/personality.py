@@ -482,7 +482,10 @@ class PersonalityManager:
                 )
                 raise
             self.soul_core = self._bounded_soul(new_soul)
-        audit_log({"event": "soul_evolution_applied", "reason": reason, "version": new_version, "sha256": new_hash})
+        audit_log(
+            {"event": "soul_evolution_applied", "reason": reason, "version": new_version, "sha256": new_hash},
+            cfg=self.cfg,
+        )
         return {"status": "applied", "version": new_version, "sha256": new_hash}
 
     def restore_from_backup(self) -> dict:
@@ -497,10 +500,16 @@ class PersonalityManager:
         # the advisory pattern set it is visible — without refusing the restore.
         restore_flags = self._scan_advisory(backup_content)
         if restore_flags:
-            audit_log({"event": "soul_restore_scan_flags",
-                       "injection_flag_count": len(restore_flags)})
+            audit_log(
+                {"event": "soul_restore_scan_flags",
+                 "injection_flag_count": len(restore_flags)},
+                cfg=self.cfg,
+            )
         result = self.apply_evolution(backup_content, "RESTORE: reverted to previous .bak", scan=False)
-        audit_log({"event": "soul_restored_from_backup", "sha256": result["sha256"]})
+        audit_log(
+            {"event": "soul_restored_from_backup", "sha256": result["sha256"]},
+            cfg=self.cfg,
+        )
         return result
 
     def reload(self) -> None:

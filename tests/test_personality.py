@@ -359,6 +359,45 @@ class TestApplyEvolutionInjectionGate:
         assert soul_path.read_text() == "# V2 clean upgrade"
         assert pm.get_version() == 2
 
+    def test_applied_audit_passes_in_memory_cfg(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        with patch("utils.personality.audit_log") as mock_audit:
+            pm.apply_evolution("# V2 clean upgrade", "legitimate human reason")
+
+        applied = [
+            c for c in mock_audit.call_args_list
+            if c.args and c.args[0].get("event") == "soul_evolution_applied"
+        ]
+        assert applied
+        assert applied[0].kwargs.get("cfg") is cfg
+
+    def test_restore_audit_passes_in_memory_cfg(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+            pm.apply_evolution("# V2 clean upgrade", "legitimate human reason")
+
+        with patch("utils.personality.audit_log") as mock_audit:
+            pm.restore_from_backup()
+
+        restored = [
+            c for c in mock_audit.call_args_list
+            if c.args and c.args[0].get("event") == "soul_restored_from_backup"
+        ]
+        assert restored
+        assert restored[0].kwargs.get("cfg") is cfg
+
     def test_scan_false_bypass_for_trusted_restore(self, cfg, tmp_paths):
         """The internal restore path may re-apply already-vetted content via scan=False."""
         soul_path, _, _ = tmp_paths
