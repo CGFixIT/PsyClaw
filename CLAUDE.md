@@ -452,9 +452,10 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** logging raw query text "for debugging."
   **Rule:** the audit log stores SHA-256 hashes only; raw text is never
   persisted. `test_gate` enforces it.
-- **Trap:** "adding the missing `check_input`" to the MCP server.
-  **Rule:** the MCP path deliberately does NOT sanitize — there is no LLM behind
-  it (`sampling: None`). This is a documented non-goal, not a gap.
+- **Trap:** treating MCP `hybrid_search` as unsanitized.
+  **Rule:** E3 (`#974`) runs `check_input` before retrieval (same
+  `banned_patterns` / `max_input_chars` as HTTP `/query`) and audits
+  `prompt_injection_blocked`. `sampling: None` is unchanged.
 - **Trap:** re-reading `config.yaml` inside a module, or using cwd-relative
   paths. **Rule:** config is loaded once and passed down as a `cfg` dict. Paths
   anchor to `_BASE_DIR`/`_REPO_ROOT`, never cwd (Windows double-click breaks
