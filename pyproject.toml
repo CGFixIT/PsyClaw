@@ -34,6 +34,9 @@ dependencies = [
     "nltk==3.10.0",
     "langgraph==1.2.9",
     "langchain-core==1.5.0",
+    # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
+    # so legacy/no-deps paths cannot strand the app on websockets 12.x.
+    "websockets==15.0.1",
 ]
 
 [project.optional-dependencies]
