@@ -655,7 +655,10 @@ class GrokClient:
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(grok_cfg)
         # Strip so whitespace-only counts as missing and padded values don't leak into the auth header.
         self.api_key = (os.environ.get("GROK_API_KEY") or "").strip()
-        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
+        # Same as LocalLLM: do not honor ambient HTTP(S)_PROXY/.netrc. A
+        # confirmed hybrid call would otherwise send GROK_API_KEY through an
+        # operator proxy. Explicit httpx proxy config is out of scope here.
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout), trust_env=False)
 
     def close(self) -> None:
         self._client.close()
@@ -713,7 +716,9 @@ class ClaudeClient:
         self.anthropic_version = claude_cfg.get("anthropic_version", "2023-06-01")
         self.retry_max, self.retry_backoff, self.retry_backoff_max = _read_retry(claude_cfg)
         self.api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
-        self._client = httpx.Client(timeout=_client_timeout(self.timeout))
+        # Same as LocalLLM / GrokClient: ambient HTTP(S)_PROXY must not see
+        # ANTHROPIC_API_KEY on a confirmed hybrid call.
+        self._client = httpx.Client(timeout=_client_timeout(self.timeout), trust_env=False)
 
     def close(self) -> None:
         self._client.close()
