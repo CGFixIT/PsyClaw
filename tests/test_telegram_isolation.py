@@ -40,7 +40,7 @@ def test_request_path_does_not_import_telegram(module_file):
 
 
 def test_reverse_guard_flags_planted_request_path_import(tmp_path):
-    forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     planted = tmp_path / "telegram_probe.py"
     planted.write_text("import gate\nfrom graph import build_graph\n", encoding="utf-8")
     leaked = forbidden & _imports(planted.read_text(encoding="utf-8"))
@@ -48,7 +48,7 @@ def test_reverse_guard_flags_planted_request_path_import(tmp_path):
 
 
 def test_telegram_does_not_import_request_path():
-    forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     scanned = 0
     for py in (REPO_ROOT / "telegram").rglob("*.py"):
         scanned += 1

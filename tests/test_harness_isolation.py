@@ -48,7 +48,7 @@ def test_reverse_guard_flags_planted_request_path_import(tmp_path):
     # Symmetric negative self-test: a planted harness-side module importing
     # gate/graph must trip the forbidden set, proving the guard below isn't
     # vacuously passing because _imports() is broken.
-    forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     planted = tmp_path / "harness_probe.py"
     planted.write_text("import gate\nfrom graph import build_graph\n", encoding="utf-8")
     leaked = forbidden & _imports(planted.read_text(encoding="utf-8"))
@@ -58,8 +58,8 @@ def test_reverse_guard_flags_planted_request_path_import(tmp_path):
 
 
 def test_harness_does_not_import_request_path():
-    # Symmetric guard: harness must not pull in gate/gate_ops/graph/mcp either.
-    forbidden = {"gate", "gate_ops", "graph", "mcp_hybrid_server"}
+    # Symmetric guard: harness must not pull in the I6 request-path set.
+    forbidden = {"gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server"}
     scanned = 0
     for py in (REPO_ROOT / "harness").rglob("*.py"):
         scanned += 1
