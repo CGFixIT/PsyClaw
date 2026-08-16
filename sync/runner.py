@@ -234,7 +234,7 @@ class SyncResult:
     def event_counts(self) -> dict:
         counts = {"added": 0, "modified": 0, "deleted": 0}
         for ev in self.events:
-            counts[ev.kind] = counts.get(ev.kind, 0) + 1
+            counts[ev.kind] += 1
         return counts
 
     def to_audit_dict(self) -> dict:

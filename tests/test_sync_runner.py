@@ -292,6 +292,20 @@ def test_sync_result_audit_dict_no_secret_fields():
     assert d["event"] == "sync_completed"
 
 
+def test_sync_result_event_counts():
+    res = SyncResult(
+        success=True, direction="pull", started_at=0.0, finished_at=1.0,
+        rclone_exit_code=0,
+        events=[
+            FileEvent(kind="added", path="a.md"),
+            FileEvent(kind="modified", path="b.md"),
+            FileEvent(kind="added", path="c.md"),
+            FileEvent(kind="deleted", path="d.md"),
+        ],
+    )
+    assert res.event_counts() == {"added": 2, "modified": 1, "deleted": 1}
+
+
 # ---------------------------------------------------------------------------
 # run_sync end-to-end (mocked subprocess) + corpus_changed / exit-code wiring
 # ---------------------------------------------------------------------------
