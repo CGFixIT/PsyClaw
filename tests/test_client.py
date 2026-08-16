@@ -894,7 +894,7 @@ class TestResolveLocalBackend:
         llm_cfg = {
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {"enabled": False},
         }
         resolved = resolve_local_backend(llm_cfg)
@@ -911,7 +911,7 @@ class TestResolveLocalBackend:
         llm_cfg = {
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "provider": "lmstudio",
@@ -931,7 +931,7 @@ class TestResolveLocalBackend:
         llm_cfg = {
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "provider": "lmstudio",
@@ -941,12 +941,12 @@ class TestResolveLocalBackend:
         }
         resolved = resolve_local_backend(llm_cfg)
         assert resolved.source == "primary"
-        assert resolved.model == "qwen3.8:27b"
+        assert resolved.model == "qwen3.8:27b-mlx"
 
     def test_fallback_enabled_requires_model(self):
         llm_cfg = {
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
@@ -959,7 +959,7 @@ class TestResolveLocalBackend:
     def test_fallback_rejects_non_loopback_secondary(self):
         llm_cfg = {
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "base_url": "http://10.0.0.5:1234/v1",  # DevSkim: ignore DS162092
@@ -980,7 +980,7 @@ class TestResolveLocalBackend:
             local_llm_extra={
                 "provider": "ollama",
                 "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                "model": "qwen3.8:27b",
+                "model": "qwen3.8:27b-mlx",
                 "fallback": {
                     "enabled": True,
                     "provider": "lmstudio",
@@ -1016,7 +1016,7 @@ class TestResolveLocalBackend:
             local_llm_extra={
                 "provider": "ollama",
                 "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                "model": "qwen3.8:27b",
+                "model": "qwen3.8:27b-mlx",
                 "api_key": "primary-secret",
                 "fallback": {
                     "enabled": True,
@@ -1038,7 +1038,7 @@ class TestResolveLocalBackend:
             tmp_path,
             local_llm_extra={
                 "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                "model": "qwen3.8:27b",
+                "model": "qwen3.8:27b-mlx",
                 "api_key": "primary-secret",
                 "fallback": {
                     "enabled": True,
@@ -1057,7 +1057,7 @@ class TestResolveLocalBackend:
         llm_cfg = {
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "provider": "lmstudio",
@@ -1081,7 +1081,7 @@ class TestResolveLocalBackend:
         llm_cfg = {
             "provider": "ollama",
             "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "fallback": {
                 "enabled": True,
                 "provider": "lmstudio",
@@ -1110,7 +1110,7 @@ class TestResolveLocalBackend:
                 "local_llm": {
                     "provider": "ollama",
                     "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                    "model": "qwen3.8:27b",
+                    "model": "qwen3.8:27b-mlx",
                     "max_tokens": 10,
                     "temperature": 0.0,
                     "timeout_sec": 5,
@@ -1159,7 +1159,7 @@ class TestResolveLocalBackend:
                 "local_llm": {
                     "provider": "ollama",
                     "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                    "model": "qwen3.8:27b",
+                    "model": "qwen3.8:27b-mlx",
                     "max_tokens": 10,
                     "temperature": 0.0,
                     "timeout_sec": 5,
@@ -1212,7 +1212,7 @@ class TestResolveLocalBackend:
                 "local_llm": {
                     "provider": "ollama",
                     "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
-                    "model": "qwen3.8:27b",
+                    "model": "qwen3.8:27b-mlx",
                     "max_tokens": 10,
                     "temperature": 0.0,
                     "timeout_sec": 5,

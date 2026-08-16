@@ -230,7 +230,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `60` per `60`s | `api.rate_limit` | per-IP |
 | `40` | `banned_patterns` length | **documentary count**; the *phrases* are contractual (see §4) |
 | `80` | `coverage fail_under` | in `pyproject.toml`, not `ci.yml` |
-| `qwen3.8:27b` | `local_llm.model` | Ollama |
+| `qwen3.8:27b-mlx` | `local_llm.model` | Ollama |
 | `grok-4.5` | `grok.model` | `grok.enabled: true` since 2026-08-07 (armed; see `docs/THREAT_MODEL.md` eighth amendment) — still triple-gated (I3), `user_confirmed_online` is per-request and cannot be pre-set |
 | `claude-sonnet-5` | `claude.model` | `claude.enabled: true` since 2026-08-07 (armed, same amendment); second external fallback (PR #441), same triple-gate |
 

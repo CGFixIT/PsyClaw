@@ -11,7 +11,7 @@ This guide covers installing CyClaw with Ollama as the local LLM backend. Ollama
 | Aspect | Before (LM Studio) | After (Ollama) |
 |--------|-------------------|----------------|
 | Default port | `1234` | `11434` |
-| Default model tag | `qwen2.5-7b-instruct` | `qwen2.5:7b` → now `qwen3.8:27b` |
+| Default model tag | `qwen2.5-7b-instruct` | `qwen2.5:7b` → now `qwen3.8:27b-mlx` |
 | Provider name | `lmstudio` | `ollama` |
 | Install method | GUI download + model search | `curl \| sh` + `ollama pull` |
 | Model format | Multiple (GGUF, etc.) | Ollama Registry (built on GGUF) |
@@ -72,10 +72,10 @@ curl http://127.0.0.1:11434/api/tags
 
 ```bash
 # Pull the default CyClaw model (recommended)
-ollama pull qwen3.8:27b
+ollama pull qwen3.8:27b-mlx
 
 # Verify it works
-ollama run qwen3.8:27b "Say hello"
+ollama run qwen3.8:27b-mlx "Say hello"
 # Should respond immediately
 ```
 
@@ -83,13 +83,14 @@ ollama run qwen3.8:27b "Say hello"
 
 | Model | Command | Notes |
 |-------|---------|-------|
-| Qwen 3.8 27B (default) | `ollama pull qwen3.8:27b` | What `config.yaml` ships. Dense ~27B — `timeout_sec: 600`/`max_tokens: 3000` are already sized for it. Needs the most `num_ctx` headroom and the most RAM |
+| Qwen 3.8 27B MLX (default) | `ollama pull qwen3.8:27b-mlx` | What `config.yaml` ships. Apple Silicon MLX build. Dense ~27B — `timeout_sec: 600`/`max_tokens: 3000` are already sized for it. Needs the most `num_ctx` headroom and the most RAM |
+| Qwen 3.8 27B (generic) | `ollama pull qwen3.8:27b` | Same weights without the MLX tag. Use on Intel/Windows/Linux, then set `models.local_llm.model` and `guardrails.model` to this tag |
 | Qwen 2.5 7B | `ollama pull qwen2.5:7b` | Much lighter; the prior default. Best balance of quality + speed on modest hardware |
 | Mistral 7B | `ollama pull mistral:7b` | Good alternative |
 | Llama 3.1 8B | `ollama pull llama3.1:8b` | Meta's latest |
 | Qwen 2.5 14B | `ollama pull qwen2.5:14b` | Higher quality, slower |
 
-> **Note:** Model tags are case-sensitive in Ollama. Use the exact lowercase tag `ollama list` prints (e.g. `qwen3.8:27b`), not a display name like `Qwen3.8-27B-Instruct`.
+> **Note:** Model tags are case-sensitive in Ollama. Use the exact lowercase tag `ollama list` prints (e.g. `qwen3.8:27b-mlx`), not a display name like `Qwen3.8-27B-Instruct`.
 >
 > **Changing model = changing `config.yaml`.** `models.local_llm.model` AND `guardrails.model` must both match the tag you pulled — `config-guard`'s C11 check fails the build if they drift apart. Smaller model? Everything still works. Larger? Re-check `num_ctx` below.
 
@@ -133,7 +134,7 @@ models:
   local_llm:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"
-    model: "qwen3.8:27b"  # must match your `ollama pull` tag exactly
+    model: "qwen3.8:27b-mlx"  # must match your `ollama pull` tag exactly
     timeout_sec: 600     # what ships; sized for the dense ~27B default
     max_tokens: 3000
 ```
@@ -218,7 +219,7 @@ ollama serve
 Or per-session inside an interactive `ollama run` shell (there is no `--num_ctx` CLI flag):
 
 ```
-ollama run qwen3.8:27b
+ollama run qwen3.8:27b-mlx
 >>> /set parameter num_ctx 12288
 ```
 
@@ -279,7 +280,7 @@ larger `num_ctx` grows Ollama's KV-cache, and unlike a discrete-GPU box, that
 cache shares the *same* memory pool as the model weights, CyClaw's own Python
 process (ChromaDB + embeddings + FastAPI), the OS, and anything else you have
 open — there is no separate VRAM budget to fall back on. This repo does not
-ship a measured GB-per-context-length figure for `qwen3.8:27b` to cite here,
+ship a measured GB-per-context-length figure for `qwen3.8:27b-mlx` to cite here,
 so don't guess at a number: watch actual usage (Activity Monitor, or
 `ollama ps` for the running model's reported size) after raising `num_ctx`,
 rather than maximizing it up front on the assumption that more is free.
@@ -291,7 +292,7 @@ rather than maximizing it up front on the assumption that more is free.
 | Symptom | Fix |
 |---------|-----|
 | `Ollama timeout` error | Check `ollama serve` is running; increase `timeout_sec` in config.yaml |
-| `Ollama HTTP 404` | Model not pulled, or the tag does not match `config.yaml`: run `ollama pull qwen3.8:27b` (or set `model:` to what `ollama list` shows) |
+| `Ollama HTTP 404` | Model not pulled, or the tag does not match `config.yaml`: run `ollama pull qwen3.8:27b-mlx` (or set `model:` to what `ollama list` shows) |
 | `0% processing` stall | Ollama context too small: increase `num_ctx` (see above) |
 | `IndexNotFoundError` on startup | Run `python -m retrieval.indexer` first |
 | Empty answers | Check corpus files exist in `data/corpus/` |
@@ -321,7 +322,7 @@ CyClaw's `LocalLLMClient` (in `llm/client.py`) speaks raw HTTP to any OpenAI-com
 CyClaw (LocalLLMClient)
   |
   |  POST http://127.0.0.1:11434/v1/chat/completions
-  |  { "model": "qwen3.8:27b", "messages": [...], ... }
+  |  { "model": "qwen3.8:27b-mlx", "messages": [...], ... }
   v
 Ollama (OpenAI-compatible API)
   |

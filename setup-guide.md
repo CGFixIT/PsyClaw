@@ -24,7 +24,7 @@ section. Then:
 |---|---|
 | Git | Any recent version |
 | Python 3.12 | Primary supported runtime (`requires-python >=3.12`) |
-| [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434`, with `qwen3.8:27b` pulled: `ollama pull qwen3.8:27b` |
+| [Ollama](https://ollama.com/) | Running on `http://127.0.0.1:11434`, with `qwen3.8:27b-mlx` pulled: `ollama pull qwen3.8:27b-mlx` |
 | Corpus `.md` files (optional) | The repo ships a small sample corpus in `data/corpus/`, so the indexer has something to build against out of the box. Copy your own `.md` files in to replace/extend it — from your own notes, or an existing SafeClaw/PsyClaw-style corpus if you have one. |
 | Windows | PowerShell, no admin/elevation needed. If script execution is blocked, run once: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` |
 | Linux | bash |
@@ -154,7 +154,7 @@ It will:
    stored (never `--token "$GH_TOKEN"`)
 7. Check Ollama; prefer the signed `.app` (will not `curl | sh` unless
    you pass `--ollama-install-script`); pull the shipped local model
-   (`qwen3.6:27b`, or `--small-model` for `qwen2.5:7b`)
+   (`qwen3.8:27b-mlx`, or `--small-model` for `qwen2.5:7b`)
 8. Build the retrieval index (`python -m retrieval.indexer`)
 9. `exec macos/invoke-cyclaw.sh --repo <this checkout>` so both the
    terminal (`:8787`) and the harness (`:8790`) start, and Ctrl+C owns
@@ -365,7 +365,7 @@ prefer the signed app on a machine you care about.
 ```bash
 ollama --version            # sanity check
 ollama serve                # only if you did NOT install the .app — see below
-ollama pull qwen3.8:27b     # the model config.yaml expects by default (dense
+ollama pull qwen3.8:27b-mlx     # the model config.yaml expects by default (dense
                             # ~27B — multi-GB pull). Want a lighter one? See
                             # "Running a different local model" below.
 
@@ -658,7 +658,7 @@ macOS section above are those same commands.
 
 ### Running a different local model
 
-`config.yaml` ships `models.local_llm.model: "qwen3.8:27b"` — a dense ~27B
+`config.yaml` ships `models.local_llm.model: "qwen3.8:27b-mlx"` — a dense ~27B
 model — and the setup steps pull exactly that. It is the heaviest default this
 project has shipped: expect a multi-gigabyte pull and meaningful RAM use. On
 modest hardware a smaller tag (`qwen2.5:7b`, `mistral:7b`) is a perfectly
@@ -805,7 +805,7 @@ models:
   local_llm:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # Ollama's OpenAI-compatible endpoint — do not change
-    model: "qwen3.8:27b"                     # must match a model tag actually pulled in Ollama
+    model: "qwen3.8:27b-mlx"                     # must match a model tag actually pulled in Ollama
     timeout_sec: 600                        # must stay < api.graph_timeout_sec (660)
     max_tokens: 3000                        # reserved output budget — see config.yaml's own comment on num_ctx headroom
 

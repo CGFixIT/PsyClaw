@@ -12,7 +12,7 @@ loops today and must not be used as a copy-paste config cookbook.
 |---|---|
 | Live real-repo coding path? | `agentic/real_repo_loop.py` + harness `/api/agent/*` (still heavily gated / disarmed by default) |
 | DeepAgents subgraph future work? | **No** — owner retired further development 2026-07-31 (see `GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md` retirement banner and `docs/THREAT_MODEL.md` fifth amendment) |
-| Local model provider default? | **Ollama** at `http://127.0.0.1:11434/v1`, model `qwen3.8:27b` (`config.yaml` `models.local_llm` and `agentic.deepagent_github`) |
+| Local model provider default? | **Ollama** at `http://127.0.0.1:11434/v1`, model `qwen3.8:27b-mlx` (`config.yaml` `models.local_llm` and `agentic.deepagent_github`) |
 | Is `provider: "lmstudio"` still valid for deepagent_github? | **No** — `agentic/config.py` accepts only `"ollama"` or `"openai_compatible"`. LM Studio in diagrams below is **historical** design text only |
 | Shipped DeepAgents defaults? | `deepagent_github.enabled: false`, `allow_deepagents_dependency: false`, cloud providers off |
 

@@ -145,7 +145,7 @@ _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
 _RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
-# /loop on a local 27b (qwen3.8:27b / Apple Silicon) must not replay the full
+# /loop on a local 27b (qwen3.8:27b-mlx / Apple Silicon) must not replay the full
 # 20-turn window: each completion is large and Ollama reserves max_tokens up
 # front. Eight prior turns is enough to steer without blowing num_ctx.
 _LOOP_HISTORY_TURNS = 8
@@ -309,7 +309,7 @@ def clip_history(messages: list[dict], max_chars: int) -> list[dict]:
 class GenerationGate:
     """At most one local-LLM generation at a time.
 
-    qwen3.8:27b on Apple Silicon is single-stream. A second concurrent chat
+    qwen3.8:27b-mlx on Apple Silicon is single-stream. A second concurrent chat
     (two tabs, jammed Enter, /loop + a typed line) queues behind Metal and
     looks like a hang. Non-blocking claim: the second caller gets 409
     instead of waiting minutes.
@@ -342,7 +342,7 @@ def _resolve_backend() -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
             provider="ollama", # Or LM studio - Default fallback label
             base_url="http://127.0.0.1:11434/v1",
-            model="qwen3.8:27b",
+            model="qwen3.8:27b-mlx",
             source="primary",
         )
     return resolve_local_backend(llm)

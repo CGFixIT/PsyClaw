@@ -30,7 +30,7 @@ models:
     # no Authorization header is sent. Only set this if you have configured Ollama
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-    model: "qwen3.8:27b"            # keep in sync with guardrails.model
+    model: "qwen3.8:27b-mlx"            # keep in sync with guardrails.model
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
@@ -43,7 +43,7 @@ models:
     max_tokens: 3000
     temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host -- the shipped qwen3.8:27b default. A smaller tag
+    # is expected to host -- the shipped qwen3.8:27b-mlx default. A smaller tag
     # simply leaves this budget unused.
     # Worked from the
     # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
@@ -77,7 +77,7 @@ models:
       enabled: false
       provider: "lmstudio"                       # label only; same OpenAI-compat stack
       base_url: "http://127.0.0.1:1234/v1"       # DevSkim: ignore DS162092,DS137138 - LM Studio loopback
-      model: "qwen3.8-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.8:27b` verbatim
+      model: "qwen3.8-27b-instruct"              # EXAMPLE ONLY — set to your LM Studio loaded model id when enabling. LM Studio ids are not Ollama tags (no colon; see the note above), so this will not match `qwen3.8:27b-mlx` verbatim
       probe_timeout_sec: 1.5                     # discovery only; generate still uses timeout_sec
   embeddings:
     provider: "sentence-transformers"
@@ -696,7 +696,7 @@ agentic:
     enabled: false
     provider: "ollama"                          # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"        # DevSkim: ignore DS162092,DS137138 - local Ollama loopback, matches every other local endpoint's host form
-    model: "qwen3.8:27b"
+    model: "qwen3.8:27b-mlx"
     # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
     # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
     # (600) above: this package is never imported by graph.py/gate.py (I6), so it
@@ -905,7 +905,7 @@ guardrails:
                                   # and local_llm. See docs/NeMo/phase2_implementation_plan.md.
   engine: "openai"               # Ollama exposes an OpenAI-compatible API
   base_url: "http://127.0.0.1:11434/v1"  # DevSkim: ignore DS162092,DS137138 - loopback Ollama, offline-only
-  model: "qwen3.8:27b"           # keep in sync with models.local_llm.model
+  model: "qwen3.8:27b-mlx"           # keep in sync with models.local_llm.model
   nemo_config_dir: "guardrails/config"  # holds config.yml + rails.co (RailsConfig.from_path)
   metrics_path: "logs/guardrails.jsonl" # SEPARATE stream from logs/audit.jsonl (privacy: hashes only)
   block_message: "I can't help with that request. It was stopped by a CyClaw safety guardrail."

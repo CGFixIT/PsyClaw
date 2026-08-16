@@ -40,7 +40,7 @@ PreCompact / SessionEnd hooks.
 |---|---|---|---|
 | **A. `/goal` + `/loop` only** | subsection below | session goal CRUD, goal in system prompt, `LOOP_REQUIRES_GOAL`, loop limiter ≠ chat limiter, cancel idempotence, HTML slash wiring, I6 (no `agentic` import from `harness/`) | RAG/graph, live 27b quality, browser `/loop auto` + `GOAL_DONE`, `/api/agent/run` |
 | **B. In-process swarm** | `python3.12 .claude/skills/CyClaw-Sandbox/run_full_verification.py` | Skill phases 4–12 (5 queries, triple-gate, redaction, harness `TestClient` including `/goal` + loop, HTML contract) | Live HTTP servers, browser JS, Windows installer |
-| **C. CI lifecycle** | `bash .claude/skills/CyClaw-Sandbox/verify.sh` | 3.12 venv, full pytest, RAG smoke, live `gate.py` + harness + `mock_ollama`, both emulations | Browser `/loop auto`, real `qwen3.8:27b`, Auth Stages 3–4, live NeMo 4b rail |
+| **C. CI lifecycle** | `bash .claude/skills/CyClaw-Sandbox/verify.sh` | 3.12 venv, full pytest, RAG smoke, live `gate.py` + harness + `mock_ollama`, both emulations | Browser `/loop auto`, real `qwen3.8:27b-mlx`, Auth Stages 3–4, live NeMo 4b rail |
 | **D. Surface smoke** | `bash .claude/skills/CyClaw-Sandbox/smoke.sh` | 29 out-of-band checks against a live server | Due-diligence classes, harness `/goal`/`/loop`, agent-run routes |
 
 ### A. `/goal` + `/loop` only (harness console contract)
@@ -717,7 +717,7 @@ either `gate.py` or the harness console -- both read
 `models.local_llm.base_url` from `config.yaml`, which defaults to this
 mock's own default bind (`127.0.0.1:11434`).
 ```bash
-python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen3.8:27b
+python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen3.8:27b-mlx
 ```
 
 ### `verify.sh` / `smoke.sh` / `windows-smoke.ps1`

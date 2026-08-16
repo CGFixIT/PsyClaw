@@ -137,14 +137,14 @@ def test_chat_injects_memory_only_when_on(cfg, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         })
 
     chat = HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1",
-        model="qwen3.8:27b",
+        model="qwen3.8:27b-mlx",
         transport=httpx.MockTransport(handler),
     )
     app = harness_server.create_app(cfg, chat)

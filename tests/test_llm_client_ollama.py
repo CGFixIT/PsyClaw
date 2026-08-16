@@ -92,7 +92,7 @@ def _write_config(tmp_path, base_url: str) -> str:
         "models": {
             "local_llm": {
                 "base_url": base_url,
-                "model": "qwen3.8:27b",
+                "model": "qwen3.8:27b-mlx",
                 "max_tokens": 256,
                 "temperature": 0.1,
                 "timeout_sec": 5,
@@ -127,7 +127,7 @@ class TestLocalLLMClientAgainstRealHTTPServer:
         client.close()
         assert len(server.received) == 1
         body = server.received[0]
-        assert body["model"] == "qwen3.8:27b"
+        assert body["model"] == "qwen3.8:27b-mlx"
         assert body["messages"] == [{"role": "user", "content": "what is CyClaw?"}]
         assert body["max_tokens"] == 256
         assert body["temperature"] == pytest.approx(0.1)
@@ -182,7 +182,7 @@ class TestBackendSwapLockingRegression:
 
     def _resolved(self, base_url: str) -> ResolvedLocalBackend:
         return ResolvedLocalBackend(
-            provider="ollama", base_url=base_url, model="qwen3.8:27b", source="primary",
+            provider="ollama", base_url=base_url, model="qwen3.8:27b-mlx", source="primary",
         )
 
     def test_readopt_backend_holds_lock_for_its_entire_reassignment(self, tmp_path, mock_ollama):

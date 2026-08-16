@@ -19,7 +19,7 @@ This guideline remains the **historical contract and decision log**. Prefer
 [`README.md`](./README.md) for current status. Body below still mentions LM
 Studio in places because it was written against an earlier local-LLM default;
 shipped CyClaw uses **Ollama** at `http://127.0.0.1:11434/v1` and
-`qwen3.8:27b` (see `config.yaml` `models.local_llm` / `guardrails.base_url`).
+`qwen3.8:27b-mlx` (see `config.yaml` `models.local_llm` / `guardrails.base_url`).
 
 ## Summary
 
