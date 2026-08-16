@@ -30,7 +30,7 @@ models:
     # no Authorization header is sent. Only set this if you have configured Ollama
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
-    model: "qwen3.8:27b-mlx" # lol you fool now you have to do it by hand this time (was wondering why a 3 second video took 10 min)
+    model: "qwen3.8:27b"            # keep in sync with guardrails.model
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt
@@ -43,9 +43,8 @@ models:
     max_tokens: 3000
     temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
-    # is expected to host -- which, since the default above became qwen3.8:27b,
-    # is now the shipped default itself rather than a headroom allowance for a
-    # model heavier than it. A smaller tag simply leaves this budget unused.
+    # is expected to host -- the shipped qwen3.8:27b default. A smaller tag
+    # simply leaves this budget unused.
     # Worked from the
     # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
     # weights, so single-stream decode is memory-bandwidth-bound at roughly
@@ -520,10 +519,6 @@ logging:
   # comparable. See graph.py's _llm_identity.
   audit_fields:
     include_query_hash: true
-    # include_top_score: true  #currently placeholders
-    # include_retrieval_mode: true  #currently placeholders
-    # include_online_escalated: true  #currently placeholders
-    # include_model_used: true #currently placeholders
 
 security:
   # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).
