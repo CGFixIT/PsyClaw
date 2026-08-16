@@ -85,11 +85,9 @@ jobs:
       - name: Download torch wheel (cache miss only)
         if: runner.os != 'macOS' && steps.torch-wheel-cache.outputs.cache-hit != 'true'
         shell: bash
-        # torch is intentionally NOT pinned in requirements.txt — see its header:
-        # a bare resolve pulls the ~2.5 GB CUDA build from PyPI on Linux. Fetch
-        # the lean CPU wheel from the PyTorch index (matching ci.yml and the
-        # documented CVE-2025-32434 >=2.6.0 floor); --no-deps avoids pulling the
-        # default CUDA build.
+        # torch is pinned in requirements.txt as the CPU build; fetch the lean
+        # wheel from the PyTorch index (matching ci.yml and the documented
+        # CVE-2025-32434 >=2.6.0 floor); --no-deps avoids pulling the default CUDA build.
         run: |
           pip download "torch==2.13.0+cpu" \
             --index-url https://download.pytorch.org/whl/cpu \
