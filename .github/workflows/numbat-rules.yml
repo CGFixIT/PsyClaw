@@ -1,0 +1,52 @@
+# Non-blocking Numbat rules-test against committed fixtures (#961).
+# Does not gate merges. Does not edit ci.yml (owned by other open drafts).
+name: Numbat rules fixture
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: numbat-rules-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions: {}
+
+jobs:
+  numbat-rules-fixture:
+    name: numbat rules test --fixture
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install numbat 0.1.2 (linux amd64)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/numbat.tgz \
+            https://github.com/perplexityai/numbat/releases/download/v0.1.2/numbat_0.1.2_linux_amd64.tar.gz
+          echo "973da3b75c25aa7a671505a20a7f0dd5e21dd14da625dc05d4807982047b143c  /tmp/numbat.tgz" | sha256sum -c -
+          tar -xzf /tmp/numbat.tgz -C /tmp
+          sudo install -m 0755 /tmp/numbat /usr/local/bin/numbat
+          numbat version
+
+      - name: Known-bad fixture must hit required rules
+        run: |
+          numbat rules test \
+            --fixture tests/fixtures/numbat/known-bad-events.ndjson \
+            --expect exfil.curl_post_file \
+            --expect secrets.read_private_key
+
+      - name: Clean / jail fixture must produce zero hits
+        run: |
+          numbat rules test \
+            --fixture tests/fixtures/numbat/clean-events.ndjson \
+            --expect-none
