@@ -685,7 +685,7 @@ jobs:
           try {
             $mock = Start-CyClawProcess -Name "mock-ollama" -WorkingDirectory $RuntimeDir -Arguments @(
               (Join-Path $env:GITHUB_WORKSPACE ".claude\skills\CyClaw-Sandbox\mock_ollama.py"),
-              "--host", "127.0.0.1", "--port", "11434", "--model", "qwen3.8:27b"
+              "--host", "127.0.0.1", "--port", "11434", "--model", "qwen3.8:27b-mlx"
             )
             Wait-CyClawEndpoint -Name "mock Ollama" -Uri "http://127.0.0.1:11434/api/tags" -Process $mock
 

@@ -246,7 +246,7 @@ as T1.
 **Operator checklist**
 
 1. CyClaw server up on loopback (`python -m gate` / install scripts).
-2. Ollama serving `qwen3.8:27b` (or configured local model).
+2. Ollama serving `qwen3.8:27b-mlx` (or configured local model).
 3. Config:
    ```yaml
    telegram:
@@ -490,7 +490,7 @@ Wire each job’s `on_failure_notify: true` to `python -m telegram.cli send` onc
 ## 9. Rollout on MacBook Pro M5 (operator notes)
 
 1. `bash ./macos/install-cyclaw.sh` if not already.
-2. Ollama: `qwen3.8:27b`, `num_ctx` ≥ budget in `config.yaml` comments.
+2. Ollama: `qwen3.8:27b-mlx`, `num_ctx` ≥ budget in `config.yaml` comments.
 3. Keep embeddings on CPU (`EMBED_DEVICE`) for deterministic retrieval.
 4. Run CyClaw loopback server.
 5. Enable Telegram **T1 first**; live with notify for a few days before `mode: chat`.

@@ -220,7 +220,7 @@ def test_home_dir_literal_matches_install_and_invoke() -> None:
 
 def test_default_and_small_ollama_tags_are_documented() -> None:
     text = _script_text()
-    assert 'DEFAULT_MODEL="qwen3.6:27b"' in text
+    assert 'DEFAULT_MODEL="qwen3.8:27b-mlx"' in text
     assert 'SMALL_DEFAULT="qwen2.5:7b"' in text
     assert "--small-model" in text
     assert "guardrails.model" in text  # C11 mismatch warning

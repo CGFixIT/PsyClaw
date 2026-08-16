@@ -26,14 +26,14 @@ _TEST_KEY = "harness-test-key"
 def _chat() -> HarnessChatClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         })
 
     return HarnessChatClient(
         base_url="http://127.0.0.1:11434/v1",
-        model="qwen3.8:27b",
+        model="qwen3.8:27b-mlx",
         transport=httpx.MockTransport(handler),
     )
 

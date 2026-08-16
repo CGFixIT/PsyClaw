@@ -733,7 +733,7 @@ def _llm_identity(answer_model: str, cfg: dict) -> dict:
     Returns two additive fields, never replacing ``model_used``:
 
     * ``llm_model`` -- the tag from config.yaml that actually served the answer
-      (``qwen3.8:27b``, ``grok-4.5``, ``claude-sonnet-5``), or ``None`` when no
+      (``qwen3.8:27b-mlx``, ``grok-4.5``, ``claude-sonnet-5``), or ``None`` when no
       model ran. Read from cfg rather than hardcoded, so retagging a model in
       config.yaml moves the audit with it.
     * ``llm`` -- a one-line human summary, which is what an operator reading

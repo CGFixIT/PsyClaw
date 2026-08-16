@@ -175,7 +175,7 @@ fi
 reject_shell_metachars "$REPO_DIR"
 reject_shell_metachars "$HOME_DIR"
 
-DEFAULT_MODEL="qwen3.6:27b"
+DEFAULT_MODEL="qwen3.8:27b-mlx"
 SMALL_DEFAULT="qwen2.5:7b"
 
 _read_shipped_model() {

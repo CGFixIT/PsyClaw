@@ -46,7 +46,7 @@ GUARDED = [
     ("post", "/api/memory/add", {"text": "prefer ruff"}),
     ("post", "/api/memory/forget", {"id": "deadbeef"}),
     ("post", "/api/memory/clear", None),
-    ("post", "/api/model", {"model": "qwen3.8:27b"}),
+    ("post", "/api/model", {"model": "qwen3.8:27b-mlx"}),
     ("post", "/api/web", {"enabled": False}),
     ("post", "/api/web/allow", {"url": "https://docs.python.org/"}),
     ("post", "/api/web/deny", {"url": "https://docs.python.org/"}),
@@ -87,13 +87,13 @@ OPEN = [
 def _chat() -> HarnessChatClient:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={
-            "model": "qwen3.8:27b",
+            "model": "qwen3.8:27b-mlx",
             "choices": [{"message": {"role": "assistant", "content": "ok"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         })
 
     return HarnessChatClient(
-        base_url="http://127.0.0.1:11434/v1", model="qwen3.8:27b", transport=httpx.MockTransport(handler)
+        base_url="http://127.0.0.1:11434/v1", model="qwen3.8:27b-mlx", transport=httpx.MockTransport(handler)
     )
 
 
@@ -495,7 +495,7 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
 
     secret = "SECRET-ANSWER revenue target is 4.2M and the headcount freeze runs to Q4"
     session = Session(session_id="c11f67fd89ea", title="Quarterly plan",
-                      created_ts=0.0, model="qwen3.8:27b")
+                      created_ts=0.0, model="qwen3.8:27b-mlx")
     session.messages.append(Message(role="user", text="what is our Q3 revenue target?"))
     session.messages.append(Message(role="assistant", text=secret))
 
@@ -512,7 +512,7 @@ def test_open_session_listing_carries_no_message_content(tmp_path):
     # summarize_json is the path the listing route really takes; it must agree.
     from_json = Session.summarize_json(json.loads(json.dumps({
         "session_id": "c11f67fd89ea", "title": "Quarterly plan", "created_ts": 0.0,
-        "model": "qwen3.8:27b",
+        "model": "qwen3.8:27b-mlx",
         "messages": [{"role": "user", "text": "q"}, {"role": "assistant", "text": secret}],
     })))
     assert secret not in json.dumps(from_json)
