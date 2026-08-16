@@ -619,7 +619,11 @@ class SqlClient:
     def table_preview(self, table: str) -> dict:
         self._guard_op("table_preview")
         ident = quote_identifier(table, self.sql_cfg.driver)
-        _audit_sql({"event": "sqlconnect_read", "op": "table_preview", "table": table}, self.config_path, command=f"table_preview {table}")
+        _audit_sql(
+            {"event": "sqlconnect_read", "op": "table_preview", "table": table},
+            self.config_path,
+            command=f"table_preview {table}",
+        )
         # ident is allow-list-validated + quoted (validate_identifier/quote_identifier)
         # and max_rows is coerced to int; no untrusted text reaches the SQL string.
         if self.sql_cfg.driver == "mssql":
@@ -661,7 +665,11 @@ class SqlClient:
         """Return ``count(*)`` for a table without materialising its rows."""
         self._guard_op("row_count")
         ident = quote_identifier(table, self.sql_cfg.driver)
-        _audit_sql({"event": "sqlconnect_read", "op": "row_count", "table": table}, self.config_path, command=f"row_count {table}")
+        _audit_sql(
+            {"event": "sqlconnect_read", "op": "row_count", "table": table},
+            self.config_path,
+            command=f"row_count {table}",
+        )
         # ident is allow-list-validated + driver-quoted; no untrusted text reaches SQL.
         sql = f"SELECT count(*) AS row_count FROM {ident}"  # noqa: S608
         return {"op": "row_count", "table": table, **self._execute(sql)}
