@@ -946,7 +946,8 @@ def _run_sync_locked(
                         f"rclone sync timed out after {cfg.sync_timeout_sec}s (budget exhausted by retries)",
                         details={"direction": cfg.direction, "timeout_sec": cfg.sync_timeout_sec},
                     )
-                run_timeout: float | None = remaining
+                # IEEE-754: (t+3600)-t can be 3600.0000000000005 on Windows.
+                run_timeout: float | None = min(remaining, float(cfg.sync_timeout_sec))
             else:
                 run_timeout = None
 
@@ -1063,6 +1064,9 @@ def _run_sync_locked(
         # docstring for why the check phase must not get its own fresh full budget.
         if result.success and not dry_run and getattr(cfg, "post_sync_check", False):
             remaining_for_check = (deadline - time.monotonic()) if (has_budget and deadline is not None) else None
+            if remaining_for_check is not None:
+                # IEEE-754: (t+3600)-t can be 3600.0000000000005 on Windows.
+                remaining_for_check = min(remaining_for_check, float(cfg.sync_timeout_sec))
             result.check_result = run_post_sync_check(cfg, rclone_bin, remaining_budget_sec=remaining_for_check)
 
         # Per-file audit events -- one row per file, with sha256 when available.
