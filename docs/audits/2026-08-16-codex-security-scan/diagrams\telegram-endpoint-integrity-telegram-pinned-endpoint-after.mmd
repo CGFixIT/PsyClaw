@@ -1,0 +1,7 @@
+flowchart LR
+    C["config.yaml api_base"] --> V["exact production host policy"]
+    V -->|"accept only api.telegram.org"| U["bot_api_url"]
+    T["TELEGRAM_BOT_TOKEN"] --> U
+    U --> H["api.telegram.org"]
+    H --> B["Bot API request"]
+    V -->|"reject"| E["config error before client use"]
