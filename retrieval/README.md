@@ -9,6 +9,7 @@ precedes it.
 
 | Module | Role |
 |---|---|
+| `results.py` | `SearchResult` dataclass. Imported by the retriever and by optional memory fusion so the memory package does not pull in Chroma/BM25. Re-exported from `hybrid_search.py`. |
 | `hybrid_search.py` | `HybridRetriever`: ChromaDB semantic leg + BM25Okapi keyword leg → RRF fusion (`retrieval.rrf_k`, shipped 60). Degrades gracefully if one leg fails. |
 | `indexer.py` | Corpus ingestion from `data/corpus/*.md`: chunking (`indexing.chunk_size`/`chunk_overlap`), chunk sanitization via the prompt filter, writes both indices. Run `python -m retrieval.indexer` (or `cyclaw-index`) explicitly — the server never builds the index itself; a missing index is fail-soft (503 `INDEX_NOT_FOUND`). |
 | `embeddings.py` | Local sentence-transformers embeddings, device hardcoded to CPU (`EMBED_DEVICE` — cross-platform ranking determinism; see the constant's own comment). Triple `lru_cache`; `embedding_fingerprint()` detects index staleness. HF offline flags are set conditionally, never blanket (see `utils/telemetry_kill.py`'s exclusion note). |

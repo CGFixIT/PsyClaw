@@ -8,7 +8,6 @@ Degrades gracefully if one retrieval path fails.
 import heapq
 import json
 import logging
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from utils.logger import audit_log
 
 from .embeddings import embedding_fingerprint, get_embedding
 from .indexer import _anchor_index_paths, _resolve_config_path
+from .results import SearchResult
 from .stemmer import tokenize_and_stem
 from .vector_store import get_vector_reader, parse_stem_tags
 
@@ -43,24 +43,6 @@ def _mps_risk_present() -> bool:
     except Exception:  # noqa: BLE001 -- probe failure must default to "not at risk"
         return False
 
-
-@dataclass
-class SearchResult:
-    """Single search result with provenance metadata."""
-    text: str
-    score: float
-    source: str
-    chunk_id: int
-    stem_tags: list[str]
-    retrieval_mode: str  # "semantic" | "keyword" | "hybrid"
-    source_sha256: str = ""
-    semantic_score: float | None = None
-    semantic_rank: int | None = None
-    keyword_score: float | None = None
-    keyword_rank: int | None = None
-    rrf_score: float | None = None
-    rrf_semantic_contrib: float | None = None
-    rrf_keyword_contrib: float | None = None
 
 class HybridRetriever:
     def __init__(self, config_path: str = "config.yaml"):

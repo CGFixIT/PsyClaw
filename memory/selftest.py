@@ -54,7 +54,7 @@ def main() -> int:
         search_facts_fts,
         stage_episode,
     )
-    from retrieval.hybrid_search import SearchResult
+    from retrieval.results import SearchResult
     from utils.errors import PromptInjectionError
 
     tmp = Path(tempfile.mkdtemp(prefix="cyclaw-memory-selftest-"))
