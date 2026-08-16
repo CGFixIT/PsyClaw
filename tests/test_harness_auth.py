@@ -236,6 +236,44 @@ def test_api_key_optional_false_matches_the_default(cfg, monkeypatch):
     assert resp.status_code == 401
 
 
+def test_api_key_optional_true_still_refuses_non_loopback_peer(cfg, monkeypatch):
+    """The bypass is peer-based, not Host-based: a non-loopback socket peer
+    must still see 401 even when the flag is on. Mirrors gate.py's
+    _is_loopback_peer check on /soul/* and /ops/*."""
+    import copy
+
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    real_get_config = harness_server._get_config
+
+    def _patched(path: str) -> dict:
+        loaded = copy.deepcopy(real_get_config(path))
+        loaded.setdefault("security", {})["api_key_optional"] = True
+        return loaded
+
+    monkeypatch.setattr(harness_server, "_get_config", _patched)
+    c = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://127.0.0.1",
+        client=("192.168.1.100", 51234),
+    )
+    resp = c.post("/api/soul", json={"enabled": True}, headers=_csrf(c))
+    assert resp.status_code == 401
+
+
+def test_api_key_optional_true_still_refuses_proxied_request(cfg, monkeypatch):
+    """A reverse-proxy forwarding header makes every remote caller look like a
+    loopback peer, so the bypass must deny it. Mirrors gate.py's
+    _looks_proxied check on /soul/* and /ops/*."""
+    monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+    c = _client_with_api_key_optional(cfg, monkeypatch, True)
+    resp = c.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={**_csrf(c), "X-Forwarded-For": "203.0.113.1"},
+    )
+    assert resp.status_code == 401
+
+
 # --- fail-closed -----------------------------------------------------------
 
 
