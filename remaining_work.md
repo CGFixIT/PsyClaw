@@ -38,7 +38,7 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 | # | Title | Notes |
 |---|---|---|
 | [#958](https://github.com/cgfixit/CyClaw/issues/958) | Spend ledger | Shipped in #975; issue not closed |
-| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Fixture job shipped in #981; issue not closed |
+| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Fixture job in #981; live redteam + executor-jail job on this branch (still `continue-on-error`); issue not closed |
 | [#962](https://github.com/cgfixit/CyClaw/issues/962) | LLM-as-judge | Stretch |
 | [#963](https://github.com/cgfixit/CyClaw/issues/963) | Pre-action hook | 2–3 day, graph-adjacent |
 | [#964](https://github.com/cgfixit/CyClaw/issues/964) | Memory arena | Stretch |
