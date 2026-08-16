@@ -957,7 +957,7 @@ guardrails:
 # Threat model: docs/THREAT_MODEL.md §5 seventh amendment.
 telegram:
   enabled: false                 # off by default; NEED ID AT LEAST TO TURN TRUE - CLI status/test work; send/poll no-op or refuse
-  mode: "notify"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
+  mode: "chat"                 # "notify" (outbound only, T1) | "chat" (2-way long-poll, T2)
   bot_token_env: "TELEGRAM_BOT_TOKEN"  # unattended token source; token is never stored in YAML
   allowed_chat_ids: []           # REQUIRED non-empty when enabled: true (load fails if empty)
   # To enable: set enabled: true, keep mode "notify" to start (not "chat"), and put
