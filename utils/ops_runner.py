@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import _get_config, redact_sensitive
+from utils.numbat_emitter import emit_numbat_event, redact_argv_for_numbat
 from utils.repo_paths import canonical_repo_relative_path
 
 # Repo root = parent of utils/. The CLIs run as ``python -m sync.cli`` /
@@ -254,6 +255,19 @@ def _maybe_json(text: str) -> Any:
         return None
 
 
+def _emit_ops_numbat(argv: list[str], result: OpsResult) -> None:
+    """Project one ops subprocess into the Numbat NDJSON stream. Never raises."""
+    emit_numbat_event(
+        "command.exec",
+        command=redact_argv_for_numbat(argv),
+        exit_code=result.exit_code,
+        tool_name=result.subsystem,
+        actor="system",
+        tags=["ops", result.subsystem, result.action],
+        artifact_type="ops_runner",
+    )
+
+
 def _write_body(body: str, *, prefix: str = "cyclaw_skill_") -> str:
     """Persist caller-supplied text to a temporary file, never an argv value."""
     handle = tempfile.NamedTemporaryFile(
@@ -314,7 +328,9 @@ def run_sync_op(action: str, *, dry_run: bool = False) -> OpsResult:
     timeout = _sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
     proc = _run(argv, timeout_sec=timeout)
     ok, label = _SYNC_LABELS.get(proc.returncode, (False, "unknown"))
-    return OpsResult("sync", action, proc.returncode, ok, label, proc.stdout, proc.stderr)
+    result = OpsResult("sync", action, proc.returncode, ok, label, proc.stdout, proc.stderr)
+    _emit_ops_numbat(argv, result)
+    return result
 
 
 def run_agentic_op(
@@ -510,7 +526,9 @@ def run_agentic_op(
         )
         ok, label = _AGENTIC_LABELS.get(proc.returncode, (False, "unknown"))
         parsed = _maybe_json(proc.stdout) if (ok and action in _AGENTIC_JSON_ACTIONS) else None
-        return OpsResult("agentic", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+        result = OpsResult("agentic", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+        _emit_ops_numbat(argv, result)
+        return result
     finally:
         if body_file:
             Path(body_file).unlink(missing_ok=True)
@@ -562,7 +580,9 @@ def run_fsconnect_op(
     proc = _run(argv)
     ok, label = _FSCONNECT_LABELS.get(proc.returncode, (False, "unknown"))
     parsed = _maybe_json(proc.stdout) if (ok and action in _FSCONNECT_JSON_ACTIONS) else None
-    return OpsResult("fsconnect", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+    result = OpsResult("fsconnect", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+    _emit_ops_numbat(argv, result)
+    return result
 
 
 def run_sqlconnect_op(
@@ -604,4 +624,6 @@ def run_sqlconnect_op(
     proc = _run(argv)
     ok, label = _SQLCONNECT_LABELS.get(proc.returncode, (False, "unknown"))
     parsed = _maybe_json(proc.stdout) if (ok and action in _SQLCONNECT_JSON_ACTIONS) else None
-    return OpsResult("sqlconnect", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+    result = OpsResult("sqlconnect", action, proc.returncode, ok, label, proc.stdout, proc.stderr, parsed)
+    _emit_ops_numbat(argv, result)
+    return result

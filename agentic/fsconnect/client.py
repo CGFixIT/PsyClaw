@@ -25,6 +25,7 @@ from guardrails.rails import (
 from guardrails.rails import scan_injection_patterns
 from utils.errors import FsConnectError
 from utils.logger import audit_log
+from utils.numbat_emitter import emit_numbat_event
 
 _MAX_GREP_MATCHES = 200
 _MAX_GLOB_MATCHES = 1000
@@ -103,6 +104,17 @@ class FsClient:
 
     def _audit(self, event: dict) -> None:
         audit_log(event, self.config_path)
+        op = str(event.get("op") or "")
+        path = event.get("path")
+        emit_numbat_event(
+            "file.read",
+            file_path=str(path) if path else None,
+            tool_name="fsconnect",
+            actor="system",
+            tags=["fsconnect", op or "read"],
+            artifact_type="fsconnect",
+            config_path=self.config_path,
+        )
 
     # --- operations -------------------------------------------------------
 

@@ -27,6 +27,21 @@ from utils.errors import (
     SqlDriverNotInstalledError,
 )
 from utils.logger import audit_log
+from utils.numbat_emitter import emit_numbat_event
+
+
+def _audit_sql(event: dict, config_path: str, command: str | None = None) -> None:
+    """Write the sqlconnect audit line and its Numbat projection."""
+    audit_log(event, config_path)
+    emit_numbat_event(
+        "command.exec",
+        command=command or str(event.get("op") or "sqlconnect"),
+        tool_name="sqlconnect",
+        actor="system",
+        tags=["sqlconnect", str(event.get("op") or "query")],
+        artifact_type="sqlconnect",
+        config_path=config_path,
+    )
 
 # Dialect assumed when a caller does not name one. Mirrors SqlConnectConfig's own
 # default so the guard's standalone callers (selftest, sandbox verifier) behave
@@ -597,14 +612,14 @@ class SqlClient:
 
     def schema_list(self) -> dict:
         self._guard_op("schema_list")
-        audit_log({"event": "sqlconnect_read", "op": "schema_list"}, self.config_path)
+        _audit_sql({"event": "sqlconnect_read", "op": "schema_list"}, self.config_path, command="schema_list")
         sql = "SELECT table_schema, table_name FROM information_schema.tables ORDER BY table_schema, table_name"
         return {"op": "schema_list", **self._execute(sql)}
 
     def table_preview(self, table: str) -> dict:
         self._guard_op("table_preview")
         ident = quote_identifier(table, self.sql_cfg.driver)
-        audit_log({"event": "sqlconnect_read", "op": "table_preview", "table": table}, self.config_path)
+        _audit_sql({"event": "sqlconnect_read", "op": "table_preview", "table": table}, self.config_path, command=f"table_preview {table}")
         # ident is allow-list-validated + quoted (validate_identifier/quote_identifier)
         # and max_rows is coerced to int; no untrusted text reaches the SQL string.
         if self.sql_cfg.driver == "mssql":
@@ -616,7 +631,7 @@ class SqlClient:
     def run_select(self, sql: str, fmt: Literal["json", "csv"] = "json") -> dict:
         self._guard_op("run_select")
         cleaned = assert_read_only_sql(sql, driver=self.sql_cfg.driver)  # pure guard, pre-connection
-        audit_log({"event": "sqlconnect_read", "op": "run_select", "fmt": fmt}, self.config_path)
+        _audit_sql({"event": "sqlconnect_read", "op": "run_select", "fmt": fmt}, self.config_path, command="SELECT")
         result = self._execute(cleaned)
         if fmt == "csv":
             return {"op": "run_select", "format": "csv", "csv": _rows_to_csv(result["columns"], result["rows"])}
@@ -639,14 +654,14 @@ class SqlClient:
                 details={"driver": "mssql"},
             )
         cleaned = assert_read_only_sql(sql, driver=self.sql_cfg.driver)  # pure guard, pre-connection
-        audit_log({"event": "sqlconnect_read", "op": "explain"}, self.config_path)
+        _audit_sql({"event": "sqlconnect_read", "op": "explain"}, self.config_path, command="EXPLAIN")
         return {"op": "explain", **self._execute(f"EXPLAIN {cleaned}")}
 
     def row_count(self, table: str) -> dict:
         """Return ``count(*)`` for a table without materialising its rows."""
         self._guard_op("row_count")
         ident = quote_identifier(table, self.sql_cfg.driver)
-        audit_log({"event": "sqlconnect_read", "op": "row_count", "table": table}, self.config_path)
+        _audit_sql({"event": "sqlconnect_read", "op": "row_count", "table": table}, self.config_path, command=f"row_count {table}")
         # ident is allow-list-validated + driver-quoted; no untrusted text reaches SQL.
         sql = f"SELECT count(*) AS row_count FROM {ident}"  # noqa: S608
         return {"op": "row_count", "table": table, **self._execute(sql)}

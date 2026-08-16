@@ -105,6 +105,7 @@ from agentic.harness_optimizer.governance import (
 )
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
+from utils.numbat_emitter import emit_numbat_event
 
 
 @runtime_checkable
@@ -1076,6 +1077,20 @@ def finalize_real_repo_change(
         config_path=config_path,
         cfg=cfg,
     )
+    approved = decision == "approve"
+    emit_numbat_event(
+        "permission.approved" if approved else "permission.denied",
+        decision="allowed" if approved else "denied",
+        approval_required=True,
+        approval_decision="allowed" if approved else "denied",
+        git_branch=branch_name,
+        tool_name="real_repo_loop",
+        actor="user",
+        tags=["real_repo_loop", "decide"],
+        artifact_type="real_repo_loop",
+        config_path=config_path,
+        cfg=cfg,
+    )
     if decision == "reject":
         return {"status": "rejected", "branch": branch_name}
 
@@ -1105,6 +1120,17 @@ def finalize_real_repo_change(
     tools.commit(commit_message)
     audit_log(
         {"event": "agentic_real_repo_change_approved", "branch": branch_name},
+        config_path=config_path,
+        cfg=cfg,
+    )
+    emit_numbat_event(
+        "command.exec",
+        command="git commit",
+        git_branch=branch_name,
+        tool_name="real_repo_loop",
+        actor="system",
+        tags=["real_repo_loop", "commit"],
+        artifact_type="real_repo_loop",
         config_path=config_path,
         cfg=cfg,
     )
