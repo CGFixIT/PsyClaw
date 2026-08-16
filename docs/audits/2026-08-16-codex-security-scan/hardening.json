@@ -1,0 +1,425 @@
+{
+  "documentType": "codex-security.hardening-analysis",
+  "schemaVersion": "1.0",
+  "analysisId": "hardening_9689563d_telegram_repo_write",
+  "sourceScan": {
+    "scanId": "9689563d-6515-484d-82d8-142a2d0825e5",
+    "targetRevision": "4cb913088f1fa04fbaefea21ecb0dccbbd113e46",
+    "sourceDrift": "none"
+  },
+  "assessment": {
+    "outcome": "opportunities_identified",
+    "summary": "Two conditional high-impact boundaries merit focused hardening: pin Telegram Bot API endpoint identity before token-bearing requests, and preserve canonical landed paths through real-repo governance. Several local-only availability gaps remain deferred under the documented single-operator model."
+  },
+  "constraints": {
+    "profile": "balanced",
+    "changeHorizons": ["incremental", "medium_term"],
+    "nonNegotiables": [
+      "Keep Telegram, agentic, and core module isolation intact.",
+      "Do not broaden external egress or Git-write capability while fixing the boundaries.",
+      "Preserve the single-operator, loopback-first defaults and human-gated write policy."
+    ],
+    "assumptions": [
+      "This analysis is source-derived; no live Telegram, GitHub, database, or external HTTP call was made.",
+      "No latency, memory, or migration budget was supplied.",
+      "The source snapshot remains at target revision 4cb913088f1fa04fbaefea21ecb0dccbbd113e46; source drift requires re-review."
+    ]
+  },
+  "opportunities": [
+    {
+      "opportunityId": "telegram-endpoint-integrity",
+      "title": "Pin Telegram Bot API endpoint identity before token-bearing requests",
+      "summary": "Replace syntactic HTTPS-only validation with an explicit production endpoint policy so a configured bot token cannot be redirected to an arbitrary host.",
+      "diagnosis": "TelegramConfig accepts any HTTPS hostname, while every client method embeds the bot token in the URL path. The default is safe because Telegram is disabled and the base is api.telegram.org, but enabling the layer with a configuration-influenced base turns the optional connector into a token-exfiltration boundary.",
+      "evidence": [
+        {
+          "claimType": "observed",
+          "sourceKind": "finding",
+          "findingId": "OPTIONAL-LAYERS-TELEGRAM-API-BASE-001",
+          "path": "telegram/config.py",
+          "claim": "Lines 257-278 reject malformed HTTPS URLs but do not restrict the hostname; telegram/client.py:171-173 then embeds the bot token under that base."
+        },
+        {
+          "claimType": "observed",
+          "sourceKind": "source",
+          "path": "config.yaml",
+          "claim": "Lines 958-968 ship Telegram disabled with https://api.telegram.org, so exposure is conditional on feature enablement and configuration influence."
+        },
+        {
+          "claimType": "inferred",
+          "sourceKind": "threat_model",
+          "path": "docs/THREAT_MODEL.md",
+          "claim": "The trusted-operator default narrows reachability, but endpoint identity remains a useful invariant for an enabled optional external layer."
+        }
+      ],
+      "desiredInvariants": [
+        "Production bot tokens are sent only to the documented Telegram Bot API endpoint.",
+        "A self-hosted/custom Bot API endpoint requires an explicit separate mode and credential policy.",
+        "No audit or error path logs a full token-bearing URL."
+      ],
+      "proposalPath": "proposals/telegram-endpoint-integrity.md",
+      "options": [
+        {
+          "optionId": "telegram-pinned-endpoint",
+          "title": "Pin the production endpoint",
+          "kind": "baseline",
+          "summary": "Accept exactly api.telegram.org for the production Bot API path and reject all other hosts at configuration load.",
+          "diagramPaths": {
+            "before": "diagrams/telegram-endpoint-integrity-before.mmd",
+            "after": "diagrams/telegram-endpoint-integrity-telegram-pinned-endpoint-after.mmd"
+          },
+          "findingCoverage": [
+            {
+              "findingId": "OPTIONAL-LAYERS-TELEGRAM-API-BASE-001",
+              "effect": "addresses",
+              "tacticalFixRequired": true,
+              "rationale": "The endpoint allowlist closes the direct source-to-token-bearing-HTTP sink."
+            }
+          ],
+          "tradeoffs": [
+            {
+              "dimension": "security",
+              "direction": "improves",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "An attacker-controlled HTTPS host is rejected before a token-bearing client is constructed.",
+              "validationPlan": "Unit-test rejected hosts and mock every Telegram client method to assert the host is api.telegram.org."
+            },
+            {
+              "dimension": "performance",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "A string host comparison occurs once at config load and adds no request hop.",
+              "validationPlan": "Run the Telegram self-test and compare startup timing within normal noise."
+            },
+            {
+              "dimension": "memory",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The change adds no buffers or retained state.",
+              "validationPlan": "No special memory benchmark is expected; verify no token-bearing URL is retained in diagnostics."
+            },
+            {
+              "dimension": "reliability",
+              "direction": "improves",
+              "confidence": "medium",
+              "basis": "source-derived",
+              "assessment": "A mistyped endpoint fails at startup instead of failing after a credential-bearing request.",
+              "validationPlan": "Exercise config load with the shipped endpoint, a trailing slash, and invalid custom hosts."
+            },
+            {
+              "dimension": "operability",
+              "direction": "regresses",
+              "confidence": "medium",
+              "basis": "source-derived",
+              "assessment": "Operators using a private Bot API proxy must choose a separate supported mode rather than changing one URL.",
+              "validationPlan": "Document the intentional refusal and confirm support escalation has a clear custom-endpoint path."
+            },
+            {
+              "dimension": "migration",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The shipped configuration requires no migration; only non-default custom endpoints need review.",
+              "validationPlan": "Load existing config fixtures and verify api.telegram.org remains accepted."
+            }
+          ],
+          "residualRisks": [
+            "Compromise of api.telegram.org or the operator's TLS trust remains outside this repository's control.",
+            "A pinned public endpoint does not remove provider-side retention of messages or files."
+          ],
+          "implementationReadiness": {
+            "affectedComponents": ["telegram/config.py", "tests/test_telegram_config.py", "telegram/client.py"],
+            "workPackages": ["Add a production endpoint constant and strict host/port/path validation.", "Add token-redaction and endpoint-identity regression tests."],
+            "acceptanceCriteria": ["https://api.telegram.org is accepted.", "https://attacker.example and alternate ports/paths are rejected before client use.", "All Bot API methods inherit the same validated endpoint."],
+            "migrationNotes": ["Audit any deployment that currently uses a custom api_base before enabling the new validation."],
+            "rollback": "Revert the focused validator and tests only after disabling Telegram or restoring a separately reviewed endpoint policy."
+          }
+        },
+        {
+          "optionId": "telegram-explicit-custom-mode",
+          "title": "Separate production and self-hosted endpoint modes",
+          "kind": "structural",
+          "summary": "Keep production mode pinned while making self-hosted Bot API use an explicit mode with a distinct token and operator-visible warning.",
+          "diagramPaths": {
+            "before": "diagrams/telegram-endpoint-integrity-before.mmd",
+            "after": "diagrams/telegram-endpoint-integrity-telegram-explicit-custom-mode-after.mmd"
+          },
+          "findingCoverage": [
+            {
+              "findingId": "OPTIONAL-LAYERS-TELEGRAM-API-BASE-001",
+              "effect": "mitigates",
+              "tacticalFixRequired": true,
+              "rationale": "Production credentials stop flowing to arbitrary endpoints; custom deployments receive an explicit, separately reviewed boundary."
+            }
+          ],
+          "tradeoffs": [
+            {
+              "dimension": "security",
+              "direction": "improves",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "Credential scope and endpoint intent become independently visible, reducing accidental production-token redirection.",
+              "validationPlan": "Test that production mode rejects custom hosts and custom mode requires a distinct token source plus explicit enablement."
+            },
+            {
+              "dimension": "performance",
+              "direction": "neutral",
+              "confidence": "medium",
+              "basis": "hypothetical",
+              "assessment": "Mode selection is local configuration work and does not add a request hop.",
+              "validationPlan": "Compare request timing against the pinned mode with a mock transport."
+            },
+            {
+              "dimension": "memory",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "No additional response or token buffer is needed.",
+              "validationPlan": "Inspect config/client objects for token duplication."
+            },
+            {
+              "dimension": "reliability",
+              "direction": "improves",
+              "confidence": "medium",
+              "basis": "source-derived",
+              "assessment": "Endpoint failures are attributable to an explicit deployment mode rather than a silently accepted URL.",
+              "validationPlan": "Run startup and polling tests for both modes with deterministic mock endpoints."
+            },
+            {
+              "dimension": "operability",
+              "direction": "regresses",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "Operators must manage a second token source and understand a mode-specific warning.",
+              "validationPlan": "Review setup/CLI messages with a clean environment and confirm no secret is printed."
+            },
+            {
+              "dimension": "migration",
+              "direction": "regresses",
+              "confidence": "medium",
+              "basis": "hypothetical",
+              "assessment": "Existing custom deployments need an explicit migration and possibly token rotation.",
+              "validationPlan": "Build a fixture matrix for shipped and known custom configurations."
+            }
+          ],
+          "residualRisks": [
+            "Custom-mode endpoint compromise remains the operator's responsibility.",
+            "Mode separation cannot protect a token that is intentionally reused across environments."
+          ],
+          "implementationReadiness": {
+            "affectedComponents": ["telegram/config.py", "telegram/client.py", "telegram/cli.py", "docs/channels/TELEGRAM_DESIGN.md"],
+            "workPackages": ["Define production/custom endpoint schema and token names.", "Add explicit startup warnings and tests."],
+            "acceptanceCriteria": ["Production mode cannot load arbitrary api_base values.", "Custom mode cannot reuse the production token variable by accident.", "Every client request uses the selected mode's validated endpoint."],
+            "migrationNotes": ["Requires an operator migration document and token rotation guidance."],
+            "rollback": "Disable custom mode and return to the pinned production endpoint policy."
+          }
+        }
+      ],
+      "recommendedOptionId": "telegram-pinned-endpoint",
+      "recommendation": "I recommend the pinned production endpoint under the current single-operator constraints. The explicit custom mode becomes preferable only if a supported self-hosted Bot API deployment is a real product requirement and can carry separate credentials."
+    },
+    {
+      "opportunityId": "canonical-protected-write-paths",
+      "title": "Preserve canonical landed paths through real-repo governance",
+      "summary": "Consume the filesystem writer's resolved target before protected-path checks, verification bookkeeping, and final staging.",
+      "diagnosis": "RepoWorkspaceTools._validate_write_path correctly resolves symlink aliases and returns the landed repository-relative path, but run_real_repo_loop ignores the write result and records the planner's raw spelling. A symlink from an apparently safe path to tests, CI, config, or .git-adjacent content can therefore evade the governance gate and review metadata.",
+      "evidence": [
+        {
+          "claimType": "observed",
+          "sourceKind": "finding",
+          "findingId": "SB-008",
+          "path": "agentic/real_repo_loop.py",
+          "claim": "Lines 924-930 call write_file(path, content) but append the uncanonicalized planner path to written; finalize_real_repo_change later stages changed_files."
+        },
+        {
+          "claimType": "observed",
+          "sourceKind": "source",
+          "path": "agentic/deepagent_github/repo_workspace.py",
+          "claim": "Lines 420-538 resolve the actual landed path and write_file returns it at lines 662-705."
+        },
+        {
+          "claimType": "inferred",
+          "sourceKind": "source",
+          "path": "tests/test_agentic_repo_workspace.py",
+          "claim": "The unit test at lines 1256-1292 proves the low-level result is canonical, but no integration test proves real_repo_loop consumes it before governance."
+        }
+      ],
+      "desiredInvariants": [
+        "Protected-path policy, review diffs, verification, changed_files, and final staging all use the same canonical landed path.",
+        "A symlink alias cannot hide a write to tests, workflows, configuration, .git, or another protected target.",
+        "A rejected canonical target is quarantined before verification or approval side effects."
+      ],
+      "proposalPath": "proposals/canonical-protected-write-paths.md",
+      "options": [
+        {
+          "optionId": "propagate-canonical-write-result",
+          "title": "Propagate the canonical write result",
+          "kind": "incremental",
+          "summary": "Capture write_file's returned target, re-run protected-path policy on it, and use canonical paths for all iteration and finalization state.",
+          "diagramPaths": {
+            "before": "diagrams/canonical-protected-write-paths-before.mmd",
+            "after": "diagrams/canonical-protected-write-paths-propagate-canonical-write-result-after.mmd"
+          },
+          "findingCoverage": [
+            {
+              "findingId": "SB-008",
+              "effect": "addresses",
+              "tacticalFixRequired": true,
+              "rationale": "The missing integration step is exactly the canonical result propagation and downstream policy re-check."
+            }
+          ],
+          "tradeoffs": [
+            {
+              "dimension": "security",
+              "direction": "improves",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "In-repository symlink aliases become visible to the existing protected-write gate and human diff.",
+              "validationPlan": "Run a real_repo_loop fixture with docs/alias -> tests/test_x.py and assert rejection before verification and staging."
+            },
+            {
+              "dimension": "performance",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The returned dictionary is already produced; the change avoids extra filesystem traversal.",
+              "validationPlan": "Benchmark normal single-file and multi-file planner iterations."
+            },
+            {
+              "dimension": "memory",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The loop stores one canonical string per written file, as it already stores one raw string.",
+              "validationPlan": "Compare iteration result sizes for large file sets."
+            },
+            {
+              "dimension": "reliability",
+              "direction": "improves",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "Review, verification, and staging no longer disagree about which file changed.",
+              "validationPlan": "Exercise normal files, path respellings, existing symlinks, and rejected protected targets."
+            },
+            {
+              "dimension": "operability",
+              "direction": "improves",
+              "confidence": "medium",
+              "basis": "source-derived",
+              "assessment": "Audit and pending-diff records identify the file that actually landed, making review easier.",
+              "validationPlan": "Inspect audit events and rendered pending diffs for canonical names."
+            },
+            {
+              "dimension": "migration",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The public planner protocol remains unchanged; only bookkeeping becomes truthful.",
+              "validationPlan": "Run existing real-repo loop and workspace suites plus the new symlink integration cases."
+            }
+          ],
+          "residualRisks": [
+            "A concurrent filesystem mutation between validation and the write still needs the lower-level writer's no-follow/atomic guarantees.",
+            "Allowing benign in-repository symlinks preserves compatibility but requires continued canonical-result propagation."
+          ],
+          "implementationReadiness": {
+            "affectedComponents": ["agentic/real_repo_loop.py", "agentic/deepagent_github/repo_workspace.py", "tests/test_agentic_real_repo_loop.py"],
+            "workPackages": ["Capture and validate the write result target.", "Canonicalize changed_files/ever_written and pending-diff inputs.", "Add protected symlink-alias integration tests."],
+            "acceptanceCriteria": ["An alias landing under tests/.github/config/.git is rejected before verification.", "Normal new files retain current behavior.", "Final staging consumes the same canonical list shown in review."],
+            "migrationNotes": ["Persisted pending runs containing raw aliases should be revalidated or rejected on resume."],
+            "rollback": "Revert the loop bookkeeping change; do not weaken the low-level canonical path return."
+          }
+        },
+        {
+          "optionId": "reject-symlink-write-targets",
+          "title": "Refuse symlinked write targets entirely",
+          "kind": "isolation",
+          "summary": "Make the repository writer reject any symlink component for model-authored writes, eliminating alias ambiguity at the cost of compatibility.",
+          "diagramPaths": {
+            "before": "diagrams/canonical-protected-write-paths-before.mmd",
+            "after": "diagrams/canonical-protected-write-paths-reject-symlink-write-targets-after.mmd"
+          },
+          "findingCoverage": [
+            {
+              "findingId": "SB-008",
+              "effect": "addresses",
+              "tacticalFixRequired": true,
+              "rationale": "A refused symlink target cannot redirect the writer into a protected path."
+            }
+          ],
+          "tradeoffs": [
+            {
+              "dimension": "security",
+              "direction": "improves",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "The alias class is removed rather than merely recorded correctly.",
+              "validationPlan": "Attempt leaf and intermediate symlink writes on POSIX and Windows-compatible fixtures."
+            },
+            {
+              "dimension": "performance",
+              "direction": "neutral",
+              "confidence": "medium",
+              "basis": "source-derived",
+              "assessment": "The writer already resolves path components; refusal changes only the decision branch.",
+              "validationPlan": "Benchmark normal paths and symlink-heavy repositories separately."
+            },
+            {
+              "dimension": "memory",
+              "direction": "neutral",
+              "confidence": "high",
+              "basis": "source-derived",
+              "assessment": "No additional retained state is required.",
+              "validationPlan": "No special memory benchmark beyond the existing workspace suite."
+            },
+            {
+              "dimension": "reliability",
+              "direction": "regresses",
+              "confidence": "medium",
+              "basis": "hypothetical",
+              "assessment": "Repositories that intentionally use symlinked documentation or generated paths will receive deterministic refusals.",
+              "validationPlan": "Inventory representative target repositories before choosing this option."
+            },
+            {
+              "dimension": "operability",
+              "direction": "regresses",
+              "confidence": "medium",
+              "basis": "hypothetical",
+              "assessment": "Operators need a clear refusal message and a documented copy/rename workaround.",
+              "validationPlan": "Verify error text identifies the symlink component without leaking host paths."
+            },
+            {
+              "dimension": "migration",
+              "direction": "regresses",
+              "confidence": "medium",
+              "basis": "hypothetical",
+              "assessment": "Existing workflows that write through benign symlinks require migration or an explicit trusted exception.",
+              "validationPlan": "Run compatibility fixtures against current target repositories before rollout."
+            }
+          ],
+          "residualRisks": [
+            "A no-symlink rule does not replace canonical bookkeeping for path aliases or filesystem races elsewhere.",
+            "It may cause unnecessary write failures in repositories that use symlinks for legitimate generated content."
+          ],
+          "implementationReadiness": {
+            "affectedComponents": ["agentic/deepagent_github/repo_workspace.py", "tests/test_agentic_repo_workspace.py", "tests/test_agentic_real_repo_loop.py"],
+            "workPackages": ["Add an explicit no-symlink model-authored-write policy.", "Document and test compatibility refusals.", "Retain canonical bookkeeping for non-symlink aliases."],
+            "acceptanceCriteria": ["Leaf and intermediate symlink writes fail before bytes land.", "Protected-path tests remain green.", "The error is audited and actionable."],
+            "migrationNotes": ["Requires a repository inventory and an operator decision for legitimate symlink workflows."],
+            "rollback": "Re-enable benign symlink writes only after canonical result propagation and protected-path integration tests are deployed."
+          }
+        }
+      ],
+      "recommendedOptionId": "propagate-canonical-write-result",
+      "recommendation": "I recommend canonical-result propagation first: it closes the demonstrated governance gap with the smallest compatibility impact and preserves the writer's deliberate support for benign symlinks. Rejecting all symlink targets becomes preferable if the agentic layer moves toward hostile multi-tenant execution or the repository inventory shows symlinks are not required."
+    }
+  ],
+  "openQuestions": [
+    "Should the shipped Telegram connector support any self-hosted Bot API endpoint, or is api.telegram.org the only supported production destination?",
+    "Should a future real-repo loop treat a canonical protected target as a hard refusal even when the declared alias is not protected?",
+    "If the deployment threat model expands beyond a trusted loopback operator, should the server-issued external confirmation and ASGI streaming body cap be promoted from deferred hardening to reportable controls?"
+  ]
+}
