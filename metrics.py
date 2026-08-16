@@ -17,9 +17,12 @@ apply_telemetry_kill()
 import json  # noqa: E402 - must follow the telemetry kill above
 import math  # noqa: E402 - must follow the telemetry kill above
 from collections import Counter  # noqa: E402 - must follow the telemetry kill above
+from datetime import UTC, date, datetime, timedelta  # noqa: E402 - must follow the telemetry kill above
 from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
 
 import yaml  # noqa: E402 - must follow the telemetry kill above
+
+from utils.spend import estimate_usd  # noqa: E402 - must follow the telemetry kill above
 
 # Anchor config.yaml to the repo root, not the process's cwd. print_metrics's
 # default config_path="config.yaml" is a bare relative name; `cyclaw-metrics`
@@ -62,6 +65,142 @@ def iter_events(audit_file: str):
 def load_events(audit_file: str):
     """Materialized list form of :func:`iter_events` (kept for existing callers)."""
     return list(iter_events(audit_file))
+
+
+def iter_spend(spend_file: str):
+    """Yield parsed spend records one line at a time (constant memory).
+
+    ``spend.jsonl`` is the same class of untrusted append-only evidence as
+    ``audit.jsonl``: skip bad JSON and JSON-valid non-objects so one corrupt
+    line cannot take down ``cyclaw-metrics``. Dollars are never stored on the
+    ledger — callers price via :func:`utils.spend.estimate_usd` at read time.
+    """
+    if not Path(spend_file).exists():
+        return
+    with open(spend_file, encoding="utf-8") as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                yield event
+
+
+def _spend_event_date(event: dict) -> date | None:
+    raw = event.get("timestamp")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    return parsed.date()
+
+
+def _spend_token_count(event: dict, key: str) -> int:
+    value = event.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _empty_spend_window() -> dict:
+    return {
+        "by_provider": Counter(),
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "usd": 0.0,
+        "usd_incomplete": False,
+    }
+
+
+def _add_spend_record(window: dict, provider: str, tokens_in: int, tokens_out: int, usd, rate_unknown: bool) -> None:
+    window["by_provider"][provider] += 1
+    window["tokens_in"] += tokens_in
+    window["tokens_out"] += tokens_out
+    if rate_unknown or usd is None:
+        window["usd_incomplete"] = True
+    else:
+        window["usd"] += usd
+
+
+def _freeze_spend_window(window: dict) -> dict:
+    return {
+        "by_provider": dict(window["by_provider"].most_common()),
+        "tokens_in": window["tokens_in"],
+        "tokens_out": window["tokens_out"],
+        "usd": None if window["usd_incomplete"] else window["usd"],
+    }
+
+
+def compute_spend(events, *, now=None) -> dict:
+    """Aggregate spend.jsonl records into today / last-7-day windows.
+
+    Prices at read time via :func:`utils.spend.estimate_usd`. Does not read a
+    file — pass :func:`iter_spend` (or a list) so this stays off the audit
+    ``compute_metrics`` path. ``now`` is UTC; naive values are treated as UTC.
+    Last 7 days is the UTC calendar window ``today-6`` through ``today``.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    else:
+        now = now.astimezone(UTC)
+    today_date = now.date()
+    start_7d = today_date - timedelta(days=6)
+
+    today = _empty_spend_window()
+    last_7d = _empty_spend_window()
+    usage_missing = 0
+    rate_unknown_count = 0
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if event.get("usage_missing") is True:
+            usage_missing += 1
+        model = event.get("model")
+        priced = estimate_usd(model if isinstance(model, str) else "", event)
+        if priced["rate_unknown"]:
+            rate_unknown_count += 1
+        event_date = _spend_event_date(event)
+        if event_date is None or event_date < start_7d or event_date > today_date:
+            continue
+        provider = _bucket_key(event.get("provider"))
+        tokens_in = _spend_token_count(event, "input_tokens")
+        tokens_out = _spend_token_count(event, "output_tokens")
+        record = (provider, tokens_in, tokens_out, priced["usd"], bool(priced["rate_unknown"]))
+        _add_spend_record(last_7d, *record)
+        if event_date == today_date:
+            _add_spend_record(today, *record)
+
+    return {
+        "today": _freeze_spend_window(today),
+        "last_7d": _freeze_spend_window(last_7d),
+        "usage_missing": usage_missing,
+        "rate_unknown": rate_unknown_count,
+    }
+
+
+def _print_spend(spend: dict | None) -> None:
+    if spend is None:
+        return
+    print("\nSpend:")
+    for label, key in (("today", "today"), ("last_7d", "last_7d")):
+        window = spend[key]
+        usd = window["usd"]
+        usd_text = "n/a" if usd is None else f"{usd:.6f}"
+        print(f"  {label}: tokens_in={window['tokens_in']} tokens_out={window['tokens_out']} usd={usd_text}")
+        for provider, count in window["by_provider"].items():
+            print(f"    {provider}: {count}")
+    if spend["usage_missing"]:
+        print(f"  usage_missing: {spend['usage_missing']}")
+    if spend["rate_unknown"]:
+        print(f"  rate_unknown: {spend['rate_unknown']}")
 
 
 def compute_audit_integrity(audit_file: str) -> dict:
@@ -323,6 +462,14 @@ def print_metrics(config_path: str = "config.yaml"):
     audit_file = cfg["logging"]["audit_file"]
     summary = summarize_audit(audit_file)
     integrity = summary["audit_integrity"]
+    # Same repo-root anchor as config.yaml. Relative spend_file must not
+    # depend on cwd (cyclaw-metrics is invoked from anywhere). Missing key
+    # stays silent so existing audit-only test configs do not grow a Spend
+    # section — and so "rate_unknown" cannot false-trip `unknown` assertions.
+    spend_raw = cfg["logging"].get("spend_file")
+    spend_summary = None
+    if isinstance(spend_raw, str) and spend_raw:
+        spend_summary = compute_spend(iter_spend(str(_resolve_config_path(spend_raw))))
     if not summary["total_events"]:
         print("No audit events found.")
         if any(integrity.values()):
@@ -330,6 +477,7 @@ def print_metrics(config_path: str = "config.yaml"):
             for name, count in integrity.items():
                 if count:
                     print(f"  {name}: {count}")
+        _print_spend(spend_summary)
         return
     print(f"Total events: {summary['total_events']}")
     print("\nEvent breakdown:")
@@ -353,6 +501,7 @@ def print_metrics(config_path: str = "config.yaml"):
             for model, count in summary["model_used"].items():
                 print(f"  {model}: {count}")
         print(f"\nOnline escalations (external LLM): {summary['online_escalated']}")
+    _print_spend(spend_summary)
     # Deliberately OUTSIDE the `if summary["rag_query_count"]` block above. These
     # findings come from the out-of-band agentic context fetchers, so the audit log
     # that contains them typically has zero RAG queries -- nesting this section

@@ -140,6 +140,7 @@ jobs:
           --cov=utils.errors \
           --cov=utils.logger \
           --cov=utils.numbat_emitter \
+          --cov=utils.spend \
           --cov=utils.personality \
           --cov=utils.personality_db \
           --cov=utils.ratelimit \
