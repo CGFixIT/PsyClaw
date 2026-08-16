@@ -84,7 +84,7 @@ from llm.client import ResolvedLocalBackend, resolve_local_backend
 from schemas.api import AuthCreateUserRequest, AuthLoginRequest, AuthSetPasswordRequest, AuthSetRoleRequest
 from utils.auth import require_api_key
 from utils.errors import AgenticError
-from utils.logger import _get_config, redact_sensitive
+from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
 
@@ -1025,6 +1025,7 @@ def create_app(
                     _DETAILS_KEY: {},
                 },
             ) from exc
+        audit_log({"event": "harness_api_keys_updated", "keys": written["written"]})
         logger.info("api keys updated: %s", ",".join(written["written"]))
         return {**written, "keys": env_keys.read_status()}
 
