@@ -19,18 +19,18 @@ from utils.telemetry_kill import apply_telemetry_kill
 apply_telemetry_kill()
 
 from retrieval.hybrid_search import HybridRetriever  # noqa: E402 - must follow the telemetry kill above
-from utils.errors import RAGError  # noqa: E402 - must follow the telemetry kill above
+from utils.errors import PromptInjectionError, RAGError  # noqa: E402 - must follow the telemetry kill above
 from utils.logger import audit_log, redact_sensitive  # noqa: E402 - must follow the telemetry kill above
+from utils.sanitizer import check_input  # noqa: E402 - must follow the telemetry kill above
 
 # Bounds for the client-supplied top_k. The retriever fuses at most
 # top_k_semantic + top_k_keyword distinct chunks, so an unbounded value buys
 # nothing; a non-int or non-positive value would otherwise crash the slice.
 _DEFAULT_TOP_K = 5
 _MAX_TOP_K = 50
-# A stdio JSON-RPC caller could otherwise hand this process an arbitrarily
-# large string to embed/tokenize on every search — this ceiling is just a
-# sanity bound on request size, not a security filter (this path doesn't run
-# check_input; see the DESIGN DECISION comment in _handle_search below).
+# Hard ceiling before check_input. The HTTP path uses
+# policy.prompt_filter.max_input_chars (4000); this is a last-line bound if
+# the filter is disabled. E3 still runs check_input below.
 _MAX_QUERY_CHARS = 65536
 
 
@@ -115,18 +115,19 @@ def _score_scale(mode: str, results) -> str:
     return "rrf"
 
 def _handle_search(msg_id, args: dict, retriever: HybridRetriever) -> dict:
-    # DESIGN DECISION (PR #99 #12): this path intentionally does NOT run
-    # utils.sanitizer.check_input. The MCP server is retrieval-only —
-    # CAPABILITIES["sampling"] is None, so there is no LLM to escalate a prompt
-    # injection to — and it serves a trusted local stdio caller. Prompt-injection
-    # filtering here would have no escalation target to protect. If strict policy
-    # parity with the HTTP path is ever desired, add check_input(query) below and
-    # mirror the HTTP audit-on-block; it is omitted by design today.
+    # E3 (#974): same check_input + audit-on-block as gate.py /query. Retrieval
+    # still has no LLM, but MCP must not be a side door around banned_patterns
+    # or max_input_chars. The old PR #99 omission is superseded.
     query = args.get("query", "")
     if not isinstance(query, str) or not query:
         return _error(msg_id, -32602, "hybrid_search requires a non-empty string query")
     if len(query) > _MAX_QUERY_CHARS:
         return _error(msg_id, -32602, f"hybrid_search query exceeds {_MAX_QUERY_CHARS} characters")
+    try:
+        check_input(query)
+    except PromptInjectionError as exc:
+        audit_log({"event": "prompt_injection_blocked", "query": query})
+        return _error(msg_id, -32602, exc.message)
     top_k = _coerce_top_k(args.get("top_k", _DEFAULT_TOP_K))
     # Normalise mode BEFORE dispatch so the audit event and the response
     # metadata record what was actually executed. Previously the raw client
