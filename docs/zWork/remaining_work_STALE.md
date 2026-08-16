@@ -1,4 +1,8 @@
-# Remaining Work
+# Remaining Work (STALE — 2026-08-02)
+
+> **Not the live list.** Current checklist:
+> [`remaining_work.md`](../../remaining_work.md). Keep this file as the
+> closed-item / refutation log from 2026-08-02 (`9282359`).
 
 Open engineering work on CyClaw `main`, as of **2026-08-02** (`9282359`).
 

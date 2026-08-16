@@ -26,8 +26,8 @@ bash ./macos/install-cyclaw.sh
 ```
 
 The installer: creates `~/.CyClaw`, clones or links the repo, creates a venv
-and installs dependencies (CPU torch first, then `requirements.txt -c
-constraints.txt`, matching the documented trap-avoidance order), writes the
+and installs dependencies (plain `torch==2.13.0` on Darwin — not the
+`+cpu` wheel — then `requirements.txt -c constraints.txt`), writes the
 `cyclaw` shim, and adds a PATH entry plus a `cyclaw()` shell function to your
 rc file (`~/.zshrc` on zsh; on macOS bash, the first existing login file among
 `~/.bash_profile`, `~/.bash_login`, and `~/.profile`, with `~/.bash_profile`
