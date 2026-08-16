@@ -912,13 +912,21 @@ def _run_sync_locked(
     try:
 
         # A 0 timeout means "unbounded" (subprocess.run treats timeout=None that way).
-        # When a budget IS set (the common safe case) it is the WALL-CLOCK budget for
+        # When a budget IS set (the common safe case) it is the ELAPSED-TIME budget for
         # the whole retry sequence under the single-instance lock, not just one
         # attempt -- otherwise a transient-exit-5 retry path could hold the lock for
         # attempts * sync_timeout_sec + sum(retry_backoff_sec*2^k), a many-times
         # multiple of the documented per-attempt ceiling.
+        #
+        # time.monotonic(), not time.time(): this deadline drives control flow -- the
+        # per-attempt timeout, the "budget exhausted" raise, and the check phase's
+        # remaining slice. time.time() can step (NTP correction, operator setting the
+        # clock) mid-sync, which would either extend how long the lock is held past the
+        # documented ceiling or fail a sync that still had budget left. time.time() is
+        # still correct for started_at/finished_at below -- those are audit TIMESTAMPS,
+        # not durations. Same split utils/health.py and telegram/ratelimit.py already use.
         has_budget = cfg.sync_timeout_sec > 0
-        deadline = (time.time() + cfg.sync_timeout_sec) if has_budget else None
+        deadline = (time.monotonic() + cfg.sync_timeout_sec) if has_budget else None
 
         # Outer retry loop: re-run rclone on a *transient* failure (exit code 5) up to
         # cfg.sync_retries extra times, with exponential backoff. The log is truncated
@@ -932,7 +940,7 @@ def _run_sync_locked(
             # the inner TimeoutExpired path raises. has_budget implies deadline is
             # not None (set together above), so the type check is structural.
             if has_budget and deadline is not None:
-                remaining = deadline - time.time()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise SyncRuntimeError(
                         f"rclone sync timed out after {cfg.sync_timeout_sec}s (budget exhausted by retries)",
@@ -999,7 +1007,7 @@ def _run_sync_locked(
             # break out so the FAILED attempt's result is surfaced (parsed + audited)
             # rather than raising a bare timeout that drops the retry's stderr/events.
             if has_budget and deadline is not None:
-                remaining = deadline - time.time()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
                 if backoff > remaining:
@@ -1054,7 +1062,7 @@ def _run_sync_locked(
         # above already spent from -- see run_post_sync_check's remaining_budget_sec
         # docstring for why the check phase must not get its own fresh full budget.
         if result.success and not dry_run and getattr(cfg, "post_sync_check", False):
-            remaining_for_check = (deadline - time.time()) if (has_budget and deadline is not None) else None
+            remaining_for_check = (deadline - time.monotonic()) if (has_budget and deadline is not None) else None
             result.check_result = run_post_sync_check(cfg, rclone_bin, remaining_budget_sec=remaining_for_check)
 
         # Per-file audit events -- one row per file, with sha256 when available.

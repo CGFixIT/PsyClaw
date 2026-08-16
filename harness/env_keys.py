@@ -1,7 +1,7 @@
 """Allowlisted dotenv secret store behind the harness console's ``/api`` panel.
 
 Writes the SAME file ``macos/setup-cyclaw-keys.sh`` manages --
-``$CYCLAW_HOME/.env`` (default ``~/.CyClaw/.env``, mode 600) -- in the same
+``$CYCLAW_HOME/.env`` (default ``~/.CyClaw/.env``, mode 600 on POSIX) -- in the same
 ``export KEY='value'`` form, so the shell installer and the web panel can be
 used interchangeably without one corrupting the other's file.
 
@@ -18,7 +18,8 @@ should have to remember:
 3. **The file is never half-written.** Writes go to a sibling temp file created
    mode 600 and are moved into place with ``os.replace``, so a crash mid-write
    leaves the previous file intact rather than a truncated one -- and the
-   secret is never briefly world-readable.
+   secret is never briefly world-readable. The atomicity holds everywhere; the
+   mode bits are POSIX-only (see ``_FILE_MODE``).
 
 Deliberately NOT in scope: loading these values into the running process.
 Nothing in CyClaw reads ``.env`` at runtime (there is no ``python-dotenv``
@@ -45,6 +46,11 @@ _HOME_DIRNAME = ".CyClaw"
 _ENV_FILENAME = ".env"
 
 # 0600 / 0700: the file holds live credentials, so group and other get nothing.
+# POSIX only. Windows os.chmod() honours just the read-only bit -- it cannot
+# express an owner-only mode, so a file written here reports 0o666 there. The
+# equivalent confinement on Windows comes from the NTFS ACL %USERPROFILE%\.CyClaw
+# inherits (owner + SYSTEM + Administrators), not from these bits. Stated so a
+# reader does not take the chmod below for a cross-platform confidentiality gate.
 _FILE_MODE = stat.S_IRUSR | stat.S_IWUSR
 _DIR_MODE = stat.S_IRWXU
 
