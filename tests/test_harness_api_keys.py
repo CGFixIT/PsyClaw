@@ -240,6 +240,23 @@ def test_secret_never_reaches_the_log(client, home, caplog):
     assert "GROK_API_KEY" in caplog.text
 
 
+def test_post_emits_audit_event_with_names_only(client, home, monkeypatch):
+    """The write must be recorded in the audit log, but only key names -- no values."""
+    calls = []
+    monkeypatch.setattr(harness_server, "audit_log", lambda event, **kw: calls.append(event))
+    resp = client.post(
+        "/api/keys",
+        json={"keys": {"GROK_API_KEY": _SECRET}},
+        headers=_full_auth(client),
+    )
+    assert resp.status_code == 200
+    assert len(calls) == 1
+    event = calls[0]
+    assert event["event"] == "harness_api_keys_updated"
+    assert event["keys"] == ["GROK_API_KEY"]
+    assert _SECRET not in str(event)
+
+
 def test_every_managed_key_is_read_somewhere_in_the_repo():
     """The panel must not offer a key nothing consumes.
 
