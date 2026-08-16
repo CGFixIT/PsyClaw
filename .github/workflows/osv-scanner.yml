@@ -33,6 +33,7 @@ jobs:
   # PR events: differential scan that flags vulnerabilities introduced by the PR.
   scan-pr:
     if: ${{ github.event_name == 'pull_request' }}
+    timeout-minutes: 15
     permissions:
       security-events: write # upload SARIF to code scanning
       contents: read # checkout
@@ -50,6 +51,7 @@ jobs:
   # schedule / push / manual: full-tree scan, results published to the Security tab.
   scan-scheduled:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    timeout-minutes: 15
     permissions:
       security-events: write # upload SARIF to code scanning
       contents: read # checkout
