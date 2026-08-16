@@ -69,7 +69,7 @@ User Query (HTTP POST /query or MCP tool call)
                        │
                        ▼
     ┌─────────────────────────────────────────────────────┐
-    │  graph.py  (LangGraph 10-node State Machine)        │
+    │  graph.py  (LangGraph 12-node State Machine)        │
     │                                                     │
     │  [ENTRY]                                            │
     │     ↓                                               │
@@ -78,25 +78,27 @@ User Query (HTTP POST /query or MCP tool call)
     │  2. route_by_score  (top_score >= 0.028 RRF?)       │
     │     ├─ YES ──→ 3. guardrail_input (offline rail;    │
     │     │           opt-in, pass-through when disabled) │
-    │     │           blocked ──→ 9. audit_logger          │
-    │     │           passed  ──→ 4. local_llm             │
+    │     │           blocked ──→ 12. audit_logger        │
+    │     │           passed  ──→ 4. local_llm            │
     │     │                        (Ollama :11434)        │
     │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
     │                    ├─ not yet answered ──→          │
-    │                    │      9. audit_logger           │
+    │                    │     12. audit_logger           │
     │                    ├─ confirmed + hybrid ──→        │
-    │                    │      6. grok_fallback OR       │
-    │                    │         claude_fallback        │
+    │                    │      6. pre_action_hook_grok   │
+    │                    │      7. grok_fallback OR       │
+    │                    │      8. pre_action_hook_claude │
+    │                    │      9. claude_fallback        │
     │                    └─ declined / offline ──→        │
     │                       3. guardrail_input (again)    │
-    │                           blocked ──→ 9. audit_logger│
-    │                           passed  ──→                │
-    │                           7. offline_best_effort    │
+    │                           blocked ──→ 12. audit_logger│
+    │                           passed  ──→               │
+    │                           10. offline_best_effort   │
     │     ↓ (all four answer nodes converge)              │
-    │  8. guardrail_output (offline output rail; opt-in;  │
+    │  11. guardrail_output (offline output rail; opt-in; │
     │     grounding check applies to local_llm answer only)│
     │     ↓                                               │
-    │  9. audit_logger (SHA-256 + PII redact → jsonl)     │
+    │  12. audit_logger (SHA-256 + PII redact → jsonl)    │
     │     ↓                                               │
     │  [END]                                              │
     └─────────────────────────────────────────────────────┘
@@ -127,24 +129,28 @@ flowchart TD
 
     E --> F
 
-    subgraph GRAPH ["graph.py — LangGraph 10-node State Machine"]
+    subgraph GRAPH ["graph.py — LangGraph 12-node State Machine"]
         F(["① retrieve\nChroma + BM25 + RRF"])
         F --> G["② route_by_score\ntop_score ≥ 0.028?"]
         G -->|"YES — local context"| X["③ guardrail_input\noffline rail · opt-in\npass-through when disabled"]
         X -->|"blocked"| L
         X -->|"passed · high score"| H["④ local_llm\nOllama :11434\nqwen3.8:27b-mlx"]
         G -->|"NO — vault miss"| I["⑤ user_gate\nneeds_confirm = true"]
-        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| J["⑥ grok_fallback\nxAI grok-4.5\ntriple-gated · not railed"]
-        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| W["⑦ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated · not railed"]
+        I -->|"confirmed=true + hybrid\n+ grok.enabled + provider=grok"| PG["⑥ pre_action_hook_grok\nsync · disabled=pass-through\nexit 2 → deny"]
+        PG -->|"exit 0 → allow"| J["⑦ grok_fallback\nxAI grok-4.5\ntriple-gated · not railed"]
+        I -->|"confirmed=true + hybrid\n+ claude.enabled + provider=claude"| PC["⑧ pre_action_hook_claude\nsync · disabled=pass-through\nexit 2 → deny"]
+        PC -->|"exit 0 → allow"| W["⑨ claude_fallback\nAnthropic claude-sonnet-5\ntriple-gated · not railed"]
         I -->|"confirmed=false\nor offline mode"| X
-        X -->|"passed · vault miss"| K["⑧ offline_best_effort\nlocal LLM · no RAG gate"]
+        X -->|"passed · vault miss"| K["⑩ offline_best_effort\nlocal LLM · no RAG gate"]
         I -->|"confirmed=None — PAUSE\nreturn needs_confirm to the client"| L
-        H --> Y["⑨ guardrail_output\noffline rail · opt-in\ngrounding check: local_llm only"]
+        H --> Y["⑪ guardrail_output\noffline rail · opt-in\ngrounding check: local_llm only"]
         J --> Y
         W --> Y
         K --> Y
         Y --> L
-        L(["⑩ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
+        PG -.->|"deny"| L
+        PC -.->|"deny"| L
+        L(["⑫ audit_logger\nSHA-256 hash · PII redact\n→ logs/audit.jsonl"])
     end
 
     L --> M(["📤 QueryResponse\nanswer · sources · model_used\nretrieval_mode · needs_confirm"])

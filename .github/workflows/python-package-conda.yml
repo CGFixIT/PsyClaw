@@ -146,6 +146,7 @@ jobs:
           --cov=utils.ratelimit \
           --cov=utils.health \
           --cov=utils.ops_runner \
+          --cov=utils.external_pre_hook \
           --cov=utils.guardrail_bridge \
           --cov=utils.selftest \
           --cov=utils.launchd_plist \

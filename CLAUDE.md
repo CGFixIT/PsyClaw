@@ -50,7 +50,7 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
               → soul init → graph invoke (wrapped in 660s timeout)
         │
         ▼
-   graph.py  (LangGraph 10-node state machine)
+   graph.py  (LangGraph 12-node state machine)
    retrieve → route_by_score
               ├─ score ≥ min_score → guardrail_input (offline input rail; opt-in,
               │                       pass-through when guardrails.enabled=false)
@@ -58,8 +58,10 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
               │                       └─ passed  → local_llm
               └─ score < min_score → user_gate
                                      ├─ confirmed + hybrid + selected provider usable
-                                     │    → grok_fallback | claude_fallback  (NOT railed —
-                                     │      their gate is the triple gate, not the rail)
+                                     │    → pre_action_hook_<provider> → grok_fallback |
+                                     │      claude_fallback (NOT railed — their gate is
+                                     │      the triple gate; the pre-action hook can only
+                                     │      shrink this reachable space, not expand it)
                                      └─ declined / offline / no key → guardrail_input
                                             ├─ blocked → audit_logger
                                             └─ passed  → offline_best_effort
@@ -176,7 +178,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
 | `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
 | `memory/` | Optional facts + episodes SQLite+FTS5 store with propose/apply governance and optional retrieval fusion (all switches false in shipped `config.yaml`) |
-| `graph.py` | 10-node LangGraph topology; all security policy lives in the edges |
+| `graph.py` | 12-node LangGraph topology; all security policy lives in the edges |
 | `retrieval/hybrid_search.py` | RRF fusion (k=60) over ChromaDB + BM25 |
 | `retrieval/indexer.py` | Corpus ingestion, chunk sanitization (`cyclaw-index`) |
 | `retrieval/embeddings.py` | Local embeddings, device hardcoded to CPU (`EMBED_DEVICE` — cross-platform determinism; see the constant's own comment for why); triple `lru_cache`; `embedding_fingerprint()` for index-staleness detection |
