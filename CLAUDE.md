@@ -250,7 +250,7 @@ statically; run it after any change to the core files.
 | I3 | **Triple-gated external fallback** — a call to Grok or Claude needs `mode=="hybrid"` AND `<provider>.enabled` AND `user_confirmed_online`, all three, for whichever provider is selected (`online_provider`) | `gate.py` construction + `graph.py` `user_gate_router` | `test_graph`, `test_gate` | route to `grok_fallback`/`claude_fallback` without all three conditions for that provider |
 | I4 | **Audit convergence** — all nine upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
 | I5 | **Soul governance** — soul mutation requires a human `reason` string; writes are atomic | `utils/personality.py` `apply_evolution` | `test_personality` | write `soul.md` without a non-empty `reason`, or bypass `PersonalityManager` |
-| I6 | **Module isolation** — `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`, and those never import the core three | import graph | `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core three to "reuse" something |
+| I6 | **Module isolation** — `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`, and those never import the core six | import graph | invariant-guard I6; `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core six to "reuse" something |
 
 Supporting guards (also checked by `invariant-guard`): telemetry-kill precedes
 heavy imports in `gate.py` (the block itself is shared from
