@@ -1253,7 +1253,7 @@ architecture, the T0–T4 phase ledger, and the threat-model obligations
 | Network | Binds `127.0.0.1:8787` — no external exposure by design |
 | Input | Config-driven injection filter (`policy.prompt_filter`) |
 | Rate limit | 60 req/min per IP |
-| Proxy bypass | Loopback and token-bearing `httpx` clients set `trust_env=False` — ambient `HTTP(S)_PROXY`/`.netrc` can never reroute local traffic or see the path-embedded Telegram bot token (`utils/health.py`, `llm/client.py` local backend + discovery probe, `harness/ollama.py`, `telegram/client.py`); the external Grok/Claude clients keep httpx defaults so an operator proxy still governs real egress |
+| Proxy bypass | All `httpx` clients set `trust_env=False` — ambient `HTTP(S)_PROXY`/`.netrc` cannot reroute local traffic, see the path-embedded Telegram bot token, or carry `GROK_API_KEY` / `ANTHROPIC_API_KEY` on a confirmed hybrid call (`utils/health.py`, `llm/client.py` local + Grok + Claude, `harness/ollama.py`, `telegram/client.py`). This reverses the old “operator proxy governs paid egress” exception. |
 | Telemetry | Shared kill block (`utils/telemetry_kill.py`) runs before any SDK import in every entry point — gateway, MCP server, and indexer CLI; HF Hub network calls are also cut off once the embedding model is confirmed cached (`retrieval/embeddings.py`) |
 | Audit | All paths log SHA-256 query hash + PII-redacted metadata |
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
