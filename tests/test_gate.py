@@ -1651,3 +1651,28 @@ class TestBootAuthEnabled:
         non-dict) and must fail closed."""
         import gate
         assert gate._boot_auth_enabled(bad) is False
+
+
+class TestBootPersonalityEnabled:
+    """_boot_personality_enabled gates whether gate.py constructs
+    PersonalityManager at import time. Same literal-True rule as
+    _boot_auth_enabled so a quoted YAML ``enabled: "false"`` cannot
+    prepend soul to every local prompt."""
+
+    def test_literal_true_is_enabled(self):
+        import gate
+        assert gate._boot_personality_enabled({"enabled": True}) is True
+
+    @pytest.mark.parametrize("value", ["false", "true", "no", "0", "off", 1, None])
+    def test_non_literal_values_fail_closed(self, value):
+        import gate
+        assert gate._boot_personality_enabled({"enabled": value}) is False
+
+    def test_missing_key_defaults_closed(self):
+        import gate
+        assert gate._boot_personality_enabled({}) is False
+
+    @pytest.mark.parametrize("bad", ["not-a-dict", None, [], 1])
+    def test_non_mapping_personality_block_fails_closed(self, bad):
+        import gate
+        assert gate._boot_personality_enabled(bad) is False

@@ -589,8 +589,20 @@ def _confirm_choices(providers: list[str]) -> str:
     labels = [_PROVIDER_LABELS[p] for p in providers]
     return "Choose Offline Best Effort or " + " or ".join(labels) + "."
 
+def _boot_personality_enabled(personality_cfg: object) -> bool:
+    """True only when ``personality.enabled`` is the literal boolean ``True``.
+
+    Same quoted-YAML fail-closed rule as ``_boot_auth_enabled``: a string
+    ``"false"`` is truthy in Python and would otherwise construct
+    PersonalityManager and prepend soul to every local prompt.
+    """
+    if not isinstance(personality_cfg, dict):
+        return False
+    return personality_cfg.get("enabled") is True
+
+
 personality = None
-if cfg.get("personality", {}).get("enabled", False):
+if _boot_personality_enabled(cfg.get("personality")):
     personality = PersonalityManager(cfg)
 
 def _boot_auth_enabled(auth_cfg: object) -> bool:
