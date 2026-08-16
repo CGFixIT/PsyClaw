@@ -1,0 +1,9 @@
+flowchart LR
+    M["explicit mode"] --> P["production policy"]
+    M --> S["self-hosted policy"]
+    P --> PT["production token"]
+    S --> ST["custom token"]
+    P --> PH["api.telegram.org"]
+    S --> SH["operator-validated private host"]
+    PT --> PR["production Bot API request"]
+    ST --> SR["custom Bot API request"]
