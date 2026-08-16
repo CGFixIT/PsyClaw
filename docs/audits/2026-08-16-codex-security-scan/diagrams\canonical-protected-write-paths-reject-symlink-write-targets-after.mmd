@@ -1,0 +1,6 @@
+flowchart LR
+    P["planner raw path"] --> W["write_file path inspection"]
+    W -->|"ordinary path"| C["canonical target"]
+    W -->|"symlink component"| Q["refuse + audit"]
+    C --> G["protected-path check"]
+    G --> V["review + verification + staging"]
