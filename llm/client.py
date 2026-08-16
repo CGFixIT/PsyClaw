@@ -32,6 +32,7 @@ import httpx
 import yaml
 
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError, RAGError
+from utils.spend import record_external_usage
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +133,26 @@ def _extract_claude_content(resp: httpx.Response) -> str:
     if data.get("stop_reason") == "max_tokens":
         log.warning("Claude response truncated at max_tokens (stop_reason=max_tokens)")
     return content
+
+
+def _extract_and_record_spend(
+    provider: str,
+    model: str,
+    resp: httpx.Response,
+    extract: Callable[[httpx.Response], str],
+) -> str:
+    """Extract the user-visible answer, then append one spend line.
+
+    Spend failures must not change the answer. Extract still raises as-is.
+    """
+    text = extract(resp)
+    try:
+        usage = resp.json().get("usage")
+        record_external_usage(provider=provider, model=model, usage=usage)
+    except Exception as exc:
+        # Type-only: spend is best-effort and must not leak body fragments.
+        log.debug("spend record failed: %s", type(exc).__name__)
+    return text
 
 
 # Fallback ceiling on a single backoff sleep when ``backoff_max_sec`` is absent
@@ -686,6 +707,9 @@ class GrokClient:
             max_retries=self.retry_max,
             backoff_base=self.retry_backoff,
             backoff_max=self.retry_backoff_max,
+            extract_content=lambda resp: _extract_and_record_spend(
+                "grok", self.model, resp, _extract_content
+            ),
             on_http=lambda e: GrokServiceError(
                 f"Grok HTTP {e.response.status_code}",
                 details={"status": e.response.status_code},
@@ -747,7 +771,9 @@ class ClaudeClient:
             max_retries=self.retry_max,
             backoff_base=self.retry_backoff,
             backoff_max=self.retry_backoff_max,
-            extract_content=_extract_claude_content,
+            extract_content=lambda resp: _extract_and_record_spend(
+                "claude", self.model, resp, _extract_claude_content
+            ),
             on_http=lambda e: ClaudeServiceError(
                 f"Claude HTTP {e.response.status_code}",
                 details={"status": e.response.status_code},

@@ -12,6 +12,7 @@ is monkeypatched. Real ``httpx.Request``/``Response`` objects are used so the
 ``e.response.status_code`` path in the production code runs unmocked.
 """
 
+import json
 import logging
 
 import httpx
@@ -36,6 +37,17 @@ def _clear_local_backend_cache():
     reset_local_backend_cache()
     yield
     reset_local_backend_cache()
+
+
+@pytest.fixture(autouse=True)
+def _spend_ledger(tmp_path, monkeypatch):
+    # Paid generate() now appends spend.jsonl; keep that off the repo tree.
+    ledger = tmp_path / "spend.jsonl"
+    monkeypatch.setattr(
+        "utils.spend._get_config",
+        lambda config_path="config.yaml": {"logging": {"spend_file": str(ledger)}},
+    )
+    return ledger
 
 
 def _write_config(tmp_path, retry: dict = None, local_llm_extra: dict | None = None) -> str:
@@ -115,18 +127,20 @@ class _FakePost:
         return self._response
 
 
-def _ok_response(content: str = "hello from llm") -> httpx.Response:
+def _ok_response(content: str = "hello from llm", usage: dict | None = None) -> httpx.Response:
+    payload: dict = {"choices": [{"message": {"content": content}}]}
+    if usage is not None:
+        payload["usage"] = usage
     req = httpx.Request("POST", _URL)
-    return httpx.Response(
-        200, json={"choices": [{"message": {"content": content}}]}, request=req
-    )
+    return httpx.Response(200, json=payload, request=req)
 
 
-def _claude_ok_response(content: str = "hello from claude") -> httpx.Response:
+def _claude_ok_response(content: str = "hello from claude", usage: dict | None = None) -> httpx.Response:
+    payload: dict = {"content": [{"type": "text", "text": content}]}
+    if usage is not None:
+        payload["usage"] = usage
     req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    return httpx.Response(
-        200, json={"content": [{"type": "text", "text": content}]}, request=req
-    )
+    return httpx.Response(200, json=payload, request=req)
 
 
 def _status_response(status: int, headers: dict | None = None) -> httpx.Response:
@@ -553,6 +567,65 @@ class TestClaudeClient:
         with caplog.at_level(logging.WARNING, logger="llm.client"):
             assert client.generate("a prompt") == "cut off answ"
         assert any("stop_reason=max_tokens" in r.message for r in caplog.records)
+        client.close()
+
+
+# =============================================================================
+# External spend recording (Grok / Claude 2xx only)
+# =============================================================================
+
+class TestExternalSpendRecording:
+    def test_grok_200_with_usage_writes_spend_line(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={"prompt_tokens": 41, "completion_tokens": 104},
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "grok answer"
+        lines = _spend_ledger.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["provider"] == "grok"
+        assert record["model"] == "grok-4.5"
+        assert record["input_tokens"] == 41
+        assert record["output_tokens"] == 104
+        client.close()
+
+    def test_claude_200_with_usage_writes_spend_line(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_claude_ok_response(
+                "claude answer",
+                usage={"input_tokens": 2095, "output_tokens": 503},
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "claude answer"
+        lines = _spend_ledger.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["provider"] == "claude"
+        assert record["model"] == "claude-sonnet-5"
+        assert record["input_tokens"] == 2095
+        assert record["output_tokens"] == 503
+        client.close()
+
+    def test_local_200_with_usage_does_not_write_spend(self, tmp_path, _spend_ledger):
+        client = LocalLLMClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "local answer",
+                usage={"prompt_tokens": 10, "completion_tokens": 20},
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "local answer"
+        assert not _spend_ledger.exists()
         client.close()
 
 
