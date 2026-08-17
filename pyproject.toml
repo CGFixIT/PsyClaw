@@ -151,6 +151,7 @@ packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrai
 "graph.py" = "graph.py"
 "mcp_hybrid_server.py" = "mcp_hybrid_server.py"
 "metrics.py" = "metrics.py"
+"mcp_manifest.json" = "mcp_manifest.json"
 "config.yaml" = "config.yaml"
 "static" = "static"
 "data" = "data"
@@ -159,6 +160,7 @@ packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrai
 [tool.hatch.build.targets.sdist]
 include = [
     "gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
+    "mcp_manifest.json",
     "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval", "memory",
     "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "telegram", "powershell", "macos", "windows",
 ]

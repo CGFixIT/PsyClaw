@@ -21,6 +21,10 @@ apply_telemetry_kill()
 from retrieval.hybrid_search import HybridRetriever  # noqa: E402 - must follow the telemetry kill above
 from utils.errors import PromptInjectionError, RAGError  # noqa: E402 - must follow the telemetry kill above
 from utils.logger import audit_log, redact_sensitive  # noqa: E402 - must follow the telemetry kill above
+from utils.mcp_manifest import (  # noqa: E402 - must follow the telemetry kill above
+    ManifestDriftError,
+    verify_registered_tools,
+)
 from utils.sanitizer import check_input  # noqa: E402 - must follow the telemetry kill above
 
 # Bounds for the client-supplied top_k. The retriever fuses at most
@@ -220,6 +224,21 @@ def handle_message(msg: dict, retriever: HybridRetriever) -> dict | None:
     return _error(msg_id, -32601, f"Unknown method: {method}")
 
 def main():
+    # E2 (#974): refuse to serve if registered TOOLS drifted from the
+    # committed pin. Compare before HybridRetriever so a rug-pulled
+    # description never opens the index. Hashes only in the audit event.
+    try:
+        verify_registered_tools(TOOLS)
+    except ManifestDriftError as exc:
+        audit_log({
+            "event": "mcp_manifest_drift",
+            "expected": exc.expected,
+            "actual": exc.actual,
+        })
+        sys.stderr.write(
+            f"[MCP] Tool manifest drift (expected {exc.expected}, actual {exc.actual})\n"
+        )
+        sys.exit(1)
     try:
         retriever = HybridRetriever()
     except Exception as e:
