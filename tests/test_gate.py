@@ -9,10 +9,12 @@ Tests the HTTP layer including:
 """
 
 import copy
+import json
 import re
 
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from tests.conftest import (
@@ -71,25 +73,31 @@ def client(tmp_path):
         # Patch module-level variables
         import gate
         gate.cfg = cfg
-        gate.retriever = retriever
-        gate.local_llm = llm
-        gate.grok = None
-        gate.claude = None
-        gate.compiled_graph = mock_graph
+        _globals = ("retriever", "local_llm", "grok", "claude", "compiled_graph")
+        _saved = {k: getattr(gate, k, None) for k in _globals}
+        try:
+            gate.retriever = retriever
+            gate.local_llm = llm
+            gate.grok = None
+            gate.claude = None
+            gate.compiled_graph = mock_graph
 
-        # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
-        # (added at import from the real config.yaml allowed_hosts) admits the
-        # request; the default "testserver" host would otherwise 400.
-        client = TestClient(
-            gate.app,
-            base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
-            # Starlette defaults the peer to ("testclient", 50000), which is
-            # deliberately NOT loopback under _is_loopback_peer. Set a real
-            # loopback peer so tests exercise the ordinary local-operator case;
-            # the non-loopback case is asserted explicitly in TestApiKeyOptionalPeer.
-            client=("127.0.0.1", 51234),  # DevSkim: ignore DS162092,DS137138
-        )
-        yield client, mock_graph
+            # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
+            # (added at import from the real config.yaml allowed_hosts) admits the
+            # request; the default "testserver" host would otherwise 400.
+            client = TestClient(
+                gate.app,
+                base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+                # Starlette defaults the peer to ("testclient", 50000), which is
+                # deliberately NOT loopback under _is_loopback_peer. Set a real
+                # loopback peer so tests exercise the ordinary local-operator case;
+                # the non-loopback case is asserted explicitly in TestApiKeyOptionalPeer.
+                client=("127.0.0.1", 51234),  # DevSkim: ignore DS162092,DS137138
+            )
+            yield client, mock_graph
+        finally:
+            for k, v in _saved.items():
+                setattr(gate, k, v)
 
     reset_config_cache()
 
@@ -1675,3 +1683,68 @@ class TestBootPersonalityEnabled:
     def test_non_mapping_personality_block_fails_closed(self, bad):
         import gate
         assert gate._boot_personality_enabled(bad) is False
+
+
+class TestQueryResponseHandling:
+    def test_skipped_sources_are_logged_but_dont_break_response(self, client, tmp_path):
+        """Non-dict entries in answer_sources are dropped with an audit event;
+        the response still 200s and only the valid dicts surface as SourceInfo."""
+        test_client, mock_graph = client
+        mock_graph.invoke.return_value = {
+            "query": "q",
+            "answer": "answer",
+            "answer_model": "local",
+            "answer_sources": [
+                {"source": "valid.md", "score": 0.9, "chunk_id": 0},
+                "not-a-dict",
+                {"source": "also_valid.md", "score": 0.8, "chunk_id": 1},
+                123,
+            ],
+            "retrieved_docs": [],
+            "top_score": 0.9,
+            "retrieval_mode": "hybrid",
+            "needs_user_confirm": False,
+            "audit_event": {},
+        }
+
+        resp = test_client.post("/query", json={"query": "q"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["sources"]) == 2
+        assert {s["source"] for s in data["sources"]} == {"valid.md", "also_valid.md"}
+
+        # skipped_sources audit event must be written.
+        audit_lines = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+        skipped = [json.loads(line) for line in audit_lines if json.loads(line).get("event") == "skipped_sources"]
+        assert len(skipped) == 1
+        assert skipped[0]["skipped_count"] == 2
+
+
+class TestAuditRoleGuard:
+    def test_audit_role_cannot_call_query(self):
+        """_forbid_audit_query blocks the audit role from /query while leaving
+        other roles and unauthenticated users alone."""
+        import gate
+
+        user = MagicMock()
+        user.role = "audit"
+        manager = MagicMock()
+        manager.get_user.return_value = user
+
+        saved = getattr(gate, "auth_manager", None)
+        gate.auth_manager = manager
+        try:
+            with pytest.raises(HTTPException) as ei:
+                gate._forbid_audit_query("eve")
+            assert ei.value.status_code == 403
+            assert ei.value.detail["code"] == "AUTH_ROLE_DENIED"
+
+            # Non-audit role passes.
+            user.role = "operator"
+            gate._forbid_audit_query("alice")  # no exception
+
+            # Missing user / no auth manager also passes.
+            manager.get_user.return_value = None
+            gate._forbid_audit_query("ghost")
+        finally:
+            gate.auth_manager = saved
