@@ -6,9 +6,6 @@ No wall-clock sleeps: subprocess.run is monkeypatched.
 from __future__ import annotations
 
 import subprocess
-from unittest.mock import MagicMock
-
-import pytest
 
 from utils.external_pre_hook import (
     DEFAULT_TIMEOUT_SEC,
