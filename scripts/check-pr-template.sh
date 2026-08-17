@@ -8,8 +8,8 @@
 #
 # Exit 0 = ok; exit 1 = missing required sections.
 # Git hooks cannot intercept GitHub API / gh pr create bodies — agents and
-# humans should run this before opening a PR. CI also runs an advisory check
-# (.github/workflows/pr-template-check.yml).
+# humans should run this before opening a PR. CI runs the same headers as a
+# blocking check (.github/workflows/pr-template-check.yml).
 set -euo pipefail
 
 input="${1:-${CYCLAW_PR_BODY_FILE:-}}"

@@ -66,13 +66,19 @@ def gate_client(tmp_path):
 
         import gate
         gate.cfg = cfg
-        gate.retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
-        gate.local_llm = MockLocalLLM()
-        gate.grok = None
-        gate.compiled_graph = mock_graph
+        _globals = ("retriever", "local_llm", "grok", "compiled_graph")
+        _saved = {k: getattr(gate, k, None) for k in _globals}
+        try:
+            gate.retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+            gate.local_llm = MockLocalLLM()
+            gate.grok = None
+            gate.compiled_graph = mock_graph
 
-        client = TestClient(gate.app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138
-        yield client, mock_graph
+            client = TestClient(gate.app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138
+            yield client, mock_graph
+        finally:
+            for k, v in _saved.items():
+                setattr(gate, k, v)
 
     reset_config_cache()
 
