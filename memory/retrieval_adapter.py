@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from retrieval.hybrid_search import SearchResult
+    from retrieval.results import SearchResult
 
 logger = logging.getLogger("cyclaw.memory.retrieval")
 
@@ -21,7 +21,7 @@ def fuse_memory_hits(
     Callers in hybrid_search must still wrap in try/except. This function is
     defensive but may raise on programmer error; hooks catch everything.
     """
-    from retrieval.hybrid_search import SearchResult as SR  # lazy — avoids import cost when unused
+    from retrieval.results import SearchResult as SR  # lazy — no hybrid_search / Chroma stack
 
     mem = cfg.get("memory") or {}
     if mem.get("enabled") is not True:

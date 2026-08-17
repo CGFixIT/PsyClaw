@@ -521,11 +521,10 @@ class TestSecurityResponseHeaders:
         """Widen the check above from "/" to every page the static mount serves.
 
         The test above only fetches "/", which is terminal.html. gate.py mounts
-        the whole static/ directory, so extractor.html was served under the same
-        strict CSP with the same inline-script defect and stayed invisible --
-        fixing one page did not prove the other was fixed. Walking the directory
-        means a newly added page with an inline block fails here rather than
-        shipping inert.
+        the whole static/ directory, so a second HTML page with the same
+        inline-script defect would stay invisible if we only checked "/".
+        Walking the directory means a newly added page with an inline block
+        fails here rather than shipping inert.
 
         harness.html is the one deliberate exemption. It lives in static/ but its
         working home is harness/server.py on :8790, which sends a different (much

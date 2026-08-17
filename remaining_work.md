@@ -1,6 +1,6 @@
 # Remaining work
 
-Live checklist as of **2026-08-16**, `origin/main` `961f2c59`.
+Live checklist as of **2026-08-16**, `origin/main` `10f6d03f`.
 
 Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 [`docs/zWork/remaining_work_STALE.md`](docs/zWork/remaining_work_STALE.md)
@@ -26,17 +26,23 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 - **NeMo 4b `check_soul_leak`** — listed in `guardrails.output_rails`, not fully built. `docs/NeMo/phase4b_soul_leak.md`
 - **Agentic loop is GitHub-clone-only** — no local-directory attach. Capability boundary, not a bug
 
+## Shipped in tree (GitHub issue may still be open)
+
+- Spend ledger — merged as [#975](https://github.com/cgfixit/CyClaw/pull/975); issue [#958](https://github.com/cgfixit/CyClaw/issues/958) is still open (close-out, not a re-implement)
+- Numbat emitter — merged as [#973](https://github.com/cgfixit/CyClaw/pull/973); issue [#959](https://github.com/cgfixit/CyClaw/issues/959) is **closed**
+- Graph outcome battery — runner + rows in [#969](https://github.com/cgfixit/CyClaw/pull/969) / [#971](https://github.com/cgfixit/CyClaw/pull/971) / [#976](https://github.com/cgfixit/CyClaw/pull/976); issue [#960](https://github.com/cgfixit/CyClaw/issues/960) is **closed**
+- Numbat rules-test fixture job — merged as [#981](https://github.com/cgfixit/CyClaw/pull/981); issue [#961](https://github.com/cgfixit/CyClaw/issues/961) is still open (close-out)
+
 ## Open GitHub issues (re-list before acting)
 
 | # | Title | Notes |
 |---|---|---|
-| [#958](https://github.com/cgfixit/CyClaw/issues/958) | Spend ledger | Researched; later session |
-| [#959](https://github.com/cgfixit/CyClaw/issues/959) | Numbat emitter | 1–2 day |
-| [#960](https://github.com/cgfixit/CyClaw/issues/960) | Graph outcome battery | Runner landed in #969; more JSONL rows remain |
-| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Blocked on #959 |
+| [#958](https://github.com/cgfixit/CyClaw/issues/958) | Spend ledger | Shipped in #975; issue not closed |
+| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Static fixture job shipped in #981 (`continue-on-error`). Live-jail generator job was dropped: 0.1.2 CLI rejects 0.2.0 `command.exec` fields before rules run. Issue not closed. |
 | [#962](https://github.com/cgfixit/CyClaw/issues/962) | LLM-as-judge | Stretch |
 | [#963](https://github.com/cgfixit/CyClaw/issues/963) | Pre-action hook | 2–3 day, graph-adjacent |
 | [#964](https://github.com/cgfixit/CyClaw/issues/964) | Memory arena | Stretch |
-| [#965](https://github.com/cgfixit/CyClaw/issues/965) / [#966](https://github.com/cgfixit/CyClaw/issues/966) | Deferred | Wait on #959 / #963 |
+| [#965](https://github.com/cgfixit/CyClaw/issues/965) / [#966](https://github.com/cgfixit/CyClaw/issues/966) | Deferred | Wait on #963 (965 was waiting on #959, now closed) |
+| [#974](https://github.com/cgfixit/CyClaw/issues/974) | MCP hardening | stdio-first transport / pinned manifest |
 
 Ignore PR #415 if it is still the labeled ignore-PR.

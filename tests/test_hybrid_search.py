@@ -39,6 +39,12 @@ def _bind_hybrid_helpers(fake: SimpleNamespace) -> SimpleNamespace:
     return fake
 
 
+def test_search_result_reexported_from_results() -> None:
+    from retrieval.results import SearchResult as FromResults
+
+    assert SearchResult is FromResults
+
+
 class TestRRFFusion:
     """Test Reciprocal Rank Fusion math independently."""
 

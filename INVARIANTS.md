@@ -184,16 +184,26 @@ already declared"; the flag is not a guard.
 
 ---
 
-## Rule 9 — the core three never import the out-of-band packages
+## Rule 9 — the core request-path modules never import the out-of-band packages
 
-**Must never change:** `gate.py`, `graph.py`, and `mcp_hybrid_server.py` never import
-`agentic`, `sync`, or `guardrails` (and those never import the core three). The
-`/ops/*` routes reach the out-of-band CLIs only through `utils/ops_runner.py`, a
-`subprocess.run([...])` shim — never an import. This isolation is what keeps the
-out-of-band subsystems from becoming a path around the security invariants.
+**Must never change:** `gate.py`, `gate_ops.py`, `gate_auth.py`, `gate_memory.py`,
+`graph.py`, and `mcp_hybrid_server.py` never import `agentic`, `sync`,
+`guardrails`, `harness`, or `telegram` (and those packages never import the
+core six). The `/ops/*` routes reach the out-of-band CLIs only through
+`utils/ops_runner.py`, a `subprocess.run([...])` shim — never an import. This
+isolation is what keeps the out-of-band subsystems from becoming a path around
+the security invariants.
 
-**Proven by:** `TestCoreModuleIsolation.test_core_modules_never_import_out_of_band`
-and `tests/test_agentic_isolation.py` (AST, both directions). Also invariant-guard I6.
+`memory/` is **not** in this out-of-band set. It is default-off and
+lazy-imported from `gate_memory.py`, `graph.py`, and
+`retrieval/hybrid_search.py`. Its isolation contract is
+`tests/test_memory_isolation.py`.
+
+**Proven by:** invariant-guard I6 (AST, both directions, six core vs five OOB).
+A narrower characterization (`gate` / `gate_ops` / `graph` / `mcp` vs
+`agentic` / `sync` / `guardrails`) remains in
+`TestCoreModuleIsolation.test_core_modules_never_import_out_of_band` and
+`tests/test_agentic_isolation.py`.
 
 ---
 
