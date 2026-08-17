@@ -74,11 +74,14 @@ jobs:
       # above unfiltered.
       - name: Detect image-relevant changes
         id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "docker_changed=true" >> "$GITHUB_OUTPUT"
           else
-            non_docs=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -vE '^(docs/|\.claude/)' || true)
+            non_docs=$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -vE '^(docs/|\.claude/)' || true)
             if [ -n "$non_docs" ]; then
               echo "docker_changed=true" >> "$GITHUB_OUTPUT"
             else
