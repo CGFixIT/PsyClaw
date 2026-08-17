@@ -71,7 +71,7 @@ Phone (Telegram cloud)
               │  httpx → http://127.0.0.1:8787/query
               ▼
 ┌───────────────────────────┐
-│  gate.py → 10-node graph  │  I1–I5 unchanged
+│  gate.py → 12-node graph  │  I1–I5 unchanged
 │  retrieve → … → audit     │
 └───────────────────────────┘
 ```
