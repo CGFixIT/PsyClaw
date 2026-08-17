@@ -31,7 +31,7 @@ the GitHub connector API. For that layer:
 
 1. **Always** fill [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md) fully when opening a PR (required for Grok Build + GitHub connector on cgfixit/CyClaw).
 2. **Local check:** `scripts/check-pr-template.sh path/to/body.md` before create.
-3. **CI:** advisory sticky comment via `.github/workflows/pr-template-check.yml`.
+3. **CI:** blocking check via `.github/workflows/pr-template-check.yml` (same headers as `scripts/check-pr-template.sh`).
 
 Example:
 
