@@ -267,6 +267,43 @@ def test_hash_changed_files_tolerates_cross_drive_commonpath_valueerror(monkeypa
     assert out[0].sha256 is None
 
 
+def test_hash_changed_files_skips_symlink_escape(tmp_path):
+    """A symlink inside local_root that points outside must not be hashed."""
+    root = tmp_path / "corpus"
+    root.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = root / "link.txt"
+    try:
+        os.symlink(str(outside), str(link))
+    except OSError:
+        pytest.skip("symlink creation not supported on this platform")
+
+    out = hash_changed_files([FileEvent(kind="modified", path="link.txt")], str(root))
+
+    assert len(out) == 1
+    assert out[0].sha256 is None
+
+
+def test_reindex_exit_code_for_dry_run_is_zero_even_when_corpus_changed():
+    """--dry-run previews changes; it must never signal a real reindex."""
+    cfg = _make_cfg(Path("/tmp"), reindex_on_change=True)
+    result = SyncResult(
+        success=True,
+        direction="dry-run",
+        started_at=0.0,
+        finished_at=0.0,
+        rclone_exit_code=0,
+        events=[],
+        errors=[],
+        log_path=None,
+        aborted_for_safety=False,
+        dry_run=True,
+        corpus_changed=True,
+    )
+    assert reindex_exit_code_for(result, cfg) == 0
+
+
 # ---------------------------------------------------------------------------
 # Audit dicts -- "file" key, never "query", no secret fields
 # ---------------------------------------------------------------------------

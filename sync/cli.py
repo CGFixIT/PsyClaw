@@ -448,7 +448,7 @@ def main(argv: list[str] | None = None) -> int:
     except SyncConfigError as exc:
         _print_typed_error(exc)
         return EXIT_ENV
-    except (RcloneNotInstalledError, RcloneVersionError) as exc:
+    except (RcloneNotInstalledError, RcloneTimeoutError, RcloneVersionError) as exc:
         _print_typed_error(exc)
         return EXIT_ENV
     except SyncError as exc:

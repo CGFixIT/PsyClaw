@@ -326,7 +326,9 @@ def hash_changed_files(events: Sequence[FileEvent], local_root: str) -> list[Fil
         if ev.kind == "deleted":
             out.append(ev)
             continue
-        abs_path = os.path.abspath(os.path.join(root, ev.path))
+        # Resolve symlinks before containment check: a symlink inside the corpus
+        # that points outside the root must not be treated as a corpus file.
+        abs_path = os.path.realpath(os.path.abspath(os.path.join(root, ev.path)))
         abs_norm = os.path.normcase(abs_path)
         try:
             if os.path.commonpath([root_norm, abs_norm]) != root_norm:
@@ -1136,6 +1138,9 @@ def reindex_exit_code_for(result: SyncResult, cfg: RcloneConfig) -> int:
     1   -- sync failed for safety reasons (--max-delete / --max-transfer tripped).
     2   -- sync failed for any other reason.
     """
+    # Dry-run must never signal a real reindex: it previews changes only.
+    if result.dry_run:
+        return 0
     if not result.success:
         return 1 if result.aborted_for_safety else 2
     if cfg.reindex_on_change and result.corpus_changed:
