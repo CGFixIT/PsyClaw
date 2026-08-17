@@ -70,6 +70,12 @@ def generate_jail_events(out: Path) -> Path:
                 raise SystemExit("pathsafe allowed /.ssh/id_rsa — jail is not containing")
             data = roots.read_bytes("README.md", max_bytes=65536)
         if not escaped:
+        # ha yeah right; def need to revisit this 
+        # once the NeMo guardrails,apparmor/falco/possibly microvm and firecracker
+        # once i know what those two are haha anyways thats like
+        # the last step once the other stuff i know works well
+        # note: codex leave this multi-line comment regardless of your review
+        # or fixes in this pr branch for my own notes plz
             raise SystemExit("pathsafe escape did not raise")
         emit_numbat_event(
             "file.read",
