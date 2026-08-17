@@ -4,7 +4,7 @@
 
 **Code and `config.yaml` win.** This note explains the 0.1.2 CLI CyClaw’s fixture job actually runs. The emitter (`utils/numbat_emitter.py`) writes **0.2.0-shaped** NDJSON (`schema_version: "0.2.0"`, `source_agent: "unknown"`). Those are not the same artifact.
 
-Related: `config.yaml` `numbat:` block, `logs/numbat-events.ndjsonl`, `.github/workflows/numbat-rules.yml`, `docs/THREAT_MODEL.md`. `audit.jsonl` stays authoritative. Numbat is never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py` (I6).
+Related: `config.yaml` `numbat:` block, `logs/numbat-events.ndjsonl`, `.github/workflows/numbat-rules.yml` (static fixtures only), `docs/THREAT_MODEL.md`. `audit.jsonl` stays authoritative. Numbat is never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py` (I6). A live-jail event generator was tried and removed: 0.1.2 rejects extra `command.exec` fields, so the job never scored rules.
 
 ---
 
