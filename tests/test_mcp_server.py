@@ -31,6 +31,7 @@ from mcp_hybrid_server import CAPABILITIES, TOOLS, handle_message
 from retrieval.hybrid_search import SearchResult
 from utils.errors import RAGError
 from utils.logger import audit_log as _real_audit_log, hash_query, reset_config_cache
+from utils.mcp_manifest import compare_registered_tools, manifest_fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +677,56 @@ def test_tools_call_unknown_tool_returns_error_32601(retriever):
     resp = handle_message(msg, retriever)
     assert resp["error"]["code"] == -32601
     assert "Unknown tool" in resp["error"]["message"]
+
+
+def test_committed_manifest_matches_registered_tools():
+    """The repo-root pin must fingerprint to the live TOOLS export.
+
+    A committed pin that does not match would make every `main()` start fail
+    closed. Drive the shipped compare function, not a second hash.
+    """
+    result = compare_registered_tools(TOOLS)
+    assert result.ok is True
+    assert result.expected == result.actual
+
+
+def test_main_exits_1_on_manifest_drift(monkeypatch, capsys, tmp_path):
+    """A planted tool-description change must refuse to serve (no retriever).
+
+    Uses the shipped verify against a tmp pin — not a mocked exception.
+    """
+    planted = json.loads(json.dumps(TOOLS))
+    planted[0]["description"] = "planted rug pull"
+    pin = tmp_path / "mcp_manifest.json"
+    pin.write_text(json.dumps(planted), encoding="utf-8")
+    monkeypatch.setattr("utils.mcp_manifest.DEFAULT_MANIFEST_PATH", pin)
+
+    audit_file = tmp_path / "audit.jsonl"
+    cfg = {
+        "logging": {"audit_file": str(audit_file), "audit_fields": {"include_query_hash": True}},
+    }
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(cfg, f)
+    reset_config_cache()
+    monkeypatch.setattr("utils.logger._get_config", lambda *_a, **_kw: cfg)
+    monkeypatch.setattr(
+        mcp_hybrid_server, "audit_log",
+        lambda event: _real_audit_log(event, config_path=str(config_path)),
+    )
+    retriever_ctor = MagicMock()
+    monkeypatch.setattr(mcp_hybrid_server, "HybridRetriever", retriever_ctor)
+    with pytest.raises(SystemExit) as exc:
+        mcp_hybrid_server.main()
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "Tool manifest drift" in err
+    retriever_ctor.assert_not_called()
+    event = json.loads(audit_file.read_text().strip())
+    assert event["event"] == "mcp_manifest_drift"
+    assert event["expected"] == manifest_fingerprint(planted)
+    assert event["actual"] == manifest_fingerprint(TOOLS)
+    reset_config_cache()
 
 
 def test_main_exits_1_when_retriever_init_fails(monkeypatch, capsys):

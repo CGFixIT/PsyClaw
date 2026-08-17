@@ -1,0 +1,26 @@
+[
+  {
+    "name": "hybrid_search",
+    "description": "Search local .md corpus using semantic + keyword retrieval with RRF fusion",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "Search query"},
+        "top_k": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Max results (clamped to [1, 50] server-side; non-integer or out-of-range values fall back to the default of 5)"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["hybrid", "semantic", "keyword"],
+          "default": "hybrid",
+          "description": "Retrieval mode"
+        }
+      },
+      "required": ["query"]
+    }
+  }
+]

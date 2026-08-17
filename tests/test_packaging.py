@@ -55,6 +55,18 @@ def test_wheel_force_includes_every_top_level_module() -> None:
     )
 
 
+def test_wheel_and_sdist_ship_mcp_manifest_pin() -> None:
+    """#974 E2: a wheel without the pin would fail closed at every `cyclaw-mcp` start."""
+    cfg = _load_pyproject()
+    force_include = cfg["tool"]["hatch"]["build"]["targets"]["wheel"].get("force-include", {})
+    assert "mcp_manifest.json" in force_include, (
+        "wheel force-include is missing mcp_manifest.json — cyclaw-mcp from a "
+        "real pip install would refuse to start (missing pin)."
+    )
+    sdist_include = set(cfg["tool"]["hatch"]["build"]["targets"]["sdist"]["include"])
+    assert "mcp_manifest.json" in sdist_include
+
+
 def test_wheel_packages_includes_memory() -> None:
     cfg = _load_pyproject()
     wheel_cfg = cfg["tool"]["hatch"]["build"]["targets"]["wheel"]

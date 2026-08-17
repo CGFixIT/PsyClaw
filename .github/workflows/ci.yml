@@ -758,6 +758,7 @@ jobs:
             --cov=utils.logger \
             --cov=utils.numbat_emitter \
             --cov=utils.spend \
+            --cov=utils.mcp_manifest \
             --cov=utils.personality \
             --cov=utils.personality_db \
             --cov=utils.ratelimit \
