@@ -23,6 +23,7 @@ from sync.cli import (
 from sync.config import RcloneConfig
 from utils.errors import (
     RcloneNotInstalledError,
+    RcloneTimeoutError,
     SchedulerError,
     SyncConfigError,
     SyncRuntimeError,
@@ -90,6 +91,13 @@ def test_sync_other_failure_exit_2():
 def test_sync_rclone_missing_exit_3():
     with patch("sync.cli.load_sync_config", return_value=_cfg()), \
          patch("sync.cli.run_sync", side_effect=RcloneNotInstalledError("nope")):
+        assert main(["sync"]) == EXIT_ENV
+
+
+def test_sync_rclone_timeout_exit_3():
+    """RcloneTimeoutError in cmd_sync is already mapped to EXIT_ENV; main() must too."""
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.run_sync", side_effect=RcloneTimeoutError("wall clock expired")):
         assert main(["sync"]) == EXIT_ENV
 
 
