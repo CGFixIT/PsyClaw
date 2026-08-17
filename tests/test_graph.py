@@ -21,7 +21,7 @@ from graph import (
     offline_best_effort_node, grok_fallback_node, claude_fallback_node,
     audit_logger_node, guardrail_input_node, guardrail_output_node, guardrail_router,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
-    _context_char_budget, _format_context_chunks, SECTION_SEP,
+    _context_char_budget, _format_context_chunks, SECTION_SEP, _llm_identity,
 )
 from tests.conftest import (
     MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
@@ -694,20 +694,23 @@ class TestGrokFallbackPrompt:
     def test_grok_reports_no_fabricated_sources(self, tmp_path):
         # Grok answers from its own knowledge, not a cited local document. The
         # node must NOT fabricate a "Grok Fallback" source stub (which would
-        # surface as a meaningless null-scored source to the client). With or
-        # without forwarded context, answer_sources must be an empty list.
+        # surface as a meaningless null-scored source to the client).
+        # When no context is forwarded, answer_sources is empty. When context is
+        # forwarded, audit.jsonl must record exactly which corpus chunks left
+        # the machine.
         grok = MockGrokClient()
-        state = {
-            "query": "what is RRF?",
-            "retrieved_docs": [
-                {"text": "reciprocal rank fusion", "score": 0.30,
-                 "source": "rrf.md", "chunk_id": 0},
-            ],
-        }
-        for send_ctx in (True, False):
-            result = grok_fallback_node(state, grok=grok, cfg=self._cfg(send_ctx))
-            assert result["answer_model"] == "grok"
-            assert result["answer_sources"] == []
+        docs = [
+            {"text": "reciprocal rank fusion", "score": 0.30,
+             "source": "rrf.md", "chunk_id": 0},
+        ]
+        state = {"query": "what is RRF?", "retrieved_docs": docs}
+        result = grok_fallback_node(state, grok=grok, cfg=self._cfg(send_ctx=False))
+        assert result["answer_model"] == "grok"
+        assert result["answer_sources"] == []
+
+        result = grok_fallback_node(state, grok=grok, cfg=self._cfg(send_ctx=True))
+        assert result["answer_model"] == "grok"
+        assert result["answer_sources"] == docs
 
     def test_no_context_forwarded_sends_query_only(self, tmp_path):
         grok = MockGrokClient()
@@ -787,7 +790,7 @@ class TestGrokFallbackPrompt:
 
     def test_grok_none_degrades_without_crash(self, tmp_path):
         result = grok_fallback_node({"query": "x"}, grok=None, cfg=self._cfg(False))
-        assert result["answer_model"] == "offline-best-effort"
+        assert result["answer_model"] == "external-unavailable"
 
 
 class TestClaudeFallbackPrompt:
@@ -824,18 +827,22 @@ class TestClaudeFallbackPrompt:
         assert result["answer"] == claude.response
 
     def test_claude_reports_no_fabricated_sources(self, tmp_path):
+        # Claude answers from its own knowledge, not a cited local document. The
+        # node must NOT fabricate a "Claude Fallback" source stub.
+        # With forwarded context, audit.jsonl records the forwarded chunks.
         claude = MockClaudeClient()
-        state = {
-            "query": "what is RRF?",
-            "retrieved_docs": [
-                {"text": "reciprocal rank fusion", "score": 0.30,
-                 "source": "rrf.md", "chunk_id": 0},
-            ],
-        }
-        for send_ctx in (True, False):
-            result = claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx))
-            assert result["answer_model"] == "claude"
-            assert result["answer_sources"] == []
+        docs = [
+            {"text": "reciprocal rank fusion", "score": 0.30,
+             "source": "rrf.md", "chunk_id": 0},
+        ]
+        state = {"query": "what is RRF?", "retrieved_docs": docs}
+        result = claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx=False))
+        assert result["answer_model"] == "claude"
+        assert result["answer_sources"] == []
+
+        result = claude_fallback_node(state, claude=claude, cfg=self._cfg(send_ctx=True))
+        assert result["answer_model"] == "claude"
+        assert result["answer_sources"] == docs
 
     def test_no_context_forwarded_sends_query_only(self, tmp_path):
         claude = MockClaudeClient()
@@ -900,7 +907,7 @@ class TestClaudeFallbackPrompt:
 
     def test_claude_none_degrades_without_crash(self, tmp_path):
         result = claude_fallback_node({"query": "x"}, claude=None, cfg=self._cfg(False))
-        assert result["answer_model"] == "offline-best-effort"
+        assert result["answer_model"] == "external-unavailable"
 
 
 # A poisoned corpus document embedding the exact static markers the prompt
@@ -1751,3 +1758,33 @@ class TestGuardrailOutputGraphIntegration:
             "claude_fallback never reached guardrail_output_node -- the edge "
             "wiring regressed"
         )
+
+
+class TestLLMIdentityMappings:
+    """_llm_identity must not conflate distinct no-model states in audit.jsonl."""
+
+    @pytest.fixture
+    def cfg(self):
+        return {"models": {"local_llm": {"model": "qwen-test"}}}
+
+    def test_hook_denied_is_distinct_from_user_gate_pause(self, cfg):
+        identity = _llm_identity("hook-denied", cfg)
+        assert identity["llm_model"] is None
+        assert "hook denied" in identity["llm"]
+        assert "awaiting online confirmation" not in identity["llm"]
+
+    def test_external_unavailable_is_distinct_from_offline_best_effort(self, cfg):
+        identity = _llm_identity("external-unavailable", cfg)
+        assert identity["llm_model"] is None
+        assert "unavailable" in identity["llm"]
+        assert "best-effort" not in identity["llm"]
+
+    def test_guardrail_blocked_unchanged(self, cfg):
+        identity = _llm_identity("guardrail-blocked", cfg)
+        assert identity["llm_model"] is None
+        assert "blocked by guardrail" in identity["llm"]
+
+    def test_offline_best_effort_still_reports_local_model(self, cfg):
+        identity = _llm_identity("offline-best-effort", cfg)
+        assert identity["llm_model"] == "qwen-test"
+        assert "offline best-effort local" in identity["llm"]

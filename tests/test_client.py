@@ -638,6 +638,30 @@ class TestExternalSpendRecording:
         assert not _spend_ledger.exists()
         client.close()
 
+    def test_grok_200_with_bad_content_still_records_spend(self, tmp_path, monkeypatch, _spend_ledger):
+        # A billed 200 whose content extraction raises (e.g. max_tokens with no
+        # text) must still reach the spend ledger.
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        req = httpx.Request("POST", "https://api.x.ai/v1/chat/completions")
+        bad = httpx.Response(
+            200,
+            json={"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 0}},
+            request=req,
+        )
+        client._client.post = _FakePost(response=bad)
+
+        with pytest.raises(GrokServiceError):
+            client.generate("a prompt")
+
+        lines = _spend_ledger.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["provider"] == "grok"
+        assert record["input_tokens"] == 7
+        assert record["output_tokens"] == 0
+        client.close()
+
 
 # =============================================================================
 # Retry / exponential backoff (shared _post_with_retry helper)
