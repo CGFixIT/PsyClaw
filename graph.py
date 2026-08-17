@@ -148,7 +148,7 @@ class GraphState(TypedDict, total=False):
 
     # Model outputs
     answer: str
-    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked" | "hook-denied"
+    answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked" | "hook-denied" | "external-unavailable"
     answer_sources: list[RetrievedDoc]
 
     # Guardrail (Phase 2 offline input rail; only set when a guard is configured)
@@ -575,7 +575,7 @@ def _external_fallback_node(
         )
         return {
             "answer": f"[{label} unavailable: offline mode or {label} disabled — no external fallback executed]",
-            "answer_model": "offline-best-effort",
+            "answer_model": "external-unavailable",
             "answer_sources": []
         }
 
@@ -600,8 +600,9 @@ def _external_fallback_node(
             )
         return f"USER QUERY: {query}"
 
+    included_docs: list[RetrievedDoc] = []
     if send_ctx:
-        context, _included_docs = _format_context_chunks(docs, limit=3, char_cap=200)
+        context, included_docs = _format_context_chunks(docs, limit=3, char_cap=200)
     else:
         context = ""
     prompt = _assemble(context)
@@ -625,7 +626,7 @@ def _external_fallback_node(
             framing_overhead = len(_assemble(""))
             ctx_budget = max_chars - framing_overhead
             if ctx_budget > 0:
-                context, _included_docs = _format_context_chunks(
+                context, included_docs = _format_context_chunks(
                     docs, limit=3, char_cap=200, total_char_budget=ctx_budget,
                 )
                 prompt = _assemble(context)
@@ -634,6 +635,7 @@ def _external_fallback_node(
                 # drop the context entirely and fall back to a query-only prompt
                 # that still preserves the USER QUERY label.
                 prompt = f"USER QUERY: {query}"
+                included_docs = []
             if len(prompt) > max_chars:
                 # Defensive tail slice for the residual no-context (or
                 # query-too-long) case; matches legacy behaviour for the no-ctx
@@ -659,11 +661,12 @@ def _external_fallback_node(
     # retrieval metadata (no semantic/keyword/rrf scores) and would surface to
     # the client (gate.py -> SourceInfo) as a meaningless null-scored "source".
     # The provider answered from its own knowledge, not from a cited local
-    # document, so report no sources rather than a fake one.
+    # document, so report no sources unless we explicitly forwarded those docs
+    # in the prompt (in which case audit.jsonl must show what left the machine).
     out: dict = {
         "answer": answer,
         "answer_model": provider,
-        "answer_sources": [],
+        "answer_sources": included_docs,
     }
     if error is not None:
         out["error"] = error
@@ -780,6 +783,10 @@ def _llm_identity(answer_model: str, cfg: dict) -> dict:
         }
     if answer_model == "guardrail-blocked":
         return {"llm": "none: blocked by guardrail", "llm_model": None}
+    if answer_model == "hook-denied":
+        return {"llm": "none: pre-action hook denied", "llm_model": None}
+    if answer_model == "external-unavailable":
+        return {"llm": "none: external provider unavailable", "llm_model": None}
     # Empty answer_model is the user_gate pause -- the human has not yet chosen
     # online or offline, so nothing has run.
     return {"llm": "none: awaiting online confirmation", "llm_model": None}

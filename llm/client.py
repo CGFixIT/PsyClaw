@@ -141,17 +141,21 @@ def _extract_and_record_spend(
     resp: httpx.Response,
     extract: Callable[[httpx.Response], str],
 ) -> str:
-    """Extract the user-visible answer, then append one spend line.
+    """Extract the user-visible answer and append one spend line.
 
+    Spend is recorded regardless of whether extraction succeeds, because a
+    billed 200 response (e.g. stop_reason=max_tokens) still consumes quota.
     Spend failures must not change the answer. Extract still raises as-is.
     """
-    text = extract(resp)
     try:
-        usage = resp.json().get("usage")
-        record_external_usage(provider=provider, model=model, usage=usage)
-    except Exception as exc:
-        # Type-only: spend is best-effort and must not leak body fragments.
-        log.debug("spend record failed: %s", type(exc).__name__)
+        text = extract(resp)
+    finally:
+        try:
+            usage = resp.json().get("usage")
+            record_external_usage(provider=provider, model=model, usage=usage)
+        except Exception as exc:
+            # Type-only: spend is best-effort and must not leak body fragments.
+            log.debug("spend record failed: %s", type(exc).__name__)
     return text
 
 
