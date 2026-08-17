@@ -786,7 +786,7 @@ def _llm_identity(answer_model: str, cfg: dict) -> dict:
     if answer_model == "hook-denied":
         return {"llm": "none: pre-action hook denied", "llm_model": None}
     if answer_model == "external-unavailable":
-        return {"llm": f"none: external provider unavailable", "llm_model": None}
+        return {"llm": "none: external provider unavailable", "llm_model": None}
     # Empty answer_model is the user_gate pause -- the human has not yet chosen
     # online or offline, so nothing has run.
     return {"llm": "none: awaiting online confirmation", "llm_model": None}
