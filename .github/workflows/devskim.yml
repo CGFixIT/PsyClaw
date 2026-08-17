@@ -40,37 +40,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Optional: set up Python & install deps so DevSkim understands imports
-      # No `cache: "pip"` here on purpose: this job runs on `pull_request`
-      # (including branches whose diff this job doesn't otherwise gate) *and*
-      # on `schedule`/`push` to main. A pip cache written by an untrusted PR
-      # run and later restored by the trusted scheduled/main run is a cache-
-      # poisoning vector (zizmor `cache-poisoning`, high severity) — this job
-      # isn't hot-path CI re-run dozens of times an hour, so the cache's
-      # performance win doesn't justify carrying that risk.
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Install project dependencies (Poetry or requirements.txt)
-        run: |
-          python -m pip install --upgrade "pip==26.1.2"
-          # CyClaw quirk (CLAUDE.md § Dependency Notes): install CPU-only torch
-          # BEFORE requirements.txt, otherwise Linux pulls the multi-GB CUDA
-          # wheel. Mirrors ci.yml so DevSkim's import-resolution env matches CI.
-          # This pin is duplicated in ci.yml, pip-audit.yml, and
-          # copilot-setup-steps.yml -- grep for the version string under
-          # .github/workflows/ before bumping it.
-          pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-          if [ -f poetry.lock ]; then
-            pip install poetry
-            poetry install --no-root --no-interaction --no-ansi
-          elif [ -f requirements.txt ]; then
-            pip install -r requirements.txt -c constraints.txt
-          else
-            echo "No dependency file found – continuing without install."
-          fi
+      # DevSkim is a regex/pattern matcher, not a Python import resolver, so the
+      # multi-GB torch+requirements install buys nothing while burning CI minutes.
 
       # Run DevSkim
       - name: Run DevSkim scanner

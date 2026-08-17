@@ -64,13 +64,6 @@ jobs:
         with:
           python-version: '3.12'  # match the project's CI target (CLAUDE.md); avoid floating 3.x
 
-      # Install deps only when build-mode is manual (CodeQL needs to trace the build)
-      - name: Install dependencies
-        if: matrix.language == 'python' && matrix['build-mode'] == 'manual'
-        run: |
-          python -m pip install --upgrade "pip==26.1.2"
-          pip install -r requirements.txt -c constraints.txt
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4
         with:
@@ -83,13 +76,6 @@ jobs:
           # inline `queries: security-and-quality` moved there too rather than
           # splitting the query configuration across two places.
           config-file: ./.github/codeql/codeql-config.yml
-
-      - name: Run manual build steps
-        if: matrix.build-mode == 'manual'
-        shell: bash
-        run: |
-          echo "Replace this with your build commands (make, mvn, dotnet build, etc.)"
-          exit 1
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38  # v4
