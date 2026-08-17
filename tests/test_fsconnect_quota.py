@@ -132,3 +132,19 @@ def test_trash_empty_credits_freed_bytes_to_ledger(tmp_path):
         w.trash_empty(reason="empty all", confirm=True, all_entries=True)
         after = w.quota_status()["used_bytes"]
     assert after <= before - 100
+
+
+def test_quota_recompute_fail_closed_on_unreadable_root(tmp_path):
+    """If the root itself cannot be scanned, usage is indeterminate; writes are refused."""
+    wz = tmp_path / "wz"
+    wz.mkdir()
+    cfg, fs_cfg, cp = _make(tmp_path, [{"path": str(wz), "quota_bytes": 10000}])
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        # Remove read permission so the recompute walk cannot read the root.
+        wz.chmod(0o000)
+        try:
+            with pytest.raises(FsWriteRefused) as ei:
+                w.fs_write("a.txt", b"X" * 10, reason="should fail closed")
+            assert ei.value.details["failed_gate"] == "quota"
+        finally:
+            wz.chmod(0o755)

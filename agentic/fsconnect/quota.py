@@ -80,6 +80,10 @@ def _walk_usage(base: str) -> tuple[int, int]:
 
     Excludes the ledger file itself and any orphaned ``*.cyclaw-tmp`` files so the
     recompute is stable across save cycles and does not count crash leftovers.
+
+    A failure to scan the root itself is a total failure and raises OSError so
+    callers fail closed; failures in subdirectories are ignored and the partial
+    count is returned.
     """
     used = 0
     files = 0
@@ -101,6 +105,8 @@ def _walk_usage(base: str) -> tuple[int, int]:
                         used += int(st.st_size)
                         files += 1
         except OSError:
+            if cur == base:
+                raise
             continue
     return used, files
 

@@ -734,7 +734,15 @@ class FsWriter:
             self._roots.unlink(f"{payload}{trash.META_SUFFIX}", root=root, sha_max_bytes=0)
         return True, had_payload
 
-    def _purge_tree(self, sr: SafeRoot, rel: str, root: str | None) -> None:
+    # Ceiling on directory levels _purge_tree will descend. Without a bound, a
+    # deeply nested trash tree raises RecursionError, which is not an FsConnectError
+    # so the CLI exits 1 outside the documented 0/2/3/4 contract. 64 is far beyond
+    # any real corpus layout and leaves the frame budget untouched.
+    _MAX_PURGE_DEPTH = 64
+
+    def _purge_tree(
+        self, sr: SafeRoot, rel: str, root: str | None, *, _depth: int = 0
+    ) -> None:
         """Recursively remove a trash payload (file or whole dir) via pathsafe.
 
         Confined to ``.cyclaw-trash`` (CyClaw-owned quarantine, already root-contained);
@@ -742,13 +750,18 @@ class FsWriter:
         a public ``fs_delete --purge`` on arbitrary dirs (blast-radius control). Each hop
         re-descends from the held root fd with ``O_NOFOLLOW`` so containment still holds.
         """
+        if _depth >= self._MAX_PURGE_DEPTH:
+            raise FsConnectError(
+                f"trash tree exceeds {self._MAX_PURGE_DEPTH} directory levels; "
+                "refusing unbounded recursive purge"
+            )
         try:
             st = self._roots.stat(rel, root=root)
         except FsConnectError:
             return
         if st.get("type") == "dir":
             for item in self._roots.list_dir(rel, root=root):
-                self._purge_tree(sr, f"{rel}/{item['name']}", root)
+                self._purge_tree(sr, f"{rel}/{item['name']}", root, _depth=_depth + 1)
             self._roots.rmdir(rel, root=root)
         else:
             self._roots.unlink(rel, root=root, sha_max_bytes=0)
