@@ -259,3 +259,28 @@ def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | 
         "priced_as_of": PRICED_AS_OF,
         "usd_source": "rate_table",
     }
+
+
+def compare_vendor_cost(model: str, tokens: Mapping[str, object]) -> dict[str, float | bool | str | None]:
+    """Rate-table USD vs xAI ``cost_in_usd_ticks`` when the ledger has ticks.
+
+    Claude has no vendor dollar field — ``vendor_usd`` is then None.
+    """
+    table_tokens = dict(tokens)
+    table_tokens["vendor_cost_ticks"] = None
+    table = estimate_usd(model, table_tokens)
+    ticks = tokens.get("vendor_cost_ticks")
+    vendor_usd: float | None = None
+    if _is_int(ticks) and ticks >= 0:
+        vendor_usd = ticks / TICKS_PER_USD
+    table_usd = table["usd"]
+    delta: float | None = None
+    if vendor_usd is not None and isinstance(table_usd, (int, float)) and not isinstance(table_usd, bool):
+        delta = float(table_usd) - vendor_usd
+    return {
+        "table_usd": table_usd,
+        "vendor_usd": vendor_usd,
+        "delta_usd": delta,
+        "rate_unknown": table["rate_unknown"],
+        "priced_as_of": table["priced_as_of"],
+    }

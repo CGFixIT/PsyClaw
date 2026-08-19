@@ -1,43 +1,43 @@
 ## Branch naming (required for agent-opened PRs)
 
-`grok/spend-ledger-accuracy`
+`grok/spend-live-probe`
 
 ## Title
 
-`[fix] - price Grok reasoning tokens and Claude cache TTLs from vendor usage`
+`[feat] - opt-in live Grok/Claude spend probe vs vendor usage`
 
 ## Proposed changes
 
-Refs #958 (accuracy follow-up after #975 / #989). Does not re-implement the ledger.
+Refs #958 after #1007 merged to `origin/main` (`61edda6b`). Owner asked for a real-API spend check, not another ledger rewrite.
 
-Vendor docs (2026-08-19) showed the shipped rate table undercounted two billed token classes:
+- `utils.spend.compare_vendor_cost` — rate-table USD vs xAI `cost_in_usd_ticks` (Claude has no dollar field)
+- `metrics.py` Spend section prints `table_usd` / `vendor_usd` / `delta_usd` when ticks exist
+- `tests/spend_live_probe.py` — **not** `test_*.py`, so CI `pytest tests/` never collects it. Refuses unless `CYCLAW_SPEND_LIVE=1`. One tiny Grok and/or Claude `generate()` through the real clients (the emit seam). Never logs prompt, answer, or keys.
 
-- xAI Chat Completions: `completion_tokens` is visible output only. Reasoning is `completion_tokens_details.reasoning_tokens` and is billed at the output rate. Official example: 9 completion + 94 reasoning. Persist `reasoning_tokens` and `cost_in_usd_ticks` (10_000_000_000 ticks = $1); prefer ticks at read time when present. `grok-4.5` ≥200k prompt uses the long-context band for **all** tokens ($4 / $0.60 cached / $12).
-- Anthropic Messages: `usage.cache_creation.ephemeral_5m_input_tokens` / `ephemeral_1h_input_tokens` split 5m ($2.50/M) vs 1h ($4/M) cache writes. Unsplit `cache_creation_input_tokens` still prices at 5m. `output_tokens` stays the inclusive Claude billing total.
-
-`generate()` still returns `str`. `gate.py` / `graph.py` / MCP untouched. Dollars still computed at read time; never stored on the JSONL line. LocalLLM still does not emit.
+`gate.py` / `graph.py` / MCP untouched.
 
 **Invariant / Governance Impact**
-- None of the six invariants change. I6: spend stays `utils/` imported by `llm/client.py` and `metrics.py` only.
+- None. I6 unchanged. Paid calls are operator-gated and off the CI path.
 
 ## Types of changes
 
-- [x] Bugfix
-- [ ] New feature
+- [ ] Bugfix
+- [x] New feature
 - [ ] Breaking change
 - [ ] Documentation Update
 - [ ] Invariant / Governance refinement
 
+(The probe is a test/ops tool; the comparator is a correctness aid for the existing spend feature.)
+
 ## Benefits / why
 
-- Fallback spend matches official xAI and Anthropic usage fields instead of dropping reasoning tokens and 1h cache writes.
-- Vendor `cost_in_usd_ticks` is used when present so a rate-table lag cannot hide Grok's billed amount.
+- Operator can run one billed Grok/Claude call and see whether the ledger matches vendor ticks (Grok) or the official token formula (Claude).
+- CI cannot spend money: discovery skip + `CYCLAW_SPEND_LIVE` fail-closed.
 
 ## Risks to monitor
 
-- Historical 1M-token test fixtures now correctly price at the grok-4.5 long-context band.
-- No live Grok/Claude invoice check in this PR (mocked usage fixtures only).
-- `query_hash` / `route_path` still deferred (Option B would touch `graph.py`).
+- This agent shell’s `GROK_API_KEY` is a placeholder (`api.x.ai` 400 Incorrect API key). Live Grok check still needs a real console key. `ANTHROPIC_API_KEY` unset here.
+- Option B `query_hash` / `route_path` still deferred.
 
 ## Checklist
 
@@ -49,10 +49,10 @@ Vendor docs (2026-08-19) showed the shipped rate table undercounted two billed t
 ## Verify
 
 - `ruff check --select E,F,I,B,C4,UP,S` on touched Python → exit 0
-- `GROK_API_KEY=dummy python -m pytest tests/test_spend.py tests/test_metrics_spend.py tests/test_client.py tests/test_ci_coverage_flag_contract.py tests/test_due_diligence_invariants.py -q --tb=short` → exit 0
-- `python ~/.grok/skills/invariant-guard/check_invariants.py --repo-root <worktree>` → 35/35
-- `python ~/.grok/githooks/cyclaw/verify_ci_emulation.py` — run before push
-- No new CI workflow: `--cov=utils.spend` already in `ci.yml` and conda lane
+- `GROK_API_KEY=dummy python -m pytest tests/test_spend.py tests/test_metrics_spend.py tests/test_due_diligence_invariants.py -q --tb=short` → exit 0
+- invariant-guard 35/35
+- `CYCLAW_SPEND_LIVE=1 python tests/spend_live_probe.py` → Grok 400 invalid key on this machine; Claude skipped (no Anthropic key)
+- `python ~/.grok/githooks/cyclaw/verify_ci_emulation.py` before push
 
 ## Merge order
 
@@ -61,4 +61,4 @@ Vendor docs (2026-08-19) showed the shipped rate table undercounted two billed t
 
 ## Base
 
-- GitHub base: `main` (`origin/main@5ac5df31`)
+- GitHub base: `main` (`origin/main@61edda6b`)
