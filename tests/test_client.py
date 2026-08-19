@@ -603,6 +603,29 @@ class TestExternalSpendRecording:
         assert record["model"] == "grok-4.5"
         assert record["input_tokens"] == 41
         assert record["output_tokens"] == 104
+        assert record["reasoning_tokens"] is None
+        client.close()
+
+    def test_grok_200_with_reasoning_tokens_writes_them(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={
+                    "prompt_tokens": 32,
+                    "completion_tokens": 9,
+                    "completion_tokens_details": {"reasoning_tokens": 94},
+                    "cost_in_usd_ticks": 10_000_000_000,
+                },
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "grok answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["reasoning_tokens"] == 94
+        assert record["vendor_cost_ticks"] == 10_000_000_000
+        assert "usd" not in record
         client.close()
 
     def test_claude_200_with_usage_writes_spend_line(self, tmp_path, monkeypatch, _spend_ledger):
