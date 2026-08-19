@@ -236,6 +236,26 @@ def test_estimate_usd_prefers_vendor_ticks() -> None:
     assert priced["rate_unknown"] is False
 
 
+def test_compare_vendor_cost_splits_table_and_ticks() -> None:
+    parsed = spend.parse_grok_usage({**GROK_REASONING_USAGE, "cost_in_usd_ticks": spend.TICKS_PER_USD})
+    compared = spend.compare_vendor_cost("grok-4.5", parsed)
+    table = spend.estimate_usd("grok-4.5", spend.parse_grok_usage(GROK_REASONING_USAGE))
+    assert compared["vendor_usd"] == pytest.approx(1.0)
+    assert compared["table_usd"] == pytest.approx(table["usd"])
+    assert compared["delta_usd"] == pytest.approx(table["usd"] - 1.0)
+    assert table["usd_source"] == "rate_table"
+
+
+def test_compare_vendor_cost_claude_has_no_ticks() -> None:
+    parsed = spend.parse_claude_usage(CLAUDE_USAGE)
+    compared = spend.compare_vendor_cost("claude-sonnet-5", parsed)
+    assert compared["vendor_usd"] is None
+    assert compared["delta_usd"] is None
+    assert compared["table_usd"] == pytest.approx(
+        spend.estimate_usd("claude-sonnet-5", parsed)["usd"]
+    )
+
+
 def test_estimate_usd_grok_long_context_band() -> None:
     tokens = {
         "input_tokens": 200_000,
@@ -292,3 +312,15 @@ def test_spend_write_error_is_swallowed(tmp_path: Path, monkeypatch: pytest.Monk
 def test_no_update_or_delete_helpers() -> None:
     names = {name for name, _ in inspect.getmembers(spend, inspect.isfunction)}
     assert not any(name.startswith(("update", "delete", "rewrite")) for name in names)
+
+
+def test_live_probe_refuses_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.util
+
+    monkeypatch.delenv("CYCLAW_SPEND_LIVE", raising=False)
+    path = Path(__file__).resolve().parent / "spend_live_probe.py"
+    spec = importlib.util.spec_from_file_location("spend_live_probe", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main() == 2

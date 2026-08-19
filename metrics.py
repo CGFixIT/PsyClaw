@@ -22,7 +22,11 @@ from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
 
 import yaml  # noqa: E402 - must follow the telemetry kill above
 
-from utils.spend import billed_output_tokens, estimate_usd  # noqa: E402 - must follow the telemetry kill above
+from utils.spend import (  # noqa: E402 - must follow the telemetry kill above
+    billed_output_tokens,
+    compare_vendor_cost,
+    estimate_usd,
+)
 
 # Anchor config.yaml to the repo root, not the process's cwd. print_metrics's
 # default config_path="config.yaml" is a bare relative name; `cyclaw-metrics`
@@ -114,6 +118,10 @@ def _empty_spend_window() -> dict:
         "tokens_out": 0,
         "usd": 0.0,
         "usd_incomplete": False,
+        "table_usd": 0.0,
+        "vendor_usd": 0.0,
+        "vendor_rows": 0,
+        "table_incomplete": False,
     }
 
 
@@ -127,12 +135,33 @@ def _add_spend_record(window: dict, provider: str, tokens_in: int, tokens_out: i
         window["usd"] += usd
 
 
+def _add_spend_compare(window: dict, compared: dict) -> None:
+    table_usd = compared.get("table_usd")
+    vendor_usd = compared.get("vendor_usd")
+    if compared.get("rate_unknown") or table_usd is None:
+        window["table_incomplete"] = True
+    elif isinstance(table_usd, (int, float)) and not isinstance(table_usd, bool):
+        window["table_usd"] += float(table_usd)
+    if isinstance(vendor_usd, (int, float)) and not isinstance(vendor_usd, bool):
+        window["vendor_usd"] += float(vendor_usd)
+        window["vendor_rows"] += 1
+
+
 def _freeze_spend_window(window: dict) -> dict:
+    vendor_usd = None if window["vendor_rows"] == 0 else window["vendor_usd"]
+    table_usd = None if window["table_incomplete"] else window["table_usd"]
+    delta = None
+    if vendor_usd is not None and table_usd is not None:
+        delta = table_usd - vendor_usd
     return {
         "by_provider": dict(window["by_provider"].most_common()),
         "tokens_in": window["tokens_in"],
         "tokens_out": window["tokens_out"],
         "usd": None if window["usd_incomplete"] else window["usd"],
+        "table_usd": table_usd,
+        "vendor_usd": vendor_usd,
+        "delta_usd": delta,
+        "vendor_rows": window["vendor_rows"],
     }
 
 
@@ -173,10 +202,13 @@ def compute_spend(events, *, now=None) -> dict:
         provider = _bucket_key(event.get("provider"))
         tokens_in = _spend_token_count(event, "input_tokens")
         tokens_out = billed_output_tokens(event)
+        compared = compare_vendor_cost(model if isinstance(model, str) else "", event)
         record = (provider, tokens_in, tokens_out, priced["usd"], bool(priced["rate_unknown"]))
         _add_spend_record(last_7d, *record)
+        _add_spend_compare(last_7d, compared)
         if event_date == today_date:
             _add_spend_record(today, *record)
+            _add_spend_compare(today, compared)
 
     return {
         "today": _freeze_spend_window(today),
@@ -195,6 +227,15 @@ def _print_spend(spend: dict | None) -> None:
         usd = window["usd"]
         usd_text = "n/a" if usd is None else f"{usd:.6f}"
         print(f"  {label}: tokens_in={window['tokens_in']} tokens_out={window['tokens_out']} usd={usd_text}")
+        if window.get("vendor_usd") is not None:
+            table_text = "n/a" if window["table_usd"] is None else f"{window['table_usd']:.6f}"
+            vendor_text = f"{window['vendor_usd']:.6f}"
+            delta = window.get("delta_usd")
+            delta_text = "n/a" if delta is None else f"{delta:.6f}"
+            print(
+                f"    table_usd={table_text} vendor_usd={vendor_text} "
+                f"delta_usd={delta_text} vendor_rows={window['vendor_rows']}"
+            )
         for provider, count in window["by_provider"].items():
             print(f"    {provider}: {count}")
     if spend["usage_missing"]:

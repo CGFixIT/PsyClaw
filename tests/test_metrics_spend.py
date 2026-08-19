@@ -138,6 +138,26 @@ def test_daily_and_last_7d_token_and_usd_math(tmp_path: Path) -> None:
     assert summary["rate_unknown"] == 0
 
 
+def test_vendor_ticks_print_table_vs_vendor() -> None:
+    events = [
+        _record(
+            days_ago=0,
+            provider="grok",
+            model="grok-4.5",
+            input_tokens=32,
+            output_tokens=9,
+            extra={"reasoning_tokens": 94, "vendor_cost_ticks": 1_000_000},
+        )
+    ]
+    summary = compute_spend(events, now=NOW)
+    assert summary["today"]["vendor_rows"] == 1
+    assert summary["today"]["vendor_usd"] == pytest.approx(1_000_000 / 10_000_000_000)
+    assert summary["today"]["table_usd"] is not None
+    assert summary["today"]["delta_usd"] == pytest.approx(
+        summary["today"]["table_usd"] - summary["today"]["vendor_usd"]
+    )
+
+
 def test_reasoning_tokens_count_as_tokens_out() -> None:
     events = [
         _record(
