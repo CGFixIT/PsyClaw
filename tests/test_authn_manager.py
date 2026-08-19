@@ -300,7 +300,7 @@ class TestLogin:
 
         row = manager.conn.execute(manager._sql_get_user, ("alice",)).fetchone()
         assert row["password_hash"] != weak_record
-        assert row["password_hash"].split("$")[1] == "16384"  # current _SCRYPT_N
+        assert row["password_hash"].split("$")[1] == "131072"  # current _SCRYPT_N (2**17)
         # And the upgraded record still authenticates.
         result = manager.login("alice", _GOOD_PASSWORD)
         assert result.username == "alice"

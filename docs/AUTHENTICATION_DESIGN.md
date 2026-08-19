@@ -174,10 +174,14 @@ make CyClaw safe to expose to the internet, and says so in §11.
 ### 4.1 Password hashing — `hashlib.scrypt`, not argon2
 
 **stdlib, no new runtime dependency.** `hashlib.scrypt` (RFC 7914) is
-memory-hard, ships with CPython against OpenSSL 1.1+, and is verified working in
-this environment at n=2¹⁴, r=8, p=1 → ~0.11 s per verification, which is the
-right order for an interactive login and expensive enough to make offline
-cracking costly.
+memory-hard and ships with CPython against OpenSSL 1.1+. Current parameters:
+n=2¹⁷, r=8, p=1 — the OWASP Password Storage Cheat Sheet's scrypt floor when
+Argon2id isn't used (checked 2026-08-19), costing ~128 MiB and, measured on
+this environment's CPU (Intel Xeon @2.80GHz, 4 cores), ~0.40 s per
+verification (n=2¹⁴'s prior floor measured ~0.04 s here for comparison — both
+figures are hardware-dependent, re-measure on the actual deployment target
+before re-tuning). Slower than ideal for interactive login, but expensive
+enough to make offline cracking costly, which is what this parameter buys.
 
 This was chosen over argon2id specifically because `argon2-cffi` would be a new
 runtime dependency, which CLAUDE.md §7 classifies High-tier and which would need

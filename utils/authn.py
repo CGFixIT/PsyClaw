@@ -35,11 +35,16 @@ import time
 # stronger primitive in the abstract; at these parameters scrypt is not the weak
 # link in this system, and the dependency cost is real.
 #
-# n=2**14, r=8, p=1 costs ~0.11s and ~16 MiB per verification here. That is the
-# right order for an interactive login: slow enough to make offline cracking
-# expensive, fast enough that a human does not notice, and memory-hard so GPU
-# arrays lose most of their advantage.
-_SCRYPT_N = 2**14
+# n=2**17, r=8, p=1: the OWASP Password Storage Cheat Sheet's current scrypt
+# floor (checked 2026-08-19) when Argon2id isn't used, costing ~128 MiB.
+# Measured on this environment's CPU (Intel Xeon @2.80GHz, 4 cores): ~0.40s
+# per verification at n=2**17, vs. ~0.04s at the previous n=2**14 -- both
+# numbers are hardware-dependent, not portable constants; re-measure on the
+# actual deployment target if this ever needs re-tuning. Slower than ideal
+# for interactive login, but the floor exists because offline cracking cost
+# is what this parameter actually buys, and memory-hard so GPU arrays lose
+# most of their advantage.
+_SCRYPT_N = 2**17
 _SCRYPT_R = 8
 _SCRYPT_P = 1
 _SCRYPT_DKLEN = 32

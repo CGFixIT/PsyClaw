@@ -45,7 +45,7 @@ class TestHashAndVerify:
     def test_record_is_self_describing(self):
         algo, n, r, p, salt_b64, hash_b64 = hash_password(_GOOD).split("$")
         assert algo == "scrypt"
-        assert int(n) >= 2**14 and int(r) >= 8 and int(p) >= 1
+        assert int(n) >= 2**17 and int(r) >= 8 and int(p) >= 1
         # Parameters live in the record so they can be raised later without
         # invalidating existing accounts.
         assert len(base64.b64decode(salt_b64)) == 16
@@ -107,9 +107,9 @@ class TestHashAndVerify:
         forged or corrupted, and unbounded n/r previously let
         maxmem=max(_SCRYPT_MAXMEM, n*r*128*4) grow with the stored record."""
         salt = b"0123456789abcdef"
-        derived = hashlib.scrypt(_GOOD.encode(), salt=salt, n=2**15, r=8, p=1, dklen=32, maxmem=2**26)
+        derived = hashlib.scrypt(_GOOD.encode(), salt=salt, n=2**18, r=8, p=1, dklen=32, maxmem=2**30)
         record = "$".join(
-            ("scrypt", str(2**15), "8", "1", base64.b64encode(salt).decode(), base64.b64encode(derived).decode())
+            ("scrypt", str(2**18), "8", "1", base64.b64encode(salt).decode(), base64.b64encode(derived).decode())
         )
         assert verify_password(_GOOD, record) == (False, False)
 
