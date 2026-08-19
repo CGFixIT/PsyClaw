@@ -93,7 +93,7 @@ def register_memory_routes(
             raise HTTPException(status_code=404, detail="Memory system not enabled")
         from memory.store import list_facts  # lazy
 
-        facts = list_facts(cfg, active_only=True, limit=min(limit, 500), offset=max(offset, 0))
+        facts = list_facts(cfg, active_only=True, limit=max(0, min(limit, 500)), offset=max(offset, 0))
         return {"facts": [asdict(f) for f in facts]}
 
     @app.get("/memory/episodes", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
@@ -102,7 +102,7 @@ def register_memory_routes(
             raise HTTPException(status_code=404, detail="Memory system not enabled")
         from memory.store import list_episodes  # lazy
 
-        eps = list_episodes(cfg, limit=min(limit, 500), offset=max(offset, 0))
+        eps = list_episodes(cfg, limit=max(0, min(limit, 500)), offset=max(offset, 0))
         return {"episodes": [asdict(e) for e in eps]}
 
     @app.get("/memory/proposals", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])

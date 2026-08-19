@@ -145,6 +145,28 @@ def test_disabled_master_404_on_facts(tmp_path, api_key):
     assert client.get("/memory/facts", headers=headers).status_code == 404
 
 
+def test_negative_limit_does_not_bypass_the_pagination_cap(memory_app):
+    """Issue #1000: /memory/facts and /memory/episodes capped `limit` only on
+    the upper bound (`min(limit, 500)`), so a negative value passed through
+    unchanged and SQLite's `LIMIT` treats a negative number as unbounded --
+    the entire table came back in one response. `offset` already had a floor
+    (`max(offset, 0)`); `limit` now gets the same treatment."""
+    app, cfg, key, _audit = memory_app
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {key}"}
+
+    for i in range(3):
+        insert_fact(cfg, f"fact number {i}", reason="seed")
+
+    unclamped = client.get("/memory/facts", headers=headers)
+    assert unclamped.status_code == 200
+    assert len(unclamped.json()["facts"]) == 3
+
+    negative = client.get("/memory/facts?limit=-1", headers=headers)
+    assert negative.status_code == 200
+    assert negative.json()["facts"] == []
+
+
 def test_blank_reason_rejected_by_schema(memory_app):
     app, _cfg, key, _audit = memory_app
     client = TestClient(app)
