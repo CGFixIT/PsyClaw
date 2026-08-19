@@ -248,6 +248,16 @@ then echoed back by the browser in the `X-CyClaw-CSRF` header on
 state-changing routes. (The harness's own variant stores its token in a
 `<meta>` tag; that is the harness surface, not the gate's.)
 
+At rest, `sessions.session_id` and `sessions.csrf_token` store
+`utils.authn.hash_token()` of the values above, never the plaintext — the
+same treatment `device_tokens.token_hash` already gets, for the same reason:
+a copied or backed-up DB file must not hand out directly usable, live
+credentials. `AuthManager.validate_session`/`logout` hash the caller's raw
+cookie value before every lookup; `gate_auth.py` hashes the caller's raw
+`X-CyClaw-CSRF` header before comparing it to the stored hash. The plaintext
+values exist only in the login response body and the session cookie, never
+in the database.
+
 ### 4.4 Lockout
 
 Per-account exponential backoff on consecutive failures, recorded in

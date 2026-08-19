@@ -254,8 +254,11 @@ def register_auth_routes(
         not a browser and is not a CSRF vector, the same reasoning
         harness/server.py's identical dependency documents.
         """
+        # session.csrf_token is the stored HASH (see authn_manager.SessionInfo's
+        # docstring), never the plaintext -- hash the header value the same
+        # way before comparing.
         supplied = request.headers.get(_CSRF_HEADER, "")
-        if not hmac.compare_digest(supplied.encode("utf-8"), session.csrf_token.encode("utf-8")):
+        if not hmac.compare_digest(authn.hash_token(supplied).encode("utf-8"), session.csrf_token.encode("utf-8")):
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
@@ -431,8 +434,11 @@ def register_auth_routes(
         if cyclaw_session:
             session_info = manager.validate_session(cyclaw_session)
             if session_info is not None:
+                # Same hash-then-compare as _enforce_csrf above.
                 supplied = request.headers.get(_CSRF_HEADER, "")
-                if not hmac.compare_digest(supplied.encode("utf-8"), session_info.csrf_token.encode("utf-8")):
+                if not hmac.compare_digest(
+                    authn.hash_token(supplied).encode("utf-8"), session_info.csrf_token.encode("utf-8")
+                ):
                     raise HTTPException(
                         status_code=_HTTP_FORBIDDEN,
                         detail={

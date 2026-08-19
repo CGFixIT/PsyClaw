@@ -13,7 +13,7 @@ import importlib
 
 import pytest
 
-from utils.authn import PasswordPolicyError
+from utils.authn import PasswordPolicyError, hash_token
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME, _DUMMY_RECORD
 from utils.errors import (
     AuthAccountLocked,
@@ -562,7 +562,28 @@ class TestSessions:
         info = manager.validate_session(result.session_id)
         assert info is not None
         assert info.username == "alice"
-        assert info.csrf_token == result.csrf_token
+        # SessionInfo.csrf_token is the stored HASH, not the plaintext
+        # LoginResult.csrf_token -- see SessionInfo's docstring.
+        assert info.csrf_token == hash_token(result.csrf_token)
+
+    def test_session_and_csrf_token_are_hashed_at_rest(self, manager):
+        """Issue #998: a copied/backed-up DB file must not hand out directly
+        usable session cookies or CSRF tokens -- both must be stored hashed,
+        the same way device_tokens.token_hash already is."""
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        # This fixture is always SQLite (see the `manager` fixture above), so
+        # the placeholder is always "?" -- no need for the ph-interpolation
+        # pattern utils/authn_manager.py's own SQL templates use for
+        # SQLite/Postgres portability.
+        row = manager.conn.execute(
+            "SELECT session_id, csrf_token FROM sessions WHERE username = ?",
+            ("alice",),
+        ).fetchone()
+        assert row["session_id"] != result.session_id
+        assert row["session_id"] == hash_token(result.session_id)
+        assert row["csrf_token"] != result.csrf_token
+        assert row["csrf_token"] == hash_token(result.csrf_token)
 
     def test_unknown_session_id_is_invalid(self, manager):
         assert manager.validate_session("not-a-real-session-id") is None

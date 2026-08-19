@@ -64,6 +64,15 @@ class LoginResult:
 
 @dataclass
 class SessionInfo:
+    """``session_id`` is the RAW value the caller looked up with (echoed back,
+    never re-read from the row). ``csrf_token`` is the opposite: it comes
+    straight from the row, and the row stores ``authn.hash_token(csrf_token)``,
+    not the plaintext -- so this field holds a SHA-256 hex digest here, unlike
+    the same-named field on ``LoginResult``, which is the one-time plaintext
+    value the client must be given. Compare a caller-supplied CSRF header
+    against this field only after hashing it the same way (see gate_auth.py's
+    ``_enforce_csrf``/``_require_write_actor``) -- never compare it directly."""
+
     session_id: str
     username: str
     csrf_token: str
@@ -481,8 +490,16 @@ class AuthManager:
         session_id = authn.new_session_id()
         csrf_token = authn.new_csrf_token()
         expires_ts = now + self.absolute_timeout_sec
+        # Stored hashed, exactly like device_tokens.token_hash: both are
+        # high-entropy random values the client must already hold to present
+        # again, so there is no offline-guessing risk to slow down -- the
+        # hash is purely to keep a copied/backed-up DB file from handing out
+        # directly usable, live session cookies. The plaintext values below
+        # are returned to the caller (the cookie, and the login JSON body)
+        # exactly once and never stored.
         self.conn.execute(
-            self._sql_insert_session, (session_id, username, csrf_token, now, now, expires_ts)
+            self._sql_insert_session,
+            (authn.hash_token(session_id), username, authn.hash_token(csrf_token), now, now, expires_ts),
         )
         return LoginResult(
             username=username, session_id=session_id, csrf_token=csrf_token, expires_ts=expires_ts
@@ -607,9 +624,16 @@ class AuthManager:
         """
         if not isinstance(session_id, str) or not session_id:
             return None
+        # The DB stores hash_token(session_id), never the raw value (see
+        # _create_session_locked) -- hash the caller's cookie value once and
+        # use the hash for every lookup/touch/revoke below. session_id itself
+        # stays the raw value for the SessionInfo returned at the end, since
+        # callers (e.g. gate_auth.py's logout) need to pass it back into
+        # validate_session/logout, which hash it again themselves.
+        session_id_hash = authn.hash_token(session_id)
         now = self._now()
         with self._lock:
-            row = self.conn.execute(self._sql_get_session, (session_id,)).fetchone()
+            row = self.conn.execute(self._sql_get_session, (session_id_hash,)).fetchone()
             if row is None or row["revoked"]:
                 self._end_read_txn()
                 return None
@@ -625,10 +649,10 @@ class AuthManager:
                 # resurrect that way, since expires_ts is frozen into the row
                 # at creation, but it costs nothing to retire that row too
                 # rather than re-evaluating it until it ages out.)
-                self.conn.execute(self._sql_revoke_session, (session_id,))
+                self.conn.execute(self._sql_revoke_session, (session_id_hash,))
                 self.conn.commit()
                 return None
-            self.conn.execute(self._sql_touch_session, (now, session_id))
+            self.conn.execute(self._sql_touch_session, (now, session_id_hash))
             self.conn.commit()
             return SessionInfo(session_id=session_id, username=row["username"], csrf_token=row["csrf_token"])
 
@@ -638,7 +662,7 @@ class AuthManager:
         if not isinstance(session_id, str) or not session_id:
             return False
         with self._lock:
-            cur = self.conn.execute(self._sql_revoke_session, (session_id,))
+            cur = self.conn.execute(self._sql_revoke_session, (authn.hash_token(session_id),))
             self.conn.commit()
             return bool(cur.rowcount)
 
