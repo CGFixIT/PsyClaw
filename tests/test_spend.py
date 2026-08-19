@@ -17,11 +17,42 @@ GROK_USAGE = {
     "prompt_tokens_details": {"cached_tokens": 0, "text_tokens": 41},
 }
 
+# Official xAI Chat Completions example (docs 2026-08-19): reasoning is
+# outside completion_tokens (9 + 94 = 103 billed output; total_tokens 135).
+GROK_REASONING_USAGE = {
+    "prompt_tokens": 32,
+    "completion_tokens": 9,
+    "total_tokens": 135,
+    "prompt_tokens_details": {
+        "text_tokens": 32,
+        "audio_tokens": 0,
+        "image_tokens": 0,
+        "cached_tokens": 6,
+    },
+    "completion_tokens_details": {
+        "reasoning_tokens": 94,
+        "audio_tokens": 0,
+        "accepted_prediction_tokens": 0,
+        "rejected_prediction_tokens": 0,
+    },
+}
+
 CLAUDE_USAGE = {
     "input_tokens": 2095,
     "output_tokens": 503,
     "cache_creation_input_tokens": 2051,
     "cache_read_input_tokens": 2051,
+}
+
+CLAUDE_TTL_SPLIT_USAGE = {
+    "input_tokens": 2048,
+    "cache_read_input_tokens": 1800,
+    "cache_creation_input_tokens": 248,
+    "output_tokens": 503,
+    "cache_creation": {
+        "ephemeral_5m_input_tokens": 148,
+        "ephemeral_1h_input_tokens": 100,
+    },
 }
 
 _FORBIDDEN = frozenset({"query", "prompt", "content", "messages", "api_key", "authorization"})
@@ -34,6 +65,32 @@ def test_parse_grok_usage_maps_ints() -> None:
     assert parsed["cached_input_tokens"] == 0
     assert parsed["cache_creation_input_tokens"] is None
     assert parsed["cache_read_input_tokens"] is None
+    assert parsed["reasoning_tokens"] is None
+    assert parsed["vendor_cost_ticks"] is None
+
+
+def test_parse_grok_usage_maps_reasoning_and_ticks() -> None:
+    parsed = spend.parse_grok_usage({**GROK_REASONING_USAGE, "cost_in_usd_ticks": 123456789})
+    assert parsed["input_tokens"] == 32
+    assert parsed["output_tokens"] == 9
+    assert parsed["cached_input_tokens"] == 6
+    assert parsed["reasoning_tokens"] == 94
+    assert parsed["vendor_cost_ticks"] == 123456789
+
+
+def test_as_int_rejects_negatives() -> None:
+    parsed = spend.parse_grok_usage(
+        {
+            "prompt_tokens": -1,
+            "completion_tokens": 4,
+            "completion_tokens_details": {"reasoning_tokens": -8},
+            "cost_in_usd_ticks": -3,
+        }
+    )
+    assert parsed["input_tokens"] is None
+    assert parsed["output_tokens"] == 4
+    assert parsed["reasoning_tokens"] is None
+    assert parsed["vendor_cost_ticks"] is None
 
 
 def test_parse_claude_usage_maps_ints_and_cache() -> None:
@@ -43,6 +100,16 @@ def test_parse_claude_usage_maps_ints_and_cache() -> None:
     assert parsed["cache_creation_input_tokens"] == 2051
     assert parsed["cache_read_input_tokens"] == 2051
     assert parsed["cached_input_tokens"] is None
+    assert parsed["cache_creation_5m_tokens"] is None
+    assert parsed["cache_creation_1h_tokens"] is None
+
+
+def test_parse_claude_usage_maps_cache_ttl_split() -> None:
+    parsed = spend.parse_claude_usage(CLAUDE_TTL_SPLIT_USAGE)
+    assert parsed["cache_creation_input_tokens"] == 248
+    assert parsed["cache_creation_5m_tokens"] == 148
+    assert parsed["cache_creation_1h_tokens"] == 100
+    assert parsed["cache_read_input_tokens"] == 1800
 
 
 def test_record_missing_usage_sets_usage_missing(tmp_path: Path) -> None:
@@ -95,6 +162,28 @@ def test_two_records_grow_file_by_two_lines(tmp_path: Path) -> None:
     assert second["cache_read_input_tokens"] == 2051
 
 
+def test_record_persists_reasoning_ticks_and_cache_split(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage={**GROK_REASONING_USAGE, "cost_in_usd_ticks": 50},
+        spend_file=ledger,
+    )
+    spend.record_external_usage(
+        provider="claude",
+        model="claude-sonnet-5",
+        usage=CLAUDE_TTL_SPLIT_USAGE,
+        spend_file=ledger,
+    )
+    grok_line, claude_line = (json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines())
+    assert grok_line["reasoning_tokens"] == 94
+    assert grok_line["vendor_cost_ticks"] == 50
+    assert "usd" not in grok_line
+    assert claude_line["cache_creation_5m_tokens"] == 148
+    assert claude_line["cache_creation_1h_tokens"] == 100
+
+
 def test_written_json_has_no_forbidden_keys(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(
@@ -115,6 +204,7 @@ def test_estimate_usd_known_models() -> None:
     assert grok["rate_unknown"] is False
     assert grok["usd"] == pytest.approx(41 * 2.00 / 1_000_000 + 104 * 6.00 / 1_000_000)
     assert grok["priced_as_of"] == spend.PRICED_AS_OF
+    assert grok["usd_source"] == "rate_table"
 
     claude = spend.estimate_usd("claude-sonnet-5", spend.parse_claude_usage(CLAUDE_USAGE))
     assert claude["rate_unknown"] is False
@@ -123,6 +213,53 @@ def test_estimate_usd_known_models() -> None:
         + 503 * 10.00 / 1_000_000
         + 2051 * 2.50 / 1_000_000
         + 2051 * 0.20 / 1_000_000
+    )
+
+
+def test_estimate_usd_grok_reasoning_tokens_bill_as_output() -> None:
+    parsed = spend.parse_grok_usage(GROK_REASONING_USAGE)
+    priced = spend.estimate_usd("grok-4.5", parsed)
+    uncached = 32 - 6
+    billed_out = 9 + 94
+    assert spend.billed_output_tokens(parsed) == billed_out
+    assert priced["usd"] == pytest.approx(
+        uncached * 2.00 / 1_000_000 + 6 * 0.30 / 1_000_000 + billed_out * 6.00 / 1_000_000
+    )
+    assert priced["usd_source"] == "rate_table"
+
+
+def test_estimate_usd_prefers_vendor_ticks() -> None:
+    parsed = spend.parse_grok_usage({**GROK_REASONING_USAGE, "cost_in_usd_ticks": spend.TICKS_PER_USD})
+    priced = spend.estimate_usd("grok-4.5", parsed)
+    assert priced["usd"] == pytest.approx(1.0)
+    assert priced["usd_source"] == "vendor_ticks"
+    assert priced["rate_unknown"] is False
+
+
+def test_estimate_usd_grok_long_context_band() -> None:
+    tokens = {
+        "input_tokens": 200_000,
+        "output_tokens": 10,
+        "cached_input_tokens": 1_000,
+        "reasoning_tokens": 5,
+    }
+    priced = spend.estimate_usd("grok-4.5", tokens)
+    uncached = 199_000
+    billed_out = 15
+    assert priced["usd"] == pytest.approx(
+        uncached * 4.00 / 1_000_000 + 1_000 * 0.60 / 1_000_000 + billed_out * 12.00 / 1_000_000
+    )
+
+
+def test_estimate_usd_claude_cache_ttl_split() -> None:
+    parsed = spend.parse_claude_usage(CLAUDE_TTL_SPLIT_USAGE)
+    priced = spend.estimate_usd("claude-sonnet-5", parsed)
+    assert priced["usd"] == pytest.approx(
+        2048 * 2.00 / 1_000_000
+        + 148 * 2.50 / 1_000_000
+        + 100 * 4.00 / 1_000_000
+        + 1800 * 0.20 / 1_000_000
+        + 503 * 10.00 / 1_000_000
     )
 
 

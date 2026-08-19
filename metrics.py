@@ -22,7 +22,7 @@ from pathlib import Path  # noqa: E402 - must follow the telemetry kill above
 
 import yaml  # noqa: E402 - must follow the telemetry kill above
 
-from utils.spend import estimate_usd  # noqa: E402 - must follow the telemetry kill above
+from utils.spend import billed_output_tokens, estimate_usd  # noqa: E402 - must follow the telemetry kill above
 
 # Anchor config.yaml to the repo root, not the process's cwd. print_metrics's
 # default config_path="config.yaml" is a bare relative name; `cyclaw-metrics`
@@ -172,7 +172,7 @@ def compute_spend(events, *, now=None) -> dict:
             continue
         provider = _bucket_key(event.get("provider"))
         tokens_in = _spend_token_count(event, "input_tokens")
-        tokens_out = _spend_token_count(event, "output_tokens")
+        tokens_out = billed_output_tokens(event)
         record = (provider, tokens_in, tokens_out, priced["usd"], bool(priced["rate_unknown"]))
         _add_spend_record(last_7d, *record)
         if event_date == today_date:

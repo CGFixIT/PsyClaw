@@ -121,7 +121,8 @@ def test_daily_and_last_7d_token_and_usd_math(tmp_path: Path) -> None:
     today_usd = estimate_usd("grok-4.5", today_grok)["usd"]
     edge_usd = estimate_usd("grok-4.5", window_edge)["usd"]
     claude_usd = estimate_usd("claude-sonnet-5", midweek_claude)["usd"]
-    assert today_usd == pytest.approx(1_000_000 * 2.00 / 1_000_000 + 500_000 * 6.00 / 1_000_000)
+    # 1M prompt tokens is ≥200k, so grok-4.5 uses the long-context band for all tokens.
+    assert today_usd == pytest.approx(1_000_000 * 4.00 / 1_000_000 + 500_000 * 12.00 / 1_000_000)
     assert claude_usd == pytest.approx(1_000_000 * 2.00 / 1_000_000 + 100_000 * 10.00 / 1_000_000)
 
     assert summary["today"]["tokens_in"] == 1_000_000
@@ -135,6 +136,23 @@ def test_daily_and_last_7d_token_and_usd_math(tmp_path: Path) -> None:
     assert summary["last_7d"]["by_provider"] == {"grok": 2, "claude": 1}
     assert summary["usage_missing"] == 0
     assert summary["rate_unknown"] == 0
+
+
+def test_reasoning_tokens_count_as_tokens_out() -> None:
+    events = [
+        _record(
+            days_ago=0,
+            provider="grok",
+            model="grok-4.5",
+            input_tokens=32,
+            output_tokens=9,
+            extra={"reasoning_tokens": 94, "cached_input_tokens": 6},
+        )
+    ]
+    summary = compute_spend(events, now=NOW)
+    assert summary["today"]["tokens_out"] == 103
+    billed = estimate_usd("grok-4.5", events[0])
+    assert summary["today"]["usd"] == pytest.approx(billed["usd"])
 
 
 def test_unknown_model_usd_null_and_rate_unknown_counted() -> None:
@@ -227,7 +245,7 @@ def test_print_metrics_spend_section_after_online_escalations(tmp_path: Path, ca
     escalations_at = out.index("Online escalations (external LLM): 1")
     spend_at = out.index("\nSpend:")
     assert spend_at > escalations_at
-    assert "today: tokens_in=1000000 tokens_out=500000 usd=5.000000" in out
+    assert "today: tokens_in=1000000 tokens_out=500000 usd=10.000000" in out
     assert "grok: 1" in out
     assert "usd=" in out
     dumped = ledger.read_text(encoding="utf-8")

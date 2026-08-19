@@ -20,23 +20,33 @@ logger = logging.getLogger("cyclaw.spend")
 
 _SPEND_WRITE_LOCK = threading.Lock()
 _DEFAULT_SPEND_FILE = "logs/spend.jsonl"
-PRICED_AS_OF = "2026-08-16"
+PRICED_AS_OF = "2026-08-19"
+
+# xAI Chat Completions: 100_000_000 ticks per USD cent → 10_000_000_000 ticks / $1.
+# https://docs.x.ai/developers/rest-api-reference/inference/chat (verified 2026-08-19)
+TICKS_PER_USD = 10_000_000_000
 
 # USD per 1M tokens. Hardcoded; no vendor billing API.
-# ponytail: grok-4.5 ≥200k context is $4/$12; we only have prompt_tokens, no
-# position, and shipped fallbacks stay well under 200k — bill the short rate.
-# ponytail: Claude cache_creation is unsplit 5m vs 1h ($2.50 vs $4); price at 5m.
+# Rates: https://docs.x.ai/developers/pricing and
+# https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-08-19).
+# grok-4.5 ≥200k prompt bills the long-context band for ALL tokens in the request.
+# Claude cache writes split 5m vs 1h when usage.cache_creation is present.
 _RATES: dict[str, dict[str, float]] = {
     "grok-4.5": {
         "input": 2.00,
         "output": 6.00,
         "cached_input": 0.30,
+        "long_input": 4.00,
+        "long_cached_input": 0.60,
+        "long_output": 12.00,
+        "long_prompt_threshold": 200_000.0,
     },
     "claude-sonnet-5": {
         "input": 2.00,
         "output": 10.00,
-        "cache_creation": 2.50,  # Anthropic 5m cache write (list 2026-08-16)
-        "cache_read": 0.20,  # Anthropic cache hit (list 2026-08-16)
+        "cache_creation": 2.50,  # 5m cache write
+        "cache_creation_1h": 4.00,
+        "cache_read": 0.20,
     },
 }
 
@@ -46,13 +56,17 @@ _TOKEN_KEYS = (
     "cached_input_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
+    "cache_creation_5m_tokens",
+    "cache_creation_1h_tokens",
+    "reasoning_tokens",
+    "vendor_cost_ticks",
 )
 
 _EMPTY_TOKENS: dict[str, int | None] = dict.fromkeys(_TOKEN_KEYS)
 
 
 def _as_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
     return value
 
@@ -62,7 +76,12 @@ def _empty_tokens() -> dict[str, int | None]:
 
 
 def parse_grok_usage(usage: object) -> dict[str, int | None]:
-    """Map xAI Chat Completions ``usage`` to ledger token fields."""
+    """Map xAI Chat Completions ``usage`` to ledger token fields.
+
+    ``completion_tokens`` is visible output only. Reasoning sits in
+    ``completion_tokens_details.reasoning_tokens`` and is billed at the output
+    rate. Prefer ``cost_in_usd_ticks`` at read time when present.
+    """
     tokens = _empty_tokens()
     if not isinstance(usage, Mapping):
         return tokens
@@ -71,11 +90,19 @@ def parse_grok_usage(usage: object) -> dict[str, int | None]:
     details = usage.get("prompt_tokens_details")
     if isinstance(details, Mapping):
         tokens["cached_input_tokens"] = _as_int(details.get("cached_tokens"))
+    completion_details = usage.get("completion_tokens_details")
+    if isinstance(completion_details, Mapping):
+        tokens["reasoning_tokens"] = _as_int(completion_details.get("reasoning_tokens"))
+    tokens["vendor_cost_ticks"] = _as_int(usage.get("cost_in_usd_ticks"))
     return tokens
 
 
 def parse_claude_usage(usage: object) -> dict[str, int | None]:
-    """Map Anthropic Messages ``usage`` to ledger token fields."""
+    """Map Anthropic Messages ``usage`` to ledger token fields.
+
+    ``output_tokens`` is the inclusive billing total. Cache writes split by TTL
+    when ``cache_creation`` is present; otherwise price the unsplit write at 5m.
+    """
     tokens = _empty_tokens()
     if not isinstance(usage, Mapping):
         return tokens
@@ -83,6 +110,10 @@ def parse_claude_usage(usage: object) -> dict[str, int | None]:
     tokens["output_tokens"] = _as_int(usage.get("output_tokens"))
     tokens["cache_creation_input_tokens"] = _as_int(usage.get("cache_creation_input_tokens"))
     tokens["cache_read_input_tokens"] = _as_int(usage.get("cache_read_input_tokens"))
+    creation = usage.get("cache_creation")
+    if isinstance(creation, Mapping):
+        tokens["cache_creation_5m_tokens"] = _as_int(creation.get("ephemeral_5m_input_tokens"))
+        tokens["cache_creation_1h_tokens"] = _as_int(creation.get("ephemeral_1h_input_tokens"))
     return tokens
 
 
@@ -152,32 +183,79 @@ def record_external_usage(
 
 def _token_count(tokens: Mapping[str, object], key: str) -> int:
     value = tokens.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def billed_output_tokens(tokens: Mapping[str, object]) -> int:
+    """Visible completion plus Grok reasoning tokens (Claude reasoning is already in output)."""
+    return _token_count(tokens, "output_tokens") + _token_count(tokens, "reasoning_tokens")
 
 
 def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | bool | str | None]:
-    """Dollars at read time only. Unknown model → usd None, rate_unknown true."""
+    """Dollars at read time only. Unknown model → usd None, rate_unknown true.
+
+    Prefer xAI ``cost_in_usd_ticks`` when present; otherwise the dated rate table.
+    """
+    ticks = tokens.get("vendor_cost_ticks")
+    if _is_int(ticks) and ticks >= 0:
+        return {
+            "usd": ticks / TICKS_PER_USD,
+            "rate_unknown": False,
+            "priced_as_of": PRICED_AS_OF,
+            "usd_source": "vendor_ticks",
+        }
+
     rates = _RATES.get(model)
     if rates is None:
-        return {"usd": None, "rate_unknown": True, "priced_as_of": PRICED_AS_OF}
+        return {
+            "usd": None,
+            "rate_unknown": True,
+            "priced_as_of": PRICED_AS_OF,
+            "usd_source": None,
+        }
 
-    output = _token_count(tokens, "output_tokens")
-    output_usd = output * rates["output"] / 1_000_000
+    billed_out = billed_output_tokens(tokens)
 
     if "cached_input" in rates:
+        prompt = _token_count(tokens, "input_tokens")
+        threshold = rates.get("long_prompt_threshold")
+        use_long = isinstance(threshold, (int, float)) and not isinstance(threshold, bool) and prompt >= threshold
+        input_rate = rates["long_input"] if use_long else rates["input"]
+        cached_rate = rates["long_cached_input"] if use_long else rates["cached_input"]
+        output_rate = rates["long_output"] if use_long else rates["output"]
         cached = _token_count(tokens, "cached_input_tokens")
-        billed_in = _token_count(tokens, "input_tokens")
-        uncached = max(billed_in - cached, 0)
+        uncached = max(prompt - cached, 0)
         usd = (
-            uncached * rates["input"] / 1_000_000
-            + cached * rates["cached_input"] / 1_000_000
-            + output_usd
+            uncached * input_rate / 1_000_000
+            + cached * cached_rate / 1_000_000
+            + billed_out * output_rate / 1_000_000
         )
     else:
+        has_ttl_split = _is_int(tokens.get("cache_creation_5m_tokens")) or _is_int(
+            tokens.get("cache_creation_1h_tokens")
+        )
+        if has_ttl_split:
+            cache_write_usd = (
+                _token_count(tokens, "cache_creation_5m_tokens") * rates["cache_creation"] / 1_000_000
+                + _token_count(tokens, "cache_creation_1h_tokens") * rates["cache_creation_1h"] / 1_000_000
+            )
+        else:
+            cache_write_usd = (
+                _token_count(tokens, "cache_creation_input_tokens") * rates["cache_creation"] / 1_000_000
+            )
         usd = (
             _token_count(tokens, "input_tokens") * rates["input"] / 1_000_000
-            + _token_count(tokens, "cache_creation_input_tokens") * rates["cache_creation"] / 1_000_000
+            + cache_write_usd
             + _token_count(tokens, "cache_read_input_tokens") * rates["cache_read"] / 1_000_000
-            + output_usd
+            + billed_out * rates["output"] / 1_000_000
         )
-    return {"usd": usd, "rate_unknown": False, "priced_as_of": PRICED_AS_OF}
+    return {
+        "usd": usd,
+        "rate_unknown": False,
+        "priced_as_of": PRICED_AS_OF,
+        "usd_source": "rate_table",
+    }
