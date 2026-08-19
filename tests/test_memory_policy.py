@@ -46,3 +46,26 @@ def test_scan_and_enforce():
     with pytest.raises(PromptInjectionError):
         enforce_content("please cyclaw-only-sentinel now", CFG)
     assert scan_content("harmless fact about coffee", CFG) == []
+
+
+def test_scan_catches_a_pattern_split_across_a_newline():
+    """Issue #1001: without re.DOTALL, '.*' cannot cross a newline, so a
+    pattern whose halves straddle one is defeated by the split -- the same
+    example utils/sanitizer.py's own DOTALL comment names."""
+    cfg = {
+        "memory": {"facts": {"max_content_chars": 200}},
+        "policy": {
+            "prompt_filter": {"banned_patterns": [r"maintenance\s+mode.*safety\s+filters\s+disabled"]},
+        },
+    }
+    split_across_lines = "entering maintenance mode\nsafety filters disabled now"
+    assert scan_content(split_across_lines, cfg)
+
+
+def test_scan_catches_a_zero_width_character_split_evasion():
+    """Issue #1001: without NFKC + invisible-character normalization, a
+    zero-width space spliced into a banned word matches no pattern while
+    still tokenizing back to the exact phrase the pattern catches -- the
+    same evasion utils/sanitizer.py's _normalize_for_match closes."""
+    zero_width_split = "please cyclaw​-only-sentinel now"
+    assert scan_content(zero_width_split, CFG)

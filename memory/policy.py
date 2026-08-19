@@ -8,6 +8,13 @@ from typing import Any
 from utils.errors import PromptInjectionError
 from utils.personality import ENFORCED_SOUL_PATTERNS, OWASP_INJECTION_PATTERNS
 
+# Reused rather than re-implemented, same reasoning utils/authn_store.py's
+# import of personality_db._harden_pg_conninfo documents: this is the exact
+# NFKC-fold + invisible-character-strip utils/sanitizer.py's check_input
+# already applies before matching, and a second hand-rolled copy would only
+# ever drift from it, not improve on it.
+from utils.sanitizer import _normalize_for_match
+
 
 def require_reason(reason: str) -> None:
     """Raise ValueError if reason is missing/blank (mirrors soul apply)."""
@@ -24,7 +31,11 @@ def _compile_patterns(base: list[str], cfg: dict[str, Any]) -> list[tuple[str, r
     compiled: list[tuple[str, re.Pattern[str]]] = []
     for p in sources:
         try:
-            compiled.append((p, re.compile(p, re.IGNORECASE)))
+            # IGNORECASE | DOTALL, matching utils/sanitizer.py's compile flags:
+            # DOTALL so a pattern whose halves straddle a newline still
+            # matches (e.g. 'maintenance\s+mode.*safety\s+filters\s+disabled'
+            # split across two lines would otherwise slip through).
+            compiled.append((p, re.compile(p, re.IGNORECASE | re.DOTALL)))
         except re.error:
             continue
     return compiled
@@ -33,7 +44,14 @@ def _compile_patterns(base: list[str], cfg: dict[str, Any]) -> list[tuple[str, r
 def scan_content(content: str, cfg: dict[str, Any], *, enforced: bool = True) -> list[str]:
     """Return matched pattern sources. enforced=True uses critical set only."""
     base = ENFORCED_SOUL_PATTERNS if enforced else OWASP_INJECTION_PATTERNS
-    return [src for src, pat in _compile_patterns(base, cfg) if pat.search(content or "")]
+    # Match against a normalized copy, same as utils/sanitizer.py's
+    # check_input: NFKC folds fullwidth/compatibility Unicode forms back to
+    # the ASCII the patterns are written in, and stripping invisible
+    # characters closes the zero-width-splitting evasion. Only ever folds
+    # TOWARD what the patterns already catch, so this cannot stop catching
+    # something the unnormalized text used to match.
+    probe = _normalize_for_match(content or "")
+    return [src for src, pat in _compile_patterns(base, cfg) if pat.search(probe)]
 
 
 def enforce_content(content: str, cfg: dict[str, Any]) -> None:
