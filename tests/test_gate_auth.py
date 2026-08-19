@@ -530,11 +530,17 @@ def test_csrf_comparison_uses_a_timing_safe_compare():
     """A timing leak cannot be caught by behaviour, so pin it at the source --
     same reasoning tests/test_authn.py pins hmac.compare_digest usage in
     verify_password. A plain `==` would leak the CSRF token's prefix through
-    response timing."""
+    response timing, and comparing the RAW header value (rather than its
+    hash) would compare against the wrong thing entirely -- the stored value
+    is authn.hash_token(csrf_token), not the plaintext (issue #998; see
+    authn_manager.SessionInfo's docstring). Both CSRF-enforcing call sites
+    (_enforce_csrf and _require_write_actor) must hash the header first."""
     from pathlib import Path
 
     src = (Path(__file__).resolve().parent.parent / "gate_auth.py").read_text(encoding="utf-8")
-    assert "hmac.compare_digest(supplied.encode" in src
+    assert src.count("hmac.compare_digest(") == 2
+    assert "authn.hash_token(supplied).encode" in src
+    assert "compare_digest(supplied.encode" not in src
 
 
 def test_login_and_logout_run_the_blocking_manager_call_on_a_worker_thread():
