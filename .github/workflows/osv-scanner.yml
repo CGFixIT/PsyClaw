@@ -37,7 +37,7 @@ jobs:
       security-events: write # upload SARIF to code scanning
       contents: read # checkout
       actions: read # required by the codeql/upload-sarif step
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
     with:
       # Use targeted ignore config + recurse from the repository root.
       # Keep strict on PRs so new vulns block merges.
@@ -54,7 +54,7 @@ jobs:
       security-events: write # upload SARIF to code scanning
       contents: read # checkout
       actions: read # required by the codeql/upload-sarif step
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@8deb546fdb875b9996d27d4950be7312dac076a1 # v2.5.0
     with:
       # Use targeted ignore config + recurse from the repository root.
       # Non-blocking on scheduled runs (reports to Security tab without failing workflow).
