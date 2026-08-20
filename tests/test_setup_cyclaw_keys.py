@@ -554,9 +554,15 @@ def _run_prompt_and_signal(
         os.close(master_fd)
 
 
+def _exited_by(rc: int, sig: signal.Signals) -> None:
+    """Bash trap uses 128+N; Popen.wait() uses -N if the kernel won the race."""
+    n = int(sig)
+    assert rc in (128 + n, -n), rc
+
+
 def test_sigint_during_prompt_exits_130(fake_security: Path, tmp_path: Path) -> None:
     rc = _run_prompt_and_signal(fake_security, tmp_path, signal.SIGINT)
-    assert rc == 130
+    _exited_by(rc, signal.SIGINT)
     # CYCLAW_API_KEY is written before the first prompt; later tokens must not be.
     env_text = (tmp_path / ".CyClaw" / ".env").read_text(encoding="utf-8")
     assert "export CYCLAW_API_KEY=" in env_text
@@ -568,7 +574,7 @@ def test_sigint_during_prompt_exits_130(fake_security: Path, tmp_path: Path) -> 
 
 def test_sigterm_during_prompt_exits_143(fake_security: Path, tmp_path: Path) -> None:
     rc = _run_prompt_and_signal(fake_security, tmp_path, signal.SIGTERM)
-    assert rc == 143
+    _exited_by(rc, signal.SIGTERM)
     env_text = (tmp_path / ".CyClaw" / ".env").read_text(encoding="utf-8")
     assert "TELEGRAM_BOT_TOKEN" not in env_text
     assert "GROK_API_KEY" not in env_text
