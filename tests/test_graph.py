@@ -22,6 +22,7 @@ from graph import (
     audit_logger_node, guardrail_input_node, guardrail_output_node, guardrail_router,
     CHARS_PER_TOKEN, _MIN_CONTEXT_CHARS, _DEFAULT_MAX_CONTEXT_TOKENS,
     _context_char_budget, _format_context_chunks, SECTION_SEP, _llm_identity,
+    _fallback_spend_context,
 )
 from tests.conftest import (
     MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
@@ -713,6 +714,21 @@ class TestFallbackSpendContext:
         llm = MockLocalLLM()
         local_llm_node({"query": "q", "retrieved_docs": []}, llm=llm, cfg={})
         assert llm.last_spend_context is None
+
+    def test_reconstructed_route_path_hops_are_graph_nodes(self, tmp_path):
+        cfg = _make_cfg(tmp_path)
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_HIGH_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=MockGrokClient(),
+            claude=MockClaudeClient(),
+            cfg=cfg,
+        )
+        node_names = set(graph.nodes)
+        grok_hops = _fallback_spend_context({"query": "q"}, cfg, "grok")["route_path"]
+        claude_hops = _fallback_spend_context({"query": "q"}, cfg, "claude")["route_path"]
+        assert set(grok_hops) <= node_names
+        assert set(claude_hops) <= node_names
 
 
 class TestGrokFallbackPrompt:

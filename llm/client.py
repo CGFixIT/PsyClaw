@@ -614,7 +614,8 @@ class LocalLLMClient:
         _resolved_local_backends.pop(_cache_key_for_local_llm(self._llm_cfg), None)
         self._recheck_backend = True
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+        del spend_context  # local calls are unmetered
         if self._degraded or self._recheck_backend:
             self._readopt_backend_if_stale()
         label = self._label
