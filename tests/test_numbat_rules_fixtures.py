@@ -30,7 +30,7 @@ _FIXTURE_DIR = _REPO / "tests" / "fixtures" / "numbat"
 KNOWN_BAD = _FIXTURE_DIR / "known-bad-events.ndjson"
 CLEAN = _FIXTURE_DIR / "clean-events.ndjson"
 EXPECTED_HITS = ("exfil.curl_post_file", "secrets.read_private_key")
-_FROZEN_RUN = "f1cdfe21fc514ceda2d82718512c9274"
+_FROZEN_RUN = "fixture-run-961"
 _FROZEN_ENDPOINT = {
     "hostname": "space-sandbox",
     "os": "linux",
@@ -107,7 +107,7 @@ def test_clean_fixture_matches_build_event() -> None:
                 artifact_type="executor",
                 cfg=_CFG,
             ),
-            "17015148bd684c6dbb0ce81a403c9c0d",
+            "clean-exec",
             "2026-08-20T00:00:00.000000+00:00",
         ),
         _freeze(
@@ -121,7 +121,7 @@ def test_clean_fixture_matches_build_event() -> None:
                 artifact_type="executor",
                 cfg=_CFG,
             ),
-            "a4b0c1d2e3f445668899aabbccddeeff",
+            "clean-result",
             "2026-08-20T00:00:00.000100+00:00",
         ),
         _freeze(
@@ -134,7 +134,7 @@ def test_clean_fixture_matches_build_event() -> None:
                 artifact_type="fsconnect",
                 cfg=_CFG,
             ),
-            "e38ec775a61540ceaa155269cbd6137f",
+            "clean-read",
             "2026-08-20T00:00:00.000200+00:00",
         ),
         _freeze(
@@ -149,7 +149,7 @@ def test_clean_fixture_matches_build_event() -> None:
                 artifact_type="real_repo_loop",
                 cfg=_CFG,
             ),
-            "fe064108986841a8b57a6203e1e6f2fb",
+            "clean-perm",
             "2026-08-20T00:00:00.000300+00:00",
         ),
     ]
