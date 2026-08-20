@@ -239,13 +239,66 @@ def test_usage_missing_counted() -> None:
         ),
     ]
     summary = compute_spend(events, now=NOW)
+    priced_today = 1_000 * 2.00 / 1_000_000 + 2_000 * 6.00 / 1_000_000
     assert summary["usage_missing"] == 1
+    assert summary["rate_unknown"] == 0
     assert summary["today"]["tokens_in"] == 1_000
     assert summary["today"]["tokens_out"] == 2_000
+    assert summary["today"]["usd"] == pytest.approx(priced_today)
     assert summary["last_7d"]["tokens_in"] == 1_000
-    assert summary["last_7d"]["usd"] == pytest.approx(
-        1_000 * 2.00 / 1_000_000 + 2_000 * 6.00 / 1_000_000
-    )
+    assert summary["last_7d"]["usd"] is None
+
+
+def test_in_window_usage_missing_makes_usd_none() -> None:
+    events = [
+        _record(
+            days_ago=0,
+            provider="claude",
+            model="claude-sonnet-5",
+            input_tokens=None,
+            output_tokens=None,
+            usage_missing=True,
+        ),
+        _record(
+            days_ago=0,
+            provider="grok",
+            model="grok-4.5",
+            input_tokens=1_000,
+            output_tokens=2_000,
+        ),
+    ]
+    summary = compute_spend(events, now=NOW)
+    assert summary["usage_missing"] == 1
+    assert summary["rate_unknown"] == 0
+    assert summary["today"]["usd"] is None
+    assert summary["last_7d"]["usd"] is None
+    assert summary["today"]["tokens_in"] == 1_000
+    assert summary["today"]["tokens_out"] == 2_000
+
+
+def test_out_of_window_usage_missing_does_not_taint_today() -> None:
+    events = [
+        _record(
+            days_ago=7,
+            provider="claude",
+            model="claude-sonnet-5",
+            input_tokens=None,
+            output_tokens=None,
+            usage_missing=True,
+        ),
+        _record(
+            days_ago=0,
+            provider="grok",
+            model="grok-4.5",
+            input_tokens=1_000,
+            output_tokens=2_000,
+        ),
+    ]
+    summary = compute_spend(events, now=NOW)
+    priced_today = 1_000 * 2.00 / 1_000_000 + 2_000 * 6.00 / 1_000_000
+    assert summary["usage_missing"] == 1
+    assert summary["today"]["usd"] == pytest.approx(priced_today)
+    assert summary["last_7d"]["usd"] == pytest.approx(priced_today)
 
 
 def test_print_metrics_spend_section_after_online_escalations(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
