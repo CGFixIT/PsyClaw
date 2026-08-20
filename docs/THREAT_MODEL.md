@@ -813,11 +813,16 @@ every account now carries a `role` of `admin`, `operator`, or `audit`
 - **Last-admin protection is atomic, not check-then-act.** The guard against
   deleting/disabling/demoting the sole remaining enabled admin is folded
   directly into the SQL statement (`utils/authn_manager.py`'s
-  `last_admin_guard` clause), closing a TOCTOU window an external review
-  found in the first version of this change (PR #940 review findings 1/2/5,
-  landed in `a599c35`). The same fix also moved the `/query` 401 rejection
-  path inside the auth dependency so it is rate-limited and audited like any
-  other auth failure, rather than only after a downstream check.
+  `last_admin_guard` clause). SQLite serializes that statement with
+  single-writer file locking. Postgres (READ COMMITTED) additionally
+  `SELECT ... FOR UPDATE` on enabled admin rows in username order in the
+  same transaction, so two concurrent writes against *different* admin
+  rows cannot both pass the count. PR #940 review findings 1/2/5
+  (`a599c35`) closed the original check-then-act window; issue #997 closed
+  the cross-statement Postgres race. The same #940 fix also moved the
+  `/query` 401 rejection path inside the auth dependency so it is
+  rate-limited and audited like any other auth failure, rather than only
+  after a downstream check.
 - **Shipped posture is unchanged.** `auth.enabled` still ships `false`; RBAC
   only has an effect once an operator turns Stage 3 on. This amendment
   documents a control that now exists in the code, not a change to the
