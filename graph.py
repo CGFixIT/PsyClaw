@@ -348,10 +348,9 @@ def _generate_or_error(
     try:
         if spend_context is None:
             return client.generate(prompt), None
-        try:
-            return client.generate(prompt, spend_context=spend_context), None
-        except TypeError:
-            return client.generate(prompt), None
+        # Do not catch TypeError and retry without context: generate() may
+        # already have billed a 200. Mocks accept **kwargs.
+        return client.generate(prompt, spend_context=spend_context), None
     except RAGError as e:
         return f"[{label} Error: {e.message}]", f"{e.code}: {e.message}"
 
