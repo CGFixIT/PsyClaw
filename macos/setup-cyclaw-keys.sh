@@ -340,14 +340,68 @@ _env_get() {
 
 # -- Keychain -----------------------------------------------------------------
 
-_keychain_get() {
-  security find-generic-password -a "$ACCOUNT" -s "$1" -w 2>/dev/null || true
+_SECURITY_BIN=""
+_KEYCHAIN_READ_STATE=""
+_KEYCHAIN_READ_VALUE=""
+_KEYCHAIN_READ_RC=0
+
+_resolve_security() {
+  if [ -n "$_SECURITY_BIN" ]; then
+    return 0
+  fi
+  if [ "${CYCLAW_SETUP_KEYS_SKIP_PLATFORM:-}" = "1" ] && [ "${CYCLAW_SETUP_KEYS_STDIN_STORE:-}" = "1" ]; then
+    # Test harness only: permit its fake security(1) to come from PATH.
+    _SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+  elif [ -x /usr/bin/security ]; then
+    _SECURITY_BIN="/usr/bin/security"
+  else
+    _SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+  fi
+  [ -n "$_SECURITY_BIN" ]
 }
 
-_keychain_has() {
-  local val
-  val="$(_keychain_get "$1")"
-  [ -n "$val" ]
+_keychain_read() {
+  local service="$1" value="" rc=0
+  _KEYCHAIN_READ_STATE=""
+  _KEYCHAIN_READ_VALUE=""
+  _KEYCHAIN_READ_RC=0
+
+  if ! _resolve_security; then
+    _KEYCHAIN_READ_STATE="tool_error"
+    _KEYCHAIN_READ_RC=127
+    return 1
+  fi
+
+  # Attribute lookup proves presence without requesting secret data or
+  # triggering the item's read ACL. Only a genuine not-found result may fall
+  # through to another source or key generation.
+  if "$_SECURITY_BIN" find-generic-password -a "$ACCOUNT" -s "$service" >/dev/null 2>&1; then
+    :
+  else
+    rc=$?
+    _KEYCHAIN_READ_RC="$rc"
+    if [ "$rc" -eq 44 ]; then
+      _KEYCHAIN_READ_STATE="missing"
+    else
+      _KEYCHAIN_READ_STATE="tool_error"
+    fi
+    return 1
+  fi
+
+  if value="$("$_SECURITY_BIN" find-generic-password -a "$ACCOUNT" -s "$service" -w 2>/dev/null)"; then
+    if [ -z "$value" ]; then
+      _KEYCHAIN_READ_STATE="empty"
+      return 1
+    fi
+    _KEYCHAIN_READ_STATE="readable"
+    _KEYCHAIN_READ_VALUE="$value"
+    return 0
+  else
+    rc=$?
+    _KEYCHAIN_READ_STATE="unreadable"
+    _KEYCHAIN_READ_RC="$rc"
+    return 1
+  fi
 }
 
 # Store the contents of a 0600 file as a generic password. The secret is
@@ -361,7 +415,7 @@ _keychain_store_file() {
 
   # Test / CI path: the fake `security` stub reads stdin after a bare -w.
   if [ "${CYCLAW_SETUP_KEYS_STDIN_STORE:-}" = "1" ]; then
-    security add-generic-password -a "$ACCOUNT" -s "$service" -T /usr/bin/security -U -w < "$secret_file"
+    "$_SECURITY_BIN" add-generic-password -a "$ACCOUNT" -s "$service" -T /usr/bin/security -U -w < "$secret_file"
     return $?
   fi
 
@@ -391,8 +445,8 @@ EXPECT_EOF
     return $?
   fi
 
-  warn "could not store service=$service in Keychain (no expect, no TTY). .env still written."
-  return 0
+  warn "could not store service=$service in Keychain (no expect, no TTY); aborting before dotenv write"
+  return 1
 }
 
 _keychain_store_value() {
@@ -423,15 +477,15 @@ _persist() {
   fi
 
   if [ "$DO_KEYCHAIN" -eq 1 ]; then
-    if command -v security >/dev/null 2>&1; then
-      if _keychain_store_value "$service" "$value"; then
-        step "Keychain: stored $env_name (service=$service account=$ACCOUNT)"
-      else
-        warn "Keychain store failed for $env_name (service=$service)"
-      fi
-    else
-      warn "security(1) not on PATH — skipped Keychain for $env_name"
+    if ! _resolve_security; then
+      warn "security(1) is unavailable; refusing to persist $env_name only to dotenv"
+      return 1
     fi
+    if ! _keychain_store_value "$service" "$value"; then
+      warn "Keychain store failed for $env_name (service=$service); dotenv files were not changed"
+      return 1
+    fi
+    step "Keychain: stored $env_name (service=$service account=$ACCOUNT)"
   fi
 
   if [ "$DO_ENV_FILE" -eq 1 ]; then
@@ -619,6 +673,7 @@ EOF
   chmod 644 "$dest"
   step "wrote $dest ($interval). NOT loaded."
   step "to activate: launchctl bootstrap gui/${uid} $dest"
+  step "the job runs the frozen copy at $script_path; after updating CyClaw, re-run --schedule-rotate $interval to refresh it"
   step "the job rotates CYCLAW_API_KEY only. Consoles hold the key in memory — re-run --fill-browser after a rotate, or paste once."
 }
 
@@ -775,11 +830,22 @@ _prompt_secret() {
     eval "$outvar=''"
     return 0
   fi
-  if _keychain_has "$service" 2>/dev/null; then
-    present="Keychain"
-  elif _env_has "$ENV_FILE" "$env_name"; then
+  if [ "$DO_KEYCHAIN" -eq 1 ]; then
+    if _keychain_read "$service"; then
+      present="Keychain"
+      _KEYCHAIN_READ_VALUE=""
+    else
+      case "$_KEYCHAIN_READ_STATE" in
+        missing) ;;
+        empty) warn "Keychain item for $env_name exists but its value is empty" ;;
+        unreadable) warn "Keychain item for $env_name exists but could not be read (security exit $_KEYCHAIN_READ_RC)" ;;
+        tool_error) warn "could not query the Keychain for $env_name (security exit $_KEYCHAIN_READ_RC)" ;;
+      esac
+    fi
+  fi
+  if [ -z "$present" ] && _env_has "$ENV_FILE" "$env_name"; then
     present=".env"
-  elif [ -n "$(eval "printf '%s' \"\${$env_name:-}\"")" ]; then
+  elif [ -z "$present" ] && [ -n "$(eval "printf '%s' \"\${$env_name:-}\"")" ]; then
     present="environment"
   fi
   if [ -n "$present" ]; then
@@ -823,13 +889,35 @@ _api_source=""
 _api_value=""
 
 if [ "$ROTATE" -eq 0 ]; then
-  if _keychain_has "$KC_API" 2>/dev/null; then
-    _api_value="$(_keychain_get "$KC_API")"
-    _api_source="Keychain"
-  elif _env_has "$ENV_FILE" "CYCLAW_API_KEY"; then
+  if [ "$DO_KEYCHAIN" -eq 1 ]; then
+    if _keychain_read "$KC_API"; then
+      _api_value="$_KEYCHAIN_READ_VALUE"
+      _KEYCHAIN_READ_VALUE=""
+      _api_source="Keychain"
+    else
+      case "$_KEYCHAIN_READ_STATE" in
+        missing) ;;
+        empty)
+          echo "[cyclaw] Keychain item for CYCLAW_API_KEY exists but its value is empty; refusing to generate a replacement." >&2
+          exit 1
+          ;;
+        unreadable)
+          echo "[cyclaw] Keychain item for CYCLAW_API_KEY exists but could not be read (security exit $_KEYCHAIN_READ_RC)." >&2
+          echo "[cyclaw] Unlock the Keychain or repair its ACL, then retry; no replacement key was generated." >&2
+          exit 1
+          ;;
+        tool_error)
+          echo "[cyclaw] could not query the Keychain for CYCLAW_API_KEY (security exit $_KEYCHAIN_READ_RC)." >&2
+          echo "[cyclaw] Fix security(1) access or pass --no-keychain explicitly; no replacement key was generated." >&2
+          exit 1
+          ;;
+      esac
+    fi
+  fi
+  if [ -z "$_api_source" ] && _env_has "$ENV_FILE" "CYCLAW_API_KEY"; then
     _api_value="$(_env_get "$ENV_FILE" "CYCLAW_API_KEY")"
     _api_source=".env"
-  elif [ -n "${CYCLAW_API_KEY:-}" ]; then
+  elif [ -z "$_api_source" ] && [ -n "${CYCLAW_API_KEY:-}" ]; then
     _api_value="$CYCLAW_API_KEY"
     _api_source="environment"
   fi
@@ -939,6 +1027,10 @@ step "launchd     : still uses Keychain via cyclaw-keychain-env.sh — never .en
 step "browser     : consoles keep the key in the #apiKey field only (never localStorage)"
 if [ "$FILL_BROWSER" -eq 0 ]; then
   step "            : paste once, or re-run with --fill-browser after cyclaw is up"
+fi
+if [ "$GENERATED_NEW" -eq 1 ]; then
+  step "server      : restart gate.py to load the new CYCLAW_API_KEY"
+  step "            : nothing in CyClaw reads .env at runtime; the key was NOT applied live"
 fi
 
 if [ "$GENERATED_NEW" -eq 1 ] && [ "$PRINT_KEY" != "never" ]; then

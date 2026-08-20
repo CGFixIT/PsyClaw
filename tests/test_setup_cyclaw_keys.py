@@ -37,19 +37,37 @@ cmd="$1"; shift
 case "$cmd" in
   find-generic-password)
     service=""
+    read_value=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -s) service="$2"; shift 2 ;;
-        -w) shift 1 ;;
+        -w) read_value=1; shift 1 ;;
         *) shift 1 ;;
       esac
     done
-    IFS='|' read -ra items <<< "${FAKE_SECURITY_ITEMS:-}"
+    if [ -n "${FAKE_SECURITY_FIND_LOG:-}" ]; then
+      if [ "$read_value" -eq 1 ]; then
+        printf 'read\t%s\n' "$service" >> "${FAKE_SECURITY_FIND_LOG}"
+      else
+        printf 'probe\t%s\n' "$service" >> "${FAKE_SECURITY_FIND_LOG}"
+      fi
+    fi
+    if [ "$read_value" -eq 0 ] && [ -n "${FAKE_SECURITY_PROBE_RC:-}" ]; then
+      exit "${FAKE_SECURITY_PROBE_RC}"
+    fi
+    items_raw="${FAKE_SECURITY_ITEMS:-}"
+    [ -n "$items_raw" ] || exit 44
+    IFS='|' read -ra items <<< "$items_raw"
     for item in "${items[@]}"; do
       key="${item%%=*}"
       val="${item#*=}"
       if [ "$key" = "$service" ]; then
-        printf '%s' "$val"
+        if [ "$read_value" -eq 1 ] && [ -n "${FAKE_SECURITY_READ_RC:-}" ]; then
+          exit "${FAKE_SECURITY_READ_RC}"
+        fi
+        if [ "$read_value" -eq 1 ]; then
+          printf '%s' "$val"
+        fi
         exit 0
       fi
     done
@@ -83,6 +101,9 @@ case "$cmd" in
     if [ -n "${FAKE_SECURITY_LOG:-}" ]; then
       echo "add-generic-password$args_log" >> "$FAKE_SECURITY_LOG"
     fi
+    if [ -n "${FAKE_SECURITY_WRITE_RC:-}" ]; then
+      exit "${FAKE_SECURITY_WRITE_RC}"
+    fi
     exit 0
     ;;
   *)
@@ -92,9 +113,7 @@ case "$cmd" in
 esac
 """
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt", reason="requires a POSIX shell (bash) and chmod semantics"
-)
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="requires a POSIX shell (bash) and chmod semantics")
 
 
 @pytest.fixture
@@ -201,9 +220,7 @@ def test_unknown_option_exits_one(fake_security: Path, tmp_path: Path) -> None:
     assert "unknown option" in result.stderr
 
 
-def test_skip_prompts_generates_key_into_home_env(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_skip_prompts_generates_key_into_home_env(fake_security: Path, tmp_path: Path) -> None:
     argv_log = tmp_path / "security-calls.log"
     stdin_log = tmp_path / "security-stdin.log"
     result = _run(
@@ -278,9 +295,7 @@ def test_keep_existing_without_rotate(fake_security: Path, tmp_path: Path) -> No
     home_env = tmp_path / ".CyClaw"
     home_env.mkdir()
     existing = "a" * 40
-    (home_env / ".env").write_text(
-        f"export CYCLAW_API_KEY='{existing}'\n", encoding="utf-8"
-    )
+    (home_env / ".env").write_text(f"export CYCLAW_API_KEY='{existing}'\n", encoding="utf-8")
     (home_env / ".env").chmod(0o600)
     result = _run(
         "--skip-prompts",
@@ -294,13 +309,98 @@ def test_keep_existing_without_rotate(fake_security: Path, tmp_path: Path) -> No
     assert "keeping" in result.stdout
 
 
+def test_reads_existing_keychain_item_once_after_presence_probe(fake_security: Path, tmp_path: Path) -> None:
+    existing = "c" * 40
+    find_log = tmp_path / "security-find.log"
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+        items=f"com.cgfixit.cyclaw.api-key={existing}",
+        extra_env={"FAKE_SECURITY_FIND_LOG": str(find_log)},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "already present (Keychain)" in result.stdout
+    assert f"export CYCLAW_API_KEY='{existing}'" in (tmp_path / ".CyClaw" / ".env").read_text(encoding="utf-8")
+    assert find_log.read_text(encoding="utf-8").splitlines() == [
+        "probe\tcom.cgfixit.cyclaw.api-key",
+        "read\tcom.cgfixit.cyclaw.api-key",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("extra_env", "message"),
+    [
+        ({"FAKE_SECURITY_READ_RC": "36"}, "exists but could not be read (security exit 36)"),
+        ({"FAKE_SECURITY_PROBE_RC": "1"}, "could not query the Keychain for CYCLAW_API_KEY (security exit 1)"),
+    ],
+)
+def test_keychain_lookup_failure_never_generates_or_writes_dotenv(
+    fake_security: Path,
+    tmp_path: Path,
+    extra_env: dict[str, str],
+    message: str,
+) -> None:
+    existing = "d" * 40
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+        items=f"com.cgfixit.cyclaw.api-key={existing}",
+        extra_env=extra_env,
+    )
+    assert result.returncode == 1
+    assert message in result.stderr
+    assert "generated CYCLAW_API_KEY" not in result.stdout
+    assert not (tmp_path / ".CyClaw" / ".env").exists()
+
+
+def test_empty_keychain_item_never_falls_through_to_generation(fake_security: Path, tmp_path: Path) -> None:
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+        items="com.cgfixit.cyclaw.api-key=",
+    )
+    assert result.returncode == 1
+    assert "exists but its value is empty" in result.stderr
+    assert "generated CYCLAW_API_KEY" not in result.stdout
+    assert not (tmp_path / ".CyClaw" / ".env").exists()
+
+
+def test_keychain_write_failure_aborts_before_dotenv_write(fake_security: Path, tmp_path: Path) -> None:
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+        extra_env={"FAKE_SECURITY_WRITE_RC": "1"},
+    )
+    assert result.returncode == 1
+    assert "Keychain store failed for CYCLAW_API_KEY" in result.stderr
+    assert not (tmp_path / ".CyClaw" / ".env").exists()
+
+
+def test_generated_api_key_warns_that_gate_restart_is_required(fake_security: Path, tmp_path: Path) -> None:
+    result = _run(
+        "--skip-prompts",
+        "--no-print-key",
+        fake_security_bin=fake_security,
+        home=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "restart gate.py" in result.stdout
+    assert "nothing in CyClaw reads .env at runtime" in result.stdout
+
+
 def test_rotate_replaces_existing(fake_security: Path, tmp_path: Path) -> None:
     home_env = tmp_path / ".CyClaw"
     home_env.mkdir()
     existing = "b" * 40
-    (home_env / ".env").write_text(
-        f"export CYCLAW_API_KEY='{existing}'\n", encoding="utf-8"
-    )
+    (home_env / ".env").write_text(f"export CYCLAW_API_KEY='{existing}'\n", encoding="utf-8")
     result = _run(
         "--skip-prompts",
         "--rotate",
@@ -333,17 +433,13 @@ def test_upsert_preserves_unrelated_keys(fake_security: Path, tmp_path: Path) ->
     assert "export OTHER_THING='keep-me'" in text
 
 
-def test_refuses_non_tty_without_skip_prompts(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_refuses_non_tty_without_skip_prompts(fake_security: Path, tmp_path: Path) -> None:
     result = _run(fake_security_bin=fake_security, home=tmp_path)
     assert result.returncode == 1
     assert "TTY" in result.stderr
 
 
-def test_schedule_rotate_plist_has_no_secret(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_schedule_rotate_plist_has_no_secret(fake_security: Path, tmp_path: Path) -> None:
     result = _run(
         "--skip-prompts",
         "--no-print-key",
@@ -366,11 +462,10 @@ def test_schedule_rotate_plist_has_no_secret(
     helper = tmp_path / ".CyClaw" / "bin" / "setup-cyclaw-keys.sh"
     assert helper.is_file()
     assert helper.stat().st_mode & stat.S_IXUSR
+    assert "re-run --schedule-rotate" in result.stdout
 
 
-def test_schedule_rotate_rejects_unknown_interval(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_schedule_rotate_rejects_unknown_interval(fake_security: Path, tmp_path: Path) -> None:
     result = _run(
         "--schedule-rotate",
         "daily",
@@ -381,9 +476,7 @@ def test_schedule_rotate_rejects_unknown_interval(
     assert "monthly" in result.stderr
 
 
-def test_unschedule_rotate_removes_plist(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_unschedule_rotate_removes_plist(fake_security: Path, tmp_path: Path) -> None:
     first = _run(
         "--skip-prompts",
         "--no-print-key",
@@ -408,9 +501,7 @@ def test_unschedule_rotate_removes_plist(
     assert not plist.exists()
 
 
-def test_help_lists_browser_and_schedule_flags(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_help_lists_browser_and_schedule_flags(fake_security: Path, tmp_path: Path) -> None:
     result = _run("--help", fake_security_bin=fake_security, home=tmp_path)
     assert result.returncode == 0
     assert "--fill-browser" in result.stdout
@@ -418,9 +509,7 @@ def test_help_lists_browser_and_schedule_flags(
     assert "--copy-key" in result.stdout
 
 
-def test_custom_cyclaw_home_rc_sources_that_env(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_custom_cyclaw_home_rc_sources_that_env(fake_security: Path, tmp_path: Path) -> None:
     custom = tmp_path / "alt home"
     result = _run(
         "--skip-prompts",
@@ -441,9 +530,7 @@ def test_custom_cyclaw_home_rc_sources_that_env(
     assert match.group(1) not in rc
 
 
-def test_keep_round_trips_apostrophe_in_existing_key(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_keep_round_trips_apostrophe_in_existing_key(fake_security: Path, tmp_path: Path) -> None:
     home_env = tmp_path / ".CyClaw"
     home_env.mkdir()
     # Managed encoding of abc'def-not-a-real-key-xx (apostrophe in the value).
@@ -464,9 +551,7 @@ def test_keep_round_trips_apostrophe_in_existing_key(
     assert "keeping" in result.stdout
 
 
-def test_malformed_keys_block_is_left_unchanged(
-    fake_security: Path, tmp_path: Path
-) -> None:
+def test_malformed_keys_block_is_left_unchanged(fake_security: Path, tmp_path: Path) -> None:
     rc = tmp_path / ".zshrc"
     rc.write_text("# >>> cyclaw keys >>>\n# half-written, no end marker\n", encoding="utf-8")
     result = _run(
@@ -477,9 +562,7 @@ def test_malformed_keys_block_is_left_unchanged(
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "malformed" in result.stderr
-    assert rc.read_text(encoding="utf-8") == (
-        "# >>> cyclaw keys >>>\n# half-written, no end marker\n"
-    )
+    assert rc.read_text(encoding="utf-8") == ("# >>> cyclaw keys >>>\n# half-written, no end marker\n")
 
 
 def test_repo_path_writes_checkout_env(fake_security: Path, tmp_path: Path) -> None:

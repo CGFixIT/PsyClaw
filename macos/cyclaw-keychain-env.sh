@@ -71,11 +71,40 @@ if ! [[ "$VAR_NAME" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
 fi
 
 ACCOUNT="$(id -un)"
-SECRET="$(security find-generic-password -a "$ACCOUNT" -s "$SERVICE" -w 2>/dev/null)" || {
-  echo "cyclaw-keychain-env: no Keychain item for service '$SERVICE' (account '$ACCOUNT')" >&2
-  echo "cyclaw-keychain-env: store it first: macos/cyclaw-keychain-set.sh '$SERVICE'" >&2
+if [ "${CYCLAW_KEYCHAIN_ENV_TEST_MODE:-}" = "1" ]; then
+  # Test harness only: permit its fake security(1) to come from PATH.
+  SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+elif [ -x /usr/bin/security ]; then
+  SECURITY_BIN="/usr/bin/security"
+else
+  SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+fi
+if [ -z "$SECURITY_BIN" ]; then
+  echo "cyclaw-keychain-env: could not query the Keychain: security(1) is unavailable" >&2
   exit 1
-}
+fi
+
+if "$SECURITY_BIN" find-generic-password -a "$ACCOUNT" -s "$SERVICE" >/dev/null 2>&1; then
+  :
+else
+  rc=$?
+  if [ "$rc" -eq 44 ]; then
+    echo "cyclaw-keychain-env: no Keychain item for service '$SERVICE' (account '$ACCOUNT')" >&2
+    echo "cyclaw-keychain-env: store it first: macos/cyclaw-keychain-set.sh '$SERVICE'" >&2
+  else
+    echo "cyclaw-keychain-env: could not query the Keychain for service '$SERVICE' (security exit $rc)" >&2
+  fi
+  exit 1
+fi
+
+if SECRET="$("$SECURITY_BIN" find-generic-password -a "$ACCOUNT" -s "$SERVICE" -w 2>/dev/null)"; then
+  :
+else
+  rc=$?
+  echo "cyclaw-keychain-env: Keychain item for service '$SERVICE' exists but could not be read (security exit $rc)" >&2
+  echo "cyclaw-keychain-env: unlock the Keychain or review the item's access control, then retry" >&2
+  exit 1
+fi
 
 if [ -z "$SECRET" ]; then
   echo "cyclaw-keychain-env: Keychain item for service '$SERVICE' is empty" >&2

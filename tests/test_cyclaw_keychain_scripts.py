@@ -51,19 +51,30 @@ cmd="$1"; shift
 case "$cmd" in
   find-generic-password)
     service=""
+    read_value=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
         -s) service="$2"; shift 2 ;;
-        -w) shift 1 ;;
+        -w) read_value=1; shift 1 ;;
         *) shift 1 ;;
       esac
     done
-    IFS='|' read -ra items <<< "${FAKE_SECURITY_ITEMS:-}"
+    if [ "$read_value" -eq 0 ] && [ -n "${FAKE_SECURITY_PROBE_RC:-}" ]; then
+      exit "${FAKE_SECURITY_PROBE_RC}"
+    fi
+    items_raw="${FAKE_SECURITY_ITEMS:-}"
+    [ -n "$items_raw" ] || exit 44
+    IFS='|' read -ra items <<< "$items_raw"
     for item in "${items[@]}"; do
       key="${item%%=*}"
       val="${item#*=}"
       if [ "$key" = "$service" ]; then
-        printf '%s' "$val"
+        if [ "$read_value" -eq 1 ] && [ -n "${FAKE_SECURITY_READ_RC:-}" ]; then
+          exit "${FAKE_SECURITY_READ_RC}"
+        fi
+        if [ "$read_value" -eq 1 ]; then
+          printf '%s' "$val"
+        fi
         exit 0
       fi
     done
@@ -120,10 +131,14 @@ def _run(
     fake_security_bin: Path,
     items: str = "",
     input_text: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PATH"] = f"{fake_security_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["CYCLAW_KEYCHAIN_ENV_TEST_MODE"] = "1"
     env["FAKE_SECURITY_ITEMS"] = items
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [_BASH, str(script), *args],
         check=False,
@@ -155,7 +170,9 @@ def test_env_script_usage_error_on_too_few_args(fake_security: Path) -> None:
 
 
 def test_env_script_fails_closed_on_missing_item(fake_security: Path) -> None:
-    result = _run(_ENV_SCRIPT, "missing-svc", "MY_VAR", "--", "echo", "should-not-run", fake_security_bin=fake_security, items="")
+    result = _run(
+        _ENV_SCRIPT, "missing-svc", "MY_VAR", "--", "echo", "should-not-run", fake_security_bin=fake_security, items=""
+    )
     assert result.returncode == 1
     assert "no Keychain item" in result.stderr
     assert "should-not-run" not in result.stdout
@@ -163,11 +180,58 @@ def test_env_script_fails_closed_on_missing_item(fake_security: Path) -> None:
 
 def test_env_script_fails_closed_on_empty_item(fake_security: Path) -> None:
     result = _run(
-        _ENV_SCRIPT, "svc", "MY_VAR", "--", "echo", "should-not-run",
-        fake_security_bin=fake_security, items="svc=",
+        _ENV_SCRIPT,
+        "svc",
+        "MY_VAR",
+        "--",
+        "echo",
+        "should-not-run",
+        fake_security_bin=fake_security,
+        items="svc=",
     )
     assert result.returncode == 1
     assert "is empty" in result.stderr
+    assert "should-not-run" not in result.stdout
+
+
+def test_env_script_distinguishes_unreadable_item_from_missing(
+    fake_security: Path,
+) -> None:
+    result = _run(
+        _ENV_SCRIPT,
+        "svc",
+        "MY_VAR",
+        "--",
+        "echo",
+        "should-not-run",
+        fake_security_bin=fake_security,
+        items="svc=hunter2",
+        extra_env={"FAKE_SECURITY_READ_RC": "36"},
+    )
+    assert result.returncode == 1
+    assert "exists but could not be read (security exit 36)" in result.stderr
+    assert "store it first" not in result.stderr
+    assert "hunter2" not in result.stderr
+    assert "should-not-run" not in result.stdout
+
+
+def test_env_script_distinguishes_probe_failure_from_missing(
+    fake_security: Path,
+) -> None:
+    result = _run(
+        _ENV_SCRIPT,
+        "svc",
+        "MY_VAR",
+        "--",
+        "echo",
+        "should-not-run",
+        fake_security_bin=fake_security,
+        items="svc=hunter2",
+        extra_env={"FAKE_SECURITY_PROBE_RC": "1"},
+    )
+    assert result.returncode == 1
+    assert "could not query the Keychain for service 'svc' (security exit 1)" in result.stderr
+    assert "store it first" not in result.stderr
     assert "should-not-run" not in result.stdout
 
 
@@ -175,15 +239,24 @@ def test_env_script_rejects_invalid_var_name_before_touching_keychain(fake_secur
     # No Keychain item configured at all -- if the script queried `security`
     # before validating VAR_NAME, this would fail with "no Keychain item"
     # instead of the var-name-specific message, so this also pins the order.
-    result = _run(_ENV_SCRIPT, "svc", "1-not-a-valid-name", "--", "echo", "x", fake_security_bin=fake_security, items="")
+    result = _run(
+        _ENV_SCRIPT, "svc", "1-not-a-valid-name", "--", "echo", "x", fake_security_bin=fake_security, items=""
+    )
     assert result.returncode == 1
     assert "invalid environment variable name" in result.stderr
 
 
 def test_env_script_injects_single_secret_without_leaking_it_to_stderr(fake_security: Path) -> None:
     result = _run(
-        _ENV_SCRIPT, "svc", "MY_VAR", "--", sys.executable, "-c", "import os; print(os.environ['MY_VAR'])",
-        fake_security_bin=fake_security, items="svc=hunter2",
+        _ENV_SCRIPT,
+        "svc",
+        "MY_VAR",
+        "--",
+        sys.executable,
+        "-c",
+        "import os; print(os.environ['MY_VAR'])",
+        fake_security_bin=fake_security,
+        items="svc=hunter2",
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "hunter2"
@@ -194,9 +267,16 @@ def test_env_script_chains_two_secrets_via_nested_exec(fake_security: Path) -> N
     print_both = "import os; print(os.environ['VAR_A'] + ':' + os.environ['VAR_B'])"
     result = _run(
         _ENV_SCRIPT,
-        "svc-a", "VAR_A", "--",
-        str(_ENV_SCRIPT), "svc-b", "VAR_B", "--",
-        sys.executable, "-c", print_both,
+        "svc-a",
+        "VAR_A",
+        "--",
+        str(_ENV_SCRIPT),
+        "svc-b",
+        "VAR_B",
+        "--",
+        sys.executable,
+        "-c",
+        print_both,
         fake_security_bin=fake_security,
         items="svc-a=vala|svc-b=valb",
     )
@@ -209,9 +289,15 @@ def test_env_script_second_layer_still_fails_closed_on_missing_item(fake_securit
     # chain must still fail closed rather than running with VAR_B unset.
     result = _run(
         _ENV_SCRIPT,
-        "svc-a", "VAR_A", "--",
-        str(_ENV_SCRIPT), "svc-b", "VAR_B", "--",
-        "echo", "should-not-run",
+        "svc-a",
+        "VAR_A",
+        "--",
+        str(_ENV_SCRIPT),
+        "svc-b",
+        "VAR_B",
+        "--",
+        "echo",
+        "should-not-run",
         fake_security_bin=fake_security,
         items="svc-a=vala",
     )
@@ -279,7 +365,9 @@ def _run_set_script_via_pty(
             os.close(slave_fd)
 
 
-def test_set_script_stores_via_fake_security_and_never_echoes_secret_to_argv(fake_security: Path, tmp_path: Path) -> None:
+def test_set_script_stores_via_fake_security_and_never_echoes_secret_to_argv(
+    fake_security: Path, tmp_path: Path
+) -> None:
     log_path = tmp_path / "security-calls.log"
     stdin_log_path = tmp_path / "security-stdin.log"
 
