@@ -49,11 +49,13 @@ verification that would otherwise evaporate.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agentic.deepagent_github.handoff import sanitize_handoff
@@ -63,6 +65,12 @@ from utils.logger import audit_log
 from utils.spend import record_external_usage
 
 logger = logging.getLogger("cyclaw.agentic.chat_client")
+
+# Last 2xx JSON ``usage`` from the Grok httpx hook. Prefer this over LangChain
+# metadata so xAI ``cost_in_usd_ticks`` is not dropped.
+_HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.ContextVar(
+    "cyclaw_agentic_http_usage", default=None
+)
 
 
 @dataclass(frozen=True)
@@ -127,6 +135,27 @@ def _usage_from_langchain_metadata(provider: str, usage_meta: Mapping[str, objec
     }
 
 
+def _capture_http_usage(response: httpx.Response) -> None:
+    """Store vendor usage JSON. Never log the body."""
+    try:
+        if response.status_code < 200 or response.status_code >= 300:
+            return
+        data = response.json()
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(usage, dict):
+            _HTTP_USAGE.set(usage)
+    except Exception:
+        return
+
+
+def _usage_capturing_http_client(timeout_sec: int) -> httpx.Client:
+    return httpx.Client(
+        timeout=timeout_sec,
+        trust_env=False,
+        event_hooks={"response": [_capture_http_usage]},
+    )
+
+
 def _usage_from_ai_message(provider: str, message: object) -> object | None:
     """Prefer vendor-shaped ``response_metadata`` so xAI ticks survive if forwarded."""
     meta = _as_mapping(getattr(message, "response_metadata", None))
@@ -158,12 +187,19 @@ def _spend_file_from_cfg(cfg: dict | None) -> Path | None:
     return None
 
 
+def _usage_for_spend(provider: str, message: object) -> object | None:
+    captured = _HTTP_USAGE.get()
+    if provider == "grok" and isinstance(captured, dict):
+        return captured
+    return _usage_from_ai_message(provider, message)
+
+
 def _record_proposer_spend(provider: str, model: str, message: object, cfg: dict | None) -> None:
     try:
         record_external_usage(
             provider=provider,
             model=model,
-            usage=_usage_from_ai_message(provider, message),
+            usage=_usage_for_spend(provider, message),
             source="agentic",
             spend_file=_spend_file_from_cfg(cfg),
         )
@@ -220,65 +256,72 @@ class ChatModelProposerClient:
                 details={"provider": provider},
             ) from exc
 
-        model = build_chat_model(self.settings)
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=sanitized_prompt)]
-        # Anthropic REJECTS a non-default temperature outright on the Claude 5
-        # family: "non-default temperature, top_p, or top_k values return a 400
-        # error on every request, regardless of whether thinking is used"
-        # (platform.claude.com/docs/en/build-with-claude/thinking, verified
-        # 2026-08-02), and the Messages API default is 1.0 -- so the 0.0 this
-        # method used to send unconditionally made EVERY Claude plan call fail
-        # 400 on the shipped providers.claude.model "claude-sonnet-5". The core
-        # RAG path already knew this (llm/client.py's ClaudeClient omits
-        # temperature while GrokClient sends it, pinned by
-        # tests/test_client.py's "temperature not in json" assertion); this
-        # path had simply not inherited the rule. Dropped only for Claude:
-        # xAI's OpenAI-compatible surface still wants it, and passing None
-        # explicitly lets a caller opt out for any provider.
-        invoke_kwargs: dict[str, object] = {"max_tokens": max_tokens}
-        if temperature is not None and provider != "claude":
-            invoke_kwargs["temperature"] = temperature
+        http_client: httpx.Client | None = None
+        usage_token = _HTTP_USAGE.set(None)
         try:
-            ai_message = model.invoke(messages, **invoke_kwargs)
-        except Exception as exc:
-            # The concrete exception type depends on which SDK is active
-            # (openai/xai/anthropic clients, none importable here to enumerate) --
-            # mirrors llm/client.py's own "log only the type, never the message"
-            # discipline, since a provider error message can echo request content.
+            if provider == "grok":
+                http_client = _usage_capturing_http_client(self.settings.timeout_sec)
+                model = build_chat_model(self.settings, http_client=http_client)
+            else:
+                model = build_chat_model(self.settings)
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=sanitized_prompt)]
+            # Anthropic REJECTS a non-default temperature outright on the Claude 5
+            # family: "non-default temperature, top_p, or top_k values return a 400
+            # error on every request, regardless of whether thinking is used"
+            # (platform.claude.com/docs/en/build-with-claude/thinking, verified
+            # 2026-08-02), and the Messages API default is 1.0 -- so the 0.0 this
+            # method used to send unconditionally made EVERY Claude plan call fail
+            # 400 on the shipped providers.claude.model "claude-sonnet-5". The core
+            # RAG path already knew this (llm/client.py's ClaudeClient omits
+            # temperature while GrokClient sends it, pinned by
+            # tests/test_client.py's "temperature not in json" assertion); this
+            # path had simply not inherited the rule. Dropped only for Claude:
+            # xAI's OpenAI-compatible surface still wants it, and passing None
+            # explicitly lets a caller opt out for any provider.
+            invoke_kwargs: dict[str, object] = {"max_tokens": max_tokens}
+            if temperature is not None and provider != "claude":
+                invoke_kwargs["temperature"] = temperature
+            try:
+                ai_message = model.invoke(messages, **invoke_kwargs)
+            except Exception as exc:
+                # The concrete exception type depends on which SDK is active
+                # (openai/xai/anthropic clients, none importable here to enumerate) --
+                # mirrors llm/client.py's own "log only the type, never the message"
+                # discipline, since a provider error message can echo request content.
+                audit_log(
+                    {
+                        "event": "agentic_deepagent_cloud_model_failed",
+                        "provider": provider,
+                        "model": self.settings.model,
+                        "error_type": type(exc).__name__,
+                    },
+                    config_path=config_path,
+                    cfg=cfg,
+                )
+                raise AgenticError(
+                    f"cloud proposer invocation failed ({type(exc).__name__})",
+                    details={"provider": provider, "error_type": type(exc).__name__},
+                ) from exc
+
+            try:
+                content = _coerce_text_content(ai_message.content)
+            finally:
+                # Billed 200 still consumes quota even if content coercion later raises.
+                _record_proposer_spend(provider, self.settings.model, ai_message, cfg)
             audit_log(
                 {
-                    "event": "agentic_deepagent_cloud_model_failed",
+                    "event": "agentic_deepagent_cloud_model_succeeded",
                     "provider": provider,
                     "model": self.settings.model,
-                    "error_type": type(exc).__name__,
                 },
                 config_path=config_path,
                 cfg=cfg,
             )
-            # Type name in the MESSAGE, for the same reason LocalProposerClient
-            # does it: agentic/cli.py prints exc.message alone and persists it
-            # as the run record's `error`, so details={} never reaches an
-            # operator. Deliberately NOT annotated with a timeout budget the
-            # way the local client's is -- the concrete exception types belong
-            # to whichever SDK is active (none importable here, hence the bare
-            # `except Exception` above), so this cannot tell a timeout from a
-            # rate limit without guessing.
-            raise AgenticError(
-                f"cloud proposer invocation failed ({type(exc).__name__})",
-                details={"provider": provider, "error_type": type(exc).__name__},
-            ) from exc
-
-        try:
-            content = _coerce_text_content(ai_message.content)
+            return ChatModelProposerResponse(content=content, model=self.settings.model, provider=provider)
         finally:
-            # Billed 200 still consumes quota even if content coercion later raises.
-            _record_proposer_spend(provider, self.settings.model, ai_message, cfg)
-        audit_log(
-            {"event": "agentic_deepagent_cloud_model_succeeded", "provider": provider, "model": self.settings.model},
-            config_path=config_path,
-            cfg=cfg,
-        )
-        return ChatModelProposerResponse(content=content, model=self.settings.model, provider=provider)
+            _HTTP_USAGE.reset(usage_token)
+            if http_client is not None:
+                http_client.close()
 
 
 __all__ = ["ChatModelProposerClient", "ChatModelProposerResponse"]

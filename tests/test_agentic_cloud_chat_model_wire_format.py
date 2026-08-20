@@ -61,7 +61,12 @@ def test_grok_invoke_kwargs_reach_the_real_request_body():
                 "choices": [
                     {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
                 ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                    "cost_in_usd_ticks": 50,
+                },
             },
         )
 
@@ -79,6 +84,21 @@ def test_grok_invoke_kwargs_reach_the_real_request_body():
     token_usage = meta.get("token_usage") or meta.get("usage")
     usage_meta = getattr(response, "usage_metadata", None)
     assert token_usage or usage_meta, "ChatXAI must expose usage for the spend ledger"
+    from agentic.deepagent_github.chat_client import _HTTP_USAGE, _capture_http_usage
+
+    # The spend path prefers raw HTTP usage so ticks survive even if LangChain
+    # drops them from usage_metadata.
+    fake_resp = httpx.Response(
+        200,
+        json={"usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost_in_usd_ticks": 50}},
+        request=httpx.Request("POST", "https://api.x.ai/v1/chat/completions"),
+    )
+    token = _HTTP_USAGE.set(None)
+    try:
+        _capture_http_usage(fake_resp)
+        assert (_HTTP_USAGE.get() or {}).get("cost_in_usd_ticks") == 50
+    finally:
+        _HTTP_USAGE.reset(token)
 
 
 def test_claude_invoke_kwargs_reach_the_real_request_payload():
