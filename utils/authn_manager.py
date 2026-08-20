@@ -186,6 +186,16 @@ class AuthManager:
         )
         self._sql_delete_user = f"DELETE FROM users WHERE username = {ph} AND {last_admin_guard}"
         self._sql_disable_user = f"UPDATE users SET disabled = 1 WHERE username = {ph} AND {last_admin_guard}"
+        # Postgres only. Locked in username order before each guarded write so
+        # two concurrent statements against *different* admin rows cannot both
+        # pass last_admin_guard under READ COMMITTED. SQLite is a no-op: it
+        # rejects FOR UPDATE and already serializes writers at the file lock.
+        # ORDER BY is load-bearing (lock acquisition order). Do not fold
+        # FOR UPDATE into the COUNT(*) subquery -- Postgres rejects that.
+        self._sql_lock_enabled_admins = (
+            "SELECT username FROM users WHERE role = 'admin' AND disabled = 0 "
+            "ORDER BY username FOR UPDATE"
+        )
         self._sql_count_enabled_admins = (
             "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND disabled = 0"
         )
@@ -385,10 +395,24 @@ class AuthManager:
             raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
         raise AuthLastAdmin(details={"username": canonical, "action": action})
 
+    def _lock_enabled_admins_locked(self) -> None:
+        """Take Postgres row locks on enabled admins before a guarded write.
+
+        Caller holds ``self._lock``. No-op on SQLite. Must stay in the same
+        transaction as the UPDATE/DELETE that follows -- ``_end_read_txn``
+        would commit and drop the locks. READ COMMITTED re-snapshots per
+        statement, so once this SELECT unblocks, ``last_admin_guard`` sees
+        the committed post-race count.
+        """
+        if self.backend != "postgres":
+            return
+        self.conn.execute(self._sql_lock_enabled_admins)
+
     def set_role(self, username: str, role: str) -> None:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         canonical_role = authn.validate_role(role)
         with self._lock:
+            self._lock_enabled_admins_locked()
             cur = self.conn.execute(self._sql_set_role, (canonical_role, canonical, canonical_role))
             if not cur.rowcount:
                 self._raise_guarded_write_error_locked(canonical, "set_role")
@@ -397,6 +421,7 @@ class AuthManager:
     def delete_user(self, username: str) -> None:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         with self._lock:
+            self._lock_enabled_admins_locked()
             cur = self.conn.execute(self._sql_delete_user, (canonical,))
             if not cur.rowcount:
                 self._raise_guarded_write_error_locked(canonical, "delete_user")
@@ -408,6 +433,7 @@ class AuthManager:
         canonical = username.strip().lower() if isinstance(username, str) else ""
         with self._lock:
             if disabled:
+                self._lock_enabled_admins_locked()
                 cur = self.conn.execute(self._sql_disable_user, (canonical,))
                 if not cur.rowcount:
                     self._raise_guarded_write_error_locked(canonical, "disable_user")

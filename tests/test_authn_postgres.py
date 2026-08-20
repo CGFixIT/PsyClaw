@@ -18,7 +18,8 @@ when the driver is absent. Cleanup uses a *separate autocommit* connection:
 ``authn_store.connect`` opens with ``autocommit=False`` and AuthManager does
 not always roll back.
 
-The interleaved last-admin TOCTOU case is issue #997, not this file.
+Issue #997 (concurrent last-admin on READ COMMITTED) lives in this file:
+``test_pg_last_admin_guard_holds_under_concurrent_demotes``.
 """
 
 import os
@@ -26,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from utils.authn_manager import AuthManager
+from utils.authn_manager import BOOTSTRAP_USERNAME, AuthManager
 from utils.authn_store import (
     connect,
     ddl_device_tokens,
@@ -233,3 +234,74 @@ def test_pg_auth_manager_lifecycle(clean_auth_db, tmp_path):
         assert manager.verify_device_token(token) is None
     finally:
         manager.close()
+
+
+def test_pg_last_admin_guard_holds_under_concurrent_demotes(clean_auth_db, tmp_path):
+    """Two overlapping demotes of two different admins must leave one admin.
+
+    Sequential tests cannot see this race. Two AuthManager instances (HTTP vs
+    ``cyclaw-user``) enter ``set_role`` together; a short commit delay widens
+    the window so, without ``FOR UPDATE``, both UPDATEs can evaluate
+    ``COUNT(*)`` before either commits. Do not barrier-on-commit -- that
+    deadlocks with the lock (the waiter blocks in Postgres, the holder waits
+    on the barrier).
+    """
+    import threading
+    import time
+
+    from utils.errors import AuthLastAdmin
+
+    cfg = _auth_cfg(tmp_path)
+    mgr_a = AuthManager(cfg)
+    mgr_b = AuthManager(cfg)
+    try:
+        assert mgr_a.backend == "postgres"
+        assert mgr_a.bootstrap_if_empty() is True
+        mgr_a.create_user("other", _GOOD, role="admin")
+        assert mgr_a.count_enabled_admins() == 2
+
+        def _delay_commit(conn: object) -> None:
+            real_commit = conn.commit  # type: ignore[union-attr]
+
+            def delayed() -> None:
+                time.sleep(0.08)
+                real_commit()
+
+            conn.commit = delayed  # type: ignore[method-assign]
+
+        _delay_commit(mgr_a.conn)
+        _delay_commit(mgr_b.conn)
+
+        start = threading.Barrier(2)
+        outcomes: list[tuple[str, str]] = []
+
+        def demote(mgr: AuthManager, username: str) -> None:
+            start.wait(timeout=5)
+            try:
+                mgr.set_role(username, "operator")
+                outcomes.append(("ok", username))
+            except AuthLastAdmin:
+                outcomes.append(("refused", username))
+
+        t1 = threading.Thread(target=demote, args=(mgr_a, BOOTSTRAP_USERNAME), daemon=True)
+        t2 = threading.Thread(target=demote, args=(mgr_b, "other"), daemon=True)
+        t1.start()
+        t2.start()
+        t1.join(timeout=15)
+        t2.join(timeout=15)
+        assert not t1.is_alive() and not t2.is_alive(), outcomes
+        kinds = [kind for kind, _ in outcomes]
+        assert kinds.count("ok") == 1, outcomes
+        assert kinds.count("refused") == 1, outcomes
+        assert mgr_a.count_enabled_admins() == 1
+        still_admin = [
+            name
+            for name in (BOOTSTRAP_USERNAME, "other")
+            if (user := mgr_a.get_user(name)) is not None
+            and user.role == "admin"
+            and not user.disabled
+        ]
+        assert len(still_admin) == 1
+    finally:
+        mgr_a.close()
+        mgr_b.close()
