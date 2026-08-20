@@ -59,6 +59,9 @@ data/telegram/
 .env.*
 !.env.example
 
+# Local pre-push PR body (hook reads the working tree; never re-commit)
+PR_BODY.md
+
 # OS
 .DS_Store
 Thumbs.db
