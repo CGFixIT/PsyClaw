@@ -101,9 +101,9 @@ logger = logging.getLogger("cyclaw.graph")
 
 
 class _GeneratingClient(Protocol):
-    """Structural type for LocalLLMClient/GrokClient — both expose generate(prompt) -> str."""
+    """Structural type for LocalLLMClient/GrokClient/ClaudeClient generate()."""
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, spend_context: dict[str, object] | None = None) -> str:
         # Protocol method stub: never executed, only implementations' bodies run.
         # `pass` (not `...`) here so CodeQL's ineffectual-statement check doesn't
         # flag a bare Ellipsis expression statement.

@@ -634,6 +634,32 @@ class TestExternalSpendRecording:
         assert "query" not in record
         client.close()
 
+    def test_claude_spend_context_persists_join_fields(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_claude_ok_response(
+                "claude answer",
+                usage={"input_tokens": 10, "output_tokens": 4},
+            )
+        )
+        client._client.post = fake
+        hashed = hash_query("a prompt")
+        path = [
+            "retrieve",
+            "route_by_score",
+            "user_gate",
+            "pre_action_hook_claude",
+            "claude_fallback",
+        ]
+        assert client.generate("a prompt", spend_context={"query_hash": hashed, "route_path": path}) == "claude answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["query_hash"] == hashed
+        assert record["route_path"] == path
+        assert record["provider"] == "claude"
+        assert "query" not in record
+        client.close()
+
     def test_grok_200_with_reasoning_tokens_writes_them(self, tmp_path, monkeypatch, _spend_ledger):
         monkeypatch.setenv("GROK_API_KEY", "xai-secret")
         client = GrokClient(_write_config(tmp_path))
