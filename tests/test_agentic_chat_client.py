@@ -26,16 +26,22 @@ from utils.errors import AgenticError
 class _StubModel:
     """Records every invoke() call; returns fixed content or raises."""
 
-    def __init__(self, content=None, raise_exc=None):
+    def __init__(self, content=None, raise_exc=None, response_metadata=None, usage_metadata=None):
         self.content = content
         self.raise_exc = raise_exc
+        self.response_metadata = response_metadata
+        self.usage_metadata = usage_metadata
         self.calls: list[tuple[list, dict]] = []
 
     def invoke(self, messages, **kwargs):
         self.calls.append((messages, kwargs))
         if self.raise_exc is not None:
             raise self.raise_exc
-        return SimpleNamespace(content=self.content)
+        return SimpleNamespace(
+            content=self.content,
+            response_metadata=self.response_metadata,
+            usage_metadata=self.usage_metadata,
+        )
 
 
 def _settings(provider="grok") -> DeepAgentModelSettings:
@@ -204,3 +210,129 @@ def test_invoke_wraps_a_model_failure_and_never_audits_its_message(test_config, 
     assert len(events) == 1
     assert events[0]["error_type"] == "RuntimeError"
     assert secret_message not in json.dumps(events[0])
+
+
+def _spend_rows(cfg) -> list[dict]:
+    path = cfg["logging"]["spend_file"]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def test_invoke_records_grok_token_usage_as_agentic_spend(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(
+        content="ok",
+        response_metadata={
+            "token_usage": {
+                "prompt_tokens": 32,
+                "completion_tokens": 9,
+                "prompt_tokens_details": {"cached_tokens": 6},
+                "completion_tokens_details": {"reasoning_tokens": 94},
+                "cost_in_usd_ticks": 50,
+            }
+        },
+    )
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    assert response.content == "ok"
+    rows = _spend_rows(cfg)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "agentic"
+    assert row["provider"] == "grok"
+    assert row["model"] == "grok-4.5"
+    assert row["input_tokens"] == 32
+    assert row["output_tokens"] == 9
+    assert row["cached_input_tokens"] == 6
+    assert row["reasoning_tokens"] == 94
+    assert row["vendor_cost_ticks"] == 50
+    assert row["usage_missing"] is False
+    assert {"query", "prompt", "content", "messages", "api_key"}.isdisjoint(row)
+
+
+def test_invoke_falls_back_to_langchain_usage_metadata(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(
+        content="ok",
+        usage_metadata={
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "input_token_details": {"cache_read": 2},
+            "output_token_details": {"reasoning": 3},
+        },
+    )
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    client = ChatModelProposerClient(settings=_settings())
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    row = _spend_rows(cfg)[0]
+    assert row["input_tokens"] == 10
+    assert row["output_tokens"] == 4
+    assert row["cached_input_tokens"] == 2
+    assert row["reasoning_tokens"] == 3
+    assert row["source"] == "agentic"
+
+
+def test_invoke_records_claude_usage_as_agentic_spend(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(
+        content="ok",
+        response_metadata={
+            "usage": {
+                "input_tokens": 2095,
+                "output_tokens": 503,
+                "cache_creation_input_tokens": 2051,
+                "cache_read_input_tokens": 2051,
+            }
+        },
+    )
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    client = ChatModelProposerClient(settings=_settings(provider="claude"))
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    row = _spend_rows(cfg)[0]
+    assert row["source"] == "agentic"
+    assert row["provider"] == "claude"
+    assert row["input_tokens"] == 2095
+    assert row["cache_read_input_tokens"] == 2051
+    assert row["usage_missing"] is False
+
+
+def test_invoke_missing_usage_metadata_still_records(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(content="ok")
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    client = ChatModelProposerClient(settings=_settings())
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    row = _spend_rows(cfg)[0]
+    assert row["source"] == "agentic"
+    assert row["usage_missing"] is True
+    assert row["input_tokens"] is None
+    assert row["output_tokens"] is None
+
+
+def test_invoke_spend_failure_does_not_change_content(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(content="kept")
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+
+    def _boom(**_kwargs):
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(chat_client_module, "record_external_usage", _boom)
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    assert response.content == "kept"
+    assert _spend_rows(cfg) == []
+
+
+def test_invoke_does_not_record_spend_when_model_raises(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(raise_exc=RuntimeError("no 200"))
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    client = ChatModelProposerClient(settings=_settings())
+    with pytest.raises(AgenticError):
+        client.invoke(system_prompt="s", user_prompt="a clean prompt", config_path=config_path, cfg=cfg)
+    assert _spend_rows(cfg) == []

@@ -124,6 +124,7 @@ def test_record_missing_usage_sets_usage_missing(tmp_path: Path) -> None:
     assert record["usage_missing"] is True
     assert record["input_tokens"] is None
     assert record["output_tokens"] is None
+    assert record["source"] == "query"
 
 
 def test_record_malformed_usage_sets_usage_missing(tmp_path: Path) -> None:
@@ -194,9 +195,34 @@ def test_written_json_has_no_forbidden_keys(tmp_path: Path) -> None:
     )
     record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
     assert _FORBIDDEN.isdisjoint(record)
-    dumped = json.dumps(record)
-    for key in _FORBIDDEN:
-        assert key not in dumped
+    # `source` may be the plane name "query"; scan values other than that field.
+    for field, value in record.items():
+        if field == "source":
+            continue
+        dumped = json.dumps(value)
+        for forbidden in _FORBIDDEN:
+            assert forbidden not in dumped
+
+
+def test_record_source_agentic_and_unknown(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage=GROK_USAGE,
+        spend_file=ledger,
+        source="agentic",
+    )
+    spend.record_external_usage(
+        provider="claude",
+        model="claude-sonnet-5",
+        usage=CLAUDE_USAGE,
+        spend_file=ledger,
+        source="not-a-plane",
+    )
+    first, second = (json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines())
+    assert first["source"] == "agentic"
+    assert second["source"] == "unknown"
 
 
 def test_estimate_usd_known_models() -> None:

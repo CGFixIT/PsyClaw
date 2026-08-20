@@ -49,7 +49,10 @@ verification that would otherwise evaporate.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -57,6 +60,9 @@ from agentic.deepagent_github.handoff import sanitize_handoff
 from agentic.deepagent_github.model_adapter import DeepAgentModelSettings, build_chat_model
 from utils.errors import AgenticError, PromptInjectionError
 from utils.logger import audit_log
+from utils.spend import record_external_usage
+
+logger = logging.getLogger("cyclaw.agentic.chat_client")
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,83 @@ def _coerce_text_content(content: str | list[object]) -> str:
         if isinstance(block, str) or (isinstance(block, dict) and isinstance(block.get("text"), str))
     ]
     return "\n".join(parts)
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        dumped = dump()
+        return dumped if isinstance(dumped, dict) else None
+    return None
+
+
+def _usage_from_langchain_metadata(provider: str, usage_meta: Mapping[str, object]) -> dict[str, object]:
+    """Map LangChain ``usage_metadata`` onto vendor-shaped usage dicts."""
+    input_details = _as_mapping(usage_meta.get("input_token_details")) or {}
+    output_details = _as_mapping(usage_meta.get("output_token_details")) or {}
+    if provider == "claude":
+        return {
+            "input_tokens": usage_meta.get("input_tokens"),
+            "output_tokens": usage_meta.get("output_tokens"),
+            "cache_creation_input_tokens": input_details.get("cache_creation"),
+            "cache_read_input_tokens": input_details.get("cache_read"),
+        }
+    return {
+        "prompt_tokens": usage_meta.get("input_tokens"),
+        "completion_tokens": usage_meta.get("output_tokens"),
+        "prompt_tokens_details": {
+            "cached_tokens": input_details.get("cache_read", input_details.get("cached_tokens")),
+        },
+        "completion_tokens_details": {
+            "reasoning_tokens": output_details.get("reasoning", output_details.get("reasoning_tokens")),
+        },
+    }
+
+
+def _usage_from_ai_message(provider: str, message: object) -> object | None:
+    """Prefer vendor-shaped ``response_metadata`` so xAI ticks survive if forwarded."""
+    meta = _as_mapping(getattr(message, "response_metadata", None))
+    if meta is not None:
+        if provider == "claude":
+            usage = _as_mapping(meta.get("usage"))
+            if usage is not None:
+                return usage
+        else:
+            for key in ("token_usage", "usage"):
+                usage = _as_mapping(meta.get(key))
+                if usage is not None:
+                    return usage
+    usage_meta = _as_mapping(getattr(message, "usage_metadata", None))
+    if usage_meta is not None:
+        return _usage_from_langchain_metadata(provider, usage_meta)
+    return None
+
+
+def _spend_file_from_cfg(cfg: dict | None) -> Path | None:
+    if not isinstance(cfg, dict):
+        return None
+    logging_cfg = cfg.get("logging")
+    if not isinstance(logging_cfg, dict):
+        return None
+    raw = logging_cfg.get("spend_file")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw)
+    return None
+
+
+def _record_proposer_spend(provider: str, model: str, message: object, cfg: dict | None) -> None:
+    try:
+        record_external_usage(
+            provider=provider,
+            model=model,
+            usage=_usage_from_ai_message(provider, message),
+            source="agentic",
+            spend_file=_spend_file_from_cfg(cfg),
+        )
+    except Exception as exc:
+        logger.debug("spend record failed: %s", type(exc).__name__)
 
 
 @dataclass(frozen=True)
@@ -185,7 +268,11 @@ class ChatModelProposerClient:
                 details={"provider": provider, "error_type": type(exc).__name__},
             ) from exc
 
-        content = _coerce_text_content(ai_message.content)
+        try:
+            content = _coerce_text_content(ai_message.content)
+        finally:
+            # Billed 200 still consumes quota even if content coercion later raises.
+            _record_proposer_spend(provider, self.settings.model, ai_message, cfg)
         audit_log(
             {"event": "agentic_deepagent_cloud_model_succeeded", "provider": provider, "model": self.settings.model},
             config_path=config_path,

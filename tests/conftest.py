@@ -55,6 +55,7 @@ TEST_CONFIG = {
     # TEST_CONFIG raw and writes audit lines, this placeholder fails loudly
     # (missing directory) instead of scattering files under /tmp.
     "logging": {"level": "DEBUG", "log_file": "", "audit_file": "OVERRIDDEN-PER-TEST/audit.jsonl",
+                "spend_file": "OVERRIDDEN-PER-TEST/spend.jsonl",
                 "audit_fields": {"include_query_hash": True}},
     "security": {"require_env": ["GROK_API_KEY"],
                  "allowed_origins": ["http://127.0.0.1", "http://localhost"]},  # DevSkim: ignore DS162092,DS137138
@@ -106,6 +107,7 @@ def test_config(tmp_path):
     cfg["indexing"]["bm25_path"] = str(tmp_path / "bm25.json")
     cfg["logging"]["log_file"] = str(tmp_path / "cyclaw.log")
     cfg["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
+    cfg["logging"]["spend_file"] = str(tmp_path / "spend.jsonl")
     config_file = tmp_path / "config.yaml"
     with open(config_file, "w") as f:
         yaml.dump(cfg, f)
