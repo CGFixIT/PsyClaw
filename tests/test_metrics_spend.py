@@ -10,7 +10,7 @@ import pytest
 import yaml
 
 from metrics import compute_spend, iter_spend, print_metrics
-from utils.spend import estimate_usd
+from utils.spend import compare_vendor_cost, estimate_usd
 
 NOW = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
 
@@ -136,6 +136,31 @@ def test_daily_and_last_7d_token_and_usd_math(tmp_path: Path) -> None:
     assert summary["last_7d"]["by_provider"] == {"grok": 2, "claude": 1}
     assert summary["usage_missing"] == 0
     assert summary["rate_unknown"] == 0
+
+
+def test_delta_usd_uses_only_ticked_rows() -> None:
+    ticked = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-4.5",
+        input_tokens=32,
+        output_tokens=9,
+        extra={"reasoning_tokens": 94, "vendor_cost_ticks": 1_000_000},
+    )
+    unticked = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-4.5",
+        input_tokens=41,
+        output_tokens=104,
+    )
+    summary = compute_spend([ticked, unticked], now=NOW)
+    paired = compare_vendor_cost("grok-4.5", ticked)
+    assert summary["today"]["vendor_rows"] == 1
+    assert summary["today"]["vendor_usd"] == pytest.approx(paired["vendor_usd"])
+    assert summary["today"]["ticked_table_usd"] == pytest.approx(paired["table_usd"])
+    assert summary["today"]["delta_usd"] == pytest.approx(paired["delta_usd"])
+    assert summary["today"]["table_usd"] != pytest.approx(paired["table_usd"])
 
 
 def test_vendor_ticks_print_table_vs_vendor() -> None:
