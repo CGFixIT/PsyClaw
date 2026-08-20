@@ -127,6 +127,23 @@ def test_record_missing_usage_sets_usage_missing(tmp_path: Path) -> None:
     assert record["source"] == "query"
 
 
+def test_record_partial_usage_sets_usage_missing(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage={"prompt_tokens": 41},
+        spend_file=ledger,
+    )
+    record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+    assert record["usage_missing"] is True
+    assert record["input_tokens"] == 41
+    assert record["output_tokens"] is None
+    priced = spend.estimate_usd("grok-4.5", spend.parse_grok_usage({"prompt_tokens": 41}))
+    assert priced["usd"] == pytest.approx(41 * 2.00 / 1_000_000)
+    assert priced["usd_source"] == "rate_table"
+
+
 def test_record_malformed_usage_sets_usage_missing(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(
@@ -315,6 +332,38 @@ def test_estimate_usd_claude_cache_ttl_split() -> None:
         + 1800 * 0.20 / 1_000_000
         + 503 * 10.00 / 1_000_000
     )
+
+
+def test_estimate_usd_claude_cache_ttl_residual_at_5m_rate() -> None:
+    parsed = spend.parse_claude_usage(
+        {
+            "input_tokens": 2048,
+            "output_tokens": 503,
+            "cache_creation_input_tokens": 300,
+            "cache_read_input_tokens": 1800,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 148,
+                "ephemeral_1h_input_tokens": 100,
+            },
+        }
+    )
+    priced = spend.estimate_usd("claude-sonnet-5", parsed)
+    residual = 300 - 148 - 100
+    assert priced["usd"] == pytest.approx(
+        2048 * 2.00 / 1_000_000
+        + 148 * 2.50 / 1_000_000
+        + 100 * 4.00 / 1_000_000
+        + residual * 2.50 / 1_000_000
+        + 1800 * 0.20 / 1_000_000
+        + 503 * 10.00 / 1_000_000
+    )
+
+
+def test_rates_are_stale_after_thirty_days() -> None:
+    from datetime import UTC, datetime
+
+    assert spend.rates_are_stale(datetime(2026, 8, 20, tzinfo=UTC)) is False
+    assert spend.rates_are_stale(datetime(2026, 9, 19, tzinfo=UTC)) is True
 
 
 def test_estimate_usd_unknown_model_usd_none() -> None:

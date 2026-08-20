@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from utils.logger import _anchor, _get_config
@@ -21,6 +21,7 @@ logger = logging.getLogger("cyclaw.spend")
 _SPEND_WRITE_LOCK = threading.Lock()
 _DEFAULT_SPEND_FILE = "logs/spend.jsonl"
 PRICED_AS_OF = "2026-08-19"
+STALE_AFTER_DAYS = 30
 
 # xAI Chat Completions: 100_000_000 ticks per USD cent → 10_000_000_000 ticks / $1.
 # https://docs.x.ai/developers/rest-api-reference/inference/chat (verified 2026-08-19)
@@ -128,7 +129,7 @@ def _tokens_for_provider(provider: str, usage: object | None) -> dict[str, int |
 def _usage_is_missing(usage: object | None, tokens: dict[str, int | None]) -> bool:
     if usage is None or not isinstance(usage, Mapping):
         return True
-    return tokens["input_tokens"] is None and tokens["output_tokens"] is None
+    return tokens["input_tokens"] is None or tokens["output_tokens"] is None
 
 
 def _resolve_spend_path(spend_file: Path | None) -> Path:
@@ -215,6 +216,32 @@ def billed_output_tokens(tokens: Mapping[str, object]) -> int:
     return _token_count(tokens, "output_tokens") + _token_count(tokens, "reasoning_tokens")
 
 
+def rates_are_stale(now: datetime | None = None) -> bool:
+    """True when ``PRICED_AS_OF`` is more than ``STALE_AFTER_DAYS`` behind ``now``."""
+    try:
+        priced = date.fromisoformat(PRICED_AS_OF)
+    except ValueError:
+        return True
+    if now is None:
+        current = datetime.now(UTC)
+    elif now.tzinfo is None:
+        current = now.replace(tzinfo=UTC)
+    else:
+        current = now.astimezone(UTC)
+    return (current.date() - priced).days > STALE_AFTER_DAYS
+
+
+def warn_if_priced_as_of_stale(now: datetime | None = None) -> bool:
+    stale = rates_are_stale(now)
+    if stale:
+        logger.warning(
+            "spend rate table priced_as_of %s is older than %s days",
+            PRICED_AS_OF,
+            STALE_AFTER_DAYS,
+        )
+    return stale
+
+
 def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | bool | str | None]:
     """Dollars at read time only. Unknown model → usd None, rate_unknown true.
 
@@ -268,9 +295,14 @@ def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | 
             tokens.get("cache_creation_1h_tokens")
         )
         if has_ttl_split:
+            split_5m = _token_count(tokens, "cache_creation_5m_tokens")
+            split_1h = _token_count(tokens, "cache_creation_1h_tokens")
+            total_write = _token_count(tokens, "cache_creation_input_tokens")
+            residual = max(total_write - split_5m - split_1h, 0)
             cache_write_usd = (
-                _token_count(tokens, "cache_creation_5m_tokens") * rates["cache_creation"] / 1_000_000
-                + _token_count(tokens, "cache_creation_1h_tokens") * rates["cache_creation_1h"] / 1_000_000
+                split_5m * rates["cache_creation"] / 1_000_000
+                + split_1h * rates["cache_creation_1h"] / 1_000_000
+                + residual * rates["cache_creation"] / 1_000_000
             )
         else:
             cache_write_usd = (

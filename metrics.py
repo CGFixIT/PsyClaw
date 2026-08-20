@@ -26,6 +26,7 @@ from utils.spend import (  # noqa: E402 - must follow the telemetry kill above
     billed_output_tokens,
     compare_vendor_cost,
     estimate_usd,
+    warn_if_priced_as_of_stale,
 )
 
 # Anchor config.yaml to the repo root, not the process's cwd. print_metrics's
@@ -191,6 +192,7 @@ def compute_spend(events, *, now=None) -> dict:
         now = now.astimezone(UTC)
     today_date = now.date()
     start_7d = today_date - timedelta(days=6)
+    warn_if_priced_as_of_stale(now)
 
     today = _empty_spend_window()
     last_7d = _empty_spend_window()

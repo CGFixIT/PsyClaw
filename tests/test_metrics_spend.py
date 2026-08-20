@@ -219,6 +219,25 @@ def test_unknown_model_usd_null_and_rate_unknown_counted() -> None:
     assert summary["usage_missing"] == 0
 
 
+def test_stale_rate_table_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    now = datetime(2026, 9, 19, 12, 0, tzinfo=UTC)
+    events = [
+        _record(
+            days_ago=0,
+            provider="grok",
+            model="grok-4.5",
+            input_tokens=1_000,
+            output_tokens=2_000,
+        )
+    ]
+    events[0]["timestamp"] = now.isoformat()
+    with caplog.at_level("WARNING", logger="cyclaw.spend"):
+        summary = compute_spend(events, now=now)
+    assert summary["today"]["tokens_in"] == 1_000
+    assert "priced_as_of" in caplog.text
+    assert caplog.text.count("priced_as_of") == 1
+
+
 def test_usage_missing_counted() -> None:
     events = [
         _record(

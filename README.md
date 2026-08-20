@@ -513,7 +513,7 @@ CyClaw/
 ├── gate_auth.py                # /auth/* endpoints — session cookie + CSRF, bearer device tokens
 ├── gate_memory.py              # /memory/* + /query/export/html — optional, default-off memory admin surface
 ├── graph.py
-├── metrics.py                  # audit.jsonl analyzer (cyclaw-metrics)
+├── metrics.py                  # audit.jsonl analyzer + spend.jsonl Spend section (cyclaw-metrics)
 ├── config.yaml                 # single source of truth
 ├── README.md
 ├── mcp_hybrid_server.py        # retrieval-only MCP server
