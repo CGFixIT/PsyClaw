@@ -1,4 +1,4 @@
-"""Tests for the Numbat 0.2.0 dual-write emitter (#959).
+"""Tests for the Numbat dual-write emitter (#959 / #961).
 
 The emitter is a projection: audit.jsonl stays authoritative, and every
 failure path must degrade rather than raise.
@@ -18,6 +18,7 @@ from utils.numbat_emitter import (
     SCHEMA_VERSION,
     build_endpoint,
     build_event,
+    emit_numbat_command,
     emit_numbat_event,
     posix_path,
     redact_argv_for_numbat,
@@ -84,11 +85,13 @@ def test_build_event_is_schema_legal() -> None:
         "command.exec",
         command="python -m pytest -q",
         exit_code=0,
+        file_path="/tmp/worktree",
         tags=["executor"],
         artifact_type="executor",
     )
     assert set(_REQUIRED) <= set(record)
     assert record["schema_version"] == SCHEMA_VERSION
+    assert SCHEMA_VERSION == "0.3.0"
     assert record["record_type"] == "event"
     assert record["source_agent"] == "unknown"
     assert record["source_type"] == "hook"
@@ -98,6 +101,23 @@ def test_build_event_is_schema_legal() -> None:
     for key in ("hostname", "os", "arch", "username", "uid"):
         assert record["endpoint"][key]
     assert record["evidence"]["artifact_type"] == "executor"
+    assert record["evidence"]["local_path"]
+    assert "exit_code" not in record
+    assert "file_path" not in record
+
+
+def test_command_result_keeps_exit_code() -> None:
+    record = build_event(
+        "command.result",
+        command="python -m pytest -q",
+        exit_code=0,
+        duration_ms=12,
+        tags=["executor"],
+        artifact_type="executor",
+    )
+    assert record["exit_code"] == 0
+    assert record["duration_ms"] == 12
+    assert record["command"] == "python -m pytest -q"
 
 
 def test_source_agent_cyclaw_is_forced_to_unknown() -> None:
@@ -113,21 +133,23 @@ def test_unknown_event_type_raises_in_builder_but_emit_swallows() -> None:
 
 def test_emit_writes_one_ndjson_line(numbat_cfg: tuple[str, Path]) -> None:
     config_path, out = numbat_cfg
-    emit_numbat_event(
-        "command.exec",
-        command="python -m ruff check .",
+    emit_numbat_command(
+        "python -m ruff check .",
         exit_code=0,
         tool_name="executor",
         tags=["executor", "ruff"],
         config_path=config_path,
     )
     lines = out.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert record["event_type"] == "command.exec"
-    assert record["command"] == "python -m ruff check ."
-    assert record["exit_code"] == 0
-    assert "cyclaw" in record["tags"]
+    assert len(lines) == 2
+    exec_record = json.loads(lines[0])
+    result_record = json.loads(lines[1])
+    assert exec_record["event_type"] == "command.exec"
+    assert exec_record["command"] == "python -m ruff check ."
+    assert "exit_code" not in exec_record
+    assert result_record["event_type"] == "command.result"
+    assert result_record["exit_code"] == 0
+    assert "cyclaw" in exec_record["tags"]
 
 
 def test_disabled_is_a_noop(tmp_path: Path) -> None:
@@ -152,10 +174,12 @@ def test_executor_emits_command_exec(tmp_path: Path, numbat_cfg: tuple[str, Path
     )
     assert report.ok
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
-    assert records
+    assert len(records) == 2
     assert records[0]["event_type"] == "command.exec"
     assert records[0]["tool_name"] == "executor"
-    assert records[0]["exit_code"] == 0
+    assert "exit_code" not in records[0]
+    assert records[1]["event_type"] == "command.result"
+    assert records[1]["exit_code"] == 0
 
 
 def test_ops_runner_redacts_reason(monkeypatch: pytest.MonkeyPatch, numbat_cfg: tuple[str, Path]) -> None:
@@ -180,10 +204,14 @@ def test_ops_runner_redacts_reason(monkeypatch: pytest.MonkeyPatch, numbat_cfg: 
         reason="super secret reason",
         confirm=True,
     )
-    record = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
-    assert "super secret reason" not in record["command"]
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    blob = "\n".join(lines)
+    assert "super secret reason" not in blob
+    record = json.loads(lines[0])
     assert "--reason=<redacted>" in record["command"]
     assert record["tags"][-1] == "apply-skill"
+    assert json.loads(lines[1])["event_type"] == "command.result"
 
 
 def test_core_modules_do_not_import_emitter() -> None:

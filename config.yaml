@@ -532,12 +532,13 @@ logging:
   audit_fields:
     include_query_hash: true
 
-# Numbat 0.2.0 dual-write projection (issue #959). Off the request path.
+# Numbat dual-write projection (issue #959 / #961). Off the request path.
+# Emitter writes schema 0.3.0; CI pins the Numbat 0.2.0 CLI (that schema).
 # audit.jsonl stays authoritative; this is a derived forensic stream.
 numbat:
   enabled: true
   output_path: "logs/numbat-events.ndjsonl"
-  source_agent: "unknown"   # "cyclaw" is not a legal Numbat 0.2.0 enum
+  source_agent: "unknown"   # "cyclaw" is not a legal Numbat enum
   source_type: "hook"
 
 security:
