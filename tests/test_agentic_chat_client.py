@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from agentic.deepagent_github import chat_client as chat_client_module
@@ -17,6 +18,8 @@ from agentic.deepagent_github.chat_client import (
     ChatModelProposerClient,
     ChatModelProposerResponse,
     _coerce_text_content,
+    _capture_http_usage,
+    _HTTP_USAGE,
 )
 from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
 from agentic.real_repo_loop import ProposerClient, ProposerResponse
@@ -87,7 +90,7 @@ def test_coerce_text_content_joins_text_blocks_and_skips_the_rest():
 def test_invoke_sanitizes_the_prompt_before_it_reaches_the_model(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content="=== FILE x.txt ===\nhi\n=== END FILE ===")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings())
     response = client.invoke(
@@ -120,7 +123,7 @@ def test_invoke_omits_temperature_for_claude(test_config, monkeypatch):
     here."""
     cfg, config_path = test_config
     stub = _StubModel(content="plan")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings(provider="claude"))
     client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
@@ -135,7 +138,7 @@ def test_invoke_still_sends_temperature_for_grok(test_config, monkeypatch):
     OpenAI-compatible surface accepts and uses it."""
     cfg, config_path = test_config
     stub = _StubModel(content="plan")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings(provider="grok"))
     client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
@@ -148,7 +151,7 @@ def test_invoke_temperature_none_drops_it_for_every_provider(test_config, monkey
     """An explicit None is the provider-agnostic opt-out."""
     cfg, config_path = test_config
     stub = _StubModel(content="plan")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings(provider="grok"))
     client.invoke(
@@ -163,7 +166,7 @@ def test_invoke_temperature_none_drops_it_for_every_provider(test_config, monkey
 def test_invoke_coerces_list_content_from_the_model(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content=[{"type": "text", "text": "patch body"}])
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings())
     response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
@@ -176,7 +179,7 @@ def test_invoke_coerces_list_content_from_the_model(test_config, monkeypatch):
 def test_invoke_blocks_an_injection_shaped_prompt_before_any_egress(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content="should never be reached")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings())
     with pytest.raises(AgenticError) as excinfo:
@@ -197,7 +200,7 @@ def test_invoke_wraps_a_model_failure_and_never_audits_its_message(test_config, 
     cfg, config_path = test_config
     secret_message = "leaked api key sk-should-not-be-logged"
     stub = _StubModel(raise_exc=RuntimeError(secret_message))
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     client = ChatModelProposerClient(settings=_settings())
     with pytest.raises(AgenticError) as excinfo:
@@ -235,7 +238,7 @@ def test_invoke_records_grok_token_usage_as_agentic_spend(test_config, monkeypat
             }
         },
     )
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
     client = ChatModelProposerClient(settings=_settings())
     response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
     assert response.content == "ok"
@@ -254,6 +257,45 @@ def test_invoke_records_grok_token_usage_as_agentic_spend(test_config, monkeypat
     assert {"query", "prompt", "content", "messages", "api_key"}.isdisjoint(row)
 
 
+def test_invoke_prefers_captured_http_usage_ticks(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _StubModel(content="ok")
+
+    def _build(settings, **kwargs):
+        assert kwargs.get("http_client") is not None
+        _HTTP_USAGE.set(
+            {"prompt_tokens": 7, "completion_tokens": 3, "cost_in_usd_ticks": 99}
+        )
+        return stub
+
+    monkeypatch.setattr(chat_client_module, "build_chat_model", _build)
+    client = ChatModelProposerClient(settings=_settings())
+    client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    row = _spend_rows(cfg)[0]
+    assert row["vendor_cost_ticks"] == 99
+    assert row["input_tokens"] == 7
+    assert row["output_tokens"] == 3
+    assert row["source"] == "agentic"
+
+
+def test_capture_http_usage_stores_ticks_without_logging_body():
+    req = httpx.Request("POST", "https://api.x.ai/v1/chat/completions")
+    resp = httpx.Response(
+        200,
+        json={"usage": {"prompt_tokens": 1, "cost_in_usd_ticks": 50}, "choices": []},
+        request=req,
+    )
+    token = _HTTP_USAGE.set(None)
+    try:
+        _capture_http_usage(resp)
+        captured = _HTTP_USAGE.get()
+        assert captured is not None
+        assert captured["cost_in_usd_ticks"] == 50
+        assert captured["prompt_tokens"] == 1
+    finally:
+        _HTTP_USAGE.reset(token)
+
+
 def test_invoke_falls_back_to_langchain_usage_metadata(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(
@@ -265,7 +307,7 @@ def test_invoke_falls_back_to_langchain_usage_metadata(test_config, monkeypatch)
             "output_token_details": {"reasoning": 3},
         },
     )
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
     client = ChatModelProposerClient(settings=_settings())
     client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
     row = _spend_rows(cfg)[0]
@@ -289,7 +331,7 @@ def test_invoke_records_claude_usage_as_agentic_spend(test_config, monkeypatch):
             }
         },
     )
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
     client = ChatModelProposerClient(settings=_settings(provider="claude"))
     client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
     row = _spend_rows(cfg)[0]
@@ -303,7 +345,7 @@ def test_invoke_records_claude_usage_as_agentic_spend(test_config, monkeypatch):
 def test_invoke_missing_usage_metadata_still_records(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content="ok")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
     client = ChatModelProposerClient(settings=_settings())
     client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
     row = _spend_rows(cfg)[0]
@@ -316,7 +358,7 @@ def test_invoke_missing_usage_metadata_still_records(test_config, monkeypatch):
 def test_invoke_spend_failure_does_not_change_content(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(content="kept")
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
 
     def _boom(**_kwargs):
         raise OSError("simulated disk full")
@@ -331,7 +373,7 @@ def test_invoke_spend_failure_does_not_change_content(test_config, monkeypatch):
 def test_invoke_does_not_record_spend_when_model_raises(test_config, monkeypatch):
     cfg, config_path = test_config
     stub = _StubModel(raise_exc=RuntimeError("no 200"))
-    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings: stub)
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
     client = ChatModelProposerClient(settings=_settings())
     with pytest.raises(AgenticError):
         client.invoke(system_prompt="s", user_prompt="a clean prompt", config_path=config_path, cfg=cfg)

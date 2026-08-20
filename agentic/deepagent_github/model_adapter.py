@@ -94,11 +94,14 @@ def _require_cloud_key(provider: str) -> str:
     return key
 
 
-def build_chat_model(settings: DeepAgentModelSettings) -> object:
+def build_chat_model(
+    settings: DeepAgentModelSettings, *, http_client: object | None = None
+) -> object:
     """Return a tool-calling BaseChatModel for the resolved provider.
 
     Local providers never require a key. Cloud providers fail closed on a missing
     one and never place it anywhere it can be logged.
+    ``http_client`` is Grok/ChatXAI only (xAI usage capture); ignored otherwise.
     """
     if not settings.is_cloud:
         try:
@@ -126,7 +129,14 @@ def build_chat_model(settings: DeepAgentModelSettings) -> object:
                 "optional cloud provider dependencies are not installed",
                 details={"extra": _CLOUD_EXTRA, "provider": settings.provider},
             ) from exc
-        return ChatXAI(model=settings.model, api_key=key, timeout=settings.timeout_sec)
+        kwargs: dict[str, object] = {
+            "model": settings.model,
+            "api_key": key,
+            "timeout": settings.timeout_sec,
+        }
+        if http_client is not None:
+            kwargs["http_client"] = http_client
+        return ChatXAI(**kwargs)
 
     try:
         # langchain-anthropic is a MANDATORY dependency of deepagents itself, not
