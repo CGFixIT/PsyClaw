@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import _get_config, redact_sensitive
-from utils.numbat_emitter import emit_numbat_event, redact_argv_for_numbat
+from utils.numbat_emitter import emit_numbat_command, redact_argv_for_numbat
 from utils.repo_paths import canonical_repo_relative_path
 
 # Repo root = parent of utils/. The CLIs run as ``python -m sync.cli`` /
@@ -257,9 +257,8 @@ def _maybe_json(text: str) -> Any:
 
 def _emit_ops_numbat(argv: list[str], result: OpsResult) -> None:
     """Project one ops subprocess into the Numbat NDJSON stream. Never raises."""
-    emit_numbat_event(
-        "command.exec",
-        command=redact_argv_for_numbat(argv),
+    emit_numbat_command(
+        redact_argv_for_numbat(argv),
         exit_code=result.exit_code,
         tool_name=result.subsystem,
         actor="system",

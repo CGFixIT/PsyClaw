@@ -38,7 +38,7 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 | # | Title | Notes |
 |---|---|---|
 | [#958](https://github.com/cgfixit/CyClaw/issues/958) | Spend ledger | Shipped in #975; issue not closed |
-| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Static fixture job shipped in #981 (`continue-on-error`). Live-jail generator job was dropped: 0.1.2 CLI rejects 0.2.0 `command.exec` fields before rules run. Issue not closed. |
+| [#961](https://github.com/cgfixit/CyClaw/issues/961) | Numbat CI | Fixture job now pins CLI 0.2.0 (schema 0.3.0) with emitter-shaped fixtures plus an executor-jail pytest. Keep `continue-on-error`. |
 | [#962](https://github.com/cgfixit/CyClaw/issues/962) | LLM-as-judge | Stretch |
 | [#963](https://github.com/cgfixit/CyClaw/issues/963) | Pre-action hook | 2–3 day, graph-adjacent |
 | [#964](https://github.com/cgfixit/CyClaw/issues/964) | Memory arena | Stretch |

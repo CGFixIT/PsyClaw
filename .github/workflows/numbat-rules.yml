@@ -1,5 +1,5 @@
 # Non-blocking Numbat rules-test against committed fixtures (#961).
-# Does not gate merges. Does not edit ci.yml (owned by other open drafts).
+# Pins CLI 0.2.0 (schema 0.3.0). Does not gate merges. Does not edit ci.yml.
 name: Numbat rules fixture
 
 on:
@@ -28,12 +28,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install numbat 0.1.2 (linux amd64)
+      - name: Install numbat 0.2.0 (linux amd64)
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/numbat.tgz \
-            https://github.com/perplexityai/numbat/releases/download/v0.1.2/numbat_0.1.2_linux_amd64.tar.gz
-          echo "973da3b75c25aa7a671505a20a7f0dd5e21dd14da625dc05d4807982047b143c  /tmp/numbat.tgz" | sha256sum -c -
+            https://github.com/perplexityai/numbat/releases/download/v0.2.0/numbat_0.2.0_linux_amd64.tar.gz
+          echo "6513d8cec69ea4a55667b0a764b93b7cef8fe814c2ef9e2535aaf438f11f1548  /tmp/numbat.tgz" | sha256sum -c -
           tar -xzf /tmp/numbat.tgz -C /tmp
           sudo install -m 0755 /tmp/numbat /usr/local/bin/numbat
           numbat version

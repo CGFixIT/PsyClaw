@@ -1,21 +1,23 @@
-"""Numbat 0.2.0 NDJSON dual-write emitter — I6-clean forensic projection.
+"""Numbat NDJSON dual-write emitter — I6-clean forensic projection.
 
 Maps CyClaw's existing action records (executor check runs, ops_runner
 subprocess invocations, real_repo_loop decisions, fsconnect/sqlconnect
-operations) into Numbat 0.2.0-compatible NDJSON events written to
-``logs/numbat-events.ndjsonl`` alongside the authoritative ``audit.jsonl``.
+operations) into Numbat events written to ``logs/numbat-events.ndjsonl``
+alongside the authoritative ``audit.jsonl``.
 
 Never imported by ``gate.py`` / ``graph.py`` / ``mcp_hybrid_server.py`` (I6).
 Never raises — degrades to ``logger.warning`` on any failure.
 The audit log stays authoritative; this is a projection, not a replacement.
 
-Schema contract (verified against ``perplexityai/numbat``
-``docs/schema/v0.2.0/event-record.schema.json``):
+Wire contract (Numbat CLI 0.2.0, which evaluates schema 0.3.0):
 
-* ``schema_version`` is the constant ``\"0.2.0\"``.
+* ``schema_version`` is the constant ``\"0.3.0\"``.
 * ``source_agent`` must be ``\"unknown\"`` — ``\"cyclaw\"`` is not a legal enum.
 * Identify CyClaw via ``tags: [\"cyclaw\", ...]``.
 * ``additionalProperties: false`` on the event and the ``endpoint`` object.
+* ``rules test`` uses per-type allowlists stricter than the published JSON
+  schema: ``command.exec`` may not carry ``exit_code`` / ``file_path`` /
+  ``duration_ms`` (those belong on ``command.result`` / ``file.*``).
 * No hash chain — CyClaw hashes query text only (Rule 7).
 """
 
@@ -37,7 +39,7 @@ from utils.logger import _anchor, _get_config
 
 logger = logging.getLogger("cyclaw.numbat_emitter")
 
-SCHEMA_VERSION = "0.2.0"
+SCHEMA_VERSION = "0.3.0"
 RECORD_TYPE = "event"
 DEFAULT_SOURCE_AGENT = "unknown"
 DEFAULT_SOURCE_TYPE = "hook"
@@ -104,10 +106,19 @@ _KNOWN_FIELDS = frozenset({
     "cli_version",
     "sub_agent",
     "content_preview",
+    "content_preview_truncated",
+    "content",
+    "content_bytes",
+    "content_truncated",
     "tags",
     "confidence",
     "evidence",
 })
+# CLI 0.2.0 `rules test` rejects these even though event-record.schema.json lists them.
+_EVENT_TYPE_FORBIDDEN_FIELDS: dict[str, frozenset[str]] = {
+    "command.exec": frozenset({"exit_code", "file_path", "duration_ms"}),
+    "tool.result": frozenset({"command", "exit_code"}),
+}
 _SENSITIVE_ARGV_PREFIXES = (
     "--reason=",
     "--instruction=",
@@ -250,7 +261,7 @@ def build_event(
     artifact_type: str = "audit_log",
     cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one schema-legal Numbat 0.2.0 event record."""
+    """Build one CLI-legal Numbat event record (schema 0.3.0)."""
     if event_type not in _EVENT_TYPES:
         raise ValueError(f"unsupported event_type: {event_type!r}")
     if confidence not in _CONFIDENCE:
@@ -294,6 +305,8 @@ def build_event(
     for key, value in optional.items():
         if value is not None:
             record[key] = value
+    for key in _EVENT_TYPE_FORBIDDEN_FIELDS.get(event_type, ()):
+        record.pop(key, None)
     extras = set(record) - _KNOWN_FIELDS
     if extras:
         raise ValueError(f"schema extras rejected: {sorted(extras)}")
@@ -333,7 +346,7 @@ def emit_numbat_event(
     config_path: str = "config.yaml",
     cfg: dict[str, Any] | None = None,
 ) -> None:
-    """Emit one Numbat 0.2.0 event. Never raises."""
+    """Emit one Numbat event. Never raises."""
     try:
         if cfg is None:
             cfg = _get_config(config_path)
@@ -365,10 +378,46 @@ def emit_numbat_event(
         logger.warning("numbat emit failed for %s: %s", event_type, exc)
 
 
+def emit_numbat_command(
+    command: str,
+    *,
+    exit_code: int | None = None,
+    duration_ms: int | None = None,
+    tool_name: str | None = None,
+    tags: list[str] | None = None,
+    actor: str | None = None,
+    git_branch: str | None = None,
+    artifact_type: str = "audit_log",
+    run_id: str | None = None,
+    config_path: str = "config.yaml",
+    cfg: dict[str, Any] | None = None,
+) -> None:
+    """Emit ``command.exec`` plus ``command.result`` when an outcome exists.
+
+    Numbat's CLI forbids ``exit_code`` / ``duration_ms`` on ``command.exec``.
+    Never raises.
+    """
+    shared: dict[str, Any] = {
+        "command": command,
+        "tool_name": tool_name,
+        "tags": tags,
+        "actor": actor,
+        "git_branch": git_branch,
+        "artifact_type": artifact_type,
+        "run_id": run_id,
+        "config_path": config_path,
+        "cfg": cfg,
+    }
+    emit_numbat_event("command.exec", **shared)
+    if exit_code is not None or duration_ms is not None:
+        emit_numbat_event("command.result", exit_code=exit_code, duration_ms=duration_ms, **shared)
+
+
 __all__ = [
     "SCHEMA_VERSION",
     "build_endpoint",
     "build_event",
+    "emit_numbat_command",
     "emit_numbat_event",
     "posix_path",
     "redact_argv_for_numbat",

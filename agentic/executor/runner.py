@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from utils.logger import audit_log
-from utils.numbat_emitter import emit_numbat_event, posix_path, redact_argv_for_numbat
+from utils.numbat_emitter import emit_numbat_command, redact_argv_for_numbat
 
 # Same truncation discipline as agentic/gh_client.py's MAX_DIFF_CHARS: a
 # runaway pytest failure dump must not blow up memory, the audit log, or a
@@ -220,11 +220,9 @@ def run_verification(
             config_path=config_path,
             cfg=cfg,
         )
-        emit_numbat_event(
-            "command.exec",
-            command=redact_argv_for_numbat(list(check.argv)),
+        emit_numbat_command(
+            redact_argv_for_numbat(list(check.argv)),
             exit_code=result.exit_code,
-            file_path=posix_path(worktree),
             tool_name="executor",
             actor="system",
             tags=["executor", result.name],
