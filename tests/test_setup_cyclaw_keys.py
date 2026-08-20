@@ -55,7 +55,9 @@ case "$cmd" in
     if [ "$read_value" -eq 0 ] && [ -n "${FAKE_SECURITY_PROBE_RC:-}" ]; then
       exit "${FAKE_SECURITY_PROBE_RC}"
     fi
-    IFS='|' read -ra items <<< "${FAKE_SECURITY_ITEMS:-}" || true
+    items_raw="${FAKE_SECURITY_ITEMS:-}"
+    [ -n "$items_raw" ] || exit 44
+    IFS='|' read -ra items <<< "$items_raw"
     for item in "${items[@]}"; do
       key="${item%%=*}"
       val="${item#*=}"
