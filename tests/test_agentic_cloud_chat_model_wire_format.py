@@ -75,6 +75,10 @@ def test_grok_invoke_kwargs_reach_the_real_request_body():
     assert response.content == "ok"
     assert captured["body"]["max_tokens"] == 777
     assert captured["body"]["temperature"] == 0.33
+    meta = getattr(response, "response_metadata", None) or {}
+    token_usage = meta.get("token_usage") or meta.get("usage")
+    usage_meta = getattr(response, "usage_metadata", None)
+    assert token_usage or usage_meta, "ChatXAI must expose usage for the spend ledger"
 
 
 def test_claude_invoke_kwargs_reach_the_real_request_payload():

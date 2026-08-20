@@ -149,10 +149,21 @@ def _append_line(path: Path, line: str) -> None:
         handle.write(line)
 
 
+_ALLOWED_SOURCES = frozenset({"query", "agentic"})
+
+
 def _normalize_provider(provider: str) -> str:
     if isinstance(provider, str):
         normalized = provider.strip().lower()
         if normalized:
+            return normalized
+    return "unknown"
+
+
+def _normalize_source(source: str) -> str:
+    if isinstance(source, str):
+        normalized = source.strip().lower()
+        if normalized in _ALLOWED_SOURCES:
             return normalized
     return "unknown"
 
@@ -163,6 +174,7 @@ def record_external_usage(
     model: str,
     usage: object | None,
     spend_file: Path | None = None,
+    source: str = "query",
 ) -> None:
     """Append one JSON line. Write failures log WARNING and do not raise."""
     normalized = _normalize_provider(provider)
@@ -173,6 +185,7 @@ def record_external_usage(
         "model": model,
         **tokens,
         "usage_missing": _usage_is_missing(usage, tokens),
+        "source": _normalize_source(source),
     }
     line = json.dumps(record) + "\n"
     path = _resolve_spend_path(spend_file)
