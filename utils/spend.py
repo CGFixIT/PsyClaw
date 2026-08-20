@@ -62,6 +62,8 @@ _TOKEN_KEYS = (
     "vendor_cost_ticks",
 )
 
+_TOKEN_COUNT_KEYS = tuple(key for key in _TOKEN_KEYS if key != "vendor_cost_ticks")
+
 _EMPTY_TOKENS: dict[str, int | None] = dict.fromkeys(_TOKEN_KEYS)
 
 
@@ -186,6 +188,11 @@ def _token_count(tokens: Mapping[str, object], key: str) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
+def _token_fields_missing(tokens: Mapping[str, object]) -> bool:
+    """True when every token count is absent (None), not when counts are zero."""
+    return all(tokens.get(key) is None for key in _TOKEN_COUNT_KEYS)
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -199,6 +206,7 @@ def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | 
     """Dollars at read time only. Unknown model → usd None, rate_unknown true.
 
     Prefer xAI ``cost_in_usd_ticks`` when present; otherwise the dated rate table.
+    All token counts None (not zero) → usd None with ``usd_source`` incomplete.
     """
     ticks = tokens.get("vendor_cost_ticks")
     if _is_int(ticks) and ticks >= 0:
@@ -207,6 +215,14 @@ def estimate_usd(model: str, tokens: Mapping[str, object]) -> dict[str, float | 
             "rate_unknown": False,
             "priced_as_of": PRICED_AS_OF,
             "usd_source": "vendor_ticks",
+        }
+
+    if _token_fields_missing(tokens):
+        return {
+            "usd": None,
+            "rate_unknown": False,
+            "priced_as_of": PRICED_AS_OF,
+            "usd_source": "incomplete",
         }
 
     rates = _RATES.get(model)

@@ -299,6 +299,31 @@ def test_estimate_usd_unknown_model_usd_none() -> None:
     assert tokens["input_tokens"] == 41
 
 
+def test_estimate_usd_all_none_tokens_is_incomplete() -> None:
+    result = spend.estimate_usd("grok-4.5", spend.parse_grok_usage(None))
+    assert result["usd"] is None
+    assert result["rate_unknown"] is False
+    assert result["usd_source"] == "incomplete"
+
+
+def test_estimate_usd_all_zero_tokens_is_zero_dollars() -> None:
+    result = spend.estimate_usd(
+        "grok-4.5",
+        spend.parse_grok_usage({"prompt_tokens": 0, "completion_tokens": 0}),
+    )
+    assert result["usd"] == 0
+    assert result["rate_unknown"] is False
+    assert result["usd_source"] == "rate_table"
+
+
+def test_estimate_usd_ticks_win_when_tokens_missing() -> None:
+    tokens = spend.parse_grok_usage({"cost_in_usd_ticks": spend.TICKS_PER_USD})
+    result = spend.estimate_usd("grok-4.5", tokens)
+    assert result["usd"] == pytest.approx(1.0)
+    assert result["usd_source"] == "vendor_ticks"
+    assert result["rate_unknown"] is False
+
+
 def test_spend_write_error_is_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     ledger = tmp_path / "spend.jsonl"
 
