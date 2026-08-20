@@ -249,7 +249,7 @@ python -m agentic.cli test
 Postgres/pgvector backend tests require a live Postgres/pgvector service and are wired in `.github/workflows/ci.yml`:
 
 ```bash
-pytest tests/test_personality_postgres.py tests/test_ratelimit_postgres.py tests/test_pgvector_store.py -q --tb=short
+pytest tests/test_personality_postgres.py tests/test_ratelimit_postgres.py tests/test_pgvector_store.py tests/test_authn_postgres.py -q --tb=short
 ```
 
 Windows live HTTP smoke, with the server running:

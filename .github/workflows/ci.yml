@@ -954,7 +954,7 @@ jobs:
   # Postgres backend job (opt-in DB paths)
   # Exercises the LIVE psycopg/pgvector connect+execute paths that the default
   # matrix can only skip: the soul DB over Postgres, the rate limiter over
-  # Postgres, and the pgvector vector store. Ubuntu-only — service containers do
+  # Postgres, the pgvector vector store, and authn. Ubuntu-only — service containers do
   # not run on the windows-latest leg. Uses pgvector/pgvector:pg16 (a superset of
   # postgres:16 that ships the `vector` extension). Lean deps: torch / chromadb /
   # sentence-transformers / fastapi stay lazy and are not needed; the job installs
@@ -1023,10 +1023,11 @@ jobs:
             tests/test_ratelimit_postgres.py \
             tests/test_pgvector_store.py \
             tests/test_personality_db.py \
+            tests/test_authn_postgres.py \
             -q --tb=short
 
       - name: Final status
-        run: echo "Postgres backend tests passed (soul DB + rate limiter + pgvector)"
+        run: echo "Postgres backend tests passed (soul DB + rate limiter + pgvector + authn)"
 
   # ==============================================================================
   # Skill verification matrix (new in feature/CyClaw-Agent)

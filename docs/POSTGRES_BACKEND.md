@@ -117,7 +117,7 @@ recall needs it.
 ## Verification
 
 The `postgres-backend` CI job (ubuntu, `pgvector/pgvector:pg16` service) runs the
-live tests for all three surfaces:
+live tests for the soul DB, rate limiter, pgvector store, and authn:
 
 ```bash
 # locally, against your own Postgres+pgvector:
@@ -125,7 +125,8 @@ export CYCLAW_DB_URL="postgresql://cyclaw:***@localhost:5432/cyclaw"
 export CYCLAW_DB_SSLMODE=disable   # local trusted server only
 pytest tests/test_personality_postgres.py \
        tests/test_ratelimit_postgres.py \
-       tests/test_pgvector_store.py -q
+       tests/test_pgvector_store.py \
+       tests/test_authn_postgres.py -q
 ```
 
 Without a DSN these tests skip, so the default offline suite stays green.
