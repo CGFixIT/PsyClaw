@@ -24,7 +24,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from urllib.parse import urlparse
 
@@ -140,6 +140,7 @@ def _extract_and_record_spend(
     model: str,
     resp: httpx.Response,
     extract: Callable[[httpx.Response], str],
+    spend_context: Mapping[str, object] | None = None,
 ) -> str:
     """Extract the user-visible answer and append one spend line.
 
@@ -152,7 +153,11 @@ def _extract_and_record_spend(
     finally:
         try:
             usage = resp.json().get("usage")
-            record_external_usage(provider=provider, model=model, usage=usage)
+            extra: dict[str, object] = {}
+            if spend_context is not None:
+                extra["query_hash"] = spend_context.get("query_hash")
+                extra["route_path"] = spend_context.get("route_path")
+            record_external_usage(provider=provider, model=model, usage=usage, **extra)
         except Exception as exc:
             # Type-only: spend is best-effort and must not leak body fragments.
             log.debug("spend record failed: %s", type(exc).__name__)
@@ -691,7 +696,7 @@ class GrokClient:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
         if not self.api_key:
             raise GrokServiceError("GROK_API_KEY not set",
                                     details={"required_env": "GROK_API_KEY"})
@@ -715,7 +720,7 @@ class GrokClient:
             backoff_base=self.retry_backoff,
             backoff_max=self.retry_backoff_max,
             extract_content=lambda resp: _extract_and_record_spend(
-                "grok", self.model, resp, _extract_content
+                "grok", self.model, resp, _extract_content, spend_context=spend_context
             ),
             on_http=lambda e: GrokServiceError(
                 f"Grok HTTP {e.response.status_code}",
@@ -754,7 +759,7 @@ class ClaudeClient:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
         if not self.api_key:
             raise ClaudeServiceError("ANTHROPIC_API_KEY not set",
                                      details={"required_env": "ANTHROPIC_API_KEY"})
@@ -781,7 +786,7 @@ class ClaudeClient:
             backoff_base=self.retry_backoff,
             backoff_max=self.retry_backoff_max,
             extract_content=lambda resp: _extract_and_record_spend(
-                "claude", self.model, resp, _extract_claude_content
+                "claude", self.model, resp, _extract_claude_content, spend_context=spend_context
             ),
             on_http=lambda e: ClaudeServiceError(
                 f"Claude HTTP {e.response.status_code}",

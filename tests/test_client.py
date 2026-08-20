@@ -28,6 +28,7 @@ from llm.client import (
     resolve_local_backend,
 )
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError
+from utils.logger import hash_query
 
 _URL = "http://127.0.0.1:1234/v1/chat/completions"  # DevSkim: ignore DS162092,DS137138 - loopback test URL
 
@@ -604,6 +605,33 @@ class TestExternalSpendRecording:
         assert record["input_tokens"] == 41
         assert record["output_tokens"] == 104
         assert record["reasoning_tokens"] is None
+        assert "query_hash" not in record
+        assert "route_path" not in record
+        client.close()
+
+    def test_grok_spend_context_persists_join_fields(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={"prompt_tokens": 41, "completion_tokens": 104},
+            )
+        )
+        client._client.post = fake
+        hashed = hash_query("a prompt")
+        path = [
+            "retrieve",
+            "route_by_score",
+            "user_gate",
+            "pre_action_hook_grok",
+            "grok_fallback",
+        ]
+        assert client.generate("a prompt", spend_context={"query_hash": hashed, "route_path": path}) == "grok answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["query_hash"] == hashed
+        assert record["route_path"] == path
+        assert "query" not in record
         client.close()
 
     def test_grok_200_with_reasoning_tokens_writes_them(self, tmp_path, monkeypatch, _spend_ledger):

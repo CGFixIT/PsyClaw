@@ -221,6 +221,48 @@ def test_written_json_has_no_forbidden_keys(tmp_path: Path) -> None:
             assert forbidden not in dumped
 
 
+def test_record_query_hash_and_route_path(tmp_path: Path) -> None:
+    from utils.logger import hash_query
+
+    ledger = tmp_path / "spend.jsonl"
+    hashed = hash_query("what is RRF?")
+    path = [
+        "retrieve",
+        "route_by_score",
+        "user_gate",
+        "pre_action_hook_grok",
+        "grok_fallback",
+    ]
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage=GROK_USAGE,
+        spend_file=ledger,
+        query_hash=hashed,
+        route_path=path,
+    )
+    record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+    assert record["query_hash"] == hashed
+    assert record["route_path"] == path
+    assert "query" not in record
+
+
+def test_record_omits_invalid_query_hash_and_route_path(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage=GROK_USAGE,
+        spend_file=ledger,
+        query_hash="not-a-sha256",
+        route_path=["retrieve", "not valid", "grok_fallback"],
+    )
+    record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+    assert "query_hash" not in record
+    assert "route_path" not in record
+    assert record["input_tokens"] == GROK_USAGE["prompt_tokens"]
+
+
 def test_record_source_agentic_and_unknown(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(

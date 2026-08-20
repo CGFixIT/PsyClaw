@@ -305,7 +305,35 @@ def _format_context_chunks(
     return SECTION_SEP.join(parts), included
 
 
-def _generate_or_error(client: _GeneratingClient, prompt: str, *, label: str) -> tuple[str, str | None]:
+def _fallback_spend_context(state: GraphState, cfg: dict, provider: str) -> dict[str, object]:
+    """Join fields for spend.jsonl. Hash only when audit hashing is on. Never the query."""
+    ctx: dict[str, object] = {
+        "route_path": [
+            "retrieve",
+            "route_by_score",
+            "user_gate",
+            f"pre_action_hook_{provider}",
+            f"{provider}_fallback",
+        ]
+    }
+    logging_cfg = cfg.get("logging") if isinstance(cfg, dict) else None
+    audit_fields = logging_cfg.get("audit_fields") if isinstance(logging_cfg, dict) else None
+    include_hash = True
+    if isinstance(audit_fields, dict):
+        include_hash = bool(audit_fields.get("include_query_hash", True))
+    query = state.get("query")
+    if include_hash and isinstance(query, str):
+        ctx["query_hash"] = hash_query(query)
+    return ctx
+
+
+def _generate_or_error(
+    client: _GeneratingClient,
+    prompt: str,
+    *,
+    label: str,
+    spend_context: dict[str, object] | None = None,
+) -> tuple[str, str | None]:
     """Call client.generate(prompt); translate a RAGError into a safe answer.
 
     local_llm_node, offline_best_effort_node (both call LocalLLMClient) and
@@ -318,7 +346,12 @@ def _generate_or_error(client: _GeneratingClient, prompt: str, *, label: str) ->
     node functions and their public signatures/return dicts are unchanged.
     """
     try:
-        return client.generate(prompt), None
+        if spend_context is None:
+            return client.generate(prompt), None
+        try:
+            return client.generate(prompt, spend_context=spend_context), None
+        except TypeError:
+            return client.generate(prompt), None
     except RAGError as e:
         return f"[{label} Error: {e.message}]", f"{e.code}: {e.message}"
 
@@ -654,7 +687,12 @@ def _external_fallback_node(
             "query": state.get("query", ""),
         })
 
-    answer, error = _generate_or_error(client, prompt, label=label)
+    answer, error = _generate_or_error(
+        client,
+        prompt,
+        label=label,
+        spend_context=_fallback_spend_context(state, cfg, provider),
+    )
 
     # No fabricated source. A stub {"source": f"{label} Fallback", "score": 0.0,
     # "chunk_id": -1, ...} would not be a real RetrievedDoc — it carries no

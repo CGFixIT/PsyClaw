@@ -190,8 +190,9 @@ class MockLocalLLM:
         self.response = response
         self.last_prompt = None
 
-    def generate(self, prompt):
+    def generate(self, prompt, **kwargs):
         self.last_prompt = prompt
+        self.last_spend_context = kwargs.get("spend_context")
         return self.response
 
 
@@ -211,8 +212,9 @@ class MockGrokClient:
     def is_available(self):
         return self._available
 
-    def generate(self, prompt):
+    def generate(self, prompt, **kwargs):
         self.last_prompt = prompt
+        self.last_spend_context = kwargs.get("spend_context")
         return self.response
 
 

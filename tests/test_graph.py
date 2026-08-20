@@ -662,6 +662,59 @@ class TestBuildGraphSignature:
             build_graph(retriever, llm, None, cfg)
 
 
+class TestFallbackSpendContext:
+    """Option B: fallback nodes stamp query_hash + reconstructed route_path."""
+
+    def test_grok_fallback_passes_query_hash_and_route_path(self):
+        grok = MockGrokClient()
+        query = "what is RRF?"
+        grok_fallback_node(
+            {"query": query},
+            grok=grok,
+            cfg={"policy": {"fallback": {"send_local_context_to_grok": False}}},
+        )
+        assert grok.last_spend_context is not None
+        assert grok.last_spend_context["query_hash"] == hash_query(query)
+        assert grok.last_spend_context["route_path"] == [
+            "retrieve",
+            "route_by_score",
+            "user_gate",
+            "pre_action_hook_grok",
+            "grok_fallback",
+        ]
+
+    def test_claude_fallback_uses_claude_node_names(self):
+        claude = MockClaudeClient()
+        claude_fallback_node(
+            {"query": "q"},
+            claude=claude,
+            cfg={"policy": {"fallback": {"send_local_context_to_claude": False}}},
+        )
+        assert claude.last_spend_context["route_path"][-2:] == [
+            "pre_action_hook_claude",
+            "claude_fallback",
+        ]
+        assert claude.last_spend_context["query_hash"] == hash_query("q")
+
+    def test_omits_query_hash_when_audit_hashing_disabled(self):
+        grok = MockGrokClient()
+        grok_fallback_node(
+            {"query": "secret query"},
+            grok=grok,
+            cfg={
+                "policy": {"fallback": {"send_local_context_to_grok": False}},
+                "logging": {"audit_fields": {"include_query_hash": False}},
+            },
+        )
+        assert "query_hash" not in grok.last_spend_context
+        assert "route_path" in grok.last_spend_context
+
+    def test_local_llm_does_not_receive_spend_context(self):
+        llm = MockLocalLLM()
+        local_llm_node({"query": "q", "retrieved_docs": []}, llm=llm, cfg={})
+        assert llm.last_spend_context is None
+
+
 class TestGrokFallbackPrompt:
     """grok_fallback_node prompt structure when forwarding local context."""
 
@@ -1029,15 +1082,15 @@ class TestNodeErrorRecovery:
             raise RAGError("retriever exploded")
 
     class _RaisingLLM:
-        def generate(self, prompt):
+        def generate(self, prompt, **kwargs):
             raise LLMServiceError("LM Studio down")
 
     class _RaisingGrok:
-        def generate(self, prompt):
+        def generate(self, prompt, **kwargs):
             raise GrokServiceError("xAI 500")
 
     class _RaisingClaude:
-        def generate(self, prompt):
+        def generate(self, prompt, **kwargs):
             raise ClaudeServiceError("Anthropic 500")
 
     def test_retrieve_node_rag_error_returns_safe_error_state(self):
@@ -1089,7 +1142,7 @@ class TestNodeErrorRecovery:
         # never clobber an upstream error already in state (e.g. a retrieve
         # RAG_ERROR that routed here via the offline path).
         class _OkLLM:
-            def generate(self, prompt):
+            def generate(self, prompt, **kwargs):
                 return "ok answer"
 
         out = local_llm_node({"query": "q", "retrieved_docs": []}, llm=_OkLLM(), cfg={})

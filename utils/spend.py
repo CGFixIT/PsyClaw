@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
@@ -151,6 +152,9 @@ def _append_line(path: Path, line: str) -> None:
 
 
 _ALLOWED_SOURCES = frozenset({"query", "agentic"})
+_QUERY_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_ROUTE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_MAX_ROUTE_HOPS = 16
 
 
 def _normalize_provider(provider: str) -> str:
@@ -169,6 +173,23 @@ def _normalize_source(source: str) -> str:
     return "unknown"
 
 
+def _normalized_query_hash(value: object) -> str | None:
+    if isinstance(value, str) and _QUERY_HASH_RE.fullmatch(value):
+        return value
+    return None
+
+
+def _normalized_route_path(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not value or len(value) > _MAX_ROUTE_HOPS:
+        return None
+    hops: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not _ROUTE_TOKEN_RE.fullmatch(item):
+            return None
+        hops.append(item)
+    return hops
+
+
 def record_external_usage(
     *,
     provider: str,
@@ -176,6 +197,8 @@ def record_external_usage(
     usage: object | None,
     spend_file: Path | None = None,
     source: str = "query",
+    query_hash: str | None = None,
+    route_path: list[str] | None = None,
 ) -> None:
     """Append one JSON line. Write failures log WARNING and do not raise."""
     normalized = _normalize_provider(provider)
@@ -188,6 +211,12 @@ def record_external_usage(
         "usage_missing": _usage_is_missing(usage, tokens),
         "source": _normalize_source(source),
     }
+    hashed = _normalized_query_hash(query_hash)
+    if hashed is not None:
+        record["query_hash"] = hashed
+    hops = _normalized_route_path(route_path)
+    if hops is not None:
+        record["route_path"] = hops
     line = json.dumps(record) + "\n"
     path = _resolve_spend_path(spend_file)
     try:
