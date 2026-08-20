@@ -18,7 +18,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
 | `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port`. |
-| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600). `--rotate`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent). |
+| `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600), failing before dotenv writes if a requested Keychain write fails. `--rotate`, `--no-env-file`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent). |
 | `setup-fsconnect.sh` | Creates confined `~/CyClaw-FS` (`chmod 700`). Unless `--prepare-only`, enables list/stat/read via `_enable_fsconnect_readlist.py`. |
 | `_enable_fsconnect_readlist.py` | Writes the confined read/list `fsconnect:` profile into `config.yaml` (writes stay off). |
 | `cyclaw-keychain-set.sh` | Interactive Keychain store. Bare `-w` (secret never in argv); `-T /usr/bin/security`. Requires a TTY. |
@@ -67,8 +67,10 @@ not read `.env`, and this script never writes a token into a plist or the
 The terminal (`#apiKeyInput`) and harness (`#apiKey`) consoles hold the
 operator key **in the input element only** — never `localStorage`, never a
 cookie. `--fill-browser` injects that field on `127.0.0.1` tabs after
-opening the consoles. A scheduled rotate updates Keychain + `.env`; it
-cannot reach a closed browser, so paste once or re-run `--fill-browser`.
+opening the consoles. A scheduled rotate updates Keychain + `.env`; it exits
+nonzero before changing `.env` if the Keychain write fails. Neither a manual
+nor scheduled rotate changes an already-running server environment: restart
+`gate.py`, then paste once or re-run `--fill-browser`.
 
 ```bash
 # first run (prompts; skip any; fill the consoles if they are up)
@@ -82,6 +84,10 @@ bash ~/.CyClaw/bin/setup-cyclaw-keys.sh --rotate --skip-prompts --fill-browser
 bash ~/.CyClaw/bin/setup-cyclaw-keys.sh --schedule-rotate monthly
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cgfixit.cyclaw.keys-rotate.plist
 ```
+
+The rotate LaunchAgent runs a frozen copy at
+`$CYCLAW_HOME/bin/setup-cyclaw-keys.sh`. Re-run `--schedule-rotate` after
+updating CyClaw so an existing schedule receives script fixes.
 
 | Env var | How | Keychain service |
 |---|---|---|
