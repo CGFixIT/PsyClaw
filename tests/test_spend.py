@@ -246,6 +246,14 @@ def test_compare_vendor_cost_splits_table_and_ticks() -> None:
     assert table["usd_source"] == "rate_table"
 
 
+def test_ticks_mismatch_relative_floor_and_cap() -> None:
+    assert spend.ticks_mismatch(1e-9, 0.0001) is False
+    assert spend.ticks_mismatch(0.00002, 0.0001) is True
+    assert spend.ticks_mismatch(0.004, 0.1) is False
+    assert spend.ticks_mismatch(0.02, 1.0) is True
+    assert spend.ticks_mismatch(None, 1.0) is False
+
+
 def test_compare_vendor_cost_claude_has_no_ticks() -> None:
     parsed = spend.parse_claude_usage(CLAUDE_USAGE)
     compared = spend.compare_vendor_cost("claude-sonnet-5", parsed)
@@ -312,6 +320,18 @@ def test_spend_write_error_is_swallowed(tmp_path: Path, monkeypatch: pytest.Monk
 def test_no_update_or_delete_helpers() -> None:
     names = {name for name, _ in inspect.getmembers(spend, inspect.isfunction)}
     assert not any(name.startswith(("update", "delete", "rewrite")) for name in names)
+
+
+def test_live_probe_refuses_unpriced_model() -> None:
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "spend_live_probe.py"
+    spec = importlib.util.spec_from_file_location("spend_live_probe_unpriced", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with pytest.raises(SystemExit, match="rate table cannot price"):
+        mod._refuse_unpriced({"rate_unknown": True, "table_usd": None}, "grok")
 
 
 def test_live_probe_refuses_without_env(monkeypatch: pytest.MonkeyPatch) -> None:

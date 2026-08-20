@@ -120,6 +120,7 @@ def _empty_spend_window() -> dict:
         "usd_incomplete": False,
         "table_usd": 0.0,
         "vendor_usd": 0.0,
+        "comparable_table_usd": 0.0,
         "vendor_rows": 0,
         "table_incomplete": False,
     }
@@ -142,23 +143,32 @@ def _add_spend_compare(window: dict, compared: dict) -> None:
         window["table_incomplete"] = True
     elif isinstance(table_usd, (int, float)) and not isinstance(table_usd, bool):
         window["table_usd"] += float(table_usd)
-    if isinstance(vendor_usd, (int, float)) and not isinstance(vendor_usd, bool):
+    table_ok = (
+        not compared.get("rate_unknown")
+        and isinstance(table_usd, (int, float))
+        and not isinstance(table_usd, bool)
+    )
+    vendor_ok = isinstance(vendor_usd, (int, float)) and not isinstance(vendor_usd, bool)
+    if table_ok and vendor_ok:
         window["vendor_usd"] += float(vendor_usd)
+        window["comparable_table_usd"] += float(table_usd)
         window["vendor_rows"] += 1
 
 
 def _freeze_spend_window(window: dict) -> dict:
     vendor_usd = None if window["vendor_rows"] == 0 else window["vendor_usd"]
     table_usd = None if window["table_incomplete"] else window["table_usd"]
+    comparable = None if window["vendor_rows"] == 0 else window["comparable_table_usd"]
     delta = None
-    if vendor_usd is not None and table_usd is not None:
-        delta = table_usd - vendor_usd
+    if vendor_usd is not None and comparable is not None:
+        delta = comparable - vendor_usd
     return {
         "by_provider": dict(window["by_provider"].most_common()),
         "tokens_in": window["tokens_in"],
         "tokens_out": window["tokens_out"],
         "usd": None if window["usd_incomplete"] else window["usd"],
         "table_usd": table_usd,
+        "ticked_table_usd": comparable,
         "vendor_usd": vendor_usd,
         "delta_usd": delta,
         "vendor_rows": window["vendor_rows"],
@@ -229,12 +239,14 @@ def _print_spend(spend: dict | None) -> None:
         print(f"  {label}: tokens_in={window['tokens_in']} tokens_out={window['tokens_out']} usd={usd_text}")
         if window.get("vendor_usd") is not None:
             table_text = "n/a" if window["table_usd"] is None else f"{window['table_usd']:.6f}"
+            ticked_text = "n/a" if window.get("ticked_table_usd") is None else f"{window['ticked_table_usd']:.6f}"
             vendor_text = f"{window['vendor_usd']:.6f}"
             delta = window.get("delta_usd")
             delta_text = "n/a" if delta is None else f"{delta:.6f}"
             print(
-                f"    table_usd={table_text} vendor_usd={vendor_text} "
-                f"delta_usd={delta_text} vendor_rows={window['vendor_rows']}"
+                f"    table_usd={table_text} ticked_table_usd={ticked_text} "
+                f"vendor_usd={vendor_text} delta_usd={delta_text} "
+                f"vendor_rows={window['vendor_rows']}"
             )
         for provider, count in window["by_provider"].items():
             print(f"    {provider}: {count}")

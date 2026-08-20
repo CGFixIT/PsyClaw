@@ -284,3 +284,27 @@ def compare_vendor_cost(model: str, tokens: Mapping[str, object]) -> dict[str, f
         "rate_unknown": table["rate_unknown"],
         "priced_as_of": table["priced_as_of"],
     }
+
+
+DELTA_REL_FAIL = 0.05
+DELTA_ABS_FLOOR = 1e-8
+DELTA_ABS_CAP = 0.01
+
+
+def ticks_mismatch(delta_usd: object, vendor_usd: object) -> bool:
+    """True when rate-table USD disagrees with vendor ticks beyond the live-probe gate.
+
+    Relative 5% when ``vendor_usd > 0``, ignoring sub-tick dust under
+    ``DELTA_ABS_FLOOR``. Absolute ``DELTA_ABS_CAP`` still trips catastrophic misses.
+    """
+    if isinstance(delta_usd, bool) or not isinstance(delta_usd, (int, float)):
+        return False
+    if isinstance(vendor_usd, bool) or not isinstance(vendor_usd, (int, float)):
+        return False
+    abs_delta = abs(float(delta_usd))
+    vendor = float(vendor_usd)
+    if abs_delta <= DELTA_ABS_FLOOR:
+        return False
+    if abs_delta > DELTA_ABS_CAP:
+        return True
+    return vendor > 0 and abs_delta / vendor > DELTA_REL_FAIL

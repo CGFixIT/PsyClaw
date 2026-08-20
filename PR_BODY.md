@@ -1,43 +1,42 @@
 ## Branch naming (required for agent-opened PRs)
 
-`grok/spend-live-probe`
+`grok/spend-probe-delta`
 
 ## Title
 
-`[feat] - opt-in live Grok/Claude spend probe vs vendor usage`
+`[fix] - compare spend delta only on vendor-ticked rows`
 
 ## Proposed changes
 
-Refs #958 after #1007 merged to `origin/main` (`61edda6b`). Owner asked for a real-API spend check, not another ledger rewrite.
+Refs #958 after #1009 merged (`feeeeacf`). Lands audit findings **2–5** that were meant for #1009 before merge.
 
-- `utils.spend.compare_vendor_cost` — rate-table USD vs xAI `cost_in_usd_ticks` (Claude has no dollar field)
-- `metrics.py` Spend section prints `table_usd` / `vendor_usd` / `delta_usd` when ticks exist
-- `tests/spend_live_probe.py` — **not** `test_*.py`, so CI `pytest tests/` never collects it. Refuses unless `CYCLAW_SPEND_LIVE=1`. One tiny Grok and/or Claude `generate()` through the real clients (the emit seam). Never logs prompt, answer, or keys.
+- **2:** `delta_usd` is now `ticked_table_usd - vendor_usd` (paired rows only). All-rows `table_usd` is unchanged.
+- **3:** live probe `SystemExit` if `rate_unknown` or `table_usd is None`.
+- **4:** `ticks_mismatch` — 5% relative gate, `1e-8` floor, `$0.01` cap (the old absolute-only `$0.01` could not fire on a one-word call).
+- **5:** probe loads shipped `config.yaml` `models.grok` / `models.claude`, caps `max_tokens` at 2048, forces `retry.max_retries: 0`, prints the model used.
 
-`gate.py` / `graph.py` / MCP untouched.
+Finding 6 (`usage_missing` → confident `$0.00`) and finding 1 (agentic plane vs `/query` AC) are **not** in this PR.
 
 **Invariant / Governance Impact**
-- None. I6 unchanged. Paid calls are operator-gated and off the CI path.
+- None. I6 unchanged. Probe still opt-in (`CYCLAW_SPEND_LIVE=1`).
 
 ## Types of changes
 
-- [ ] Bugfix
-- [x] New feature
+- [x] Bugfix
+- [ ] New feature
 - [ ] Breaking change
 - [ ] Documentation Update
 - [ ] Invariant / Governance refinement
 
-(The probe is a test/ops tool; the comparator is a correctness aid for the existing spend feature.)
-
 ## Benefits / why
 
-- Operator can run one billed Grok/Claude call and see whether the ledger matches vendor ticks (Grok) or the official token formula (Claude).
-- CI cannot spend money: discovery skip + `CYCLAW_SPEND_LIVE` fail-closed.
+- Spend CLI delta no longer mixes pre-ticks Grok rows and Claude rows into a fake vendor comparison.
+- Live probe fails closed on an unpriced model and uses the deployed model IDs.
 
 ## Risks to monitor
 
-- This agent shell’s `GROK_API_KEY` is a placeholder (`api.x.ai` 400 Incorrect API key). Live Grok check still needs a real console key. `ANTHROPIC_API_KEY` unset here.
-- Option B `query_hash` / `route_path` still deferred.
+- Print line now includes `ticked_table_usd`.
+- Live billed reconciliation still needs real xAI + Anthropic keys.
 
 ## Checklist
 
@@ -48,10 +47,9 @@ Refs #958 after #1007 merged to `origin/main` (`61edda6b`). Owner asked for a re
 
 ## Verify
 
-- `ruff check --select E,F,I,B,C4,UP,S` on touched Python → exit 0
+- ruff on touched Python → exit 0
 - `GROK_API_KEY=dummy python -m pytest tests/test_spend.py tests/test_metrics_spend.py tests/test_due_diligence_invariants.py -q --tb=short` → exit 0
 - invariant-guard 35/35
-- `CYCLAW_SPEND_LIVE=1 python tests/spend_live_probe.py` → Grok 400 invalid key on this machine; Claude skipped (no Anthropic key)
 - `python ~/.grok/githooks/cyclaw/verify_ci_emulation.py` before push
 
 ## Merge order
@@ -61,4 +59,4 @@ Refs #958 after #1007 merged to `origin/main` (`61edda6b`). Owner asked for a re
 
 ## Base
 
-- GitHub base: `main` (`origin/main@61edda6b`)
+- GitHub base: `main` (`origin/main@feeeeacf`)
