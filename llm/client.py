@@ -26,6 +26,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -151,10 +152,23 @@ def _extract_and_record_spend(
     try:
         text = extract(resp)
     finally:
-        extra: dict[str, object] = {}
+        query_hash: str | None = None
+        route_path: list[str] | None = None
+        source = "query"
+        spend_file: Path | None = None
         if spend_context is not None:
-            extra["query_hash"] = spend_context.get("query_hash")
-            extra["route_path"] = spend_context.get("route_path")
+            raw_query_hash = spend_context.get("query_hash")
+            if isinstance(raw_query_hash, str):
+                query_hash = raw_query_hash
+            raw_route_path = spend_context.get("route_path")
+            if isinstance(raw_route_path, list) and all(isinstance(hop, str) for hop in raw_route_path):
+                route_path = raw_route_path
+            raw_source = spend_context.get("source")
+            if isinstance(raw_source, str):
+                source = raw_source
+            raw_spend_file = spend_context.get("spend_file")
+            if isinstance(raw_spend_file, (str, Path)):
+                spend_file = Path(raw_spend_file)
         try:
             usage = resp.json().get("usage")
         except Exception as exc:
@@ -163,7 +177,15 @@ def _extract_and_record_spend(
             log.debug("spend usage parse failed: %s", type(exc).__name__)
             usage = None
         try:
-            record_external_usage(provider=provider, model=model, usage=usage, **extra)
+            record_external_usage(
+                provider=provider,
+                model=model,
+                usage=usage,
+                spend_file=spend_file,
+                source=source,
+                query_hash=query_hash,
+                route_path=route_path,
+            )
         except Exception as exc:
             # Type-only: spend is best-effort and must not leak body fragments.
             log.debug("spend record failed: %s", type(exc).__name__)
@@ -758,7 +780,11 @@ class ClaudeClient:
         self.api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
         # Same as LocalLLM / GrokClient: ambient HTTP(S)_PROXY must not see
         # ANTHROPIC_API_KEY on a confirmed hybrid call.
-        self._client = httpx.Client(timeout=_client_timeout(self.timeout), trust_env=False)
+        self._client = httpx.Client(
+            timeout=_client_timeout(self.timeout),
+            trust_env=False,
+            follow_redirects=False,
+        )
 
     def close(self) -> None:
         self._client.close()

@@ -34,7 +34,7 @@ consolidates the threat-model assumptions previously scattered across
 | Tenancy | **Single-tenant.** No mutual isolation between users is attempted. |
 | Data store | Embedded ChromaDB (`PersistentClient`) + local BM25 + SQLite. No HTTP DB. |
 | LLM | Local Ollama over loopback; optional Grok and/or Claude fallback (triple-gated per provider). **Since 2026-08-07 the shipped `config.yaml` satisfies two of those three gates** — `app.mode: "hybrid"` and both `models.grok.enabled` / `models.claude.enabled` are `true`. The third, `user_confirmed_online`, is per-request and cannot be pre-set by config. See the eighth amendment in §5. |
-| Outbound model egress | **Two planes. Neither is "off by default" any more — see the eighth amendment in §5.** Core plane: two of its three gates ship satisfied (`app.mode: "hybrid"`, both providers `enabled: true`); only the per-request `user_confirmed_online` still stands. Agentic plane: `allow_cloud_providers` and both `providers.<name>.enabled` ship `true`; `agentic.enabled`, `deepagent_github.enabled`, the API-key env var, and `--confirm-online` still stand. The core graph's triple-gated fallback (`mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`), and the out-of-band Deep Agents harness behind a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. Destinations are `api.x.ai` and `api.anthropic.com` only. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record egress this way — a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **This chain now has two consumers, not one, with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation — egress IS recorded there. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its constructed cloud `BaseChatModel` straight to the DeepAgents `creator(model=model, ...)` call with no wrapping through `sanitize_handoff`; that path's egress is NOT recorded, and remains out-of-scope follow-on work. |
+| Outbound model egress | **Three planes.** Core and agentic are not fully off by default; see the eighth amendment in §5. Core plane: two of its three gates ship satisfied (`app.mode: "hybrid"`, both providers `enabled: true`); only the per-request `user_confirmed_online` still stands. Agentic plane: `allow_cloud_providers` and both `providers.<name>.enabled` ship `true`; `agentic.enabled`, `deepagent_github.enabled`, the API-key env var, and `--confirm-online` still stand. Evaluation plane: `tests/judge_eval.py` is a standalone, default-off forensic tool requiring `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY`; it is never imported by a production or live-request path. The core graph's triple-gated fallback is `mode==hybrid` AND `<provider>.enabled` AND `user_confirmed_online`. The out-of-band Deep Agents harness has a six-condition chain: `agentic.enabled`, `deepagent_github.enabled`, `allow_cloud_providers`, `providers.<name>.enabled`, the provider's API-key env var present, and a per-run `--confirm-online`. External destinations remain `api.x.ai` and `api.anthropic.com`; the evaluation plane permits only `api.anthropic.com`. `agentic/deepagent_github/handoff.py` implements a `HandoffEnvelope`/`sanitize_handoff` to record agentic egress as a SHA-256 of the outbound prompt, its length, the context doc ids, and a redaction count, never the prompt text. **The agentic chain has two consumers with different egress-recording states (see §5's fifth amendment):** `agentic/cli.py`'s `real-repo-run --provider`, wired to `agentic.deepagent_github.chat_client.ChatModelProposerClient`, calls `sanitize_handoff` on every real invocation. The separate, still-unwired `builder.py`/DeepAgents-graph path (`deepagent-plan`, probe-only) passes its cloud `BaseChatModel` straight to `creator(model=model, ...)` without `sanitize_handoff`; that path's egress is not recorded and remains out-of-scope follow-on work. |
 | Agentic / sync layers | **Out-of-band, opt-in, disabled by default.** Never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`. |
 | Host | A machine the operator controls. Host root is **trusted**. |
 
@@ -57,6 +57,7 @@ multi-tenant workloads.
 | **DNS-rebinding → state-changing POST** | `TrustedHostMiddleware` Host allow-list (outermost middleware) | `gate.py`, `config.yaml` |
 | **Unauthorized cross-origin reads** | CORS allow-list | `gate.py`, `config.yaml` |
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
+| **Uncontrolled evaluation egress** | Standalone CLI refuses unless `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY` are both present; Anthropic origin is exact-pinned; contestant is loopback-only; embedding downloads are forced offline | `tests/judge_eval.py`, `tests/test_judge_eval.py` |
 | **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import, by **every** entry point (gateway, MCP server, indexer CLI) from one shared mapping — an ambient value in the operator's environment is overwritten, not inherited; HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
 | **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; Docker builtin seccomp; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
@@ -866,6 +867,48 @@ an unenabled checkout never even imports it.
   (`memory/README.md`) states retrieval-fusion and episode-staging hooks are
   lazy and non-fatal — this amendment does not independently re-verify that
   claim beyond confirming the shipped switches are `false`.
+
+### Thirteenth amendment — opt-in groundedness evaluation is a third outbound plane
+
+`tests/judge_eval.py` is an evaluation and forensic CLI, not a server feature.
+It is never imported by `gate.py`, `gate_ops.py`, `gate_auth.py`,
+`gate_memory.py`, `graph.py`, `mcp_hybrid_server.py`, or `harness/`, and it is
+not called by any live request path. I1-I5 remain production graph properties;
+I6 isolation is locked by `tests/test_judge_eval.py`.
+
+- **The plane is hard default-off.** The CLI returns exit 2 before indexing or
+  model construction unless `CYCLAW_EVAL_LIVE` is exactly `1` and a non-empty
+  `ANTHROPIC_API_KEY` is present. Required CI never sets the flag or runs the
+  live script. Offline tests import helpers and verify refusal only.
+- **The destination set is closed.** The judge reuses `ClaudeClient`, including
+  `trust_env=False`, but first requires the configured endpoint to be exactly
+  `https://api.anthropic.com/v1`; URL credentials, alternate ports, query
+  strings, fragments, redirects, proxies, and alternate hosts are not allowed.
+  The contestant endpoint must be loopback and its fallback is disabled. The
+  script forces Hugging Face and Transformers offline before retrieval imports,
+  so a missing embedding cache fails the run instead of adding another host.
+- **Only synthetic fixture data may cross the boundary.** The CLI builds a
+  dedicated embedded ChromaDB plus JSON BM25 index from the six fixed documents
+  under `tests/fixtures/groundedness/corpus/`. It accepts no corpus, index,
+  endpoint, or report path overrides and rejects unexpected source IDs and
+  symlink/path escapes. It never reads `data/corpus/` or production `index/`.
+- **Disclosure is explicit.** Each live judge request sends the case query, the
+  local contestant answer, expected and forbidden public-safe claims, and the
+  retrieved public-safe evidence to Anthropic. Those bytes are subject to the
+  provider's retention, access, and processing terms. This plane is opt-in
+  forensic evaluation only and must never be described as the production answer
+  path or as a security control.
+- **Persistence is metadata-only.** Ignored files under `logs/evals/` contain
+  per-case scores, bounded reason codes, claim IDs, source IDs, token counts,
+  and model/index fingerprints. They contain no raw query, answer, evidence
+  excerpt, claim text, API key, or authorization header. Judge spend uses a
+  dedicated `source=eval` ledger rather than contaminating production-query
+  attribution.
+- **Spend and judge behavior are bounded.** The fixture is exactly 24 cases,
+  each client is capped at 512 output tokens, cloud retries are disabled, and
+  malformed or free-form judge output fails the run. The judge is probabilistic
+  measurement evidence, not formal proof. Residual risks are Anthropic retention,
+  key theft, billed usage, model drift, and evaluator variance.
 
 ---
 

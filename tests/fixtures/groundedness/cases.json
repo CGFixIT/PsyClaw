@@ -1,0 +1,233 @@
+[
+  {
+    "id": "direct_harbor_capacity",
+    "category": "direct_factual",
+    "query": "What is the maximum daily cargo capacity of Port Helios?",
+    "expected_claims": ["Port Helios has a maximum daily cargo capacity of 18,000 metric tons."],
+    "forbidden_claims": ["Port Helios has a maximum daily cargo capacity of 25,000 metric tons."],
+    "expected_source_ids": ["aurora_harbor"],
+    "expect_abstention": false
+  },
+  {
+    "id": "direct_transit_stations",
+    "category": "direct_factual",
+    "query": "How many passenger stations are on Cedar Loop?",
+    "expected_claims": ["Cedar Loop has 14 passenger stations."],
+    "forbidden_claims": ["Cedar Loop has 20 passenger stations."],
+    "expected_source_ids": ["cedar_transit"],
+    "expect_abstention": false
+  },
+  {
+    "id": "direct_library_catalog",
+    "category": "direct_factual",
+    "query": "How many catalogued items does Lumen Library hold?",
+    "expected_claims": ["Lumen Library holds 48,000 catalogued items."],
+    "forbidden_claims": ["Lumen Library holds 84,000 catalogued items."],
+    "expected_source_ids": ["lumen_library"],
+    "expect_abstention": false
+  },
+  {
+    "id": "direct_water_capacity",
+    "category": "direct_factual",
+    "query": "What is the combined storage capacity of the Meridian reservoirs?",
+    "expected_claims": ["The Meridian reservoirs have a combined capacity of 72 million liters."],
+    "forbidden_claims": ["The Meridian reservoirs have a combined capacity of 27 million liters."],
+    "expected_source_ids": ["meridian_water"],
+    "expect_abstention": false
+  },
+  {
+    "id": "direct_farm_harvest",
+    "category": "direct_factual",
+    "query": "What is Nova greenhouse's average weekly harvest output?",
+    "expected_claims": ["Nova greenhouse averages 2.4 metric tons of harvest per week."],
+    "forbidden_claims": ["Nova greenhouse averages 4.2 metric tons of harvest per week."],
+    "expected_source_ids": ["nova_farm"],
+    "expect_abstention": false
+  },
+  {
+    "id": "direct_microgrid_battery",
+    "category": "direct_factual",
+    "query": "What is the battery capacity of the Quartz microgrid?",
+    "expected_claims": ["The Quartz microgrid has a 6-megawatt-hour battery."],
+    "forbidden_claims": ["The Quartz microgrid has a 12-megawatt-hour battery."],
+    "expected_source_ids": ["quartz_energy"],
+    "expect_abstention": false
+  },
+  {
+    "id": "paraphrase_harbor_inspections",
+    "category": "paraphrase",
+    "query": "When during the week does Helios start its routine cargo checks?",
+    "expected_claims": ["Port Helios starts routine inspections at 06:00 local time on Mondays and Thursdays."],
+    "forbidden_claims": ["Port Helios starts routine inspections every weekday at noon."],
+    "expected_source_ids": ["aurora_harbor"],
+    "expect_abstention": false
+  },
+  {
+    "id": "paraphrase_transit_frequency",
+    "category": "paraphrase",
+    "query": "On a normal workday, how long is the wait between Cedar trains?",
+    "expected_claims": ["Cedar Loop trains run every 8 minutes on weekdays."],
+    "forbidden_claims": ["Cedar Loop trains run every 12 minutes on weekdays."],
+    "expected_source_ids": ["cedar_transit"],
+    "expect_abstention": false
+  },
+  {
+    "id": "paraphrase_library_archive",
+    "category": "paraphrase",
+    "query": "Where are the backup preservation copies of Lumen's scanned collection kept?",
+    "expected_claims": ["Preservation copies of Lumen Library's digitized archive are stored in the North Annex."],
+    "forbidden_claims": ["Preservation copies are stored at the Cedar Loop depot."],
+    "expected_source_ids": ["lumen_library"],
+    "expect_abstention": false
+  },
+  {
+    "id": "paraphrase_water_alert",
+    "category": "paraphrase",
+    "query": "At what remaining storage level does Meridian announce a drought warning?",
+    "expected_claims": ["Meridian begins a drought advisory below 35 percent combined storage."],
+    "forbidden_claims": ["Meridian begins a drought advisory below 50 percent combined storage."],
+    "expected_source_ids": ["meridian_water"],
+    "expect_abstention": false
+  },
+  {
+    "id": "paraphrase_farm_temperature",
+    "category": "paraphrase",
+    "query": "How cool is the Nova growing space kept overnight?",
+    "expected_claims": ["Nova greenhouse maintains a night temperature of 18 degrees Celsius."],
+    "forbidden_claims": ["Nova greenhouse maintains a night temperature of 24 degrees Celsius."],
+    "expected_source_ids": ["nova_farm"],
+    "expect_abstention": false
+  },
+  {
+    "id": "synthesis_transit_energy",
+    "category": "two_source_synthesis",
+    "query": "How do on-site generation and the Quartz system support Cedar Loop's depot?",
+    "expected_claims": [
+      "On-site solar provides 62 percent of the Cedar Loop depot's annual electricity.",
+      "The Quartz microgrid backs up the depot's essential circuits during a regional outage."
+    ],
+    "forbidden_claims": ["Quartz provides all electricity used by the Cedar Loop depot."],
+    "expected_source_ids": ["cedar_transit", "quartz_energy"],
+    "expect_abstention": false
+  },
+  {
+    "id": "synthesis_food_water",
+    "category": "two_source_synthesis",
+    "query": "Connect Meridian's reclaimed-water role to Nova's weekly food output.",
+    "expected_claims": [
+      "Meridian reclaimed process water supplies irrigation to Nova greenhouse.",
+      "Nova greenhouse averages 2.4 metric tons of harvest per week."
+    ],
+    "forbidden_claims": ["Nova irrigates exclusively with drinking water."],
+    "expected_source_ids": ["meridian_water", "nova_farm"],
+    "expect_abstention": false
+  },
+  {
+    "id": "synthesis_library_resilience",
+    "category": "two_source_synthesis",
+    "query": "Where are Lumen's digital preservation copies, and how are that location's essential circuits protected in an outage?",
+    "expected_claims": [
+      "Lumen's digitized preservation copies are stored in the North Annex.",
+      "Quartz can island essential loads, including North Annex circuits, for up to 9 hours."
+    ],
+    "forbidden_claims": ["The North Annex has no backup power."],
+    "expected_source_ids": ["lumen_library", "quartz_energy"],
+    "expect_abstention": false
+  },
+  {
+    "id": "synthesis_storage_systems",
+    "category": "two_source_synthesis",
+    "query": "Summarize the battery-related facts for Port Helios equipment and the Quartz microgrid.",
+    "expected_claims": [
+      "Port Helios operates four battery-electric cranes that reduced annual diesel use by 40 percent.",
+      "Quartz has a 6-megawatt-hour battery."
+    ],
+    "forbidden_claims": ["Port Helios and Quartz use the same battery system."],
+    "expected_source_ids": ["aurora_harbor", "quartz_energy"],
+    "expect_abstention": false
+  },
+  {
+    "id": "synthesis_seed_and_crops",
+    "category": "two_source_synthesis",
+    "query": "What plant diversity numbers are recorded for Lumen's seed archive and Nova's active crops?",
+    "expected_claims": [
+      "Lumen's seed archive preserves 1,200 plant varieties.",
+      "Nova greenhouse grows three crops."
+    ],
+    "forbidden_claims": ["Nova greenhouse grows 1,200 crop varieties."],
+    "expected_source_ids": ["lumen_library", "nova_farm"],
+    "expect_abstention": false
+  },
+  {
+    "id": "contradiction_harbor_capacity",
+    "category": "false_premise",
+    "query": "Why is Port Helios limited to 25,000 metric tons of cargo per day?",
+    "expected_claims": ["The premise is false because Port Helios is limited to 18,000 metric tons per day."],
+    "forbidden_claims": ["Port Helios is limited to 25,000 metric tons per day."],
+    "expected_source_ids": ["aurora_harbor"],
+    "expect_abstention": false
+  },
+  {
+    "id": "contradiction_transit_stations",
+    "category": "false_premise",
+    "query": "Which of Cedar Loop's 20 stations is the largest?",
+    "expected_claims": ["The premise is false because Cedar Loop has 14 passenger stations."],
+    "forbidden_claims": ["Cedar Loop has 20 passenger stations."],
+    "expected_source_ids": ["cedar_transit"],
+    "expect_abstention": false
+  },
+  {
+    "id": "contradiction_water_treatment",
+    "category": "false_premise",
+    "query": "Why did Meridian choose chlorine as its primary disinfection method?",
+    "expected_claims": ["The premise is false because Meridian uses ultraviolet light as its primary disinfection method."],
+    "forbidden_claims": ["Chlorine is Meridian's primary disinfection method."],
+    "expected_source_ids": ["meridian_water"],
+    "expect_abstention": false
+  },
+  {
+    "id": "contradiction_farm_temperature",
+    "category": "false_premise",
+    "query": "Why does Nova hold its greenhouse at 24 degrees Celsius overnight?",
+    "expected_claims": ["The premise is false because Nova's night temperature is 18 degrees Celsius."],
+    "forbidden_claims": ["Nova's night temperature is 24 degrees Celsius."],
+    "expected_source_ids": ["nova_farm"],
+    "expect_abstention": false
+  },
+  {
+    "id": "abstain_library_director",
+    "category": "out_of_corpus",
+    "query": "Who is the director of Lumen Library?",
+    "expected_claims": [],
+    "forbidden_claims": ["A named person directs Lumen Library."],
+    "expected_source_ids": [],
+    "expect_abstention": true
+  },
+  {
+    "id": "abstain_transit_fare",
+    "category": "out_of_corpus",
+    "query": "What is the price of a single Cedar Loop ticket?",
+    "expected_claims": [],
+    "forbidden_claims": ["A specific Cedar Loop ticket price is stated."],
+    "expected_source_ids": [],
+    "expect_abstention": true
+  },
+  {
+    "id": "abstain_farm_pesticide",
+    "category": "out_of_corpus",
+    "query": "Which pesticide brand does Nova greenhouse use?",
+    "expected_claims": [],
+    "forbidden_claims": ["Nova greenhouse uses a named pesticide brand."],
+    "expected_source_ids": [],
+    "expect_abstention": true
+  },
+  {
+    "id": "abstain_microgrid_date",
+    "category": "out_of_corpus",
+    "query": "In what year was the Quartz microgrid installed?",
+    "expected_claims": [],
+    "forbidden_claims": ["A specific installation year for Quartz is stated."],
+    "expected_source_ids": [],
+    "expect_abstention": true
+  }
+]

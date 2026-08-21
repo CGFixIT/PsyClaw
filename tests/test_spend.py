@@ -263,7 +263,7 @@ def test_record_omits_invalid_query_hash_and_route_path(tmp_path: Path) -> None:
     assert record["input_tokens"] == GROK_USAGE["prompt_tokens"]
 
 
-def test_record_source_agentic_and_unknown(tmp_path: Path) -> None:
+def test_record_source_agentic_eval_and_unknown(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(
         provider="grok",
@@ -277,11 +277,19 @@ def test_record_source_agentic_and_unknown(tmp_path: Path) -> None:
         model="claude-sonnet-5",
         usage=CLAUDE_USAGE,
         spend_file=ledger,
+        source="eval",
+    )
+    spend.record_external_usage(
+        provider="claude",
+        model="claude-sonnet-5",
+        usage=CLAUDE_USAGE,
+        spend_file=ledger,
         source="not-a-plane",
     )
-    first, second = (json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines())
+    first, second, third = (json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines())
     assert first["source"] == "agentic"
-    assert second["source"] == "unknown"
+    assert second["source"] == "eval"
+    assert third["source"] == "unknown"
 
 
 def test_estimate_usd_known_models() -> None:
