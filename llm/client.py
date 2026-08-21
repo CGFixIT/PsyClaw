@@ -151,12 +151,18 @@ def _extract_and_record_spend(
     try:
         text = extract(resp)
     finally:
+        extra: dict[str, object] = {}
+        if spend_context is not None:
+            extra["query_hash"] = spend_context.get("query_hash")
+            extra["route_path"] = spend_context.get("route_path")
         try:
             usage = resp.json().get("usage")
-            extra: dict[str, object] = {}
-            if spend_context is not None:
-                extra["query_hash"] = spend_context.get("query_hash")
-                extra["route_path"] = spend_context.get("route_path")
+        except Exception as exc:
+            # Billed 2xx with a non-JSON body still consumed quota. Record
+            # usage_missing rather than skipping the line (issue #1013).
+            log.debug("spend usage parse failed: %s", type(exc).__name__)
+            usage = None
+        try:
             record_external_usage(provider=provider, model=model, usage=usage, **extra)
         except Exception as exc:
             # Type-only: spend is best-effort and must not leak body fragments.
