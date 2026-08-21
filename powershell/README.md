@@ -4,8 +4,10 @@ Installer / launcher / scheduled-task **glue** for Windows 10/11.
 Not request-path code: `gate.py`, `graph.py`, and `mcp_hybrid_server.py` never
 import anything here (I6). The macOS sibling is `macos/`.
 
-After install, `cyclaw` starts the RAG gateway (`127.0.0.1:8787`) and the
-coding console (`127.0.0.1:8790`). Mutable state lives under `%USERPROFILE%\.CyClaw`.
+After install, `cyclaw` starts the coding console (`127.0.0.1:8790`). The RAG
+gateway (`gate.py`, `127.0.0.1:8787` per `config.yaml`) is **not** launched by
+the Windows shim — start it separately (unlike the macOS `invoke-cyclaw.sh`,
+which starts both). Mutable state lives under `%USERPROFILE%\.CyClaw`.
 
 ## Scripts
 
@@ -13,7 +15,7 @@ coding console (`127.0.0.1:8790`). Mutable state lives under `%USERPROFILE%\.CyC
 |---|---|
 | `Install-CyClaw.ps1` | Home layout, venv, `cyclaw` shim, optional PATH / profile function. `-RepoPath`, `-SkipPythonDeps`, `-NoProfileEdit`, `-NoPathEdit`. |
 | `Uninstall-CyClaw.ps1` | Removes the profile function and PATH entry. Keeps `~\.CyClaw` unless `-RemoveHome`. Optional `-RemoveFsConnect`. Best-effort unschedules Dropbox sync and deletes **known** CyClaw Task Scheduler names only (never a wildcard). |
-| `Invoke-CyClaw.ps1` | Starts gate + harness from `~\.CyClaw\venv`. |
+| `Invoke-CyClaw.ps1` | Starts the harness console (`python -m harness.server`) from `~\.CyClaw\venv`. `-Port`, `-NoBrowser`, `-Repo`. Does **not** start `gate.py` (port 8787) — launch the RAG gateway separately. |
 | `Setup-FsConnect.ps1` | Creates confined `%USERPROFILE%\CyClaw-FS` (current-user ACL). Unless `-PrepareOnly`, enables list/stat/read via `macos/_enable_fsconnect_readlist.py`. Writes stay off. |
 | `CyClaw-CredMan-Set.ps1` | Interactive Credential Manager store. `Read-Host -AsSecureString` + `CredWriteW`. Secret never in argv. Requires a TTY. |
 | `CyClaw-CredMan-Env.ps1` | Fetch one GENERIC credential, export it, run the wrapped command. Fail-closed if missing/empty. |
