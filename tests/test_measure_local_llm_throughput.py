@@ -71,3 +71,15 @@ def test_main_bad_args(probe) -> None:
 
 def test_default_model_matches_shipped_tag(probe) -> None:
     assert probe.DEFAULT_MODEL == "qwen3.8:27b-mlx"
+
+
+def test_http_url_refuses_non_http_schemes(probe) -> None:
+    with pytest.raises(ValueError, match="non-http"):
+        probe._http_url("file:///etc/passwd")
+    with pytest.raises(ValueError, match="non-http"):
+        probe._http_url("ftp://127.0.0.1/api/tags")
+    assert probe._http_url("http://127.0.0.1:11434/api/tags").startswith("http://")
+
+
+def test_main_refuses_file_host(probe) -> None:
+    assert probe.main(["--host", "file:///tmp"]) == 1

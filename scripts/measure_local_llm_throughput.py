@@ -21,6 +21,7 @@ import argparse
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -69,10 +70,18 @@ def rates_from_generate(payload: dict) -> dict[str, Any]:
     }
 
 
+def _http_url(url: str) -> str:
+    """Refuse file: / custom schemes so urlopen is loopback HTTP only."""
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"refusing non-http URL scheme {scheme!r}")
+    return url
+
+
 def _post_generate(host: str, body: dict, timeout_sec: int) -> dict:
-    url = host.rstrip("/") + "/api/generate"
+    url = _http_url(host.rstrip("/") + "/api/generate")
     raw = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310
         url,
         data=raw,
         method="POST",
@@ -83,8 +92,8 @@ def _post_generate(host: str, body: dict, timeout_sec: int) -> dict:
 
 
 def _tags_reachable(host: str, timeout_sec: int = 3) -> bool:
-    url = host.rstrip("/") + "/api/tags"
-    req = urllib.request.Request(url, method="GET")
+    url = _http_url(host.rstrip("/") + "/api/tags")
+    req = urllib.request.Request(url, method="GET")  # noqa: S310
     try:
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # noqa: S310
             return 200 <= getattr(resp, "status", 200) < 300
@@ -173,6 +182,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.num_predict <= 0 or args.timeout_sec <= 0:
         print("num-predict and timeout-sec must be positive", file=sys.stderr)
+        return 1
+    try:
+        _http_url(args.host)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
     if not _tags_reachable(args.host):
         print(
