@@ -91,9 +91,9 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools, canonical_repo_path
 from agentic.executor import Check, VerificationReport, run_verification
@@ -718,6 +718,7 @@ def run_real_repo_loop(
     plan: str = "",
     config_path: str = "config.yaml",
     cfg: dict | None = None,
+    unslop_probe: Callable[[str, Mapping[str, str], int], dict[str, Any]] | None = None,
 ) -> RealRepoLoopResult:
     """Run plan -> patch -> verify -> commit against a real, jailed clone.
 
@@ -853,6 +854,21 @@ def run_real_repo_loop(
         except AgenticError:
             proposed_files = {}
             duplicate_path_detected = True
+
+        unslop_result: dict[str, Any] = {}
+        if unslop_probe is not None:
+            try:
+                unslop_result = unslop_probe(response.content, proposed_files, step)
+            except Exception as exc:
+                audit_log(
+                    {
+                        "event": "unslop_probe_exception",
+                        "step": step,
+                        "exc_type": type(exc).__name__,
+                    },
+                    config_path=config_path,
+                    cfg=cfg,
+                )
 
         governance_findings: list[GovernanceFinding] = []
         written: list[str] = []
@@ -1004,6 +1020,8 @@ def run_real_repo_loop(
             )
         if write_failure_messages:
             feedback_parts.append("\n".join(write_failure_messages))
+        if unslop_result.get("nudge"):
+            feedback_parts.append(unslop_result["nudge"])
         feedback = "\n\n".join(feedback_parts)
 
     audit_log(
