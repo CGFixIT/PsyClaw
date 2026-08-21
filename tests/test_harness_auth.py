@@ -72,6 +72,21 @@ GUARDED = [
     ("post", "/api/agent/runs/" + "0" * 32 + "/push", {}),
     ("post", "/api/agent/runs/" + "0" * 32 + "/publish", {"reason": "r", "confirm": True}),
     ("post", "/api/agent/runs/" + "0" * 32 + "/discard", {}),
+    # The managed credential surface (harness/env_keys.py). Both halves were
+    # guarded in harness/server.py from the start but absent from this list, so
+    # the one route family that fronts stored secrets was the only guarded one
+    # with no 401 regression test -- the same omission left it out of
+    # tools_view's catalog and undercounted CLAUDE.md's guarded-route total.
+    # The read is guarded too: which providers an operator has configured is
+    # worth withholding even though no secret is returned.
+    ("get", "/api/keys", None),
+    # ApiKeysRequest takes a name -> secret MAPPING, not flat key/value fields,
+    # and forbids extras -- a {"key":..., "value":...} body would 422 before the
+    # dependency chain proved anything. GROK_API_KEY is in env_keys.MANAGED_KEYS,
+    # so this body is one that would succeed if it got through, per this list's
+    # contract above. CYCLAW_HOME is the tmp home from the cfg fixture, so the
+    # accepts-the-right-key case writes its .env under tmp_path, not ~/.CyClaw.
+    ("post", "/api/keys", {"keys": {"GROK_API_KEY": "x"}}),
 ]
 
 # Left open on purpose: the console must be able to boot and tell the operator it
