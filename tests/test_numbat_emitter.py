@@ -241,3 +241,60 @@ def test_endpoint_shape() -> None:
     endpoint = build_endpoint()
     assert set(endpoint) >= {"hostname", "os", "arch", "username", "uid"}
     assert set(endpoint) <= {"hostname", "os", "arch", "username", "uid", "device_id"}
+
+
+def test_tool_result_strips_illegal_action_fields() -> None:
+    record = build_event(
+        "tool.result",
+        command="echo hi",
+        file_path="/tmp/x",
+        exit_code=0,
+        duration_ms=5,
+        tool_name="fsconnect",
+    )
+    assert "command" not in record
+    assert "file_path" not in record
+    assert "exit_code" not in record
+    assert "duration_ms" not in record
+    assert record["tool_name"] == "fsconnect"
+
+
+def test_file_read_keeps_path_drops_command() -> None:
+    record = build_event(
+        "file.read",
+        file_path="README.md",
+        command="cat README.md",
+        exit_code=0,
+        tool_name="fsconnect",
+    )
+    assert record["file_path"] == "README.md"
+    assert record["tool_name"] == "fsconnect"
+    assert "command" not in record
+    assert "exit_code" not in record
+
+
+def test_session_start_strips_action_fields() -> None:
+    record = build_event(
+        "session.start",
+        command="python",
+        file_path="/tmp",
+        exit_code=0,
+        tool_name="executor",
+        actor="system",
+    )
+    assert "command" not in record
+    assert "file_path" not in record
+    assert "exit_code" not in record
+    assert "tool_name" not in record
+    assert record["actor"] == "system"
+
+
+def test_forbidden_map_covers_every_event_type() -> None:
+    from utils import numbat_emitter as ne
+
+    assert set(ne._EVENT_TYPE_FORBIDDEN_FIELDS) == ne._EVENT_TYPES
+    exec_forbidden = ne._EVENT_TYPE_FORBIDDEN_FIELDS["command.exec"]
+    assert {"exit_code", "file_path", "duration_ms"} <= exec_forbidden
+    assert "command" not in exec_forbidden
+    result_forbidden = ne._EVENT_TYPE_FORBIDDEN_FIELDS["tool.result"]
+    assert {"command", "exit_code", "duration_ms", "file_path"} <= result_forbidden
