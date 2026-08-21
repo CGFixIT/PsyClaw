@@ -138,6 +138,35 @@ def test_daily_and_last_7d_token_and_usd_math(tmp_path: Path) -> None:
     assert summary["rate_unknown"] == 0
 
 
+def test_source_split_query_vs_agentic() -> None:
+    query_row = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-4.5",
+        input_tokens=10,
+        output_tokens=4,
+        extra={"source": "query"},
+    )
+    agentic_row = _record(
+        days_ago=0,
+        provider="claude",
+        model="claude-sonnet-5",
+        input_tokens=20,
+        output_tokens=8,
+        extra={"source": "agentic"},
+    )
+    unlabeled = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-4.5",
+        input_tokens=1,
+        output_tokens=1,
+    )
+    summary = compute_spend([query_row, agentic_row, unlabeled], now=NOW)
+    assert summary["today"]["by_source"] == {"query": 1, "agentic": 1, "unknown": 1}
+    assert summary["last_7d"]["by_source"] == {"query": 1, "agentic": 1, "unknown": 1}
+
+
 def test_delta_usd_uses_only_ticked_rows() -> None:
     ticked = _record(
         days_ago=0,
