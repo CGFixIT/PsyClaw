@@ -331,6 +331,13 @@ class AuthLoginFailed(AuthError):
         super().__init__(message, code="AUTH_LOGIN_FAILED", details=details)
 
 
+class AuthBootstrapComplete(AuthError):
+    """First-password setup was already done; the HTTP bootstrap path is closed."""
+
+    def __init__(self, message: str = "admin password is already set", details: dict | None = None):
+        super().__init__(message, code="AUTH_BOOTSTRAP_COMPLETE", details=details)
+
+
 class AuthAccountLocked(AuthError):
     """Too many consecutive failures; locked out until retry_after_sec elapses.
 

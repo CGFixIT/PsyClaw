@@ -161,9 +161,16 @@
     <div class="logo">CyClaw <span>/ harness</span></div>
     <div class="header-right">
       <span id="harnessAuth">
-        <input class="apikey" id="hAuthUser" placeholder="user" autocomplete="username">
-        <input class="apikey" id="hAuthPass" type="password" placeholder="pass" autocomplete="current-password">
-        <button class="toggle" id="hAuthLogin" type="button">login</button>
+        <span id="hAuthSetup" hidden>
+          <input class="apikey" id="hAuthSetupPass" type="password" placeholder="set admin password" autocomplete="new-password">
+          <input class="apikey" id="hAuthSetupPass2" type="password" placeholder="confirm" autocomplete="new-password">
+          <button class="toggle" id="hAuthSetupBtn" type="button">set password</button>
+        </span>
+        <span id="hAuthLoginBox" hidden>
+          <input class="apikey" id="hAuthUser" placeholder="user" autocomplete="username">
+          <input class="apikey" id="hAuthPass" type="password" placeholder="pass" autocomplete="current-password">
+          <button class="toggle" id="hAuthLogin" type="button">login</button>
+        </span>
         <span id="hAuthWho"></span>
       </span>
       <div class="pill model">model <b id="hModel">…</b></div>
@@ -1469,6 +1476,39 @@ document.querySelectorAll('.side-tab').forEach(tab => {
   });
 });
 const hAuthLogin = document.getElementById('hAuthLogin');
+const hAuthLoginBox = document.getElementById('hAuthLoginBox');
+const hAuthSetup = document.getElementById('hAuthSetup');
+async function refreshHarnessAuth() {
+  const who = document.getElementById('hAuthWho');
+  try {
+    const me = await fetch('/api/auth/whoami');
+    if (me.status === 503) {
+      if (hAuthSetup) hAuthSetup.hidden = true;
+      if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      if (who) who.textContent = '';
+      return;
+    }
+    if (me.ok) {
+      const data = await me.json();
+      window.__cyclawRole = data.role;
+      if (hAuthSetup) hAuthSetup.hidden = true;
+      if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      if (who) who.textContent = data.username + ' · ' + data.role;
+      return;
+    }
+    const setup = await fetch('/api/auth/setup-status');
+    if (setup.ok) {
+      const status = await setup.json();
+      if (status.needs_password) {
+        if (hAuthSetup) hAuthSetup.hidden = false;
+        if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+        return;
+      }
+    }
+    if (hAuthSetup) hAuthSetup.hidden = true;
+    if (hAuthLoginBox) hAuthLoginBox.hidden = false;
+  } catch (e) { /* keep last UI */ }
+}
 if (hAuthLogin) {
   hAuthLogin.addEventListener('click', async function () {
     const user = document.getElementById('hAuthUser');
@@ -1484,8 +1524,35 @@ if (hAuthLogin) {
     const data = await r.json();
     window.__cyclawRole = data.role;
     if (who) who.textContent = data.username + ' · ' + data.role;
+    if (hAuthSetup) hAuthSetup.hidden = true;
+    if (hAuthLoginBox) hAuthLoginBox.hidden = true;
   });
 }
+const hAuthSetupBtn = document.getElementById('hAuthSetupBtn');
+if (hAuthSetupBtn) {
+  hAuthSetupBtn.addEventListener('click', async function () {
+    const p1 = document.getElementById('hAuthSetupPass');
+    const p2 = document.getElementById('hAuthSetupPass2');
+    const who = document.getElementById('hAuthWho');
+    const password = p1 ? p1.value : '';
+    const confirm = p2 ? p2.value : '';
+    if (p1) p1.value = '';
+    if (p2) p2.value = '';
+    if (password !== confirm) { if (who) who.textContent = 'passwords do not match'; return; }
+    const r = await fetch('/api/auth/bootstrap-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    });
+    if (!r.ok) { if (who) who.textContent = 'could not set password'; return; }
+    const data = await r.json();
+    window.__cyclawRole = data.role;
+    if (who) who.textContent = data.username + ' · ' + data.role;
+    if (hAuthSetup) hAuthSetup.hidden = true;
+    if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+  });
+}
+refreshHarnessAuth();
 $('sSoul').addEventListener('click', () => runSlash('/soul ' + (soulEnabled ? 'off' : 'on')));
 $('sMemory').addEventListener('click', () => runSlash('/memory ' + (memoryEnabled ? 'off' : 'on')));
 

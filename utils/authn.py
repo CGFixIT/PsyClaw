@@ -56,6 +56,11 @@ _SCRYPT_MAXMEM = _SCRYPT_N * _SCRYPT_R * 128 * 4
 
 _ALGO = "scrypt"
 _FIELD_SEP = "$"
+# Bootstrap accounts store ``pending$`` + a normal scrypt record of a discarded
+# secret so the UIs can tell "password not set yet" from a real hash. The
+# prefix is not a second algorithm: verify_password always fails it (after
+# paying the inner scrypt cost) until set_password writes a bare record.
+PENDING_HASH_PREFIX = "pending$"
 # Parameters are stored IN the record so they can be raised later without
 # invalidating existing accounts: verify_password reports when a stored record
 # used weaker parameters than current policy, and the caller re-hashes on the
@@ -171,6 +176,16 @@ def hash_password(password: str, *, salt: bytes | None = None) -> str:
     )
 
 
+def is_pending_password_record(record: str) -> bool:
+    """True when ``record`` is a bootstrap placeholder, not a usable password."""
+    return isinstance(record, str) and record.startswith(PENDING_HASH_PREFIX)
+
+
+def hash_pending_placeholder() -> str:
+    """scrypt record of a discarded secret, marked unusable until set_password."""
+    return PENDING_HASH_PREFIX + hash_password(generate_bootstrap_password())
+
+
 def verify_password(password: str, record: str) -> tuple[bool, bool]:
     """Return ``(ok, needs_rehash)``.
 
@@ -185,6 +200,11 @@ def verify_password(password: str, record: str) -> tuple[bool, bool]:
     derived key leaks its prefix through response timing.
     """
     if not isinstance(password, str) or not isinstance(record, str):
+        return (False, False)
+    if is_pending_password_record(record):
+        # Pay the inner scrypt cost so a pending admin is not a timing oracle,
+        # then fail closed even if the discarded bootstrap secret is guessed.
+        verify_password(password, record[len(PENDING_HASH_PREFIX):])
         return (False, False)
     parts = record.split(_FIELD_SEP)
     if len(parts) != _RECORD_FIELDS or parts[0] != _ALGO:

@@ -39,13 +39,15 @@ from schemas.api import (
     AuthLoginResponse,
     AuthSetPasswordRequest,
     AuthSetRoleRequest,
+    AuthSetupStatusResponse,
     AuthUserRecord,
     AuthWhoamiResponse,
 )
 from utils import authn
-from utils.authn_manager import AuthManager, SessionInfo, UserSummary
+from utils.authn_manager import BOOTSTRAP_USERNAME, AuthManager, SessionInfo, UserSummary
 from utils.errors import (
     AuthAccountLocked,
+    AuthBootstrapComplete,
     AuthLastAdmin,
     AuthLoginFailed,
     AuthUserExists,
@@ -56,8 +58,10 @@ logger = logging.getLogger("cyclaw.gate_auth")
 
 _HTTP_UNAUTHORIZED = 401
 _HTTP_FORBIDDEN = 403
+_HTTP_CONFLICT = 409
 _HTTP_LOCKED = 423
 _HTTP_SERVICE_UNAVAILABLE = 503
+_LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 # Cookie/header names are a single source in this module; gate_auth owns the
 # whole /auth/* surface so nothing else needs to agree on these strings today.
@@ -317,6 +321,75 @@ def register_auth_routes(
             )
         request.state.auth_username = username
         return username
+
+    def _client_is_loopback(request: Request) -> bool:
+        host = request.client.host if request.client else ""
+        if host in _LOOPBACK_CLIENTS:
+            return True
+        try:
+            import ipaddress
+
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return False
+
+    @app.get("/auth/setup-status", dependencies=[Depends(enforce_rate_limit)])
+    async def auth_setup_status() -> AuthSetupStatusResponse:
+        manager = _require_enabled()
+        pending = await asyncio.to_thread(manager.needs_password_setup)
+        return AuthSetupStatusResponse(
+            enabled=True,
+            needs_password=pending,
+            username=BOOTSTRAP_USERNAME if pending else None,
+        )
+
+    @app.post(
+        "/auth/bootstrap-password",
+        dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)],
+    )
+    async def auth_bootstrap_password(
+        request: Request, response: Response, req: AuthSetPasswordRequest
+    ) -> AuthLoginResponse:
+        manager = _require_enabled()
+        if not _client_is_loopback(request):
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "AUTH_LOOPBACK_ONLY",
+                    _MESSAGE_KEY: "first password must be set from this machine",
+                    _DETAILS_KEY: {},
+                },
+            )
+        try:
+            login_result = await asyncio.to_thread(manager.bootstrap_set_password, req.password)
+        except AuthBootstrapComplete as exc:
+            raise HTTPException(
+                status_code=_HTTP_CONFLICT,
+                detail={_CODE_KEY: exc.code, _MESSAGE_KEY: exc.message, _DETAILS_KEY: exc.details or {}},
+            ) from exc
+        except authn.PasswordPolicyError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={_CODE_KEY: "AUTH_POLICY", _MESSAGE_KEY: str(exc), _DETAILS_KEY: {}},
+            ) from exc
+        response.set_cookie(
+            key=_SESSION_COOKIE,
+            value=login_result.session_id,
+            httponly=True,
+            samesite="strict",
+            secure=tls_enabled,
+            path="/",
+            max_age=int(manager.absolute_timeout_sec),
+        )
+        await audit({
+            _EVENT_KEY: "auth_bootstrap_password_set",
+            "username": login_result.username,
+        })
+        return AuthLoginResponse(
+            username=login_result.username,
+            csrf_token=login_result.csrf_token,
+            expires_ts=login_result.expires_ts,
+        )
 
     @app.post("/auth/login", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_login(request: Request, response: Response, req: AuthLoginRequest) -> AuthLoginResponse:

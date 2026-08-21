@@ -56,10 +56,13 @@ _CATALOG_EXEMPT: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/keys"),
     # The whole /api/auth/* block: its own session+CSRF domain (auth_open /
     # auth_sess dependency lists, not `guarded`), driven by the /users command
-    # (static/harness.html:1263) rather than by a 1:1 /tools row.
+    # (static/harness.html:1263) and the first-password bootstrap panel rather
+    # than by a 1:1 /tools row.
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
     ("GET", "/api/auth/whoami"),
+    ("GET", "/api/auth/setup-status"),
+    ("POST", "/api/auth/bootstrap-password"),
     ("GET", "/api/auth/users"),
     ("POST", "/api/auth/users"),
     ("POST", "/api/auth/users/{}/password"),
@@ -85,6 +88,8 @@ _KEY_EXEMPT: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/logout"),
     ("GET", "/api/auth/whoami"),
+    ("GET", "/api/auth/setup-status"),
+    ("POST", "/api/auth/bootstrap-password"),
     ("GET", "/api/auth/users"),
     ("POST", "/api/auth/users"),
     ("POST", "/api/auth/users/{}/password"),

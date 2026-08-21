@@ -104,6 +104,42 @@ class TestAuthDisabled:
         r = _client(None).get("/auth/whoami")
         assert r.status_code == 503
 
+    def test_setup_status_503(self):
+        r = _client(None).get("/auth/setup-status")
+        assert r.status_code == 503
+
+
+class TestBootstrapPassword:
+    def test_setup_status_after_bootstrap(self, manager):
+        manager.bootstrap_if_empty()
+        r = _client(manager).get("/auth/setup-status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["enabled"] is True
+        assert body["needs_password"] is True
+        assert body["username"] == "admin"
+
+    def test_loopback_can_set_password(self, manager):
+        manager.bootstrap_if_empty()
+        app = _make_app(manager)
+        client = TestClient(app, base_url=_base_url(), client=("127.0.0.1", 50000))
+        r = client.post("/auth/bootstrap-password", json={"password": _GOOD_PASSWORD})
+        assert r.status_code == 200
+        assert r.json()["username"] == "admin"
+        assert "cyclaw_session" in r.cookies
+        assert manager.needs_password_setup() is False
+        again = client.post("/auth/bootstrap-password", json={"password": _GOOD_PASSWORD})
+        assert again.status_code == 409
+
+    def test_non_loopback_is_forbidden(self, manager):
+        manager.bootstrap_if_empty()
+        app = _make_app(manager)
+        client = TestClient(app, base_url=_base_url(), client=("10.0.0.8", 50000))
+        r = client.post("/auth/bootstrap-password", json={"password": _GOOD_PASSWORD})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+        assert manager.needs_password_setup() is True
+
 
 class TestLogin:
     def test_success_returns_username_and_csrf(self, manager, user):

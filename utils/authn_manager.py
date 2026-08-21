@@ -22,6 +22,7 @@ from pathlib import Path
 from utils import authn, authn_store
 from utils.errors import (
     AuthAccountLocked,
+    AuthBootstrapComplete,
     AuthLastAdmin,
     AuthLoginFailed,
     AuthTokenLabelExists,
@@ -323,7 +324,7 @@ class AuthManager:
             if row and int(row["n"]) > 0:
                 self._end_read_txn()
                 return False
-            record = authn.hash_password(authn.generate_bootstrap_password())
+            record = authn.hash_pending_placeholder()
             now = self._now()
             self.conn.execute(
                 self._sql_insert_user,
@@ -503,6 +504,35 @@ class AuthManager:
             self.conn.commit()
             if not cur.rowcount:
                 raise AuthUserNotFound(f"unknown user: {canonical}", details={"username": canonical})
+
+    def needs_password_setup(self) -> bool:
+        """True when the bootstrap admin still has the unusable pending hash."""
+        with self._lock:
+            row = self.conn.execute(self._sql_get_user, (BOOTSTRAP_USERNAME,)).fetchone()
+            self._end_read_txn()
+        if row is None:
+            return False
+        return authn.is_pending_password_record(str(row["password_hash"]))
+
+    def bootstrap_set_password(self, password: str) -> LoginResult:
+        """One-shot first password for BOOTSTRAP_USERNAME. Then mints a session.
+
+        ``cyclaw-user passwd admin`` remains valid: it calls ``set_password``,
+        which writes a bare scrypt record and closes this path.
+        """
+        record = authn.hash_password(password)
+        now = self._now()
+        with self._lock:
+            row = self.conn.execute(self._sql_get_user, (BOOTSTRAP_USERNAME,)).fetchone()
+            if row is None or not authn.is_pending_password_record(str(row["password_hash"])):
+                self._end_read_txn()
+                raise AuthBootstrapComplete(details={"username": BOOTSTRAP_USERNAME})
+            self.conn.execute(self._sql_set_password, (record, BOOTSTRAP_USERNAME))
+            self.conn.execute(self._sql_reset_lockout, (BOOTSTRAP_USERNAME,))
+            self.conn.execute(self._sql_revoke_sessions_for_user, (BOOTSTRAP_USERNAME,))
+            result = self._create_session_locked(BOOTSTRAP_USERNAME, now)
+            self.conn.commit()
+            return result
 
     # -- login / sessions ----------------------------------------------------
 

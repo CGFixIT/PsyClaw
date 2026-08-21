@@ -834,6 +834,11 @@
     <button class="toolbar-btn" id="auditToggleBtn" hidden aria-label="Toggle Audit panel">Audit</button>
     <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
     <span class="toolbar-auth" id="toolbarAuth">
+      <span id="authSetupBox" hidden>
+        <input class="api-key-input" id="authSetupPass" type="password" placeholder="set admin password" autocomplete="new-password">
+        <input class="api-key-input" id="authSetupPass2" type="password" placeholder="confirm" autocomplete="new-password">
+        <button class="toolbar-btn" id="authSetupBtn" type="button">Set password</button>
+      </span>
       <span id="authLoginBox" hidden>
         <input class="api-key-input" id="authUser" type="text" placeholder="username" autocomplete="username">
         <input class="api-key-input" id="authPass" type="password" placeholder="password" autocomplete="current-password">

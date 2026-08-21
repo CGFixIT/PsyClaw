@@ -81,9 +81,17 @@ from harness.skills_view import list_wired_skills
 from harness.tools_view import list_wired_tools
 from harness.web_search import WebTool, WebToolError
 from llm.client import ResolvedLocalBackend, resolve_local_backend
-from schemas.api import AuthCreateUserRequest, AuthLoginRequest, AuthSetPasswordRequest, AuthSetRoleRequest
+from schemas.api import (
+    AuthCreateUserRequest,
+    AuthLoginRequest,
+    AuthSetPasswordRequest,
+    AuthSetRoleRequest,
+    AuthSetupStatusResponse,
+)
 from utils.auth import require_api_key
-from utils.errors import AgenticError
+from utils.authn import PasswordPolicyError
+from utils.authn_manager import BOOTSTRAP_USERNAME
+from utils.errors import AgenticError, AuthBootstrapComplete
 from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
@@ -485,6 +493,7 @@ def create_app(
         from utils.authn_manager import AuthManager as _AuthManager
 
         harness_auth = _AuthManager(cyclaw_cfg)
+        harness_auth.bootstrap_if_empty()
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
@@ -1518,6 +1527,47 @@ def create_app(
         Depends(_enforce_same_origin),
         Depends(_enforce_csrf_token),
     ]
+
+    @app.get("/api/auth/setup-status", dependencies=[Depends(_enforce_rate_limit)])
+    def harness_setup_status() -> AuthSetupStatusResponse:
+        manager = _require_harness_auth()
+        pending = manager.needs_password_setup()
+        return AuthSetupStatusResponse(
+            enabled=True,
+            needs_password=pending,
+            username=BOOTSTRAP_USERNAME if pending else None,
+        )
+
+    @app.post("/api/auth/bootstrap-password", dependencies=auth_open)
+    def harness_bootstrap_password(
+        request: Request, response: Response, req: AuthSetPasswordRequest
+    ) -> dict:
+        manager = _require_harness_auth()
+        if not _is_loopback_peer(request):
+            raise _auth_http(
+                _HTTP_FORBIDDEN,
+                "AUTH_LOOPBACK_ONLY",
+                "first password must be set from this machine",
+            )
+        try:
+            login_result = manager.bootstrap_set_password(req.password)
+        except AuthBootstrapComplete as exc:
+            raise _auth_http(_HTTP_CONFLICT, exc.code, exc.message) from exc
+        except PasswordPolicyError as exc:
+            raise _auth_http(_HTTP_UNPROCESSABLE, "AUTH_POLICY", str(exc)) from exc
+        response.set_cookie(
+            key=HARNESS_SESSION_COOKIE,
+            value=login_result.session_id,
+            httponly=True,
+            samesite="strict",
+            secure=False,
+            path="/",
+        )
+        return {
+            _USERNAME_KEY: login_result.username,
+            _ROLE_KEY: _ROLE_ADMIN,
+            "csrf_token": login_result.csrf_token,
+        }
 
     @app.post("/api/auth/login", dependencies=auth_open)
     async def harness_login(req: AuthLoginRequest, response: Response) -> dict:

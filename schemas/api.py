@@ -192,6 +192,13 @@ class AuthSetPasswordRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class AuthSetupStatusResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    enabled: bool
+    needs_password: bool
+    username: str | None = None
+
+
 class AuthSetRoleRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     role: str = Field(min_length=1, max_length=32)

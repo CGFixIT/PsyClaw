@@ -614,3 +614,28 @@ def test_api_key_optional_is_denied_to_a_proxied_request(cfg, monkeypatch):
     )
     assert resp.status_code == 401
     assert resp.json()["detail"]["code"] == "UNAUTHORIZED"
+
+
+def test_setup_status_503_when_auth_off(client):
+    r = client.get("/api/auth/setup-status")
+    assert r.status_code == 503
+
+
+def test_harness_bootstrap_password_from_loopback(tmp_path, monkeypatch, cfg):
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    remote = TestClient(app, base_url="http://127.0.0.1", client=("10.1.1.8", 50000))
+    status = loop.get("/api/auth/setup-status")
+    assert status.status_code == 200
+    assert status.json()["needs_password"] is True
+    denied = remote.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
+    assert denied.status_code == 403
+    r = loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
+    assert r.status_code == 200
+    assert r.json()["username"] == "admin"

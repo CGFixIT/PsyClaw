@@ -478,10 +478,11 @@ api:
 # original design; CodeQL alert #1057 flagged it, and correctly: a service's
 # stdout is persisted by journald/Docker/log shippers, so "printed once" was
 # never really once). Set the first real password on the server machine with
-# `cyclaw-user passwd admin` (prompts via getpass, no echo); manage accounts
-# after that with the same local-only CLI (add/list/disable/enable/passwd/
-# token) -- see utils/authn_cli.py. No account exists until you turn this
-# on; nothing is ever created automatically.
+# `cyclaw-user passwd admin` (prompts via getpass, no echo) or the loopback
+# Set-password panel on the terminal (:8787) and harness (:8790). Manage
+# accounts after that with the same local-only CLI (add/list/disable/enable/
+# passwd/token) -- see utils/authn_cli.py. No account exists until you turn
+# this on; nothing is ever created automatically.
 auth:
   enabled: false
   # SQLite by default (relative paths anchor to the repo root, matching

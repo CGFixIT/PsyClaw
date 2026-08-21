@@ -17,6 +17,7 @@ from utils.authn import PasswordPolicyError, hash_token
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME, _DUMMY_RECORD
 from utils.errors import (
     AuthAccountLocked,
+    AuthBootstrapComplete,
     AuthLoginFailed,
     AuthTokenLabelExists,
     AuthUserExists,
@@ -63,6 +64,21 @@ class TestBootstrap:
         assert manager.bootstrap_if_empty() is False
         # Still just the one account -- bootstrap did not also create "admin".
         assert [u.username for u in manager.list_users()] == ["alice"]
+
+    def test_bootstrap_hash_is_marked_pending(self, manager):
+        assert manager.bootstrap_if_empty() is True
+        assert manager.needs_password_setup() is True
+        row = manager.get_user(BOOTSTRAP_USERNAME)
+        assert row is not None
+
+    def test_bootstrap_set_password_then_login_works(self, manager):
+        assert manager.bootstrap_if_empty() is True
+        result = manager.bootstrap_set_password(_GOOD_PASSWORD)
+        assert result.username == BOOTSTRAP_USERNAME
+        assert manager.needs_password_setup() is False
+        with pytest.raises(AuthBootstrapComplete):
+            manager.bootstrap_set_password(_GOOD_PASSWORD)
+        assert manager.login(BOOTSTRAP_USERNAME, _GOOD_PASSWORD).username == BOOTSTRAP_USERNAME
 
     def test_bootstrap_account_is_unusable_until_a_password_is_set(self, manager):
         """The placeholder hash is of a secret that was discarded inside
@@ -322,7 +338,15 @@ class TestLoginTransactionAndRaceSafety:
         assert calls == [1]
 
     def test_locked_account_closes_its_read_transaction(self, manager, monkeypatch):
-        """Same gap as above, on the is_locked() exit path."""
+        """Same gap as above, on the is_locked() exit path.
+
+        Threshold-5 lockout is only _LOCKOUT_BASE_SEC (2.0s). login() snapshots
+        manager._now() before scrypt; on Windows CI one hash can exceed that
+        window, so the sixth call sees an expired lock. Freeze the clock so
+        this asserts the is_locked() txn close, not hasher wall time.
+        """
+        frozen = manager._now()
+        monkeypatch.setattr(manager, "_now", lambda: frozen)
         manager.create_user("alice", _GOOD_PASSWORD)
         for _ in range(5):
             with pytest.raises(AuthLoginFailed):
