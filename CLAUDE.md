@@ -203,7 +203,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/authn_cli.py` | `cyclaw-user` console script (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/`token revoke`), local-only by construction (no HTTP route reaches it) |
 | `utils/gen_cert.py` | `cyclaw-gen-cert` — openssl wrapper that writes a self-signed cert + key with hostname/LAN SAN; no new runtime dep |
 | `schemas/api.py` | Pydantic models (`extra='forbid', strict=True`) |
-| `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`); also prints a Spend section from `logs/spend.jsonl` (tokens as ground truth, dollars at read time, `source` `query` or `agentic`; no query text on the ledger) |
+| `metrics.py` | `audit.jsonl` analyzer (`cyclaw-metrics`); also prints a Spend section from `logs/spend.jsonl` (tokens as ground truth, dollars at read time, `source` `query` or `agentic`; no query text on the ledger) and an offline Sequences section (`utils/sequence_detect.py`) joining hashed audit events to `source=query` spend. Forensic/CLI only — not imported by `gate.py`/`graph.py`/MCP and not a `/query` policy point |
 | `mcp_hybrid_server.py` | MCP server: `hybrid_search` only, no LLM, `sampling: None` |
 | `sync/` | Out-of-band Dropbox corpus sync (`python -m sync.cli`) |
 | `agentic/` | Out-of-band GitHub context + governed skills registry (`python -m agentic.cli`) |

@@ -32,6 +32,7 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 - Numbat emitter — merged as [#973](https://github.com/cgfixit/CyClaw/pull/973); issue [#959](https://github.com/cgfixit/CyClaw/issues/959) is **closed**
 - Graph outcome battery — runner + rows in [#969](https://github.com/cgfixit/CyClaw/pull/969) / [#971](https://github.com/cgfixit/CyClaw/pull/971) / [#976](https://github.com/cgfixit/CyClaw/pull/976); issue [#960](https://github.com/cgfixit/CyClaw/issues/960) is **closed**
 - Numbat rules-test fixture job — merged as [#981](https://github.com/cgfixit/CyClaw/pull/981); issue [#961](https://github.com/cgfixit/CyClaw/issues/961) is still open (close-out)
+- Offline sequence detection — `utils/sequence_detect.py` joined to `cyclaw-metrics` (audit.jsonl + `source=query` spend.jsonl on `query_hash`). Forensic only; `/query` still has no cross-request policy state. On-path correlation id / checkpointer stays High-tier and out of this work.
 
 ## Open GitHub issues (re-list before acting)
 
@@ -42,7 +43,8 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 | [#962](https://github.com/cgfixit/CyClaw/issues/962) | LLM-as-judge | Stretch |
 | [#963](https://github.com/cgfixit/CyClaw/issues/963) | Pre-action hook | 2–3 day, graph-adjacent |
 | [#964](https://github.com/cgfixit/CyClaw/issues/964) | Memory arena | Stretch |
-| [#965](https://github.com/cgfixit/CyClaw/issues/965) / [#966](https://github.com/cgfixit/CyClaw/issues/966) | Deferred | Wait on #963 (965 was waiting on #959, now closed) |
+| [#965](https://github.com/cgfixit/CyClaw/issues/965) | Deferred | Upstream Numbat artifact parser; first-party NDJSON projection shipped instead |
+| [#966](https://github.com/cgfixit/CyClaw/issues/966) | Offline detector shipped | `cyclaw-metrics` Sequences section. Not on-path enforcement. Hook correlation id / checkpointer remain High-tier. |
 | [#974](https://github.com/cgfixit/CyClaw/issues/974) | MCP hardening | stdio-first transport / pinned manifest |
 
 Ignore PR #415 if it is still the labeled ignore-PR.

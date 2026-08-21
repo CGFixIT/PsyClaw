@@ -92,9 +92,14 @@ itself (today the external hook command owns its own emission).
 
 ### Step 4 — Sequence rules
 
-- Multi-event patterns (injection → exfil tool chain).
-- Requires stable `session_id` plumbing end to end (prerequisite task;
-  see open issue #966 for cross-request state on the /query path).
+- **Offline (shipped):** `utils/sequence_detect.py` joins `audit.jsonl` to
+  `source=query` rows in `spend.jsonl` on `query_hash` and prints a
+  Sequences section from `cyclaw-metrics`. This is forensic detection, not
+  a `/query` policy point (see #966). CEL/`cel-python` is not the engine.
+- **On-path policy still open:** multi-event *enforcement* (injection →
+  exfil tool chain at request time) still needs stable `session_id` /
+  checkpointer plumbing. That remains High-tier and is not implied by the
+  offline detector.
 
 ### Step 5 — Templated soul / prompt assembly (Grok Build-inspired)
 
@@ -168,7 +173,7 @@ first-party NDJSON projection.
 
 1. ~~Step 1 action-plane emitter~~ — DONE (#973)
 2. Step 1 mainline audit projection (this PR) — ~1 day
-3. `session_id` plumbing — 0.5 day (prerequisite for Step 4; cf. #966)
+3. `session_id` plumbing — 0.5 day (still required for on-path Step 4 *policy*; offline join detector for #966 is shipped)
 4. Step 2 hook runner — DONE; monitor/enforce split remains — 0.5 day
 5. Phase 0 daemon — 0.5–1 day
 6. Phase 1 Telegram allowlist hardening — 1 day
