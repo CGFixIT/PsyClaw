@@ -100,7 +100,8 @@ elseif (-not (Test-Path (Join-Path $Repo "harness\server.py"))) {
 }
 else {
     Write-Step "repo already present at $Repo (pulling latest main)"
-    & git -C $Repo pull --ff-only
+    & git -C $Repo pull --ff-only --no-autostash
+    if ($LASTEXITCODE -ne 0) { throw "git pull failed (exit $LASTEXITCODE) -- resolve the existing checkout, then re-run." }
 }
 Assert-SafeRepoPath $Repo
 
