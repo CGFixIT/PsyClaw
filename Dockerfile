@@ -56,6 +56,14 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # App code
 COPY . .
 
+# DLA-4726-1: Mozilla CA bundle 2.74. Root only; must run before USER cyclaw.
+# bookworm-security still ships 20250419~deb12u1 (checked 2026-08-21).
+# Quoted so /bin/sh does not treat ~ as home-dir expansion. Do not apt-get upgrade.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      'ca-certificates=20250419~deb12u1' \
+ && rm -rf /var/lib/apt/lists/*
+
 # Non-root user (Veeam-style least privilege)
 RUN groupadd --gid 1000 cyclaw && \
     useradd --create-home --uid 1000 --gid cyclaw cyclaw && \
