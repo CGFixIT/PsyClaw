@@ -1,16 +1,75 @@
-"""Static contract tests for powershell/ Windows parity glue.
+"""Contract tests for powershell/ Windows parity glue.
 
-No real schtasks, Credential Manager, or ACL mutation: these tests read the
-scripts as text the same way tests/test_macos_scripts.py pins macos/*.sh.
+No real schtasks, Credential Manager, or ACL mutation. Most tests read the
+scripts as text; the installer regression uses a disposable home and fake git.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _PS = _REPO_ROOT / "powershell"
+
+
+def test_installer_update_checks_git_exit() -> None:
+    text = (_PS / "Install-CyClaw.ps1").read_text(encoding="utf-8")
+    update = text.split('Write-Step "repo already present at $Repo (pulling latest main)"', 1)[1]
+    update = update.split("Assert-SafeRepoPath $Repo", 1)[0]
+    assert re.search(
+        r"& git -C \$Repo pull --ff-only --no-autostash\r?\n"
+        r'\s*if \(\$LASTEXITCODE -ne 0\) \{ throw "git pull failed',
+        update,
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows PowerShell 5.1")
+def test_installer_git_failure_stops_before_launcher(tmp_path: Path) -> None:
+    home = tmp_path / "operator"
+    server = home / ".CyClaw" / "repo" / "harness" / "server.py"
+    server.parent.mkdir(parents=True)
+    server.write_text("", encoding="utf-8")
+
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    (shim_dir / "git.cmd").write_text("@echo off\r\nexit /b 37\r\n", encoding="ascii")
+
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not powershell.is_file():
+        pytest.skip("Windows PowerShell 5.1 is unavailable")
+
+    env = os.environ.copy()
+    env["USERPROFILE"] = str(home)
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(_PS / "Install-CyClaw.ps1"),
+            "-SkipPythonDeps",
+            "-NoProfileEdit",
+            "-NoPathEdit",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "git pull failed (exit 37)" in output
+    assert not (home / ".CyClaw" / "bin" / "Invoke-CyClaw.ps1").exists()
 
 
 def test_uninstall_deletes_only_known_task_names() -> None:
