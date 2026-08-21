@@ -119,6 +119,7 @@ def _spend_token_count(event: dict, key: str) -> int:
 def _empty_spend_window() -> dict:
     return {
         "by_provider": Counter(),
+        "by_source": Counter(),
         "tokens_in": 0,
         "tokens_out": 0,
         "usd": 0.0,
@@ -133,8 +134,26 @@ def _empty_spend_window() -> dict:
     }
 
 
-def _add_spend_record(window: dict, provider: str, tokens_in: int, tokens_out: int, usd, rate_unknown: bool) -> None:
+def _spend_source_key(event: dict) -> str:
+    raw = event.get("source")
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in {"query", "agentic"}:
+            return normalized
+    return "unknown"
+
+
+def _add_spend_record(
+    window: dict,
+    provider: str,
+    tokens_in: int,
+    tokens_out: int,
+    usd,
+    rate_unknown: bool,
+    source: str = "unknown",
+) -> None:
     window["by_provider"][provider] += 1
+    window["by_source"][source] += 1
     window["tokens_in"] += tokens_in
     window["tokens_out"] += tokens_out
     if rate_unknown or usd is None:
@@ -182,6 +201,7 @@ def _freeze_spend_window(window: dict) -> dict:
         delta = window["comparable_table_usd"] - window["comparable_vendor_usd"]
     return {
         "by_provider": dict(window["by_provider"].most_common()),
+        "by_source": dict(window["by_source"].most_common()),
         "tokens_in": window["tokens_in"],
         "tokens_out": window["tokens_out"],
         "usd": None if window["usd_incomplete"] else window["usd"],
@@ -229,10 +249,11 @@ def compute_spend(events, *, now=None) -> dict:
         if event_date is None or event_date < start_7d or event_date > today_date:
             continue
         provider = _bucket_key(event.get("provider"))
+        source = _spend_source_key(event)
         tokens_in = _spend_token_count(event, "input_tokens")
         tokens_out = billed_output_tokens(event)
         compared = compare_vendor_cost(model if isinstance(model, str) else "", event)
-        record = (provider, tokens_in, tokens_out, priced["usd"], bool(priced["rate_unknown"]))
+        record = (provider, tokens_in, tokens_out, priced["usd"], bool(priced["rate_unknown"]), source)
         _add_spend_record(last_7d, *record)
         _add_spend_compare(last_7d, compared)
         if event_date == today_date:
@@ -277,6 +298,8 @@ def _print_spend(spend: dict | None) -> None:
                 )
         for provider, count in window["by_provider"].items():
             print(f"    {provider}: {count}")
+        for source, count in window.get("by_source", {}).items():
+            print(f"    source {source}: {count}")
     if spend["usage_missing"]:
         print(f"  usage_missing: {spend['usage_missing']}")
     if spend["rate_unknown"]:
