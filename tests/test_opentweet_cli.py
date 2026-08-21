@@ -28,6 +28,14 @@ def _write(tmp_path: Path, block: dict) -> str:
     return str(path)
 
 
+def test_status_rejects_url_userinfo_without_echo(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cp = _write(tmp_path, {"api_base": "https://user:supersecret@opentweet.io"})
+    assert main(["--config", cp, "status"]) == EXIT_ENV
+    err = capsys.readouterr().err
+    assert "supersecret" not in err
+    assert "credentials" in err
+
+
 def test_post_disabled_is_env(tmp_path: Path) -> None:
     cp = _write(tmp_path, {"enabled": False})
     assert main(["--config", cp, "post", "--topic", "hi"]) == EXIT_ENV

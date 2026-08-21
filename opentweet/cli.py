@@ -45,6 +45,10 @@ def _heading(text: str) -> None:
 
 
 def _kv(key: str, value: object) -> None:
+    # Status is documented as secret-free. Never echo password-shaped keys
+    # (CodeQL py/clear-text-logging-sensitive-data sink).
+    if "password" in key.lower():
+        value = "(redacted)"
     print(f"  {key:.<28} {value}")
 
 
@@ -63,8 +67,13 @@ def _warn(text: str) -> None:
 def _print_typed_error(exc: object) -> None:
     _err(getattr(exc, "message", str(exc)))
     details = getattr(exc, "details", None) or {}
+    skip_frags = ("password", "secret", "token", "authorization")
     for k, v in details.items():
-        if k in {"received"} and isinstance(v, str) and len(v) > 80:
+        key = k if isinstance(k, str) else str(k)
+        lowered = key.lower()
+        if any(frag in lowered for frag in skip_frags):
+            continue
+        if key == "received" and isinstance(v, str) and ("@" in v or len(v) > 80):
             continue
         _err(f"   {k}: {v}")
 

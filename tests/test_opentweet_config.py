@@ -73,6 +73,27 @@ def test_loopback_reject(tmp_path: Path) -> None:
         load_opentweet_config(path)
 
 
+def test_url_userinfo_rejected_without_echoing_secret(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"api_base": "https://user:supersecret@opentweet.io"})
+    with pytest.raises(OpenTweetConfigError) as exc:
+        load_opentweet_config(path)
+    assert "credentials" in exc.value.message
+    blob = f"{exc.value.message}{exc.value.details}"
+    assert "supersecret" not in blob
+    assert "user:supersecret" not in blob
+
+
+def test_loopback_userinfo_rejected(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {"query": {"base_url": "http://user:supersecret@127.0.0.1:8787"}},
+    )
+    with pytest.raises(OpenTweetConfigError) as exc:
+        load_opentweet_config(path)
+    assert "credentials" in exc.value.message
+    assert "supersecret" not in str(exc.value.details)
+
+
 def test_unknown_key(tmp_path: Path) -> None:
     path = _write_config(tmp_path, {"publish_now": True})
     with pytest.raises(OpenTweetConfigError) as exc:

@@ -72,6 +72,28 @@ def _validate_env_name(name: str, field_name: str) -> str:
     return name
 
 
+def _url_for_details(url: str) -> str:
+    """Strip userinfo before a URL is copied into error details.
+
+    Implemented with string partition (not ``ParseResult.password``) so
+    CodeQL does not treat the original URL as a cleartext-password source
+    that later taints ``status`` / ``_kv`` prints of the validated URL.
+    """
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return "<unparsed>"
+    _userinfo, at, hostpart = rest.rpartition("@")
+    if at:
+        return f"{scheme}://<redacted>@{hostpart}"
+    return url
+
+
+def _reject_url_userinfo(netloc: str, field_name: str) -> None:
+    """Refuse ``userinfo@host`` without reading ``ParseResult.password``."""
+    if "@" in (netloc or ""):
+        raise OpenTweetConfigError(f"{field_name} must not contain URL credentials")
+
+
 def _validate_loopback_url(url: str, field_name: str) -> str:
     if not isinstance(url, str) or not url.strip():
         raise OpenTweetConfigError(
@@ -81,20 +103,19 @@ def _validate_loopback_url(url: str, field_name: str) -> str:
     if any(c in url for c in _SHELL_METACHARS):
         raise OpenTweetConfigError(
             f"{field_name} contains disallowed characters",
-            details={"received": url},
+            details={"received": _url_for_details(url)},
         )
     try:
         parsed = urlparse(url)
         _ = parsed.port
     except ValueError as exc:
         raise OpenTweetConfigError(f"{field_name} is not a valid URL") from exc
+    _reject_url_userinfo(parsed.netloc, field_name)
     if parsed.scheme not in ("http", "https"):
         raise OpenTweetConfigError(
             f"{field_name} must be http or https, got scheme={parsed.scheme!r}",
-            details={"received": url},
+            details={"received": _url_for_details(url)},
         )
-    if parsed.username is not None or parsed.password is not None:
-        raise OpenTweetConfigError(f"{field_name} must not contain URL credentials")
     if parsed.query or parsed.fragment:
         raise OpenTweetConfigError(f"{field_name} must not contain a query or fragment")
     host = (parsed.hostname or "").lower()
@@ -102,7 +123,7 @@ def _validate_loopback_url(url: str, field_name: str) -> str:
         raise OpenTweetConfigError(
             f"{field_name} must target loopback (127.0.0.1/localhost), got host={host!r}",
             details={
-                "received": url,
+                "received": _url_for_details(url),
                 "hint": "OpenTweet talks to CyClaw only over loopback.",
             },
         )
@@ -118,17 +139,16 @@ def _validate_https_base(url: str, field_name: str) -> str:
     if any(c in url for c in _SHELL_METACHARS):
         raise OpenTweetConfigError(
             f"{field_name} contains disallowed characters",
-            details={"received": url},
+            details={"received": _url_for_details(url)},
         )
     try:
         parsed = urlparse(url)
         _ = parsed.port
     except ValueError as exc:
         raise OpenTweetConfigError(f"{field_name} is not a valid URL") from exc
+    _reject_url_userinfo(parsed.netloc, field_name)
     if parsed.scheme != "https" or not parsed.hostname:
         raise OpenTweetConfigError(f"{field_name} must be an https URL with a hostname")
-    if parsed.username is not None or parsed.password is not None:
-        raise OpenTweetConfigError(f"{field_name} must not contain URL credentials")
     if parsed.query or parsed.fragment:
         raise OpenTweetConfigError(f"{field_name} must not contain a query or fragment")
     return url.rstrip("/")
