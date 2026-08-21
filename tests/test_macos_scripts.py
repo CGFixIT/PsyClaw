@@ -92,34 +92,42 @@ def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
 def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     """Uninstall must name every generated CyClaw LaunchAgent label.
 
-    Sync is handled by sync.cli unschedule; these five are not. Gate/harness
-    labels are included even before #912 lands: bootout of an unloaded
-    label is a no-op, and uninstall must not leave a supervised listener
-    behind if the operator generated one from that PR (or by hand).
+    Sync is handled by sync.cli unschedule; these seven are not. Bootout of
+    an unloaded label is a no-op, and uninstall must not leave a KeepAlive
+    or crash-restart job behind if the operator generated one.
     """
-    text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
-    assert "unschedule_landed_launchagents" in text
-    assert "launchctl bootout" in text
-    for label in (
+    labels = (
         "com.cgfixit.cyclaw.telegram-poll",
         "com.cgfixit.cyclaw.telegram-health",
         "com.cgfixit.cyclaw.fsconnect-trash",
         "com.cgfixit.cyclaw.gate",
         "com.cgfixit.cyclaw.harness",
+        "com.cgfixit.cyclaw.keys-rotate",
         "com.cgfixit.cyclaw.opentweet",
-    ):
+    )
+    text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
+    assert "unschedule_landed_launchagents" in text
+    assert "launchctl bootout" in text
+    for label in labels:
         assert label in text
     # Label-domain bootout must run even when the plist file is already gone.
     assert 'bootout "gui/${uid}/${label}"' in text
 
     # Docs must not still claim "three landed" agents or that gate/harness
-    # survive uninstall (#922 landed with #912).
+    # survive uninstall (#922 landed with #912). The brace list and the
+    # "seven generated" phrasing must match the live uninstall loop.
     harness_doc = (_REPO_ROOT / "docs" / "HARNESS_MACOS.md").read_text(encoding="utf-8")
     assert "three landed generated LaunchAgents" not in harness_doc
     assert "future gate/harness agent, are left alone" not in harness_doc
-    assert "com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash,gate,harness}" in harness_doc
+    assert "five generated LaunchAgent labels" not in harness_doc
+    assert "seven generated LaunchAgent labels" in harness_doc
+    for label in labels:
+        short = label.removeprefix("com.cgfixit.cyclaw.")
+        assert short in harness_doc
     readme = (_REPO_ROOT / "macos" / "README.md").read_text(encoding="utf-8")
     assert "gate, harness" in readme
+    assert "keys-rotate" in readme
+    assert "opentweet" in readme
 
 
 def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
