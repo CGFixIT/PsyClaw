@@ -16,7 +16,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 |---|---|
 | `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. |
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
-| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate). |
+| `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate, opentweet). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port`. |
 | `setup-cyclaw-keys.sh` | Apple Silicon key bootstrap. Autogenerates `CYCLAW_API_KEY`; prompts for Telegram / Claude (`ANTHROPIC_API_KEY`) / Grok / GitHub (skip allowed). Persists to Keychain + `~/.CyClaw/.env` (chmod 600), failing before dotenv writes if a requested Keychain write fails. `--rotate`, `--no-env-file`, `--fill-browser` (loopback `#apiKey` / `#apiKeyInput` only — never localStorage), `--schedule-rotate monthly\|weekly\|never` (writes, never loads, a LaunchAgent). |
 | `setup-fsconnect.sh` | Creates confined `~/CyClaw-FS` (`chmod 700`). Unless `--prepare-only`, enables list/stat/read via `_enable_fsconnect_readlist.py`. |
@@ -110,6 +110,7 @@ These plists are **not** installed or loaded by the installer.
 | `com.cgfixit.cyclaw.fsconnect-trash.plist` | `python -m agentic.fsconnect.cli trash-empty-plist` |
 | `com.cgfixit.cyclaw.telegram-poll.plist` | `python -m telegram.cli poll-plist` |
 | `com.cgfixit.cyclaw.telegram-health.plist` | `python -m telegram.cli health-plist` |
+| `com.cgfixit.cyclaw.opentweet.plist` | `python -m opentweet.cli schedule-plist` |
 
 Generators write resolved paths and (for Telegram) chain the Keychain
 wrapper so tokens never appear in the plist. They print a `launchctl
@@ -123,5 +124,6 @@ Hand-editing a template: replace every `REPLACE_*` value, create
 
 - Dropbox sync scheduling: [`docs/SYNC_README.md`](../docs/SYNC_README.md)
 - Telegram channel: [`docs/channels/TELEGRAM_DESIGN.md`](../docs/channels/TELEGRAM_DESIGN.md)
+- OpenTweet X channel: [`docs/channels/OPENTWEET_DESIGN.md`](../docs/channels/OPENTWEET_DESIGN.md)
 - Agentic / registry: [`agentic/README.md`](../agentic/README.md)
 - Console slash commands (`/goal`, `/loop`, `/skills`, `/tools`, `/web`): [`harness/README.md`](../harness/README.md)

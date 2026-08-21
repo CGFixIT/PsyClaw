@@ -300,6 +300,38 @@ class TelegramRuntimeError(TelegramError):
         super().__init__(message, code="TELEGRAM_RUNTIME_ERROR", details=details)
 
 
+class OpenTweetError(RAGError):
+    """Base error for the out-of-band OpenTweet X channel.
+
+    Mirrors TelegramError: never imported by gate.py / graph.py /
+    mcp_hybrid_server.py.
+    """
+
+    def __init__(self, message: str, code: str = "OPENTWEET_ERROR", details: dict | None = None):
+        super().__init__(message, code=code, details=details)
+
+
+class OpenTweetConfigError(OpenTweetError):
+    """The opentweet: block in config.yaml is missing or invalid."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="OPENTWEET_CONFIG_INVALID", details=details)
+
+
+class OpenTweetRefused(OpenTweetError):
+    """An OpenTweet operation was refused by a local gate."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="OPENTWEET_REFUSED", details=details)
+
+
+class OpenTweetRuntimeError(OpenTweetError):
+    """A CyClaw /query or OpenTweet HTTP call failed at runtime."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="OPENTWEET_RUNTIME_ERROR", details=details)
+
+
 class AuthError(RAGError):
     """Base error for the per-user authentication layer
     (docs/AUTHENTICATION_DESIGN.md). Stage 1 primitives live in utils/authn.py,

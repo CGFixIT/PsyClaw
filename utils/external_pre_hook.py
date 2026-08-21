@@ -9,7 +9,7 @@ The command receives a JSON payload on stdin describing the proposed action
   * any other exit, crash, or timeout -> fail-closed deny + audit
 
 This module is intentionally isolated from the request path's optional layers:
-it does not import agentic, sync, guardrails, harness, telegram, or
+it does not import agentic, sync, guardrails, harness, telegram, opentweet, or
 numbat_emitter.  The external command itself (often a Numbat hook) is
 responsible for emitting any network.indicator events it wants to record.
 """

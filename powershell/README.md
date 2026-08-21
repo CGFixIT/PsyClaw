@@ -28,7 +28,7 @@ Dropbox sync is already scheduled with `python -m sync.cli schedule`
 `Uninstall-CyClaw.ps1` best-effort deletes a **fixed** list of CyClaw task
 names (`CyClaw Dropbox Sync`, `CyClaw fsconnect-trash`,
 `CyClaw telegram-poll`, `CyClaw telegram-health`, `CyClaw gate`,
-`CyClaw harness`) so a later generator cannot outlive uninstall. It never
+`CyClaw harness`, `CyClaw opentweet`) so a later generator cannot outlive uninstall. It never
 uses a wildcard `/TN`. A missing task is a no-op (query-then-delete;
 Windows PowerShell 5.1 must not abort uninstall on `schtasks` stderr).
 Credential Manager items are **not** deleted (same as macOS Keychain).

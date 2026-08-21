@@ -86,6 +86,7 @@ def test_uninstall_deletes_only_known_task_names() -> None:
         "CyClaw telegram-health",
         "CyClaw gate",
         "CyClaw harness",
+        "CyClaw opentweet",
     ):
         assert name in text
     assert "*" not in text.split("KnownTaskNames")[1].split(")")[0]

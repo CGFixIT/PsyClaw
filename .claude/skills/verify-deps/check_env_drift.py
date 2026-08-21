@@ -159,6 +159,7 @@ _IMPORT_ALLOWLIST = {
 }
 _FIRST_PARTY = {
     "utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram",
+    "opentweet",
     "gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server", "metrics",
     "memory", "tests", "conftest",
 }

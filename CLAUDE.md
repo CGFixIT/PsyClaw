@@ -219,6 +219,7 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `harness/env_keys.py` | Allowlisted dotenv secret store behind the console's `/api` panel. Writes `$CYCLAW_HOME/.env` (atomic everywhere; mode 600 on POSIX — Windows `os.chmod` cannot express owner-only, so confinement there is the inherited `%USERPROFILE%` ACL) in the same `export KEY='v'` form `macos/setup-cyclaw-keys.sh` uses, so the two never corrupt each other. File-only by design — nothing in CyClaw reads `.env` at runtime, so a write needs a restart to reach `gate.py`; `write_keys` reports `restart_required` rather than implying otherwise. Returns presence + a masked tail, never a value |
 | `harness/` | Out-of-band coding harness (`cyclaw-harness` / `python -m harness.server`): slash-command console on 127.0.0.1:8790 (`/goal`, `/loop`, `/skills`, `/tools`, allowlist-only `/web` off by default). `%USERPROFILE%\.CyClaw` home on Windows (`~/.CyClaw` on macOS/Linux). Reuses `agentic/` + `agentic/harness_optimizer/` via `utils.ops_runner`; same I6 isolation as `agentic/`. `/loop` and `/web` never start `/api/agent/*`. Launched via `powershell/` (Windows) or `macos/` (macOS/Linux). See `harness/README.md`, `docs/HARNESS_POWERSHELL.md`, `docs/HARNESS_MACOS.md` |
 | `telegram/` | Out-of-band Telegram channel (`python -m telegram.cli`), shipped `enabled: false`. Outbound notify (`mode: notify`) and, when configured, long-poll inbound chat (`mode: chat`) via the Telegram Bot API; inbound text only ever becomes an answer through HTTP `POST /query` on loopback — never a direct call into `graph.py`. `gate.py`/`graph.py`/`mcp_hybrid_server.py` never import it (I6). T3 hybrid-confirm consent (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online`, and only via the exact `/online on <grok|claude>` command — core's triple gate remains the final authority. T4 media staging (default off) writes only through the existing `agentic/fsconnect` write path. See `docs/channels/TELEGRAM_DESIGN.md` and `docs/THREAT_MODEL.md`'s seventh amendment |
+| `opentweet/` | Out-of-band OpenTweet X channel (`python -m opentweet.cli`), shipped `enabled: false`. Weekly generate-don't-load LaunchAgent / generate-don't-register Windows task. Generation is loopback `POST /query` with `user_confirmed_online: false`; default write is an OpenTweet draft; `scheduled_date` is opt-in. Never a graph node, never X/Tweepy, never hosted OpenTweet MCP. See `docs/channels/OPENTWEET_DESIGN.md` |
 
 ### Load-bearing numbers (all from `config.yaml`/`pyproject.toml` — do not invent)
 
@@ -255,7 +256,7 @@ statically; run it after any change to the core files.
 | I3 | **Triple-gated external fallback** — a call to Grok or Claude needs `mode=="hybrid"` AND `<provider>.enabled` AND `user_confirmed_online`, all three, for whichever provider is selected (`online_provider`) | `gate.py` construction + `graph.py` `user_gate_router` | `test_graph`, `test_gate` | route to `grok_fallback`/`claude_fallback` without all three conditions for that provider |
 | I4 | **Audit convergence** — all nine upstream paths reach `audit_logger` before END | `graph.py` edges | `test_graph` | add a node with a path to END that skips `audit_logger` |
 | I5 | **Soul governance** — soul mutation requires a human `reason` string; writes are atomic | `utils/personality.py` `apply_evolution` | `test_personality` | write `soul.md` without a non-empty `reason`, or bypass `PersonalityManager` |
-| I6 | **Module isolation** — `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`, and those never import the core six | import graph | invariant-guard I6; `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core six to "reuse" something |
+| I6 | **Module isolation** — `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`/`opentweet`, and those never import the core six | import graph | invariant-guard I6; `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core six to "reuse" something |
 
 Supporting guards (also checked by `invariant-guard`): telemetry-kill precedes
 heavy imports in `gate.py` (the block itself is shared from
@@ -703,7 +704,7 @@ CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); ubuntu
 and macos gate the build while the windows leg carries `continue-on-error`, so
 it surfaces failures without blocking. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
-`utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`. `tests/conftest.py` mocks
+`utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
 discoverable in `tests/` (~170 `test_*.py` files, auto-collected by pytest).
 

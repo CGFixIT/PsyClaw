@@ -388,6 +388,7 @@ def test_uninstall_removes_landed_launchagent_plists(tmp_path: Path) -> None:
         "com.cgfixit.cyclaw.fsconnect-trash.plist",
         "com.cgfixit.cyclaw.gate.plist",
         "com.cgfixit.cyclaw.harness.plist",
+        "com.cgfixit.cyclaw.opentweet.plist",
     )
     for name in landed:
         (agents / name).write_text("generated", encoding="utf-8")

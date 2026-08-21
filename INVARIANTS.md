@@ -188,7 +188,7 @@ already declared"; the flag is not a guard.
 
 **Must never change:** `gate.py`, `gate_ops.py`, `gate_auth.py`, `gate_memory.py`,
 `graph.py`, and `mcp_hybrid_server.py` never import `agentic`, `sync`,
-`guardrails`, `harness`, or `telegram` (and those packages never import the
+`guardrails`, `harness`, `telegram`, or `opentweet` (and those packages never import the
 core six). The `/ops/*` routes reach the out-of-band CLIs only through
 `utils/ops_runner.py`, a `subprocess.run([...])` shim — never an import. This
 isolation is what keeps the out-of-band subsystems from becoming a path around
