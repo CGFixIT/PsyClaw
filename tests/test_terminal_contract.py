@@ -35,7 +35,7 @@ def _console_source() -> str:
 _POST_PATHS = {
     "/query", "/soul/reload", "/soul/propose", "/soul/apply", "/soul/restore",
     "/ops/sync", "/ops/agentic", "/ops/fsconnect", "/ops/sqlconnect",
-    "/auth/login", "/auth/logout",
+    "/auth/login", "/auth/logout", "/auth/bootstrap-password",
 }
 
 

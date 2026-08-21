@@ -97,6 +97,8 @@ decision.
 | POST | `/ops/agentic` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/fsconnect` | **API key** | rate-limited; subprocess shim |
 | POST | `/ops/sqlconnect` | **API key** | rate-limited; subprocess shim |
+| GET | `/auth/setup-status` | none | rate-limited; `{enabled, needs_password, username}` when the bootstrap admin still has no password; 503 when `auth.enabled` is false |
+| POST | `/auth/bootstrap-password` | loopback peer | first admin password; same-origin; 403 off-box; 409 once set; 503 when auth off |
 | POST | `/auth/login` | none | rate-limited; session cookie + CSRF token on success; 503 when `auth.enabled` is false |
 | POST | `/auth/logout` | **session cookie + CSRF** | rate-limited; 503 when `auth.enabled` is false |
 | GET | `/auth/whoami` | **session cookie or bearer token** | rate-limited; returns `username` + `role`; 503 when `auth.enabled` is false |

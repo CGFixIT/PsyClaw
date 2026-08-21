@@ -88,18 +88,26 @@ function queryHeaders() {
 
 let csrfToken = null;
 let authRole = null;
+const authSetupBox = document.getElementById('authSetupBox');
 const authLoginBox = document.getElementById('authLoginBox');
 const authSessionBox = document.getElementById('authSessionBox');
 const authUserInput = document.getElementById('authUser');
 const authPassInput = document.getElementById('authPass');
+const authSetupPass = document.getElementById('authSetupPass');
+const authSetupPass2 = document.getElementById('authSetupPass2');
 const authStatus = document.getElementById('authStatus');
+
+function hideAuthBoxes() {
+  if (authSetupBox) authSetupBox.hidden = true;
+  if (authLoginBox) authLoginBox.hidden = true;
+  if (authSessionBox) authSessionBox.hidden = true;
+}
 
 async function refreshAuthUi() {
   try {
     const resp = await fetchWithTimeout(`${API}/auth/whoami`, {}, 5000);
     if (resp.status === 503) {
-      if (authLoginBox) authLoginBox.hidden = true;
-      if (authSessionBox) authSessionBox.hidden = true;
+      hideAuthBoxes();
       csrfToken = null;
       authRole = null;
       applyRoleChrome();
@@ -107,21 +115,63 @@ async function refreshAuthUi() {
     }
     if (resp.ok) {
       const data = await resp.json();
-      if (authLoginBox) authLoginBox.hidden = true;
+      hideAuthBoxes();
       if (authSessionBox) authSessionBox.hidden = false;
       authRole = data.role || null;
       if (authStatus) authStatus.textContent = (data.username || '') + (authRole ? ' · ' + authRole : '');
       applyRoleChrome();
       return;
     }
-    if (authLoginBox) authLoginBox.hidden = false;
-    if (authSessionBox) authSessionBox.hidden = true;
     csrfToken = null;
     authRole = null;
     applyRoleChrome();
+    const setup = await fetchWithTimeout(`${API}/auth/setup-status`, {}, 5000);
+    if (setup.ok) {
+      const status = await setup.json();
+      if (status.needs_password) {
+        if (authSetupBox) authSetupBox.hidden = false;
+        if (authLoginBox) authLoginBox.hidden = true;
+        if (authSessionBox) authSessionBox.hidden = true;
+        return;
+      }
+    }
+    if (authSetupBox) authSetupBox.hidden = true;
+    if (authLoginBox) authLoginBox.hidden = false;
+    if (authSessionBox) authSessionBox.hidden = true;
   } catch {
     // Leave the last-known UI; /health already reports reachability.
   }
+}
+
+async function setupAdminPassword() {
+  if (!authSetupPass || !authSetupPass2) return;
+  const password = authSetupPass.value;
+  const confirm = authSetupPass2.value;
+  authSetupPass.value = '';
+  authSetupPass2.value = '';
+  if (password !== confirm) {
+    if (authStatus) {
+      if (authSessionBox) authSessionBox.hidden = false;
+      authStatus.textContent = 'passwords do not match';
+    }
+    return;
+  }
+  const resp = await fetchWithTimeout(`${API}/auth/bootstrap-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  }, 15000);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    if (authStatus) {
+      if (authSessionBox) authSessionBox.hidden = false;
+      authStatus.textContent = extractErrorMessage(err, 'could not set password');
+    }
+    return;
+  }
+  const data = await resp.json();
+  csrfToken = data.csrf_token || null;
+  await refreshAuthUi();
 }
 
 async function login() {
@@ -1183,6 +1233,9 @@ document.getElementById('agenticReason').addEventListener('input', refreshAgenti
 if (document.getElementById('authLoginBtn')) {
   document.getElementById('authLoginBtn').addEventListener('click', () => login());
 }
+if (document.getElementById('authSetupBtn')) {
+  document.getElementById('authSetupBtn').addEventListener('click', () => setupAdminPassword());
+}
 if (document.getElementById('authLogoutBtn')) {
   document.getElementById('authLogoutBtn').addEventListener('click', () => logout());
 }
@@ -1191,6 +1244,14 @@ if (authPassInput) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       login();
+    }
+  });
+}
+if (authSetupPass2) {
+  authSetupPass2.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      setupAdminPassword();
     }
   });
 }

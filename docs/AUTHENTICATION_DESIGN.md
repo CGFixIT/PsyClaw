@@ -281,6 +281,22 @@ existing loopback install until the operator turns it on. When enabled,
 local processes are inside the stated adversary set. The smoke tests and
 `CyClaw-Sandbox` get a token like any other programmatic client.
 
+### 4.6 First password from the consoles (loopback only)
+
+Turning `auth.enabled` on still seeds `admin` with an unusable `pending$`
+hash (CodeQL #1057: no one-time password on stdout). `cyclaw-user passwd
+admin` remains the local CLI path.
+
+When the operator opens the terminal (`:8787`) or harness (`:8790`) with
+auth on and that pending hash still in place, the UI shows a **Set admin
+password** panel instead of login. `GET /auth/setup-status` (and
+`/api/auth/setup-status` on the harness) reports `{needs_password, username}`
+with no hashes. `POST /auth/bootstrap-password` accepts the new password
+**only from a loopback peer** (`127.0.0.1` / `::1`), then mints a session.
+A non-loopback caller gets 403. Once a real hash is stored the POST returns
+409. The bind guard also refuses a LAN bind while `needs_password_setup()`
+is true, so enabling auth+TLS does not open that POST to the LAN.
+
 ---
 
 ## 5. TLS

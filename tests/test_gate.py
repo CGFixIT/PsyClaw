@@ -1412,7 +1412,23 @@ class TestLoopbackBindGuard:
             gate, "cfg", {"auth": {"enabled": True}, "api": {"tls": {"enabled": True}}}
         )
         monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
+        monkeypatch.setattr(gate, "auth_manager", None)
         assert gate._require_loopback_bind("10.0.0.50") is True
+
+    def test_pending_admin_password_blocks_lan_bind(self, monkeypatch):
+        """LAN bind must not open while the bootstrap admin still has no password."""
+        import gate
+        from types import SimpleNamespace
+
+        monkeypatch.delenv(gate._ALLOW_NON_LOOPBACK_ENV, raising=False)
+        monkeypatch.setattr(
+            gate, "cfg", {"auth": {"enabled": True}, "api": {"tls": {"enabled": True}}}
+        )
+        monkeypatch.setattr(gate, "_request_path_enforcement_active", lambda: True)
+        monkeypatch.setattr(
+            gate, "auth_manager", SimpleNamespace(needs_password_setup=lambda: True)
+        )
+        assert gate._require_loopback_bind("10.0.0.50") is False
 
     def test_api_key_optional_closes_the_auth_and_tls_bind_route(self, monkeypatch):
         """security.api_key_optional must not compose with the auth+TLS route.

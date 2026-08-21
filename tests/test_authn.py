@@ -14,9 +14,12 @@ import time
 import pytest
 
 from utils.authn import (
+    PENDING_HASH_PREFIX,
     PasswordPolicyError,
     hash_password,
+    hash_pending_placeholder,
     is_locked,
+    is_pending_password_record,
     lockout_delay_sec,
     new_session_id,
     next_lock_until,
@@ -35,6 +38,13 @@ class TestHashAndVerify:
     def test_wrong_password_rejected(self):
         ok, _ = verify_password("not the password at all", hash_password(_GOOD))
         assert ok is False
+
+    def test_pending_placeholder_never_verifies(self):
+        record = hash_pending_placeholder()
+        assert is_pending_password_record(record)
+        assert record.startswith(PENDING_HASH_PREFIX)
+        assert verify_password(_GOOD, record) == (False, False)
+        assert verify_password("admin", record) == (False, False)
 
     def test_salt_makes_identical_passwords_hash_differently(self):
         """Without a per-record salt, two users with the same password share a
