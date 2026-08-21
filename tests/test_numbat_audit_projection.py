@@ -265,12 +265,15 @@ def test_audit_log_survives_projection_import_failure(
     already computed -- the same rationale that guards record-building and the
     disk write covers the projection, including its lazy import.
     """
-    import utils.numbat_emitter as emitter
-
     def _boom(*_args, **_kwargs):
         raise RuntimeError("projection exploded")
 
-    monkeypatch.setattr(emitter, "project_audit_record", _boom)
+    # Patched by dotted path rather than `import utils.numbat_emitter as
+    # emitter`: this module already binds the same module with `from ...
+    # import`, and mixing both import forms trips CodeQL's
+    # py/import-and-import-from. audit_log resolves the symbol at call time,
+    # so patching the module attribute is what takes effect either way.
+    monkeypatch.setattr("utils.numbat_emitter.project_audit_record", _boom)
     cfg, audit, _ = proj_cfg
     audit_log({"event": "rag_query", "query": "q"}, cfg=cfg)  # must not raise
     close_audit_handles()
