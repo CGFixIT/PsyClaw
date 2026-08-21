@@ -186,9 +186,12 @@ def test_executor_jail_live_events_have_zero_rule_hits(tmp_path: Path) -> None:
     assert "/.ssh/id_rsa" not in blob
     assert "https://evil.example" not in blob
     records = [json.loads(line) for line in blob.splitlines() if line.strip()]
-    assert records[0]["event_type"] == "command.exec"
-    assert "exit_code" not in records[0]
-    assert records[1]["event_type"] == "command.result"
+    exec_records = [r for r in records if r["event_type"] == "command.exec"]
+    result_records = [r for r in records if r["event_type"] == "command.result"]
+    assert exec_records, "expected at least one command.exec record"
+    assert result_records, "expected at least one command.result record"
+    assert "exit_code" not in exec_records[0]
+    assert "exit_code" in result_records[0]
     exe = _numbat_bin()
     if exe is None:
         pytest.skip("numbat CLI not installed")
