@@ -4,7 +4,7 @@
 
 **Code and `config.yaml` win.** This note explains the Numbat **0.2.0 CLI** CyClaw’s fixture job actually runs. That CLI evaluates **schema 0.3.0**. The emitter (`utils/numbat_emitter.py`) writes the same wire version (`schema_version: "0.3.0"`, `source_agent: "unknown"`). Release version and schema version are independent in upstream Numbat.
 
-Related: `config.yaml` `numbat:` block, `logs/numbat-events.ndjsonl`, `.github/workflows/numbat-rules.yml` (static fixtures only), `docs/THREAT_MODEL.md`. `audit.jsonl` stays authoritative. Numbat is never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py` (I6).
+Related: `config.yaml` `numbat:` block, `logs/numbat-events.ndjsonl`, `.github/workflows/numbat-rules.yml` (committed fixtures plus a live executor-jail `rules test`), `docs/THREAT_MODEL.md`. `audit.jsonl` stays authoritative. Numbat is never imported by `gate.py` / `graph.py` / `mcp_hybrid_server.py` (I6).
 
 ---
 
@@ -16,7 +16,7 @@ Numbat is a security notebook for AI helpers: it writes down “the helper ran t
 
 ## Tech 101
 
-In CyClaw, Numbat is a **side-channel detector**, not part of `POST /query`. `utils/numbat_emitter.py` appends NDJSON to `logs/numbat-events.ndjsonl` when the executor, fsconnect, or similar out-of-band tools fire; `gate.py` / `graph.py` / MCP never import it (I6). CI pins the **Numbat 0.2.0** binary and runs `numbat rules test --fixture` against committed fixtures that `build_event` produced, looking for rules like `secrets.read_private_key` and `exfil.curl_post_file`. A separate pytest runs the executor under its scrubbed env and asserts those rules still miss. Benefit: you get a vendor-shaped “did the agent do something nasty?” check without putting Numbat on the RAG path.
+In CyClaw, Numbat is a **side-channel detector**, not part of `POST /query`. `utils/numbat_emitter.py` appends NDJSON to `logs/numbat-events.ndjsonl` when the executor, fsconnect, or similar out-of-band tools fire; `gate.py` / `graph.py` / MCP never import it (I6). CI pins the **Numbat 0.2.0** binary and runs `numbat rules test --fixture` against committed fixtures that `build_event` produced, looking for rules like `secrets.read_private_key` and `exfil.curl_post_file`. The same job then runs the executor-jail pytest with that binary on PATH so live emitter output is scored, not only the committed files. Benefit: you get a vendor-shaped “did the agent do something nasty?” check without putting Numbat on the RAG path.
 
 `rules test` uses per-type allowlists stricter than the published JSON schema: `command.exec` cannot carry `exit_code` / `file_path` / `duration_ms`. The emitter strips those from `command.exec` and writes outcomes as `command.result`.
 
