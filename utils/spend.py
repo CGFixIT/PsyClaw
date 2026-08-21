@@ -151,7 +151,7 @@ def _append_line(path: Path, line: str) -> None:
         handle.write(line)
 
 
-_ALLOWED_SOURCES = frozenset({"query", "agentic"})
+_ALLOWED_SOURCES = frozenset({"query", "agentic", "eval"})
 _QUERY_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _ROUTE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _MAX_ROUTE_HOPS = 16

@@ -204,6 +204,7 @@ class TestClientTimeoutIsolation:
     def test_claude_client_disables_ambient_proxy(self, tmp_path):
         client = ClaudeClient(_write_config(tmp_path))
         assert client._client.trust_env is False
+        assert client._client.follow_redirects is False
         client.close()
 
     def test_grok_client_uses_isolated_connect_timeout(self, tmp_path):
@@ -683,6 +684,28 @@ class TestExternalSpendRecording:
         assert record["route_path"] == path
         assert record["provider"] == "claude"
         assert "query" not in record
+        client.close()
+
+    def test_claude_spend_context_can_isolate_eval_ledger(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        client._client.post = _FakePost(
+            response=_claude_ok_response(
+                "claude answer",
+                usage={"input_tokens": 10, "output_tokens": 4},
+            )
+        )
+        eval_ledger = tmp_path / "eval-spend.jsonl"
+
+        assert client.generate(
+            "a prompt",
+            spend_context={"source": "eval", "spend_file": eval_ledger},
+        ) == "claude answer"
+
+        assert not _spend_ledger.exists()
+        record = json.loads(eval_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["source"] == "eval"
+        assert record["provider"] == "claude"
         client.close()
 
     def test_grok_200_with_reasoning_tokens_writes_them(self, tmp_path, monkeypatch, _spend_ledger):
