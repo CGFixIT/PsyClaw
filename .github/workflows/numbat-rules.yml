@@ -1,5 +1,6 @@
-# Non-blocking Numbat rules-test against committed fixtures (#961).
-# Pins CLI 0.2.0 (schema 0.3.0). Does not gate merges. Does not edit ci.yml.
+# Non-blocking Numbat rules-test against committed fixtures plus a live
+# executor-jail run (#961 / #965). Pins CLI 0.2.0 (schema 0.3.0).
+# Does not gate merges. Does not edit ci.yml.
 name: Numbat rules fixture
 
 on:
@@ -18,7 +19,7 @@ jobs:
   numbat-rules-fixture:
     name: numbat rules test --fixture
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     continue-on-error: true
     permissions:
       contents: read
@@ -50,3 +51,16 @@ jobs:
           numbat rules test \
             --fixture tests/fixtures/numbat/clean-events.ndjson \
             --expect-none
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Live executor-jail events must produce zero hits
+        env:
+          NUMBAT: /usr/local/bin/numbat
+          GROK_API_KEY: dummy
+        run: |
+          python -m pip install --disable-pip-version-check pytest==9.1.1 pyyaml==6.0.3
+          python -m pytest tests/test_numbat_rules_fixtures.py::test_executor_jail_live_events_have_zero_rule_hits -q --tb=short
