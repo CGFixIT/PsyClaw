@@ -38,10 +38,10 @@ import argparse
 import hashlib
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agentic.config import AgenticConfig, load_agentic_config
 from utils.errors import (
@@ -841,6 +841,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
                           provider=provider, plan_sha256=plan_sha256),
     )
 
+    probe: Callable[[str, Mapping[str, str], int], dict[str, Any]] | None = None
     if provider:
         from agentic.deepagent_github.chat_client import ChatModelProposerClient
         from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
@@ -855,6 +856,9 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             model=cfg.deepagent_github.model,
             timeout_sec=cfg.deepagent_github.planner_timeout_sec,
         )
+        from agentic.unslop_bridge import build_unslop_probe
+
+        probe = build_unslop_probe(app_cfg)
     try:
         result = run_real_repo_loop(
             tools,
@@ -875,6 +879,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             plan=plan,
             config_path=args.config,
             cfg=app_cfg,
+            unslop_probe=probe,
         )
     except AgenticWriteRefused as exc:
         # Persist before returning, like the AgenticError path below already
