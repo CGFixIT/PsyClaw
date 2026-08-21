@@ -36,6 +36,21 @@ def test_status_rejects_url_userinfo_without_echo(tmp_path: Path, capsys: pytest
     assert "credentials" in err
 
 
+def test_status_env_presence_without_api_key_identifiers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_supersecret")
+    cp = _write(tmp_path, {"enabled": False})
+    assert main(["--config", cp, "status"]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "ot_supersecret" not in out
+    assert "api_key_env" not in out
+    assert "api_key_set" not in out
+    assert "vendor env configured" in out
+    assert "query env configured" in out
+    assert "yes" in out
+
+
 def test_post_disabled_is_env(tmp_path: Path) -> None:
     cp = _write(tmp_path, {"enabled": False})
     assert main(["--config", cp, "post", "--topic", "hi"]) == EXIT_ENV

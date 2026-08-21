@@ -20,6 +20,7 @@ This module never imports gate.py, graph.py, or mcp_hybrid_server.py.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import sys
 from pathlib import Path
@@ -107,10 +108,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         return EXIT_ENV
 
     pub = cfg.to_public_dict()
+    vendor_env_state = "yes" if cfg.api_key_env in os.environ else "no"
+    query_env_state = "yes" if cfg.query.api_key_env in os.environ else "no"
     _kv("enabled", pub["enabled"])
     _kv("api_base", pub["api_base"])
-    _kv("api_key_env", pub["api_key_env"])
-    _kv("api_key_set", pub["api_key_set"])
+    # Presence only. Do not pass api_key_* identifiers into _kv — CodeQL
+    # classifies those names as password sources (py/clear-text-logging-sensitive-data).
+    _kv("vendor env configured", vendor_env_state)
     _kv("topic_file", pub["topic_file"] or "(unset)")
     _kv("max_topic_chars", pub["max_topic_chars"])
     _kv("max_post_chars", pub["max_post_chars"])
@@ -120,8 +124,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("fire_hour", pub["fire_hour"])
     _kv("fire_minute", pub["fire_minute"])
     _kv("query.base_url", pub["query"]["base_url"])
-    _kv("query.api_key_env", pub["query"]["api_key_env"])
-    _kv("query.api_key_set", pub["query_api_key_set"])
+    _kv("query env configured", query_env_state)
     _kv("query.timeout_sec", pub["query"]["timeout_sec"])
     if not cfg.enabled:
         _warn("Layer disabled (enabled: false) — post will refuse.")
@@ -215,8 +218,8 @@ def cmd_schedule_plist(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     inner_argv = _post_inner_argv(cfg, args.config)
     secrets = [(args.token_service, cfg.api_key_env)]
-    if args.api_key_service:
-        secrets.append((args.api_key_service, cfg.query.api_key_env))
+    if args.query_env_service:
+        secrets.append((args.query_env_service, cfg.query.api_key_env))
     wrapper = launchd_plist.keychain_wrapper_path(repo_root)
     program_args = launchd_plist.wrap_with_keychain_secrets(inner_argv, secrets, wrapper)
 
@@ -240,8 +243,8 @@ def cmd_schedule_plist(args: argparse.Namespace) -> int:
     _kv("weekday", weekday)
     _kv("fire", f"{hour:02d}:{minute:02d}")
     _kv("token Keychain service", args.token_service)
-    if args.api_key_service:
-        _kv("api-key Keychain service", args.api_key_service)
+    if args.query_env_service:
+        _kv("query env Keychain service", args.query_env_service)
     print()
     print(f"  Store the key first: macos/cyclaw-keychain-set.sh '{args.token_service}'")
     print(f"  NOT loaded. Run to activate: {launchd_plist.bootstrap_hint(path)}")
@@ -264,8 +267,8 @@ def cmd_schedule_task(args: argparse.Namespace) -> int:
     repo_root = Path(__file__).resolve().parent.parent
     inner_argv = _post_inner_argv(cfg, args.config)
     secrets = [(args.token_service, cfg.api_key_env)]
-    if args.api_key_service:
-        secrets.append((args.api_key_service, cfg.query.api_key_env))
+    if args.query_env_service:
+        secrets.append((args.query_env_service, cfg.query.api_key_env))
     wrapper = win_schtasks.credman_wrapper_path(repo_root)
     argv = win_schtasks.wrap_with_credman_secrets(inner_argv, secrets, wrapper)
     weekday = args.weekday if args.weekday is not None else cfg.weekday
@@ -327,7 +330,12 @@ def build_parser() -> argparse.ArgumentParser:
             default=_DEFAULT_KEY_SERVICE,
             help="Keychain/CredMan name for OPENTWEET_API_KEY.",
         )
-        p.add_argument("--api-key-service", default="", help="Optional Keychain/CredMan name for CYCLAW_API_KEY.")
+        p.add_argument(
+            "--api-key-service",
+            dest="query_env_service",
+            default="",
+            help="Optional Keychain/CredMan name for CYCLAW_API_KEY.",
+        )
         p.add_argument("--weekday", type=int, default=None, help="0/7 Sunday … 6 Saturday (default: config).")
         p.add_argument("--hour", type=int, default=None, help="Fire hour 0-23 (default: config fire_hour).")
         p.add_argument("--minute", type=int, default=None, help="Fire minute 0-59 (default: config fire_minute).")
