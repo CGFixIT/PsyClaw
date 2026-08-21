@@ -25,7 +25,7 @@ invariants, API key redaction, and security invariants. Supports both sandbox
 
 ## Operator map — which command proves what
 
-Three ladders. They are complementary. A green run of one is **not** evidence
+Five ladders. They are complementary. A green run of one is **not** evidence
 the others would also pass. Always invoke with `python3.12` (never bare
 `python3` — see Gotchas).
 
@@ -42,6 +42,7 @@ PreCompact / SessionEnd hooks.
 | **B. In-process swarm** | `python3.12 .claude/skills/CyClaw-Sandbox/run_full_verification.py` | Skill phases 4–12 (5 queries, triple-gate, redaction, harness `TestClient` including `/goal` + loop, HTML contract) | Live HTTP servers, browser JS, Windows installer |
 | **C. CI lifecycle** | `bash .claude/skills/CyClaw-Sandbox/verify.sh` | 3.12 venv, full pytest, RAG smoke, live `gate.py` + harness + `mock_ollama`, both emulations | Browser `/loop auto`, real `qwen3.8:27b-mlx`, Auth Stages 3–4, live NeMo 4b rail |
 | **D. Surface smoke** | `bash .claude/skills/CyClaw-Sandbox/smoke.sh` | 29 out-of-band checks against a live server | Due-diligence classes, harness `/goal`/`/loop`, agent-run routes |
+| **E. Live API bomb** | `windows-smoke.ps1` / `macos-smoke.sh` | 22 live HTTP checks (gate + harness) against already-running servers | Broader fsconnect/sqlconnect/guardrails/Postgres (that's ladder D) |
 
 ### A. `/goal` + `/loop` only (harness console contract)
 
@@ -589,6 +590,7 @@ python .claude/skills/CyClaw-Sandbox/harness_runtime_check.py
 | `test_fsconnect_macos_policy.py` | Darwin logic, SIMULATED via `sys.platform`/`os.stat` monkeypatching -- runs cross-platform, always exercises the Darwin branch regardless of host OS |
 | `test_macos_fsconnect_setup.py` | REAL, unmocked subprocess execution of `macos/setup-fsconnect.sh` + `macos/_enable_fsconnect_readlist.py` end-to-end (config mutation, idempotency, `--no-fsconnect` behavior); POSIX-generic, genuinely real on both Linux and macOS CI |
 | `test_macos_scripts.py` | Static content/regex pins on the shell scripts themselves (no execution) |
+| `test_macos_smoke.py` | Static pins that `macos-smoke.sh` stays the Darwin twin of `windows-smoke.ps1` (endpoint parity, bash 3.2, no jq, loopback-only, no server launch) |
 | `test_fsconnect_macos_real.py` | NEW -- genuinely REAL Darwin syscalls, no monkeypatching: `/Volumes` opt-in gate, Apple-metadata filtering (`.DS_Store`/`._*`), case-insensitive-APFS root-overlap detection, real `EACCES`-to-typed-error mapping. Darwin-only (self-skips everywhere else). SF_DATALESS/iCloud-dataless handling is deliberately NOT made real here (no way to create a genuine dataless placeholder in CI) -- stays covered only by the simulated `test_fsconnect_macos_policy.py` |
 | `test_sqlconnect_*.py` | SQLConnect CLI, client, config, read-only guards |
 | `test_sync_*.py` | Sync CLI, config, runner, scheduler, filters |
@@ -720,7 +722,7 @@ mock's own default bind (`127.0.0.1:11434`).
 python .claude/skills/CyClaw-Sandbox/mock_ollama.py --port 11434 --model qwen3.8:27b-mlx
 ```
 
-### `verify.sh` / `smoke.sh` / `windows-smoke.ps1`
+### `verify.sh` / `smoke.sh` / `windows-smoke.ps1` / `macos-smoke.sh`
 
 `verify.sh` is the CI-wired, full-lifecycle check (Linux): Python 3.12
 provisioning, the pytest suite, an emulated RAG query, both independent
@@ -728,11 +730,13 @@ runtime checks, then both consoles launched live (gate.py on :8787, the
 harness on :8790, pairing `mock_ollama.py` on :11434 automatically) and
 emulated end to end. `smoke.sh` covers the broader out-of-band subsystems
 (fsconnect, sqlconnect, guardrails, Postgres backends). `windows-smoke.ps1`
-is the Windows-parity smoke bomb -- notably where the harness (Windows-first:
-`%USERPROFILE%\.CyClaw` home, PowerShell launcher) gets its own platform
-coverage; run manually against already-running servers (`-Port`/
-`-HarnessPort` params), not wired into CI (the `verify-skills` CI matrix only
-discovers `verify.sh`/`smoke.sh`, not `.ps1` files).
+and `macos-smoke.sh` are the platform live-API bombs — 22 matching checks
+against already-running `gate.py` + `harness.server`. Windows CI
+(`windows-latest` pwsh step) runs `windows-smoke.ps1`; macOS CI
+(`macos-latest` bash step) runs `macos-smoke.sh`. Neither is discovered by
+the `verify-skills` matrix (that job only globs `verify.sh`/`smoke.sh`).
+`macos-smoke.sh` is Darwin-first (bash 3.2, no jq) and also the POSIX twin
+Linux operators run by hand.
 
 ### `test-specifications.md`
 

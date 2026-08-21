@@ -102,10 +102,21 @@ uvicorn gate:app --reload --host 127.0.0.1 --port 8787
 
 ### Linux smoke test
 
-There isn't yet a Linux-native equivalent of `windows-smoke.ps1` in this repo.
-Run the full test suite (below) as the install gate, or hit `curl -s
-http://127.0.0.1:8787/health` for a one-line readiness check against a
-running server.
+Against already-running servers (same 22-check contract as the Windows
+script). POSIX/bash 3.2; curl + python3 only:
+
+```bash
+export CYCLAW_API_KEY="the-value-you-generated"
+bash .claude/skills/CyClaw-Sandbox/macos-smoke.sh
+```
+
+`macos-smoke.sh` is Darwin-first but the HTTP surface is OS-agnostic, so
+Linux operators use the same file. For a one-line readiness check instead:
+
+```bash
+curl -s http://127.0.0.1:8787/health
+```
+
 
 ---
 
@@ -383,13 +394,28 @@ not a problem to fix.
 
 ### macOS smoke test
 
-There is no macOS-native equivalent of `windows-smoke.ps1`. Use the test suite
-as the install gate, or a one-line readiness check against a running server:
+Darwin twin of `windows-smoke.ps1`. Same 22 checks (gateway + harness),
+same non-zero exit on any failure, bash 3.2 / BSD userland, no jq and no
+Homebrew. Servers must already be running (`invoke-cyclaw.sh` or the
+uvicorn + `python -m harness.server` pair):
+
+```bash
+export CYCLAW_API_KEY="the-value-you-generated"
+bash .claude/skills/CyClaw-Sandbox/macos-smoke.sh
+```
+
+For a one-line readiness check instead:
+
+```bash
+curl -s http://127.0.0.1:8787/health
+```
+
+The full pytest suite remains the install gate:
 
 ```bash
 GROK_API_KEY=dummy pytest tests/ -q --tb=short
-curl -s http://127.0.0.1:8787/health
 ```
+
 
 ---
 
