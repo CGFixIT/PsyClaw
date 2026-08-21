@@ -95,6 +95,7 @@
       "Bash(python3 .claude/skills/OTel-Hardening/check_otel.py)",
       "Bash(bash .claude/skills/OTel-Hardening/verify.sh)",
       "Bash(bash .claude/skills/CyClaw-Sandbox/verify.sh)",
+      "Bash(bash .claude/skills/CyClaw-Sandbox/macos-smoke.sh)",
       "Bash(bash .claude/skills/cyclaw-advisor/verify.sh)"
     ]
   }

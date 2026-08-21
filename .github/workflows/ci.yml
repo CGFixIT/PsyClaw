@@ -627,15 +627,11 @@ jobs:
           python -m tests.ci_rag_smoke
 
       - name: macOS live gateway + harness API smoke
-        # macOS is CyClaw's stated primary platform (CLAUDE.md), but unlike
-        # Windows (below) and Linux (verify-skills' CyClaw-Sandbox matrix
-        # leg), nothing here ever boots gate.py + harness.server together and
-        # proves they answer a real request on this OS -- the macOS test leg
-        # otherwise only runs the fsconnect-specific integration tests above.
-        # Deliberately a SMALLER check set than windows-smoke.ps1's 22 (health
-        # + soul auth gate + harness status/console only, not the full session
-        # lifecycle / ops surface) -- closing the "never boots" gap first; a
-        # follow-up can extend parity once this is proven stable.
+        # macOS is CyClaw's stated primary platform (CLAUDE.md). This step
+        # boots mock-ollama + gate.py + harness.server, then runs the Darwin
+        # twin of windows-smoke.ps1 (macos-smoke.sh) for the same 22-check
+        # live-API contract. Isolated CYCLAW_HOME so the session residue
+        # (title macos-smoke) never touches the runner's real home.
         if: runner.os == 'macOS'
         shell: bash
         env:
@@ -644,16 +640,15 @@ jobs:
           CYCLAW_HOME: ${{ runner.temp }}/cyclaw-runtime-home
           CYCLAW_HARNESS_HOST: 127.0.0.1
           CYCLAW_HARNESS_PORT: '8790'
+          PORT: '8787'
+          HARNESS_PORT: '8790'
+          PYTHON: python
         run: |
           set -uo pipefail
           RUNTIME_DIR="$RUNNER_TEMP/cyclaw-macos-live-smoke"
           mkdir -p "$RUNTIME_DIR" "$CYCLAW_HOME"
-          FAILURES=0
           PIDS=()
           LOGS=()
-
-          pass() { echo "  PASS  $1"; }
-          fail() { echo "  FAIL  $1"; FAILURES=$((FAILURES + 1)); }
 
           # SIGTERM, wait for the process to actually exit, escalate to
           # SIGKILL if it lingers -- same pattern as
@@ -732,53 +727,7 @@ jobs:
           wait_for_endpoint "harness" "http://127.0.0.1:8790/api/status" "$HARNESS_PID" || { on_failure; exit 1; }
 
           echo "=== CyClaw macOS live smoke (http://127.0.0.1:8787, http://127.0.0.1:8790) ==="
-
-          # 1. GET /health — index_ready + graph_ready true
-          if health="$(curl -sf http://127.0.0.1:8787/health)" \
-            && [ "$(echo "$health" | jq -r '.index_ready and .graph_ready')" = "true" ]; then
-            pass "GET /health ($health)"
-          else
-            fail "GET /health unexpected: ${health:-<curl failed>}"
-          fi
-
-          # 2. GET /soul — unauthenticated must be rejected (API-key gated, PR #249)
-          soul_unauth_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/soul)"
-          if [ "$soul_unauth_status" = "401" ]; then
-            pass "GET /soul rejects unauthenticated (HTTP 401)"
-          else
-            fail "GET /soul unauth HTTP $soul_unauth_status (expected 401)"
-          fi
-
-          # 3. GET /soul — authenticated returns the soul payload
-          if soul="$(curl -sf -H "Authorization: Bearer $CYCLAW_API_KEY" http://127.0.0.1:8787/soul)" \
-            && [ "$(echo "$soul" | jq -r '.version // empty')" != "" ]; then
-            pass "GET /soul authed (version=$(echo "$soul" | jq -r '.version'))"
-          else
-            fail "GET /soul authed unexpected: ${soul:-<curl failed>}"
-          fi
-
-          # 4. GET /api/status — harness header pills (model, provider)
-          if status="$(curl -sf http://127.0.0.1:8790/api/status)" \
-            && [ "$(echo "$status" | jq -r '.model // empty')" != "" ] \
-            && [ "$(echo "$status" | jq -r '.provider // empty')" != "" ]; then
-            pass "GET /api/status (model=$(echo "$status" | jq -r '.model'), provider=$(echo "$status" | jq -r '.provider'))"
-          else
-            fail "GET /api/status unexpected: ${status:-<curl failed>}"
-          fi
-
-          # 5. GET / — harness console served
-          console_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8790/)"
-          if [ "$console_status" = "200" ]; then
-            pass "GET / (harness console, HTTP 200)"
-          else
-            fail "GET / (harness console) HTTP $console_status (expected 200)"
-          fi
-
-          echo ""
-          if [ "$FAILURES" -eq 0 ]; then
-            echo "[smoke] All macOS live checks passed."
-          else
-            echo "[smoke] $FAILURES macOS live check(s) FAILED."
+          if ! bash "$GITHUB_WORKSPACE/.claude/skills/CyClaw-Sandbox/macos-smoke.sh"; then
             on_failure
             exit 1
           fi

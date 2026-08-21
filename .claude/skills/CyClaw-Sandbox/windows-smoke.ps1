@@ -18,6 +18,13 @@
 # /ops/* endpoints, only /ops/fsconnect's "status" action is exercised below
 # (check 22). /ops/sync, /ops/agentic, and /ops/sqlconnect are NOT yet
 # covered by this script.
+#
+# Privacy (cyclaw-advisor): loopback-only; CYCLAW_API_KEY is never printed;
+# queries are hashed in the audit log (never raw); /api/agent/run and
+# .../decision are auth-gate-only (no git write). Hits a live harness, so a
+# session titled "windows-smoke" is written into whatever CYCLAW_HOME the
+# running server uses — isolate CYCLAW_HOME in CI; operators accept residue
+# against their own running console. Advisory only, not licensed counsel.
 
 param(
     [int]$Port = 8787,
