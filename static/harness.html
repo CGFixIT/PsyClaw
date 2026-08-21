@@ -836,7 +836,10 @@ async function runSlash(line) {
           // the operator quoted it.
           const secret = rest.slice(2).join(' ');
           const r = await api('/api/keys', 'POST', { keys: { [name]: secret } });
-          sys('saved: ' + r.written.join(', ') + '  ->  ' + r.env_file);
+          // POST /api/keys returns the destination as `path` (write_keys);
+          // `env_file` is the GET-only spelling. Reading the wrong one here
+          // printed "-> undefined" on every successful save.
+          sys('saved: ' + r.written.join(', ') + '  ->  ' + r.path);
           if (r.restart_required)
             sys('restart gate.py to load it: nothing in CyClaw reads .env at runtime, ' +
                 'your shell sources it (see docs/HARNESS_API_KEYS.md)');
