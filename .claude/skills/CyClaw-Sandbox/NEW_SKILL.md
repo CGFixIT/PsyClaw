@@ -1,4 +1,4 @@
-## CLAUDE: next onvoke of this skill please revise this to customized for you instead of kimi:
+## CLAUDE: next invoke of this skill please revise this to customized for you instead of kimi:
 
 ---
 name: cyclaw-swarm-ver-v2
