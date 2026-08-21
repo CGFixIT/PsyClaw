@@ -338,3 +338,11 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
         # trail couldn't be persisted. Degrade loudly to the app log instead
         # of raising; the caller still gets its answer.
         logger.warning("audit_log write failed for %s: %s", log_path, exc)
+    # Derived Numbat NDJSON projection (top-level numbat: block, shipped
+    # enabled). audit.jsonl stays authoritative; the projection is fail-soft
+    # and independent. Lazy import: utils/numbat_emitter.py imports _anchor
+    # and _get_config from THIS module, so a top-level import would be
+    # circular; keeping it inside the call also means gate.py/graph.py gain
+    # no import-time numbat surface (I6 hygiene).
+    from utils.numbat_emitter import project_audit_record
+    project_audit_record(record, cfg=cfg)

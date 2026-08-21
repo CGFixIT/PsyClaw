@@ -174,6 +174,10 @@ def test_executor_emits_command_exec(tmp_path: Path, numbat_cfg: tuple[str, Path
     )
     assert report.ok
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    # The mainline audit trail now projects into the same file
+    # (artifact_type "cyclaw_audit_jsonl"); this test asserts the executor's
+    # action-plane records, so exclude the audit projection.
+    records = [r for r in records if r["evidence"]["artifact_type"] != "cyclaw_audit_jsonl"]
     assert len(records) == 2
     assert records[0]["event_type"] == "command.exec"
     assert records[0]["tool_name"] == "executor"
