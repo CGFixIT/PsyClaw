@@ -61,6 +61,15 @@ def test_topic_with_braces_does_not_crash(tmp_path: Path) -> None:
     assert "Write exactly one X status" in sent
 
 
+def test_non_utf8_topic_file_refuses(tmp_path: Path) -> None:
+    cfg_path = _cfg(tmp_path)
+    (tmp_path / "topic.txt").write_bytes(b"\xff\xfeS\x00")
+    cfg = load_opentweet_config(cfg_path)
+    with pytest.raises(OpenTweetRefused) as exc:
+        post_once(cfg, dry_run=True)
+    assert exc.value.details["gate"] == "topic_file"
+
+
 def test_empty_topic_file_refuses(tmp_path: Path) -> None:
     cfg_path = _cfg(tmp_path)
     (tmp_path / "topic.txt").write_text("  \n", encoding="utf-8")
@@ -124,6 +133,45 @@ def test_dry_run_does_not_call_opentweet(tmp_path: Path) -> None:
     assert result["mode"] == "draft"
     assert "text" not in result
     assert len(result["text_hash"]) == 64
+
+
+def test_schedule_sends_future_iso_not_publish_now(tmp_path: Path) -> None:
+    cfg = load_opentweet_config(_cfg(tmp_path, schedule_enabled=True, weekday=1, schedule_slot="09:00"))
+    now = datetime(2026, 8, 24, 6, 0, tzinfo=UTC)
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()),
+        patch(
+            "opentweet.client.get_me",
+            return_value={
+                "authenticated": True,
+                "subscription": {"has_access": True},
+                "limits": {"can_post": True},
+            },
+        ),
+        patch("opentweet.client.create_post", return_value={"success": True, "posts": [{"id": "p2"}]}) as create,
+    ):
+        result = post_once(cfg, schedule=True, now=now)
+    assert result["mode"] == "scheduled"
+    kwargs = create.call_args.kwargs
+    assert kwargs.get("scheduled_date")
+    assert "publish_now" not in kwargs
+    assert kwargs["scheduled_date"].startswith("2026-08-24T09:00:00")
+
+
+def test_limits_null_refuses_schedule(tmp_path: Path) -> None:
+    cfg = load_opentweet_config(_cfg(tmp_path, schedule_enabled=True))
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()),
+        patch(
+            "opentweet.client.get_me",
+            return_value={"authenticated": True, "subscription": {"has_access": True}, "limits": None},
+        ),
+        patch("opentweet.client.create_post") as create,
+    ):
+        with pytest.raises(OpenTweetRefused) as exc:
+            post_once(cfg, schedule=True)
+    assert exc.value.details["gate"] == "subscription"
+    create.assert_not_called()
 
 
 def test_success_does_not_include_raw_text(tmp_path: Path) -> None:

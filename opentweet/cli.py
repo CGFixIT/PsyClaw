@@ -145,7 +145,7 @@ def cmd_post(args: argparse.Namespace) -> int:
     if args.schedule and not cfg.schedule_enabled:
         _err("--schedule requires opentweet.schedule_enabled: true")
         return EXIT_ENV
-    want_schedule = bool(cfg.schedule_enabled)
+    want_schedule = bool(args.schedule) and cfg.schedule_enabled
     try:
         result = post_once(
             cfg,
@@ -175,7 +175,7 @@ def cmd_post(args: argparse.Namespace) -> int:
 
 def _post_inner_argv(cfg: OpenTweetConfig, config_path: str) -> list[str]:
     topic_file = str(Path(cfg.topic_file).expanduser())
-    return [
+    argv = [
         launchd_plist.python_executable() if platform.system() != "Windows" else win_schtasks.python_executable(),
         "-m",
         "opentweet.cli",
@@ -185,6 +185,9 @@ def _post_inner_argv(cfg: OpenTweetConfig, config_path: str) -> list[str]:
         "--topic-file",
         topic_file,
     ]
+    if cfg.schedule_enabled:
+        argv.append("--schedule")
+    return argv
 
 
 def cmd_schedule_plist(args: argparse.Namespace) -> int:

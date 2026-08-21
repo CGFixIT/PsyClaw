@@ -40,6 +40,23 @@ def test_schedule_flag_requires_config(tmp_path: Path) -> None:
     assert main(["--config", cp, "post", "--schedule", "--dry-run"]) == EXIT_ENV
 
 
+def test_post_without_schedule_flag_stays_draft(tmp_path: Path) -> None:
+    topic = tmp_path / "t.txt"
+    topic.write_text("soul", encoding="utf-8")
+    cp = _write(tmp_path, {"enabled": True, "topic_file": str(topic), "schedule_enabled": True})
+    fake = {
+        "ok": True,
+        "mode": "draft",
+        "text_hash": "a" * 64,
+        "text_len": 10,
+        "dry_run": True,
+        "opentweet_id": None,
+    }
+    with patch("opentweet.cli.post_once", return_value=fake) as once:
+        assert main(["--config", cp, "post", "--dry-run"]) == EXIT_OK
+    assert once.call_args.kwargs.get("schedule") is False
+
+
 def test_dry_run_skips_opentweet_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
     topic = tmp_path / "t.txt"
@@ -116,6 +133,20 @@ def test_schedule_task_non_windows_refuses(tmp_path: Path) -> None:
     cp = _write(tmp_path, {"enabled": True, "topic_file": str(topic)})
     with patch("opentweet.cli.platform.system", return_value="Linux"):
         assert main(["--config", cp, "schedule-task"]) == EXIT_ENV
+
+
+def test_schedule_task_passes_schedule_flag_when_enabled(tmp_path: Path) -> None:
+    topic = tmp_path / "t.txt"
+    topic.write_text("x", encoding="utf-8")
+    cp = _write(tmp_path, {"enabled": True, "topic_file": str(topic), "schedule_enabled": True})
+    home = tmp_path / "home"
+    with (
+        patch("opentweet.cli.platform.system", return_value="Windows"),
+        patch("utils.win_schtasks.Path.home", return_value=home),
+    ):
+        assert main(["--config", cp, "schedule-task"]) == EXIT_OK
+    cmd = (home / ".CyClaw" / "tasks" / "CyClaw-opentweet.cmd").read_text(encoding="utf-8")
+    assert "--schedule" in cmd
 
 
 def test_schedule_task_wraps_credman(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

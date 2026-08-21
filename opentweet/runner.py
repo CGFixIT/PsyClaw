@@ -56,7 +56,7 @@ def read_topic(cfg: OpenTweetConfig, *, topic: str | None, topic_file: str | Non
         path = Path(path_s).expanduser()
         try:
             raw = path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             raise OpenTweetRefused(
                 "topic file could not be read",
                 details={"gate": "topic_file", "error_type": type(exc).__name__},
