@@ -707,7 +707,7 @@ non-blocking `numbat-rules.yml` job. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (~170 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (181 `test_*.py` files, auto-collected by pytest).
 
 ---
 
