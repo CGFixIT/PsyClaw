@@ -729,6 +729,10 @@ _fill_browser() {
   fi
   secret_file="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fillkey.XXXXXX")"
   scpt="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fill.XXXXXX")"
+  # Cleartext key lives in secret_file until osascript reads it below; cover
+  # that window so an interrupted run doesn't leave it behind (same trap
+  # idiom as the TTY-echo restore above).
+  trap 'rm -f "$secret_file" "$scpt"' EXIT
   umask 077
   printf '%s' "$_api_value" > "$secret_file"
   chmod 600 "$secret_file"
@@ -817,6 +821,7 @@ APPLESCRIPT
     warn "browser fill failed (Safari/Chrome must allow JavaScript from Apple Events). Paste from the clipboard into the key field."
   fi
   rm -f "$secret_file" "$scpt"
+  trap - EXIT
 }
 
 # -- prompts ------------------------------------------------------------------
