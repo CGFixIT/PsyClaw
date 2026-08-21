@@ -734,35 +734,45 @@ jobs:
           echo "=== CyClaw macOS live smoke (http://127.0.0.1:8787, http://127.0.0.1:8790) ==="
 
           # 1. GET /health — index_ready + graph_ready true
-          health="$(curl -sf http://127.0.0.1:8787/health)" && \
-            [ "$(echo "$health" | jq -r '.index_ready and .graph_ready')" = "true" ] \
-            && pass "GET /health ($health)" \
-            || fail "GET /health unexpected: $health"
+          if health="$(curl -sf http://127.0.0.1:8787/health)" \
+            && [ "$(echo "$health" | jq -r '.index_ready and .graph_ready')" = "true" ]; then
+            pass "GET /health ($health)"
+          else
+            fail "GET /health unexpected: ${health:-<curl failed>}"
+          fi
 
           # 2. GET /soul — unauthenticated must be rejected (API-key gated, PR #249)
           soul_unauth_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/soul)"
-          [ "$soul_unauth_status" = "401" ] \
-            && pass "GET /soul rejects unauthenticated (HTTP 401)" \
-            || fail "GET /soul unauth HTTP $soul_unauth_status (expected 401)"
+          if [ "$soul_unauth_status" = "401" ]; then
+            pass "GET /soul rejects unauthenticated (HTTP 401)"
+          else
+            fail "GET /soul unauth HTTP $soul_unauth_status (expected 401)"
+          fi
 
           # 3. GET /soul — authenticated returns the soul payload
-          soul="$(curl -sf -H "Authorization: Bearer $CYCLAW_API_KEY" http://127.0.0.1:8787/soul)" && \
-            [ "$(echo "$soul" | jq -r '.version // empty')" != "" ] \
-            && pass "GET /soul authed (version=$(echo "$soul" | jq -r '.version'))" \
-            || fail "GET /soul authed unexpected: $soul"
+          if soul="$(curl -sf -H "Authorization: Bearer $CYCLAW_API_KEY" http://127.0.0.1:8787/soul)" \
+            && [ "$(echo "$soul" | jq -r '.version // empty')" != "" ]; then
+            pass "GET /soul authed (version=$(echo "$soul" | jq -r '.version'))"
+          else
+            fail "GET /soul authed unexpected: ${soul:-<curl failed>}"
+          fi
 
           # 4. GET /api/status — harness header pills (model, provider)
-          status="$(curl -sf http://127.0.0.1:8790/api/status)" && \
-            [ "$(echo "$status" | jq -r '.model // empty')" != "" ] \
-            && [ "$(echo "$status" | jq -r '.provider // empty')" != "" ] \
-            && pass "GET /api/status (model=$(echo "$status" | jq -r '.model'), provider=$(echo "$status" | jq -r '.provider'))" \
-            || fail "GET /api/status unexpected: $status"
+          if status="$(curl -sf http://127.0.0.1:8790/api/status)" \
+            && [ "$(echo "$status" | jq -r '.model // empty')" != "" ] \
+            && [ "$(echo "$status" | jq -r '.provider // empty')" != "" ]; then
+            pass "GET /api/status (model=$(echo "$status" | jq -r '.model'), provider=$(echo "$status" | jq -r '.provider'))"
+          else
+            fail "GET /api/status unexpected: ${status:-<curl failed>}"
+          fi
 
           # 5. GET / — harness console served
           console_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8790/)"
-          [ "$console_status" = "200" ] \
-            && pass "GET / (harness console, HTTP 200)" \
-            || fail "GET / (harness console) HTTP $console_status (expected 200)"
+          if [ "$console_status" = "200" ]; then
+            pass "GET / (harness console, HTTP 200)"
+          else
+            fail "GET / (harness console) HTTP $console_status (expected 200)"
+          fi
 
           echo ""
           if [ "$FAILURES" -eq 0 ]; then
