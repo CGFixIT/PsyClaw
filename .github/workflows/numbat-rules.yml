@@ -61,6 +61,11 @@ jobs:
         env:
           NUMBAT: /usr/local/bin/numbat
           GROK_API_KEY: dummy
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
+          # --noconftest: tests/conftest.py imports retrieval.hybrid_search
+          # (rank_bm25 / torch). This job only installs pytest+pyyaml.
           python -m pip install --disable-pip-version-check pytest==9.1.1 pyyaml==6.0.3
-          python -m pytest tests/test_numbat_rules_fixtures.py::test_executor_jail_live_events_have_zero_rule_hits -q --tb=short
+          python -m pytest --noconftest \
+            tests/test_numbat_rules_fixtures.py::test_executor_jail_live_events_have_zero_rule_hits \
+            -q --tb=short
