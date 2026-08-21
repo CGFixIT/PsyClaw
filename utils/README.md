@@ -22,6 +22,8 @@ modules"; this file groups them by concern.
 | `gen_cert.py` | `cyclaw-gen-cert` console script — wraps `openssl req -x509` to write a self-signed TLS cert with hostname/LAN SAN (Stage 4 of `docs/AUTHENTICATION_DESIGN.md`); no new runtime dependency. |
 | `telemetry_kill.py` | Canonical telemetry-kill env mapping. Stdlib-only; must be applied **before** heavy imports (`invariant-guard` G1). |
 | `guardrail_bridge.py` | Inversion shim: the only module through which `graph.py` reaches `guardrails/` (I6). Returns `None` for a disabled rail. |
+| `external_pre_hook.py` | Synchronous pre-action hook runner behind the `pre_action_hook_grok`/`pre_action_hook_claude` graph nodes: runs the configured command before any Grok/Claude call; exit 0 allows, exit 2 denies, anything else fails closed. |
+| `numbat_emitter.py` | Numbat NDJSON dual-write emitter (`logs/numbat-events.ndjsonl`): I6-clean forensic projection of executor/ops_runner/real_repo_loop/fsconnect/sqlconnect action records. Never raises; audit.jsonl stays authoritative. |
 
 ## Soul / audit / errors
 
@@ -31,6 +33,7 @@ modules"; this file groups them by concern.
 | `personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL`. |
 | `logger.py` | Audit JSONL: SHA-256 query hashing, recursive PII redaction. Raw query text is never persisted. |
 | `errors.py` | Typed exception hierarchy rooted at `RAGError` (`.code`/`.message`/`.details`). Never raise bare `Exception`. |
+| `spend.py` | Append-only Grok/Claude token ledger (`logs/spend.jsonl`, `logging.spend_file`). Tokens are ground truth; dollars derived at read time by `metrics.py`. Separate stream from `audit.jsonl`; never persists query/prompt content. |
 
 ## Serving / ops
 
@@ -45,6 +48,7 @@ modules"; this file groups them by concern.
 | `agent_identity.py` | Driver-agnostic committer identity + branch-prefix allowlist for all agent write surfaces. |
 | `repo_paths.py` | Stdlib-only mirror of `agentic`'s repo-relative path-safety rule (no `..`, no absolute/drive-qualified path, no leading `-`), shared by `harness` and `ops_runner` so they can reject the same escapes without importing `agentic` (I6). |
 | `selftest.py` | Shared self-test plumbing used by the out-of-band subsystems' `test` subcommands. |
+| `mcp_manifest.py` | Pure compare/verify layer for the committed MCP tools manifest pin: fingerprints the registered `TOOLS` list so drift against `mcp_manifest.json` fails closed in `mcp_hybrid_server.py`. |
 
 ## Related
 

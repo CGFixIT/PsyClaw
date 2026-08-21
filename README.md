@@ -477,8 +477,9 @@ python -m harness.server                             # → http://127.0.0.1:8790
 ```
 
 **The `cyclaw-*` short names need a self-install.** `cyclaw-server`,
-`cyclaw-harness`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`, and
-`cyclaw-clear-cache` are `[project.scripts]` console scripts, and pip writes
+`cyclaw-harness`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`,
+`cyclaw-clear-cache`, `cyclaw-user`, and `cyclaw-gen-cert` are
+`[project.scripts]` console scripts, and pip writes
 those shims only when the CyClaw *project itself* is installed. The install
 steps above install `requirements.txt` — a third-party pin list with no
 self-install line — so those names are `command not found` after them. Add
@@ -1043,9 +1044,12 @@ into `approve`.
 
 ### Security posture
 
-- **Diff-scope gate.** A candidate that writes into `tests/`, `conftest.py`,
-  `.github/`, `.git/`, `pyproject.toml`, `setup.cfg`, `pytest.ini`, or
-  `.claude/skills/` is refused outright — those are the files that judge the
+- **Diff-scope gate.** A candidate that writes into any of `config.yaml`'s
+  `agentic.deepagent_github.protected_write_paths` — shipped as `tests/`,
+  `conftest.py`, `.github/`, `.git/`, `pyproject.toml`, `setup.cfg`,
+  `pytest.ini`, `.ruff.toml`, `ruff.toml`, `tox.ini`, `noxfile.py`,
+  `.claude/`, `.codex/`, `config.yaml`, and `CLAUDE.md` — is refused
+  outright — those are the files that judge the
   candidate's own acceptance, and rewriting them is the classic reward-hacking
   failure mode of a make-the-checks-pass loop. Also budget-capped
   (`max_write_budget_bytes`, 100000 bytes per iteration).
@@ -1065,7 +1069,8 @@ into `approve`.
   the env scrub cannot stop a determined test file from opening a raw socket. See
   `agentic/executor/runner.py`'s own statement of its limits.
 - **The console sends check-profile *names*, never argv.** `harness/agent_policy.py`
-  resolves them against a fixed allow-list (`pytest`, `ruff`); a request body that
+  resolves them against a fixed allow-list (`pytest`, `ruff`, `invariant-guard`,
+  `config-guard`); a request body that
   could carry an argv would make an authenticated route a remote shell.
 - **`push_branch` passes no credential.** Its four-name env allowlist deliberately
   excludes `GH_TOKEN`/`GITHUB_TOKEN`, because that environment is shared with the

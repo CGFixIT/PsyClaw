@@ -31,7 +31,7 @@ lazy-import this package.
 | `models.py` | `Fact`, `Episode`, `MemoryProposal` |
 | `policy.py` | Reason required, size/tag limits, injection scan |
 | `retrieval_adapter.py` | Optional FTS fusion into hybrid search |
-| `mirror.py` | Markdown export helpers |
+| `mirror.py` | `/memory/status` dict + `GET /query/export/html` builder |
 | `consolidation.py` | Unimplemented stub |
 | `selftest.py` | `python -m memory.selftest` |
 

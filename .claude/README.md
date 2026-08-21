@@ -44,7 +44,8 @@ All `*-refactor` skills follow the same seven-step cycle:
 ```
 .claude/
 ├── README.md              ← this file
-├── settings.json          ← project permissions and hooks
+├── settings.json          ← project permissions, hooks, and plugin marketplace
+├── ponytail-marketplace.json ← local plugin marketplace (see settings.json extraKnownMarketplaces)
 ├── skills/                ← project-specific skills (see CLAUDE.md for the full list)
 │   ├── invariant-guard/   ← SKILL.md + check_invariants.py + verify.sh
 │   ├── architecture-refactor/
@@ -54,7 +55,12 @@ All `*-refactor` skills follow the same seven-step cycle:
 ├── patterns/              ← reusable behavioral patterns (01–09)
 ├── utility-prompts/       ← coordinator / session-title / tool-summary / next-action
 ├── commands/              ← reference command docs
-├── hooks/                 ← SessionStart / PreCompact / SessionEnd scripts
+├── tools/                 ← tool-usage reference docs
+├── hooks/                 ← session-start-sync-check.sh only; on disk but NOT
+│                            registered in settings.json. The live SessionStart /
+│                            PreCompact / SessionEnd / UserPromptSubmit hooks are
+│                            inline commands in settings.json pointing into .claude/skills/*
+├── memory/                ← legacy memory location (live memory: docs/memories/)
 └── rules/                 ← project-specific rules (scoped by paths:)
 ```
 
@@ -68,7 +74,8 @@ utilities shipped by Claude Code itself or by installed marketplaces).
 
 This directory intentionally vendors only the **project** scope — every skill
 in `CLAUDE.md` §9's tables already lives under `.claude/skills/` here, one
-folder per `name:` in its `SKILL.md` frontmatter. User-scope and built-in
+folder per skill, named for the `name:` in its `SKILL.md` frontmatter — with
+one exception: `CyClaw-Sandbox/` declares `name: cyclaw-swarm-verification`. User-scope and built-in
 skills are **not** copied in, for three concrete reasons:
 
 1. **YAGNI / no current caller.** No CyClaw code path or documented workflow
@@ -157,7 +164,10 @@ repo:
 
 ## Key Conventions
 
-- Skill folders: `kebab-case`, matching `name:` in SKILL.md frontmatter
+- Skill folders match the `name:` in SKILL.md frontmatter. Most are
+  `kebab-case`; three ship mixed-case by convention (`CyClaw-Optimize`,
+  `CyClaw-Sandbox`, `OTel-Hardening`), and `CyClaw-Sandbox/`'s frontmatter
+  declares `name: cyclaw-swarm-verification`
 - All SKILL.md files use YAML frontmatter: `name:`, `description:`
 - Refactor progress is tracked in `/tmp/refactor-CyClaw.md`
 - Git identity must be set before commits (driver-agnostic defaults from

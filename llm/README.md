@@ -36,5 +36,6 @@ enforced in `gate.py` + `graph.py`, not here.
 
 - Provider gating and per-query selection (`online_provider`): `graph.py`,
   repo-root `INVARIANTS.md`
-- Ollama context-length footgun on "CyClaw hangs" reports: `Readme.md`
-  troubleshooting
+- Ollama context-length footgun on "CyClaw hangs" reports:
+  [`setup-guide.md`](../setup-guide.md#troubleshooting) (the `num_ctx`
+  headroom formula lives in the same doc)

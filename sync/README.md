@@ -1,7 +1,8 @@
 # `sync/` — out-of-band Dropbox corpus sync
 
-Optional rclone-bisync wrapper that keeps `data/corpus/` in step with a
-Dropbox folder. Runs **strictly out-of-band** (`python -m sync.cli`);
+Optional rclone wrapper that keeps `data/corpus/` in step with a Dropbox
+folder. Ships one-way (`direction: pull` → `rclone copy`, never deletes);
+`direction: bisync` is opt-in and discouraged. Runs **strictly out-of-band** (`python -m sync.cli`);
 `gate.py`, `graph.py`, and `mcp_hybrid_server.py` never import it, and it
 never imports them (invariant I6). The core server reaches it only through
 the `/ops/sync` subprocess shim (`utils/ops_runner.py`).
@@ -17,13 +18,14 @@ authority; this file is the in-tree map.
 | `cli.py` | Entry point: `setup` / `sync` / `test` / `schedule` / `unschedule` / `status`. `--dry-run` previews; `--resync` rebuilds the bisync baseline. |
 | `config.py` | Loads the `sync:` block of `config.yaml`; validation and defaults. |
 | `filters.py` | Generates the rclone filter file (what syncs, what never does). |
-| `runner.py` | Drives `rclone bisync` as an argv-list subprocess with timeouts. |
+| `runner.py` | Drives `rclone copy` (pull, default) or `rclone bisync` (opt-in) as an argv-list subprocess with timeouts. |
 | `scheduler.py` | Scheduled-job backends: cron (default), launchd (Darwin-only, opt-in via `sync.scheduler_backend`, writes a plist but never auto-loads it), Windows Task Scheduler. |
 | `selftest.py` | Pre-flight checks behind `sync test`. |
 
 ## Exit codes (an API — keep them)
 
-`0` success/no change · `2` operation failed · `3` env/config problem ·
+`0` success/no change · `1` safety fuse tripped (`--max-delete` /
+`--max-transfer` abort) · `2` operation failed · `3` env/config problem ·
 `10` corpus changed → caller should reindex (`python -m retrieval.indexer`).
 
 ## Related

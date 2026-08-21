@@ -15,7 +15,7 @@ that document is the authority; this file is the in-tree map.
 
 | Module | Role |
 |---|---|
-| `cli.py` | Entry point: `status` / `test` / `send` (T1) / `poll` (T2) plus the launchd generators `poll-plist` / `health-plist` (Darwin-only; chain the Keychain wrapper so tokens never land in a plist). |
+| `cli.py` | Entry point: `status` / `test` / `send` (T1) / `poll` (T2) plus the scheduled-job generators `poll-plist` / `health-plist` (Darwin launchd) and `poll-task` / `health-task` (Windows Task Scheduler) — all generate-only, never load or register, and chain the OS credential-store wrapper so tokens never land in the artifact. |
 | `config.py` | Loads the `telegram:` block; `bot_token_env` names the env var holding the token — the token itself never appears in config. |
 | `client.py` | Bot API HTTP client (outbound `sendMessage`, long-poll `getUpdates`); ignores ambient `HTTP(S)_PROXY`. |
 | `runner.py` | `send_notify` (T1) and `poll_forever` (T2) orchestration, allowlist enforcement. |

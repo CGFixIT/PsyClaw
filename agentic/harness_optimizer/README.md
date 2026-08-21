@@ -3,7 +3,9 @@
 Opt-in scaffold under the agentic layer. Ships **disabled**
 (`agentic.harness_optimizer.enabled: false`). It scores fixture-based harness
 runs, proposes candidate artifacts in a jailed workspace, and records
-human-gated accept/reject decisions. It does **not** call GitHub, spawn a host
+human-gated accept/reject decisions. It never **writes** to GitHub
+(`runners/github_coding_runner.fetch_github_task_context` does make read-only
+GitHub context calls through `agentic.context`), does not spawn a host
 shell, or import `gate.py` / `graph.py` / `mcp_hybrid_server.py` (I6).
 
 Accept still requires a human when
@@ -13,8 +15,8 @@ Accept still requires a human when
 
 | Module | Role |
 |---|---|
-| `core.py` | Experiment / variant / scorecard types and `decide_candidate` |
-| `governance.py` | Injection + visible-case-hardcoding inspection |
+| `core.py` | Surface / experiment / variant / run-report / decision types and `decide_candidate` (`Scorecard` lives in `scoring.py`) |
+| `governance.py` | Injection, visible-case-hardcoding, and code-shape (`scan_code_shape`) inspection |
 | `proposer.py` | Build a proposer workspace (`current/`, holdout hidden) |
 | `patching.py` | Propose / apply a candidate artifact |
 | `scoring.py` | Case results → scorecard / run report |

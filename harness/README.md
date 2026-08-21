@@ -33,7 +33,7 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | `config.py` | Home layout + read-only view of repo `config.yaml` |
 | `sessions.py` | Per-session JSON + token tallies |
 | `ollama.py` | Local OpenAI-compatible chat client |
-| `prompts.py` | System prompt (repo skills + optional soul + optional session goal + optional `/web` extract) |
+| `prompts.py` | System prompt (repo skills + optional soul + optional session goal + optional `/web` extract + optional `/memory` operator notes) |
 | `registry_view.py` | Read-only merge of skills / tools / connectors |
 | `tools_view.py` | Wired-tool inventory + ASCII diagram (`/tools`) |
 | `skills_view.py` | Wired-skill inventory + ASCII diagram (`/skills`) |
