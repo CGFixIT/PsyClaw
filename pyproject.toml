@@ -200,7 +200,7 @@ source = ["gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_s
 # exists. Re-include them once Windows coverage is wired. "harness" here is paired
 # with --cov=harness in ci.yml and python-package-conda.yml (dep-guard D10 checks
 # the pairing); tests/test_harness.py measured it at 85% standalone (2026-07-22).
-omit = ["tests/*", "*/test_*", "*/__pycache__/*", "agentic/fsconnect/*", "agentic/sqlconnect/*"]
+omit = ["tests/*", "*/test_*", "*/__pycache__/*", "agentic/fsconnect/*", "agentic/sqlconnect/*", "agentic/vendor/*"]
 
 [tool.coverage.report]
 fail_under = 80
@@ -214,7 +214,7 @@ exclude_also = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-exclude = [".claude"]
+exclude = [".claude", "agentic/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "C4", "UP", "S"]

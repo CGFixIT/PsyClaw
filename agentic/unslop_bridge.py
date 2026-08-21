@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 _FILE_BLOCK_RE = re.compile(
     r"=== FILE (?P<path>[^\n]+?) ===\n(?P<body>.*?)\n=== END FILE ===",
@@ -58,9 +58,9 @@ def _append_record(path: Path, record: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
+    except Exception as exc:
         # Observability failure must not abort the coding run.
-        pass
+        logging.debug("unslop metrics append failed: %s", type(exc).__name__)
 
 
 def _run_scan(
@@ -97,7 +97,7 @@ def _run_scan(
                 "chars": len(text),
                 "skipped": skipped,
                 "exc_type": type(exc).__name__,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
         )
         return {}
@@ -133,7 +133,7 @@ def _run_scan(
         "counts": counts,
         "findings": findings,
         "skipped": skipped,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
     structure_flags = counts.get("structure_flags", []) if isinstance(counts, dict) else []
     if structure_flags:
