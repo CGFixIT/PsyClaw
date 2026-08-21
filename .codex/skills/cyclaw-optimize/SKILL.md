@@ -18,9 +18,9 @@ You read code for leverage: performance, security, financial risk / oversight
 in assumptions, auditability, and maintainability.
 
 **What this skill does:** drives a time-boxed scan of the **main** branch,
-groups findings into a **small set of reviewable PR-sized chunks** (about 1–4
-when several independent fixes earn their keep — **a guideline, not a quota**;
-do not invent low-value PRs to hit a number), and opens one focused pull request
+produces **2–4 evidence-backed, PR-shaped findings** when that many survive
+deduplication and review, groups them into a small set of reviewable chunks, and
+opens one focused pull request
 per kept chunk on a branch cut from the **topology base** Step 3.5 assigns —
 never committing to `main` directly. A human decides when to merge/close.
 Prefer merging this session's drafts **lowest PR number → highest**, parent
@@ -85,7 +85,11 @@ structure):
 > into a small set of PR-sized chunks (only as many as earn a PR — not a fixed five). Cite real code — do not invent.
 
 You may keep reading code after the 4 minutes; the time-box only governs the
-initial sweep.
+initial sweep. Save the initial findings locally before editing, using a
+caller-provided path or an ignored `.codex/optimization-findings.md` file.
+Each saved finding must include the title, exact file/line evidence, root
+cause, impact, effort, proposed PR boundary, and verification plan. Do not put
+secrets, credentials, or raw scan output in the saved artifact.
 
 ### Step 2 — Dedup against open PRs (MCP) — do this BEFORE picking focus areas
 
@@ -104,11 +108,11 @@ mcp__github__list_pull_requests(owner="CGFixIT", repo="CyClaw", state="open")
 
 ### Step 3 — Select focus areas and announce them
 
-From the deduped findings, choose only the PR-sized chunks that clearly earn
-their keep. **Count is a guideline, not a target:** about 1–4 focused PRs is
-typical when several independent fixes are real; **one solid PR is better than
-four thin ones**, and zero is correct when nothing remains after dedup. Never
-split or invent work just to fill a slot. Each chunk = **1–2 major concepts OR
+From the deduped findings, choose **2–4 PR-shaped chunks** that clearly earn
+their keep. The requested range is a target, not permission to manufacture
+work: if fewer than two findings survive evidence, deduplication, or risk
+review, report the shortfall and stop. Never split one concern or pad the list
+with speculative refactors. Each chunk = **1–2 major concepts OR
 3–5 minor tasks**, cross-file/cross-concept where it adds value. State, in one
 line each, which section of code each PR will touch and why (the leverage:
 performance / security / financial-risk / auditability / maintainability).
@@ -228,9 +232,11 @@ you opened in order; if not, parent-first wins over number order). When a parent
 lands on `main` (often via squash), refresh each open child onto current
 `origin/main` (or retarget base to `main` after rebase) before merging the next.
 
-If, after scanning, no clear optimization opportunities remain (all covered by
-open PRs or out of scope), **confirm that briefly and stop** — do not
-manufacture low-value PRs.
+If, after scanning, fewer than two clear optimization opportunities remain
+(all covered by open PRs, out of scope, or unsupported by evidence), **confirm
+the shortfall briefly and stop** — do not manufacture low-value PRs. When two
+to four findings do survive, retain their local ledger and include a concise
+finding-to-PR map in each draft PR body so the review boundary is explicit.
 
 ---
 
@@ -379,3 +385,4 @@ high**, parent-before-child when stacked.
 - Feature freeze applies (`CLAUDE.md` §1) — the operative test is "does this polish the portfolio signal or fix a real defect?" New capabilities need explicit user justification first.
 - Never push directly to `main`; never force-push without sign-off.
 - Re-run `python3 .claude/skills/invariant-guard/check_invariants.py` before opening any PR that touches core files.
+
