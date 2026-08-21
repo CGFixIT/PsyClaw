@@ -136,10 +136,18 @@ def _usage_from_langchain_metadata(provider: str, usage_meta: Mapping[str, objec
 
 
 def _capture_http_usage(response: httpx.Response) -> None:
-    """Store vendor usage JSON. Never log the body."""
+    """Store vendor usage JSON. Never log the body.
+
+    httpx fires response event hooks before the body is read (`Client.send`
+    reads it only afterward), so `.json()` here needs an explicit `.read()`
+    first -- omitting it raises `ResponseNotRead` on every real request and
+    is silently swallowed by the except below, making this a no-op that only
+    "works" against a pre-read `httpx.Response(json=...)` test fixture.
+    """
     try:
         if response.status_code < 200 or response.status_code >= 300:
             return
+        response.read()
         data = response.json()
         usage = data.get("usage") if isinstance(data, dict) else None
         if isinstance(usage, dict):
