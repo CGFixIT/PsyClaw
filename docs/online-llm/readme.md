@@ -15,8 +15,10 @@ Both providers ship **enabled** in `config.yaml`, and `app.mode` ships
 `"hybrid"` (armed since 2026-08-07). The triple gate still applies per query:
 a provider only runs when CyClaw is in hybrid mode, that provider is enabled
 in `config.yaml`, the matching API key exists in the environment, and the
-user explicitly confirms the online send — no online call happens without
-that confirmation.
+user explicitly confirms the online send — no online **fallback/generation**
+call happens without that confirmation. (The one other online-touching path
+is the opt-in `/health` provider probe, `api.health_probe_external_providers`,
+which ships `false` — see "Quick Local Check" below.)
 
 ## API Keys
 
