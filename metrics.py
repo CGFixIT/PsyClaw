@@ -1,7 +1,11 @@
-"""RAG performance metrics — parses audit.jsonl.
+"""RAG performance metrics — parses audit.jsonl (and spend.jsonl).
 
 Usage:
    python metrics.py
+
+Also prints an offline Sequences section by joining hashed audit events to
+``source=query`` spend rows (issue #966). That detector is forensic/CLI only
+and is lazy-imported so ``GET /audit/summary`` does not load it.
 """
 
 # This process never imports gate.py, so without this it would inherit
@@ -544,8 +548,16 @@ def print_metrics(config_path: str = "config.yaml"):
     # section — and so "rate_unknown" cannot false-trip `unknown` assertions.
     spend_raw = cfg["logging"].get("spend_file")
     spend_summary = None
+    spend_events: list[dict] = []
     if isinstance(spend_raw, str) and spend_raw:
-        spend_summary = compute_spend(iter_spend(str(_resolve_config_path(spend_raw))))
+        spend_events = list(iter_spend(str(_resolve_config_path(spend_raw))))
+        spend_summary = compute_spend(spend_events)
+    # Lazy: gate.py imports summarize_audit from this module. Importing the
+    # detector at module top-level would load it into the gate process for
+    # GET /audit/summary, which is not a sequence policy point (#966).
+    from utils.sequence_detect import detect_sequences, format_sequences
+
+    seq_lines = format_sequences(detect_sequences(iter_events(audit_file), spend_events))
     if not summary["total_events"]:
         print("No audit events found.")
         if any(integrity.values()):
@@ -554,6 +566,10 @@ def print_metrics(config_path: str = "config.yaml"):
                 if count:
                     print(f"  {name}: {count}")
         _print_spend(spend_summary)
+        if seq_lines:
+            print()
+            for line in seq_lines:
+                print(line)
         return
     print(f"Total events: {summary['total_events']}")
     print("\nEvent breakdown:")
@@ -578,6 +594,10 @@ def print_metrics(config_path: str = "config.yaml"):
                 print(f"  {model}: {count}")
         print(f"\nOnline escalations (external LLM): {summary['online_escalated']}")
     _print_spend(spend_summary)
+    if seq_lines:
+        print()
+        for line in seq_lines:
+            print(line)
     # Deliberately OUTSIDE the `if summary["rag_query_count"]` block above. These
     # findings come from the out-of-band agentic context fetchers, so the audit log
     # that contains them typically has zero RAG queries -- nesting this section
