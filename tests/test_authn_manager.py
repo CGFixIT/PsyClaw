@@ -80,6 +80,63 @@ class TestBootstrap:
             manager.bootstrap_set_password(_GOOD_PASSWORD)
         assert manager.login(BOOTSTRAP_USERNAME, _GOOD_PASSWORD).username == BOOTSTRAP_USERNAME
 
+    def test_bootstrap_set_password_claim_loses_to_a_second_manager(self, tmp_path, monkeypatch):
+        """Two AuthManagers (gateway vs harness, or HTTP vs CLI) both see
+        pending. Username-only UPDATE let the later writer overwrite the
+        password and revoke the first session. The claim matches the pending
+        hash, so the loser is AuthBootstrapComplete and the first session
+        stays live.
+
+        Hashing is stubbed so this pins the SQL race, not scrypt cost.
+        """
+        monkeypatch.setattr(
+            "utils.authn.hash_pending_placeholder",
+            lambda: "pending$scrypt$placeholder",
+        )
+        monkeypatch.setattr(
+            "utils.authn.hash_password",
+            lambda password, salt=None: "scrypt$claimed$" + password.replace(" ", "_"),
+        )
+        monkeypatch.setattr(
+            "utils.authn.is_pending_password_record",
+            lambda rec: isinstance(rec, str) and rec.startswith("pending$"),
+        )
+        db_path = str(tmp_path / "claim.db")
+        first = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        second = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        other = "a different password entirely"
+        try:
+            assert first.bootstrap_if_empty() is True
+            won = first.bootstrap_set_password(_GOOD_PASSWORD)
+            with pytest.raises(AuthBootstrapComplete):
+                second.bootstrap_set_password(other)
+            row = first.conn.execute(first._sql_get_user, (BOOTSTRAP_USERNAME,)).fetchone()
+            assert row["password_hash"] == "scrypt$claimed$correct_horse_battery_staple"
+            assert first.validate_session(won.session_id) is not None
+        finally:
+            first.close()
+            second.close()
+
+    def test_bootstrap_if_empty_unique_violation_is_a_noop(self, tmp_path, monkeypatch):
+        """If the empty-table COUNT is stale (the other process already
+        inserted admin), INSERT hits the username PK. That must return False
+        rather than raising, so harness/gateway startup does not abort."""
+        monkeypatch.setattr(
+            "utils.authn.hash_pending_placeholder",
+            lambda: "pending$scrypt$placeholder",
+        )
+        db_path = str(tmp_path / "boot-race.db")
+        first = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        second = AuthManager({"auth": {"enabled": True, "db_path": db_path}})
+        try:
+            assert first.bootstrap_if_empty() is True
+            second._sql_count_users = "SELECT 0 AS n"
+            assert second.bootstrap_if_empty() is False
+            assert [u.username for u in first.list_users()] == [BOOTSTRAP_USERNAME]
+        finally:
+            first.close()
+            second.close()
+
     def test_bootstrap_account_is_unusable_until_a_password_is_set(self, manager):
         """The placeholder hash is of a secret that was discarded inside
         bootstrap_if_empty -- nobody, operator included, can log in as admin
