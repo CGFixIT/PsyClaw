@@ -11,9 +11,12 @@ CyClaw now has two optional online choices after a vault miss:
 - **Send to Grok** uses the xAI Grok API.
 - **Send to Claude** uses the Anthropic Claude API.
 
-Both are off by default. They only run when CyClaw is in hybrid mode, the
-specific provider is enabled in `config.yaml`, the matching API key exists in
-the environment, and the user explicitly confirms the online send.
+Both providers ship **enabled** in `config.yaml`, and `app.mode` ships
+`"hybrid"` (armed since 2026-08-07). The triple gate still applies per query:
+a provider only runs when CyClaw is in hybrid mode, that provider is enabled
+in `config.yaml`, the matching API key exists in the environment, and the
+user explicitly confirms the online send — no online call happens without
+that confirmation.
 
 ## API Keys
 
@@ -43,7 +46,7 @@ The main switch is:
 
 ```yaml
 app:
-  mode: "offline"  # change to "hybrid" to allow online fallback choices
+  mode: "hybrid"  # SHIPPED DEFAULT — online fallback choices reachable; set "offline" to hard-disable them
 ```
 
 Grok has its own provider switch:
@@ -51,7 +54,7 @@ Grok has its own provider switch:
 ```yaml
 models:
   grok:
-    enabled: false
+    enabled: true    # shipped default; set false to disable Grok regardless of mode
     base_url: "https://api.x.ai/v1"
     model: "grok-4.5"   # shipped default; pin grok-4.3 only if you prefer cost/window
 ```
@@ -61,7 +64,7 @@ Claude has its own provider switch:
 ```yaml
 models:
   claude:
-    enabled: false
+    enabled: true    # shipped default; set false to disable Claude regardless of mode
     base_url: "https://api.anthropic.com/v1"
     model: "claude-sonnet-5"
 ```
@@ -100,7 +103,9 @@ stay local.
 
 When CyClaw cannot confidently answer from the vault, the terminal offers:
 
-- **Offline Best Effort**: keep everything local and answer as well as possible.
+- **No — Stay Offline** (labelled **Offline Best Effort** when no online
+  provider button is available): keep everything local and answer as well as
+  possible.
 - **Send to Grok**: send the question to Grok if hybrid mode and Grok are enabled.
 - **Send to Claude**: send the question to Claude if hybrid mode and Claude are enabled.
 
@@ -118,6 +123,9 @@ turn on online mode.
 
 ## Quick Local Check
 
-After changing settings, use `/health` to confirm CyClaw can see the expected
-provider configuration. A missing API key should show as unavailable, not as a
-secret value.
+After changing settings, `/health` shows `mode` and local-backend health. It
+does **not** report Grok/Claude status unless you opt in with
+`api.health_probe_external_providers: true` (ships `false` — `/health` is
+unauthenticated and unrate-limited, so probing there is operator-triggerable
+third-party egress). With the probe enabled, a missing key surfaces as
+`grok_api`/`claude_api` unavailable — never as the key value.
