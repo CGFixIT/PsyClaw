@@ -45,15 +45,21 @@ models:
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
     # is expected to host -- the shipped qwen3.8:27b-mlx default. A smaller tag
     # simply leaves this budget unused.
-    # Worked from the
-    # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
-    # weights, so single-stream decode is memory-bandwidth-bound at roughly
-    # (bandwidth / weight-bytes) x realized-fraction. On 300-310 GB/s Apple
-    # Silicon (M5 Pro class, 48 GB unified) the shipped qwen3.8:27b-mlx path
-    # typically lands ~15-22 tok/s, so 4096 output tokens is ~3-4 min of
-    # decode plus prefill and a one-time cold load. The 720s budget also
-    # still covers a conservative high-single-digit tok/s Q5_K_M worst case
+    # Decode speed is NOT a config value. Measure it on the operator machine:
+    #   python3 scripts/measure_local_llm_throughput.py
+    # Third-party M5 Pro 48 GB reports (not this checkout; 2026-08 Reddit /
+    # ollama --verbose): ~29-34 tok/s decode on the shipped 4-bit MLX tag
+    # (qwen3.8:27b-mlx, ~18 GB). At 30 tok/s, 4096 output tokens is ~2.3 min
+    # of decode plus prefill and a one-time cold load. 720s is therefore
+    # headroom, not a tight fit -- it still covers a conservative
+    # high-single-digit tok/s Q5_K_M worst case (non-MLX / thermal throttle)
     # without stretching the inner timeout past the graph deadline.
+    # Weight quant is the Ollama tag, not an env var. On 48 GB M5 Pro the
+    # official MLX ladder is: 27b-mlx (4-bit, shipped) / 27b-nvfp4 (same 18 GB,
+    # higher-quality 4-bit) / 27b-mxfp8 (32 GB, tight with 16k KV) /
+    # 27b-mlx-bf16 (56 GB, does not fit). Runtime knobs live in
+    # macos/ollama-mlx.env (context 16384, keep_alive 30m, one model, no
+    # parallel slots, flash-attn + KV q8_0).
     # Deliberately NOT higher: gate.py's asyncio.wait_for cancels the await, not
     # the worker thread, so after a 504 an orphaned thread stays blocked in httpx
     # for the remainder of this timeout (and the retry block below can multiply

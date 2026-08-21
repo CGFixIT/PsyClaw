@@ -24,6 +24,7 @@ Console package: [`harness/README.md`](../harness/README.md).
 | `cyclaw-keychain-set.sh` | Interactive Keychain store. Bare `-w` (secret never in argv); `-T /usr/bin/security`. Requires a TTY. |
 | `cyclaw-keychain-env.sh` | Fetch one Keychain item, export it, `exec` the wrapped command. Fail-closed if missing/empty. |
 | `generate_service_plist.py` | Supervised LaunchAgent for `gate.py` or the harness (`--service gate\|harness`). Highest-risk generator: refuses to write without `--confirm` **and** a non-empty `--reason`. `KeepAlive: {SuccessfulExit: false}` (crash-only restart, never after a clean stop), `ThrottleInterval` 30s default, optional `--api-key-service` chains the Keychain wrapper. Never loads the agent itself. |
+| `ollama-mlx.env` | KEY=value tunings sourced before `ollama serve` (context 16384, keep-alive 30m, one model, no parallel slots, flash-attn + KV q8_0). No secrets. `setup-from-clone.sh` sources it when *it* launches Ollama; an already-running .app ignores it until quit. |
 
 Target shells: bash (including macOS 3.2) and zsh. BSD userland on macOS —
 no Homebrew required.

@@ -271,7 +271,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
   fi
   echo "  6. optional gh auth status (never prints a token)"
   if [ "$SKIP_OLLAMA" -eq 0 ]; then
-    echo "  7. Ollama check + optional pull of $OLLAMA_MODEL"
+    echo "  7. Ollama check + optional pull of $OLLAMA_MODEL (source macos/ollama-mlx.env before serve)"
   else
     echo "  7. skip Ollama"
   fi
@@ -459,6 +459,18 @@ _ollama_has_model() {
   ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -Fxq "$tag"
 }
 
+# Source macos/ollama-mlx.env (KEY=value, no secrets). No-op if the file is
+# missing. Does not restart an already-running Ollama.app — those tunings
+# only apply to `ollama serve` launched from this script.
+_ollama_apply_mlx_env() {
+  local envf="$REPO_DIR/macos/ollama-mlx.env"
+  [ -f "$envf" ] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  . "$envf"
+  set +a
+}
+
 if [ "$SKIP_OLLAMA" -eq 0 ]; then
   if command -v ollama >/dev/null 2>&1; then
     step "Ollama CLI present ($(ollama --version 2>/dev/null || echo unknown))"
@@ -484,6 +496,7 @@ if [ "$SKIP_OLLAMA" -eq 0 ]; then
       # The .app usually already serves :11434. A second `ollama serve` is
       # address-already-in-use — that is success, not a problem.
       step "Ollama API not answering yet; launching 'ollama serve' in the background"
+      _ollama_apply_mlx_env
       ollama serve >/tmp/cyclaw-ollama-serve.log 2>&1 &
       sleep 1
       if _ollama_up; then

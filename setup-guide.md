@@ -725,7 +725,10 @@ prompt can legitimately run several times larger. See OLLAMA_SETUP.md's
 
 The shipped `local_llm.timeout_sec: 720` and `max_tokens: 4096` are sized for a
 dense ~27B MLX model on M5 Pro class Apple Silicon (see `CLAUDE.md`'s
-load-bearing-numbers table). `timeout_sec` must stay
+load-bearing-numbers table). Measure actual tok/s on the machine with
+`python3 scripts/measure_local_llm_throughput.py` rather than trusting
+third-party figures; MLX quant tunings live in `macos/ollama-mlx.env`.
+`timeout_sec` must stay
 below `api.graph_timeout_sec` (780) if you do raise it. Dropping to a smaller
 model needs no config change beyond the two `model:` keys; the generous timeout
 simply goes unused.

@@ -83,8 +83,11 @@ ollama run qwen3.8:27b-mlx "Say hello"
 
 | Model | Command | Notes |
 |-------|---------|-------|
-| Qwen 3.8 27B MLX (default) | `ollama pull qwen3.8:27b-mlx` | What `config.yaml` ships. Apple Silicon MLX build. Dense ~27B — `timeout_sec: 720`/`max_tokens: 4096` are sized for M5 Pro class 48 GB / 307 GB/s. Needs the most `num_ctx` headroom and the most RAM |
-| Qwen 3.8 27B (generic) | `ollama pull qwen3.8:27b` | Same weights without the MLX tag. Use on Intel/Windows/Linux, then set `models.local_llm.model` and `guardrails.model` to this tag |
+| Qwen 3.8 27B MLX 4-bit (default) | `ollama pull qwen3.8:27b-mlx` | What `config.yaml` ships. Apple Silicon MLX 4-bit, ~18 GB. Third-party M5 Pro 48 GB reports ~29–34 tok/s decode — **measure on your machine** (`python3 scripts/measure_local_llm_throughput.py`). |
+| Qwen 3.8 27B MLX NVFP4 | `ollama pull qwen3.8:27b-nvfp4` | Same ~18 GB. NVFP4 4-bit (higher quality than q4_K_M per Ollama's MLX blog). Candidate upgrade on 48 GB; switch **both** `models.local_llm.model` and `guardrails.model` (C11) only after measuring tok/s + answer quality. |
+| Qwen 3.8 27B MLX MXFP8 | `ollama pull qwen3.8:27b-mxfp8` | ~32 GB 8-bit MLX. Fits 48 GB only with a tight KV budget — measure, watch Activity Monitor, do not assume. |
+| Qwen 3.8 27B MLX BF16 | `ollama pull qwen3.8:27b-mlx-bf16` | ~56 GB. **Does not fit 48 GB unified.** |
+| Qwen 3.8 27B (generic GGUF) | `ollama pull qwen3.8:27b` | Same weights without the MLX tag. Use on Intel/Windows/Linux, then set `models.local_llm.model` and `guardrails.model` to this tag |
 | Qwen 2.5 7B | `ollama pull qwen2.5:7b` | Much lighter; the prior default. Best balance of quality + speed on modest hardware |
 | Mistral 7B | `ollama pull mistral:7b` | Good alternative |
 | Llama 3.1 8B | `ollama pull llama3.1:8b` | Meta's latest |
@@ -249,7 +252,7 @@ and an instruction up to 8,192 chars via the harness route (`harness/schemas.py`
 iteration**, before reserving any output budget. At this project's own
 ~4-chars/token convention (see the formula above), that is approximately
 **9,750–10,000 input tokens** — which by itself can already approach or exceed
-the 10,000–12,288 window recommended above, a number sized only for the
+the 16384 window recommended above, a number sized only for the
 smaller RAG-path formula.
 
 This is arithmetic over the loop's own stated caps, not a number CyClaw states
@@ -284,6 +287,59 @@ ship a measured GB-per-context-length figure for `qwen3.8:27b-mlx` to cite here,
 so don't guess at a number: watch actual usage (Activity Monitor, or
 `ollama ps` for the running model's reported size) after raising `num_ctx`,
 rather than maximizing it up front on the assumption that more is free.
+
+---
+
+## Measure tok/s (do this on the Mac, not from a remote agent)
+
+A remote checkout cannot see `127.0.0.1:11434` on your laptop. The numbers
+in `config.yaml` comments are **timeout budgets**, not claimed throughput.
+To replace third-party figures with *your* quant + prompt mix:
+
+```bash
+# Ollama must already be up, with macos/ollama-mlx.env sourced into *that*
+# process (quit the .app fully if it was started from Spotlight).
+python3 scripts/measure_local_llm_throughput.py
+python3 scripts/measure_local_llm_throughput.py --model qwen3.8:27b-nvfp4 --json
+```
+
+The script calls Ollama's native `/api/generate` and prints prefill tok/s,
+decode tok/s, load ms. Warmup is on by default so the first 27B cold-load
+does not poison the decode sample. Exit 2 = Ollama down; exit 3 = generate
+failed (wrong tag, stall, timeout).
+
+## MLX quant tunings (48 GB M5 Pro)
+
+Weight quant is the **Ollama tag**, not an environment variable. Official
+library tags as of 2026-08:
+
+| Tag | Disk | Fits 48 GB? | Role |
+|---|---|---|---|
+| `qwen3.8:27b-mlx` | ~18 GB | yes | **shipped default**, 4-bit MLX |
+| `qwen3.8:27b-nvfp4` | ~18 GB | yes | same RAM, NVFP4 4-bit (Ollama MLX blog: better perplexity vs q4_K_M). Measure before switching C11 tags. |
+| `qwen3.8:27b-mxfp8` | ~32 GB | maybe | 8-bit. KV + CyClaw Python + OS share the remaining ~16 GB. Measure; expect swap if `num_ctx` is high. |
+| `qwen3.8:27b-mlx-bf16` | ~56 GB | **no** | do not pull on 48 GB |
+
+Runtime knobs (source before `ollama serve`; documented in Ollama's FAQ):
+
+```bash
+set -a
+. macos/ollama-mlx.env
+set +a
+ollama serve
+```
+
+That file sets `OLLAMA_CONTEXT_LENGTH=16384`, `OLLAMA_KEEP_ALIVE=30m`,
+`OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_NUM_PARALLEL=1`,
+`OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`. Flash-attn and KV
+q8_0 are llama.cpp-runner knobs that Ollama applies when the backend
+supports them; they may be no-ops on a pure MLX tag and still help if you
+fall back to `qwen3.8:27b` GGUF. Do **not** raise `OLLAMA_NUM_PARALLEL`
+on this class of machine — it multiplies KV RAM and stalls both `/query`
+and harness `/loop`.
+
+`macos/setup-from-clone.sh` sources the same file when *it* launches
+`ollama serve`. An already-running Ollama.app ignores it until quit.
 
 ---
 
