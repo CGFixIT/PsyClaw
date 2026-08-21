@@ -514,6 +514,14 @@ _AUDIT_PREVIEW_CAP = 2000
 # CyClaw audit ``event`` name -> (numbat event_type, actor, confidence).
 # Unknown events fall back to ("tool.call", "tool", "low") -- an audit line
 # is never dropped, just downgraded in confidence.
+# Audit events written by the out-of-band ACTION plane already have direct
+# Numbat emits (e.g. agentic/executor/runner.py calls emit_numbat_command).
+# Projecting them again from the mainline audit trail would double-write and
+# reorder the NDJSON stream, so project_audit_record skips them.
+_AUDIT_ACTION_PLANE_EVENTS: frozenset[str] = frozenset({
+    "agentic_executor_check_result",
+})
+
 _AUDIT_EVENT_MAP: dict[str, tuple[str, str, str]] = {
     "rag_query": ("prompt.user", "user", "high"),
     "user_gate_pause": ("permission.requested", "system", "high"),
@@ -591,6 +599,10 @@ def project_audit_record(
             return
         event_name = record.get("event")
         if not isinstance(event_name, str) or not event_name:
+            return
+        if event_name in _AUDIT_ACTION_PLANE_EVENTS:
+            # Action-plane events are already emitted directly to Numbat.
+            # Do not project the legacy audit record a second time.
             return
         event_type, actor, confidence = _AUDIT_EVENT_MAP.get(
             event_name, ("tool.call", "tool", "low"),
