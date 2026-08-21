@@ -36,6 +36,32 @@ class _HealthHandler(BaseHTTPRequestHandler):
         return
 
 
+def test_dockerfile_refreshes_ca_certificates_before_nonroot_user() -> None:
+    """DLA-4726-1 / issue #1024: digest-pinned slim-bookworm ships a stale
+    Mozilla CA bundle. The one-package refresh must run as root (before
+    USER cyclaw), must not apt-get upgrade, and must not float the FROM digest.
+    """
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    pin = "ca-certificates=20250419~deb12u1"
+    assert pin in dockerfile
+    assert f"'{pin}'" in dockerfile
+    ca_at = dockerfile.index(pin)
+    user_at = dockerfile.index("\nUSER cyclaw")
+    assert ca_at < user_at, "ca-certificates refresh must run as root before USER cyclaw"
+    for line in dockerfile.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        assert "apt-get upgrade" not in line
+    from_lines = [
+        line.strip()
+        for line in dockerfile.splitlines()
+        if line.startswith("FROM python:3.12-slim-bookworm@sha256:")
+    ]
+    assert len(from_lines) == 2
+    builder, runtime = from_lines
+    assert builder.split(" AS ")[0] == runtime
+
+
 def test_compose_forces_builtin_seccomp_and_stage_one_baseline() -> None:
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
     service = compose["services"]["cyclaw"]
