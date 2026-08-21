@@ -78,8 +78,8 @@ _AGENTIC_JSON_ACTIONS = frozenset({
 # Derived per request rather than a flat constant. It WAS a flat 900s, sized
 # when the planner's own timeout was a hardcoded 30s (30 x 3 iterations = 90s,
 # which fit trivially). Making that timeout configurable and defaulting it to
-# 600s -- necessary for any real local model -- inverted the relationship:
-# 600 x the CLI's own default of 3 iterations is 1800s, twice this ceiling,
+# 720s -- necessary for any real local model -- inverted the relationship:
+# 720 x the CLI's own default of 3 iterations is 2160s, twice this ceiling,
 # and the harness route accepts up to 10 iterations and 8 check profiles.
 #
 # The failure this prevents is worse than a slow request. subprocess.run's
@@ -88,7 +88,7 @@ _AGENTIC_JSON_ACTIONS = frozenset({
 # leaves a permanently `running` record that no later decide/status call can
 # resolve. Verified by emulated rehearsal (2026-08-02) -- the handled paths
 # clean up correctly, this one does not, because it cannot.
-_REAL_REPO_RUN_FALLBACK_PLANNER_SEC = 600  # mirrors agentic.config.DEFAULT_PLANNER_TIMEOUT_SEC
+_REAL_REPO_RUN_FALLBACK_PLANNER_SEC = 720  # mirrors agentic.config.DEFAULT_PLANNER_TIMEOUT_SEC
 _REAL_REPO_RUN_DEFAULT_ITERATIONS = 3  # mirrors agentic/cli.py's --max-iterations default
 _REAL_REPO_RUN_CHECK_SEC = 120  # mirrors agentic.executor.runner.DEFAULT_CHECK_TIMEOUT_SEC
 # Clone (gh_client.DEFAULT_CLONE_TIMEOUT_SEC=120) + context fetch (30) +

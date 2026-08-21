@@ -84,7 +84,7 @@ class ChatRequest(_ForbidModel):
     session_id: str | None = None
     model: str | None = None
     # True only for console /loop turns. Triggers the tighter loop limiter,
-    # the in-flight lock, a shorter clipped history window, a 1024-token
+    # the in-flight lock, a shorter clipped history window, a 2048-token
     # output budget, and the "goal required" check. Default False so ordinary
     # chatbot turns are unchanged aside from the shared single-generation lock.
     loop: bool = False

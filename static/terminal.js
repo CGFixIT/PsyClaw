@@ -59,11 +59,11 @@ let queryCount = 0;
 // (api.graph_timeout_sec) so the browser never aborts first — otherwise the user
 // sees a generic client timeout instead of the server's truthful 504 GRAPH_TIMEOUT
 // message. Synced from /health (graph_timeout_sec + 10s buffer); the default here
-// already clears the 660s server default in case /health hasn't responded yet.
+// already clears the 780s server default in case /health hasn't responded yet.
 // That fallback is load-bearing whenever /health is slow or failing — its own
 // fetch aborts at 3s while the server-side probe allows 5s, so a still-loading
 // or unreachable Ollama is exactly the case where the sync never runs.
-let queryDeadlineMs = 670000;
+let queryDeadlineMs = 790000;
 let pendingConfirmQuery = null;
 let pendingSoulProposal = null;
 let entryCounter = 0;

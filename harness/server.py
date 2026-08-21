@@ -176,12 +176,12 @@ _DEFAULT_LOOP_WINDOW_SEC = 300
 # that or a retry looks like a concurrent loop.
 _LOOP_INFLIGHT_TTL_SEC = 900
 # Ollama reserves max_tokens up front. A loop turn that reuses the shipped
-# 3000-token chat budget on top of soul+skills+goal+history stalls at
-# "0% processing" on a 10-12k num_ctx 27b. 1024 is enough for a concise
+# 4096-token chat budget on top of soul+skills+goal+history stalls at
+# "0% processing" on a 16k num_ctx 27b. 2048 is enough for a concise
 # coding turn and leaves room for the system prompt.
-_DEFAULT_LOOP_MAX_TOKENS = 1024
+_DEFAULT_LOOP_MAX_TOKENS = 2048
 # Character budgets for prior turns forwarded to the model. Turn-count caps
-# alone do not protect Metal: eight 3000-token replies already blow num_ctx.
+# alone do not protect Metal: eight 4096-token replies already blow num_ctx.
 _LOOP_HISTORY_CHARS = 4000
 _CHAT_HISTORY_CHARS = 8000
 _HTTP_UNPROCESSABLE = 422
@@ -199,7 +199,7 @@ _UNEXPECTED_FIELD = "(unexpected field)"
 # near-miss the operator needs to see to spot their own typo.
 _MAX_ECHOED_RUN_ID_LEN = 64
 _DEFAULT_TIMEOUT_SEC = 300
-_DEFAULT_MAX_TOKENS = 3000
+_DEFAULT_MAX_TOKENS = 4096
 _DEFAULT_TEMPERATURE = 0.3
 _MODEL_KEY = "model"
 # Keys of the error envelope static/harness.html's fetch helper reads. Named
@@ -282,7 +282,7 @@ def _loop_rate_limit_settings() -> dict:
 
 
 def _loop_max_tokens() -> int:
-    """Optional ``api.harness_loop_rate_limit.max_tokens``; default 1024."""
+    """Optional ``api.harness_loop_rate_limit.max_tokens``; default 2048."""
     raw = _loop_rate_limit_settings().get("max_tokens", _DEFAULT_LOOP_MAX_TOKENS)
     try:
         token_budget = int(raw)
@@ -1310,7 +1310,7 @@ def create_app(
         utils.ops_runner._real_repo_run_timeout_sec from this request's own
         --max-iterations and check count, capped at 3600s -- it was a flat 900s
         until that flat ceiling started killing legitimate runs once the
-        planner timeout became configurable (default 600s x 3 iterations).
+        planner timeout became configurable (default 720s x 3 iterations).
 
         Deliberately synchronous, and deliberately not a poll-a-background-job
         design, for two reasons found in the backend rather than chosen here:

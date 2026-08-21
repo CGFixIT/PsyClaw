@@ -88,15 +88,16 @@ DEFAULT_HARNESS_MEMORY_DIR = "data/agentic/harness_optimizer/memory"
 # overridden by any caller: a 2026-08-02 audit found this to be a hard,
 # unrecoverable, first-iteration failure (no retry) for any local-model
 # completion over 30 wall-clock seconds -- effectively unusable for any model
-# slower than a trivial one. Sized to the same "dense ~27B, 8-16 tok/s"
-# rationale as models.local_llm.timeout_sec's 600s retune, since this loop's
-# own single-shot prompt (instruction + up to 12k chars of declared files +
-# up to 8k chars of GitHub context + up to 4k chars of prior-iteration
-# feedback) is comparably large.
-DEFAULT_PLANNER_TIMEOUT_SEC = 600
+# slower than a trivial one. Sized to the same 720s inner budget as
+# models.local_llm.timeout_sec (M5 Pro class 27B MLX; measure tok/s with
+# scripts/measure_local_llm_throughput.py rather than inventing a rate),
+# since this loop's own single-shot prompt (instruction + up to 12k
+# chars of declared files + up to 8k chars of GitHub context + up to 4k chars
+# of prior-iteration feedback) is comparably large.
+DEFAULT_PLANNER_TIMEOUT_SEC = 720
 # Completion budget for each local/cloud proposer call. Keep the existing
 # implicit client default so this new operator control is rollout-neutral.
-DEFAULT_PLANNER_MAX_TOKENS = 2048
+DEFAULT_PLANNER_MAX_TOKENS = 3072
 
 _VALID_MODES = ("read", "write")
 # Post-Ollama migration: "lmstudio" is retired as a provider id. Use "ollama"

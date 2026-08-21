@@ -959,8 +959,8 @@ def test_loop_turn_uses_smaller_max_tokens(cfg):
     assert c.post(
         "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
     ).status_code == 200
-    assert captured[0] == 3000
-    assert captured[1] == 1024
+    assert captured[0] == 4096
+    assert captured[1] == 2048
 
 
 def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):

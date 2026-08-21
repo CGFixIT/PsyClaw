@@ -38,20 +38,28 @@ models:
     # graph.py local_llm_node / offline_best_effort_node), so the stall is
     # prevented deterministically as long as:
     #   Ollama context length  >=  max_context_tokens + max_tokens + ~1500 headroom
-    # RECOMMENDED Ollama context length (via num_ctx): 10000-12288 (10k-12k).
-    # With max_context_tokens=4000 + max_tokens=3000 that is 7000 + headroom -> fits.
-    max_tokens: 3000
+    # RECOMMENDED Ollama context length (via num_ctx): 16384 (16k).
+    # With max_context_tokens=4000 + max_tokens=4096 that is 8096 + headroom -> fits.
+    max_tokens: 4096
     temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
     # is expected to host -- the shipped qwen3.8:27b-mlx default. A smaller tag
     # simply leaves this budget unused.
-    # Worked from the
-    # slowest plausible operator machine: a dense ~27B at Q5_K_M is ~20GB of
-    # weights, so single-stream decode is memory-bandwidth-bound at roughly
-    # (bandwidth / weight-bytes) x realized-fraction. On 300-310 GB/s Apple
-    # Silicon that lands in the high single digits of tok/s, so the max_tokens
-    # budget below (3000) can take ~6-8 min of decode alone, plus prompt prefill
-    # and a one-time cold model load. 600s clears that with real headroom.
+    # Decode speed is NOT a config value. Measure it on the operator machine:
+    #   python3 scripts/measure_local_llm_throughput.py
+    # Third-party M5 Pro 48 GB reports (not this checkout; 2026-08 Reddit /
+    # ollama --verbose): ~29-34 tok/s decode on the shipped 4-bit MLX tag
+    # (qwen3.8:27b-mlx, ~18 GB). At 30 tok/s, 4096 output tokens is ~2.3 min
+    # of decode plus prefill and a one-time cold load. 720s is therefore
+    # headroom, not a tight fit -- it still covers a conservative
+    # high-single-digit tok/s Q5_K_M worst case (non-MLX / thermal throttle)
+    # without stretching the inner timeout past the graph deadline.
+    # Weight quant is the Ollama tag, not an env var. On 48 GB M5 Pro the
+    # official MLX ladder is: 27b-mlx (4-bit, shipped) / 27b-nvfp4 (same 18 GB,
+    # higher-quality 4-bit) / 27b-mxfp8 (32 GB, tight with 16k KV) /
+    # 27b-mlx-bf16 (56 GB, does not fit). Runtime knobs live in
+    # macos/ollama-mlx.env (context 16384, keep_alive 30m, one model, no
+    # parallel slots, flash-attn + KV q8_0).
     # Deliberately NOT higher: gate.py's asyncio.wait_for cancels the await, not
     # the worker thread, so after a 504 an orphaned thread stays blocked in httpx
     # for the remainder of this timeout (and the retry block below can multiply
@@ -59,7 +67,7 @@ models:
     # That orphan occupies a slot in the shared default ThreadPoolExecutor that
     # rate limiting, audit writes, and /health also use, so an over-long value
     # degrades the whole server, not just the one stalled query.
-    timeout_sec: 600  # Per-call LLM timeout. Must be < api.graph_timeout_sec (660) to avoid orphaned graph invocations.
+    timeout_sec: 720  # Per-call LLM timeout. Must be < api.graph_timeout_sec (780) to avoid orphaned graph invocations.
     retry:                  # bounded exp-backoff on transport/5xx/429; 4xx AND read-timeouts fail fast
       max_retries: 2        # extra attempts beyond the first (applies to transport/5xx/429 only)
       backoff_base_sec: 0.5 # delay = min(backoff_base_sec * 2**attempt, backoff_max_sec) (0.5s, 1s)
@@ -145,7 +153,7 @@ retrieval:
   # within this many tokens. This bounds both the RAG (local_llm) and offline
   # best-effort paths. The no-stall guarantee:
   #   Ollama context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
-  # 4000 + max_tokens 3000 + headroom -> recommend Ollama context 10000-12288.
+  # 4000 + max_tokens 4096 + headroom -> recommend Ollama context 16384.
   # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
   max_context_tokens: 4000
@@ -405,14 +413,14 @@ api:
   # graph invoke is wrapped in asyncio.wait_for; on exceed the endpoint returns
   # HTTP 504 instead of holding the request open, so a stalled Ollama /
   # retrieval can't hang a client indefinitely. Keep this >= the inner
-  # models.local_llm.timeout_sec (600) so normal slow inference is not cut off;
+  # models.local_llm.timeout_sec (720) so normal slow inference is not cut off;
   # the margin covers retrieval + soul-DB time. The 60s margin (double the 30s
   # documented floor) exists because the FIRST query after boot also pays a cold
   # sentence-transformers load inside this same deadline, before the LLM call --
   # embeddings are pinned to CPU on purpose (retrieval/embeddings.py EMBED_DEVICE).
   # Keeping the inner LLM timeout the one that fires first means the operator sees
   # the diagnostic LLM error, not a generic 504.
-  graph_timeout_sec: 660  # Must exceed models.local_llm.timeout_sec (600) — the 60s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
+  graph_timeout_sec: 780  # Must exceed models.local_llm.timeout_sec (720) — the 60s margin covers retrieval + routing + audit overhead. Formula: graph_timeout >= llm_timeout + 30.
   # Whether GET /health probes the external providers (Grok, Claude) for
   # liveness. Ships FALSE, and that default is a security choice, not a
   # performance one: /health is the only route with neither auth nor a rate
@@ -726,15 +734,15 @@ agentic:
     model: "qwen3.8:27b-mlx"
     # Per-call HTTP timeout for the planner's own model call (LocalProposerClient /
     # ChatModelProposerClient) -- a separate knob from models.local_llm.timeout_sec
-    # (600) above: this package is never imported by graph.py/gate.py (I6), so it
+    # (720) above: this package is never imported by graph.py/gate.py (I6), so it
     # cannot reuse that value, and this loop's own prompt is comparably large (up
     # to ~24k chars of declared files + GitHub context + prior-iteration feedback).
     # Was hardcoded at 30s with no override before this key existed -- a hard,
     # unrecoverable, first-iteration failure for any real local-model completion.
-    planner_timeout_sec: 600
+    planner_timeout_sec: 720
     # Reserved completion tokens for each real-repo plan/coding call. Keep
     # prompt + this budget below Ollama num_ctx; raise only after measuring.
-    planner_max_tokens: 2048
+    planner_max_tokens: 3072
     allow_deepagents_dependency: false           # extras must be installed explicitly
     # Governs the RETIRED DeepAgents virtual tool surface only (permissions.py,
     # tools.py) -- NOT the real-repo pipeline, whose write_file/add/commit/push
@@ -1014,7 +1022,7 @@ telegram:
   query:
     base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
     api_key_env: "CYCLAW_API_KEY"
-    timeout_sec: 660             # match api.graph_timeout_sec
+    timeout_sec: 780             # match api.graph_timeout_sec
   media:
     enabled: false               # T4 default-off; accepts only private-chat /save --confirm attachments
     fsconnect_root: ""           # REQUIRED when enabled; exact explicit fsconnect.writable_roots entry

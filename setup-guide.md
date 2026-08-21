@@ -638,7 +638,7 @@ endpoints, is read-only.
 | `423` | `/auth/login` only: account temporarily locked from too many failed attempts — `retry_after_sec` in the response body |
 | `429` | rate limit — 60 requests/min per IP |
 | `503` | `INDEX_NOT_FOUND` — run `python -m retrieval.indexer` |
-| `504` | the graph exceeded `api.graph_timeout_sec` (660s) |
+| `504` | the graph exceeded `api.graph_timeout_sec` (780s) |
 
 ### The harness console's API
 
@@ -704,11 +704,11 @@ hangs instead of failing loudly:
    num_ctx  >=  retrieval.max_context_tokens + local_llm.max_tokens + ~1500
    ```
 
-   At the shipped `4000 + 3000 + 1500`, that means **10,000–12,288**. Set it
+   At the shipped `4000 + 4096 + 1500`, that means **16,384**. Set it
    server-wide *before* starting Ollama — `num_ctx` is not a CLI flag:
 
    ```bash
-   export OLLAMA_CONTEXT_LENGTH=12288
+   export OLLAMA_CONTEXT_LENGTH=16384
    ollama serve
    ```
 
@@ -723,10 +723,13 @@ needs more headroom than the formula above — that pathway's per-iteration
 prompt can legitimately run several times larger. See OLLAMA_SETUP.md's
 ["The agentic real-repo coding loop needs more headroom than that"](OLLAMA_SETUP.md#the-agentic-real-repo-coding-loop-needs-more-headroom-than-that).
 
-The shipped `local_llm.timeout_sec: 600` and `max_tokens: 3000` are sized for a
-dense ~27B model (see `CLAUDE.md`'s load-bearing-numbers table), so they already
-match the default above — no timeout tuning needed. `timeout_sec` must stay
-below `api.graph_timeout_sec` (660) if you do raise it. Dropping to a smaller
+The shipped `local_llm.timeout_sec: 720` and `max_tokens: 4096` are sized for a
+dense ~27B MLX model on M5 Pro class Apple Silicon (see `CLAUDE.md`'s
+load-bearing-numbers table). Measure actual tok/s on the machine with
+`python3 scripts/measure_local_llm_throughput.py` rather than trusting
+third-party figures; MLX quant tunings live in `macos/ollama-mlx.env`.
+`timeout_sec` must stay
+below `api.graph_timeout_sec` (780) if you do raise it. Dropping to a smaller
 model needs no config change beyond the two `model:` keys; the generous timeout
 simply goes unused.
 
@@ -832,8 +835,8 @@ models:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"  # Ollama's OpenAI-compatible endpoint — do not change
     model: "qwen3.8:27b-mlx"                     # must match a model tag actually pulled in Ollama
-    timeout_sec: 600                        # must stay < api.graph_timeout_sec (660)
-    max_tokens: 3000                        # reserved output budget — see config.yaml's own comment on num_ctx headroom
+    timeout_sec: 720                        # must stay < api.graph_timeout_sec (780)
+    max_tokens: 4096                        # reserved output budget — see config.yaml's own comment on num_ctx headroom
 
 retrieval:
   min_score: 0.028     # RRF fused-rank threshold (NOT cosine similarity — a different scale)
