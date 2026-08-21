@@ -44,7 +44,11 @@ QUERIES = [
     ("What fusion method does CyClaw use to blend semantic and keyword results?", "cyclaw_overview"),
     ("How does CyClaw combine ChromaDB vector embeddings with BM25 keyword search?", "cyclaw_overview"),
     ("What does CyClaw use for rate limiting to protect against DoS attacks?", "cyclaw_overview"),
-    ("How does CyClaw deploy and run local LLM inference offline?", "cyclaw_overview"),
+    (
+        "According to the CyClaw Deployment section, what does CyClaw use "
+        "for local LLM inference offline?",
+        "cyclaw_overview",
+    ),
 ]
 
 
