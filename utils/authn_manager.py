@@ -14,6 +14,7 @@ utils/personality.py knows nothing about /soul's HTTP layer.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -124,6 +125,14 @@ class DeviceTokenSummary:
 _DUMMY_RECORD = authn.hash_password("dummy-timing-equalization-password", salt=b"\x00" * 16)
 
 
+def _is_unique_violation(exc: BaseException) -> bool:
+    """True for a PRIMARY KEY / UNIQUE conflict on either auth backend."""
+    if isinstance(exc, sqlite3.IntegrityError):
+        return "unique" in str(exc).lower()
+    sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+    return sqlstate == "23505"
+
+
 class AuthManager:
     def __init__(self, cfg: dict) -> None:
         self.cfg = cfg
@@ -202,6 +211,16 @@ class AuthManager:
         )
         self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
         self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
+        # Compare-and-swap for first-password setup: two AuthManager instances
+        # (gateway vs harness, or HTTP vs `cyclaw-user passwd`) can both read
+        # the pending row. Username-only UPDATE would let the later writer
+        # overwrite the earlier password and revoke the session the earlier
+        # caller just received. Matching the pending hash in WHERE makes the
+        # loser a no-op (rowcount 0 -> AuthBootstrapComplete).
+        self._sql_claim_bootstrap_password = (
+            f"UPDATE users SET password_hash = {ph} "
+            f"WHERE username = {ph} AND password_hash = {ph}"
+        )
         # A single conditional UPDATE, not a read-then-write pair: it both
         # verifies the row is still exactly what login() checked (password
         # hash, disabled, lockout) AND claims it -- in one statement, so
@@ -326,11 +345,22 @@ class AuthManager:
                 return False
             record = authn.hash_pending_placeholder()
             now = self._now()
-            self.conn.execute(
-                self._sql_insert_user,
-                (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None, "admin"),
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute(
+                    self._sql_insert_user,
+                    (BOOTSTRAP_USERNAME, record, now, 0, None, 0, None, "admin"),
+                )
+                self.conn.commit()
+            except Exception as exc:
+                # Gateway and harness each hold their own AuthManager. Both
+                # can observe an empty table and race the INSERT; the PK on
+                # username makes the loser a unique violation, not a second
+                # admin. Treat that as the same no-op as "table already had
+                # a user" -- do not abort startup.
+                self.conn.rollback()
+                if _is_unique_violation(exc):
+                    return False
+                raise
             return True
 
     def create_user(self, username: str, password: str, role: str = authn.DEFAULT_ROLE) -> str:
@@ -527,7 +557,14 @@ class AuthManager:
             if row is None or not authn.is_pending_password_record(str(row["password_hash"])):
                 self._end_read_txn()
                 raise AuthBootstrapComplete(details={"username": BOOTSTRAP_USERNAME})
-            self.conn.execute(self._sql_set_password, (record, BOOTSTRAP_USERNAME))
+            pending_hash = str(row["password_hash"])
+            claimed = self.conn.execute(
+                self._sql_claim_bootstrap_password,
+                (record, BOOTSTRAP_USERNAME, pending_hash),
+            )
+            if not claimed.rowcount:
+                self._end_read_txn()
+                raise AuthBootstrapComplete(details={"username": BOOTSTRAP_USERNAME})
             self.conn.execute(self._sql_reset_lockout, (BOOTSTRAP_USERNAME,))
             self.conn.execute(self._sql_revoke_sessions_for_user, (BOOTSTRAP_USERNAME,))
             result = self._create_session_locked(BOOTSTRAP_USERNAME, now)
