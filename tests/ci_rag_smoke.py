@@ -33,10 +33,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import yaml
+# Direct-script execution needs the repository root on sys.path before these
+# project imports; module execution already has the same root naturally.
+import yaml  # noqa: E402
 
-from retrieval.indexer import build_index
-from retrieval.hybrid_search import HybridRetriever
+from retrieval.indexer import build_index  # noqa: E402
+from retrieval.hybrid_search import HybridRetriever  # noqa: E402
 
 # (query, expected_source_substring) — each answerable by data/corpus/cyclaw_overview.md.
 # Phrased near-verbatim to corpus content to clear the min_score gate reliably in CI.
