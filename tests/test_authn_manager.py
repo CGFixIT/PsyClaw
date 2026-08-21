@@ -338,7 +338,15 @@ class TestLoginTransactionAndRaceSafety:
         assert calls == [1]
 
     def test_locked_account_closes_its_read_transaction(self, manager, monkeypatch):
-        """Same gap as above, on the is_locked() exit path."""
+        """Same gap as above, on the is_locked() exit path.
+
+        Threshold-5 lockout is only _LOCKOUT_BASE_SEC (2.0s). login() snapshots
+        manager._now() before scrypt; on Windows CI one hash can exceed that
+        window, so the sixth call sees an expired lock. Freeze the clock so
+        this asserts the is_locked() txn close, not hasher wall time.
+        """
+        frozen = manager._now()
+        monkeypatch.setattr(manager, "_now", lambda: frozen)
         manager.create_user("alice", _GOOD_PASSWORD)
         for _ in range(5):
             with pytest.raises(AuthLoginFailed):
