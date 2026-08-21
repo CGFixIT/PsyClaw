@@ -16,8 +16,9 @@ Wire contract (Numbat CLI 0.2.0, which evaluates schema 0.3.0):
 * Identify CyClaw via ``tags: [\"cyclaw\", ...]``.
 * ``additionalProperties: false`` on the event and the ``endpoint`` object.
 * ``rules test`` uses per-type allowlists stricter than the published JSON
-  schema: ``command.exec`` may not carry ``exit_code`` / ``file_path`` /
-  ``duration_ms`` (those belong on ``command.result`` / ``file.*``).
+  schema (Numbat v0.2.0 ``docs/rules.md`` Event-type fields table). Action
+  fields not listed for a type are stripped — e.g. ``command.exec`` may not
+  carry ``exit_code`` / ``file_path`` / ``duration_ms``.
 * No hash chain — CyClaw hashes query text only (Rule 7).
 """
 
@@ -114,10 +115,62 @@ _KNOWN_FIELDS = frozenset({
     "confidence",
     "evidence",
 })
-# CLI 0.2.0 `rules test` rejects these even though event-record.schema.json lists them.
+# CLI 0.2.0 `rules test` rejects action fields the published JSON schema lists.
+# Allowed columns are the v0.2.0 Event-type fields table; everything else in
+# `_ACTION_FIELDS` is stripped. Context fields (actor, session, git_branch, …)
+# are valid on every type and are not in this set.
+_ACTION_FIELDS = frozenset({
+    "command",
+    "file_path",
+    "exit_code",
+    "duration_ms",
+    "tool_name",
+    "tool_call_id",
+    "decision",
+    "mcp_server",
+    "mcp_tool",
+    "url",
+    "diff_sha256",
+    "diff_bytes",
+    "approval_required",
+    "approval_decision",
+    "approval_reason",
+})
+_NONE: frozenset[str] = frozenset()
+_EVENT_TYPE_ALLOWED_ACTION_FIELDS: dict[str, frozenset[str]] = {
+    "session.start": _NONE,
+    "session.end": _NONE,
+    "prompt.user": _NONE,
+    "message.assistant": _NONE,
+    "message.reasoning": _NONE,
+    "config.agent": _NONE,
+    "tool.call": frozenset({"tool_name", "tool_call_id", "mcp_server", "mcp_tool", "url", "file_path", "decision"}),
+    "tool.result": frozenset({"tool_name", "tool_call_id", "mcp_server", "mcp_tool", "decision"}),
+    "command.exec": frozenset({"command", "tool_name", "tool_call_id", "decision"}),
+    "command.result": frozenset({"command", "tool_name", "tool_call_id", "exit_code", "duration_ms", "decision"}),
+    "file.read": frozenset({"file_path", "tool_name", "tool_call_id", "decision"}),
+    "file.write": frozenset({"file_path", "tool_name", "tool_call_id", "decision", "diff_sha256", "diff_bytes"}),
+    "file.delete": frozenset({"file_path", "tool_name", "tool_call_id", "diff_sha256", "diff_bytes"}),
+    "permission.requested": frozenset({
+        "tool_name", "tool_call_id", "decision",
+        "approval_required", "approval_decision", "approval_reason",
+    }),
+    "permission.approved": frozenset({
+        "tool_name", "tool_call_id", "decision",
+        "approval_required", "approval_decision", "approval_reason",
+    }),
+    "permission.denied": frozenset({
+        "tool_name", "tool_call_id", "decision",
+        "approval_required", "approval_decision", "approval_reason",
+    }),
+    "config.mcp": frozenset({"mcp_server", "mcp_tool"}),
+    "network.indicator": frozenset({"url", "tool_name", "tool_call_id", "mcp_server", "mcp_tool", "decision"}),
+}
+if set(_EVENT_TYPE_ALLOWED_ACTION_FIELDS) != _EVENT_TYPES:
+    raise RuntimeError("Numbat action-field map does not cover every event_type")
 _EVENT_TYPE_FORBIDDEN_FIELDS: dict[str, frozenset[str]] = {
-    "command.exec": frozenset({"exit_code", "file_path", "duration_ms"}),
-    "tool.result": frozenset({"command", "exit_code"}),
+    event_type: _ACTION_FIELDS - allowed
+    for event_type, allowed in _EVENT_TYPE_ALLOWED_ACTION_FIELDS.items()
 }
 _SENSITIVE_ARGV_PREFIXES = (
     "--reason=",
