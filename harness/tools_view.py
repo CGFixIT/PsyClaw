@@ -99,6 +99,10 @@ _HARNESS_SURFACES: tuple[tuple[str, str, str, str, str], ...] = (
              "allowlist-only web fetch (off until /web on)"),
     _surface("web-fetch", "/web fetch", _POST, "/api/web/fetch",
              "GET one allowlisted URL; no crawl, no search engine"),
+    _surface("web-search", "/web search", _POST, "/api/web/search",
+             "grep allowlisted pages for a query (no search engine)"),
+    _surface("keys", "/api", _GET, "/api/keys",
+             "managed credential status (masked tail only, never a value)"),
 )
 
 
