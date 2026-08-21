@@ -122,7 +122,9 @@ def _empty_spend_window() -> dict:
         "table_usd": 0.0,
         "vendor_usd": 0.0,
         "comparable_table_usd": 0.0,
+        "comparable_vendor_usd": 0.0,
         "vendor_rows": 0,
+        "comparable_rows": 0,
         "table_incomplete": False,
     }
 
@@ -150,19 +152,30 @@ def _add_spend_compare(window: dict, compared: dict) -> None:
         and not isinstance(table_usd, bool)
     )
     vendor_ok = isinstance(vendor_usd, (int, float)) and not isinstance(vendor_usd, bool)
-    if table_ok and vendor_ok:
+    # vendor_usd/vendor_rows track EVERY ticked row so a vendor-billed total
+    # stays visible even when the rate table can't price that row's model
+    # (e.g. a not-yet-listed model) -- previously this whole block was gated
+    # on table_ok too, so an unpriceable ticked row silently vanished from
+    # the printed comparison entirely, not just from the delta.
+    if vendor_ok:
         window["vendor_usd"] += float(vendor_usd)
-        window["comparable_table_usd"] += float(table_usd)
         window["vendor_rows"] += 1
+        # delta_usd must stay population-matched: only rows priced by BOTH
+        # the table and the vendor, tracked separately from the vendor-wide
+        # total above.
+        if table_ok:
+            window["comparable_table_usd"] += float(table_usd)
+            window["comparable_vendor_usd"] += float(vendor_usd)
+            window["comparable_rows"] += 1
 
 
 def _freeze_spend_window(window: dict) -> dict:
     vendor_usd = None if window["vendor_rows"] == 0 else window["vendor_usd"]
     table_usd = None if window["table_incomplete"] else window["table_usd"]
-    comparable = None if window["vendor_rows"] == 0 else window["comparable_table_usd"]
+    comparable = None if window["comparable_rows"] == 0 else window["comparable_table_usd"]
     delta = None
-    if vendor_usd is not None and comparable is not None:
-        delta = comparable - vendor_usd
+    if window["comparable_rows"] > 0:
+        delta = window["comparable_table_usd"] - window["comparable_vendor_usd"]
     return {
         "by_provider": dict(window["by_provider"].most_common()),
         "tokens_in": window["tokens_in"],
@@ -240,16 +253,24 @@ def _print_spend(spend: dict | None) -> None:
         usd_text = "n/a" if usd is None else f"{usd:.6f}"
         print(f"  {label}: tokens_in={window['tokens_in']} tokens_out={window['tokens_out']} usd={usd_text}")
         if window.get("vendor_usd") is not None:
-            table_text = "n/a" if window["table_usd"] is None else f"{window['table_usd']:.6f}"
-            ticked_text = "n/a" if window.get("ticked_table_usd") is None else f"{window['ticked_table_usd']:.6f}"
             vendor_text = f"{window['vendor_usd']:.6f}"
             delta = window.get("delta_usd")
-            delta_text = "n/a" if delta is None else f"{delta:.6f}"
-            print(
-                f"    table_usd={table_text} ticked_table_usd={ticked_text} "
-                f"vendor_usd={vendor_text} delta_usd={delta_text} "
-                f"vendor_rows={window['vendor_rows']}"
-            )
+            if delta is None:
+                # Vendor billed real money on these rows but the rate table
+                # can't price any of them (e.g. an unlisted model) -- keep
+                # the vendor total visible instead of dropping the line.
+                print(
+                    f"    vendor_usd={vendor_text} vendor_rows={window['vendor_rows']} "
+                    "delta_usd=n/a (no rate-table price for these rows)"
+                )
+            else:
+                table_text = "n/a" if window["table_usd"] is None else f"{window['table_usd']:.6f}"
+                ticked_text = "n/a" if window.get("ticked_table_usd") is None else f"{window['ticked_table_usd']:.6f}"
+                print(
+                    f"    table_usd={table_text} ticked_table_usd={ticked_text} "
+                    f"vendor_usd={vendor_text} delta_usd={delta:.6f} "
+                    f"vendor_rows={window['vendor_rows']}"
+                )
         for provider, count in window["by_provider"].items():
             print(f"    {provider}: {count}")
     if spend["usage_missing"]:

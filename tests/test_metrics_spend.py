@@ -163,6 +163,70 @@ def test_delta_usd_uses_only_ticked_rows() -> None:
     assert summary["today"]["table_usd"] != pytest.approx(paired["table_usd"])
 
 
+def test_unpriceable_ticked_model_stays_visible_in_vendor_usd() -> None:
+    """A ticked row for a model outside the rate table must not vanish.
+
+    Regression test: vendor_usd/vendor_rows previously accumulated only when
+    the rate table could ALSO price the row (table_ok gated the whole
+    block), so a vendor-billed row on a not-yet-listed model disappeared
+    from the summary entirely instead of just being excluded from delta_usd.
+    """
+    unpriceable = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-9000-not-in-rate-table",
+        input_tokens=10,
+        output_tokens=5,
+        extra={"vendor_cost_ticks": 2_000_000},
+    )
+    summary = compute_spend([unpriceable], now=NOW)
+    assert summary["today"]["vendor_rows"] == 1
+    assert summary["today"]["vendor_usd"] == pytest.approx(2_000_000 / 10_000_000_000)
+    assert summary["today"]["delta_usd"] is None
+    assert summary["today"]["ticked_table_usd"] is None
+    # estimate_usd prefers vendor_cost_ticks over the rate table (see its
+    # docstring), so the row's OWN usd prices successfully via ticks even
+    # though its model is unlisted -- rate_unknown_count tracks that top-level
+    # pricing outcome, not whether the rate table specifically could have
+    # priced it (that's what ticked_table_usd/delta_usd being None reflects).
+    assert summary["rate_unknown"] == 0
+
+
+def test_mixed_priceable_and_unpriceable_ticked_rows_keep_delta_population_matched() -> None:
+    """delta_usd must compare only the rows both sides could price.
+
+    A vendor-billed row on an unlisted model must widen vendor_usd (for
+    visibility) without polluting delta_usd, which stays restricted to rows
+    the rate table could also price -- otherwise the comparison mixes two
+    different populations again.
+    """
+    priceable = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-4.5",
+        input_tokens=32,
+        output_tokens=9,
+        extra={"reasoning_tokens": 94, "vendor_cost_ticks": 1_000_000},
+    )
+    unpriceable = _record(
+        days_ago=0,
+        provider="grok",
+        model="grok-9000-not-in-rate-table",
+        input_tokens=10,
+        output_tokens=5,
+        extra={"vendor_cost_ticks": 2_000_000},
+    )
+    summary = compute_spend([priceable, unpriceable], now=NOW)
+    paired = compare_vendor_cost("grok-4.5", priceable)
+    assert summary["today"]["vendor_rows"] == 2
+    assert summary["today"]["vendor_usd"] == pytest.approx(
+        paired["vendor_usd"] + 2_000_000 / 10_000_000_000
+    )
+    # delta_usd is restricted to the one row both sides priced.
+    assert summary["today"]["delta_usd"] == pytest.approx(paired["delta_usd"])
+    assert summary["today"]["ticked_table_usd"] == pytest.approx(paired["table_usd"])
+
+
 def test_vendor_ticks_print_table_vs_vendor() -> None:
     events = [
         _record(

@@ -19,6 +19,7 @@ from agentic.deepagent_github.chat_client import (
     ChatModelProposerResponse,
     _coerce_text_content,
     _capture_http_usage,
+    _usage_capturing_http_client,
     _HTTP_USAGE,
 )
 from agentic.deepagent_github.model_adapter import DeepAgentModelSettings
@@ -294,6 +295,60 @@ def test_capture_http_usage_stores_ticks_without_logging_body():
         assert captured["prompt_tokens"] == 1
     finally:
         _HTTP_USAGE.reset(token)
+
+
+class _UnreadJsonStream(httpx.SyncByteStream):
+    """Yields a JSON body lazily, like a real socket -- unlike
+    ``httpx.Response(json=...)``, which pre-reads at construction and so
+    cannot reproduce the ResponseNotRead failure this test targets."""
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __iter__(self):
+        yield self._payload
+
+
+def test_usage_capturing_http_client_wires_the_capture_hook():
+    client = _usage_capturing_http_client(timeout_sec=5)
+    try:
+        assert _capture_http_usage in client.event_hooks["response"]
+    finally:
+        client.close()
+
+
+def test_usage_capturing_http_client_reads_body_before_json_on_a_real_transport():
+    """Regression test for a hook that parsed an unread response.
+
+    httpx fires ``event_hooks["response"]`` before ``Client.send`` reads the
+    body. A response built via ``httpx.Response(json=...)`` is pre-read at
+    construction and so cannot catch a hook calling ``.json()`` without an
+    explicit ``.read()`` first -- it raises ``ResponseNotRead`` on any real
+    transport, silently swallowed by ``_capture_http_usage``'s bare except.
+    This drives the real hook, wired the same way
+    ``_usage_capturing_http_client`` wires it, through a MockTransport
+    returning a stream-backed body -- the shape a real socket response takes.
+    """
+    payload = json.dumps({"usage": {"prompt_tokens": 3, "cost_in_usd_ticks": 77}}).encode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_UnreadJsonStream(payload), headers={"content-type": "application/json"})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        event_hooks={"response": [_capture_http_usage]},
+    )
+
+    token = _HTTP_USAGE.set(None)
+    try:
+        response = client.post("https://api.x.ai/v1/chat/completions", json={})
+        assert response.status_code == 200
+        captured = _HTTP_USAGE.get()
+        assert captured is not None, "hook must capture usage from an unread streaming response"
+        assert captured["cost_in_usd_ticks"] == 77
+    finally:
+        _HTTP_USAGE.reset(token)
+        client.close()
 
 
 def test_invoke_falls_back_to_langchain_usage_metadata(test_config, monkeypatch):
