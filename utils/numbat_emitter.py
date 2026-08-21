@@ -1,11 +1,21 @@
 """Numbat NDJSON dual-write emitter — I6-clean forensic projection.
 
-Maps CyClaw's existing action records (executor check runs, ops_runner
-subprocess invocations, real_repo_loop decisions, fsconnect/sqlconnect
-operations) into Numbat events written to ``logs/numbat-events.ndjsonl``
-alongside the authoritative ``audit.jsonl``.
+Two planes feed one stream, written to ``logs/numbat-events.ndjsonl``
+alongside the authoritative ``audit.jsonl``:
 
-Never imported by ``gate.py`` / ``graph.py`` / ``mcp_hybrid_server.py`` (I6).
+* ACTION plane — CyClaw's existing action records (executor check runs,
+  ops_runner subprocess invocations, real_repo_loop decisions,
+  fsconnect/sqlconnect operations) emitted directly at the call site via
+  ``emit_numbat_event`` / ``emit_numbat_command``.
+* MAINLINE plane — every redacted ``audit.jsonl`` record, projected by
+  ``project_audit_record`` (PR #1033). Events whose own code path already
+  emitted directly are skipped here; see ``_AUDIT_ACTION_PLANE_EVENTS``.
+
+Never imported at module scope by ``gate.py`` / ``graph.py`` /
+``mcp_hybrid_server.py`` (I6). The mainline projection means this module is
+lazy-imported and executed *inside* those processes on every ``audit_log``
+call — utils/ is shared, so that is allowed, but it is why every entry point
+here must stay fail-soft and stdlib-only.
 Never raises — degrades to ``logger.warning`` on any failure.
 The audit log stays authoritative; this is a projection, not a replacement.
 
@@ -518,8 +528,22 @@ _AUDIT_PREVIEW_CAP = 2000
 # Numbat emits (e.g. agentic/executor/runner.py calls emit_numbat_command).
 # Projecting them again from the mainline audit trail would double-write and
 # reorder the NDJSON stream, so project_audit_record skips them.
+#
+# Membership rule: the event's own code path calls audit_log(...) AND an
+# emit_numbat_* helper for the same action, so the stream already has a
+# record. Each entry below is paired with the emit site that makes it a
+# duplicate -- keep them in step when either side moves.
 _AUDIT_ACTION_PLANE_EVENTS: frozenset[str] = frozenset({
+    # agentic/executor/runner.py -- emit_numbat_command, same loop iteration
     "agentic_executor_check_result",
+    # agentic/fsconnect/client.py::_audit -- emit_numbat_event("file.read")
+    "fsconnect_read",
+    # agentic/sqlconnect/client.py::_audit_sql -- emit_numbat_event("command.exec")
+    "sqlconnect_read",
+    # agentic/real_repo_loop.py -- emit_numbat_event("permission.approved"/"denied")
+    "agentic_real_repo_change_decided",
+    # agentic/real_repo_loop.py -- emit_numbat_event("command.exec", "git commit")
+    "agentic_real_repo_change_approved",
 })
 
 _AUDIT_EVENT_MAP: dict[str, tuple[str, str, str]] = {

@@ -17,7 +17,11 @@ import pytest
 import yaml
 
 from utils.logger import audit_log, close_audit_handles, reset_config_cache
-from utils.numbat_emitter import _KNOWN_FIELDS, project_audit_record
+from utils.numbat_emitter import (
+    _AUDIT_ACTION_PLANE_EVENTS,
+    _KNOWN_FIELDS,
+    project_audit_record,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -196,6 +200,81 @@ def test_projection_fail_soft_on_disk_error(proj_cfg, monkeypatch: pytest.Monkey
     audit_log({"event": "rag_query", "query": "q"}, cfg=cfg)
     close_audit_handles()
     assert len(_lines(audit)) == 1
+
+
+# Audit events whose own code path calls audit_log(...) AND an emit_numbat_*
+# helper for the same action. Spelled out here rather than read from
+# _AUDIT_ACTION_PLANE_EVENTS on purpose: deriving the cases from the constant
+# under test would make this vacuous -- dropping an entry would delete its own
+# test case instead of failing it.
+_DUAL_EMIT_EVENTS = {
+    "agentic_executor_check_result": "agentic/executor/runner.py",
+    "fsconnect_read": "agentic/fsconnect/client.py::_audit",
+    "sqlconnect_read": "agentic/sqlconnect/client.py::_audit_sql",
+    "agentic_real_repo_change_decided": "agentic/real_repo_loop.py",
+    "agentic_real_repo_change_approved": "agentic/real_repo_loop.py",
+}
+
+
+@pytest.mark.parametrize("event_name", sorted(_DUAL_EMIT_EVENTS))
+def test_action_plane_events_are_not_double_projected(proj_cfg, event_name: str) -> None:
+    """Every action-plane event's own code path already emitted directly.
+
+    Projecting it again from the mainline audit trail would put two records
+    for one action into the stream, out of order. The legacy audit line must
+    still be written -- only the derived projection is suppressed.
+    """
+    cfg, audit, out = proj_cfg
+    audit_log({"event": event_name, "op": "x"}, cfg=cfg)
+    close_audit_handles()
+    assert not out.exists(), (
+        f"{event_name} was double-projected; it is already emitted directly by "
+        f"{_DUAL_EMIT_EVENTS[event_name]}"
+    )
+    assert len(_lines(audit)) == 1  # authoritative stream unaffected
+
+
+def test_skip_set_matches_known_dual_emitters() -> None:
+    """The constant and the real emit sites must stay in step, both ways.
+
+    Under-inclusion double-writes the stream; over-inclusion silently drops a
+    mainline event that has no direct emit to fall back on.
+    """
+    assert _AUDIT_ACTION_PLANE_EVENTS == frozenset(_DUAL_EMIT_EVENTS)
+
+
+def test_non_action_plane_event_still_projects(proj_cfg) -> None:
+    """Control for the skip set: suppression must stay narrow.
+
+    A mainline event with no direct emit of its own still has to reach the
+    Numbat stream, so an over-broad skip set fails here rather than silently
+    dropping the plane the projection exists to add.
+    """
+    cfg, _, out = proj_cfg
+    audit_log({"event": "rag_query", "query": "q"}, cfg=cfg)
+    close_audit_handles()
+    assert len(_lines(out)) == 1
+
+
+def test_audit_log_survives_projection_import_failure(
+    proj_cfg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken projection must never reach the caller.
+
+    audit_log runs in the terminal audit_logger node (I4), after the answer is
+    already computed -- the same rationale that guards record-building and the
+    disk write covers the projection, including its lazy import.
+    """
+    import utils.numbat_emitter as emitter
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("projection exploded")
+
+    monkeypatch.setattr(emitter, "project_audit_record", _boom)
+    cfg, audit, _ = proj_cfg
+    audit_log({"event": "rag_query", "query": "q"}, cfg=cfg)  # must not raise
+    close_audit_handles()
+    assert len(_lines(audit)) == 1  # answer + audit trail both survive
 
 
 def test_existing_emitter_kwargs_schema_clean(proj_cfg) -> None:

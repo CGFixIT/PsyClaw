@@ -344,5 +344,16 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
     # and _get_config from THIS module, so a top-level import would be
     # circular; keeping it inside the call also means gate.py/graph.py gain
     # no import-time numbat surface (I6 hygiene).
-    from utils.numbat_emitter import project_audit_record
-    project_audit_record(record, cfg=cfg)
+    #
+    # The import itself is inside the guard, not just the call: it is the one
+    # statement here that runs outside project_audit_record's own internal
+    # Exception handler, and a derived stream must never be able to raise out
+    # of the terminal audit step. Same rationale as the two guards above -- a
+    # failure to project must not turn an already-good response into an
+    # HTTP 500.
+    try:
+        from utils.numbat_emitter import project_audit_record
+
+        project_audit_record(record, cfg=cfg)
+    except Exception as exc:  # noqa: BLE001 -- derived stream, never fatal
+        logger.warning("numbat projection failed for %r: %s", record.get("event"), exc)
