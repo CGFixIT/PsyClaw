@@ -67,7 +67,7 @@ _HARNESS_SURFACES: tuple[tuple[str, str, str, str, str], ...] = (
              "select the local chat model"),
     _surface("status", "/status", _GET, "/api/status",
              "harness health, layout, and token tally"),
-    _surface("registry", "/skills", _GET, "/api/registry",
+    _surface("registry", "/registry", _GET, "/api/registry",
              "merged skills / MCP catalog / connectors"),
     _surface("github", "/github", _GET, "/api/github/status",
              "read-only agentic GitHub status (subprocess)"),
