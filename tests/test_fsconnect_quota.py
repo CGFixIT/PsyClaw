@@ -9,6 +9,7 @@ ledger with on-disk reality.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 import yaml
@@ -109,6 +110,24 @@ def test_quota_status_recompute(tmp_path):
         status = w.quota_status(recompute=True)
     assert status["used_bytes"] == 100  # 30 + 70 reconciled by the walk
     assert status["file_count"] == 2
+
+
+def test_recompute_excludes_macos_artifacts(tmp_path, monkeypatch):
+    # .DS_Store / ._* are invisible to fs_list/fs_read (pathsafe's read-path
+    # filter) but were, before this fix, still counted by the recompute walk --
+    # a Finder-browsed root would silently accrue quota usage the operator's
+    # own listing never shows. Pin that the walk now agrees with the read path.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    wz = tmp_path / "wz"
+    cfg, fs_cfg, cp = _make(tmp_path, [{"path": str(wz), "quota_bytes": 10000}])
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        w.fs_write("a.txt", b"X" * 30, reason="seed")
+        (wz / ".DS_Store").write_bytes(b"Z" * 500)
+        (wz / "._a.txt").write_bytes(b"Z" * 500)
+        (wz / ".localized").write_bytes(b"")
+        status = w.quota_status(recompute=True)
+    assert status["used_bytes"] == 30
+    assert status["file_count"] == 1
 
 
 def test_quota_bytes_allows_exact_boundary(tmp_path):
