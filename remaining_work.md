@@ -1,5 +1,7 @@
 # Remaining work
 
+# note i must be retarded i did basically everything w the telegram config and even get correct responses but the chatbot in the app itself doesnt respond - i dont use telegram and its prob something easy but i wasted an hour on it today haha 
+
 Live checklist as of **2026-08-21**, `origin/main` `02447585`.
 
 Code and `config.yaml` win. History of closed 2026-08-02 items lives in
