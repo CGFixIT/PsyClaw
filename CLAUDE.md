@@ -191,7 +191,8 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `utils/sanitizer.py` | Injection filter; patterns in `config.yaml` |
 | `utils/personality.py` | Soul versioning, SHA-256 drift detection, injection gate on write |
 | `utils/personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL` |
-| `utils/logger.py` | Audit JSONL; SHA-256 query hashing, recursive PII redaction |
+| `utils/logger.py` | Audit JSONL; SHA-256 query hashing, recursive PII redaction. Since the Numbat mainline plane landed, `audit_log` also projects each **already-redacted** record into the derived NDJSON stream via a lazy, fail-soft `utils/numbat_emitter` call — `audit.jsonl` stays authoritative |
+| `utils/numbat_emitter.py` | Derived Numbat NDJSON stream (`logs/numbat-events.ndjsonl`, `numbat:` block ships **enabled**). Two producer planes: the out-of-band **action** plane (`emit_numbat_event`/`emit_numbat_command` from `agentic/*` + `ops_runner`) and the **mainline** plane (`project_audit_record`, every audit record). Events that already emit directly are listed in `_AUDIT_ACTION_PLANE_EVENTS` so they aren't written twice — keep that set in step with the emit sites. Stdlib-only and fail-soft on purpose: it is lazy-imported *inside* gate/graph processes on every `audit_log`, so it must never raise |
 | `utils/ratelimit.py` | Per-IP rate limiting; in-memory / SQLite / Postgres |
 | `utils/health.py` | `check_all()` behind `/health`; probes Grok/Claude only when `api.health_probe_external_providers` is true (ships **false** — `/health` is unauthenticated and unrate-limited, so probing there is operator-triggerable third-party egress), and even then skips a provider whose key is unset |
 | `utils/errors.py` | Typed exception hierarchy rooted at `RAGError` |
