@@ -967,6 +967,17 @@ guardrails:
     - short-term memory
 
 # ===========================
+# UNSLOP: offline prose-quality rail for the agentic real-repo loop (default disabled)
+# ===========================
+# Detects AI-writing tells in local-model output inside agentic/real_repo_loop.py.
+# Log-only + non-blocking: findings are appended to rejection feedback but never
+# change the acceptance decision. Never makes a network call; scanners are vendored
+# under agentic/vendor/unslop/.
+unslop:
+  enabled: false
+  metrics_path: "logs/unslop.jsonl"
+
+# ===========================
 # Telegram channel (out-of-band)  [v0.1 — T0–T3 code + partial T4; default disabled]
 # ===========================
 # Absence of this block, or enabled: false, disables the Telegram channel entirely.
