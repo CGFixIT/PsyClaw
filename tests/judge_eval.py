@@ -91,17 +91,21 @@ class SearchHit(Protocol):
 
 
 class Retriever(Protocol):
-    def hybrid_search(self, query: str) -> list[SearchHit]: ...
+    def hybrid_search(self, query: str) -> list[SearchHit]:
+        raise NotImplementedError
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 class GenerateClient(Protocol):
     model: str
 
-    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str: ...
+    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+        raise NotImplementedError
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)

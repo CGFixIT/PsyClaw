@@ -169,10 +169,20 @@ def test_judge_parser_accepts_claim_ids_and_bounded_reason_codes() -> None:
     "payload",
     [
         "```json\n{}\n```",
-        '{"groundedness": 1.0, "supported_claim_ids": ["E99"], "contradicted_claim_ids": [], '
-        '"forbidden_claim_ids": [], "reason_codes": ["fully_grounded"]}',
-        '{"groundedness": 1.0, "supported_claim_ids": ["E1"], "contradicted_claim_ids": [], '
-        '"forbidden_claim_ids": [], "reason_codes": ["free form evidence quote"]}',
+        json.dumps({
+            "groundedness": 1.0,
+            "supported_claim_ids": ["E99"],
+            "contradicted_claim_ids": [],
+            "forbidden_claim_ids": [],
+            "reason_codes": ["fully_grounded"],
+        }),
+        json.dumps({
+            "groundedness": 1.0,
+            "supported_claim_ids": ["E1"],
+            "contradicted_claim_ids": [],
+            "forbidden_claim_ids": [],
+            "reason_codes": ["free form evidence quote"],
+        }),
     ],
 )
 def test_judge_parser_fails_closed_on_non_schema_output(payload: str) -> None:
