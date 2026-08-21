@@ -107,7 +107,7 @@ decision.
 | POST | `/auth/password` | **session+CSRF or admin bearer** | self-service password change; any authenticated role |
 | POST | `/auth/users/{username}/password` | **session+CSRF or admin bearer** | reset password; operator cannot touch admins |
 | POST | `/auth/users/{username}/role` | **admin only** | set role; last-admin protected |
-| POST | `/auth/users/{username}/disable` `/enable` | **admin; operator on non-admins** | last-admin protected |
+| POST | `/auth/users/{username}/disable` `/auth/users/{username}/enable` | **admin; operator on non-admins** | last-admin protected |
 | DELETE | `/auth/users/{username}` | **admin only** | hard delete after revoke; last-admin protected |
 | GET | `/auth/audit/summary` | **session; admin or audit** | reduced audit view; not the ops API key |
 | GET | `/memory/status` | **API key** | rate-limited; always 200 + flags (default-off memory) |

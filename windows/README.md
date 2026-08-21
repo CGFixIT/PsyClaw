@@ -9,5 +9,6 @@ Windows twin of `macos/generate_service_plist.py`. Not request-path code
 
 Installer / CredMan / fsconnect jail live in [`powershell/`](../powershell/README.md).
 Harness slash commands: [`harness/README.md`](../harness/README.md).
-Trash and Telegram generators: `python -m agentic.fsconnect.cli trash-empty-task`,
-`python -m telegram.cli poll-task` / `health-task`.
+Trash, Telegram, and OpenTweet generators: `python -m agentic.fsconnect.cli trash-empty-task`,
+`python -m telegram.cli poll-task` / `health-task`,
+`python -m opentweet.cli schedule-task`.

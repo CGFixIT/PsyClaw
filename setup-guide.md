@@ -485,6 +485,8 @@ device token (the console login form, or `cyclaw-user token create`).
 
 | Route | Method | What it does |
 |---|---|---|
+| `/auth/setup-status` | GET | unauthenticated, rate-limited; `{enabled, needs_password, username}` while the bootstrap admin still has no password; 503 when `auth.enabled` is false |
+| `/auth/bootstrap-password` | POST | first admin password; loopback peer + same-origin only; 403 off-box; 409 once set; 503 when auth off |
 | `/auth/login` | POST | `{"username", "password"}` → sets an `HttpOnly` session cookie and returns a CSRF token |
 | `/auth/logout` | POST | requires the session cookie **and** the CSRF token in an `X-CyClaw-CSRF` header; revokes the session |
 | `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
@@ -513,6 +515,10 @@ password on the server machine itself (prompts via `getpass`, no echo):
 ```bash
 cyclaw-user passwd admin
 ```
+
+The browser first-run panel can also `POST /auth/bootstrap-password` from
+loopback (same-origin); off-box callers get 403. After the password exists
+that route returns 409 — use `cyclaw-user passwd` or `/auth/password`.
 
 Manage accounts after that with the same local-only `cyclaw-user` CLI
 (`add`/`list`/`disable`/`enable`/`passwd`/`token create`/`token list`/
