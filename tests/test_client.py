@@ -358,6 +358,31 @@ class TestGrokClient:
         assert exc.value.details.get("required_env") == "GROK_API_KEY"
         client.close()
 
+    def test_non_json_200_still_records_usage_missing_spend(
+        self, tmp_path, monkeypatch, _spend_ledger
+    ):
+        """A billed 2xx with a non-JSON body must still append a spend line.
+
+        ``_extract_and_record_spend`` used to swallow ``resp.json()`` in the
+        same try as ``record_external_usage``, so a parse failure skipped the
+        ledger entirely — contradicting the helper's 'recorded regardless'
+        docstring (#1013).
+        """
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        req = httpx.Request("POST", _URL)
+        client._client.post = _FakePost(response=httpx.Response(200, content=b"not-json", request=req))
+        with pytest.raises(GrokServiceError):
+            client.generate("a prompt")
+        client.close()
+        lines = [ln for ln in _spend_ledger.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == 1
+        row = json.loads(lines[0])
+        assert row["usage_missing"] is True
+        assert row["provider"] == "grok"
+        assert "query" not in row
+        assert "prompt" not in row
+
     def test_generate_success_sends_bearer(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GROK_API_KEY", "xai-secret")
         client = GrokClient(_write_config(tmp_path))
