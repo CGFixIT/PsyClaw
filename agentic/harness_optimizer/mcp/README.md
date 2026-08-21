@@ -18,7 +18,7 @@ Constraints enforced here (same as a future MCP surface would have to):
 | Tool | Purpose |
 |---|---|
 | `list_workspace` | List visible entries (skips `holdout_hidden`) |
-| `read_file` | Read one visible file (≤ 256 KiB) |
+| `read_file` | Read one visible file (≤ 256 kB, 256,000 bytes) |
 | `read_surface_manifest` | Local surface manifest |
 | `read_train_failures` | Visible train artifacts |
 | `read_visible_history` | Prior-attempt artifacts |

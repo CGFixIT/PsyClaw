@@ -185,7 +185,9 @@ agentic:
 ```
 
 While `enabled: false`, every `agentic.cli` command **except** `status` and
-`test` is a clean no-op (exit 0). `status` always reports the disabled state.
+`test` is a clean no-op (exit 0) — with one exception: `real-repo-run-publish`
+invoked without `--confirm` exits 4 (gate refusal) before the master-switch
+check. `status` always reports the disabled state.
 
 Prerequisites: GitHub CLI `gh` ≥ `gh_min_version`, authenticated (`gh auth login`).
 CyClaw never reads or forwards your token.
@@ -427,7 +429,10 @@ Allowlisted ops (`allowed_read_ops`):
 | `repo_view` | Repository overview |
 | `pr_list` / `pr_view` / `pr_diff` | PR metadata + diff |
 | `issue_list` / `issue_view` | Issue metadata |
-| `repo_clone` | Used internally by real-repo workspace (not a free-form agent tool) |
+
+`repo_clone` is **not** an `allowed_read_ops` entry: it is allow-listed
+separately in `gh_client._READ_OPS` and only invoked internally by
+`RepoWorkspaceTools.clone` (not a free-form agent tool).
 
 Invocation:
 
@@ -462,7 +467,7 @@ scrubbed env and `cwd` pinned to the clone.
 | Tool / method | Default | What it does |
 |---|---|---|
 | `read_file` / `list_dir` / `stat_file` | always (once cloned) | Scoped reads inside the clone |
-| `write_file` | `allow_git_write_tools` | Create/overwrite one text file (≤ 256 KiB) |
+| `write_file` | `allow_git_write_tools` | Create/overwrite one text file (≤ 256 kB, 256,000 bytes) |
 | `checkout_branch` | `allow_git_write_tools` | `git checkout -b <vendor>/<topic>` only |
 | `add` | `allow_git_write_tools` | Stage validated paths |
 | `commit` | `allow_git_write_tools` | Commit as CyClaw agent identity; `--no-verify` |
@@ -501,8 +506,13 @@ python -m agentic.cli real-repo-run-discard --run-id <id>
 ```
 
 Also reachable (authenticated) via harness routes:
-`POST /api/agent/run`, `GET /api/agent/runs/{id}`, `POST /api/agent/runs/{id}/decision`.
-Two-stage `--provider` / `--plan-file` is **CLI-only** today.
+`POST /api/agent/run`, `GET /api/agent/runs/{id}`, and
+`POST /api/agent/runs/{id}/decision|push|publish|discard` — the full run
+lifecycle including the draft-PR publish.
+Two-stage `--provider` (cloud plan) is **CLI-only** today —
+`real-repo-run-plan` is not in `ops_runner._AGENTIC_ACTIONS`. `--plan-file`
+**is** reachable over HTTP via `POST /api/agent/run`'s `plan` body field,
+which the shim materializes to a temp file.
 
 **`--provider` semantics differ by subcommand:**
 
@@ -542,7 +552,7 @@ holdout reads, no unrestricted FS.**
 | Tool | Purpose |
 |---|---|
 | `list_workspace` | List visible entries (skips `holdout_hidden`) |
-| `read_file` | Read one visible file (≤ 256 KiB) |
+| `read_file` | Read one visible file (≤ 256 kB, 256,000 bytes) |
 | `read_surface_manifest` | Local surface manifest |
 | `read_train_failures` | Visible train artifacts |
 | `read_visible_history` | Prior-attempt artifacts |
