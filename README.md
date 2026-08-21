@@ -25,6 +25,7 @@
 - [Coding Harness Console](#coding-harness-console-v19)
 - [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
 - [Telegram Channel](#telegram-channel-v19)
+- [OpenTweet Channel](#opentweet-channel)
 - [Security Model](#security-model)
 - [Remaining Work](docs/zWork/remaining_work_STALE.md) 
 - [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) 
@@ -46,11 +47,12 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
 10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, `/goal` + human-gated `/loop`, wired `/skills` and `/tools` diagrams, and allowlist-only `/web` (off by default). Home layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
 11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
-12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. Beyond login/logout/whoami, `gate_auth.py` also carries a role-based admin surface (§12 "Roles" — three roles, `admin`/`operator`/`audit`, with the last enabled `admin` protected from disable/delete/role-change): `/auth/users` list/create, `/auth/password` self-service, `/auth/users/{username}/password|role|disable|enable`, `DELETE /auth/users/{username}`, and `/auth/audit/summary`. Every `/auth/*` route exists regardless of `auth.enabled` and returns 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **When `auth.enabled` is true, `POST /query` and the console require a session or named device token.** The shipped default leaves `/query` open.
+12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. First-boot HTTP is `GET /auth/setup-status` (unauthenticated, rate-limited) and loopback-only `POST /auth/bootstrap-password` (403 off-box, 409 once set). Beyond login/logout/whoami, `gate_auth.py` also carries a role-based admin surface (§12 "Roles" — three roles, `admin`/`operator`/`audit`, with the last enabled `admin` protected from disable/delete/role-change): `/auth/users` list/create, `/auth/password` self-service, `/auth/users/{username}/password|role|disable|enable`, `DELETE /auth/users/{username}`, and `/auth/audit/summary`. Every `/auth/*` route exists regardless of `auth.enabled` and returns 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **When `auth.enabled` is true, `POST /query` and the console require a session or named device token.** The shipped default leaves `/query` open.
 13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, package [`memory/README.md`](memory/README.md), plan in [`docs/memory/README.md`](docs/memory/README.md)) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. Not `docs/memories/` (sandbox notes)
 14. **Ships an optional Telegram channel** (v1.9, `telegram/`, shipped `enabled: false`) — an out-of-band phone remote. Shipped YAML is `mode: "chat"` (allowlisted long-poll); `mode: "notify"` remains the T1 outbound-only option. Operator advice is still T1-first before leaving a poller up. Inbound text only ever reaches the RAG pipeline through loopback `POST /query` — never a direct call into `graph.py`. T3 hybrid-confirm (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online` — one-shot, via the exact private-chat command `/online on <grok|claude>` — and T4 media staging (`media.enabled`, default off) writes only through the existing `agentic/fsconnect` path. See [`docs/channels/TELEGRAM_DESIGN.md`](docs/channels/TELEGRAM_DESIGN.md)
 15. **Adds an offline slop-detection probe for the agentic coding loop** (v1.9.x, `agentic/unslop_bridge.py` + vendored scanners under `agentic/vendor/unslop/`) — scans `real_repo_loop.py`'s model responses and proposed prose files (`.md`/`.rst`/`.txt`) for AI-writing tells (filler openers, listicle rhythm, moralizing codas), logging redacted findings (SHA-256 doc hash + counts, never raw text) to `logs/unslop.jsonl` and surfacing a nudge back into the loop. `unslop.enabled` ships `false`; the vendored scanner runs fully offline with no network calls, and — like every consumer already inside `agentic/` — it never crosses the I6 boundary into `gate.py`/`graph.py`/`mcp_hybrid_server.py`
 16. **Projects the audit trail into a Numbat forensic stream** (`utils/numbat_emitter.py`, `numbat:` block — the one optional subsystem that ships **`enabled: true`**) — a derived NDJSON stream at `logs/numbat-events.ndjsonl` that the pinned **Numbat 0.2.0** CLI can score for patterns like `secrets.read_private_key` and `exfil.curl_post_file`. Two producer planes write it: the out-of-band **action** plane (executor, `ops_runner`, `real_repo_loop`, fsconnect, sqlconnect emit directly) and the **mainline** plane (`utils/logger.audit_log` projects every audit record). `audit.jsonl` stays authoritative and the privacy contract is inherited, not re-implemented — records are projected *after* SHA-256 query hashing and recursive PII redaction, so raw query text reaches neither stream. The projection is fail-soft end to end and runs at the terminal `audit_logger` node (I4), after the answer is computed, so it can never turn a good response into a 500. See [`docs/security-philosophy/numbat_secondary_evaluator.md`](docs/security-philosophy/numbat_secondary_evaluator.md)
+17. **Ships an optional OpenTweet X channel** (`opentweet/`, shipped `enabled: false`) — an out-of-band weekly poster. Generation only happens through loopback `POST /query` with `user_confirmed_online: false`; the default write is an OpenTweet **draft** (`scheduled_date` is opt-in). Schedulers (`python -m opentweet.cli schedule-plist` on Darwin, `schedule-task` on Windows) generate and never load/register, and they never send `publish_now`. Same I6 isolation as Telegram: `gate.py` / `graph.py` / MCP never import the package. See [`docs/channels/OPENTWEET_DESIGN.md`](docs/channels/OPENTWEET_DESIGN.md) and [`opentweet/README.md`](opentweet/README.md)
 
 ---
 
@@ -587,6 +589,12 @@ CyClaw/
 │   ├── state.py                 # T3 hybrid-confirm consent state (default off)
 │   ├── media.py                 # T4 attachment staging via agentic/fsconnect (default off)
 │   └── ratelimit.py
+├── opentweet/                  # optional X channel (out-of-band), shipped enabled: false
+│   ├── cli.py                  # status / test / post / schedule-plist / schedule-task
+│   ├── client.py               # loopback /query + OpenTweet REST; trust_env=False
+│   ├── config.py               # loads config.yaml's `opentweet:` block
+│   ├── runner.py               # topic → query → validate → draft/schedule
+│   └── selftest.py
 ├── powershell/                 # Windows installer/launcher for the harness
 │   ├── Install-CyClaw.ps1      # home + venv + PATH shim + profile function
 │   ├── Invoke-CyClaw.ps1
@@ -699,8 +707,9 @@ always a separate, explicit operator action.
   argv, and the item is trust-pinned with `-T /usr/bin/security`
 - **Scheduled jobs** — Dropbox sync (opt-in launchd backend, see
   [Dropbox Corpus Sync](#dropbox-corpus-sync)), Telegram poll/health
-  (`python -m telegram.cli poll-plist` / `health-plist`), and fsconnect
-  trash emptying (`python -m agentic.fsconnect.cli trash-empty-plist`)
+  (`python -m telegram.cli poll-plist` / `health-plist`), fsconnect
+  trash emptying (`python -m agentic.fsconnect.cli trash-empty-plist`),
+  and OpenTweet (`python -m opentweet.cli schedule-plist`)
 - **Supervised services** (highest risk, extra-gated) —
   `macos/generate_service_plist.py` writes a KeepAlive LaunchAgent for
   `gate.py` or the harness console. Because that turns a loopback server into
@@ -710,7 +719,10 @@ always a separate, explicit operator action.
   (`KeepAlive: {SuccessfulExit: false}`); a clean `launchctl stop` stays stopped
 - **Uninstall symmetry** — `macos/uninstall-cyclaw.sh` unschedules any
   registered sync job and boots out + removes landed CyClaw LaunchAgents by
-  label, so no background job outlives the install
+  label (`telegram-poll`, `telegram-health`, `fsconnect-trash`, `gate`,
+  `harness`, `keys-rotate`, `opentweet`), so no background job outlives
+  the install. Sync's optional launchd job is owned by `sync.cli unschedule`,
+  not that label loop.
 
 **Core commands**
 
@@ -719,6 +731,7 @@ bash macos/cyclaw-keychain-set.sh com.cgfixit.cyclaw.telegram-bot-token   # stor
 python -m telegram.cli poll-plist                                        # Darwin-only; generates, never loads
 python -m telegram.cli health-plist
 python -m agentic.fsconnect.cli trash-empty-plist
+python -m opentweet.cli schedule-plist                                   # Darwin-only; generates, never loads
 python macos/generate_service_plist.py --service gate \
     --reason "keep the RAG server up across reboots" --confirm
 python macos/generate_service_plist.py --service harness \
@@ -979,8 +992,8 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
   (add `--remove-home` to delete `~/.CyClaw` too, `--remove-fsconnect` to
   prompt-delete `~/CyClaw-FS`); it also unschedules any registered Dropbox
   sync job and boots out + removes landed CyClaw LaunchAgents by label
-  (telegram-poll/health, fsconnect-trash), so no background job outlives
-  the install.
+  (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate,
+  opentweet), so no background job outlives the install.
 - **Chat:** talks to the local model through the OpenAI-compatible `/v1`
   endpoint from `config.yaml`'s `models.local_llm.base_url` (Ollama by
   default) — no keys, no login, offline. Every reply shows prompt/completion
@@ -1267,6 +1280,31 @@ architecture, the T0–T4 phase ledger, and the threat-model obligations
 
 ---
 
+## OpenTweet Channel
+
+Optional out-of-band X poster (`opentweet/`, shipped `enabled: false`).
+`gate.py`, `graph.py`, and the MCP server never import it (invariant I6).
+Generation is loopback `POST /query` with `user_confirmed_online: false`.
+The default write is an OpenTweet **draft**; `scheduled_date` is opt-in via
+`opentweet.schedule_enabled`. Schedulers never send `publish_now`.
+
+**Core commands**
+
+```bash
+python -m opentweet.cli status
+python -m opentweet.cli test
+python -m opentweet.cli post --topic "..."          # add --dry-run to preview
+python -m opentweet.cli schedule-plist              # Darwin; generates, never loads
+python -m opentweet.cli schedule-task               # Windows; generates, never registers
+```
+
+See [`docs/channels/OPENTWEET_DESIGN.md`](docs/channels/OPENTWEET_DESIGN.md)
+and [`opentweet/README.md`](opentweet/README.md). Keychain/CredMan wrappers
+are in [`macos/README.md`](macos/README.md) and
+[`powershell/README.md`](powershell/README.md).
+
+---
+
 ## Security Model
 
 | Layer | Mechanism |
@@ -1274,7 +1312,7 @@ architecture, the T0–T4 phase ledger, and the threat-model obligations
 | Network | Binds `127.0.0.1:8787` — no external exposure by design |
 | Input | Config-driven injection filter (`policy.prompt_filter`) |
 | Rate limit | 60 req/min per IP |
-| Proxy bypass | All `httpx` clients set `trust_env=False` — ambient `HTTP(S)_PROXY`/`.netrc` cannot reroute local traffic, see the path-embedded Telegram bot token, or carry `GROK_API_KEY` / `ANTHROPIC_API_KEY` on a confirmed hybrid call (`utils/health.py`, `llm/client.py` local + Grok + Claude, `harness/ollama.py`, `telegram/client.py`). This reverses the old “operator proxy governs paid egress” exception. |
+| Proxy bypass | All `httpx` clients set `trust_env=False` — ambient `HTTP(S)_PROXY`/`.netrc` cannot reroute local traffic, see the path-embedded Telegram bot token, or carry `GROK_API_KEY` / `ANTHROPIC_API_KEY` on a confirmed hybrid call (`utils/health.py`, `llm/client.py` local + Grok + Claude, `harness/ollama.py`, `telegram/client.py`, `opentweet/client.py`). This reverses the old “operator proxy governs paid egress” exception. |
 | Telemetry | Shared kill block (`utils/telemetry_kill.py`) runs before any SDK import in every entry point — gateway, MCP server, and indexer CLI; HF Hub network calls are also cut off once the embedding model is confirmed cached (`retrieval/embeddings.py`) |
 | Audit | All paths log SHA-256 query hash + PII-redacted metadata |
 | Grok gating | Triple gate: `mode=hybrid` AND `grok.enabled=true` AND `user_confirmed_online=true` |
@@ -1285,9 +1323,10 @@ architecture, the T0–T4 phase ledger, and the threat-model obligations
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
 | Telegram channel | Out-of-band, ships `enabled: false`; non-empty `allowed_chat_ids` allowlist required to arm; inbound chat reaches the pipeline only via loopback `POST /query` (never a direct `graph.py` call); T3 hybrid-confirm consent (`allow_hybrid_confirm`) ships off — only an explicit `/online on <grok|claude>` grants one TTL-capped per-request consent; T4 media staging off and confined to the fsconnect write path |
+| OpenTweet channel | Out-of-band, ships `enabled: false`; answers only via loopback `POST /query` with `user_confirmed_online: false`; default write is a draft; schedulers generate-don't-load and never send `publish_now`; API key from env / Keychain / CredMan, never YAML or a plist `EnvironmentVariables` dict |
 | launchd secrets (macOS) | Generated plists never embed tokens — `macos/cyclaw-keychain-env.sh` injects secrets from the macOS Keychain at exec time and fails closed when the item is missing; `cyclaw-keychain-set.sh` stores them via a no-echo `security` prompt so the secret never appears in argv or the plist; the gate/harness supervised-agent generator additionally requires `--confirm` + a non-empty `--reason` |
 | `/ops/*` routes | Loopback-only, `require_api_key` gated, rate-limited (60/min), every call audited (`ops_sync_executed` / `ops_agentic_executed` / `ops_fsconnect_executed` / `ops_sqlconnect_executed`); shells out via `subprocess.run([...])` — never imports `sync/` or `agentic/` |
-| `/auth/*` routes | Per-user auth design (`gate_auth.py`, `docs/AUTHENTICATION_DESIGN.md`); session cookie + CSRF for browsers, bearer device tokens for programmatic clients; three roles (`admin`/`operator`/`audit`) gate the `/auth/users*` admin surface, with the last enabled `admin` protected from disable/delete/role-change; every `/auth/*` handler checks `auth.enabled` first and returns 503 (not 404) so route presence never discloses whether the feature is on. When `auth.enabled` is true, `POST /query` requires a session or named device token |
+| `/auth/*` routes | Per-user auth design (`gate_auth.py`, `docs/AUTHENTICATION_DESIGN.md`); first-boot `GET /auth/setup-status` (unauthenticated) and loopback-only `POST /auth/bootstrap-password`; session cookie + CSRF for browsers, bearer device tokens for programmatic clients; three roles (`admin`/`operator`/`audit`) gate the `/auth/users*` admin surface, with the last enabled `admin` protected from disable/delete/role-change; every `/auth/*` handler checks `auth.enabled` first and returns 503 (not 404) so route presence never discloses whether the feature is on. When `auth.enabled` is true, `POST /query` requires a session or named device token |
 | `/memory/*` + `/query/export/html` routes | Optional, default-off memory admin surface (`gate_memory.py`); every `memory:` switch ships `false`; `require_api_key` gated, rate-limited; mutating routes (`propose`/`apply`/`reject`) require a non-empty `reason` string, with an injection scan on `apply` |
 | Container | Non-root, `no-new-privileges`, `cap_drop: ALL`, read-only rootfs, seccomp, resource limits; optional eBPF/Falco detection (`deploy/falco/`, off by default) |
 

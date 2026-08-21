@@ -180,7 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     # docs/AUTHENTICATION_DESIGN.md Stage 2 (/auth/*); gate_memory.py added
     # 2026-08-09 for the optional default-off memory admin surface
     # (/memory/* + /query/export/html).
-    _decl = r'@app\.(?:get|post)\("([^"]+)"'
+    # Allow the path on the next line: `@app.post(\n        "/auth/..."`.
+    _decl = r'@app\.(?:get|post|delete|put|patch)\(\s*"([^"]+)"'
     routes: set[str] = set(re.findall(_decl, gate_src))
     for extra_module in ("gate_ops.py", "gate_auth.py", "gate_memory.py"):
         extra_path = root / extra_module
