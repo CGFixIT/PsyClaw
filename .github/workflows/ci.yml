@@ -626,6 +626,153 @@ jobs:
           # (Unit tests + coverage run in the next step.)
           python -m tests.ci_rag_smoke
 
+      - name: macOS live gateway + harness API smoke
+        # macOS is CyClaw's stated primary platform (CLAUDE.md), but unlike
+        # Windows (below) and Linux (verify-skills' CyClaw-Sandbox matrix
+        # leg), nothing here ever boots gate.py + harness.server together and
+        # proves they answer a real request on this OS -- the macOS test leg
+        # otherwise only runs the fsconnect-specific integration tests above.
+        # Deliberately a SMALLER check set than windows-smoke.ps1's 22 (health
+        # + soul auth gate + harness status/console only, not the full session
+        # lifecycle / ops surface) -- closing the "never boots" gap first; a
+        # follow-up can extend parity once this is proven stable.
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          GROK_API_KEY: dummy
+          CYCLAW_API_KEY: smoke-test-key-ci
+          CYCLAW_HOME: ${{ runner.temp }}/cyclaw-runtime-home
+          CYCLAW_HARNESS_HOST: 127.0.0.1
+          CYCLAW_HARNESS_PORT: '8790'
+        run: |
+          set -uo pipefail
+          RUNTIME_DIR="$RUNNER_TEMP/cyclaw-macos-live-smoke"
+          mkdir -p "$RUNTIME_DIR" "$CYCLAW_HOME"
+          FAILURES=0
+          PIDS=()
+          LOGS=()
+
+          pass() { echo "  PASS  $1"; }
+          fail() { echo "  FAIL  $1"; FAILURES=$((FAILURES + 1)); }
+
+          # SIGTERM, wait for the process to actually exit, escalate to
+          # SIGKILL if it lingers -- same pattern as
+          # .claude/skills/CyClaw-Sandbox/verify.sh's _stop_pid, so no
+          # process here leaves its port bound for a later CI step.
+          stop_pid() {
+            local pid="$1"
+            [ -n "$pid" ] || return 0
+            kill "$pid" 2>/dev/null || true
+            for _ in $(seq 1 20); do
+              kill -0 "$pid" 2>/dev/null || break
+              sleep 0.5
+            done
+            kill -9 "$pid" 2>/dev/null || true
+          }
+          cleanup() {
+            for pid in "${PIDS[@]:-}"; do
+              stop_pid "$pid"
+            done
+          }
+          trap cleanup EXIT
+
+          # Sets LAST_PID rather than `echo`ing it: a caller capturing the
+          # return value via `X=$(start_process ...)` would run this whole
+          # function in a command-substitution SUBSHELL, so the PIDS/LOGS
+          # array appends below would vanish with that subshell on return
+          # and cleanup() would have nothing to kill. Call as a plain
+          # statement and read $LAST_PID immediately after.
+          LAST_PID=""
+          start_process() {
+            local name="$1"; shift
+            local stdout="$RUNTIME_DIR/$name.stdout.log"
+            local stderr="$RUNTIME_DIR/$name.stderr.log"
+            "$@" >"$stdout" 2>"$stderr" &
+            LAST_PID=$!
+            PIDS+=("$LAST_PID")
+            LOGS+=("$stdout" "$stderr")
+          }
+
+          wait_for_endpoint() {
+            local name="$1" url="$2" pid="$3"
+            for _ in $(seq 1 60); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                echo "FATAL: $name exited before becoming ready" >&2
+                return 1
+              fi
+              if curl -sf -o /dev/null "$url"; then
+                return 0
+              fi
+              sleep 0.5
+            done
+            echo "FATAL: $name did not become ready at $url" >&2
+            return 1
+          }
+
+          on_failure() {
+            for log in "${LOGS[@]:-}"; do
+              if [ -f "$log" ]; then
+                echo "===== $log ====="
+                cat "$log"
+              fi
+            done
+          }
+
+          start_process "mock-ollama" python "$GITHUB_WORKSPACE/.claude/skills/CyClaw-Sandbox/mock_ollama.py" \
+            --host 127.0.0.1 --port 11434 --model qwen3.8:27b-mlx
+          MOCK_PID="$LAST_PID"
+          wait_for_endpoint "mock Ollama" "http://127.0.0.1:11434/api/tags" "$MOCK_PID" || { on_failure; exit 1; }
+
+          start_process "gateway" python -m uvicorn gate:app --host 127.0.0.1 --port 8787
+          GATEWAY_PID="$LAST_PID"
+          wait_for_endpoint "gateway" "http://127.0.0.1:8787/health" "$GATEWAY_PID" || { on_failure; exit 1; }
+
+          start_process "harness" python -m harness.server
+          HARNESS_PID="$LAST_PID"
+          wait_for_endpoint "harness" "http://127.0.0.1:8790/api/status" "$HARNESS_PID" || { on_failure; exit 1; }
+
+          echo "=== CyClaw macOS live smoke (http://127.0.0.1:8787, http://127.0.0.1:8790) ==="
+
+          # 1. GET /health — index_ready + graph_ready true
+          health="$(curl -sf http://127.0.0.1:8787/health)" && \
+            [ "$(echo "$health" | jq -r '.index_ready and .graph_ready')" = "true" ] \
+            && pass "GET /health ($health)" \
+            || fail "GET /health unexpected: $health"
+
+          # 2. GET /soul — unauthenticated must be rejected (API-key gated, PR #249)
+          soul_unauth_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/soul)"
+          [ "$soul_unauth_status" = "401" ] \
+            && pass "GET /soul rejects unauthenticated (HTTP 401)" \
+            || fail "GET /soul unauth HTTP $soul_unauth_status (expected 401)"
+
+          # 3. GET /soul — authenticated returns the soul payload
+          soul="$(curl -sf -H "Authorization: Bearer $CYCLAW_API_KEY" http://127.0.0.1:8787/soul)" && \
+            [ "$(echo "$soul" | jq -r '.version // empty')" != "" ] \
+            && pass "GET /soul authed (version=$(echo "$soul" | jq -r '.version'))" \
+            || fail "GET /soul authed unexpected: $soul"
+
+          # 4. GET /api/status — harness header pills (model, provider)
+          status="$(curl -sf http://127.0.0.1:8790/api/status)" && \
+            [ "$(echo "$status" | jq -r '.model // empty')" != "" ] \
+            && [ "$(echo "$status" | jq -r '.provider // empty')" != "" ] \
+            && pass "GET /api/status (model=$(echo "$status" | jq -r '.model'), provider=$(echo "$status" | jq -r '.provider'))" \
+            || fail "GET /api/status unexpected: $status"
+
+          # 5. GET / — harness console served
+          console_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8790/)"
+          [ "$console_status" = "200" ] \
+            && pass "GET / (harness console, HTTP 200)" \
+            || fail "GET / (harness console) HTTP $console_status (expected 200)"
+
+          echo ""
+          if [ "$FAILURES" -eq 0 ]; then
+            echo "[smoke] All macOS live checks passed."
+          else
+            echo "[smoke] $FAILURES macOS live check(s) FAILED."
+            on_failure
+            exit 1
+          fi
+
       - name: Windows live gateway + harness API smoke
         if: runner.os == 'Windows'
         shell: pwsh
