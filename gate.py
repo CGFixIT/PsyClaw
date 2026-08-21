@@ -248,6 +248,24 @@ def _forbid_audit_query(username: str | None) -> None:
         )
 
 
+def _reject_cross_site_query(request: Request) -> None:
+    """Attached to POST /query only when auth is on (see the Stage 3 wiring
+    below) -- reuses _looks_cross_site, the same check that already protects
+    the /soul api_key_optional bypass. Without this, a same-site (different-
+    port) page could ride the operator's session cookie: SameSite=Strict
+    blocks cross-SITE requests but not same-site cross-PORT ones, and unlike
+    every /auth/* route (which all carry gate_auth.py's own _enforce_same_origin),
+    /query had no CSRF/same-origin check to close that gap. A bearer/device
+    token is unaffected either way -- it is never browser-attached, so
+    _looks_cross_site's absent-header allowance already passes it through.
+    """
+    if _looks_cross_site(request):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cross-site request rejected", "code": "CROSS_SITE_BLOCKED"},
+        )
+
+
 async def _audit_query(request: Request, event: dict) -> None:
     """Audit a /query-path event, attaching username when a session/token resolved."""
     username = _request_username(request)
@@ -955,6 +973,14 @@ require_identity = register_auth_routes(
 )
 if auth_manager is not None:
     attach_identity_to_query(app, require_identity)
+    # attach_identity_to_query is dependency-shape-agnostic despite its name --
+    # it just appends a parameterless dependency to POST /query. Calling it a
+    # second time closes the CSRF/same-origin gap /query had relative to every
+    # /auth/* route (see _reject_cross_site_query's docstring). Each call
+    # inserts at index 0 of the dependant tree, so this second call's check
+    # runs BEFORE require_identity -- the same ordering gate_auth.py's own
+    # routes use (_enforce_same_origin declared ahead of the identity dependency).
+    attach_identity_to_query(app, _reject_cross_site_query)
 
 # Optional memory admin surface (default-off). gate_memory lazy-imports memory.*
 # inside handlers only — same registration-injection shape as ops/auth.

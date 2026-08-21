@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from gate import _reject_cross_site_query
 from gate_auth import attach_identity_to_query, register_auth_routes
 from utils.authn_manager import AuthManager
 
@@ -47,6 +48,10 @@ def _make_query_app(manager, cfg=None, limiter=None):
     )
     if manager is not None:
         attach_identity_to_query(app, identity)
+        # Mirrors gate.py's real Stage 3 wiring exactly (see the comment
+        # there): closes the CSRF/same-origin gap /query otherwise had
+        # relative to every /auth/* route.
+        attach_identity_to_query(app, _reject_cross_site_query)
     app.state.audit_events = events
     return app
 
@@ -134,6 +139,72 @@ class TestQueryAuthEnabled:
             "/query", json={}, headers={"Authorization": "Bearer dummy-ops-key"},
         )
         assert r.status_code == 401
+
+
+class TestQueryCrossSiteRejected:
+    """Regression: /query used to carry no CSRF/same-origin check, so a
+    same-site (different-port) page could ride the operator's session cookie
+    -- SameSite=Strict blocks cross-SITE requests but not same-site
+    cross-PORT ones. A real browser sends Sec-Fetch-Site on exactly that kind
+    of request; a non-browser bearer/device-token caller sends neither header
+    and must stay unaffected.
+    """
+
+    def test_same_site_cross_port_cookie_request_is_rejected(self, manager, user):
+        username, password = user
+        client = _client(manager)
+        login = client.post("/auth/login", json={"username": username, "password": password})
+        assert login.status_code == 200
+        r = client.post("/query", json={}, headers={"sec-fetch-site": "same-site"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_cross_site_cookie_request_is_rejected(self, manager, user):
+        username, password = user
+        client = _client(manager)
+        login = client.post("/auth/login", json={"username": username, "password": password})
+        assert login.status_code == 200
+        r = client.post("/query", json={}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_same_origin_cookie_request_still_works(self, manager, user):
+        """Not a regression risk this change should introduce, but the whole
+        point of the fix is that a legitimate same-origin caller is unaffected."""
+        username, password = user
+        client = _client(manager)
+        login = client.post("/auth/login", json={"username": username, "password": password})
+        assert login.status_code == 200
+        r = client.post("/query", json={}, headers={"sec-fetch-site": "same-origin"})
+        assert r.status_code == 200
+
+    def test_a_forged_cross_site_header_is_rejected_even_with_a_valid_device_token(self, manager, user):
+        """The check runs on headers alone, before identity is even resolved,
+        so it rejects a cross-site-labeled request regardless of credential
+        kind. Harmless in practice: a real device-token client (curl,
+        PowerShell, Telegram's client) never sends Sec-Fetch-Site at all --
+        see the no-headers case below, which is the realistic one."""
+        username, _password = user
+        token = manager.create_device_token(username, "telegram")
+        r = _client(manager).post(
+            "/query",
+            json={},
+            headers={"Authorization": f"Bearer {token}", "sec-fetch-site": "cross-site"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_device_token_caller_with_no_browser_headers_still_works(self, manager, user):
+        """The realistic device-token case: no Sec-Fetch-Site/Origin at all
+        (curl, PowerShell, Telegram's client) -- _looks_cross_site's absent-
+        header allowance passes it straight through."""
+        username, _password = user
+        token = manager.create_device_token(username, "telegram")
+        r = _client(manager).post(
+            "/query", json={}, headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200
+        assert r.json()["username"] == username
 
 
 class TestAttachFlipsProbe:
