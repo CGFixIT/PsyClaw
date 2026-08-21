@@ -571,6 +571,16 @@ class TestLoginTransactionAndRaceSafety:
 
 
 class TestLockout:
+    @pytest.fixture(autouse=True)
+    def _freeze_lockout_clock(self, manager, monkeypatch):
+        """Threshold-5 lockout is only _LOCKOUT_BASE_SEC (2.0s). login() snapshots
+        manager._now() before scrypt; on Windows CI one hash can exceed that
+        window, so the sixth call sees an expired lock. Freeze the clock so
+        these tests assert lockout semantics, not hasher wall time.
+        """
+        self._now = manager._now()
+        monkeypatch.setattr(manager, "_now", lambda: self._now)
+
     def test_locks_after_five_consecutive_failures(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         for _ in range(5):
@@ -627,14 +637,9 @@ class TestLockout:
         for _ in range(5):
             with pytest.raises(AuthLoginFailed):
                 manager.login("alice", "wrong")
-        real_now = manager._now
-        manager._now = lambda: real_now() + 3.0  # past the 2s delay at failure #5
-        try:
-            result = manager.login("alice", _GOOD_PASSWORD)
-            assert result.username == "alice"
-        finally:
-            manager._now = real_now
-
+        self._now += 3.0  # past the 2s delay at failure #5
+        result = manager.login("alice", _GOOD_PASSWORD)
+        assert result.username == "alice"
 
 class TestSessions:
     def test_validate_session_returns_the_username(self, manager):
