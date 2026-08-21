@@ -226,8 +226,8 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | `127.0.0.1:8787` | `api.host`/`api.port` | loopback only, never a public interface |
 | `0.028` | `retrieval.min_score` | **RRF scale**, not cosine. Fused scores rarely exceed ~0.1 |
 | `60` | `retrieval.rrf_k` | RRF fusion constant |
-| `660` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (600) |
-| `600` / `3000` | `local_llm.timeout_sec` / `max_tokens` | sized for a dense ~27B local model — which `local_llm.model` now is, so these match the shipped default |
+| `780` | `api.graph_timeout_sec` | must exceed `local_llm.timeout_sec` (720) |
+| `720` / `4096` | `local_llm.timeout_sec` / `max_tokens` | sized for dense ~27B MLX on M5 Pro class 307 GB/s (48 GB unified) — match the shipped default |
 | `8000` | `personality.soul_max_chars` | soul is capped |
 | `4000` | `retrieval.max_context_tokens` | prompt context budget |
 | `512` / `50` | `indexing.chunk_size` / `chunk_overlap` | overlap must stay `< chunk_size` |

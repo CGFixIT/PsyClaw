@@ -83,7 +83,7 @@ ollama run qwen3.8:27b-mlx "Say hello"
 
 | Model | Command | Notes |
 |-------|---------|-------|
-| Qwen 3.8 27B MLX (default) | `ollama pull qwen3.8:27b-mlx` | What `config.yaml` ships. Apple Silicon MLX build. Dense ~27B — `timeout_sec: 600`/`max_tokens: 3000` are already sized for it. Needs the most `num_ctx` headroom and the most RAM |
+| Qwen 3.8 27B MLX (default) | `ollama pull qwen3.8:27b-mlx` | What `config.yaml` ships. Apple Silicon MLX build. Dense ~27B — `timeout_sec: 720`/`max_tokens: 4096` are sized for M5 Pro class 48 GB / 307 GB/s. Needs the most `num_ctx` headroom and the most RAM |
 | Qwen 3.8 27B (generic) | `ollama pull qwen3.8:27b` | Same weights without the MLX tag. Use on Intel/Windows/Linux, then set `models.local_llm.model` and `guardrails.model` to this tag |
 | Qwen 2.5 7B | `ollama pull qwen2.5:7b` | Much lighter; the prior default. Best balance of quality + speed on modest hardware |
 | Mistral 7B | `ollama pull mistral:7b` | Good alternative |
@@ -135,8 +135,8 @@ models:
     provider: "ollama"
     base_url: "http://127.0.0.1:11434/v1"
     model: "qwen3.8:27b-mlx"  # must match your `ollama pull` tag exactly
-    timeout_sec: 600     # what ships; sized for the dense ~27B default
-    max_tokens: 3000
+    timeout_sec: 720     # what ships; sized for the dense ~27B MLX default on M5 Pro class
+    max_tokens: 4096
 ```
 
 **If you pulled a different model in Step 2,** update **both** `models.local_llm.model` and `guardrails.model` to match it exactly (e.g. `mistral:7b`, `llama3.1:8b`) — `config-guard`'s C11 check fails the build if the two drift apart.
@@ -212,7 +212,7 @@ If you hit the "0% processing" stall on large context queries, increase Ollama's
 Set the environment variable before `ollama serve` (recommended, persists for all models):
 
 ```bash
-export OLLAMA_CONTEXT_LENGTH=12288
+export OLLAMA_CONTEXT_LENGTH=16384
 ollama serve
 ```
 
@@ -220,13 +220,13 @@ Or per-session inside an interactive `ollama run` shell (there is no `--num_ctx`
 
 ```
 ollama run qwen3.8:27b-mlx
->>> /set parameter num_ctx 12288
+>>> /set parameter num_ctx 16384
 ```
 
-> Note: Ollama's default context window is 4096 tokens — below the 8,500-token floor CyClaw's no-stall formula requires. Setting this is **not optional** with the default config.
+> Note: Ollama's default context window is 4096 tokens — below the ~9,600-token floor CyClaw's no-stall formula requires. Setting this is **not optional** with the default config.
 
 The config.yaml formula: `Ollama num_ctx >= max_context_tokens + max_tokens + ~1500 headroom`
-With defaults: `4000 + 3000 + 1500 = 8500`, so `10000-12288` is the safe range.
+With defaults: `4000 + 4096 + 1500 = 9596`, so **16384** is the safe recommended value.
 
 ### The agentic real-repo coding loop needs more headroom than that
 

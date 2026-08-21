@@ -86,7 +86,7 @@ turn it on, and even then it can GET only hosts you allowlisted.
 ```
 
 `/loop` is separately rate-limited (default 8 turns / 300s). Turns send
-`{"loop": true}`, use a 1024-token output budget and a clipped history
+`{"loop": true}`, use a 2048-token output budget and a clipped history
 window, and share a process-wide single-generation lock with ordinary chat
 so Metal is never double-booked. A loop without a goal is `400 LOOP_REQUIRES_GOAL`.
 

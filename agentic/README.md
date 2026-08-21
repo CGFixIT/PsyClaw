@@ -105,8 +105,8 @@ agentic:
     provider: "ollama"           # "ollama" | "openai_compatible"
     base_url: "http://127.0.0.1:11434/v1"   # loopback only (validated)
     model: "qwen3.8:27b-mlx"
-    planner_timeout_sec: 600
-    planner_max_tokens: 2048
+    planner_timeout_sec: 720
+    planner_max_tokens: 3072
     allow_deepagents_dependency: false
     allow_filesystem_write_tools: false   # retired DeepAgents virtual surface only
     allow_shell_execution: false          # no host shell tool (hard-refused if true)
