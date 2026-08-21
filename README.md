@@ -212,7 +212,7 @@ Set for the current Terminal tab. Generate a real value instead of typing one �
 
 ```bash
 export CYCLAW_API_KEY="$(openssl rand -hex 20)"
-echo "$CYCLAW_API_KEY"        # copy it; you paste this into the console UI
+echo "$CYCLAW_API_KEY"       
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
@@ -222,7 +222,7 @@ Persist it. macOS has defaulted to **zsh** since Catalina, so that means
 ```bash
 echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.zshrc
 source ~/.zshrc
-echo "$CYCLAW_API_KEY"        # confirm it survived
+echo "$CYCLAW_API_KEY"        
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
@@ -271,7 +271,6 @@ Persist API key across sessions (writes to the current user's environment perman
     "your-strong-local-secret",
     [System.EnvironmentVariableTarget]::User
 )
-# Restart your terminal, then launch normally:
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
@@ -400,13 +399,15 @@ git clone https://github.com/CGFixIT/CyClaw
 cd CyClaw
 python3.12 -m venv .venv
 source .venv/bin/activate
-
+```
 # 1) torch FIRST, and PLAIN — no +cpu suffix, no --index-url override.
 #    Apple Silicon has one arm64 wheel; there is no CPU/CUDA build to pick between.
+```bash
 pip install "torch==2.13.0"
-
+```
 # 2) Everything else, from copies of both manifests with the torch and
 #    PyTorch-index lines stripped out. Same thing CI's macos-latest leg runs.
+```bash
 grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
 grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
@@ -434,14 +435,17 @@ tradeoffs are tabulated in
 git clone https://github.com/CGFixIT/CyClaw
 cd CyClaw
 python3.12 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-
+source .venv/bin/activate        
+```
 # 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
+```bash
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
+```
 
 # 2) Install the rest, pinned to the verified transitive tree.
 #    --ignore-installed PyYAML avoids a resolver conflict with a system-level
 #    PyYAML some platforms preinstall outside pip's own tracking.
+```bash
 pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
@@ -457,9 +461,10 @@ pip install -e ".[all]" -c constraints.txt
 ### Required local prep
 
 ```bash
-mkdir -p index logs   # optional — gate.py/the retriever/logger self-create these on first run
+mkdir -p index logs   
 export GROK_API_KEY=dummy
 ```
+^ # optional — gate.py/the retriever/logger self-create these on first run
 
 `data/personality/soul.md` ships committed to git with CyClaw's real
 personality already in place — do not recreate it from a placeholder on a
