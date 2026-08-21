@@ -49,6 +49,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. Beyond login/logout/whoami, `gate_auth.py` also carries a role-based admin surface (§12 "Roles" — three roles, `admin`/`operator`/`audit`, with the last enabled `admin` protected from disable/delete/role-change): `/auth/users` list/create, `/auth/password` self-service, `/auth/users/{username}/password|role|disable|enable`, `DELETE /auth/users/{username}`, and `/auth/audit/summary`. Every `/auth/*` route exists regardless of `auth.enabled` and returns 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **When `auth.enabled` is true, `POST /query` and the console require a session or named device token.** The shipped default leaves `/query` open.
 13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, package [`memory/README.md`](memory/README.md), plan in [`docs/memory/README.md`](docs/memory/README.md)) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. Not `docs/memories/` (sandbox notes)
 14. **Ships an optional Telegram channel** (v1.9, `telegram/`, shipped `enabled: false`) — an out-of-band phone remote. Shipped YAML is `mode: "chat"` (allowlisted long-poll); `mode: "notify"` remains the T1 outbound-only option. Operator advice is still T1-first before leaving a poller up. Inbound text only ever reaches the RAG pipeline through loopback `POST /query` — never a direct call into `graph.py`. T3 hybrid-confirm (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online` — one-shot, via the exact private-chat command `/online on <grok|claude>` — and T4 media staging (`media.enabled`, default off) writes only through the existing `agentic/fsconnect` path. See [`docs/channels/TELEGRAM_DESIGN.md`](docs/channels/TELEGRAM_DESIGN.md)
+15. **Adds an offline slop-detection probe for the agentic coding loop** (v1.9.x, `agentic/unslop_bridge.py` + vendored scanners under `agentic/vendor/unslop/`) — scans `real_repo_loop.py`'s model responses and proposed prose files (`.md`/`.rst`/`.txt`) for AI-writing tells (filler openers, listicle rhythm, moralizing codas), logging redacted findings (SHA-256 doc hash + counts, never raw text) to `logs/unslop.jsonl` and surfacing a nudge back into the loop. `unslop.enabled` ships `false`; the vendored scanner runs fully offline with no network calls, and — like every consumer already inside `agentic/` — it never crosses the I6 boundary into `gate.py`/`graph.py`/`mcp_hybrid_server.py`
 
 ---
 
@@ -533,6 +534,8 @@ CyClaw/
 │   ├── registry.py
 │   ├── writer.py               # gh pr create --draft; armed flag, held by agentic.enabled
 │   ├── real_repo_loop.py       # (v1.9 P10) clone → plan → patch → verify → human decides → commit
+│   ├── unslop_bridge.py        # (v1.9.x) offline slop-detection probe for real_repo_loop; default off
+│   ├── vendor/unslop/          # vendored offline AI-writing-tell scanners (suggest.py); no network calls
 │   ├── executor/               # sandboxed argv-list check runner; soft sandbox, not a kernel boundary
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
@@ -1078,6 +1081,11 @@ into `approve`.
   HOME-resident credential helper (`gh auth setup-git`).
 - Branch names are forced into the `claude/` namespace; `run_id` is validated as
   32-char lowercase hex before it can become an argv element.
+- **Optional offline slop-detection nudge.** When `unslop.enabled` is `true`,
+  each step's model response and any proposed prose files are scanned by the
+  vendored offline scanner (`agentic/unslop_bridge.py`) for AI-writing tells;
+  a hit becomes feedback appended to the next planning prompt, not a gate —
+  it never blocks or refuses a candidate. Ships `false`; see item 15 above.
 
 ### Enable it
 
