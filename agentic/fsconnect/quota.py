@@ -30,7 +30,7 @@ import stat as statmod
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
-from agentic.fsconnect.pathsafe import SafeRoot, ScopedRoots
+from agentic.fsconnect.pathsafe import SafeRoot, ScopedRoots, _is_macos_artifact_name
 from agentic.fsconnect.trash import iso
 
 QUOTA_FILE = ".cyclaw-quota.json"
@@ -78,8 +78,10 @@ def save(roots: ScopedRoots, root: str | None, ledger: QuotaLedger) -> None:
 def _walk_usage(base: str) -> tuple[int, int]:
     """Sum sizes + count of regular files under ``base`` (symlinks never followed).
 
-    Excludes the ledger file itself and any orphaned ``*.cyclaw-tmp`` files so the
-    recompute is stable across save cycles and does not count crash leftovers.
+    Excludes the ledger file itself, any orphaned ``*.cyclaw-tmp`` files, and (on
+    Darwin) the same Finder-dropped artifacts (``.DS_Store``, ``.localized``,
+    ``._*``) that pathsafe's read/list path already hides -- otherwise quota usage
+    silently includes bytes the connector never shows the operator.
 
     A failure to scan the root itself is a total failure and raises OSError so
     callers fail closed; failures in subdirectories are ignored and the partial
@@ -100,7 +102,11 @@ def _walk_usage(base: str) -> tuple[int, int]:
                     if statmod.S_ISDIR(st.st_mode):
                         stack.append(entry.path)
                     elif statmod.S_ISREG(st.st_mode):
-                        if entry.name == QUOTA_FILE or entry.name.endswith(".cyclaw-tmp"):
+                        if (
+                            entry.name == QUOTA_FILE
+                            or entry.name.endswith(".cyclaw-tmp")
+                            or _is_macos_artifact_name(entry.name)
+                        ):
                             continue
                         used += int(st.st_size)
                         files += 1
