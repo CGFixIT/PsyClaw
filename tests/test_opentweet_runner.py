@@ -48,6 +48,19 @@ def _answer(**overrides: object) -> dict:
     return data
 
 
+def test_topic_with_braces_does_not_crash(tmp_path: Path) -> None:
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()) as post,
+        patch("opentweet.client.get_me"),
+        patch("opentweet.client.create_post"),
+    ):
+        post_once(cfg, topic="what does {graph} topology mean?", dry_run=True)
+    sent = post.call_args.args[1]
+    assert "{graph}" in sent
+    assert "Write exactly one X status" in sent
+
+
 def test_empty_topic_file_refuses(tmp_path: Path) -> None:
     cfg_path = _cfg(tmp_path)
     (tmp_path / "topic.txt").write_text("  \n", encoding="utf-8")

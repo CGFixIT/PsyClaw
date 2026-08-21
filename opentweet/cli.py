@@ -310,7 +310,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_post.set_defaults(func=cmd_post)
 
     def _sched_flags(p: argparse.ArgumentParser) -> None:
-        p.add_argument("--token-service", default=_DEFAULT_KEY_SERVICE, help="Keychain/CredMan name for OPENTWEET_API_KEY.")
+        p.add_argument(
+            "--token-service",
+            default=_DEFAULT_KEY_SERVICE,
+            help="Keychain/CredMan name for OPENTWEET_API_KEY.",
+        )
         p.add_argument("--api-key-service", default="", help="Optional Keychain/CredMan name for CYCLAW_API_KEY.")
         p.add_argument("--weekday", type=int, default=None, help="0/7 Sunday … 6 Saturday (default: config).")
         p.add_argument("--hour", type=int, default=None, help="Fire hour 0-23 (default: config fire_hour).")

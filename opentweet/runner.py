@@ -18,7 +18,7 @@ Output only the post text. No preamble, no wrapping quotes, no hashtags unless
 they appear in a source. If the corpus does not support a specific claim, write
 one short sentence saying so rather than inventing.
 
-Topic: {topic}
+Topic:
 """
 
 _ONLINE_MODELS = frozenset({"grok", "claude"})
@@ -149,7 +149,8 @@ def post_once(
     includes the post text or API key.
     """
     topic_text = read_topic(cfg, topic=topic, topic_file=topic_file)
-    query = PROMPT_TEMPLATE.format(topic=topic_text)
+    # Concatenate: str.format would KeyError/ValueError if the topic contains braces.
+    query = PROMPT_TEMPLATE + topic_text
     data = client.post_query(cfg, query)
     answer = _validate_answer(cfg, data)
 
