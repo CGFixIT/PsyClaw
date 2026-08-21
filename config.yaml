@@ -533,7 +533,11 @@ logging:
   audit_fields:
     include_query_hash: true
 
-# Numbat dual-write projection (issue #959 / #961). Off the request path.
+# Numbat dual-write projection (issue #959 / #961). Since the mainline plane
+# landed this runs ON the request path but never in front of the answer: it
+# fires inside audit_log, at the terminal audit_logger node (I4), after the
+# response is already computed, and is fail-soft end to end -- a projection
+# failure degrades to a logger.warning and never reaches the caller.
 # Emitter writes schema 0.3.0; CI pins the Numbat 0.2.0 CLI (that schema).
 # audit.jsonl stays authoritative; this is a derived forensic stream.
 # Two producer planes write here: the out-of-band action plane (agentic /

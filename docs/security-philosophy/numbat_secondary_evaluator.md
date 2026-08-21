@@ -10,13 +10,18 @@ Related: `config.yaml` `numbat:` block, `logs/numbat-events.ndjsonl`, `.github/w
 
 ## ELI5
 
-Numbat is a security notebook for AI helpers: it writes down “the helper ran this command” or “it tried to read this file.” CyClaw already has its own diary (`audit.jsonl`). Numbat is a second, simpler copy of the *optional* helper stuff (tools, files, checks), not the main Q&A brain. Version **0.2.0** is the Numbat program CyClaw’s tests actually run, to ask: “does this notebook look like someone stealing a key or sending a secret out?” It does not decide what CyClaw answers, and if Numbat breaks, CyClaw is supposed to keep working.
+Numbat is a security notebook for AI helpers: it writes down “the helper ran this command” or “it tried to read this file.” CyClaw already has its own diary (`audit.jsonl`). Numbat is a second, simpler copy of that diary. It started as a copy of only the *optional* helper stuff (tools, files, checks); it now also copies the main Q&A trail, so one notebook describes CyClaw end to end. Version **0.2.0** is the Numbat program CyClaw’s tests actually run, to ask: “does this notebook look like someone stealing a key or sending a secret out?” It does not decide what CyClaw answers, and if Numbat breaks, CyClaw is supposed to keep working.
 
 ---
 
 ## Tech 101
 
-In CyClaw, Numbat is a **side-channel detector**, not part of `POST /query`. `utils/numbat_emitter.py` appends NDJSON to `logs/numbat-events.ndjsonl` when the executor, fsconnect, or similar out-of-band tools fire; `gate.py` / `graph.py` / MCP never import it (I6). CI pins the **Numbat 0.2.0** binary and runs `numbat rules test --fixture` against committed fixtures that `build_event` produced, looking for rules like `secrets.read_private_key` and `exfil.curl_post_file`. The same job then runs the executor-jail pytest with that binary on PATH so live emitter output is scored, not only the committed files. Benefit: you get a vendor-shaped “did the agent do something nasty?” check without putting Numbat on the RAG path.
+In CyClaw, Numbat is a **detector over a derived stream**, never an authority. `utils/numbat_emitter.py` appends NDJSON to `logs/numbat-events.ndjsonl` from two producer planes:
+
+* **Action plane** — direct `emit_numbat_event` / `emit_numbat_command` calls when the executor, ops_runner, real_repo_loop, fsconnect, or sqlconnect fire.
+* **Mainline plane** — `project_audit_record`, which projects every `audit.jsonl` record, including `POST /query`. This plane is newer than the “side-channel only” framing this doc originally carried.
+
+The mainline plane does put the emitter on the request path, but never in front of an answer: it runs inside `audit_log`, at the terminal `audit_logger` node (I4), after the response is computed, and is fail-soft throughout — a projection failure degrades to a `logger.warning`. `gate.py` / `graph.py` / MCP still never import it at module scope; the projection reaches it by a lazy call-time import from `utils/logger.py` (I6 holds — `utils/` is shared). Privacy is inherited, not re-implemented: the record is projected *after* query hashing and recursive PII redaction, so raw query text reaches neither stream. CI pins the **Numbat 0.2.0** binary and runs `numbat rules test --fixture` against committed fixtures that `build_event` produced, looking for rules like `secrets.read_private_key` and `exfil.curl_post_file`. The same job then runs the executor-jail pytest with that binary on PATH so live emitter output is scored, not only the committed files. Benefit: you get a vendor-shaped “did the agent do something nasty?” check without putting Numbat on the RAG path.
 
 `rules test` uses per-type allowlists stricter than the published JSON schema: `command.exec` cannot carry `exit_code` / `file_path` / `duration_ms`. The emitter strips those from `command.exec` and writes outcomes as `command.result`.
 

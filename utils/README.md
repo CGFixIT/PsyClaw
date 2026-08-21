@@ -23,7 +23,7 @@ modules"; this file groups them by concern.
 | `telemetry_kill.py` | Canonical telemetry-kill env mapping. Stdlib-only; must be applied **before** heavy imports (`invariant-guard` G1). |
 | `guardrail_bridge.py` | Inversion shim: the only module through which `graph.py` reaches `guardrails/` (I6). Returns `None` for a disabled rail. |
 | `external_pre_hook.py` | Synchronous pre-action hook runner behind the `pre_action_hook_grok`/`pre_action_hook_claude` graph nodes: runs the configured command before any Grok/Claude call; exit 0 allows, exit 2 denies, anything else fails closed. |
-| `numbat_emitter.py` | Numbat NDJSON dual-write emitter (`logs/numbat-events.ndjsonl`): I6-clean forensic projection of executor/ops_runner/real_repo_loop/fsconnect/sqlconnect action records. Never raises; audit.jsonl stays authoritative. |
+| `numbat_emitter.py` | Numbat NDJSON dual-write emitter (`logs/numbat-events.ndjsonl`). Two planes: the **action** plane (direct `emit_numbat_*` calls from executor/ops_runner/real_repo_loop/fsconnect/sqlconnect) and the **mainline** plane (`project_audit_record`, every redacted audit record). `_AUDIT_ACTION_PLANE_EVENTS` keeps events that emit on both from being written twice. Never raises; audit.jsonl stays authoritative. |
 
 ## Soul / audit / errors
 
@@ -31,7 +31,7 @@ modules"; this file groups them by concern.
 |---|---|
 | `personality.py` | Soul versioning, SHA-256 drift detection, injection scan + human-`reason` gate on write (invariant I5), atomic writes. |
 | `personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL`. |
-| `logger.py` | Audit JSONL: SHA-256 query hashing, recursive PII redaction. Raw query text is never persisted. |
+| `logger.py` | Audit JSONL: SHA-256 query hashing, recursive PII redaction. Raw query text is never persisted. `audit_log` also projects each record — *after* hashing and redaction — into the Numbat stream via a lazy, fail-soft `numbat_emitter` call, so the derived stream inherits the same privacy contract. |
 | `errors.py` | Typed exception hierarchy rooted at `RAGError` (`.code`/`.message`/`.details`). Never raise bare `Exception`. |
 | `spend.py` | Append-only Grok/Claude token ledger (`logs/spend.jsonl`, `logging.spend_file`). Tokens are ground truth; dollars derived at read time by `metrics.py`. Separate stream from `audit.jsonl`; never persists query/prompt content. |
 
