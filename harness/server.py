@@ -89,7 +89,7 @@ from schemas.api import (
     AuthSetupStatusResponse,
 )
 from utils.auth import require_api_key
-from utils.authn import PasswordPolicyError
+from utils.authn import PasswordPolicyError, validate_role
 from utils.authn_manager import BOOTSTRAP_USERNAME
 from utils.errors import AgenticError, AuthBootstrapComplete
 from utils.logger import _get_config, audit_log, redact_sensitive
@@ -1621,10 +1621,20 @@ def create_app(
     def harness_create_user(request: Request, req: AuthCreateUserRequest) -> dict:
         account = _harness_actor(request)
         _require_user_admin(account)
-        if account.role == _ROLE_OPERATOR and req.role == _ROLE_ADMIN:
+        # Canonicalize BEFORE the operator/admin comparison -- comparing the
+        # raw request string let "Admin"/"ADMIN"/"admin " skip this guard
+        # entirely (req.role == _ROLE_ADMIN is a literal-string ==), then get
+        # stored as canonical "admin" once create_user() re-validates it.
+        # gate_auth.py's auth_create_user does this in the correct order;
+        # mirror it here.
+        try:
+            role = validate_role(req.role)
+        except PasswordPolicyError as exc:
+            raise _auth_http(_HTTP_UNPROCESSABLE, "AUTH_POLICY", str(exc)) from exc
+        if account.role == _ROLE_OPERATOR and role == _ROLE_ADMIN:
             raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
         manager = _require_harness_auth()
-        created = manager.create_user(req.username, req.password, req.role)
+        created = manager.create_user(req.username, req.password, role)
         new_user = manager.get_user(created)
         if new_user is None:
             raise _auth_http(_HTTP_UNAVAILABLE, "AUTH_ERROR", "created user missing")

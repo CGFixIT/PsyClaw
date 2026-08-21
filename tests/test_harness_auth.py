@@ -639,3 +639,43 @@ def test_harness_bootstrap_password_from_loopback(tmp_path, monkeypatch, cfg):
     r = loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
     assert r.status_code == 200
     assert r.json()["username"] == "admin"
+
+
+def test_operator_cannot_escalate_via_role_case(tmp_path, monkeypatch, cfg):
+    """An operator sending role="Admin" (any case/whitespace variant of the
+    literal "admin") must not create an admin account. Regression for the
+    harness comparing the raw, un-canonicalized request role against the
+    literal "admin" before AuthManager.create_user() lowercases it -- letting
+    "Admin"/"ADMIN"/"admin " skip the operator-block guard entirely."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
+
+    admin = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    admin.post("/api/auth/login", json={"username": "admin", "password": "correct horse battery staple"})
+    created = admin.post(
+        "/api/auth/users",
+        json={"username": "mallory", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    )
+    assert created.status_code == 200
+
+    operator = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    operator.post("/api/auth/login", json={"username": "mallory", "password": "another good password!!"})
+    escalate = operator.post(
+        "/api/auth/users",
+        json={"username": "backdoor", "password": "another good password!!", "role": "Admin"},
+        headers=_csrf(operator),
+    )
+    assert escalate.status_code == 403
+
+    backdoor_login = admin.post(
+        "/api/auth/login", json={"username": "backdoor", "password": "another good password!!"}
+    )
+    assert backdoor_login.status_code == 401
