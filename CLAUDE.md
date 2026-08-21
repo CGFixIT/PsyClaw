@@ -700,9 +700,10 @@ python3 .claude/skills/index-doctor/doctor.py --rebuild
 python3 .claude/skills/injection-redteam/redteam.py
 ```
 
-CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); ubuntu
-and macos gate the build while the windows leg carries `continue-on-error`, so
-it surfaces failures without blocking. Coverage sources:
+CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); all
+three `test` legs are release gates (a failing Windows result is not masked).
+`continue-on-error` remains only on the `verify-skills` e2e smokes and the
+non-blocking `numbat-rules.yml` job. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is

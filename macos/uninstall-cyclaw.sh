@@ -62,11 +62,11 @@ unschedule_sync_job() {
 unschedule_sync_job
 
 # -- Landed LaunchAgent cleanup -----------------------------------------------
-# #910/#911 added generators for telegram-poll (KeepAlive), telegram-health,
-# and fsconnect-trash. #912's generate_service_plist.py uses the gate/harness
-# labels. None of these jobs go through sync.cli, so the step above never
-# sees them -- a loaded telegram-poll KeepAlive or crash-restart gate agent
-# would keep running after `cyclaw` is gone. Best-effort: bootout the
+# Generators (none of these go through sync.cli): telegram-poll KeepAlive,
+# telegram-health, fsconnect-trash, gate/harness (generate_service_plist.py),
+# keys-rotate (setup-cyclaw-keys.sh --schedule-rotate), opentweet
+# (python -m opentweet.cli schedule-plist). A loaded KeepAlive or crash-restart
+# agent would keep running after `cyclaw` is gone. Best-effort: bootout the
 # launchd label even if the plist file is already gone (a KeepAlive job
 # can stay loaded after a hand-deleted plist). Then delete the file if
 # it is still present. Failures print a WARNING and uninstall continues.
