@@ -4,27 +4,39 @@
 # only after manual review confirmed the match is a fixture/test value, never
 # a live credential.
 #
-# NOTE: fingerprints pin the commit that INTRODUCED the bytes. A wrong SHA is a
-# silent no-op; full-history scans (schedule / workflow_dispatch) re-report the
-# finding while push-range scans may stay green. Do NOT paste the matched
-# secret text into comments in this file — the scanner re-matches comments.
+# NOTE: fingerprints pin the commit that INTRODUCED the bytes. A later rewrite
+# of the same line has a different SHA; ignore BOTH. Replacing an introducing
+# SHA with a later one is a silent no-op: push-range scans stay green, full-
+# history scans (schedule / workflow_dispatch) re-report. #812 did that;
+# Friday 2026-08-21 schedule run 32470191777 re-reported the dropped SHAs.
+# Do NOT paste the matched secret text into comments — the scanner re-matches
+# comments (that is how this file itself got a historical aws-access-token hit).
 
 # tests/test_audit.py — synthetic AKIA-shaped fixtures in recursive redaction
-# tests (historical 6a8b697, PR #376 area). HEAD now uses the AWS-docs
-# IOSFODNN7EXAMPLE form; full-history still sees the intermediate commit.
+# tests (PR #376). Introducing commit 08d0cc5; later rewrite 6a8b697. HEAD now
+# uses the AWS-docs IOSFODNN7EXAMPLE form.
+08d0cc528451248bfeb4e128665dce2de83f2dae:tests/test_audit.py:aws-access-token:176
+08d0cc528451248bfeb4e128665dce2de83f2dae:tests/test_audit.py:aws-access-token:186
+08d0cc528451248bfeb4e128665dce2de83f2dae:tests/test_audit.py:aws-access-token:198
+08d0cc528451248bfeb4e128665dce2de83f2dae:tests/test_audit.py:aws-access-token:203
 6a8b6976d8d05898abea6d6b4b830e3f1af0eff0:tests/test_audit.py:aws-access-token:176
 6a8b6976d8d05898abea6d6b4b830e3f1af0eff0:tests/test_audit.py:aws-access-token:186
 6a8b6976d8d05898abea6d6b4b830e3f1af0eff0:tests/test_audit.py:aws-access-token:198
 6a8b6976d8d05898abea6d6b4b830e3f1af0eff0:tests/test_audit.py:aws-access-token:203
 
-# .gitleaksignore — historical revision (f7f98d3) re-quoted an AKIA-shaped
-# fixture in a comment; later rewrites removed the literal.
+# .gitleaksignore — historical comments re-quoted an AKIA-shaped fixture.
+# Introducing self-match 51fdfb4; later rewrite f7f98d3.
+51fdfb4f8314ba58ba58865cfb3fefbb2571265e:.gitleaksignore:aws-access-token:7
 f7f98d380b8adddf498256b03834d3122a960500:.gitleaksignore:aws-access-token:7
 
 # tests/test_audit.py — assignment-form redaction fixtures (PR #99 era).
+# Introducing 7077081; later rewrite 0b4f8a7.
+70770814a734c526c9007fc0e0f6f6cbe0cd4401:tests/test_audit.py:generic-api-key:101
 0b4f8a7af149137668c45f8596bca2cc0781e639:tests/test_audit.py:generic-api-key:101
 
 # docs/TEST_SUITE_ANALYSIS_2026-06-20.md — analysis doc example assignment.
+# Introducing ce3b318; later rewrite 8c5ff35.
+ce3b318e33b064035449921ba50cf203b9586d04:docs/TEST_SUITE_ANALYSIS_2026-06-20.md:generic-api-key:307
 8c5ff358462ce384ddf1cd985bba5b47dc6fa2b2:docs/TEST_SUITE_ANALYSIS_2026-06-20.md:generic-api-key:307
 
 # .gitleaksignore — intermediate fix commit that briefly re-quoted the
