@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  CyClaw OpenTweet weekly poster.
+
+  DISABLED BY DEFAULT.
+
+  Recommended path: `python -m opentweet.cli schedule-plist` generates the
+  same plist from real, resolved install paths and injects OPENTWEET_API_KEY
+  via macos/cyclaw-keychain-env.sh (Keychain), never as a plaintext
+  EnvironmentVariables value. It still never loads the agent; it only
+  prints the `launchctl bootstrap` command to run by hand.
+
+  This hand-editable template remains as a reference/fallback.
+  See docs/channels/OPENTWEET_DESIGN.md.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cgfixit.cyclaw.opentweet</string>
+  <key>WorkingDirectory</key>
+  <string>REPLACE_WITH_CYCLAW_REPO</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPLACE_WITH_KEYCHAIN_WRAPPER</string>
+    <string>com.cgfixit.cyclaw.opentweet-api-key</string>
+    <string>OPENTWEET_API_KEY</string>
+    <string>--</string>
+    <string>REPLACE_WITH_VENV_OR_SYSTEM_PYTHON</string>
+    <string>-m</string>
+    <string>opentweet.cli</string>
+    <string>post</string>
+    <string>--topic-file</string>
+    <string>REPLACE_WITH_TOPIC_FILE</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/opentweet.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_USER/Library/Logs/CyClaw/opentweet.log</string>
+</dict>
+</plist>

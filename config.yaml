@@ -1031,3 +1031,29 @@ telegram:
     enabled: false               # T4 default-off; accepts only private-chat /save --confirm attachments
     fsconnect_root: ""           # REQUIRED when enabled; exact explicit fsconnect.writable_roots entry
     max_download_bytes: 10485760 # bounded again by fsconnect.max_write_bytes and Bot API's 20 MiB cloud cap
+
+# ===========================
+# OpenTweet X channel (out-of-band)  [v0.1; default disabled]
+# ===========================
+# Absence of this block, or enabled: false, disables the channel entirely.
+# Runs strictly via `python -m opentweet.cli` — never imported by gate.py,
+# graph.py, or mcp_hybrid_server.py. Generation goes only through HTTP POST
+# /query on loopback (user_confirmed_online always false). Default write is
+# an OpenTweet draft; scheduled_date requires schedule_enabled: true.
+# The ot_ key is never stored in YAML. Design: docs/channels/OPENTWEET_DESIGN.md
+opentweet:
+  enabled: false
+  api_base: "https://opentweet.io"
+  api_key_env: "OPENTWEET_API_KEY"
+  topic_file: ""                 # REQUIRED non-empty when enabled: true
+  max_topic_chars: 500
+  max_post_chars: 280
+  schedule_enabled: false        # opt-in OpenTweet scheduled_date
+  schedule_slot: "09:00"         # local HH:MM when schedule_enabled
+  weekday: 1                     # Monday; 0/7 Sunday (launchd + schtasks)
+  fire_hour: 6
+  fire_minute: 0
+  query:
+    base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
+    api_key_env: "CYCLAW_API_KEY"
+    timeout_sec: 780             # match api.graph_timeout_sec

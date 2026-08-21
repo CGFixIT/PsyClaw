@@ -33,8 +33,8 @@ The six security invariants (`CLAUDE.md` §3) are design constraints, not implem
 - LangGraph, ChromaDB embedded `PersistentClient`, BM25, sentence-transformers.
 - Local Ollama endpoint at `127.0.0.1:11434/v1`.
 - Optional Grok (xAI) and/or Claude fallback, hybrid mode only, triple-gated (`CLAUDE.md` §3 I3).
-- Optional `sync/`, `agentic/`, `guardrails/`, `harness/`, `telegram/`, and
-  `memory/` layers.
+- Optional `sync/`, `agentic/`, `guardrails/`, `harness/`, `telegram/`,
+  `opentweet/`, and `memory/` layers.
 - Packaging via `pyproject.toml`, legacy/CI `requirements.txt`, reproducibility `constraints.txt`, and uv where available.
 - pytest, pytest-cov, Ruff, mypy config, Bandit config.
 - Docker and Docker Compose (`Dockerfile`, `docker-compose.yml`).
@@ -270,7 +270,7 @@ Best-effort, not CI-enforced (see `CLAUDE.md` §4 for why a bare `mypy .` fails 
 
 ```bash
 mypy --strict --python-version 3.12 --explicit-package-bases <touched files>
-bandit -r gate.py gate_ops.py gate_auth.py gate_memory.py graph.py retrieval utils llm sync agentic guardrails harness telegram memory
+bandit -r gate.py gate_ops.py gate_auth.py gate_memory.py graph.py retrieval utils llm sync agentic guardrails harness telegram opentweet memory
 ```
 
 No markdown formatter or markdown lint command is configured in this repo.

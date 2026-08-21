@@ -33,7 +33,7 @@ _COV_FLAG_RE = re.compile(r"--cov=([A-Za-z0-9_.]+)")
 
 # Packages the lanes deliberately enumerate module-by-module rather than
 # passing wholesale. Only these need the completeness check -- a package listed
-# as a bare `--cov=<pkg>` (agentic, guardrails, harness, telegram, memory) is
+# as a bare `--cov=<pkg>` (agentic, guardrails, harness, telegram, opentweet, memory) is
 # already measured in full by coverage.py itself.
 _ENUMERATED_PACKAGES = ("utils", "retrieval", "sync")
 

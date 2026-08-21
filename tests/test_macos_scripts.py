@@ -106,6 +106,7 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
         "com.cgfixit.cyclaw.fsconnect-trash",
         "com.cgfixit.cyclaw.gate",
         "com.cgfixit.cyclaw.harness",
+        "com.cgfixit.cyclaw.opentweet",
     ):
         assert label in text
     # Label-domain bootout must run even when the plist file is already gone.

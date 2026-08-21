@@ -80,7 +80,8 @@ unschedule_landed_launchagents() {
     com.cgfixit.cyclaw.fsconnect-trash \
     com.cgfixit.cyclaw.gate \
     com.cgfixit.cyclaw.harness \
-    com.cgfixit.cyclaw.keys-rotate
+    com.cgfixit.cyclaw.keys-rotate \
+    com.cgfixit.cyclaw.opentweet
   do
     dest="$HOME/Library/LaunchAgents/${label}.plist"
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then

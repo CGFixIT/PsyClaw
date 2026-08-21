@@ -37,7 +37,8 @@ $KnownTaskNames = @(
     "CyClaw telegram-poll",
     "CyClaw telegram-health",
     "CyClaw gate",
-    "CyClaw harness"
+    "CyClaw harness",
+    "CyClaw opentweet"
 )
 
 function Unschedule-SyncJob {
