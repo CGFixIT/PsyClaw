@@ -397,7 +397,7 @@ both manifests hardcode that pin, so the generic block fails twice on a Mac.
 ```bash
 git clone https://github.com/CGFixIT/CyClaw
 cd CyClaw
-sudo python3.12 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 ```
 # 1) torch FIRST, and PLAIN — no +cpu suffix, no --index-url override.
