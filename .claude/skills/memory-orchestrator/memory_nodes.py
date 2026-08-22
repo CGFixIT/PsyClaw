@@ -51,7 +51,7 @@ def _now() -> datetime:
 
 def _load_state() -> dict:
     try:
-        return json.loads(STATE_FILE.read_text())
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -60,7 +60,7 @@ def _save_state(**updates) -> None:
     MEM_DIR.mkdir(parents=True, exist_ok=True)
     state = _load_state()
     state.update(updates)
-    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
 
 
 def _stamp() -> str:
@@ -114,7 +114,7 @@ def _refresh_index() -> None:
     lines.append("")
     for snap in reversed(snaps):
         lines.append(f"- [`{snap.name}`]({snap.name})")
-    INDEX_FILE.write_text("\n".join(lines).rstrip() + "\n")
+    INDEX_FILE.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 # =============================================================================
@@ -131,7 +131,7 @@ def extract_node(state: Dict[str, Any], cfg: dict | None = None, registry=None) 
     content_file = state.get("content_file")
 
     if content_file:
-        content = Path(content_file).read_text().strip()
+        content = Path(content_file).read_text(encoding="utf-8").strip()
 
     MEM_DIR.mkdir(parents=True, exist_ok=True)
     target = _timestamped_path()
@@ -149,7 +149,7 @@ def extract_node(state: Dict[str, Any], cfg: dict | None = None, registry=None) 
     elif not content.startswith("#"):
         content = f"# Memory snapshot — {_stamp()}\n\n{content}\n"
 
-    target.write_text(content if content.endswith("\n") else content + "\n")
+    target.write_text(content if content.endswith("\n") else content + "\n", encoding="utf-8")
     _save_state(last_extraction=_now().isoformat())
     _refresh_index()
 
@@ -178,7 +178,7 @@ def consolidate_node(state: Dict[str, Any], cfg: dict | None = None, registry=No
     seen: dict[str, set[str]] = {}
 
     for snap in snaps:
-        for section, lines in _split_sections(snap.read_text()).items():
+        for section, lines in _split_sections(snap.read_text(encoding="utf-8")).items():
             bucket = merged.setdefault(section, [])
             seenset = seen.setdefault(section, set())
             for line in lines:
@@ -203,7 +203,7 @@ def consolidate_node(state: Dict[str, Any], cfg: dict | None = None, registry=No
         out.extend(merged[section])
         out.append("")
 
-    CONSOLIDATED_FILE.write_text("\n".join(out).rstrip() + "\n")
+    CONSOLIDATED_FILE.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
     _save_state(last_consolidation=_now().isoformat())
     _refresh_index()
 
