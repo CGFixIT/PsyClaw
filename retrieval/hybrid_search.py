@@ -203,7 +203,20 @@ class HybridRetriever:
         # The vector reader returns normalized hits (text/score/source/chunk_id/
         # stem_tags) for whichever backend is configured; score is already the
         # cosine similarity (1 - distance), identical across ChromaDB and pgvector.
-        raw = self._vector_reader.query(emb, k)
+        try:
+            raw = self._vector_reader.query(emb, k)
+        except Exception as exc:  # noqa: BLE001 -- retrieve_node's designed
+            # fail-soft degrade (score 0.0, retrieval_mode "none", routed to
+            # user_gate) only triggers on EmbeddingServiceError/RAGError. The
+            # reader's query() is a raw backend call (chromadb / psycopg), so an
+            # unguarded backend exception here would propagate past this
+            # method's own caller (hybrid_search()'s except EmbeddingServiceError
+            # below) and out of retrieve_node entirely -- turning a designed
+            # degrade into an unhandled 500 that also skips audit_logger (I4).
+            raise EmbeddingServiceError(
+                f"vector backend query failed ({type(exc).__name__})",
+                details={"error_type": type(exc).__name__},
+            ) from exc
         hits = []
         for i, r in enumerate(raw):
             score = r["score"]
