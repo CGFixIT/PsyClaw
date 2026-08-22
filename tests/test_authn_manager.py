@@ -14,7 +14,7 @@ import importlib
 import pytest
 
 from utils.authn import PasswordPolicyError, hash_token
-from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME, _DUMMY_RECORD
+from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME, _dummy_record
 from utils.errors import (
     AuthAccountLocked,
     AuthBootstrapComplete,
@@ -438,7 +438,7 @@ class TestLoginTransactionAndRaceSafety:
             rotated = {"done": False}
 
             def racing_verify(password, record):
-                if not rotated["done"] and record != _DUMMY_RECORD:
+                if not rotated["done"] and record != _dummy_record():
                     rotated["done"] = True
                     manager_b.set_password("alice", "a brand new password entirely")
                 return real_verify(password, record)
@@ -468,7 +468,7 @@ class TestLoginTransactionAndRaceSafety:
             disabled = {"done": False}
 
             def racing_verify(password, record):
-                if not disabled["done"] and record != _DUMMY_RECORD:
+                if not disabled["done"] and record != _dummy_record():
                     disabled["done"] = True
                     manager_b.disable_user("alice")
                 return real_verify(password, record)
@@ -499,7 +499,7 @@ class TestLoginTransactionAndRaceSafety:
             locked = {"done": False}
 
             def racing_verify(password, record):
-                if not locked["done"] and record != _DUMMY_RECORD:
+                if not locked["done"] and record != _dummy_record():
                     locked["done"] = True
                     # Five concurrent wrong-password attempts from a
                     # separate process/connection -- enough to trip the
@@ -552,7 +552,7 @@ class TestLoginTransactionAndRaceSafety:
             rotated = {"done": False}
 
             def racing_verify(password, record):
-                if not rotated["done"] and record != _DUMMY_RECORD:
+                if not rotated["done"] and record != _dummy_record():
                     rotated["done"] = True
                     manager_b.set_password("alice", "a brand new password entirely")
                 return real_verify(password, record)
