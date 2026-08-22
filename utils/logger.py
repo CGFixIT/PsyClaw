@@ -267,12 +267,18 @@ def _compiled_redactors(
             )
     return tuple(compiled)
 
-def redact_sensitive(text: str, cfg: dict | None = None) -> str:
-    if cfg is None:
-        cfg = _get_config()
+def _resolve_redactors(cfg: dict) -> tuple[tuple[re.Pattern, str], ...]:
+    """Resolve cfg's privacy settings to a compiled redactor tuple.
+
+    Split out of redact_sensitive so a caller redacting many strings against
+    the same cfg (audit_log's per-event walk over every field, recursing into
+    nested dicts/lists) can resolve this once instead of re-deriving it --
+    re-enumerating redact_secrets_like into two fresh tuples and re-hashing
+    the 4-element lru_cache key -- for every string in the record.
+    """
     privacy = cfg.get("policy", {}).get("privacy", {})
     configured_patterns = privacy.get("redact_secrets_like", []) or []
-    redactors = _compiled_redactors(
+    return _compiled_redactors(
         privacy.get("redact_emails", False),
         privacy.get("redact_ips", False),
         tuple((idx, pattern) for idx, pattern in enumerate(configured_patterns) if isinstance(pattern, str)),
@@ -282,7 +288,12 @@ def redact_sensitive(text: str, cfg: dict | None = None) -> str:
             if not isinstance(pattern, str)
         ),
     )
-    for pattern, replacement in redactors:
+
+
+def redact_sensitive(text: str, cfg: dict | None = None) -> str:
+    if cfg is None:
+        cfg = _get_config()
+    for pattern, replacement in _resolve_redactors(cfg):
         text = pattern.sub(replacement, text)
     return text
 
@@ -294,7 +305,7 @@ def redact_sensitive(text: str, cfg: dict | None = None) -> str:
 _AUDIT_SKIP_KEYS = frozenset(("query_hash", "timestamp", "event"))
 
 
-def _redact_value(value: object, cfg: dict) -> object:
+def _redact_value(value: object, redactors: tuple[tuple[re.Pattern, str], ...]) -> object:
     """Recursively redact strings inside dicts and lists.
 
     audit_log previously only redacted top-level string fields, so an event
@@ -305,13 +316,19 @@ def _redact_value(value: object, cfg: dict) -> object:
     values and list/tuple elements; tuples are returned as lists because
     json.dumps emits both identically and the on-disk format must stay JSON.
     Non-string scalars (int/float/bool/None) pass through unchanged.
+
+    Takes the already-resolved redactor tuple (see _resolve_redactors) rather
+    than cfg, so audit_log's recursive per-field walk resolves it once per
+    event instead of once per string.
     """
     if isinstance(value, str):
-        return redact_sensitive(value, cfg)
+        for pattern, replacement in redactors:
+            value = pattern.sub(replacement, value)
+        return value
     if isinstance(value, dict):
-        return {k: _redact_value(v, cfg) for k, v in value.items()}
+        return {k: _redact_value(v, redactors) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_redact_value(v, cfg) for v in value]
+        return [_redact_value(v, redactors) for v in value]
     return value
 
 
@@ -325,10 +342,11 @@ def audit_log(event: dict, config_path: str = "config.yaml", cfg: dict | None = 
         if "query" in record and audit_fields.get("include_query_hash", True):
             raw_query = record.pop("query")
             record["query_hash"] = hash_query(raw_query)
+        redactors = _resolve_redactors(cfg)
         for key, value in list(record.items()):
             if key in _AUDIT_SKIP_KEYS:
                 continue
-            record[key] = _redact_value(value, cfg)
+            record[key] = _redact_value(value, redactors)
         record["timestamp"] = datetime.now(UTC).isoformat()
         line = json.dumps(record) + "\n"
     except (TypeError, ValueError, AttributeError, UnicodeError) as exc:

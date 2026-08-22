@@ -20,6 +20,7 @@ from utils.logger import audit_log, close_audit_handles, reset_config_cache
 from utils.numbat_emitter import (
     _AUDIT_ACTION_PLANE_EVENTS,
     _KNOWN_FIELDS,
+    close_numbat_handles,
     project_audit_record,
 )
 
@@ -29,6 +30,10 @@ def _clean_state():
     reset_config_cache()
     yield
     close_audit_handles()
+    # write_ndjson caches its append handle per output path; release it too so
+    # tmp_path teardown can remove the directory (Windows cannot delete a file
+    # that is still open).
+    close_numbat_handles()
     reset_config_cache()
 
 

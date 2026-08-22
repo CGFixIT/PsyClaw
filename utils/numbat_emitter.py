@@ -34,6 +34,7 @@ Wire contract (Numbat CLI 0.2.0, which evaluates schema 0.3.0):
 
 from __future__ import annotations
 
+import atexit
 import getpass
 import json
 import logging
@@ -44,7 +45,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from utils.logger import _anchor, _get_config
 
@@ -392,14 +393,57 @@ def build_event(
     return record
 
 
+# write_ndjson previously opened, wrote, and closed this file on every single
+# call -- and the mainline plane reaches it on every audit_log() call, i.e.
+# every /query. Mirrors utils/logger.py's _AUDIT_HANDLES: cache one append-mode
+# handle per resolved path and reuse it; still flush() after every write so a
+# reader (including a test that doesn't close explicitly) observes each event
+# immediately -- only the repeated open/close is eliminated.
+_NUMBAT_HANDLES: dict[str, TextIO] = {}
+
+
+def _numbat_handle(path: Path) -> TextIO:
+    """Return the cached append-mode handle for path, opening it if needed.
+
+    Caller must hold _WRITE_LOCK.
+    """
+    key = str(path)
+    handle = _NUMBAT_HANDLES.get(key)
+    if handle is None or handle.closed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115  # codeql[py/file-not-closed] closed via atexit.register below and close_numbat_handles()
+        atexit.register(handle.close)
+        _NUMBAT_HANDLES[key] = handle
+    return handle
+
+
+def close_numbat_handles() -> None:
+    """Flush and close all cached Numbat NDJSON handles.
+
+    Called automatically at process exit; also useful for tests that need to
+    release file descriptors before deleting their tmp_path output files.
+    """
+    with _WRITE_LOCK:
+        for handle in _NUMBAT_HANDLES.values():
+            try:
+                handle.close()
+            except OSError:
+                # Best-effort at process-exit/test-teardown -- _NUMBAT_HANDLES.clear()
+                # below still drops our reference so a future write_ndjson() reopens.
+                pass
+        _NUMBAT_HANDLES.clear()
+
+
+atexit.register(close_numbat_handles)
+
+
 def write_ndjson(record: dict[str, Any], path: Path) -> None:
     """Append one JSON line. Caller holds no lock; this function does."""
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
     with _WRITE_LOCK:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
+        handle = _numbat_handle(path)
+        handle.write(line)
+        handle.flush()
 
 
 def emit_numbat_event(

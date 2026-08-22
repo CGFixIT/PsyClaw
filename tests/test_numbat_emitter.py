@@ -18,6 +18,7 @@ from utils.numbat_emitter import (
     SCHEMA_VERSION,
     build_endpoint,
     build_event,
+    close_numbat_handles,
     emit_numbat_command,
     emit_numbat_event,
     posix_path,
@@ -44,6 +45,11 @@ _REQUIRED = {
 def _clear_config_cache():
     reset_config_cache()
     yield
+    # write_ndjson now caches its append handle per output path (mirroring
+    # utils/logger.py's _AUDIT_HANDLES) instead of open/close per event --
+    # release it here so tmp_path teardown can remove the directory (Windows
+    # cannot delete a file that is still open).
+    close_numbat_handles()
     reset_config_cache()
 
 
