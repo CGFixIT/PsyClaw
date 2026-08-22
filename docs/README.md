@@ -25,6 +25,7 @@ grepping.
 | `HARNESS_POWERSHELL.md` / `HARNESS_MACOS.md` | Coding-harness OS walkthroughs (install glue). Slash-command usage (`/goal`, `/loop`, `/skills`, `/tools`, `/web`) lives in [`../harness/README.md`](../harness/README.md). |
 | `AUTHENTICATION_DESIGN.md` | Per-user auth staging (`/auth/*` is Stage 2; Stage 3 enforces `/query` when `auth.enabled`; Stage 4 TLS pending). |
 | `memory/` | Optional memory subsystem plan and README. |
+| `spend/` | Online-LLM token ledger: what `logs/spend.jsonl` records, why dollars are derived at read time, and how `cyclaw-metrics` reports them. |
 | `DOCKER.md`, `SECCOMP_EBPF_HARDENING.md`, `POSTGRES_BACKEND.md` | Deployment: containers, hardening (see also `../deploy/README.md`), Postgres backends. |
 | `online-llm/`, `NeMo/`, `security-philosophy/` | Provider notes, guardrails background, telemetry-kill reference env, Numbat 0.2.0 secondary-evaluator note. |
 
