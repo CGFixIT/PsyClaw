@@ -199,6 +199,12 @@ MAX_DIFF_CHARS = 200_000
 CLONE_DEPTH = 1
 DEFAULT_CLONE_TIMEOUT_SEC = 120
 
+# Ceiling on a single retry-backoff sleep, mirroring llm/client.py's
+# _DEFAULT_BACKOFF_MAX_SEC: without a cap, retry_backoff_sec * 2**attempt grows
+# unbounded, so an operator raising agentic.gh_retries/gh_retry_backoff_sec has
+# no bound protecting the calling worker.
+_MAX_BACKOFF_SEC = 30.0
+
 
 # A non-zero `gh` exit whose stderr matches this is a TRANSIENT network/server
 # condition worth retrying. Deterministic failures (404 not found, bad flag, auth)
@@ -326,9 +332,10 @@ def run_read(
     remaining JSON ops return ``{"data": <parsed>}``. Raises ``AgenticError`` on
     non-zero exit. Never raises with secret-bearing details.
 
-    ``retries`` adds up to N extra attempts with exponential backoff, but ONLY on
-    a transient failure: a timeout, or a non-zero exit whose stderr matches a
-    network/server pattern (see ``_is_transient_gh_error``). Deterministic
+    ``retries`` adds up to N extra attempts with exponential backoff (each sleep
+    capped at ``_MAX_BACKOFF_SEC``), but ONLY on a transient failure: a timeout,
+    or a non-zero exit whose stderr matches a network/server pattern (see
+    ``_is_transient_gh_error``). Deterministic
     failures (404, bad flag, auth) are never retried -- they fail fast.
     ``retries=0`` (the default) is exactly the historical single-shot behaviour.
     ``timeout`` defaults to 30s for every op except ``repo_clone``, whose only
@@ -357,7 +364,7 @@ def run_read(
         except subprocess.TimeoutExpired as exc:
             audit_log({"event": "agentic_read_timeout", "op": op, "repo": repo, "attempt": attempt})
             if attempt < attempts:
-                time.sleep(retry_backoff_sec * (2 ** (attempt - 1)))
+                time.sleep(min(retry_backoff_sec * (2 ** (attempt - 1)), _MAX_BACKOFF_SEC))
                 continue
             raise AgenticError(
                 f"gh {op} timed out after {timeout}s",
@@ -377,7 +384,7 @@ def run_read(
                 "attempt": attempt,
                 "exit_code": completed.returncode,
             })
-            time.sleep(retry_backoff_sec * (2 ** (attempt - 1)))
+            time.sleep(min(retry_backoff_sec * (2 ** (attempt - 1)), _MAX_BACKOFF_SEC))
             continue
         break
 

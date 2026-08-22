@@ -290,6 +290,22 @@ def test_run_read_timeout_exhausted_raises():
             run_read("pr_view", "owner/repo", number=1, retries=1, retry_backoff_sec=0)
 
 
+def test_run_read_backoff_sleep_is_capped():
+    # A large retry_backoff_sec on a later attempt would otherwise sleep for
+    # hours (retry_backoff_sec * 2**(attempt-1)); every sleep must stay at or
+    # below _MAX_BACKOFF_SEC.
+    transient = _completed(stderr="error: HTTP 503 Service Unavailable", returncode=1)
+    success = _completed(stdout='{"number": 1}', returncode=0)
+    with patch.object(gh_client, "check_gh_version", return_value=(2, 55, 0)), \
+         patch.object(gh_client.shutil, "which", return_value="/usr/bin/gh"), \
+         patch.object(gh_client.subprocess, "run", side_effect=[transient, transient, success]), \
+         patch.object(gh_client.time, "sleep") as msleep:
+        run_read("pr_view", "owner/repo", number=1, retries=5, retry_backoff_sec=100.0)
+    assert msleep.call_count == 2
+    for call in msleep.call_args_list:
+        assert call.args[0] <= gh_client._MAX_BACKOFF_SEC
+
+
 # --- repo_clone --------------------------------------------------------------
 
 def test_build_repo_clone_argv():
