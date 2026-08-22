@@ -221,7 +221,10 @@ def hash_query(query: str) -> str:
 
 @lru_cache(maxsize=8)
 def _compiled_redactors(
-    redact_emails: bool, redact_ips: bool, secret_patterns: tuple[str, ...]
+    redact_emails: bool,
+    redact_ips: bool,
+    secret_patterns: tuple[tuple[int, str], ...],
+    invalid_secret_patterns: tuple[tuple[int, str], ...],
 ) -> tuple[tuple[re.Pattern, str], ...]:
     """Compile the active redaction patterns once per privacy configuration.
 
@@ -236,7 +239,14 @@ def _compiled_redactors(
     if redact_ips:
         compiled.append((re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'),
                          '[REDACTED_IP]'))
-    for idx, pattern in enumerate(secret_patterns):
+    for idx, pattern_type in invalid_secret_patterns:
+        logger.warning(
+            "privacy redaction pattern #%d has non-string type %s; it is "
+            "skipped, so matching values pass through un-redacted until it "
+            "is corrected.",
+            idx, pattern_type,
+        )
+    for idx, pattern in secret_patterns:
         try:
             compiled.append((re.compile(pattern), '[REDACTED_SECRET]'))
         except re.error as exc:
@@ -261,10 +271,16 @@ def redact_sensitive(text: str, cfg: dict | None = None) -> str:
     if cfg is None:
         cfg = _get_config()
     privacy = cfg.get("policy", {}).get("privacy", {})
+    configured_patterns = privacy.get("redact_secrets_like", []) or []
     redactors = _compiled_redactors(
         privacy.get("redact_emails", False),
         privacy.get("redact_ips", False),
-        tuple(privacy.get("redact_secrets_like", []) or []),
+        tuple((idx, pattern) for idx, pattern in enumerate(configured_patterns) if isinstance(pattern, str)),
+        tuple(
+            (idx, type(pattern).__name__)
+            for idx, pattern in enumerate(configured_patterns)
+            if not isinstance(pattern, str)
+        ),
     )
     for pattern, replacement in redactors:
         text = pattern.sub(replacement, text)

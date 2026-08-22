@@ -26,7 +26,7 @@ def _compile_patterns(base: list[str], cfg: dict[str, Any]) -> list[tuple[str, r
     sources: list[str] = list(base)
     pf = (cfg.get("policy") or {}).get("prompt_filter") or {}
     for p in pf.get("banned_patterns") or []:
-        if p not in sources:
+        if isinstance(p, str) and p not in sources:
             sources.append(p)
     compiled: list[tuple[str, re.Pattern[str]]] = []
     for p in sources:

@@ -268,6 +268,21 @@ class TestFilterToggles:
         # The malformed pattern surfaced a warning rather than a silent/fatal drop.
         assert any("failed to compile" in r.message for r in caplog.records)
 
+    def test_non_string_banned_pattern_keeps_valid_sibling_active(self, tmp_path, caplog):
+        cfg = {"policy": {"prompt_filter": {
+            "enabled": True,
+            "banned_patterns": [{"invalid": "entry"}, "banana protocol"],
+            "max_input_chars": 4000,
+        }}}
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump(cfg, f)
+
+        assert check_input("hello world", str(path)) == "hello world"
+        with pytest.raises(PromptInjectionError):
+            check_input("activate the banana protocol now", str(path))
+        assert any("non-string" in record.message for record in caplog.records)
+
 
 class TestSanitizeChunk:
     def test_strips_banned_patterns(self, filter_config):

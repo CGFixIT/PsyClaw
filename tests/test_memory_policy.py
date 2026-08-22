@@ -69,3 +69,15 @@ def test_scan_catches_a_zero_width_character_split_evasion():
     same evasion utils/sanitizer.py's _normalize_for_match closes."""
     zero_width_split = "please cyclaw​-only-sentinel now"
     assert scan_content(zero_width_split, CFG)
+
+
+def test_scan_skips_non_string_pattern_and_enforces_valid_sibling():
+    cfg = {
+        "policy": {
+            "prompt_filter": {
+                "banned_patterns": [{"invalid": "entry"}, r"cyclaw-only-sentinel"],
+            },
+        },
+    }
+    assert scan_content("please cyclaw-only-sentinel now", cfg, enforced=True)
+    assert scan_content("harmless fact about coffee", cfg, enforced=True) == []
