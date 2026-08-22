@@ -114,95 +114,79 @@ def register_ops_routes(
             "max_rows": s.get("max_rows", 1000),
         }
 
-    @app.post("/ops/sync", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
-    async def ops_sync(request: Request, req: OpsSyncRequest) -> dict[str, Any]:
+    async def _run_ops_route(
+        *,
+        route: str,
+        action: str,
+        op_fn: Callable[..., Any],
+        op_kwargs: dict[str, Any],
+        config_fn: Callable[[], dict[str, Any]],
+        extra_executed_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Shared try/except/audit/payload shape for all four /ops/* routes.
+
+        ``op_fn``/``config_fn`` are passed in by each route's own body (not
+        captured at registration time) so a test patching e.g.
+        ``gate_ops.run_sync_op`` still intercepts the call made here.
+        """
         try:
-            result = await asyncio.to_thread(run_sync_op, req.action, dry_run=req.dry_run)
+            result = await asyncio.to_thread(op_fn, action, **op_kwargs)
         except OpsError as e:
-            await audit({"event": "ops_sync_rejected", "action": req.action, "error": str(e)})
+            await audit({"event": f"ops_{route}_rejected", "action": action, "error": str(e)})
             raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
         except Exception as e:
             safe_msg = sanitize_error(e)
-            await audit({"event": "ops_sync_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/sync action=%r", _log_safe(req.action))
+            await audit({"event": f"ops_{route}_error", "action": action, "error": safe_msg})
+            logger.exception("Unexpected error in /ops/%s action=%r", route, _log_safe(action))
             raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
         await audit({
-            "event": "ops_sync_executed", "action": req.action, "dry_run": req.dry_run,
+            "event": f"ops_{route}_executed", "action": action,
+            **(extra_executed_fields or {}),
             "exit_code": result.exit_code, "label": result.label,
         })
         payload = result.to_dict()
-        payload["config"] = _ops_sync_config()
+        payload["config"] = config_fn()
         return payload
+
+    @app.post("/ops/sync", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
+    async def ops_sync(request: Request, req: OpsSyncRequest) -> dict[str, Any]:
+        return await _run_ops_route(
+            route="sync", action=req.action, op_fn=run_sync_op,
+            op_kwargs={"dry_run": req.dry_run}, config_fn=_ops_sync_config,
+            extra_executed_fields={"dry_run": req.dry_run},
+        )
 
     @app.post("/ops/agentic", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_agentic(request: Request, req: OpsAgenticRequest) -> dict[str, Any]:
-        try:
-            result = await asyncio.to_thread(
-                run_agentic_op, req.action,
-                pr=req.pr, issue=req.issue, no_diff=req.no_diff,
-                name=req.name, desc=req.desc, body=req.body, reason=req.reason, confirm=req.confirm,
-            )
-        except OpsError as e:
-            await audit({"event": "ops_agentic_rejected", "action": req.action, "error": str(e)})
-            raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-        except Exception as e:
-            safe_msg = sanitize_error(e)
-            await audit({"event": "ops_agentic_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/agentic action=%r", _log_safe(req.action))
-            raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-        await audit({
-            "event": "ops_agentic_executed", "action": req.action,
-            "exit_code": result.exit_code, "label": result.label,
-        })
-        payload = result.to_dict()
-        payload["config"] = _ops_agentic_config()
-        return payload
+        return await _run_ops_route(
+            route="agentic", action=req.action, op_fn=run_agentic_op,
+            op_kwargs={
+                "pr": req.pr, "issue": req.issue, "no_diff": req.no_diff,
+                "name": req.name, "desc": req.desc, "body": req.body,
+                "reason": req.reason, "confirm": req.confirm,
+            },
+            config_fn=_ops_agentic_config,
+        )
 
     @app.post("/ops/fsconnect", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_fsconnect(request: Request, req: OpsFsConnectRequest) -> dict[str, Any]:
-        try:
-            result = await asyncio.to_thread(
-                run_fsconnect_op, req.action,
-                root=req.root, path=req.path, pattern=req.pattern,
-                regex=req.regex, recursive=req.recursive,
-            )
-        except OpsError as e:
-            await audit({"event": "ops_fsconnect_rejected", "action": req.action, "error": str(e)})
-            raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-        except Exception as e:
-            safe_msg = sanitize_error(e)
-            await audit({"event": "ops_fsconnect_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/fsconnect action=%r", _log_safe(req.action))
-            raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-        await audit({
-            "event": "ops_fsconnect_executed", "action": req.action,
-            "exit_code": result.exit_code, "label": result.label,
-        })
-        payload = result.to_dict()
-        payload["config"] = _ops_fsconnect_config()
-        return payload
+        return await _run_ops_route(
+            route="fsconnect", action=req.action, op_fn=run_fsconnect_op,
+            op_kwargs={
+                "root": req.root, "path": req.path, "pattern": req.pattern,
+                "regex": req.regex, "recursive": req.recursive,
+            },
+            config_fn=_ops_fsconnect_config,
+        )
 
     @app.post("/ops/sqlconnect", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
     async def ops_sqlconnect(request: Request, req: OpsSqlConnectRequest) -> dict[str, Any]:
-        try:
-            result = await asyncio.to_thread(
-                run_sqlconnect_op, req.action,
-                sql=req.sql, table=req.table, explain=req.explain,
-                count=req.count, fmt=req.fmt,
-            )
-        except OpsError as e:
-            await audit({"event": "ops_sqlconnect_rejected", "action": req.action, "error": str(e)})
-            raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
-        except Exception as e:
-            safe_msg = sanitize_error(e)
-            await audit({"event": "ops_sqlconnect_error", "action": req.action, "error": safe_msg})
-            logger.exception("Unexpected error in /ops/sqlconnect action=%r", _log_safe(req.action))
-            raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "OPS_ERROR"}) from e
-        await audit({
-            "event": "ops_sqlconnect_executed", "action": req.action,
-            "exit_code": result.exit_code, "label": result.label,
-        })
-        payload = result.to_dict()
-        payload["config"] = _ops_sqlconnect_config()
-        return payload
+        return await _run_ops_route(
+            route="sqlconnect", action=req.action, op_fn=run_sqlconnect_op,
+            op_kwargs={
+                "sql": req.sql, "table": req.table, "explain": req.explain,
+                "count": req.count, "fmt": req.fmt,
+            },
+            config_fn=_ops_sqlconnect_config,
+        )
 
