@@ -23,8 +23,9 @@ grepping.
 | `channels/OPENTWEET_DESIGN.md` | OpenTweet X channel: weekly OOB poster, draft-default, I6 isolation. |
 | `agentic/AGENTIC_README.md`, `agentic/SKILLS_REGISTRY_GOVERNANCE.md`, `agentic/GITHUB_WRITE_ENABLEMENT.md` | Agentic layer governance (binding). |
 | `HARNESS_POWERSHELL.md` / `HARNESS_MACOS.md` | Coding-harness OS walkthroughs (install glue). Slash-command usage (`/goal`, `/loop`, `/skills`, `/tools`, `/web`) lives in [`../harness/README.md`](../harness/README.md). |
-| `AUTHENTICATION_DESIGN.md` | Per-user auth staging (`/auth/*` is Stage 2; Stage 3 enforces `/query` when `auth.enabled`; Stage 4 TLS pending). |
+| `AUTHENTICATION_DESIGN.md` | Per-user auth: all six stages landed — `utils/authn.py` (1), sessions + `/auth/*` (2), credential on `/query` when `auth.enabled` (3), TLS via `gate._serve` + `cyclaw-gen-cert` (4), the re-keyed bind guard (5), and RBAC roles `admin`/`operator`/`audit` with HTTP user admin (6). |
 | `memory/` | Optional memory subsystem plan and README. |
+| `spend/` | Online-LLM token ledger: what `logs/spend.jsonl` records, why dollars are derived at read time, and how `cyclaw-metrics` reports them. |
 | `DOCKER.md`, `SECCOMP_EBPF_HARDENING.md`, `POSTGRES_BACKEND.md` | Deployment: containers, hardening (see also `../deploy/README.md`), Postgres backends. |
 | `online-llm/`, `NeMo/`, `security-philosophy/` | Provider notes, guardrails background, telemetry-kill reference env, Numbat 0.2.0 secondary-evaluator note. |
 

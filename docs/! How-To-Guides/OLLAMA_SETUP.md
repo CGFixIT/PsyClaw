@@ -358,7 +358,10 @@ and harness `/loop`.
 
 ## Ollama Commands Quick Reference
 
-```bash
+Substitute a real tag for `<model>` — this is a reference table, not a block to
+paste as-is.
+
+```text
 ollama serve              # Start the API server
 ollama pull <model>       # Download a model
 ollama list               # Show installed models

@@ -35,6 +35,24 @@ It is **never imported** by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
 | `agentic/harness_optimizer/` | Fixture/harness optimizer + scoped proposer workspace tools |
 | `agentic/fsconnect/` | Scoped filesystem connector (`python -m agentic.fsconnect.cli`) |
 | `agentic/sqlconnect/` | Read-only SQL connector (`python -m agentic.sqlconnect.cli`) |
+| `agentic/unslop_bridge.py` | Offline slop-detection rail for the real-repo loop; ships `unslop.enabled: false` |
+| `agentic/vendor/unslop/` | Vendored UNSLOP scanners the bridge wraps (kept inside `agentic/` so they never cross I6) |
+| `agentic/selftest.py` | `python -m agentic.cli test` — offline preflight for the agentic layer |
+
+### UNSLOP prose-quality rail
+
+`agentic/unslop_bridge.py` is an offline prose-quality check the real-repo loop
+can run over a proposed patch's text. It ships **off**
+(`config.yaml` → `unslop.enabled: false`, metrics to `logs/unslop.jsonl`), and
+when enabled it is advisory: `agentic/real_repo_loop.py` takes it as an optional
+probe, records an audit event if the probe itself raises, and appends a nudge to
+rejection feedback rather than blocking a run on its own.
+
+The vendored scanners live at `agentic/vendor/unslop/` **inside** `agentic/` on
+purpose. Placing them here rather than under `utils/` means the core six
+(`gate.py`, `gate_ops.py`, `gate_auth.py`, `gate_memory.py`, `graph.py`,
+`mcp_hybrid_server.py`) never acquire a path to them, so the I6 module-isolation
+invariant holds without needing a special case.
 
 ---
 
@@ -498,11 +516,11 @@ python -m agentic.cli real-repo-run --repo --instruction "..." \
     --commit-message "..." --reason "..." --plan-file plan.md --confirm \
     --read-file path/to/existing.py
 
-python -m agentic.cli real-repo-run-status --run-id <id>   # includes pending diff
-python -m agentic.cli real-repo-run-decide --run-id <id> --decision approve  # or reject
-python -m agentic.cli real-repo-run-push    --run-id <id>
-python -m agentic.cli real-repo-run-publish --run-id <id> --reason "..." --confirm
-python -m agentic.cli real-repo-run-discard --run-id <id>
+python -m agentic.cli real-repo-run-status --run-id "<id>"   # includes pending diff
+python -m agentic.cli real-repo-run-decide --run-id "<id>" --decision approve  # or reject
+python -m agentic.cli real-repo-run-push    --run-id "<id>"
+python -m agentic.cli real-repo-run-publish --run-id "<id>" --reason "..." --confirm
+python -m agentic.cli real-repo-run-discard --run-id "<id>"
 ```
 
 Also reachable (authenticated) via harness routes:

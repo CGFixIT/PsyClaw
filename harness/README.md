@@ -40,6 +40,7 @@ Full walkthroughs: [`docs/HARNESS_MACOS.md`](../docs/HARNESS_MACOS.md),
 | `web_search.py` | Allowlist-only GET for `/web` (off by default; no search engine) |
 | `memory_notes.py` | Operator `/memory` notes (off by default; not RAG `memory/`) |
 | `agent_policy.py` | Check-profile names for real-repo runs |
+| `env_keys.py` | Allowlisted dotenv secret store behind `POST /api/keys`. `MANAGED_KEYS` is what stops that route from being an arbitrary-environment-injection primitive: only allowlisted names can be written. Writes `$CYCLAW_HOME/.env` atomically (mode 600 on POSIX) and returns presence plus a masked tail, never a value. File-only — nothing reads `.env` at runtime, so a write needs a restart to reach `gate.py`, which is why the response reports `restart_required` |
 | `schemas.py` | Request models |
 
 ## Skills vs the governed registry
@@ -225,6 +226,8 @@ enabling it.
 | POST | `/api/agent/runs/{id}/publish` | Draft PR |
 | POST | `/api/agent/runs/{id}/discard` | Reclaim clone |
 | GET | `/api/harness/runs` | Local run list |
+| GET | `/api/auth/setup-status` | First-run bootstrap check: whether the admin account still needs a password. Rate-limited, no credential |
+| POST | `/api/auth/bootstrap-password` | Sets the first admin password on a fresh install; open only until that password exists |
 | POST | `/api/auth/login` | Session login (sets `cyclaw_harness_session` cookie); `503` when harness auth is off |
 | POST | `/api/auth/logout` | Session logout |
 | GET | `/api/auth/whoami` | Current session's username + role |

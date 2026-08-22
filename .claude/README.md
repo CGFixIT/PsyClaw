@@ -9,7 +9,11 @@ refactor-loop, memory, and agent skills). For the **authoritative, complete list
 **"Available Skills (main branch)"** table in the root [`CLAUDE.md`](../CLAUDE.md) — kept in
 sync there so a second list does not drift. A few common entry points:
 
-```bash
+These are Claude Code slash commands typed into the session, not shell
+commands — the fence below is `text` on purpose, because pasting these into a
+terminal only produces "No such file or directory".
+
+```text
 /invariant-guard         # Static-assert the six security invariants (stdlib)
 /config-guard            # Static-validate config.yaml's relational/value/threat-model contract
 /dep-guard               # Static-validate dependency-pin invariants (pyproject + constraints)
@@ -61,7 +65,8 @@ All `*-refactor` skills follow the same seven-step cycle:
 │                            PreCompact / SessionEnd / UserPromptSubmit hooks are
 │                            inline commands in settings.json pointing into .claude/skills/*
 ├── memory/                ← legacy memory location (live memory: docs/memories/)
-└── rules/                 ← project-specific rules (scoped by paths:)
+└── rules/                 ← project-specific rules (PROJECT_RULES.md; plain
+                              Markdown, no frontmatter, applies repo-wide)
 ```
 
 ## Skill Caching Policy
@@ -112,9 +117,19 @@ the wrapper set now covers all skills; nothing else was missing.
 A doctor-style audit of `.claude/settings.json` was run against the live tree
 (don't re-create what passes; fix only what's broken). Verdict and findings:
 
-**settings.json: healthy, no changes warranted.** Valid JSON against the
-declared schema; every one of the 22 hook/allowlist-referenced files exists
-on disk (all four hook scripts, all `check_*.py`/`verify.sh` checker paths);
+**settings.json: one dangling hook reference as of 2026-08-22.** Valid JSON
+against the declared schema, and every `check_*.py` / `verify.sh` checker path
+resolves. But the registered `UserPromptSubmit` hook points at
+`.claude/skills/fable-protocol/context_gate.py`, which no longer exists — that
+file was deleted on `main` and the skill directory now holds only `SKILL.md`.
+The hook command ends in `2>/dev/null || true`, so it silently no-ops instead
+of erroring, which is exactly why the drift went unnoticed. Fixing it means
+editing `settings.json` (unwiring the hook or restoring the script), which is a
+High-tier change under `CLAUDE.md` §7 — confirm intent with the operator rather
+than doing it as part of a doc pass. Note also that the four registered hook
+*entries* resolve to three distinct scripts:
+`memory-orchestrator/orchestrate.py` is referenced twice (`PreCompact` and
+`SessionEnd`). Otherwise:
 no personal data (no usernames, absolute machine paths, or emails — keep it
 that way, this file is shared with every collaborator); hooks anchor to
 repo-relative paths so they survive any checkout location. Observation, not

@@ -42,6 +42,7 @@ python -m guardrails.cli test
 | `rails.py` | Offline floor (injection, soul-mutation intent, grounding) |
 | `metrics.py` | Separate `logs/guardrails.jsonl` (hashes, not the core audit stream) |
 | `cli.py` / `selftest.py` | Operator surface |
+| `errors.py` | `GuardrailsError` hierarchy, rooted at `utils.errors.RAGError` — kept local rather than added to `utils/errors.py` while the package is still skeleton-status |
 | `config/` | NeMo `config.yml` + Colang templates |
 
 ## Status (code, not the package docstring)
@@ -55,6 +56,15 @@ Canonical table: [`docs/NeMo/README.md`](../docs/NeMo/README.md).
 | Shared offline scanner helpers | Shipped |
 | Output grounding (`local_llm` only) | Shipped |
 | Soul-leak output rail | **Not fully built** — listed as a candidate in config only |
+| `check_jailbreak` input rail | **Not enforced offline** — configured in `input_rails`, but `integration.py`'s offline checks implement only `check_injection` and `check_soul_mutation`. Model-assisted only; same silent-skip shape as the soul-leak rail. |
+| Topical rails (`stay_in_local_knowledge`, `no_unauthed_external_advice`) | **Not enforced offline** — configured (with a `soul_topics` list) but neither name is referenced anywhere in `integration.py`. |
+
+Read that table as: when `nemoguardrails` is absent — which is the shipped
+posture, since it is a soft import — the offline floor enforces exactly two
+checks, `check_injection` and `check_soul_mutation`. Every other rail named in
+`config.yaml`'s `guardrails:` block is configuration for a model-assisted path
+that is not wired, and silently skips rather than failing loudly. Do not read a
+rail's presence in config as evidence it runs.
 
 `guardrail_safety_node` in `integration.py` is an unused example helper, not
 the live graph path.

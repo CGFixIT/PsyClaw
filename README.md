@@ -54,6 +54,8 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 16. **Projects the audit trail into a Numbat forensic stream** (`utils/numbat_emitter.py`, `numbat:` block — the one optional subsystem that ships **`enabled: true`**) — a derived NDJSON stream at `logs/numbat-events.ndjsonl` that the pinned **Numbat 0.2.0** CLI can score for patterns like `secrets.read_private_key` and `exfil.curl_post_file`. Two producer planes write it: the out-of-band **action** plane (executor, `ops_runner`, `real_repo_loop`, fsconnect, sqlconnect emit directly) and the **mainline** plane (`utils/logger.audit_log` projects every audit record). `audit.jsonl` stays authoritative and the privacy contract is inherited, not re-implemented — records are projected *after* SHA-256 query hashing and recursive PII redaction, so raw query text reaches neither stream. The projection is fail-soft end to end and runs at the terminal `audit_logger` node (I4), after the answer is computed, so it can never turn a good response into a 500. See [`docs/security-philosophy/numbat_secondary_evaluator.md`](docs/security-philosophy/numbat_secondary_evaluator.md)
 17. **Ships an optional OpenTweet X channel** (`opentweet/`, shipped `enabled: false`) — an out-of-band weekly poster. Generation only happens through loopback `POST /query` with `user_confirmed_online: false`; the default write is an OpenTweet **draft** (`scheduled_date` is opt-in). Schedulers (`python -m opentweet.cli schedule-plist` on Darwin, `schedule-task` on Windows) generate and never load/register, and they never send `publish_now`. Same I6 isolation as Telegram: `gate.py` / `graph.py` / MCP never import the package. See [`docs/channels/OPENTWEET_DESIGN.md`](docs/channels/OPENTWEET_DESIGN.md) and [`opentweet/README.md`](opentweet/README.md)
 
+18. **Tracks what the paid providers cost** (`utils/spend.py`, `logs/spend.jsonl` via `logging.spend_file`) — every billed Grok/Claude call appends one JSON line recording the token counts, the provider/model, and a `source` tag separating the `/query` plane from the agentic plane. **Tokens are the ground truth; dollars are derived at read time**, so correcting a stale vendor rate re-prices the whole history instead of leaving wrong numbers on disk. The ledger is deliberately a separate stream from `audit.jsonl` (it never routes through `audit_log`), it never persists query text, prompts, message content, or credentials, and it is not a policy point — nothing on the `/query` path reads it. `cyclaw-metrics` prints today/last-7-day windows, flags rate staleness, and compares CyClaw's rate table against xAI's own `cost_in_usd_ticks` so a wrong rate surfaces instead of accumulating. `utils/sequence_detect.py` joins it back to the audit trail on the shared `query_hash` for offline forensics. See [`docs/spend/README.md`](docs/spend/README.md)
+
 ---
 
 ## Architecture
@@ -201,7 +203,7 @@ flowchart TD
 
 CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore`) require a **Bearer API key**. Without it they return `HTTP 401` immediately — intentional fail-closed behavior.
 
-> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated.
+> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `GET /auth/setup-status`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated. `POST /auth/bootstrap-password` carries no credential either, but is not open: it is gated on a loopback socket peer plus a same-origin check, returns 403 off-box, and 409 once the first admin password is set.
 
 > **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once — but **only for requests arriving from this machine**. The bypass is granted on the socket peer, so a remote caller still needs the real key no matter how the process was launched. Entries in `security.allowed_hosts` do not change that: that list filters request `Host` headers and opens no listening socket. What *would* matter is the bind itself — `gate.py` refuses to start with a non-loopback `api.host` while the flag is `true`, and `config-guard`'s C13 warns on that pair. Note it also does nothing under Docker: NAT rewrites the source address, so the container sees the bridge gateway rather than loopback and the routes stay key-gated (set `CYCLAW_API_KEY` in the container instead).
 
@@ -645,6 +647,13 @@ CyClaw/
 │   ├── launchd_plist.py        # stdlib-only plist builder used by every launchd generator
 │   ├── guardrail_bridge.py     # only bridge from graph.py to guardrails/ (never a direct import)
 │   ├── numbat_emitter.py       # derived Numbat NDJSON stream: action-plane emits + mainline audit projection
+│   ├── spend.py                # append-only Grok/Claude token ledger (logs/spend.jsonl); dollars derived at read time
+│   ├── sequence_detect.py      # offline forensic join of audit.jsonl + spend.jsonl on query_hash (CLI only)
+│   ├── authn.py                # per-user auth primitives: scrypt hashing, lockout arithmetic, id generation
+│   ├── authn_store.py          # users/sessions/device_tokens backend (CYCLAW_AUTH_DB_URL)
+│   ├── authn_manager.py        # AuthManager — ties authn.py + authn_store.py together; no HTTP awareness
+│   ├── authn_cli.py            # cyclaw-user console script (local-only by construction)
+│   ├── gen_cert.py             # cyclaw-gen-cert — self-signed cert + key with hostname/LAN SAN
 │   └── telemetry_kill.py       # shared kill block — applied by gate.py, mcp_hybrid_server.py, retrieval/vector_store.py
 ├── schemas/                    # Pydantic API models (api.py; extra='forbid', strict)
 ├── scripts/                    # install-githooks.sh, check-pr-template.sh
@@ -831,9 +840,9 @@ Scoped **reads** and separately-gated **writes** over a local or SMB file share,
 
 ```bash
 python -m agentic.fsconnect.cli status
-python -m agentic.fsconnect.cli read  <path>            # scoped read
-python -m agentic.fsconnect.cli grep  <path> <pattern>
-python -m agentic.fsconnect.cli write <path> --reason "..."   # dry-run unless writes_enabled
+python -m agentic.fsconnect.cli read  "<path>"            # scoped read
+python -m agentic.fsconnect.cli grep  "<path>" "<pattern>"
+python -m agentic.fsconnect.cli write "<path>" --reason "..."   # dry-run unless writes_enabled
 python -m agentic.fsconnect.cli index --apply           # stage share → corpus
 python -m agentic.fsconnect.cli test                    # pre-flight self-test
 ```
@@ -1165,11 +1174,11 @@ python -m agentic.cli real-repo-run \
   --branch claude/parser-fix --commit-message "fix: off-by-one" \
   --reason "triage issue 123" --confirm
 
-python -m agentic.cli real-repo-run-status  --run-id <32-hex>
-python -m agentic.cli real-repo-run-decide  --run-id <32-hex> --decision approve
-python -m agentic.cli real-repo-run-push    --run-id <32-hex>
-python -m agentic.cli real-repo-run-publish --run-id <32-hex> --reason "..." --confirm
-python -m agentic.cli real-repo-run-discard --run-id <32-hex>
+python -m agentic.cli real-repo-run-status  --run-id "<32-hex>"
+python -m agentic.cli real-repo-run-decide  --run-id "<32-hex>" --decision approve
+python -m agentic.cli real-repo-run-push    --run-id "<32-hex>"
+python -m agentic.cli real-repo-run-publish --run-id "<32-hex>" --reason "..." --confirm
+python -m agentic.cli real-repo-run-discard --run-id "<32-hex>"
 ```
 
 Exit codes are an API: `0` ok · `2` failed · `3` env/config · `4` write refused.
@@ -1272,7 +1281,7 @@ pipeline via loopback `POST /query`, never a direct call into `graph.py`.
 ```bash
 python -m telegram.cli status
 python -m telegram.cli test
-python -m telegram.cli send --chat-id <id> --text "..."   # T1; add --dry-run to preview
+python -m telegram.cli send --chat-id "<id>" --text "..."   # T1; add --dry-run to preview
 python -m telegram.cli poll                                # T2; requires telegram.mode: chat
 python -m telegram.cli poll-plist                          # Darwin-only; generates, never loads
 python -m telegram.cli health-plist                        # Darwin-only; generates, never loads

@@ -33,7 +33,8 @@ modules"; this file groups them by concern.
 | `personality_db.py` | Soul DB backend: SQLite default, Postgres via `CYCLAW_DB_URL`. |
 | `logger.py` | Audit JSONL: SHA-256 query hashing, recursive PII redaction. Raw query text is never persisted. `audit_log` also projects each record — *after* hashing and redaction — into the Numbat stream via a lazy, fail-soft `numbat_emitter` call, so the derived stream inherits the same privacy contract. |
 | `errors.py` | Typed exception hierarchy rooted at `RAGError` (`.code`/`.message`/`.details`). Never raise bare `Exception`. |
-| `spend.py` | Append-only Grok/Claude token ledger (`logs/spend.jsonl`, `logging.spend_file`). Tokens are ground truth; dollars derived at read time by `metrics.py`. Separate stream from `audit.jsonl`; never persists query/prompt content. |
+| `spend.py` | Append-only Grok/Claude token ledger (`logs/spend.jsonl`, `logging.spend_file`). Tokens are ground truth; dollars derived at read time by `metrics.py`. Separate stream from `audit.jsonl`; never persists query/prompt content. See [`docs/spend/README.md`](../docs/spend/README.md). |
+| `sequence_detect.py` | Offline forensic sequence detection over a join of `audit.jsonl` + `spend.jsonl`, keyed on the unsalted SHA-256 `query_hash`. Correlates blocked-injection events against later online escalations inside a 15-minute window. Spend rows are restricted to `source == "query"` so the agentic ledger plane never mixes in. Findings carry hashes, event names, timestamps, and provider/model tags — never query text, IPs, soul content, or secrets. Forensic/CLI only: `gate.py`, `graph.py`, and the MCP server must not import it (it is not a `/query` policy point). |
 
 ## Serving / ops
 

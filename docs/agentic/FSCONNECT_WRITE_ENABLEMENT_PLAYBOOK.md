@@ -122,7 +122,7 @@ python -m agentic.fsconnect.cli --config $CFG append --path note.txt --body " mo
 python -m agentic.fsconnect.cli --config $CFG delete --path note.txt --reason "smoke" --confirm      # -> trash
 python -m agentic.fsconnect.cli --config $CFG quota-status
 # restore needs the entry name from the delete output or a trash listing:
-python -m agentic.fsconnect.cli --config $CFG trash-restore --entry <name> --reason "smoke" --confirm
+python -m agentic.fsconnect.cli --config $CFG trash-restore --entry "<name>" --reason "smoke" --confirm
 ```
 
 Applied ops return `{"status": "applied", "executed": true, "intent_id": ..., "rule_applied": "allowed: ..."}`.

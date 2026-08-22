@@ -1,7 +1,9 @@
 # `schemas/` — Pydantic API models
 
-One module, `api.py`: the request/response models for the FastAPI gateway
-(`/query`, sources, health, soul evolution). Every model is declared with
+One module, `api.py`: the request/response models for the FastAPI gateway.
+Four families live here — the core query surface (`/query`, sources, health,
+soul evolution), the `/ops/*` subprocess-control models, the `/auth/*`
+session/RBAC models, and the `/memory/*` propose/apply models. Every model is declared with
 `extra='forbid', strict=True` — unexpected fields and loose type coercion are
 rejected at the schema boundary (HTTP 422) before any retrieval or LLM work
 runs, which is a deliberate hardening choice against silent data injection in

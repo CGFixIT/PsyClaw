@@ -43,7 +43,7 @@ Run the harness. It pins the git identity the stop hook requires, fetches
 scan:
 
 ```bash
-bash .claude/skills/CyClaw-Optimize/bootstrap.sh agent/cyclaw-optimize-<topic>
+bash .claude/skills/CyClaw-Optimize/bootstrap.sh "agent/cyclaw-optimize-<topic>"
 ```
 
 Omit the branch argument to run read-only against the current branch. The
@@ -154,9 +154,9 @@ a throwaway 3-way merge locally in an isolated worktree and confirm both edits s
 ORIG_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git worktree add -b _trial /tmp/cyclaw-trial origin/main
 cd /tmp/cyclaw-trial
-git merge --no-ff origin/<branch-A> && git merge --no-ff origin/<branch-B>
-grep -q '<A-marker>' <shared-file> && grep -q '<B-marker>' <shared-file> && echo "both present"
-grep -rc '<<<<<<<' <shared-file>           # must be 0
+git merge --no-ff "origin/<branch-A>" && git merge --no-ff "origin/<branch-B>"
+grep -q '<A-marker>' "<shared-file>" && grep -q '<B-marker>' "<shared-file>" && echo "both present"
+grep -rc '<<<<<<<' "<shared-file>"           # must be 0
 python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"  # still valid
 cd - && git worktree remove /tmp/cyclaw-trial
 ```
@@ -194,7 +194,7 @@ assumption that every branch starts at `main`:
    ```bash
    git add -p
    git commit -m "<type>: <what changed and why>"
-   git push -u origin <branch-name>
+   git push -u origin "<branch-name>"
    ```
 
    On network failure only, retry up to 4× with exponential backoff
