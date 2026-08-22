@@ -131,6 +131,25 @@ class TestRedactSensitive:
 
 
 class TestAuditLog:
+    def test_non_string_secret_pattern_does_not_drop_audit_event(self, tmp_path, caplog):
+        audit_file = tmp_path / "audit.jsonl"
+        cfg = {
+            "logging": {"audit_file": str(audit_file), "audit_fields": {}},
+            "policy": {
+                "privacy": {
+                    "redact_emails": False,
+                    "redact_ips": False,
+                    "redact_secrets_like": [{"invalid": "entry"}, "TOKEN-[0-9]+"],
+                },
+            },
+        }
+
+        audit_log({"event": "test", "details": "TOKEN-123"}, cfg=cfg)
+
+        event = json.loads(audit_file.read_text(encoding="utf-8"))
+        assert event["details"] == "[REDACTED_SECRET]"
+        assert any("non-string" in record.message for record in caplog.records)
+
     def test_writes_jsonl(self, audit_config):
         config_path, audit_file = audit_config
         audit_log({"event": "test", "query": "hello"}, config_path)

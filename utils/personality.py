@@ -288,7 +288,7 @@ class PersonalityManager:
         sources: list[str] = list(base)
         pf = (self.cfg.get("policy") or {}).get("prompt_filter") or {}
         for p in (pf.get("banned_patterns") or []):
-            if p not in sources:
+            if isinstance(p, str) and p not in sources:
                 sources.append(p)
         compiled: list[tuple] = []
         for p in sources:

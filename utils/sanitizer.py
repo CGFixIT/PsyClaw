@@ -92,6 +92,13 @@ def _load_filter(config_path: str) -> tuple[bool, int, tuple[Pattern, ...]]:
     # pattern text.
     compiled = []
     for idx, p in enumerate(pf.get("banned_patterns", [])):
+        if not isinstance(p, str):
+            logger.warning(
+                "banned_patterns entry #%d in %s has non-string type %s; it is "
+                "skipped — injection filtering continues with the remaining patterns.",
+                idx, config_path, type(p).__name__,
+            )
+            continue
         try:
             # DOTALL so a pattern whose halves straddle a newline still matches:
             # without it 'maintenance\s+mode.*safety\s+filters\s+disabled' is
