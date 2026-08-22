@@ -73,8 +73,7 @@ jobs:
       - name: Ruff check (fast modern gate)
         run: ruff check --select E,F,I,B,C4,UP,S .
 
-      - name: Determine changed Python files
-        id: changed
+      - name: wemake-python-styleguide on changed Python files
         env:
           # Routed through env instead of interpolated directly into the run
           # script: a template expanded straight into shell text is evaluated
@@ -87,41 +86,12 @@ jobs:
           BASE_REF="${BASE_REF_INPUT:-main}"
           git fetch origin "$BASE_REF"
           BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD)
-          # xargs (no command) joins lines with single spaces and trims any
-          # leading/trailing whitespace — `tr '\n' ' '` alone leaves a
-          # trailing space after the last filename, which the wemake action
-          # then treats as part of the (single) path argument verbatim,
-          # producing a literal "FileNotFoundError: 'name.py '" instead of
-          # linting the file.
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py' | xargs)
-          echo "files=$FILES" >> "$GITHUB_OUTPUT"
-          if [ -n "$FILES" ]; then
-            echo "has_files=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          mapfile -d '' -t FILES < <(
+            git diff --name-only -z --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py'
+          )
+          if (( ${#FILES[@]} == 0 )); then
+            echo "No changed Python files; skipping wemake-python-styleguide."
+            exit 0
           fi
-
-      - name: Install wemake-python-styleguide (strict WPS + flake8 plugins)
-        if: steps.changed.outputs.has_files == 'true'
-        run: pip install flake8==7.3.0 wemake-python-styleguide==1.6.2
-
-      - name: wemake-python-styleguide (strict WPS + flake8 plugins)
-        # Scoped to this branch's changed .py files (see the step above) so the
-        # job only fails on findings in code this PR actually touches — the
-        # existing tree was never brought WPS-clean. setup.cfg (repo root)
-        # sets max-line-length=120 to match the project's Ruff standard.
-        if: steps.changed.outputs.has_files == 'true'
-        env:
-          # Routed through env rather than interpolated into the run script —
-          # the file list originates from filenames a PR branch can name
-          # arbitrarily (git diff output), so template-expanding it directly
-          # into shell text would let a maliciously-named file execute as code
-          # instead of just being read as a string argument (zizmor
-          # template-injection).
-          CHANGED_FILES: ${{ steps.changed.outputs.files }}
-        run: |
-          # CHANGED_FILES is a space-separated list that must word-split into
-          # one flake8 argument per file (see the xargs comment on the step
-          # above for why a trailing-space edge case ruled out the alternatives).
-          # shellcheck disable=SC2086
-          flake8 $CHANGED_FILES
+          pip install flake8==7.3.0 wemake-python-styleguide==1.6.2
+          flake8 -- "${FILES[@]}"
