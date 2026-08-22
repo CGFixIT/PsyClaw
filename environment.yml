@@ -11,7 +11,17 @@ channels:
 
 dependencies:
   - python=3.12
-  - pip
+  # pip is pinned (26.1.2, matches ci.yml's install-surface pin and the conda
+  # lane's "Pin pip" step) instead of floating. A bare `pip` here lets the fresh
+  # mamba env track conda-forge's newest pip while the actions/cache entry in
+  # python-package-conda.yml restores an older env tree over it; the overlay can
+  # mix pip/_internal modules from two pip versions and leave `python -m pip`
+  # unimportable (ImportError: cannot import name 'get_runnable_pip', first seen
+  # 2026-07-30; same failure signature reds the lane again when the two sides
+  # drift). Pinning keeps the fresh env and any cached env byte-coherent, and
+  # the cache key hashes this file, so bumping the pin also busts stale caches.
+  # pip 26.1.2 confirmed on conda-forge (noarch, published 2026-05-31).
+  - pip=26.1.2
   # Core runtime — pinned to match pyproject.toml / constraints.txt exactly
   # (each version verified present on conda-forge, 2026-07). Keep these pins in
   # sync with pyproject.toml [project.dependencies] and constraints.txt; a bare
