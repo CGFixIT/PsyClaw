@@ -17,6 +17,7 @@ host is the operator's own sequence. It is not an actor id.
 
 from __future__ import annotations
 
+import bisect
 import re
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
@@ -244,15 +245,24 @@ def detect_sequences(
             continue
         escalations.append((ts, hashed, row, "spend"))
     escalations.sort(key=lambda item: item[0])
+    # escalations is sorted ascending by timestamp, so for a given injection
+    # every candidate with esc_ts <= inj_ts is a fixed prefix -- bisect_right
+    # locates its end in O(log E) instead of walking past it one entry at a
+    # time for every injection (this ran as O(injections * escalations) over
+    # an unbounded, append-only audit.jsonl history).
+    escalation_timestamps = [item[0] for item in escalations]
     for inj_ts, inj_hash, inj_row in injections_all:
         match: tuple[datetime, str, dict[str, Any], str] | None = None
-        for esc_ts, esc_hash, esc_row, kind in escalations:
+        start_idx = bisect.bisect_right(escalation_timestamps, inj_ts)
+        for idx in range(start_idx, len(escalations)):
+            esc_ts, esc_hash, esc_row, kind = escalations[idx]
             if esc_hash == inj_hash:
                 continue
-            if esc_ts <= inj_ts:
-                continue
             if esc_ts - inj_ts > window:
-                continue
+                # Also sort-order-safe to stop here: every later entry is
+                # further outside the window too, so scanning the remainder
+                # of the list would find nothing.
+                break
             match = (esc_ts, esc_hash, esc_row, kind)
             break
         if match is None:
