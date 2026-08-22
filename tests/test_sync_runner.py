@@ -1222,6 +1222,44 @@ def test_run_sync_timeout_budget_is_global_across_retries(tmp_path):
     assert seen_timeouts[0] >= seen_timeouts[1] >= seen_timeouts[2]
 
 
+def test_retry_backoff_larger_than_budget_preserves_transient_result(tmp_path):
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=3, sync_retries=1, retry_backoff_sec=5)
+    log_path = cfg.log_path
+    fake_clock = [0.0]
+    sync_attempts = 0
+    sleep_calls: list[float] = []
+
+    def dispatch(argv, **kwargs):
+        nonlocal sync_attempts
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        sync_attempts += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text(
+            "2026/08/21 00:00:00 ERROR : file.md: transient failure\n",
+            encoding="utf-8",
+        )
+        return MagicMock(returncode=5, stdout="", stderr="transient failure")
+
+    def sleep(seconds):
+        sleep_calls.append(seconds)
+        fake_clock[0] += seconds
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.time.monotonic", side_effect=lambda: fake_clock[0]), \
+         patch("sync.runner.time.sleep", side_effect=sleep), \
+         _patch_audit():
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert sync_attempts == 1
+    assert sleep_calls == []
+    assert result.success is False
+    assert result.rclone_exit_code == 5
+    assert result.errors
+    assert "transient failure" in result.errors[0]
+
+
 def test_run_sync_unbounded_timeout_disables_budget(tmp_path):
     """sync_timeout_sec=0 (the documented unbounded escape hatch) must keep
     its old per-attempt None semantics — no budget tracking, no clipping."""

@@ -1006,15 +1006,15 @@ def _run_sync_locked(
                     "rclone_exit_code": completed.returncode,
                 })
             backoff = cfg.retry_backoff_sec * (2 ** (attempt - 1))
-            # Clip the backoff to whatever budget remains; if the budget is exhausted,
-            # break out so the FAILED attempt's result is surfaced (parsed + audited)
-            # rather than raising a bare timeout that drops the retry's stderr/events.
+            # If the backoff would consume the remaining budget, break out so the
+            # FAILED attempt's result is surfaced (parsed + audited) rather than
+            # raising a bare timeout that drops the retry's stderr/events.
             if has_budget and deadline is not None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
-                if backoff > remaining:
-                    backoff = remaining
+                if backoff >= remaining:
+                    break
             time.sleep(backoff)
 
         finished_at = time.time()
