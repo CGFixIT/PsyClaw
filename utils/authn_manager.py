@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from utils import authn, authn_store
@@ -122,7 +123,18 @@ class DeviceTokenSummary:
 # minimum cost actually stored across the user table, which needs a
 # DB read on every login attempt for a risk that does not exist yet. If
 # _SCRYPT_N/R/P are ever raised, revisit this before shipping that change.
-_DUMMY_RECORD = authn.hash_password("dummy-timing-equalization-password", salt=b"\x00" * 16)
+#
+# Lazy on purpose: this is a full scrypt derivation (~0.1s on the target
+# Mac), and computing it at module import made EVERY process that imports
+# gate.py pay for it -- including the shipped default config, where
+# auth.enabled is false and no AuthManager is ever constructed.
+# AuthManager.__init__ warms the cache, so by the time any login request can
+# exist the record is precomputed and the unknown-username timing path is
+# byte-identical to the old module-level constant. lru_cache makes the cost
+# once-per-process no matter how many managers a test constructs.
+@lru_cache(maxsize=1)
+def _dummy_record() -> str:
+    return authn.hash_password("dummy-timing-equalization-password", salt=b"\x00" * 16)
 
 
 def _is_unique_violation(exc: BaseException) -> bool:
@@ -158,6 +170,12 @@ class AuthManager:
         self.conn, self._ph, self.backend = authn_store.connect(self.db_path, auth_cfg)
         self._prepare_sql()
         self._ensure_schema()
+        # Warm the timing-equalization dummy before any request can reach
+        # login(): a lazily-computed first miss would make the first
+        # unknown-username attempt pay hash+verify (2x scrypt) -- a one-shot
+        # username-existence timing oracle. Paying it here keeps the login
+        # path's timing identical to the old import-time constant.
+        _dummy_record()
 
     def _prepare_sql(self) -> None:
         # Parameterized SQL templates, built once per backend. `ph` is always
@@ -649,7 +667,7 @@ class AuthManager:
             if row is None:
                 # Pay the same scrypt cost a real check would, so timing does
                 # not disclose whether this username exists.
-                authn.verify_password(password, _DUMMY_RECORD)
+                authn.verify_password(password, _dummy_record())
                 self._end_read_txn()
                 raise AuthLoginFailed()
             if authn.is_locked(row["locked_until_ts"], now=now):
