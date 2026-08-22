@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Any
 from harness.config import _UTF8, _atomic_write_json
 from utils.errors import AgenticError
 from utils.personality import ENFORCED_SOUL_PATTERNS
+
+# Serializes add/forget/clear's read-modify-write on notes.json, mirroring
+# harness/sessions.py's _LOCK -- without it, two concurrent /memory calls can
+# each read the same notes list and one write clobbers the other's update.
+_LOCK = threading.Lock()
 
 _NOTES_FILE = "notes.json"
 _NOTES_KEY = "notes"
@@ -144,40 +150,43 @@ class MemoryNotes:
 
     def add(self, text: str) -> dict[str, Any]:
         cleaned = _clean_note(text)
-        notes = _load_notes(self.path)
-        if len(notes) >= _MAX_NOTES:
-            raise MemoryNotesError(
-                f"at most {_MAX_NOTES} notes",
-                code="MEMORY_NOTE_CAP",
-                details={"max_notes": _MAX_NOTES},
-            )
-        note = {
-            _ID_KEY: secrets.token_hex(_ID_BYTES),
-            _TEXT_KEY: cleaned,
-            _TS_KEY: datetime.now(UTC).isoformat(),
-        }
-        notes.append(note)
-        _save_notes(self.dir, self.path, notes)
-        return note
+        with _LOCK:
+            notes = _load_notes(self.path)
+            if len(notes) >= _MAX_NOTES:
+                raise MemoryNotesError(
+                    f"at most {_MAX_NOTES} notes",
+                    code="MEMORY_NOTE_CAP",
+                    details={"max_notes": _MAX_NOTES},
+                )
+            note = {
+                _ID_KEY: secrets.token_hex(_ID_BYTES),
+                _TEXT_KEY: cleaned,
+                _TS_KEY: datetime.now(UTC).isoformat(),
+            }
+            notes.append(note)
+            _save_notes(self.dir, self.path, notes)
+            return note
 
     def forget(self, note_id: str) -> dict[str, Any]:
         wanted = (note_id or "").strip()
         if not wanted:
             raise MemoryNotesError("note id is required", code="MEMORY_NOTE_ID_REQUIRED")
-        notes = _load_notes(self.path)
-        kept = [note for note in notes if note.get(_ID_KEY) != wanted]
-        if len(kept) == len(notes):
-            raise MemoryNotesError(
-                "unknown note id",
-                code="MEMORY_NOTE_UNKNOWN",
-                details={_ID_KEY: wanted},
-            )
-        _save_notes(self.dir, self.path, kept)
-        return {"forgotten": wanted, "count": len(kept)}
+        with _LOCK:
+            notes = _load_notes(self.path)
+            kept = [note for note in notes if note.get(_ID_KEY) != wanted]
+            if len(kept) == len(notes):
+                raise MemoryNotesError(
+                    "unknown note id",
+                    code="MEMORY_NOTE_UNKNOWN",
+                    details={_ID_KEY: wanted},
+                )
+            _save_notes(self.dir, self.path, kept)
+            return {"forgotten": wanted, "count": len(kept)}
 
     def clear(self) -> dict[str, Any]:
-        _save_notes(self.dir, self.path, [])
-        return {"cleared": True, "count": 0}
+        with _LOCK:
+            _save_notes(self.dir, self.path, [])
+            return {"cleared": True, "count": 0}
 
     def context_text(self) -> str:
         notes = _load_notes(self.path)
