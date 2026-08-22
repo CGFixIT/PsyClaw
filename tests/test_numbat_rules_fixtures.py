@@ -23,7 +23,7 @@ import pytest
 import yaml
 
 from utils.logger import reset_config_cache
-from utils.numbat_emitter import SCHEMA_VERSION, build_event
+from utils.numbat_emitter import SCHEMA_VERSION, build_event, close_numbat_handles
 
 _REPO = Path(__file__).resolve().parent.parent
 _FIXTURE_DIR = _REPO / "tests" / "fixtures" / "numbat"
@@ -180,6 +180,10 @@ def test_executor_jail_live_events_have_zero_rule_hits(tmp_path: Path) -> None:
         cfg=cfg,
     )
     assert report.ok
+    # write_ndjson caches its append handle per output path; release it before
+    # tmp_path teardown removes the directory (Windows cannot delete a file
+    # that is still open).
+    close_numbat_handles()
     blob = out.read_text(encoding="utf-8")
     assert blob
     assert "@/.ssh/id_rsa" not in blob
