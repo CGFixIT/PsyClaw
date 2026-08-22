@@ -492,6 +492,23 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Trap:** diagnosing a child PR's red CI as the PR's fault.
   **Rule:** a red `main` poisons every branch cut from it. Check `main`'s own
   state first.
+- **Trap:** opening a draft PR and going dark — never watching its CI, so it
+  sits silently red until the human trips over it (the bottleneck lands on the
+  operator). **Rule:** subscribe to the PR's activity events at creation when
+  the session runtime offers it (e.g. `subscribe_pr_activity`) and drive it to
+  green until merged or closed; a red check on a PR you opened is your work,
+  not the reviewer's discovery. Runtimes without event delivery (e.g. Kimi via
+  `gh`) check CI once after push, then hand the watch to the operator
+  *explicitly* — never silently.
+- **Trap:** the opposite over-correction — a recurring poll (an hourly
+  "re-check the PR" timer, re-armed forever) beside a live event subscription.
+  **Rule:** events are the signal: near-zero cost when quiet, and the
+  operator's own resync at the next session start reconciles anything a
+  dropped event hid. No polling loop duplicates a subscription. At most ONE
+  long-fuse (4–6h), non-re-arming safety sweep across all open PRs per
+  session — and in a multi-agent fleet, exactly one agent owns that sweep
+  while every agent dedups against open PRs (`list_pull_requests`) before
+  scanning or implementing, or two models will write the same fix twice.
 
 ---
 
@@ -521,6 +538,11 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   merge. Develop on the assigned feature branch; never on `main`.
 - **PRs are draft.** One reviewable concern each. Body = **What / Why / Risk to
   monitor**. A human decides when to merge.
+- **Watch what you open — by events, not polls.** Every agent-opened PR gets an
+  activity subscription at creation and is driven to green until merged or
+  closed; no fire-and-forget drafts, and no recurring polling loop beside a
+  live subscription (see the §4 Git & PR traps for the full rule and the
+  multi-agent variant).
 
 ### Docs
 - Dated audit/report docs go in `docs/audits/`. Live memory lives ONLY in
