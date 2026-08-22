@@ -562,7 +562,12 @@ def summarize_audit(audit_file: str) -> dict:
 def print_metrics(config_path: str = "config.yaml"):
     with open(_resolve_config_path(config_path), encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
-    audit_file = cfg["logging"]["audit_file"]
+    # Anchor to the repo root like spend_file below (and like gate.py's own
+    # audit_file anchoring) -- a relative audit_file previously resolved
+    # against the process cwd, so running cyclaw-metrics from anywhere but
+    # the repo root silently printed "No audit events found." instead of
+    # reading the real file.
+    audit_file = str(_resolve_config_path(cfg["logging"]["audit_file"]))
     summary = summarize_audit(audit_file)
     integrity = summary["audit_integrity"]
     # Same repo-root anchor as config.yaml. Relative spend_file must not

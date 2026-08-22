@@ -187,16 +187,18 @@ test_single_word: assert len(tokens[0]) >= 5   → tokenize_and_stem("kubernetes
 - **Fix:** decide intended behavior for domain acronyms. If `kubernetes→k8s` is intended, change
   the assertion; if not, drop the mapping.
 
-### 3.8 `test_rate_limit.py` — 3 passed, but **tests a copy, not the code** ⚠️
-- The file **re-defines its own** `check_rate_limit` + `_rate_limits` (lines 11–21) rather than
-  importing from `gate`. It validates a *duplicate* of the algorithm — `gate.check_rate_limit`
-  could regress and this test would still pass (false confidence).
-- Also carries the same hardcoded `/home/workdir/...` path and a real `time.sleep(2.1)`
-  (wall-clock-dependent, slow).
-- **Fix:** extract the limiter into a small importable unit (e.g. `utils/ratelimit.py`) used by
-  **both** `gate.py` and the test; replace `sleep` with a monkeypatched clock; add an
-  IP-eviction / memory-bound test (the subject of `cc`-branch PR #12, which fixes the limiter's
-  unbounded per-IP growth — not yet on `main`).
+### 3.8 `test_rate_limit.py` — **resolved; described here as it was at the 2026-06-16 snapshot**
+- This section is a historical finding, not a current bug report: `utils/ratelimit.py` now
+  exists, `gate.py` uses it, and `tests/test_rate_limit.py`'s own module docstring states
+  "these tests import the REAL limiter used by gate.py — not a re-implemented copy" and "there
+  is no time.sleep and no wall-clock dependence." Neither of the two problems described below
+  is present on `main` today.
+- *At the time of the original audit*, the file re-defined its own `check_rate_limit` +
+  `_rate_limits` rather than importing from `gate` — validating a duplicate of the algorithm — and
+  carried a hardcoded path plus a real `time.sleep(2.1)` (wall-clock-dependent, slow).
+- *Original fix recommendation (since applied):* extract the limiter into a small importable
+  unit used by both `gate.py` and the test, and replace the sleep with a fake clock. Both
+  landed; no further action needed here.
 
 ### 3.9 `test_audit.py` — 9 passed ✅ (stale warning note)
 - Fully aligned with the current `utils/logger` API. Its top-of-file `BUILD-ALIGNMENT NOTE`
