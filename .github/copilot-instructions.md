@@ -116,7 +116,7 @@ GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q
 pytest tests/test_personality_postgres.py tests/test_ratelimit_postgres.py tests/test_pgvector_store.py -q --tb=short
 
 # Types — best-effort only, NOT CI-enforced; bare "mypy ." errors due to utils/ lacking __init__.py
-mypy --strict --python-version 3.12 --explicit-package-bases <touched files only>
+mypy --strict --python-version 3.12 --explicit-package-bases "<touched files only>"
 
 # CI-style coverage (see .github/workflows/ci.yml for exact --cov= flags and 80% fail_under gate)
 ```

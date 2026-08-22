@@ -47,7 +47,7 @@ HTTP POST /query   (or MCP tools/call: hybrid_search)
         │
         ▼
    gate.py  — TrustedHost check → rate limit (60/min per IP) → injection filter
-              → soul init → graph invoke (wrapped in 660s timeout)
+              → soul init → graph invoke (wrapped in 780s timeout)
         │
         ▼
    graph.py  (LangGraph 12-node state machine)
@@ -677,7 +677,7 @@ GROK_API_KEY=dummy python tests/ci_rag_smoke.py               # real-index RAG s
 # Lint / types (ruff is CI-enforced; mypy is a best-effort local check only —
 # see the §4 Testing trap for why the bare "mypy ... ." invocation errors out)
 ruff check --select E,F,I,B,C4,UP,S .
-mypy --strict --python-version 3.12 --explicit-package-bases <touched files>
+mypy --strict --python-version 3.12 --explicit-package-bases "<touched files>"
 
 # Run the server + probe health
 python gate.py            # or: cyclaw-server   (binds 127.0.0.1:8787)
@@ -707,7 +707,7 @@ non-blocking `numbat-rules.yml` job. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (181 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (183 `test_*.py` files, auto-collected by pytest).
 
 ---
 

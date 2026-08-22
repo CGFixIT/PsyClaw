@@ -28,6 +28,12 @@ authority; this file is the in-tree map.
 `--max-transfer` abort) · `2` operation failed · `3` env/config problem ·
 `10` corpus changed → caller should reindex (`python -m retrieval.indexer`).
 
+The `10` contract holds for the shipped posture, where `sync.auto_reindex` is
+`false`. Turning that switch on makes `python -m sync.cli sync` run the indexer
+itself instead of handing the caller a `10` to act on — so a scheduler wired to
+treat `10` as "now reindex" has nothing to do, and a caller that treats any
+nonzero exit as failure needs to know `10` is no longer expected.
+
 ## Related
 
 - Scheduling on macOS (plist generation, never auto-load):

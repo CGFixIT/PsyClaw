@@ -16,9 +16,11 @@ Canonical references:
   verification discipline, findings-before-writes, security posture, and
   shipping-first prioritization.
 - `.codex/README.md` for Codex routines, prompts, and checklists.
-- `docs/memories/CONSOLIDATED.md` for the current consolidated memory (this
-  file auto-regenerates from session snapshots — treat it as a rolling
-  summary, not a stable citation target).
+- `docs/memories/` for live agent memory (the only sanctioned location —
+  `.claude/memory/` is legacy). The memory skills regenerate a consolidated
+  summary here from session snapshots; treat whatever is present as a rolling
+  summary, not a stable citation target, and do not assume a fixed filename —
+  as of 2026-08-22 no `CONSOLIDATED.md` exists in the shipped tree.
 
 ## Project Overview
 
@@ -45,7 +47,10 @@ The six security invariants (`CLAUDE.md` §3) are design constraints, not implem
 
 Code modules mirror `CLAUDE.md` §2's "Key modules" table (more granular — treat that as the source of truth). Directories `CLAUDE.md`'s module table omits:
 
-- `static/` - browser terminal UI (`terminal.html`, served at `/`).
+- `static/` - browser consoles: `terminal.html` + `terminal.js` (the gateway
+  operator console, served at `/` on `127.0.0.1:8787`), `harness.html` (the
+  coding-harness console, served at `/` on `127.0.0.1:8790`), and the shared
+  `auth_admin.js` Users panel. Only `gate.py` mounts `/static`.
 - `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
 - `.claude/` - Claude project skills, commands, hooks, rules, and patterns.
@@ -269,7 +274,7 @@ ruff check --select E,F,I,B,C4,UP,S .
 Best-effort, not CI-enforced (see `CLAUDE.md` §4 for why a bare `mypy .` fails immediately):
 
 ```bash
-mypy --strict --python-version 3.12 --explicit-package-bases <touched files>
+mypy --strict --python-version 3.12 --explicit-package-bases "<touched files>"
 bandit -r gate.py gate_ops.py gate_auth.py gate_memory.py graph.py retrieval utils llm sync agentic guardrails harness telegram opentweet memory
 ```
 
@@ -278,8 +283,19 @@ No markdown formatter or markdown lint command is configured in this repo.
 ## Safe Development Workflow, Coding Conventions, Testing Expectations, Dependency Rules, Security Rules, Git Workflow, PR Expectations
 
 These are fully covered by `CLAUDE.md` §3-7 (invariants, conventions, quality
-bar, escalation tiers) — read those sections rather than a duplicate summary
-here. The few points below have no `CLAUDE.md` equivalent and are worth
+bar, escalation tiers, and §5's git/branch/PR conventions) — read those
+sections rather than a duplicate summary here.
+
+One item is worth repeating rather than referencing, because it applies to
+every commit a Codex session makes: **branch prefixes are driver-matched.** A
+Codex session develops on `codex/<feature>`, not the generic `agent/` prefix.
+The full vendor table is in `CLAUDE.md` §10 and `.github/PULL_REQUEST_TEMPLATE.md`;
+`utils/agent_identity.py`'s `ALLOWED_BRANCH_PREFIXES` is the enforced source of
+truth, and `.githooks/pre-commit` rejects anything outside it. PR bodies follow
+`.github/PULL_REQUEST_TEMPLATE.md` — populate its sections rather than an ad hoc
+What/Why shape.
+
+The few points below have no `CLAUDE.md` equivalent and are worth
 keeping close to this file:
 
 - Prepare the hermetic runtime directories (Setup Commands above) before any

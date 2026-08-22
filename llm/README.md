@@ -18,6 +18,14 @@ The two external clients are only ever **constructed** when
 **called** after per-request user confirmation — the triple gate (I3) is
 enforced in `gate.py` + `graph.py`, not here.
 
+Read that conditional against the shipped config before assuming it means
+"off": `app.mode` ships `"hybrid"` and both `models.grok.enabled` and
+`models.claude.enabled` ship `true` (armed 2026-08-07), so on a fresh clone
+**both external clients are constructed at boot** and two of the three gates
+are already open. The only remaining gate is the per-request
+`user_confirmed_online`, which cannot be pre-set in config. Billed calls are
+recorded to `logs/spend.jsonl` — see [`docs/spend/README.md`](../docs/spend/README.md).
+
 ## Shared behavior
 
 - **Bounded retry** (`_post_with_retry`): timeouts, transport errors, 5xx and

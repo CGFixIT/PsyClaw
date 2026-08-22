@@ -23,7 +23,7 @@ Architecture and threat notes: [`docs/channels/OPENTWEET_DESIGN.md`](../docs/cha
 ## Consent boundaries
 
 - Topic comes from `--topic`, `--topic-file`, or `opentweet.topic_file`.
-- Fail-closed on empty retrieval, `needs_confirm`, online `model_used`, oversize answer, missing key.
+- Fail-closed on empty retrieval, `needs_confirm`, online `model_used`, oversize answer, missing key. The size limits are `opentweet.max_post_chars` (ships `280`) and `opentweet.max_topic_chars` (ships `500`).
 - Logs/audit carry `hash_query(text)` + length + OpenTweet id — never the post body or Bearer token.
 - Exit codes: `0` ok · `2` refused/HTTP · `3` env/config.
 

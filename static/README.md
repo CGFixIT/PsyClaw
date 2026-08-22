@@ -8,7 +8,16 @@ loopback only.
 |---|---|---|
 | `terminal.html` + `terminal.js` | `gate.py` at `GET /` (plus the `/static` mount) on `127.0.0.1:8787` | The CyClaw Terminal — the operator console for `/query` and the authenticated soul/ops/memory endpoints. |
 | `harness.html` | `harness/server.py` on `127.0.0.1:8790` | The coding-harness console (slash-command UI: `/goal`, `/loop`, `/skills`, `/tools`, `/web`, `/agent`, …). |
-| `auth_admin.js` | reachable via the `/static` mount on either server; loaded by both `terminal.html` and `harness.html` | Shared Users panel (`/auth/users` list/create/role/disable/enable) — one script, no inline script, used by both consoles. |
+| `auth_admin.js` | served only by `gate.py`'s `/static` mount on `127.0.0.1:8787`; referenced by both `terminal.html` and `harness.html` | Shared Users panel (`/auth/users` list/create/role/disable/enable) — one script, no inline script. |
+
+`gate.py` carries the only `/static` mount in the repo (`gate.py`'s
+`app.mount("/static", ...)`). `harness/server.py` mounts nothing: it reads
+`harness.html` off disk and returns it as an HTML response, and its route table
+is `GET /` plus `/api/*`. So `harness.html`'s `<script src="/static/auth_admin.js">`
+tag resolves only when the markup is served from the gateway — loaded from the
+harness console on `127.0.0.1:8790` that request has no route and the Users
+panel script does not load. Treat the shared Users panel as a gateway-console
+feature until the harness grows a mount of its own.
 
 ## The console contract
 

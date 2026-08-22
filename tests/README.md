@@ -1,6 +1,6 @@
 # `tests/` — the CyClaw test suite
 
-Pytest suite for the whole repository (181 `test_*.py` files, auto-collected
+Pytest suite for the whole repository (183 `test_*.py` files, auto-collected
 via `testpaths = ["tests"]` in `pyproject.toml`). Everything external is mocked
 in `conftest.py` — no live Ollama, no network, no real ChromaDB service. A
 fresh clone has **no** Python deps installed; install first (see `CLAUDE.md`
