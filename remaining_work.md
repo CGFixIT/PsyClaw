@@ -1,6 +1,6 @@
 # Remaining work
 
-# note i must be retarded i did basically everything w the telegram config and even get correct terminal responses after the token and chat id part, but the chatbot in the app itself doesnt respond - i dont use telegram and its prob something easy but i wasted an hour on it today haha 
+# note i must be retarded i did basically everything w the telegram config and even get correct terminal responses after the token and chat id part, but the chatbot in the app itself doesnt respond - i dont use telegram and its prob something easy but i wasted an hour on it today haha - confirmed: mildly ‘tarded: “ Runs as a separate process (python -m telegram.cli“ aka read the readme under telegram/)
 
 Live checklist as of **2026-08-21**, `origin/main` `02447585`.
 
