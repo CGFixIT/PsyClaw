@@ -56,6 +56,32 @@ def test_notes_add_forget_clear(tmp_path):
     assert store.status(False)["count"] == 0
 
 
+def test_notes_add_is_race_free(tmp_path):
+    import threading
+
+    store = MemoryNotes(tmp_path / "memory")
+    errors: list[Exception] = []
+
+    def _add(idx: int) -> None:
+        try:
+            store.add(f"note {idx}")
+        except Exception as exc:  # noqa: BLE001 -- collected for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_add, args=(idx,)) for idx in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # A lost update (two threads read the same list, one write clobbers the
+    # other) would leave fewer than 8 notes with no error raised for the
+    # "missing" ones. Every add either lands or raises MEMORY_NOTE_CAP.
+    assert store.status(False)["count"] + sum(
+        1 for e in errors if getattr(e, "code", None) == "MEMORY_NOTE_CAP"
+    ) == 8
+
+
 def test_notes_reject_injection(tmp_path):
     store = MemoryNotes(tmp_path / "memory")
     with pytest.raises(MemoryNotesError) as exc:
