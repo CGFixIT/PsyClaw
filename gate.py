@@ -248,6 +248,18 @@ def _forbid_audit_query(username: str | None) -> None:
         )
 
 
+async def _forbid_audit_query_async(username: str | None) -> None:
+    """Offload _forbid_audit_query's sqlite lookup to a worker thread.
+
+    require_session_or_token (gate_auth.py) already keeps its own sqlite
+    lookups off the event loop for exactly this reason -- this is the one
+    lookup on the same request that was left running directly in the async
+    query_endpoint body, blocking the single event-loop thread on every
+    authenticated /query while auth is enabled.
+    """
+    await asyncio.to_thread(_forbid_audit_query, username)
+
+
 def _reject_cross_site_query(request: Request) -> None:
     """Attached to POST /query only when auth is on (see the Stage 3 wiring
     below) -- reuses _looks_cross_site, the same check that already protects
@@ -703,7 +715,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         )
 
     username = _request_username(request)
-    _forbid_audit_query(username)
+    await _forbid_audit_query_async(username)
 
     try:
         check_input(req.query)
