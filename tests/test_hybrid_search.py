@@ -249,6 +249,44 @@ class TestHybridDegradePaths:
         assert out == []
 
 
+class TestSemanticSearchBackendErrors:
+    """The vector reader's query() is a raw backend call (chromadb / psycopg).
+
+    retrieve_node's designed fail-soft degrade (score 0.0, retrieval_mode
+    "none", routed to user_gate) only triggers on RAGError/EmbeddingServiceError
+    -- an unguarded backend exception here previously propagated straight past
+    hybrid_search()'s own except EmbeddingServiceError and out of retrieve_node
+    entirely, turning a designed degrade into an unhandled 500 that also skips
+    audit_logger (I4).
+    """
+
+    def test_reader_query_failure_raises_embedding_service_error(self) -> None:
+        class _BoomReader:
+            def query(self, _emb, _k):
+                raise RuntimeError("chromadb internal failure")
+
+        fake = SimpleNamespace(
+            top_k_semantic=5, config_path="config.yaml", _vector_reader=_BoomReader(),
+        )
+        with patch("retrieval.hybrid_search.get_embedding", return_value=[0.1, 0.2, 0.3]):
+            with pytest.raises(EmbeddingServiceError, match="RuntimeError"):
+                HybridRetriever.semantic_search(fake, "q")
+
+    def test_reader_query_success_is_unaffected(self) -> None:
+        # The try/except must not swallow or alter a successful query.
+        class _OkReader:
+            def query(self, _emb, _k):
+                return [{"text": "t", "score": 0.9, "source": "s.md", "chunk_id": 0, "stem_tags": []}]
+
+        fake = SimpleNamespace(
+            top_k_semantic=5, config_path="config.yaml", _vector_reader=_OkReader(),
+        )
+        with patch("retrieval.hybrid_search.get_embedding", return_value=[0.1, 0.2, 0.3]):
+            hits = HybridRetriever.semantic_search(fake, "q")
+        assert len(hits) == 1
+        assert hits[0].score == pytest.approx(0.9)
+
+
 class TestConfigPathAnchoring:
     def test_relative_index_paths_resolve_from_config_dir(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
