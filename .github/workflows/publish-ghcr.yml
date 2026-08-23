@@ -44,6 +44,17 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Same deployment gate the sibling PyPI publisher already carries
+    # (python-publish.yml: `environment: name: pypi`). Without it, pushing any
+    # v* tag published :latest to GHCR immediately -- no review, no branch
+    # restriction, no approval -- so a mistyped or premature tag was a
+    # published release. With it, an environment protection rule (required
+    # reviewer / branch restriction, configured in repo Settings) can gate the
+    # push; if no rule is configured the environment is a no-op, so this is
+    # safe to land before the rule exists and becomes enforcement once it does.
+    environment:
+      name: ghcr
+      url: https://github.com/cgfixit/CyClaw/pkgs/container/cyclaw
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

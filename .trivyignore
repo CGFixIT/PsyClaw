@@ -1,0 +1,26 @@
+# Trivy suppressions — risk-accepted dependency CVEs.
+#
+# These are the SAME acceptances pip-audit.yml already encodes via
+# --ignore-vuln and SECURITY.md documents in full ("Accepted Dependency
+# Risks"). Trivy was the only dependency scanner in the fleet without them, so
+# every fs and image scan re-raised an alert the threat model had already
+# dispositioned -- the reliable way to train an operator to ignore the
+# Security tab entirely, which costs more than the finding it surfaces.
+#
+# Adding an entry here is a security decision, not housekeeping: it needs the
+# matching SECURITY.md rationale and a review date, exactly as below.
+
+# chromadb 1.5.9 — pre-auth RCE in Chroma SERVER mode (`chroma run` /
+# HttpClient). CyClaw uses the embedded PersistentClient exclusively, in
+# process, with no network listener, so the vulnerable path is unreachable in
+# this deployment. Any change introducing chromadb.HttpClient or a standalone
+# Chroma server re-opens this assessment.
+# Review: next chromadb release or 2026-10-01, whichever comes first.
+CVE-2026-45829
+
+# nltk 3.9.4 — no fixed release available. nltk (punkt) runs only at corpus
+# INDEX time over local, operator-supplied .md/.txt files; no untrusted remote
+# input reaches the tokenizer in normal operation.
+# Review: next nltk release or 2026-10-01, whichever comes first.
+CVE-2026-12243
+PYSEC-2026-597
