@@ -38,7 +38,8 @@ HTTP POST /query → gate.py (TrustedHost, rate-limit, injection filter, soul in
 | `config.yaml` | Single source of truth for every tunable; no hardcoded magic numbers elsewhere |
 | `pyproject.toml` / `requirements.txt` / `constraints.txt` | Packaging and reproducibility |
 | `tests/` | pytest suite + `ci_rag_smoke.py` (not pytest-discovered; runs as its own CI step) |
-| `sync/` `agentic/` `guardrails/` `harness/` `telegram/` | Optional out-of-band layers; never imported by core |
+| `gate_ops.py` `gate_auth.py` `gate_memory.py` | Register `/ops/*`, `/auth/*`, `/memory/*` onto `gate.py`'s app; part of the core six for I6 (see below) |
+| `sync/` `agentic/` `guardrails/` `harness/` `telegram/` `opentweet/` `memory/` | Optional out-of-band layers; never imported by core |
 
 ---
 
@@ -53,7 +54,7 @@ Six invariants are design constraints enforced by graph wiring, not runtime flag
 | I3 | **Triple-gated external fallback** — Grok/Claude require `mode=="hybrid"` AND `<provider>.enabled` AND `user_confirmed_online` | Route to `grok_fallback`/`claude_fallback` without all three |
 | I4 | **Audit convergence** — all paths reach `audit_logger` before END | Add any path to END that skips `audit_logger` |
 | I5 | **Soul governance** — soul mutation requires a non-empty human `reason` string and goes through `PersonalityManager.apply_evolution` atomically with injection scan | Write `soul.md` without `reason`, or bypass `PersonalityManager` |
-| I6 | **Module isolation** — `gate.py`, `graph.py`, `mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`, and vice versa | `import agentic` (or similar) anywhere in the core three |
+| I6 | **Module isolation** — `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` (the core six) never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`/`opentweet`, and vice versa | `import agentic` (or similar) anywhere in the core six |
 
 **Additional non-negotiables:** telemetry-kill env block in `gate.py` must precede all heavy imports (verified by AST in invariant guard); services bind to loopback only (`127.0.0.1`), never `0.0.0.0`; BM25 index stays JSON — no pickle (RCE risk); MCP server declares `sampling: None` and has no LLM call path; `data/personality/soul.md` must not be deleted or autonomously mutated.
 
@@ -129,18 +130,25 @@ Coverage `fail_under = 80` is configured in `pyproject.toml` and enforced by CI 
 
 | Workflow | Role |
 |---|---|
-| `ci.yml` | **Main blocking matrix** (Ubuntu + Windows + macOS): install gate, RAG smoke, pytest coverage, invariant guard, optional harness/Postgres/smoke steps |
+| `ci.yml` | **Main blocking matrix** (Ubuntu + Windows + macOS): install gate, wheel packaging, RAG smoke, pytest coverage, invariant guard, optional harness/Postgres/smoke steps |
 | `lint.yml` | Ruff repo-wide + changed-file flake8/WPS |
-| `python-package-conda.yml` | Conda environment CI |
+| `pr-template-check.yml` | Enforces PR body structure + the core-path invariant-mention rule |
+| `pr-review.yml` | Automated PR review assistant (secret-gated; see the workflow's own header) |
+| `python-package-conda.yml` | Conda environment CI (a genuinely different fourth install surface, not a duplicate of `ci.yml`) |
 | `codeql.yml` | GitHub CodeQL security scanning |
 | `gitleaks.yml` | Secret scanning |
 | `osv-scanner.yml` | OSV dependency vulnerability scan |
-| `pip-audit.yml` | pip-audit dependency audit |
+| `pip-audit.yml` | pip-audit dependency audit + install-verification gate |
+| `trivy.yml` | Trivy filesystem + container image scan |
 | `semgrep.yml` | Semgrep SAST |
 | `devskim.yml` | DevSkim security linting |
 | `defender-for-devops.yml` | Microsoft Defender for DevOps |
 | `fortify.yml` | Fortify SAST |
+| `numbat-rules.yml` | Numbat NDJSON rule-fixture contract check |
 | `copilot-setup-steps.yml` | Copilot environment bootstrap |
+| `claude.yml` `codex.yml` `codex-apply-fixes.yml` `codex-skills.yml` | Owner-triggered @-mention coding-assistant workflows (each secret-gated; see individual headers) |
+| `publish-ghcr.yml` `python-publish.yml` | Release-triggered image/package publishing |
+| `environment.yml` | Conda spec consumed by `python-package-conda.yml` — not itself a workflow |
 
 Workflow files are actionlint/zizmor checked; third-party actions are SHA-pinned.
 

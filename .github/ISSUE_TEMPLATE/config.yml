@@ -1,0 +1,10 @@
+# blank_issues_enabled: false forces every issue through a template. Combined
+# with the contact link below, this is the actual enforcement mechanism for
+# "don't file a security report as a public issue" -- a reporter who clicks
+# "New issue" sees the security link before either template, rather than
+# a blank textbox that invites exactly what SECURITY.md asks them not to do.
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/CGFixIT/CyClaw/security/advisories/new
+    about: Do NOT open a public issue for a vulnerability. Use a private GitHub Security Advisory, or see SECURITY.md for the maintainer contact.
