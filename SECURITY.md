@@ -30,10 +30,12 @@ These are tracked, deliberate exceptions — re-reviewed at every release and en
 - **Guardrails:** any future change introducing `chromadb.HttpClient` or a standalone Chroma server MUST be treated as a security regression and re-open this assessment.
 - **Review date:** next chromadb release or 2026-10-01, whichever comes first.
 
-### nltk 3.9.4 — CVE-2026-12243 / [PYSEC-2026-597](https://osv.dev/vulnerability/PYSEC-2026-597) (Medium)
+### nltk 3.10.0 — CVE-2026-12243 / [PYSEC-2026-597](https://osv.dev/vulnerability/PYSEC-2026-597) (Medium)
 
-- **What it is:** vulnerability in nltk with no fixed release available at the time of writing.
-- **Why accepted:** nltk (punkt) runs only at **corpus index time** on local, operator-supplied `.md`/`.txt` files. No untrusted remote input reaches the tokenizer in normal operation.
+- **What it is:** a URL-encoded path-traversal reached through `nltk.data.load()` — the loader the punkt sentence tokenizer uses. No fixed release available at the time of writing.
+- **Why accepted:** CyClaw never calls `nltk.data.load()` and never loads punkt. `retrieval/stemmer.py` tokenizes with its own compiled regex (`_WORD_RE`) and imports only `nltk.stem.PorterStemmer`, a pure-Python stemmer that loads no data files; the module comment records that avoiding `nltk.data.load()` was the explicit reason for the hand-rolled tokenizer. The vulnerable code path is unreachable in this deployment.
+- **Not a timing argument:** `tokenize_and_stem()` runs at corpus index time *and* on every keyword query at request time. The acceptance rests on punkt never being loaded at all — not on tokenization being offline-only.
+- **Guardrails:** any future change introducing `nltk.data.load()`, `nltk.download()`, or `punkt`/`word_tokenize` MUST be treated as a security regression and re-open this assessment.
 - **Review date:** next nltk release or 2026-10-01, whichever comes first.
 
 ## Verification
