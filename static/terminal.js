@@ -246,6 +246,200 @@ function setSoulStatus(message, tone = '') {
   soulStatus.className = `soul-status${tone ? ` ${tone}` : ''}`;
 }
 
+// ── FIRST RUN ──
+// Before this, a missing index meant POST /query answered 503 and the console
+// rendered it verbatim: "ERROR 503: Index not built. Run: python -m
+// retrieval.indexer" -- a CLI command, in a browser, to someone who may not
+// have a terminal open. /health has always carried index_ready; the console
+// just never read it. Now the empty state becomes an actionable panel instead.
+const indexBuild = { state: 'idle', timer: null };
+const INDEX_POLL_MS = 1500;
+
+function renderFirstRun(data) {
+  const emptyState = document.getElementById('emptyState');
+  // The empty state is REMOVED (not hidden) on the first query, so once a user
+  // has asked anything there is nothing to render into -- and by then they are
+  // past first run anyway.
+  if (!emptyState) return;
+  let panel = document.getElementById('firstRunPanel');
+  const needed = data && data.index_ready === false;
+
+  if (!needed && indexBuild.state !== 'running' && indexBuild.state !== 'error') {
+    if (panel) panel.remove();
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'first-run';
+    panel.id = 'firstRunPanel';
+    emptyState.appendChild(panel);
+  }
+  paintFirstRun(panel, data);
+}
+
+function paintFirstRun(panel, data) {
+  // textContent throughout, never innerHTML: corpus_path is server-supplied
+  // and the build error is an exception message. Neither is trusted markup.
+  panel.textContent = '';
+
+  const title = document.createElement('div');
+  title.className = 'first-run-title';
+  const body = document.createElement('div');
+  body.className = 'first-run-body';
+
+  if (indexBuild.state === 'running') {
+    title.textContent = 'Building your library…';
+    body.textContent = indexBuild.total
+      ? `${indexBuild.done} of ${indexBuild.total} sections indexed.`
+      : 'Reading your documents. This can take a few minutes the first time.';
+    panel.append(title, body);
+    return;
+  }
+
+  if (indexBuild.state === 'error') {
+    title.textContent = "That didn't work";
+    body.textContent = indexBuild.error || 'The build stopped before it finished.';
+    panel.append(title, body, buildButton('Try again'));
+    return;
+  }
+
+  title.textContent = 'Point me at your documents';
+  const folder = (data && data.corpus_path) || '';
+  body.textContent = folder
+    ? `Put your files in ${folder}, then build a searchable copy. `
+      + 'Nothing is uploaded — the copy stays on this machine.'
+    : 'Build a searchable copy of your documents. Nothing is uploaded — '
+      + 'the copy stays on this machine.';
+  panel.append(title, body, buildButton('Build my library'));
+}
+
+function buildButton(label) {
+  const btn = document.createElement('button');
+  btn.className = 'first-run-btn';
+  btn.id = 'buildIndexBtn';
+  btn.type = 'button';
+  btn.textContent = label;
+  btn.addEventListener('click', () => startIndexBuild());
+  return btn;
+}
+
+async function startIndexBuild() {
+  const btn = document.getElementById('buildIndexBtn');
+  if (btn) btn.disabled = true;   // the server also 409s a second build
+  indexBuild.state = 'running';
+  indexBuild.done = 0;
+  indexBuild.total = 0;
+  indexBuild.error = null;
+  paintHealthStatus();
+  renderFirstRun(lastHealth);
+  try {
+    const resp = await fetch(`${API}/index/build`, { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(extractErrorMessage(err, `build failed (${resp.status})`));
+    }
+    pollIndexStatus();
+  } catch (e) {
+    indexBuild.state = 'error';
+    indexBuild.error = e.message;
+    paintHealthStatus();
+    renderFirstRun(lastHealth);
+  }
+}
+
+function pollIndexStatus() {
+  clearTimeout(indexBuild.timer);
+  indexBuild.timer = setTimeout(async () => {
+    try {
+      const resp = await fetchWithTimeout(`${API}/index/status`, {}, 3000);
+      const s = await resp.json();
+      indexBuild.done = s.chunks_done || 0;
+      indexBuild.total = s.chunks_total || 0;
+      if (s.state === 'running') {
+        paintHealthStatus();
+        renderFirstRun(lastHealth);
+        pollIndexStatus();
+        return;
+      }
+      indexBuild.state = s.state === 'done' ? 'idle' : 'error';
+      indexBuild.error = s.error;
+      if (s.state === 'done') {
+        addEntry('system', '', '→ Your library is ready. Ask a question below.');
+      }
+      // The server hot-inits retrieval on success, so re-reading /health both
+      // clears the panel and flips the status light in one round trip.
+      checkHealth();
+    } catch (e) {
+      // A dropped poll is not a failed build -- the build runs server-side and
+      // keeps going. Retry rather than declaring failure.
+      pollIndexStatus();
+    }
+  }, INDEX_POLL_MS);
+}
+
+// ── PLAIN-LANGUAGE HEALTH ──
+// /health speaks operator. "degraded" is NORMAL without Ollama (CLAUDE.md §4
+// says so explicitly) yet it painted the dot the same red as a hard failure,
+// and "gateway degraded" tells someone who is not an engineer nothing about
+// what to do next. The response already carries everything needed to say
+// something specific -- per-service {healthy, error} plus index_ready --
+// and the console was fetching all of it and discarding it.
+//
+// Order matters: the states are ranked by which one the reader can ACT on. No
+// library is first because the fix is a button on this screen; a stopped
+// engine is next because the fix is one command; anything else is
+// informational.
+let lastHealth = null;
+
+function describeHealth(data) {
+  const d = data || {};
+  const services = (d.services && typeof d.services === 'object') ? d.services : {};
+  const down = Object.keys(services).filter(
+    (k) => services[k] && services[k].healthy === false
+  );
+
+  if (indexBuild.state === 'running') {
+    return {
+      text: 'Building your library…', tone: 'warn',
+      detail: 'Reading your documents and making them searchable.'
+    };
+  }
+  if (d.index_ready === false) {
+    return {
+      text: 'No library yet', tone: 'warn',
+      detail: 'CyClaw has no searchable copy of your documents yet. Build one below.'
+    };
+  }
+  if (down.includes('ollama')) {
+    return {
+      text: "Local AI engine isn't running", tone: 'warn',
+      detail: 'Start Ollama (ollama serve) and CyClaw can write answers again. '
+            + 'Your documents are still searchable in the meantime.'
+    };
+  }
+  if (down.length) {
+    return {
+      text: `${down[0]} unavailable`, tone: 'warn',
+      detail: (services[down[0]] && services[down[0]].error) || 'This service is not responding.'
+    };
+  }
+  return {
+    text: 'Ready', tone: 'ok',
+    detail: 'Your documents are searchable and the local AI engine is running.'
+  };
+}
+
+// Painting is separate from fetching because the status chip has TWO drivers:
+// the 15s /health poll, and local build-state transitions that must show up
+// immediately. Without this, clicking Build left the chip reading "No library
+// yet" for up to 15 seconds while the panel beside it already said "Building".
+function paintHealthStatus() {
+  const health = describeHealth(lastHealth);
+  statusDot.className = `status-dot ${health.tone}`;
+  statusText.textContent = health.text;
+  statusText.title = health.detail;
+}
+
 async function checkHealth() {
   try {
     const resp = await fetchWithTimeout(`${API}/health`, {}, 3000);
@@ -262,8 +456,8 @@ async function checkHealth() {
     if (!resp.ok) {
       throw new Error(extractErrorMessage(data, `health check failed (${resp.status})`));
     }
-    statusDot.className = 'status-dot';
-    statusText.textContent = `gateway ${data.status}`;
+    lastHealth = data;
+    paintHealthStatus();
     modeBadge.textContent = data.mode || 'offline';
     const fl = document.getElementById('footerLeft');
     if (fl) {
@@ -273,13 +467,12 @@ async function checkHealth() {
     if (Number.isFinite(data.graph_timeout_sec) && data.graph_timeout_sec > 0) {
       queryDeadlineMs = (data.graph_timeout_sec + 10) * 1000;
     }
-    if (data.status !== 'ok') {
-      statusDot.classList.add('error');
-    }
+    renderFirstRun(data);
     healthBackoffMs = HEALTH_BASE_INTERVAL;
   } catch (e) {
     statusDot.className = 'status-dot offline';
-    statusText.textContent = 'gateway unreachable';
+    statusText.textContent = "Can't reach CyClaw";
+    statusText.title = 'The gateway is not responding. Is it still running?';
     healthBackoffMs = Math.min(healthBackoffMs * 2, HEALTH_MAX_INTERVAL);
   }
   scheduleHealthCheck();

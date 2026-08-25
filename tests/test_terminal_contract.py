@@ -36,6 +36,11 @@ _POST_PATHS = {
     "/query", "/soul/reload", "/soul/propose", "/soul/apply", "/soul/restore",
     "/ops/sync", "/ops/agentic", "/ops/fsconnect", "/ops/sqlconnect",
     "/auth/login", "/auth/logout", "/auth/bootstrap-password",
+    # First-run: the console POSTs this when the operator clicks Build, and
+    # GETs /index/status to follow it. Gated on the loopback socket peer plus
+    # same-origin rather than the API key -- an unset CYCLAW_API_KEY fails
+    # CLOSED, which would brick the very flow the route exists to unblock.
+    "/index/build",
 }
 
 
@@ -162,8 +167,12 @@ def test_check_health_treats_a_non_ok_response_as_unreachable():
         "the resp.ok guard must precede the backoff reset, or a failing gateway "
         "keeps being polled at the base interval"
     )
-    assert after.index("if (!resp.ok)") < after.index("statusText.textContent"), (
-        "the resp.ok guard must precede the status text render"
+    # The status render moved into paintHealthStatus() so build-state changes
+    # can repaint the chip immediately instead of waiting up to 15s for the
+    # next poll. Same guarantee as before, tracked to the new symbol: the
+    # ok-guard must still run before anything is rendered from the response.
+    assert after.index("if (!resp.ok)") < after.index("paintHealthStatus()"), (
+        "the resp.ok guard must precede the status render"
     )
 
 

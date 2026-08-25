@@ -1091,6 +1091,11 @@ async def health():
         mode=cfg["app"]["mode"],
         graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 780),
         version=_CYCLAW_VERSION,
+        # Display-only, so the first-run panel can name the folder to put
+        # documents in. The configured value verbatim (relative as written in
+        # config.yaml), NOT the absolute resolved path -- no reason to publish
+        # the server's directory layout to answer "where do my files go?".
+        corpus_path=str(cfg.get("corpus", {}).get("path", "") or ""),
     )
 
 

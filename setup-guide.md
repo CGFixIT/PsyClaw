@@ -440,6 +440,8 @@ AUTH="Authorization: Bearer $CYCLAW_API_KEY"
 | `/static/*` | GET | static assets for that page |
 | `/health` | GET | readiness: per-service status, `index_ready`, `graph_ready`, `mode` |
 | `/query` | POST | the RAG request path — rate-limited (60/min per IP), sanitized. When `auth.enabled` is true, also requires a session cookie or `Authorization: Bearer <device-token>` |
+| `/index/build` | POST | first-run: build the search index from `corpus.path`. Loopback peer + same-origin only; 409 while a build is running |
+| `/index/status` | GET | progress of the current or last build — always 200 |
 
 ```bash
 # Readiness. "degraded" without Ollama running is NORMAL, not an error.
@@ -449,6 +451,11 @@ curl -s http://127.0.0.1:8787/health | python3 -m json.tool
 curl -s -X POST http://127.0.0.1:8787/query \
   -H 'Content-Type: application/json' \
   -d '{"query":"What is RRF fusion?"}' | python3 -m json.tool
+
+# First run only: no index yet. /query answers 503 INDEX_NOT_FOUND until one
+# exists. Build it from the browser console's "Build my library" button, or:
+curl -s -X POST http://127.0.0.1:8787/index/build | python3 -m json.tool
+curl -s http://127.0.0.1:8787/index/status | python3 -m json.tool
 ```
 
 If the corpus does not answer it, the response comes back with

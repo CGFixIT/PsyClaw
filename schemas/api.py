@@ -76,6 +76,12 @@ class HealthResponse(BaseModel):
     # The console footer renders `cyclaw v{version}`; without this field the
     # UI's data.version read is always undefined and the version never shows.
     version: str = "dev"
+    # Configured corpus folder (corpus.path), display-only. First-run has to
+    # answer "where do my documents go?" before Build means anything, and the
+    # console has no other way to learn it -- config.yaml is server-side. Read
+    # only: changing the path is a config mutation, not a console action.
+    # Defaulted so existing HealthResponse constructions stay valid.
+    corpus_path: str = ""
 
 class SoulEvolutionRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)

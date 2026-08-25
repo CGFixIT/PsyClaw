@@ -154,15 +154,33 @@ class TestIndexBuildWorker:
         finally:
             gate.compiled_graph = saved
 
-    def test_failure_is_sanitized_and_never_raises(self, idle_client):
-        """Runs on a daemon thread with no caller to catch it, and the message
-        reaches a browser -- so it must be sanitized, not a raw exception."""
-        with patch("retrieval.indexer.build_index", side_effect=RuntimeError("/secret/path exploded")), \
+    def test_failure_never_raises_and_is_reported(self, idle_client):
+        """Runs on a daemon thread with no caller to catch it, so an escaping
+        exception would kill the worker silently and leave state stuck on
+        'running' forever -- the console would spin indefinitely."""
+        with patch("retrieval.indexer.build_index", side_effect=RuntimeError("indexer blew up")), \
              patch.object(gate, "_init_retrieval"):
             gate._run_index_build()  # must not raise
         assert gate._index_build["state"] == "error"
         assert gate._index_build["error"]
-        assert "/secret/path" not in gate._index_build["error"]
+        assert gate._index_build["finished_at"] is not None, "elapsed would tick forever"
+
+    def test_failure_message_redacts_credentials(self, idle_client, monkeypatch):
+        """The error string reaches a browser via /index/status, so it goes
+        through _sanitize_error -- the same helper /query's 500 path uses.
+
+        Note what that helper does and does not do: it redacts secret-shaped
+        content and any live credential env var, NOT filesystem paths. This
+        asserts the contract that exists rather than one it never had.
+        """
+        monkeypatch.setenv("CYCLAW_API_KEY", "super-secret-key-value")
+        with patch("retrieval.indexer.build_index",
+                   side_effect=RuntimeError("auth failed for super-secret-key-value")), \
+             patch.object(gate, "_init_retrieval"):
+            gate._run_index_build()
+        assert gate._index_build["state"] == "error"
+        assert "super-secret-key-value" not in gate._index_build["error"]
+        assert "[REDACTED]" in gate._index_build["error"]
 
     def test_progress_handler_is_removed_even_on_failure(self, idle_client):
         """A leaked handler would keep firing on every later indexer log line
