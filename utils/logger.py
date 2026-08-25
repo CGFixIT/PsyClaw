@@ -124,10 +124,17 @@ def setup_logging(cfg: dict | None = None) -> None:
     if log_file:
         anchored_log_file = _anchor(log_file)
         anchored_log_file.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
-        fh.setFormatter(fmt)
-        root.addHandler(fh)
-        _capture_third_party(log_cfg, anchored_log_file, fmt)
+        # _capture_third_party attaches a FileHandler to the REAL root, and its
+        # filter deliberately passes cyclaw.* through at any level -- so when it
+        # attaches, that single handler already writes BOTH cyclaw and
+        # third-party records to this path. A second FileHandler on the "cyclaw"
+        # logger would then write every CyClaw line twice (once here, once at
+        # root via propagation) and hold two fds on one file. Only own the file
+        # directly when third-party capture is switched off and nothing else will.
+        if not _capture_third_party(log_cfg, anchored_log_file, fmt):
+            fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
+            fh.setFormatter(fmt)
+            root.addHandler(fh)
 
     _logging_initialized = True
 
@@ -163,19 +170,24 @@ class _ThirdPartyFloor(logging.Filter):
 
 def _capture_third_party(
     log_cfg: dict, log_path: Path, fmt: logging.Formatter,
-) -> None:
+) -> bool:
     """Route non-CyClaw loggers into the same file, at a safer level.
 
     Opt-out via ``logging.capture_third_party: false``. The floor is
     ``logging.third_party_level`` (default INFO) rather than the global DEBUG --
     see ``_ThirdPartyFloor`` for why that gap is deliberate.
 
-    A SEPARATE FileHandler on the real root logger, not a second handler on
-    "cyclaw": records from cyclaw.* propagate up to root, so sharing one handler
-    would write every CyClaw line to the file twice.
+    ONE FileHandler, on the real root logger. Records from cyclaw.* propagate up
+    to root and ``_ThirdPartyFloor`` passes them at any level, so this handler is
+    the file's single writer for both namespaces -- setup_logging deliberately
+    does NOT also attach one to the "cyclaw" logger while this is active, or
+    every CyClaw line would land in the file twice.
+
+    Returns True when the handler was attached, False on the opt-out path, so
+    the caller knows whether it still needs its own file handler.
     """
     if log_cfg.get("capture_third_party") is False:
-        return
+        return False
     floor_name = str(log_cfg.get("third_party_level", _THIRD_PARTY_DEFAULT_LEVEL)).upper()
     floor = getattr(logging, floor_name, logging.INFO)
 
@@ -190,6 +202,7 @@ def _capture_third_party(
     real_root.addHandler(handler)
     if real_root.level == logging.NOTSET or real_root.level > floor:
         real_root.setLevel(floor)
+    return True
 
 def resolve_config_path(config_path: str = "config.yaml") -> Path:
     """Resolve a config path exactly as ``_get_config`` loads it.

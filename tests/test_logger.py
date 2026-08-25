@@ -247,3 +247,76 @@ class TestThirdPartyLogCapture:
             logger_mod._logging_initialized = False
         assert "third-party line" in text
         assert "cyclaw debug line" in text
+
+    def test_cyclaw_lines_are_written_to_the_file_exactly_once(self, tmp_path, monkeypatch):
+        """Presence is not enough -- count it.
+
+        _capture_third_party attaches its handler to the REAL root, and
+        _ThirdPartyFloor passes cyclaw.* at any level. cyclaw.* records also
+        propagate up to root. So a second FileHandler on the "cyclaw" logger
+        writing the same path put every CyClaw line in the file TWICE (and held
+        two fds on one file). The sibling test above only asserted `in text`, so
+        it passed either way and the duplication shipped unnoticed.
+        """
+        import utils.logger as logger_mod
+
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+        real_root = logging.getLogger()
+        before = list(real_root.handlers)
+        try:
+            logger_mod.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": True,
+                "third_party_level": "INFO",
+            }})
+            logging.getLogger("cyclaw.graph").info("count-me-once")
+            logging.getLogger("chromadb.telemetry").warning("third-party-once")
+            for handler in real_root.handlers + logging.getLogger("cyclaw").handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8")
+        finally:
+            for handler in list(real_root.handlers):
+                if handler not in before:
+                    real_root.removeHandler(handler)
+                    handler.close()
+            logger_mod._logging_initialized = False
+        assert text.count("count-me-once") == 1, "CyClaw line duplicated in the log file"
+        assert text.count("third-party-once") == 1, "third-party line duplicated in the log file"
+
+    def test_cyclaw_still_reaches_the_file_when_third_party_capture_is_off(
+        self, tmp_path, monkeypatch,
+    ):
+        """The opt-out path must keep its own handler.
+
+        With capture_third_party false, _capture_third_party attaches nothing --
+        so setup_logging still has to own the file itself, or turning the
+        third-party switch off would silently stop logging CyClaw to disk too.
+        """
+        import utils.logger as logger_mod
+
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+        cyclaw_logger = logging.getLogger("cyclaw")
+        real_root = logging.getLogger()
+        before_root = list(real_root.handlers)
+        before_cyclaw = list(cyclaw_logger.handlers)
+        try:
+            logger_mod.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": False,
+            }})
+            logging.getLogger("cyclaw.graph").info("offline-marker")
+            for handler in cyclaw_logger.handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8")
+        finally:
+            for logger_obj, before in ((real_root, before_root), (cyclaw_logger, before_cyclaw)):
+                for handler in list(logger_obj.handlers):
+                    if handler not in before:
+                        logger_obj.removeHandler(handler)
+                        handler.close()
+            logger_mod._logging_initialized = False
+        assert text.count("offline-marker") == 1
