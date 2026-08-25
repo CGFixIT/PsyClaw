@@ -241,6 +241,61 @@ function extractErrorMessage(err, fallback = 'Unknown error') {
   return err.error || err.message || fallback;
 }
 
+// ── /query ERROR COPY ──
+// Plain-language sentences for the codes that can actually reach a /query
+// user: the ~10 raised as HTTPException (gate.py) plus the 4 that arrive as a
+// 200 with an `error` field carrying graph.py's "{code}: {message}" stamp
+// (utils/errors.py's LLMServiceError / GrokServiceError / ClaudeServiceError /
+// EmbeddingServiceError). utils/errors.py declares dozens of other classes --
+// soul, ops, agentic, fsconnect, sqlconnect, auth-admin -- none of which this
+// console's /query path can ever surface, so they have no entry here. An
+// unmapped code (or none at all) falls back to the raw server message rather
+// than a translation, per describeQueryError below.
+const ERROR_COPY = {
+  INDEX_NOT_FOUND: "Your document library isn't built yet.",
+  PROMPT_INJECTION_BLOCKED: 'That message looked like it was trying to manipulate the system, so it was blocked before reaching the assistant.',
+  GRAPH_TIMEOUT: 'The local model took too long to answer -- it may be stalled.',
+  GRAPH_ERROR: 'Something went wrong answering that.',
+  RATE_LIMIT: 'Too many requests -- wait a moment and try again.',
+  VALIDATION_ERROR: "That request wasn't formatted correctly.",
+  PAYLOAD_TOO_LARGE: 'That message is too long.',
+  AUTH_ROLE_DENIED: "This account can't ask questions (audit-only role).",
+  CROSS_SITE_BLOCKED: "Blocked a request that didn't look like it came from this page.",
+  AUTH_REQUIRED: 'Sign in to ask a question.',
+  EMBEDDING_ERROR: "Couldn't search your documents right now.",
+  LLM_SERVICE_ERROR: 'The local model had a problem answering.',
+  GROK_SERVICE_ERROR: 'Grok had a problem answering.',
+  CLAUDE_SERVICE_ERROR: 'Claude had a problem answering.'
+};
+
+// err is either a fetch-failure response body (object, code nested under
+// .detail or top-level) or graph.py's stamped "{code}: {message}" string (the
+// 200-with-error case) -- the two shapes extractErrorMessage already
+// normalizes for the message half, but it discards the code, which is what
+// this adds.
+function extractErrorCode(err) {
+  if (!err) return null;
+  if (typeof err === 'string') {
+    const m = err.match(/^([A-Z][A-Z0-9_]*): /);
+    return m ? m[1] : null;
+  }
+  if (err.detail && typeof err.detail === 'object') return err.detail.code || null;
+  return err.code || null;
+}
+
+// The stamped-string shape's message repeats the code as a prefix
+// ("LLM_SERVICE_ERROR: Ollama timed out") -- strip it once the code is shown
+// on its own, so it isn't printed twice.
+function stripErrorCodePrefix(message, code) {
+  return code && message.startsWith(`${code}: `) ? message.slice(code.length + 2) : message;
+}
+
+function describeQueryError(err) {
+  const code = extractErrorCode(err);
+  const message = stripErrorCodePrefix(extractErrorMessage(err, 'Unknown error'), code);
+  return { text: (code && ERROR_COPY[code]) || message, code, message };
+}
+
 function setSoulStatus(message, tone = '') {
   soulStatus.textContent = message || '';
   soulStatus.className = `soul-status${tone ? ` ${tone}` : ''}`;
@@ -632,7 +687,11 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
 
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: resp.statusText }));
-      addEntry('error', 'ERROR', `${resp.status}: ${extractErrorMessage(err)}`);
+      const { text, code, message } = describeQueryError(err);
+      const meta = [{ k: 'http', v: resp.status }];
+      if (code) meta.push({ k: 'code', v: code });
+      if (message && message !== text) meta.push({ k: 'detail', v: message });
+      addEntry('error', 'ERROR', text, meta);
       return;
     }
 
@@ -648,8 +707,14 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
       return;
     }
 
+    // model stays the ROLE ("local" / "offline-best-effort" / "grok" / "claude")
+    // -- that's the one signal telling a vault hit from a best-effort guess
+    // from an escalation. tag is additive: the concrete model.yaml name that
+    // actually answered, so "local" doesn't read as a black box. Omitted when
+    // null (the answer_model has no model identity, e.g. guardrail-blocked).
     const meta = [
       { k: 'model', v: data.model_used },
+      ...(data.llm_model ? [{ k: 'tag', v: data.llm_model }] : []),
       { k: 'mode', v: data.retrieval_mode },
       { k: 'hits', v: data.hit_count },
       { k: 'time', v: `${elapsed}ms` }
@@ -660,7 +725,11 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     }
 
     if (data.error) {
-      addEntry('error', 'WARNING', data.error);
+      const { text, code, message } = describeQueryError(data.error);
+      const meta = [];
+      if (code) meta.push({ k: 'code', v: code });
+      if (message && message !== text) meta.push({ k: 'detail', v: message });
+      addEntry('error', 'WARNING', text, meta.length ? meta : null);
     }
 
     footerRight.textContent = `queries: ${queryCount} · last: ${elapsed}ms`;
@@ -808,8 +877,8 @@ function addConfirmEntry(message, availableProviders = []) {
   noBtn.className = 'btn-confirm no';
   // With no provider available this is the only button, so "No —" would be
   // answering a question that was never asked.
-  noBtn.textContent = providerBtns.length ? 'No — Stay Offline' : 'Offline Best Effort';
-  noBtn.setAttribute('aria-label', 'Decline: stay offline with best-effort local');
+  noBtn.textContent = providerBtns.length ? 'No — Stay Offline' : 'Stay Offline';
+  noBtn.setAttribute('aria-label', 'Decline: keep this answer from the local model');
   noBtn.addEventListener('click', () => handleConfirm(false, id));
 
   buttons.append(...providerBtns, noBtn);
@@ -842,7 +911,7 @@ function handleConfirm(confirmed, entryId, onlineProvider = null) {
     el.removeAttribute('aria-labelledby');
   }
   const providerLabel = onlineProvider === 'claude' ? 'Claude' : 'Grok';
-  addEntry('system', '', confirmed ? `→ Escalating to ${providerLabel}...` : '→ Staying offline (best-effort local)');
+  addEntry('system', '', confirmed ? `→ Escalating to ${providerLabel}...` : '→ Staying offline (local model)');
   submitQuery(confirmed, onlineProvider);
   input.focus();
 }

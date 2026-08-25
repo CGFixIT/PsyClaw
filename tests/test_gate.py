@@ -110,6 +110,9 @@ class TestQueryEndpoint:
         data = resp.json()
         assert data["answer"] == "Test answer from local LLM."
         assert data["model_used"] == "local"
+        # llm_model is the concrete config.yaml tag, additive to the model_used
+        # role -- TEST_CONFIG's models.local_llm.model is "test-model".
+        assert data["llm_model"] == "test-model"
         assert data["needs_confirm"] is False
 
     def test_empty_query_rejected(self, client):
@@ -146,6 +149,9 @@ class TestQueryEndpoint:
         assert data["needs_confirm"] is True
         assert "Vault miss" in data["confirm_message"]
         assert data["error"] is None  # a real vault miss carries no error
+        # No model has run yet on the pause -- _llm_identity("", cfg) resolves
+        # to llm_model=None, distinct from an answered response's real tag.
+        assert data["llm_model"] is None
 
     # ── confirm prompt must not offer a provider the gate would decline ──────
     # The fixture pins gate.grok = gate.claude = None (offline), which is the
@@ -176,6 +182,11 @@ class TestQueryEndpoint:
         assert "No external provider is available" in data["confirm_message"]
         assert "Send to Grok" not in data["confirm_message"]
         assert "Send to Claude" not in data["confirm_message"]
+        # Names the actual local model instead of the opaque "Offline Best
+        # Effort" label -- the whole point of this field.
+        assert "test-model" in data["confirm_message"]
+        assert "Offline Best Effort" not in data["confirm_message"]
+        assert "best effort" not in data["confirm_message"].lower()
 
     def test_confirm_offers_only_the_usable_provider(self, client):
         import gate
@@ -263,6 +274,9 @@ class TestQueryEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["model_used"] == "offline-best-effort"
+        # offline-best-effort still reports the LOCAL model tag, not None --
+        # a real answer came from a real model, it just lacked vault context.
+        assert data["llm_model"] == "test-model"
 
     def test_confirmation_flow_passes_online_provider(self, client):
         test_client, mock_graph = client
@@ -287,7 +301,10 @@ class TestQueryEndpoint:
         assert resp.status_code == 200
         state = mock_graph.invoke.call_args.args[0]
         assert state["online_provider"] == "claude"
-        assert resp.json()["model_used"] == "claude"
+        data = resp.json()
+        assert data["model_used"] == "claude"
+        # TEST_CONFIG's models.claude.model tag, not the "claude" role itself.
+        assert data["llm_model"] == "claude-sonnet-5"
 
     def test_query_timeout_returns_504(self, client):
         # A graph invoke that exceeds api.graph_timeout_sec must return HTTP 504

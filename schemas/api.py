@@ -47,6 +47,14 @@ class QueryResponse(BaseModel):
     retrieval_mode: str
     hit_count: int
     model_used: str
+    # The concrete model tag that actually served the answer (e.g.
+    # "qwen3.8:27b-mlx", "grok-4.5"), or None when no model ran yet (the
+    # needs_confirm pause) or the answer_model has no model identity
+    # (guardrail-blocked, hook-denied, external-unavailable). model_used stays
+    # the ROLE vocabulary metrics.py buckets on -- this is purely additive, read
+    # from the same graph._llm_identity mapping audit.jsonl already uses, so the
+    # console can show the real model name instead of a generic role label.
+    llm_model: str | None = None
     needs_confirm: bool = False
     confirm_message: str | None = None
     # Which external providers the user gate would ACTUALLY route to if the user
