@@ -486,8 +486,18 @@ async function api(path, method, body) {
   try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
   if (!resp.ok) {
     const d = data && data.detail;
-    const err = new Error(d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status));
+    let msg = d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status);
+    /* The console's key input sends a Bearer to the server, but the server
+       compares it against CYCLAW_API_KEY in its own process environment. When
+       that env var is unset, typing a key here cannot help until the server is
+       restarted with the key sourced from the shell. Make that explicit so the
+       operator does not think the input field is broken. */
+    if (d && d.code === 'UNAUTHORIZED' && d.details && d.details.reason === 'key_not_configured') {
+      msg += '\nThe harness server was started without CYCLAW_API_KEY in its environment. Set it in the shell that launches the harness and restart; typing it here only works when the server already has the same key configured.';
+    }
+    const err = new Error(msg);
     err.code = d && d.code ? d.code : '';
+    err.details = d && d.details ? d.details : {};
     const headerWait = parseInt(resp.headers.get('Retry-After') || '0', 10);
     const bodyWait = d && d.details && d.details.retry_after_sec;
     err.retryAfter = headerWait || (typeof bodyWait === 'number' ? bodyWait : 0);
@@ -724,8 +734,8 @@ function showAgentRecord(rec) {
 
 /* ── slash commands ── */
 async function runSlash(line) {
-  const parts = line.slice(1).split(/\s+/);
-  const cmd = parts[0];
+  const parts = line.slice(1).split(/\s+/).filter(Boolean);
+  const cmd = parts[0].toLowerCase();
   const rest = parts.slice(1);
   const arg = rest.join(' ').trim();
   try {
@@ -1445,6 +1455,14 @@ async function sendChat(text, asLoop) {
   }
 }
 
+function isLoopStopCommand(text) {
+  /* Normalize before the in-flight gate, mirroring runSlash(): case
+     insensitive, collapses extra whitespace, and ignores trailing text. */
+  if (!text || text.charAt(0) !== '/') return false;
+  const parts = text.slice(1).split(/\s+/).filter(Boolean);
+  return parts.length >= 2 && parts[0].toLowerCase() === 'loop' && parts[1].toLowerCase() === 'stop';
+}
+
 async function onSend() {
   /* sendBtn.disabled is the console's existing in-flight signal (see
      sendChat and /agent confirm above); the Enter-key handler below calls
@@ -1456,7 +1474,7 @@ async function onSend() {
   const text = input.value.trim();
   if (!text) return;
   if (sendBtn.disabled) {
-    if (text === '/loop stop' || text.indexOf('/loop stop ') === 0) {
+    if (isLoopStopCommand(text)) {
       input.value = '';
       requestLoopStop('loop stop requested — aborting the in-flight turn');
     }
