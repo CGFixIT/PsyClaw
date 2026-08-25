@@ -340,3 +340,41 @@ def test_query_error_rendering_keeps_the_code_visible():
     assert "describeQueryError(err)" in submit_fn
     assert "describeQueryError(data.error)" in submit_fn
     assert "{ k: 'code', v: code }" in submit_fn
+
+
+def test_index_build_post_is_bounded_like_every_other_fetch():
+    """A bare fetch here strands the first-run panel with no way out.
+
+    startIndexBuild sets state='running' BEFORE the request, and
+    renderFirstRun's running branch draws no button -- so a request that never
+    settles leaves "Building your library" on screen permanently, with no Try
+    again affordance and no error. Every other call in this file is bounded;
+    this one was the exception.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "fetchWithTimeout(`${API}/index/build`" in js
+    assert "await fetch(`${API}/index/build`" not in js, "the build POST lost its timeout"
+
+
+def test_index_status_poll_has_a_failure_ceiling():
+    """The retry-on-drop is correct; retrying forever is not.
+
+    Without a ceiling a gateway that dies mid-build leaves the tab polling
+    /index/status every 1.5s indefinitely while the panel still reads
+    "Building your library" -- the operator is never told contact was lost.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "INDEX_POLL_MAX_MISSES" in js, "the poll retry lost its ceiling"
+    # The streak must reset on a reachable server and on a fresh build, or a
+    # long-lived tab would eventually trip the ceiling on transient blips.
+    assert js.count("indexBuild.misses = 0") >= 2
+    assert "indexBuild.misses += 1" in js
+
+
+def test_audit_panel_fetch_is_wrapped():
+    """openAuditPanel is an async click handler; an unwrapped reject is an
+    unhandled rejection AND leaves the placeholder text sitting there looking
+    like a panel that loaded. Every sibling panel wraps its fetch."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function openAuditPanel()", 1)[1].split("\n}", 1)[0]
+    assert "try {" in body and "catch" in body, "openAuditPanel's fetch is unguarded"
