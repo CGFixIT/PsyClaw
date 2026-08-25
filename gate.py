@@ -770,7 +770,7 @@ class _IndexProgressHandler(logging.Handler):
             if record.msg == "Indexed %d/%d chunks" and record.args:
                 _index_build["chunks_done"] = int(record.args[0])
                 _index_build["chunks_total"] = int(record.args[1])
-        except Exception:  # noqa: BLE001, S110 -- progress is best-effort only
+        except Exception:  # noqa: BLE001, S110  # nosec B110 -- progress is best-effort only
             pass
 
 
