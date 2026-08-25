@@ -340,3 +340,30 @@ def test_query_error_rendering_keeps_the_code_visible():
     assert "describeQueryError(err)" in submit_fn
     assert "describeQueryError(data.error)" in submit_fn
     assert "{ k: 'code', v: code }" in submit_fn
+
+
+def test_privileged_user_mutations_surface_failures():
+    """A refused privileged mutation must never look like it succeeded.
+
+    Role change / delete / password reset can all be refused (401/403 on an
+    expired session, 403 on CSRF mismatch, 429 under the rate limit, 503 with
+    auth off). They were bare `.then(reload)` -- no status check, no rejection
+    handler -- so a refusal repainted the row from the server's UNCHANGED state
+    and the <select> silently snapped back to the old role. That is
+    indistinguishable from "applied, then re-rendered", so an admin could
+    believe they had demoted or deleted an account that the server rejected.
+    """
+    js = (_STATIC / "auth_admin.js").read_text(encoding="utf-8")
+    assert "function mutate(" in js, "the guarded mutation helper is gone"
+    # Every privileged mutation must route through it -- a bare .then(reload)
+    # anywhere is the exact silent-failure shape this replaced. Comment lines
+    # are stripped first: the helper's own comment quotes the old pattern.
+    code = "\n".join(
+        line for line in js.splitlines() if not line.lstrip().startswith("//")
+    )
+    assert ".then(reload)" not in code, "a mutation bypassed mutate()"
+    for label in ('mutate("role change"', 'mutate("delete"', 'mutate("password reset"'):
+        assert label in js, f"missing guarded call: {label}"
+    body = js.split("function mutate(", 1)[1].split("\n    }", 1)[0]
+    assert "resp.ok" in body, "mutate() must check the response status"
+    assert ".catch(" in body, "mutate() must handle an unreachable gateway"

@@ -38,6 +38,30 @@
       return h;
     }
 
+    // Every privileged mutation below can be REFUSED: 401/403 on an expired
+    // session, 403 on a CSRF mismatch, 429 under the rate limit, 503 with auth
+    // off. Before this they were bare `.then(reload)` -- no status check, no
+    // rejection handler -- so a refusal reloaded the list from the server's
+    // UNCHANGED state and the row silently snapped back. The <select> returning
+    // to the old role is indistinguishable from "the change was applied and
+    // then re-rendered", so an admin could believe they had demoted, deleted,
+    // or reset an account when the server had rejected it outright. createUser
+    // already had the right shape; these did not. Funnel them all through one
+    // helper so a future mutation cannot reintroduce the silent path.
+    function mutate(label, url, init) {
+      return fetchFn(url, init)
+        .then(function (resp) {
+          if (!resp.ok) onStatus(label + " failed (" + resp.status + ")");
+          return reload();
+        })
+        .catch(function (err) {
+          // An unreachable gateway rejects before any status exists. Without
+          // this the rejection escaped an event handler unhandled and nothing
+          // on screen changed at all.
+          onStatus(label + " failed: " + ((err && err.message) || "gateway unreachable"));
+        });
+    }
+
     async function reload() {
       const resp = await fetchFn(base + "/users", { method: "GET" });
       if (resp.status === 503) {
@@ -62,20 +86,20 @@
             roleSel.appendChild(opt);
           });
           roleSel.addEventListener("change", function () {
-            fetchFn(base + "/users/" + encodeURIComponent(u.username) + "/role", {
+            mutate("role change", base + "/users/" + encodeURIComponent(u.username) + "/role", {
               method: "POST",
               headers: headers(true),
               body: JSON.stringify({ role: roleSel.value }),
-            }).then(reload);
+            });
           });
           row.appendChild(roleSel);
           const del = el("button", { type: "button", class: "toolbar-btn" }, "Delete");
           del.addEventListener("click", function () {
             if (!global.confirm("Delete " + u.username + "?")) return;
-            fetchFn(base + "/users/" + encodeURIComponent(u.username), {
+            mutate("delete", base + "/users/" + encodeURIComponent(u.username), {
               method: "DELETE",
               headers: headers(false),
-            }).then(reload);
+            });
           });
           row.appendChild(del);
         }
@@ -83,11 +107,11 @@
         reset.addEventListener("click", function () {
           const pw = global.prompt("New password for " + u.username);
           if (!pw) return;
-          fetchFn(base + "/users/" + encodeURIComponent(u.username) + "/password", {
+          mutate("password reset", base + "/users/" + encodeURIComponent(u.username) + "/password", {
             method: "POST",
             headers: headers(true),
             body: JSON.stringify({ password: pw }),
-          }).then(reload);
+          });
         });
         row.appendChild(reset);
         listBox.appendChild(row);
@@ -107,10 +131,20 @@
         passIn.value = "";
         if (!resp.ok) onStatus("create failed " + resp.status);
         reload();
+      }).catch(function (err) {
+        // The one path createUser still lacked: an unreachable gateway rejects
+        // before any resp exists, so the password field stayed populated and
+        // the rejection escaped unhandled.
+        passIn.value = "";
+        onStatus("create failed: " + ((err && err.message) || "gateway unreachable"));
       });
     });
 
-    reload();
+    // The initial paint is fetch-backed too -- an unreachable gateway here left
+    // an empty panel plus an unhandled rejection, with no indication why.
+    reload().catch(function (err) {
+      onStatus("cannot load users: " + ((err && err.message) || "gateway unreachable"));
+    });
   }
 
   global.CyClawAuthAdmin = { render: render };
