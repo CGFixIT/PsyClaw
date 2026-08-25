@@ -39,7 +39,8 @@ HTTP POST /query → gate.py (TrustedHost, rate-limit, injection filter, soul in
 | `pyproject.toml` / `requirements.txt` / `constraints.txt` | Packaging and reproducibility |
 | `tests/` | pytest suite + `ci_rag_smoke.py` (not pytest-discovered; runs as its own CI step) |
 | `gate_ops.py` `gate_auth.py` `gate_memory.py` | Register `/ops/*`, `/auth/*`, `/memory/*` onto `gate.py`'s app; part of the core six for I6 (see below) |
-| `sync/` `agentic/` `guardrails/` `harness/` `telegram/` `opentweet/` `memory/` | Optional out-of-band layers; never imported by core |
+| `sync/` `agentic/` `guardrails/` `harness/` `telegram/` `opentweet/` | Optional out-of-band layers; never imported by core (this is I6 below) |
+| `memory/` | Optional default-off RAG memory store. **Not** an I6-isolated layer: `gate_memory.py` lazy-imports `memory.*` inside its route handlers and `graph.py` lazy-imports `memory.store` on the enabled path. Imports are deferred and feature-gated (every `memory:` switch ships `false`), never module-scope. I6's isolated list correctly excludes `memory` — do not "fix" that by adding it |
 
 ---
 
