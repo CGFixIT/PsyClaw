@@ -220,3 +220,61 @@ def test_query_does_not_send_api_key_as_bearer():
     header_block = fetch_query[1].split("});", 1)[0]
     assert "queryHeaders()" in header_block
     assert "authHeaders()" not in header_block
+
+
+def test_hidden_attribute_is_not_overridden_by_display_rules():
+    """`hidden` must actually hide, even on elements with an explicit display.
+
+    The attribute is only a UA-stylesheet `display: none`, so ANY explicit
+    display rule silently outranks it. `.toolbar-btn` sets
+    `display: inline-flex`, which meant #usersToggleBtn and #auditToggleBtn --
+    both shipped carrying `hidden`, both driven by applyRoleChrome()'s role
+    gate -- rendered normally regardless of role, and clicking one produced an
+    error entry instead of the button simply not being there. Server-side auth
+    was never affected; this is the visual gate only.
+
+    Found by rendering the console in a real browser and reading computed
+    style, which no test here does -- these read source. This pins the fix so
+    it cannot be dropped by a future CSS tidy-up.
+    """
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    assert re.search(r"\[hidden\]\s*\{[^}]*display:\s*none\s*!important", html), (
+        "the global [hidden] display:none !important rule is gone -- role-gated "
+        "toolbar buttons will render for every visitor again"
+    )
+
+
+def test_advanced_mode_hides_every_operator_console():
+    """The five subsystem consoles must sit behind the advanced switch.
+
+    They shim out-of-band subsystems behind an API key: operator surfaces, not
+    user surfaces. Before this wrapper existed they were unconditionally
+    visible, so the first thing a non-engineer saw was five tools to ignore.
+
+    Deliberately NOT folded into applyRoleChrome(): that gate keys off the auth
+    role from /auth/whoami, and auth.enabled ships false, so in the shipped
+    posture the route 503s, authRole stays null, and anything gated on it would
+    be permanently invisible rather than optional.
+    """
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+
+    wrapper = html.split('<span class="advanced-tools" id="advancedTools" hidden>', 1)
+    assert len(wrapper) == 2, "the #advancedTools wrapper is gone"
+    body = wrapper[1].split("</span>", 1)[0]
+    for btn in (
+        "soulToggleBtn", "syncToggleBtn", "agenticToggleBtn",
+        "fsToggleBtn", "sqlToggleBtn", "usersToggleBtn", "auditToggleBtn",
+    ):
+        assert f'id="{btn}"' in body, f"{btn} escaped the advanced wrapper"
+
+    # Ships closed: the wrapper carries `hidden` and the button says collapsed.
+    assert 'id="advancedToggleBtn"' in html
+    assert 'aria-expanded="false"' in html, "advanced mode must default to off"
+    # display:contents keeps the buttons in .soul-toolbar's flex layout; any
+    # other value re-flows the whole toolbar.
+    assert re.search(r"\.advanced-tools\s*\{[^}]*display:\s*contents", html)
+    # localStorage access is wrapped: private windows throw on READ, not just write.
+    assert "function readAdvancedPref()" in js
+    pref = js.split("function readAdvancedPref()", 1)[1].split("\n}", 1)[0]
+    assert "try {" in pref and "catch" in pref, "localStorage read must be guarded"

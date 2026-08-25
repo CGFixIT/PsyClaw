@@ -16,7 +16,12 @@
     --border-focus: #d4920b;
     --text-primary: #c8cdd5;
     --text-secondary: #6b7280;
-    --text-muted: #454d59;
+    /* Was #454d59, which lands at ~2.6:1 against --bg-primary -- well under
+       WCAG AA's 4.5:1 for body text, and this token carries the meta row, the
+       empty-state hints, the footer, and every toolbar hint. #767e8b measures
+       ~4.7:1 on the same background: still clearly recessive against
+       --text-primary, but actually readable. */
+    --text-muted: #767e8b;
     --accent-amber: #d4920b;
     --accent-amber-dim: #a06e08;
     --accent-green: #2dd4a0;
@@ -27,6 +32,27 @@
     --accent-blue-dim: rgba(74,158,255,0.08);
     --mono: 'Cascadia Code', 'Fira Code', ui-monospace, Consolas, monospace;
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+    /* ── TYPE SCALE ──
+       Every size in this file used to be a hardcoded px value (31 of them),
+       which meant the console ignored the reader's own browser font-size
+       preference entirely -- ctrl/cmd-+ and the OS accessibility setting both
+       did nothing to it. These are rem-based so that preference actually
+       moves them, with a small vw term so the smallest rows stay legible on a
+       large display without the body text ballooning on a laptop.
+
+       --fs-micro replaces a 10px literal that carried the ENTIRE telemetry
+       chrome: mode badge, entry labels, the model/mode/hits/time meta row,
+       the sources toggle, the footer, and every toolbar hint. 10px monospace
+       is below the floor where most readers hold small text comfortably, and
+       this console is meant to be usable by someone who is not an engineer.
+       Ratios between the old sizes are preserved -- nothing is re-ranked. */
+    --fs-micro:   clamp(0.75rem,   0.72rem + 0.12vw, 0.8125rem);  /* was 10px */
+    --fs-small:   clamp(0.8125rem, 0.78rem + 0.14vw, 0.875rem);   /* was 11-12px */
+    --fs-body:    clamp(0.875rem,  0.84rem + 0.16vw, 0.9375rem);  /* was 13px */
+    --fs-md:      clamp(0.9375rem, 0.90rem + 0.18vw, 1rem);       /* was 15px */
+    --fs-display: clamp(1.5rem,    1.15rem + 1.7vw, 2rem);        /* was 28px */
+
     --radius: 8px;
     --radius-pill: 999px;
     --control-height: 36px;
@@ -34,6 +60,16 @@
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* The `hidden` attribute is only a UA-stylesheet `display: none`, so ANY
+     explicit display rule silently outranks it. `.toolbar-btn` sets
+     `display: inline-flex`, which meant #usersToggleBtn and #auditToggleBtn
+     -- both shipped with `hidden` and both driven by applyRoleChrome()'s role
+     gate -- rendered normally regardless, and clicking one produced an error
+     instead of the button simply not being there. Caught by a real-browser
+     check, not by the contract tests, which read source rather than computed
+     style. Server-side auth was never affected; this is the visual gate. */
+  [hidden] { display: none !important; }
 
   button, input, textarea, select {
     font: inherit;
@@ -57,7 +93,7 @@
     background: var(--bg-primary);
     color: var(--text-primary);
     font-family: var(--sans);
-    font-size: 13px;
+    font-size: var(--fs-body);
     line-height: 1.5;
     min-height: 100vh;
     display: flex;
@@ -84,14 +120,14 @@
   .logo {
     font-family: var(--mono);
     font-weight: 700;
-    font-size: 15px;
+    font-size: var(--fs-md);
     color: var(--accent-amber);
     letter-spacing: 1.5px;
     text-transform: uppercase;
   }
   .logo-sub {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     letter-spacing: 0.5px;
   }
@@ -116,12 +152,12 @@
   }
   .status-text {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-secondary);
   }
   .mode-badge {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     padding: 2px 8px;
     border-radius: var(--radius-pill);
     background: var(--bg-tertiary);
@@ -188,7 +224,7 @@
 
   .entry-label {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -202,7 +238,7 @@
 
   .entry-text {
     font-family: var(--sans);
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text-primary);
     line-height: 1.6;
     white-space: pre-wrap;
@@ -218,7 +254,7 @@
   }
   .meta-tag {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     display: flex;
     align-items: center;
@@ -231,7 +267,7 @@
   /* ── SOURCES COLLAPSIBLE ── */
   .sources-toggle {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--accent-blue);
     cursor: pointer;
     margin-top: 8px;
@@ -252,7 +288,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-secondary);
     line-height: 1.7;
   }
@@ -285,7 +321,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
   }
   .prov-tag {
@@ -310,7 +346,7 @@
     align-items: center;
     justify-content: center;
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     padding: 0 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
@@ -365,7 +401,7 @@
     top: 50%;
     transform: translateY(-50%);
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--accent-amber);
     pointer-events: none;
   }
@@ -376,7 +412,7 @@
     border-radius: var(--radius);
     padding: 10px 12px 10px 28px;
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: var(--fs-body);
     color: var(--text-primary);
     outline: none;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -400,7 +436,7 @@
     border-radius: var(--radius-pill);
     padding: 0 20px;
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--fs-small);
     font-weight: 600;
     cursor: pointer;
     text-transform: uppercase;
@@ -448,7 +484,7 @@
   }
   .empty-state .logo-large {
     font-family: var(--mono);
-    font-size: 28px;
+    font-size: var(--fs-display);
     font-weight: 700;
     color: var(--border);
     letter-spacing: 3px;
@@ -456,11 +492,20 @@
   }
   .empty-state .hint {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-muted);
     max-width: 400px;
     text-align: center;
     line-height: 1.7;
+  }
+  /* The local-only guarantee is the single most load-bearing sentence on this
+     screen for the audience CyClaw is aimed at (someone handling client or
+     patient files), and it was the one thing the console never said. Stated
+     once, in primary text, at the top of the empty state -- deliberately not a
+     banner, not repeated elsewhere, and not restated after the first query. */
+  .empty-state .hint-lede {
+    color: var(--text-primary);
+    max-width: 440px;
   }
 
   /* ── FOOTER STATUS ── */
@@ -471,7 +516,7 @@
     display: flex;
     justify-content: space-between;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     flex-shrink: 0;
   }
@@ -498,7 +543,7 @@
     border-radius: var(--radius-pill);
     padding: 0 12px;
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -515,10 +560,26 @@
     flex: 1 1 280px;
     min-width: 220px;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     line-height: 1.4;
   }
+  /* display:contents so the wrapper does not become a flex item of its own --
+     the buttons inside must keep participating in .soul-toolbar's flex layout
+     exactly as they did when they were direct children, including the
+     toolbar-hint's flex: 1 1 280px. Any other display value re-flows the
+     whole toolbar. */
+  .advanced-tools { display: contents; }
+  .advanced-tools[hidden] { display: none; }
+  /* These inputs carry no width, so they fell back to the default 20-character
+     `size` -- which the type scale overflowed, clipping the placeholder to
+     "API key (option". Sized in ch (relative to the font's own character
+     width) rather than px, so it stays correct at any --fs-micro value
+     instead of needing a second fix the next time the scale moves. Scoped to
+     this one input: the auth fields share the class but have shorter
+     placeholders and should stay narrow. */
+  #apiKeyInput { min-width: 22ch; }
+
   .api-key-input,
   .compact-select {
     min-height: 32px;
@@ -527,7 +588,7 @@
     border-radius: var(--radius-pill);
     padding: 0 10px;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-secondary);
     outline: none;
   }
@@ -572,14 +633,14 @@
   }
   .soul-title {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--fs-small);
     letter-spacing: 1px;
     text-transform: uppercase;
     color: var(--accent-amber);
   }
   .soul-meta {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     display: flex;
     gap: 12px;
@@ -592,7 +653,7 @@
     border-radius: var(--radius);
     color: var(--text-primary);
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: var(--fs-small);
     outline: none;
   }
   .soul-editor {
@@ -629,7 +690,7 @@
     border-radius: var(--radius-pill);
     padding: 0 13px;
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -651,7 +712,7 @@
   }
   .soul-status {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-secondary);
     min-height: 16px;
   }
@@ -667,7 +728,7 @@
   .proposal-meta,
   .proposal-warning {
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     line-height: 1.6;
     color: var(--text-secondary);
   }
@@ -680,7 +741,7 @@
     white-space: pre-wrap;
     word-break: break-word;
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-primary);
     max-height: 220px;
     overflow: auto;
@@ -693,7 +754,7 @@
     flex-direction: column;
     gap: 3px;
     font-family: var(--mono);
-    font-size: 10px;
+    font-size: var(--fs-micro);
     color: var(--text-muted);
     border-left: 2px solid var(--border);
     padding: 4px 0 4px 10px;
@@ -702,7 +763,7 @@
   .gate-row.bad { color: var(--accent-amber); }
   .gate-confirm-label {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: var(--fs-small);
     color: var(--text-secondary);
     display: flex;
     align-items: center;
@@ -825,14 +886,32 @@
 <!-- MAIN -->
 <div class="main">
   <div class="soul-toolbar">
-    <button class="toolbar-btn" id="soulToggleBtn" aria-label="Toggle Soul Console (Escape to close)">Soul Console</button>
-    <button class="toolbar-btn" id="syncToggleBtn" aria-label="Toggle Sync Console (Escape to close)">Sync Console</button>
-    <button class="toolbar-btn" id="agenticToggleBtn" aria-label="Toggle Agentic Console (Escape to close)">Agentic Console</button>
-    <button class="toolbar-btn" id="fsToggleBtn" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
-    <button class="toolbar-btn" id="sqlToggleBtn" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
-    <button class="toolbar-btn" id="usersToggleBtn" hidden aria-label="Toggle Users panel">Users</button>
-    <button class="toolbar-btn" id="auditToggleBtn" hidden aria-label="Toggle Audit panel">Audit</button>
-    <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
+    <!-- Advanced mode. The five subsystem consoles below were previously
+         visible to every visitor with no gating at all, so the first thing a
+         non-engineer saw was five operator tools they had to learn to ignore.
+         They are operator surfaces, not user surfaces: each one shims an
+         out-of-band subsystem behind an API key.
+
+         This is deliberately NOT the existing applyRoleChrome() gate that
+         hides Users/Audit. That one keys off the auth role from
+         /auth/whoami, and auth.enabled ships false -- so in the shipped
+         posture that route 503s, authRole stays null forever, and anything
+         gated on it would be permanently invisible rather than optional.
+         Advanced mode is an independent client-side preference; the two
+         compose (an admin sees Users only when their role allows it AND
+         advanced mode is on). -->
+    <button class="toolbar-btn" id="advancedToggleBtn" type="button"
+            aria-expanded="false" aria-controls="advancedTools">Advanced ▸</button>
+    <span class="advanced-tools" id="advancedTools" hidden>
+      <button class="toolbar-btn" id="soulToggleBtn" aria-label="Toggle Soul Console (Escape to close)">Soul Console</button>
+      <button class="toolbar-btn" id="syncToggleBtn" aria-label="Toggle Sync Console (Escape to close)">Sync Console</button>
+      <button class="toolbar-btn" id="agenticToggleBtn" aria-label="Toggle Agentic Console (Escape to close)">Agentic Console</button>
+      <button class="toolbar-btn" id="fsToggleBtn" aria-label="Toggle FS Console (Escape to close)">FS Console</button>
+      <button class="toolbar-btn" id="sqlToggleBtn" aria-label="Toggle SQL Console (Escape to close)">SQL Console</button>
+      <button class="toolbar-btn" id="usersToggleBtn" hidden aria-label="Toggle Users panel">Users</button>
+      <button class="toolbar-btn" id="auditToggleBtn" hidden aria-label="Toggle Audit panel">Audit</button>
+      <span class="toolbar-hint">soul · corpus sync · agentic · fs · sql — all loopback, audited, API-key gated</span>
+    </span>
     <span class="toolbar-auth" id="toolbarAuth">
       <span id="authSetupBox" hidden>
         <input class="api-key-input" id="authSetupPass" type="password" placeholder="set admin password" autocomplete="new-password">
@@ -1035,11 +1114,15 @@
   <div class="results" id="results">
     <div class="empty-state" id="emptyState">
       <div class="logo-large">CyClaw</div>
+      <div class="hint hint-lede">
+        Your documents never leave this machine. Every query is logged locally,
+        and you can read the log.
+      </div>
       <div class="hint">
         Query your local knowledge base. All queries hit retrieval first —
         no LLM sees your input until context is retrieved and scored.
       </div>
-      <div class="hint" style="margin-top:4px; color:var(--border);">
+      <div class="hint" style="margin-top:4px;">
         enter to send &nbsp;·&nbsp; shift+enter for newline &nbsp;·&nbsp; gateway at 127.0.0.1:8787
       </div>
     </div>

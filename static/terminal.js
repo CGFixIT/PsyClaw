@@ -292,6 +292,56 @@ function applyRoleChrome() {
   if (auditBtn) auditBtn.hidden = !(authRole === 'admin' || authRole === 'audit');
 }
 
+// ── ADVANCED MODE ──
+// Hides the operator toolbar -- the five subsystem consoles plus the
+// role-gated Users/Audit buttons -- behind one switch, so the default screen
+// is a query box and a status light. See the #advancedTools comment in
+// terminal.html for why this is NOT folded into applyRoleChrome().
+//
+// Users/Audit live INSIDE the wrapper, so hiding it hides them without
+// touching their own role gate, and the two compose: a button appears only
+// when its role allows it AND advanced mode is on. The /users and /audit
+// slash commands keep working either way -- a hidden ancestor does not set
+// the button's own .hidden, which is what openUsersPanel() checks, so
+// someone who knows the command is not locked out by a display preference.
+const ADVANCED_KEY = 'cyclaw.advancedMode';
+
+function readAdvancedPref() {
+  // Private windows and "block site data" throw on ACCESS, not just on write,
+  // so this needs a try/catch rather than a feature check.
+  try {
+    return window.localStorage.getItem(ADVANCED_KEY) === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+// Held in a variable rather than re-read per toggle: where localStorage is
+// unavailable the read always returns false, so a read-modify-write toggle
+// would latch on and never turn back off.
+let advancedMode = readAdvancedPref();
+
+function applyAdvancedChrome() {
+  const wrap = document.getElementById('advancedTools');
+  const btn = document.getElementById('advancedToggleBtn');
+  if (wrap) wrap.hidden = !advancedMode;
+  if (btn) {
+    btn.setAttribute('aria-expanded', advancedMode ? 'true' : 'false');
+    btn.textContent = advancedMode ? 'Advanced ▾' : 'Advanced ▸';
+  }
+}
+
+function toggleAdvanced() {
+  advancedMode = !advancedMode;
+  try {
+    window.localStorage.setItem(ADVANCED_KEY, advancedMode ? '1' : '0');
+  } catch (e) {
+    // Not persistable in this context; the toggle still works for this page
+    // load, it just will not survive a reload.
+  }
+  applyAdvancedChrome();
+}
+
 function openUsersPanel() {
   const usersBtn = document.getElementById('usersToggleBtn');
   const panel = document.getElementById('usersPanel');
@@ -1255,5 +1305,9 @@ if (authSetupPass2) {
     }
   });
 }
+if (document.getElementById('advancedToggleBtn')) {
+  document.getElementById('advancedToggleBtn').addEventListener('click', () => toggleAdvanced());
+}
+applyAdvancedChrome();
 refreshAuthUi();
 document.getElementById('agenticConfirm').addEventListener('change', refreshAgenticGates);
