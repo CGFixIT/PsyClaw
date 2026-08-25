@@ -24,8 +24,11 @@ import hmac
 import os
 import re
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 # Resolve all bundled resources relative to this file, not the current working
@@ -552,13 +555,13 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(_SecurityHeadersMiddleware)
 
-try:
-    retriever = HybridRetriever()
-except IndexNotFoundError as e:
-    print(f"FATAL: {e.message}", file=sys.stderr)
-    print("Run: python -m retrieval.indexer", file=sys.stderr)
-    logger.critical("Retrieval index not found at startup: %s", e.message)
-    retriever = None
+# Declared here, constructed by _init_retrieval() below once its dependencies
+# (the LLM clients, personality, and the guardrail rails) exist. Both are
+# module globals on purpose: /query resolves them at CALL time, not at import,
+# so reassigning them makes a freshly built index live without restarting the
+# process -- which is what /index/build relies on.
+retriever = None
+compiled_graph = None
 
 # Pass the already-parsed cfg dict into both clients rather than letting them
 # re-open a *relative* "config.yaml" (their default when cfg is None). That
@@ -696,12 +699,174 @@ input_guard = build_input_guard(cfg)
 # module-isolation guarantee as build_input_guard above.
 output_guard = build_output_guard(cfg)
 
-compiled_graph = None
-if retriever is not None:
-    compiled_graph = build_graph(
-        retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
-        personality=personality, input_guard=input_guard, output_guard=output_guard,
-    )
+def _init_retrieval(*, boot: bool = False) -> None:
+    """(Re)build ``retriever`` and ``compiled_graph`` from the index on disk.
+
+    Called once at import and again after a successful /index/build, which is
+    the whole reason it is a function: previously this ran only at module
+    scope, so a first-run operator who built the index had to restart the
+    server before /query would answer.
+
+    Fail-soft by design. A missing index leaves both globals None, /query
+    answers 503 INDEX_NOT_FOUND, and /health reports index_ready false -- the
+    documented first-run state, not a crash. The stderr banner is boot-only:
+    after a build the same condition means "the build produced no index",
+    which the caller reports through /index/status instead.
+    """
+    global retriever, compiled_graph
+    try:
+        retriever = HybridRetriever()
+    except IndexNotFoundError as e:
+        if boot:
+            print(f"FATAL: {e.message}", file=sys.stderr)
+            print("Run: python -m retrieval.indexer", file=sys.stderr)
+        logger.critical("Retrieval index not found: %s", e.message)
+        retriever = None
+
+    compiled_graph = None
+    if retriever is not None:
+        compiled_graph = build_graph(
+            retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
+            personality=personality, input_guard=input_guard, output_guard=output_guard,
+        )
+
+
+_init_retrieval(boot=True)
+
+
+# ── FIRST-RUN INDEX BUILD ──────────────────────────────────────────────────
+# A missing index was already fail-soft (503 INDEX_NOT_FOUND), but the only
+# way out was a CLI command plus a process restart -- unusable for anyone who
+# did not set the server up themselves, and the first thing a new operator
+# hits. These two routes build the index in place and hot-init retrieval when
+# it finishes, so the console can recover from first-run without a terminal.
+_INDEX_BUILD_LOCK = threading.Lock()
+_index_build: dict[str, Any] = {
+    "state": "idle",       # idle | running | done | error
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "chunks_done": 0,
+    "chunks_total": 0,
+}
+
+
+class _IndexProgressHandler(logging.Handler):
+    """Turn retrieval.indexer's own progress logging into build progress.
+
+    build_index() takes no callback and returns None, so there is nothing to
+    subscribe to. It does emit one ``logger.info("Indexed %d/%d chunks", ...)``
+    per batch, so this matches on ``record.msg`` -- the FORMAT STRING, not the
+    rendered text -- and reads ``record.args``. That needs no string parsing
+    and survives any wording change that keeps the same format literal.
+
+    Fail-soft: if that log line ever disappears the build still completes and
+    progress simply stays at zero, which the console renders as an
+    indeterminate spinner plus elapsed time rather than a wrong percentage.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            if record.msg == "Indexed %d/%d chunks" and record.args:
+                _index_build["chunks_done"] = int(record.args[0])
+                _index_build["chunks_total"] = int(record.args[1])
+        except Exception:  # noqa: BLE001, S110  # nosec B110 -- progress is best-effort only
+            pass
+
+
+def _index_status_payload() -> dict[str, Any]:
+    started, finished = _index_build["started_at"], _index_build["finished_at"]
+    elapsed = None
+    if started is not None:
+        elapsed = round((finished if finished is not None else time.monotonic()) - started, 1)
+    return {
+        "state": _index_build["state"],
+        "elapsed_sec": elapsed,
+        "chunks_done": _index_build["chunks_done"],
+        "chunks_total": _index_build["chunks_total"],
+        "error": _index_build["error"],
+        "index_ready": compiled_graph is not None,
+    }
+
+
+def _run_index_build() -> None:
+    """Worker body for /index/build. Runs on a plain daemon thread."""
+    # Lazy import: the indexer pulls the embedding stack, and every process
+    # that imports gate.py would otherwise pay for it even though only this
+    # one route uses it. I6 is unaffected -- retrieval/ is core, not one of
+    # the out-of-band layers gate.py is forbidden to import.
+    from retrieval.indexer import build_index
+
+    handler = _IndexProgressHandler()
+    idx_logger = logging.getLogger("retrieval.indexer")
+    idx_logger.addHandler(handler)
+    try:
+        build_index(str(_BASE_DIR / "config.yaml"))
+        _init_retrieval()
+        if compiled_graph is None:
+            _index_build["state"] = "error"
+            _index_build["error"] = "Build finished but no index was produced."
+        else:
+            _index_build["state"] = "done"
+    except Exception as e:  # noqa: BLE001 -- surfaced via /index/status, never raised into a request
+        logger.exception("Index build failed")
+        _index_build["state"] = "error"
+        _index_build["error"] = _sanitize_error(e)
+    finally:
+        idx_logger.removeHandler(handler)
+        _index_build["finished_at"] = time.monotonic()
+
+
+@app.post("/index/build", dependencies=[Depends(_enforce_rate_limit)])
+async def index_build(request: Request) -> dict[str, Any]:
+    """Start a background index build from the configured corpus.
+
+    Auth is the loopback socket peer plus same-origin, NOT the API key --
+    deliberately, and for the same reason /auth/bootstrap-password uses that
+    pair: on a genuine first run CYCLAW_API_KEY may not be set yet, and an
+    unset key fails CLOSED (401), so key-gating this route would brick exactly
+    the flow it exists to unblock. The peer check is on the socket, which a
+    Host or Origin header cannot forge.
+    """
+    client_host = request.client.host if request.client else ""
+    if not _is_loopback_host(client_host):
+        await _audit({"event": "index_build_rejected", "reason": "non_loopback", "ip": client_host})
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Index builds must be started from this machine",
+                    "code": "INDEX_BUILD_LOOPBACK_ONLY"},
+        )
+    if _looks_cross_site(request):
+        await _audit({"event": "index_build_rejected", "reason": "cross_site", "ip": client_host})
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Cross-site request rejected", "code": "CROSS_SITE_BLOCKED"},
+        )
+
+    # One build at a time. Two concurrent runs would write the same ChromaDB
+    # collection and the same bm25.json, so the loser corrupts the winner.
+    with _INDEX_BUILD_LOCK:
+        if _index_build["state"] == "running":
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "An index build is already running",
+                        "code": "INDEX_BUILD_IN_PROGRESS"},
+            )
+        _index_build.update({
+            "state": "running", "started_at": time.monotonic(), "finished_at": None,
+            "error": None, "chunks_done": 0, "chunks_total": 0,
+        })
+
+    await _audit({"event": "index_build_started", "ip": client_host})
+    threading.Thread(target=_run_index_build, name="cyclaw-index-build", daemon=True).start()
+    return _index_status_payload()
+
+
+@app.get("/index/status", dependencies=[Depends(_enforce_rate_limit)])
+async def index_status() -> dict[str, Any]:
+    """Progress of the current or most recent index build. Always 200."""
+    return _index_status_payload()
+
 
 @app.post("/query", response_model=QueryResponse)
 async def query_endpoint(request: Request, req: QueryRequest):
@@ -926,6 +1091,11 @@ async def health():
         mode=cfg["app"]["mode"],
         graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 780),
         version=_CYCLAW_VERSION,
+        # Display-only, so the first-run panel can name the folder to put
+        # documents in. The configured value verbatim (relative as written in
+        # config.yaml), NOT the absolute resolved path -- no reason to publish
+        # the server's directory layout to answer "where do my files go?".
+        corpus_path=str(cfg.get("corpus", {}).get("path", "") or ""),
     )
 
 

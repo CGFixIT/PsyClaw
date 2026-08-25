@@ -144,8 +144,14 @@
     box-shadow: 0 0 6px rgba(45,212,160,0.5);
     animation: pulse-dot 2s ease-in-out infinite;
   }
+  .status-dot.ok { background: var(--accent-green); box-shadow: 0 0 6px rgba(45,212,160,0.5); }
   .status-dot.offline { background: var(--text-muted); box-shadow: none; animation: none; }
   .status-dot.error { background: var(--accent-red); box-shadow: 0 0 6px rgba(239,83,80,0.5); }
+  /* Amber, not red. "degraded" without Ollama is the NORMAL shipped posture
+     (CLAUDE.md section 4), and so is a missing index on first run -- both used to
+     paint this dot the same red as a hard failure, which reads as an alarm to
+     someone who has done nothing wrong. Red is now reserved for a real fault. */
+  .status-dot.warn { background: var(--accent-amber); box-shadow: 0 0 6px rgba(212,146,11,0.5); }
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -498,6 +504,55 @@
     text-align: center;
     line-height: 1.7;
   }
+  /* ── FIRST RUN ──
+     Replaces the raw "503: Index not built. Run: python -m retrieval.indexer"
+     that a browser used to show someone who may not have a terminal open.
+     Rendered into the empty state, so it disappears for good once the user has
+     asked anything -- by then they are past first run. */
+  .first-run {
+    margin-top: 20px;
+    padding: 16px 20px;
+    border: 1px solid var(--accent-amber-dim);
+    border-radius: var(--radius);
+    background: rgba(212,146,11,0.05);
+    max-width: 440px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    text-align: center;
+  }
+  .first-run-title {
+    font-family: var(--mono);
+    font-size: var(--fs-body);
+    color: var(--accent-amber);
+    font-weight: 600;
+  }
+  .first-run-body {
+    font-family: var(--mono);
+    font-size: var(--fs-small);
+    color: var(--text-primary);
+    line-height: 1.6;
+  }
+  .first-run-btn {
+    min-height: 34px;
+    padding: 0 18px;
+    margin-top: 4px;
+    border: none;
+    border-radius: var(--radius-pill);
+    background: var(--accent-amber);
+    color: var(--bg-primary);
+    font-family: var(--mono);
+    font-size: var(--fs-small);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+  }
+  .first-run-btn:hover:not(:disabled) { background: var(--border-focus); }
+  .first-run-btn:disabled { opacity: 0.5; cursor: default; }
+
+
   /* The local-only guarantee is the single most load-bearing sentence on this
      screen for the audience CyClaw is aimed at (someone handling client or
      patient files), and it was the one thing the console never said. Stated
