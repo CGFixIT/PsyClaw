@@ -287,3 +287,56 @@ def test_advanced_mode_hides_every_operator_console():
     assert "function readAdvancedPref()" in js
     pref = js.split("function readAdvancedPref()", 1)[1].split("\n}", 1)[0]
     assert "try {" in pref and "catch" in pref, "localStorage read must be guarded"
+
+
+def test_no_best_effort_phrasing_survives_client_side():
+    """'Offline Best Effort' told a user nothing about which model would
+    answer. The three literal user-facing strings that said so must be gone --
+    the server-authored confirm_message (gate.py's _confirm_choices) is what
+    now names the real model, and it's what the console renders above these
+    buttons. NOT a blanket substring ban: "offline-best-effort" is the real
+    answer_model enum value from graph.py and legitimately appears in JS
+    comments/logic discussing it -- only the removed user-facing copy is
+    asserted gone here."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "Offline Best Effort" not in js
+    assert "stay offline with best-effort local" not in js
+    assert "Staying offline (best-effort local)" not in js
+
+
+def test_stay_offline_button_reads_correctly_in_both_layouts():
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "'No — Stay Offline' : 'Stay Offline'" in js
+
+
+def test_error_copy_table_covers_the_query_reachable_codes():
+    """Every code /query can actually emit -- the ~10 HTTPException codes plus
+    the 4 that arrive as a 200 with an `error` field carrying graph.py's
+    "{code}: {message}" stamp -- must have a plain-language entry, so an error
+    never regresses to a bare code with no sentence."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "const ERROR_COPY = {" in js
+    table = js.split("const ERROR_COPY = {", 1)[1].split("\n};", 1)[0]
+    for code in (
+        "INDEX_NOT_FOUND", "PROMPT_INJECTION_BLOCKED", "GRAPH_TIMEOUT",
+        "GRAPH_ERROR", "RATE_LIMIT", "VALIDATION_ERROR", "PAYLOAD_TOO_LARGE",
+        "AUTH_ROLE_DENIED", "CROSS_SITE_BLOCKED", "AUTH_REQUIRED",
+        "EMBEDDING_ERROR", "LLM_SERVICE_ERROR", "GROK_SERVICE_ERROR",
+        "CLAUDE_SERVICE_ERROR",
+    ):
+        assert f"{code}:" in table, f"{code} has no ERROR_COPY entry"
+
+
+def test_query_error_rendering_keeps_the_code_visible():
+    """The friendly sentence must not silently swallow the code -- an operator
+    debugging over someone's shoulder still needs it, just in small print
+    beside the plain-language text rather than as the whole message."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "function describeQueryError(" in js
+    assert "function extractErrorCode(" in js
+    # Both /query render sites must surface the code via the meta row, not
+    # just interpolate the raw server string into the entry text.
+    submit_fn = js.split("async function submitQuery(", 1)[1]
+    assert "describeQueryError(err)" in submit_fn
+    assert "describeQueryError(data.error)" in submit_fn
+    assert "{ k: 'code', v: code }" in submit_fn

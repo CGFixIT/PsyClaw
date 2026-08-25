@@ -307,6 +307,16 @@ schema or a route.
   stylesheet — so `applyRoleChrome()`'s role gate had been visually inert.
   Pre-existing, unrelated to the toggle, found only because the verification
   read computed style rather than source.
-- **PR 2** — not started (first-run + plain-language health).
-- **PR 3** — not started; blocked on sign-off for the `QueryResponse` schema
-  addition, which is the only way to surface the resolved model name.
+- **PR 2** — shipped as #1080 (`claude/console-first-run`). Items #1 and #2
+  turned out to be one change: the first-run screen and the health chip share
+  the same `/index/status` state machine.
+- **PR 3** — shipped as the PR carrying this update
+  (`claude/console-error-copy-model-badge`). `QueryResponse.llm_model`
+  (approved, additive) carries the resolved tag from `graph._llm_identity` --
+  `model_used` keeps its role vocabulary untouched, `metrics.py` unaffected.
+  `_confirm_choices` and the three client-side "Offline Best Effort" strings
+  now name the real local model instead of an opaque label. Added a 14-entry
+  `ERROR_COPY` table in terminal.js (the ~10 HTTPException codes reachable from
+  `/query` plus the 4 that arrive as a 200 with an `error` field) with a
+  parallel `extractErrorCode` so the code stays visible in small print beside
+  the plain-language sentence, never discarded.

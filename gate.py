@@ -76,7 +76,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from graph import build_graph, GraphState
+from graph import build_graph, GraphState, _llm_identity
 from retrieval.hybrid_search import HybridRetriever
 from llm.client import ClaudeClient, LocalLLMClient, GrokClient
 from schemas.api import (
@@ -612,15 +612,23 @@ def _usable_online_providers() -> list[str]:
 
 _PROVIDER_LABELS = {"grok": "Send to Grok", "claude": "Send to Claude"}
 
-def _confirm_choices(providers: list[str]) -> str:
-    """The 'here are your options' half of a confirm prompt, provider-accurate."""
+def _confirm_choices(providers: list[str], local_tag: str) -> str:
+    """The 'here are your options' half of a confirm prompt, provider-accurate.
+
+    local_tag names the model that WOULD answer if the user stays offline --
+    resolved by the caller via _llm_identity("offline-best-effort", cfg), so
+    this never re-derives config.yaml's models.local_llm.model itself. Naming
+    it here (instead of a generic "Offline Best Effort") is the fix for a
+    console that showed opaque role labels with no way to tell which model any
+    given answer actually came from.
+    """
     if not providers:
         return (
-            "No external provider is available (offline mode, provider disabled, "
-            "or its API key is unset), so the only option is Offline Best Effort."
+            f"No external provider is available (offline mode, provider disabled, "
+            f"or its API key is unset), so {local_tag} will answer from its own knowledge."
         )
     labels = [_PROVIDER_LABELS[p] for p in providers]
-    return "Choose Offline Best Effort or " + " or ".join(labels) + "."
+    return f"Stay offline with {local_tag}, or " + " or ".join(labels) + "."
 
 def _boot_personality_enabled(personality_cfg: object) -> bool:
     """True only when ``personality.enabled`` is the literal boolean ``True``.
@@ -935,6 +943,12 @@ async def query_endpoint(request: Request, req: QueryRequest):
 
     needs_confirm = result.get("needs_user_confirm", False)
     answer_model = result.get("answer_model", "")
+    # Same mapping graph.py's audit_logger_node uses for audit.jsonl, reused
+    # here so the console's model badge and the audit trail can never disagree
+    # about which model answered. answer_model is empty on the pause path, and
+    # _llm_identity("") resolves to llm_model=None there -- correct, since no
+    # model has run yet.
+    llm_model = _llm_identity(answer_model, cfg).get("llm_model")
 
     # needs_user_confirm stays True in the final graph state even after a
     # confirmed query gets answered by a fallback node (it's set once by
@@ -956,7 +970,11 @@ async def query_endpoint(request: Request, req: QueryRequest):
         # pass error through for API consumers, matching the answered path.
         retrieval_error = result.get("error")
         providers = _usable_online_providers()
-        choices = _confirm_choices(providers)
+        # The model that WOULD answer if the user stays offline -- resolved
+        # regardless of the pause's own (empty) answer_model, since nothing has
+        # run yet at this point.
+        offline_tag = _llm_identity("offline-best-effort", cfg).get("llm_model") or "the local model"
+        choices = _confirm_choices(providers, offline_tag)
         if retrieval_error:
             confirm_message = (
                 f"Retrieval failed ({retrieval_error}) — no vault results available. {choices}"
@@ -971,6 +989,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
             retrieval_mode=result.get("retrieval_mode", "none"),
             hit_count=len(result.get("retrieved_docs", [])),
             model_used="",
+            llm_model=llm_model,
             needs_confirm=True,
             confirm_message=confirm_message,
             available_providers=providers,
@@ -1010,6 +1029,7 @@ async def query_endpoint(request: Request, req: QueryRequest):
         retrieval_mode=result.get("retrieval_mode", "none"),
         hit_count=len(result.get("retrieved_docs", [])),
         model_used=result.get("answer_model", "unknown"),
+        llm_model=llm_model,
         needs_confirm=False,
         error=result.get("error")
     )
