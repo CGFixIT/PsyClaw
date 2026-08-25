@@ -154,6 +154,41 @@ def test_fetch_and_search_and_inject(cfg):
     assert tool.context_text() == ""
 
 
+def test_search_records_last_as_the_matching_hit_not_the_last_iterated_entry(cfg):
+    """A multi-host search must not let a non-matching later entry clobber
+    web_last.json with an irrelevant page.
+
+    Before this fix, _get() unconditionally overwrote _last_path on every
+    successful fetch inside search()'s loop, so /web inject after a search
+    across 2+ allowlisted hosts injected whichever host happened to be LAST
+    in allowlist order -- regardless of whether it actually matched the
+    query. Here "b.example" (second in allowlist order, and thus the one
+    that would win under the old unconditional-overwrite behavior) contains
+    no match; only "a.example" does.
+    """
+    cfg.web_enabled = True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "a.example" in str(request.url):
+            body = "<html><body><p>CyClaw allowlist docs</p></body></html>"
+        else:
+            body = "<html><body><p>unrelated content</p></body></html>"
+        return httpx.Response(200, content=body.encode("utf-8"), headers={"content-type": "text/html"})
+
+    tool = WebTool(cfg, transport=httpx.MockTransport(handler), resolver=_noop_resolve)
+    tool.allow("https://a.example/")
+    tool.allow("https://b.example/")
+
+    found = tool.search("allowlist")
+    assert len(found["hits"]) == 1
+    assert found["hits"][0]["url"] == "https://a.example/"
+
+    injected = tool.inject()
+    assert injected["injected"] is True
+    source = next(line for line in tool.context_text().splitlines() if line.startswith("Source: "))
+    assert source == "Source: https://a.example/"
+
+
 def test_search_error_record_is_code_only(cfg, monkeypatch, caplog):
     """Per-URL failures must not leak exception text into the search payload
     (CodeQL py/stack-trace-exposure, alert 1091)."""

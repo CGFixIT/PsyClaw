@@ -415,12 +415,12 @@ class WebTool:
         if len(body) > _MAX_BYTES:
             body = body[:_MAX_BYTES]
         text = extract_text(body.decode("utf-8", errors="replace"), ctype)
-        record = {"url": target, "status": resp.status_code, "content_type": ctype, "text": text, "chars": len(text)}
-        _atomic_write_json(_last_path(self._cfg), record)
-        return record
+        return {"url": target, "status": resp.status_code, "content_type": ctype, "text": text, "chars": len(text)}
 
     def fetch(self, url: str) -> dict:
-        return self._get((url or "").strip(), self._require_enabled())
+        page = self._get((url or "").strip(), self._require_enabled())
+        _atomic_write_json(_last_path(self._cfg), page)
+        return page
 
     def search(self, query: str) -> dict:
         needle = (query or "").strip()
@@ -429,6 +429,14 @@ class WebTool:
         entries = self._require_enabled()[:_MAX_SEARCH_URLS]
         hits: list[dict] = []
         errors: list[dict] = []
+        # _get() no longer writes _last_path itself (see fetch()) -- a search
+        # spans up to _MAX_SEARCH_URLS entries, and unconditionally overwriting
+        # on every successful fetch left web_last.json holding whichever entry
+        # happened to be LAST in allowlist order, regardless of whether it
+        # matched the query. /web inject reads only that file, so it could
+        # inject an unrelated page while the actually-matching hit was
+        # discarded. Record only the first hit-bearing page instead.
+        recorded_last = False
         for entry in entries:
             url = entry["raw"] or f"{entry['scheme']}://{entry['host']}{entry['path']}"
             try:
@@ -443,4 +451,7 @@ class WebTool:
             snippets = _snippets(page["text"], needle)
             if snippets:
                 hits.append({"url": page["url"], "snippets": snippets})
+                if not recorded_last:
+                    _atomic_write_json(_last_path(self._cfg), page)
+                    recorded_last = True
         return {"query": needle, "hits": hits, "errors": errors, "scanned": len(entries)}
