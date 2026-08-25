@@ -244,7 +244,7 @@ class TestThirdPartyLogCapture:
                 if handler not in before:
                     real_root.removeHandler(handler)
                     handler.close()
-            logger_mod._logging_initialized = False
+            logger._logging_initialized = False
         assert "third-party line" in text
         assert "cyclaw debug line" in text
 
@@ -258,14 +258,13 @@ class TestThirdPartyLogCapture:
         two fds on one file). The sibling test above only asserted `in text`, so
         it passed either way and the duplication shipped unnoticed.
         """
-        import utils.logger as logger_mod
 
         log_path = tmp_path / "cyclaw.log"
-        monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+        monkeypatch.setattr(logger, "_logging_initialized", False)
         real_root = logging.getLogger()
         before = list(real_root.handlers)
         try:
-            logger_mod.setup_logging({"logging": {
+            logger.setup_logging({"logging": {
                 "level": "DEBUG",
                 "log_file": str(log_path),
                 "capture_third_party": True,
@@ -281,7 +280,7 @@ class TestThirdPartyLogCapture:
                 if handler not in before:
                     real_root.removeHandler(handler)
                     handler.close()
-            logger_mod._logging_initialized = False
+            logger._logging_initialized = False
         assert text.count("count-me-once") == 1, "CyClaw line duplicated in the log file"
         assert text.count("third-party-once") == 1, "third-party line duplicated in the log file"
 
@@ -294,16 +293,15 @@ class TestThirdPartyLogCapture:
         so setup_logging still has to own the file itself, or turning the
         third-party switch off would silently stop logging CyClaw to disk too.
         """
-        import utils.logger as logger_mod
 
         log_path = tmp_path / "cyclaw.log"
-        monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+        monkeypatch.setattr(logger, "_logging_initialized", False)
         cyclaw_logger = logging.getLogger("cyclaw")
         real_root = logging.getLogger()
         before_root = list(real_root.handlers)
         before_cyclaw = list(cyclaw_logger.handlers)
         try:
-            logger_mod.setup_logging({"logging": {
+            logger.setup_logging({"logging": {
                 "level": "DEBUG",
                 "log_file": str(log_path),
                 "capture_third_party": False,
@@ -318,5 +316,5 @@ class TestThirdPartyLogCapture:
                     if handler not in before:
                         logger_obj.removeHandler(handler)
                         handler.close()
-            logger_mod._logging_initialized = False
+            logger._logging_initialized = False
         assert text.count("offline-marker") == 1
