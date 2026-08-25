@@ -1,8 +1,10 @@
 # CyClaw Security Policy
 
+> **Two files, one policy.** This copy owns the **security model summary** and the **Accepted Dependency Risks** register below — the acceptances `requirements.txt`, `.trivyignore`, `.osv-scanner.toml`, and the `pip-audit` workflow all encode. The full reporting, triage, severity, and coordinated-disclosure process lives in [`.github/SECURITY.md`](.github/SECURITY.md), which is the copy GitHub displays (`.github/` wins the community-health precedence). Update the file that owns the section rather than copying it across.
+
 ## Reporting a Vulnerability
 
-Open a private security advisory on GitHub ([CGFixIT/CyClaw](https://github.com/CGFixIT/CyClaw/security/advisories)) or contact the maintainer via [cgfixit.com](https://cgfixit.com). Do not open public issues for exploitable findings.
+Open a private security advisory on GitHub ([CGFixIT/CyClaw](https://github.com/CGFixIT/CyClaw/security/advisories)) or contact the maintainer via [cgfixit.com](https://cgfixit.com). Do not open public issues for exploitable findings — on a public repository every issue is public the moment it is filed. Full process: [`.github/SECURITY.md`](.github/SECURITY.md).
 
 ## Security Model (Summary)
 

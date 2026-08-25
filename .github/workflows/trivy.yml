@@ -47,6 +47,11 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
           version: 'v0.72.0'
+          # Passed explicitly rather than relying on Trivy's implicit cwd
+          # discovery, so the suppressions still apply if this step ever gains
+          # a working-directory. Contents mirror pip-audit.yml's --ignore-vuln
+          # set; rationale + review dates live in .trivyignore and SECURITY.md.
+          trivyignores: '.trivyignore'
 
       - name: Upload Trivy SARIF
         if: always()
@@ -115,6 +120,10 @@ jobs:
           output: 'trivy-image-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
           version: 'v0.72.0'
+          # Same suppressions as the fs scan above: the image bundles the same
+          # requirements.txt, so without this the accepted chromadb/nltk CVEs
+          # are re-raised a second time under the trivy-image category.
+          trivyignores: '.trivyignore'
 
       - name: Upload Trivy SARIF
         if: always() && steps.changes.outputs.docker_changed == 'true'

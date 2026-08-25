@@ -2,15 +2,17 @@
 
 CyClaw is a production-grade local AI agent built on three invariants: RAG-first retrieval, LangGraph topology as security policy, and human-gated soul governance. Security is a top priority. This document describes how to report vulnerabilities, how we triage and respond, and what is in-scope for vulnerability reports.
 
+> **Two files, one policy.** This is the copy GitHub displays (`.github/` wins the community-health precedence over the repo root). The root [`SECURITY.md`](../SECURITY.md) is the companion: it carries the **security model summary** (the enforced invariants) and the **Accepted Dependency Risks** register — the chromadb and nltk CVE acceptances that `requirements.txt`, `.trivyignore`, `.osv-scanner.toml`, and the `pip-audit` workflow all encode. Reporting process lives here; risk acceptances live there. Update the one that owns the section rather than copying it across.
+
 ---
 
 ## Contact — reporting a vulnerability
 
 Preferred secure channel:
 - GitHub Security Advisories: https://github.com/CGFixIT/CyClaw/security/advisories (recommended) — this provides a private, encrypted channel to the maintainers.
-- If that is unavailable to you, open a private repository issue titled "SECURITY: <short description>" and mark it private (do not include secrets).
+- If that is unavailable to you, contact the maintainer through [cgfixit.com](https://cgfixit.com) and ask for secure-upload instructions before sending any detail.
 
-Do NOT post vulnerabilities publicly (e.g., regular issues, public Twitter threads) before a coordinated disclosure. See the Disclosure and Timeline section below.
+Do NOT open a regular GitHub issue for a vulnerability. On a public repository every issue is public the instant it is filed — there is no per-issue "private" setting — so an issue is a disclosure, not a report. Do not post vulnerabilities publicly anywhere (issues, public threads) before a coordinated disclosure. See the Disclosure and Timeline section below.
 
 ---
 
@@ -57,7 +59,7 @@ Required/Recommended report contents:
 
 Do not send private keys, real passwords, or other secrets in your initial report. If you need to share sensitive data to demonstrate the issue, request secure upload instructions in the initial report.
 
-Suggested issue subject line format (if using GitHub private issue/email): SECURITY: <component> - <short summary>
+Suggested subject line format (advisory title or email): SECURITY: <component> - <short summary>
 
 ---
 
@@ -114,7 +116,7 @@ We appreciate security research. Please follow responsible disclosure and avoid 
 
 ## Reporting checklist (quick)
 
-1. Prefer a private GitHub Security Advisory (or a private repo issue if unavailable).
+1. Prefer a private GitHub Security Advisory (or the maintainer contact at cgfixit.com if unavailable). Never a public GitHub issue.
 2. Provide reproduction steps, environment, git SHA, and a safe PoC.
 3. Avoid including real secrets.
 4. Expect an acknowledgement within 3 business days.

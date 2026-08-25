@@ -160,6 +160,87 @@ jobs:
         # real gate on the six invariants it exists to enforce.
         run: python3 .claude/skills/invariant-guard/check_invariants.py
 
+  packaging:
+    # Validates the artifact a REAL USER installs -- the built wheel -- which
+    # nothing else in CI touches. python-publish.yml builds it only on
+    # `release: published` and uploads straight to PyPI with no install or
+    # smoke test in between, and the 3-OS test matrix runs from the source
+    # tree, so wheel packaging had zero coverage on any PR.
+    #
+    # That is not a theoretical gap: pyproject.toml's own
+    # [tool.hatch.build.targets.wheel] comment records the exact incident --
+    # gate.py and friends were absent from the wheel, so every console script
+    # except the ones rooted in a directory package raised ModuleNotFoundError
+    # on a real install. The same comment notes `pip install -e .` could not
+    # have caught it (editable installs point at the repo root and never
+    # consult the packaging list), which is why this job builds and inspects
+    # the wheel itself rather than doing an editable install.
+    #
+    # Ubuntu-only and dependency-free by design: the wheel is pure Python, so
+    # its contents do not vary by OS, and unzipping it answers "is the module
+    # present at the path the entry point names" without installing torch.
+    name: Wheel packaging (entry points resolvable)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade "pip==26.1.2"
+          # Same two tools python-publish.yml uses to build the released
+          # artifact; keep them in step if that workflow's build stack changes.
+          python -m pip install build
+          python -m build --wheel
+
+      - name: Every [project.scripts] entry point resolves inside the wheel
+        run: |
+          python - <<'PY'
+          import sys, tomllib, zipfile
+          from pathlib import Path
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          scripts = pyproject["project"]["scripts"]
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              sys.exit(f"expected exactly one wheel in dist/, found {[w.name for w in wheels]}")
+          names = set(zipfile.ZipFile(wheels[0]).namelist())
+
+          missing = []
+          for script, target in sorted(scripts.items()):
+              # "pkg.mod:main" -> the module must ship as pkg/mod.py, and a
+              # top-level "mod:main" as mod.py. A package entry point may also
+              # be satisfied by pkg/mod/__init__.py.
+              module = target.split(":", 1)[0]
+              stem = module.replace(".", "/")
+              if f"{stem}.py" in names or f"{stem}/__init__.py" in names:
+                  print(f"OK   {script} -> {module}")
+              else:
+                  missing.append(f"{script} -> {module} (looked for {stem}.py, {stem}/__init__.py)")
+
+          if missing:
+              print(f"\nwheel: {wheels[0].name}", file=sys.stderr)
+              for entry in missing:
+                  print(f"MISSING {entry}", file=sys.stderr)
+              sys.exit(
+                  "\nThese console scripts would raise ModuleNotFoundError on a real "
+                  "`pip install cyclaw`. Add the module to [tool.hatch.build.targets.wheel] "
+                  "packages/force-include in pyproject.toml."
+              )
+          print(f"\nall {len(scripts)} entry points present in {wheels[0].name}")
+          PY
+
   dependency-review:
     name: dependency-review
     if: github.event_name == 'pull_request'
@@ -935,6 +1016,15 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # This job installs an ad-hoc pinned set (below) rather than
+          # requirements.txt, but every version it resolves comes from
+          # constraints.txt -- so that plus the workflow file (which names the
+          # packages) is the correct key. Download-cache only: a stale or
+          # missing entry degrades to a normal install, never a broken one.
+          cache-dependency-path: |
+            constraints.txt
+            .github/workflows/ci.yml
 
       - name: Install ollama-mock-smoke test deps (no torch/chromadb needed)
         # pytest always imports tests/conftest.py regardless of which test file
@@ -980,6 +1070,12 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # Same key as the sibling ollama-mock-smoke job above, for the same
+          # reason: ad-hoc package list in this file, versions from constraints.
+          cache-dependency-path: |
+            constraints.txt
+            .github/workflows/ci.yml
 
       - name: Install real-repo-run-smoke test deps (no torch/chromadb needed)
         # Same minimal set ollama-mock-smoke installs, for the same reason
@@ -1022,6 +1118,14 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
+          cache: 'pip'
+          # The heaviest uncached install in the file: langgraph + langchain-core
+          # + deepagents + langchain-openai + langchain-xai and their transitive
+          # trees, re-downloaded on every run. Same constraints-plus-workflow key
+          # as the two smoke jobs above.
+          cache-dependency-path: |
+            constraints.txt
+            .github/workflows/ci.yml
 
       - name: Install optional Deep Agents harness dependencies
         shell: bash

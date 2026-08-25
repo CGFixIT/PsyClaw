@@ -84,15 +84,22 @@ jobs:
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
-            const corePathRe = /^(gate\.py|graph\.py|mcp_hybrid_server\.py|utils\/personality\.py|config\.yaml)$/;
+            // The full I6 "core six" from CLAUDE.md section 3, not just the
+            // original three: gate_ops.py, gate_auth.py and gate_memory.py are
+            // core-path files by the same invariant, so a PR rewriting the
+            // auth/RBAC surface or the /ops shims was exempt from the
+            // invariant-mention requirement that gate.py's own edits trigger.
+            // utils/personality.py (I5 soul governance) and config.yaml (every
+            // tunable) stay in scope as before.
+            const corePathRe = /^(gate\.py|gate_ops\.py|gate_auth\.py|gate_memory\.py|graph\.py|mcp_hybrid_server\.py|utils\/personality\.py|config\.yaml)$/;
             const touchesCore = files.some((f) => corePathRe.test(f.filename));
             const mentionsInvariant = /invariant/i.test(body);
             if (touchesCore && !mentionsInvariant) {
               missing.push({
                 label:
                   "Invariant / Governance impact statement -- this PR touches a core-path file " +
-                  "(gate.py/graph.py/mcp_hybrid_server.py/utils/personality.py/config.yaml) but its " +
-                  "body never mentions an invariant",
+                  "(gate.py/gate_ops.py/gate_auth.py/gate_memory.py/graph.py/mcp_hybrid_server.py/" +
+                  "utils/personality.py/config.yaml) but its body never mentions an invariant",
               });
             }
 

@@ -2,9 +2,14 @@ name: Claude Code (PR Comments)
 
 # Out-of-band assistance tool only.
 # This workflow allows @claude mentions on PRs to trigger review assistance.
-# It is intentionally limited to read-only repository access and human-initiated triggers only.
 # It does NOT participate in core governance, invariants, or agentic paths.
-# add comment write to pr ability for when i @ it
+#
+# Access: contents READ, plus pull-requests/issues WRITE so it can post the
+# comment it was @-mentioned to write. (The header used to say "read-only
+# repository access" -- that stopped being true when comment-write was added
+# for the @-mention reply, and a security note that overstates the sandbox is
+# worse than none.) Triggers stay human-initiated and owner-only; the job's
+# `if:` below is the actual enforcement.
 
 # Deny-by-default at the workflow level. Every job below already declares the
 # narrow set it needs, so this changes no current behaviour -- it changes what
@@ -28,11 +33,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # Only the repository owner can trigger this, and only on open Pull Requests
+    # Only the repository owner can trigger this, and only on open Pull Requests.
+    # github.actor / github.triggering_actor are checked alongside the comment
+    # author for the same reason codex.yml checks all three: comment.user.login
+    # describes who WROTE the comment, while actor/triggering_actor describe who
+    # CAUSED this run -- an edited or replayed event can separate them, so the
+    # sibling workflow with identical blast radius already gates on all three
+    # and this one should not be the looser of the pair.
     if: |
       github.event.issue.pull_request != null &&
       contains(github.event.comment.body, '@claude') &&
       github.event.comment.user.login == github.repository_owner &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
       github.event.issue.state == 'open'
 
     permissions:

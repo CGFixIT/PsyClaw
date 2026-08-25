@@ -13,10 +13,14 @@ on:
     branches: ["main"]
     paths-ignore:
       - "docs/**"
-      - ".github/**"
       - ".workflow/**"
       - ".claude/**"
-      - "tests/**"
+      # NOT ".github/**": the matrix below has an `actions` leg whose entire
+      # job is scanning workflow files, so ignoring that tree meant a merge
+      # touching only workflows skipped the one analysis built to inspect it.
+      # NOT "tests/**" either: this list is a push-to-main filter, and the
+      # file's own concurrency rationale is "every commit landed on main keeps
+      # a complete scan history" -- a skipped run is a hole in that history.
 
   pull_request:
     branches: ["main"]

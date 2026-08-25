@@ -34,7 +34,7 @@
 # .github/workflows/pip-audit.yml's `scan-optional` job — the base `scan` job
 # audits requirements.txt, which carries zero extras by scope contract.
 #
-# Schedule: weekly on Thursday (≈03:00 UTC by default)
+# Schedule: weekly — pip on Tuesday, github-actions on Wednesday (≈03:00 UTC by default)
 # Each ecosystem uses a single catch-all group so related bumps arrive as ONE
 # consolidated PR per ecosystem instead of one PR per dependency.
 
@@ -57,7 +57,8 @@ updates:
           - "*"
     ignore:
       # numpy is intentionally pinned to 1.x: numpy 2.x removes np.float_, which
-      # breaks chromadb's onnxruntime dependency (see requirements.txt:35).
+      # breaks chromadb's onnxruntime dependency (see the numpy pin comment in
+      # requirements.txt).
       - dependency-name: "numpy"
         versions: [">=2.0.0"]
 

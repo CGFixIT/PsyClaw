@@ -1,38 +1,64 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Something in CyClaw behaves incorrectly
 title: ''
-labels: ''
+labels: bug
 assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+<!--
+SECURITY: do not use this template for a vulnerability. A GitHub issue is
+public the moment you file it. Report privately instead — see SECURITY.md.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+Never paste API keys, tokens, soul.md contents, or raw query text. The audit
+log stores SHA-256 query hashes precisely so that raw text never has to leave
+your machine; keep it that way in bug reports too.
+-->
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+**What happened**
+A clear description of the incorrect behavior, and what you expected instead.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Reproduction**
+Steps, with the exact command or request you ran:
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+```
+# e.g. python gate.py, or:
+# curl -s -X POST http://127.0.0.1:8787/query -H 'Content-Type: application/json' -d '{"query":"..."}'
+```
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**Which surface**
+<!-- Delete the ones that don't apply. -->
+- [ ] Gateway `/query` or another HTTP route (`gate.py`, port 8787)
+- [ ] Soul Console / terminal UI (`static/terminal.html`)
+- [ ] Harness console (`harness/`, port 8790)
+- [ ] MCP server (`mcp_hybrid_server.py`)
+- [ ] Retrieval / indexing (`retrieval/`, `python -m retrieval.indexer`)
+- [ ] Out-of-band subsystem (`agentic/`, `sync/`, `telegram/`, `opentweet/`)
+- [ ] Install / packaging / CI
+
+**Diagnostics**
+
+```
+# Health (redact anything host-specific you'd rather not share):
+# curl -s http://127.0.0.1:8787/health
+```
+
+- `status: degraded` with no Ollama running is NORMAL — say whether Ollama is up.
+- Index built? (`python -m retrieval.indexer` run at least once?) A missing index
+  is fail-soft and returns 503 `INDEX_NOT_FOUND` by design.
+- Relevant `logs/audit.jsonl` event names (event names only — never raw query text).
+
+**Environment**
+- OS + version:
+- Python version (`python --version`) — the project requires >=3.12,<3.13:
+- CyClaw version or commit SHA:
+- Install path used: `pip install -e .` / requirements.txt / conda / Docker
+- Local model + Ollama version, if the LLM path is involved:
+
+**Config**
+Anything changed from the shipped `config.yaml` defaults? (Do not paste secrets —
+naming the keys you changed is enough.)
 
 **Additional context**
-Add any other context about the problem here.
+Anything else that helps — a hypothesis, when it started, whether it's intermittent.

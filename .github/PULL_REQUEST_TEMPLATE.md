@@ -77,7 +77,7 @@ _Put an `x` in the boxes that apply. You can fill these out after creating the P
 
 - [ ] I have read the latest `docs/CyClaw Architecture Guide` (and any relevant Phase docs) and `SECURITY.md`
 - [ ] This change preserves all 6 security invariants and I6 module isolation (explicit evidence or invariant matrix included for core changes)
-- [ ] Full sandbox validation has been run (`cyclaw-sandbox-validator` or equivalent pytest + smoke tests on core RAG/agentic paths) and passes with no regressions
+- [ ] Full sandbox validation has been run (`GROK_API_KEY=dummy pytest tests/ -q --tb=short`, and `bash .claude/skills/CyClaw-Sandbox/verify.sh` for core RAG/agentic paths) and passes with no regressions
 - [ ] No new external network dependencies or mandatory online LLM assumptions were introduced without explicit justification + offline fallback path
 - [ ] For any agentic/fsconnect/harness change: two-phase audit, quota enforcement, governed delete/trash, and write guards have been verified
 - [ ] Relevant architecture docs, threat model notes, or harness phase documentation have been updated if core behavior or topology changed
