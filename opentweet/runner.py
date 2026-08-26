@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,10 @@ def next_schedule_datetime(
         current = current.astimezone()
     python_weekday = 6 if weekday in (0, 7) else weekday - 1
     target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # Normalize through UTC so a wall-clock time that falls in a DST gap or is
+    # ambiguous snaps to an actual local instant instead of silently corrupting
+    # the schedule. The original timezone is preserved.
+    target = target.astimezone(UTC).astimezone(current.tzinfo)
     days_ahead = (python_weekday - current.weekday()) % 7
     target = target + timedelta(days=days_ahead)
     if target <= current:
@@ -160,7 +164,8 @@ def post_once(
         if when.tzinfo is None:
             when = when.astimezone()
         scheduled_date = when.isoformat(timespec="seconds")
-        if when <= (now or datetime.now().astimezone()):
+        effective_now = (now or datetime.now().astimezone()).astimezone()
+        if when <= effective_now:
             raise OpenTweetRefused(
                 "scheduled_date is not in the future",
                 details={"gate": "schedule_past"},

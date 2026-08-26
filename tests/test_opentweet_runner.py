@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
@@ -201,3 +202,41 @@ def test_next_schedule_is_future() -> None:
     assert when.date() == now.date()
     later = next_schedule_datetime(1, "09:00", now=now + timedelta(hours=4))
     assert later.date() > now.date()
+
+
+def test_next_schedule_handles_dst_gap() -> None:
+    """A slot that falls in the spring-forward gap must snap to a real instant."""
+    tz = ZoneInfo("America/New_York")
+    # 2026-03-08 01:30 EST; clocks spring forward at 02:00, so 02:30 does not exist.
+    now = datetime(2026, 3, 8, 1, 30, tzinfo=tz)
+    when = next_schedule_datetime(7, "02:30", now=now)  # same Sunday
+    assert when > now
+    # The nonexistent 02:30 EST must normalize to 03:30 EDT (or later).
+    assert when.minute == 30
+    assert when.utcoffset() == timedelta(hours=-4)
+
+
+def test_schedule_with_naive_now_normalizes(tmp_path: Path) -> None:
+    """A library caller passing a naive ``now`` must not get a TypeError."""
+    cfg = load_opentweet_config(_cfg(tmp_path, schedule_enabled=True, weekday=1, schedule_slot="09:00"))
+    now = datetime(2026, 8, 24, 6, 0)  # naive
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()),
+        patch(
+            "opentweet.client.get_me",
+            return_value={
+                "authenticated": True,
+                "subscription": {"has_access": True},
+                "limits": {"can_post": True},
+            },
+        ),
+        patch(
+            "opentweet.client.create_post",
+            return_value={"success": True, "posts": [{"id": "p3"}]},
+        ) as create,
+    ):
+        result = post_once(cfg, schedule=True, now=now)
+    assert result["mode"] == "scheduled"
+    kwargs = create.call_args.kwargs
+    assert kwargs.get("scheduled_date")
+    assert kwargs["scheduled_date"].startswith("2026-08-24T09:00:00")
