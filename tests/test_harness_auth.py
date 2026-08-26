@@ -42,6 +42,10 @@ GUARDED = [
     ("post", "/api/sessions/does-not-exist/rename", {"title": "t"}),
     ("post", "/api/sessions/does-not-exist/goal", {"goal": "ship the harness slash commands"}),
     ("post", "/api/soul", {"enabled": True}),
+    # The read returns full note bodies -- operator-authored content injected
+    # into the chat system prompt, not boot-time metadata (same shape as the
+    # /api/sessions{id} and /api/github/status precedent above).
+    ("get", "/api/memory", None),
     ("post", "/api/memory", {"enabled": False}),
     ("post", "/api/memory/add", {"text": "prefer ruff"}),
     ("post", "/api/memory/forget", {"id": "deadbeef"}),
@@ -95,7 +99,7 @@ GUARDED = [
 # hardcodes, spawns nothing, and the console needs it to populate help before a
 # key has been entered.
 OPEN = [
-    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/memory", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+    "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
 ]
 
 

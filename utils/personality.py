@@ -29,6 +29,13 @@ from utils import personality_db
 from utils.errors import PromptInjectionError, SoulPersistenceError
 from utils.logger import audit_log
 
+# Reused rather than re-implemented, same reasoning memory/policy.py's import
+# of this same helper documents: this is the exact NFKC-fold +
+# invisible-character-strip utils/sanitizer.py's check_input already applies
+# before matching, and a second hand-rolled copy would only ever drift from
+# it, not improve on it.
+from utils.sanitizer import _normalize_for_match
+
 logger = logging.getLogger("cyclaw.personality")
 
 # Anchor relative personality paths to the repo root, mirroring utils/logger.py's
@@ -293,18 +300,31 @@ class PersonalityManager:
         compiled: list[tuple] = []
         for p in sources:
             try:
-                compiled.append((p, re.compile(p, re.IGNORECASE)))
+                # IGNORECASE | DOTALL, matching utils/sanitizer.py's compile
+                # flags: DOTALL so a pattern whose halves straddle a newline
+                # still matches (e.g. 'maintenance\s+mode.*safety\s+filters
+                # \s+disabled' split across two lines would otherwise slip
+                # through).
+                compiled.append((p, re.compile(p, re.IGNORECASE | re.DOTALL)))
             except re.error:
                 continue
         return compiled
 
     def _scan_enforced(self, text: str) -> list[str]:
         """Return critical patterns that must not be written to soul.md."""
-        return [src for src, pat in self._enforced_patterns if pat.search(text)]
+        # Match against a normalized copy, same as utils/sanitizer.py's
+        # check_input: NFKC folds fullwidth/compatibility Unicode forms back
+        # to the ASCII the patterns are written in, and stripping invisible
+        # characters closes the zero-width-splitting evasion. Only ever
+        # folds TOWARD what the patterns already catch, so this cannot stop
+        # catching something the unnormalized text used to match.
+        probe = _normalize_for_match(text)
+        return [src for src, pat in self._enforced_patterns if pat.search(probe)]
 
     def _scan_advisory(self, text: str) -> list[str]:
         """Return advisory patterns for human review (propose_evolution)."""
-        return [src for src, pat in self._advisory_patterns if pat.search(text)]
+        probe = _normalize_for_match(text)
+        return [src for src, pat in self._advisory_patterns if pat.search(probe)]
 
     def propose_evolution(self, new_soul: str, reason: str) -> dict:
         """Preview a proposed soul change: compute the diff + advisory injection flags.

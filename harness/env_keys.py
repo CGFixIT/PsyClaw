@@ -355,9 +355,19 @@ def _write_temp_file(directory: Path, rendered: str) -> Path:
     """
     descriptor, temp_name = tempfile.mkstemp(prefix=".env.", dir=str(directory))
     temp_path = Path(temp_name)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(rendered)
-    temp_path.chmod(_FILE_MODE)
+    # The staged file exists on disk the moment mkstemp returns and already
+    # holds every managed secret (_render_file re-emits existing keys), so
+    # EVERY failure path between here and the caller's os.replace has to
+    # remove it or a secret-bearing orphan is left in ~/.CyClaw/ forever --
+    # same idiom (and same BaseException, for a KeyboardInterrupt mid-write)
+    # as harness/config.py's _atomic_write_json.
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(rendered)
+        temp_path.chmod(_FILE_MODE)
+    except BaseException:
+        temp_path.unlink(missing_ok=True)
+        raise
     return temp_path
 
 

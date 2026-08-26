@@ -64,7 +64,7 @@ class LocalProposerClient:
         # name the budget it exceeded -- httpx.Client exposes it only as a
         # Timeout object with four separate fields.
         self._timeout_sec = timeout_sec
-        self._client = httpx.Client(timeout=timeout_sec, transport=transport)
+        self._client = httpx.Client(timeout=timeout_sec, transport=transport, trust_env=False)
 
     def close(self) -> None:
         self._client.close()
