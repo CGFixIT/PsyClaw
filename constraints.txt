@@ -53,6 +53,10 @@ starlette==1.3.1
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.0
+# tzdata is required on Windows (and any host without a system IANA database) for
+# zoneinfo to resolve IANA names such as America/New_York. Kept unconditional so
+# OpenTweet scheduling tests behave identically across platforms.
+tzdata==2026.2
 
 # embedding backend (minimum safe post CVE-2025-32434); CPU wheel via
 # --extra-index-url (see this file's header -- no pyproject.toml extra or

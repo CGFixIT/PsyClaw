@@ -92,6 +92,10 @@ dependencies:
   # transitive until someone can confirm the compatible pin with a real solve.
   - numpy=1.26.4
   - nltk=3.10.0
+  # tzdata is required on Windows (and any host without a system IANA database) for
+  # zoneinfo to resolve IANA names such as America/New_York. Kept unconditional so
+  # OpenTweet scheduling tests behave identically across platforms.
+  - tzdata=2026.2
   # Test & Dev tooling — pinned to match pyproject.toml's test/dev extras
   - pytest=9.1.1
   - pytest-asyncio=1.4.0

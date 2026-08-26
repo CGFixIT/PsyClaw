@@ -32,6 +32,10 @@ dependencies = [
     "pyyaml==6.0.3",
     "numpy==1.26.4",
     "nltk==3.10.0",
+    # tzdata is required on Windows (and any host without a system IANA database)
+    # for zoneinfo to resolve IANA names such as America/New_York. Kept
+    # unconditional so OpenTweet scheduling tests behave identically across platforms.
+    "tzdata==2026.2",
     "langgraph==1.2.9",
     "langchain-core==1.5.0",
     # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
