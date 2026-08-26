@@ -65,8 +65,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Non-root user (Veeam-style least privilege)
+# mkdir /app/.emb_cache before the chown below: .dockerignore excludes
+# .emb_cache/ from the build context (it's a regenerable cache, mounted as a
+# named volume in docker-compose.yml), so the path does not exist in the
+# image. A Docker named volume only inherits the image path's ownership when
+# that path already exists at image-build time -- otherwise the volume root
+# is root:root 0755 and uid 1000 (below) cannot write into the very directory
+# config.yaml's models.embeddings.cache_dir names, silently losing the
+# semantic retrieval leg (retrieval/embeddings.py's EACCES -> BM25-only
+# degradation) under read_only:true + cap_drop:ALL.
 RUN groupadd --gid 1000 cyclaw && \
     useradd --create-home --uid 1000 --gid cyclaw cyclaw && \
+    mkdir -p /app/.emb_cache && \
     chown -R cyclaw:cyclaw /app /tmp
 USER cyclaw
 
