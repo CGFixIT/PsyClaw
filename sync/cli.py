@@ -251,9 +251,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
             and bool((exc.details or {}).get("corpus_changed"))
             and not args.dry_run
         ):
-            _warn("Corpus changed before sync error; exit 10 so callers reindex.")
             if getattr(cfg, "auto_reindex", False):
-                return _run_auto_reindex(cfg)
+                # The sync itself already failed -- _run_auto_reindex only
+                # discharges the reindex obligation, it cannot turn a failed
+                # sync into a success. EXIT_OK from the indexer child means
+                # "index rebuilt", not "sync succeeded", so it must not
+                # escape as this function's return value; anything else
+                # (a reindex failure) already carries its own real code.
+                rc = _run_auto_reindex(cfg)
+                return rc if rc != EXIT_OK else EXIT_FAIL
+            _warn("Corpus changed before sync error; exit 10 so callers reindex.")
             return EXIT_REINDEX
         return EXIT_FAIL
 
