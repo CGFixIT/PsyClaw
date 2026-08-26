@@ -12,6 +12,7 @@ import hmac
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -21,18 +22,20 @@ from agentic.config import AgenticConfig
 from agentic.harness_optimizer.core import CandidateDecision, Variant
 from agentic.harness_optimizer.governance import inspect_candidate_text
 from agentic.harness_optimizer.proposer import ProposerWorkspace
+from agentic.registry import (
+    _can_reclaim_lock,
+    _is_lock_owner,
+    _lock_token_path,
+    _write_lock_token,
+)
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 # An apply completes in milliseconds, so a lock directory older than this is from
-# a crashed run and is safe to reclaim. Mirrors agentic.registry's identical
-# atomic-mkdir mutex, which exists for the same reason: apply_candidate_artifact's
-# read-version-increment-write below is a plain read-modify-write with no
-# cross-process exclusion otherwise, so two concurrent accept calls for the same
-# variant_id could interleave and lose an update.
-_LOCK_STALE_SEC = 60
+# a crashed run and is safe to reclaim. Reuses the same token helpers
+# ``agentic.registry`` uses so the two atomic-mkdir mutexes stay consistent.
 _write_lock = threading.Lock()
 
 
@@ -42,10 +45,12 @@ def _acquire_artifact_lock(lock_dir: Path) -> None:
     ``Path.mkdir`` is atomic on every platform, so an atomically-created lock
     directory doubles as a zero-dependency, cross-platform mutex -- the same
     pattern ``agentic.registry._acquire_registry_lock`` uses. A lock left by a
-    crashed run is reclaimed after ``_LOCK_STALE_SEC``.
+    crashed run is reclaimed only when the recorded owner PID is dead (or no
+    token is present for backward compatibility).
     """
     try:
         lock_dir.mkdir(parents=True)
+        _write_lock_token(lock_dir)
         return
     except FileExistsError:
         # Lock is already held; fall through to the stale-age check below.
@@ -54,10 +59,11 @@ def _acquire_artifact_lock(lock_dir: Path) -> None:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
         age = 0.0
-    if age > _LOCK_STALE_SEC:
+    if _can_reclaim_lock(lock_dir, age):
         try:
-            lock_dir.rmdir()
+            shutil.rmtree(lock_dir, ignore_errors=True)
             lock_dir.mkdir(parents=True)
+            _write_lock_token(lock_dir)
             return
         except OSError:
             # Another process won the reclaim race; fall through and refuse below.
@@ -69,8 +75,19 @@ def _acquire_artifact_lock(lock_dir: Path) -> None:
 
 
 def _release_artifact_lock(lock_dir: Path) -> None:
-    """Release the cross-process write lock; tolerant if it is already gone."""
+    """Release the cross-process write lock only if we still own it.
+
+    If another process reclaimed the lock while we were slow, the token no longer
+    matches our PID and we must leave the directory alone.
+    """
     try:
+        if not _is_lock_owner(lock_dir):
+            return
+    except OSError:
+        # Lock dir disappeared under us; nothing to release.
+        return
+    try:
+        _lock_token_path(lock_dir).unlink(missing_ok=True)
         lock_dir.rmdir()
     except OSError:
         # Best-effort: the lock dir may already be gone (or never created).
