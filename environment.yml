@@ -92,6 +92,12 @@ dependencies:
   # transitive until someone can confirm the compatible pin with a real solve.
   - numpy=1.26.4
   - nltk=3.10.0
+  # PyPI package name is tzdata==2026.2 (requirements.txt / pyproject / constraints).
+  # conda-forge splits this: `tzdata` is the OS IANA database (2025b / 2026c),
+  # `python-tzdata` is the PEP 615 fallback wheel used by zoneinfo on hosts
+  # without a system tzdb (Windows). Do not pin tzdata=2026.2 here — that
+  # version does not exist on conda-forge and reds CyClaw Conda CI.
+  - python-tzdata=2026.2
   # Test & Dev tooling — pinned to match pyproject.toml's test/dev extras
   - pytest=9.1.1
   - pytest-asyncio=1.4.0
