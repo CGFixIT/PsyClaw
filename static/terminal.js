@@ -156,22 +156,29 @@ async function setupAdminPassword() {
     }
     return;
   }
-  const resp = await fetchWithTimeout(`${API}/auth/bootstrap-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password }),
-  }, 15000);
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+  try {
+    const resp = await fetchWithTimeout(`${API}/auth/bootstrap-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }, 15000);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      if (authStatus) {
+        if (authSessionBox) authSessionBox.hidden = false;
+        authStatus.textContent = extractErrorMessage(err, 'could not set password');
+      }
+      return;
+    }
+    const data = await resp.json();
+    csrfToken = data.csrf_token || null;
+    await refreshAuthUi();
+  } catch (e) {
     if (authStatus) {
       if (authSessionBox) authSessionBox.hidden = false;
-      authStatus.textContent = extractErrorMessage(err, 'could not set password');
+      authStatus.textContent = 'network error: could not set password';
     }
-    return;
   }
-  const data = await resp.json();
-  csrfToken = data.csrf_token || null;
-  await refreshAuthUi();
 }
 
 async function login() {
@@ -179,28 +186,39 @@ async function login() {
   const username = authUserInput.value.trim();
   const password = authPassInput.value;
   authPassInput.value = '';
-  const resp = await fetchWithTimeout(`${API}/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  }, 15000);
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+  try {
+    const resp = await fetchWithTimeout(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    }, 15000);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: resp.statusText }));
+      if (authStatus) {
+        if (authSessionBox) authSessionBox.hidden = false;
+        authStatus.textContent = extractErrorMessage(err, 'login failed');
+      }
+      return;
+    }
+    const data = await resp.json();
+    csrfToken = data.csrf_token || null;
+    await refreshAuthUi();
+  } catch (e) {
     if (authStatus) {
       if (authSessionBox) authSessionBox.hidden = false;
-      authStatus.textContent = extractErrorMessage(err, 'login failed');
+      authStatus.textContent = 'network error: login failed';
     }
-    return;
   }
-  const data = await resp.json();
-  csrfToken = data.csrf_token || null;
-  await refreshAuthUi();
 }
 
 async function logout() {
   const headers = { 'Content-Type': 'application/json' };
   if (csrfToken) headers['X-CyClaw-CSRF'] = csrfToken;
-  await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+  try {
+    await fetchWithTimeout(`${API}/auth/logout`, { method: 'POST', headers }, 15000);
+  } catch (e) {
+    // Best-effort: the server may already be unreachable.
+  }
   csrfToken = null;
   await refreshAuthUi();
 }
@@ -667,6 +685,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
   if (sendBtn.disabled) return;
 
   const query = confirmedOnline !== null ? pendingConfirmQuery : input.value.trim();
+  if (confirmedOnline !== null) pendingConfirmQuery = null;
   if (!query) return;
   if (confirmedOnline === null && (query === '/users' || query === '/admin')) {
     input.value = '';
