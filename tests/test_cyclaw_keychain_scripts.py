@@ -340,6 +340,7 @@ def _run_set_script_via_pty(
     """
     env = os.environ.copy()
     env["PATH"] = f"{fake_security_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["CYCLAW_KEYCHAIN_SET_TEST_MODE"] = "1"
     env["FAKE_SECURITY_LOG"] = str(log_path)
     env["FAKE_SECURITY_STDIN_LOG"] = str(stdin_log_path)
 
@@ -384,7 +385,8 @@ def test_set_script_stores_via_fake_security_and_never_echoes_secret_to_argv(
 
     logged = log_path.read_text(encoding="utf-8")
     assert "-s svc" in logged
-    assert "-T /usr/bin/security" in logged
+    expected_security = str(fake_security / "security")
+    assert f"-T {expected_security}" in logged
     assert "-U" in logged
     assert "hunter2" not in logged  # the whole point: never in the security process's argv
 
