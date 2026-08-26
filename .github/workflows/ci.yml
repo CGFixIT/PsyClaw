@@ -631,7 +631,7 @@ jobs:
           # cache hits). --no-index / --find-links keeps pip from querying the
           # PyTorch index on cache-hit runs, speeding up the step significantly.
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
-          pip install -r requirements.txt -c constraints.txt pytest pytest-cov
+          pip install -r requirements.txt -r requirements-test.txt -c constraints.txt
 
       - name: Install deps (macOS -- plain torch, no +cpu suffix)
         if: runner.os == 'macOS'
@@ -651,7 +651,7 @@ jobs:
           pip install "torch==2.13.0"
           grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' requirements.txt > /tmp/requirements-macos.txt
           grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
-          pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt pytest pytest-cov
+          pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt
 
       - name: Prepare hermetic test env
         shell: bash

@@ -45,8 +45,8 @@ python -m venv .venv
 #    CUDA build, and stays on the patched side of CVE-2025-32434)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
-# 3. Everything else, pinned to the verified transitive tree
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+# 3. Runtime + test toolchain, pinned to the verified transitive tree
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 
 # 4. Required env (any non-empty value works — see "GROK_API_KEY" below)
 $env:GROK_API_KEY = "dummy"
@@ -87,8 +87,8 @@ source .venv/bin/activate
 # 2. Torch CPU first — order matters (see the Windows step 2 note above)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
-# 3. Everything else, pinned to the verified transitive tree
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+# 3. Runtime + test toolchain, pinned to the verified transitive tree
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 
 # 4. Required env (any non-empty value works — see "GROK_API_KEY" below)
 export GROK_API_KEY=dummy
@@ -263,7 +263,7 @@ pip install "torch==2.13.0"
 grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
 grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
-pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
+pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt \
     --ignore-installed PyYAML
 
 # 4. Required env (any non-empty value works — see "GROK_API_KEY" below)

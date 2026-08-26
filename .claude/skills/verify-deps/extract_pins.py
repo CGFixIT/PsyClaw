@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """extract_pins.py — normalize every pinned package/version across CyClaw's
-four install surfaces (pyproject.toml, constraints.txt, requirements.txt,
-environment.yml) into one JSON table.
+install surfaces (pyproject.toml, constraints.txt, requirements.txt,
+requirements-test.txt, environment.yml) into one JSON table.
 
 Usage:
     python3 .claude/skills/verify-deps/extract_pins.py [--repo-root PATH]
@@ -13,18 +13,18 @@ imports its parsing helpers directly rather than re-implementing them, so
 there is one source of truth for "how do we parse a pin line."
 
 What this adds that dep-guard does not check:
-  - requirements.txt is parsed and cross-checked against constraints.txt too
-    (dep-guard never reads requirements.txt at all — grep the script, it
-    has zero references to the file). A stale requirements.txt pin would
-    pass every dep-guard check silently.
+  - requirements.txt and requirements-test.txt are parsed and cross-checked
+    against constraints.txt too (dep-guard never reads either requirements
+    file — grep the script, it has zero references to them). A stale pin in
+    either manifest would pass every dep-guard check silently.
   - Output is a flat, normalized {package: {file: version}} table meant to
     be handed to a currency check (verify-deps/SKILL.md Step 2) or read by a
-    human. `--strict` turns requirements.txt/constraints.txt drift into a gate.
+    human. `--strict` turns requirements*.txt/constraints.txt drift into a gate.
 
 Exit codes: 0 when the table is readable, 2 for reported requirements drift
 under --strict, and 3 when a required pin file is missing or unparseable.
 Without --strict this remains a reporting tool; --strict lets automated callers
-fail closed on requirements.txt<->constraints.txt drift.
+fail closed on requirements.txt/requirements-test.txt<->constraints.txt drift.
 """
 from __future__ import annotations
 
@@ -64,6 +64,7 @@ def build_table(root: Path) -> dict[str, dict[str, str]]:
     pyproject_path = root / "pyproject.toml"
     constraints_path = root / "constraints.txt"
     requirements_path = root / "requirements.txt"
+    requirements_test_path = root / "requirements-test.txt"
     env_path = root / _ENV_YML_FILE
 
     import tomllib
@@ -81,6 +82,10 @@ def build_table(root: Path) -> dict[str, dict[str, str]]:
         sources["requirements.txt"] = _load_requirements_reqs(
             requirements_path.read_text(encoding="utf-8")
         )
+    if requirements_test_path.exists():
+        sources["requirements-test.txt"] = _load_requirements_reqs(
+            requirements_test_path.read_text(encoding="utf-8")
+        )
     if env_path.exists():
         sources["environment.yml"] = _load_environment_reqs(env_path.read_text(encoding="utf-8"))
 
@@ -95,22 +100,24 @@ def build_table(root: Path) -> dict[str, dict[str, str]]:
 
 
 def find_requirements_drift(table: dict[str, dict[str, str]]) -> list[str]:
-    """Packages where requirements.txt is not constrained identically.
+    """Packages where a requirements*.txt pin is not constrained identically.
 
     This is the one cross-file agreement dep-guard's D6 does not cover.
     A requirements pin absent from constraints is drift too: the legacy/CI/Docker
-    path would otherwise resolve it outside the reproducibility ceiling.
+    path (or the test toolchain) would otherwise resolve it outside the
+    reproducibility ceiling.
     """
     drift = []
     for name, by_file in sorted(table.items()):
-        req_v = by_file.get("requirements.txt")
-        con_v = by_file.get("constraints.txt")
-        if req_v is None:
-            continue
-        if con_v is None:
-            drift.append(f"{name}: requirements.txt=={req_v} missing from constraints.txt")
-        elif req_v != con_v:
-            drift.append(f"{name}: requirements.txt=={req_v} vs constraints.txt=={con_v}")
+        for req_file in ("requirements.txt", "requirements-test.txt"):
+            req_v = by_file.get(req_file)
+            con_v = by_file.get("constraints.txt")
+            if req_v is None:
+                continue
+            if con_v is None:
+                drift.append(f"{name}: {req_file}=={req_v} missing from constraints.txt")
+            elif req_v != con_v:
+                drift.append(f"{name}: {req_file}=={req_v} vs constraints.txt=={con_v}")
     return drift
 
 
@@ -119,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo-root", type=Path, default=None)
     p.add_argument("--json", action="store_true", help="emit the raw table as JSON")
     p.add_argument("--strict", action="store_true",
-                   help="return 2 when requirements.txt and constraints.txt drift")
+                   help="return 2 when requirements*.txt and constraints.txt drift")
     args = p.parse_args(argv)
 
     root = args.repo_root or Path(__file__).resolve().parents[3]
@@ -142,23 +149,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2 if args.strict and drift else 0
 
     print(f"{'package':<24} {'pyproject.toml':<16} {'constraints.txt':<16} "
-          f"{'requirements.txt':<18} {'environment.yml':<16}")
+          f"{'requirements.txt':<18} {'req-test.txt':<16} {'environment.yml':<16}")
     for name, by_file in sorted(table.items()):
         print(
             f"{name:<24} "
             f"{by_file.get('pyproject.toml', '-'):<16} "
             f"{by_file.get('constraints.txt', '-'):<16} "
             f"{by_file.get('requirements.txt', '-'):<18} "
+            f"{by_file.get('requirements-test.txt', '-'):<16} "
             f"{by_file.get('environment.yml', '-'):<16}"
         )
 
     print()
     if drift:
-        print(f"requirements.txt <-> constraints.txt drift ({len(drift)}):")
+        print(f"requirements*.txt <-> constraints.txt drift ({len(drift)}):")
         for line in drift:
             print(f"  DRIFT  {line}")
     else:
-        print("requirements.txt <-> constraints.txt: no drift (dep-guard does not check this pair)")
+        print("requirements.txt + requirements-test.txt <-> constraints.txt: no drift (dep-guard does not check this pair)")
     return 2 if args.strict and drift else 0
 
 
