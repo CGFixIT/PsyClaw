@@ -14,7 +14,8 @@ Console package: [`harness/README.md`](../harness/README.md).
 
 | Script | What it does |
 |---|---|
-| `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. Note `--skip-prompts` implies no server start; pass `--start` to launch anyway. The script accepts a wider flag set than the common ones listed here — including `--skip-install`, `--skip-python-deps`, `--skip-keys`, `--skip-ollama`, `--skip-index`, `--skip-advisor`, `--no-browser`, `--no-fsconnect`, `--no-profile-edit`, `--no-path-edit`, `--grok-dummy`, `--rotate-key`, `--ollama-install-script`, and `--yes`; run it with `--help` for the authoritative list. |
+| `setup-cyclaw.sh` | **The one-command onboarding entry point (#1053).** Wraps everything below into a single operator decision: clone (if no checkout is found), run `setup-from-clone.sh --no-start`, offer every remaining harness-managed credential (`harness/env_keys.py`'s advanced entries — cloud planner / DB URLs) beyond the primary ones `setup-cyclaw-keys.sh` already handles, then optionally start both servers, open the loopback consoles, and autofill the generated key into `#apiKeyInput` / `#apiKey` in browser memory only. Works standalone too — download just this file and it offers to clone. `--repo PATH`, `--clone-dir PATH`, `--start`/`--no-start`, `--browser`/`--no-browser`, `--autofill-api-key`/`--no-autofill-api-key`, `--skip-advanced-keys`, `--skip-prompts`, `--dry-run`; forwards its remaining flags (`--skip-install`, `--skip-keys`, `--small-model`, `--ollama-model TAG`, etc.) straight to `setup-from-clone.sh`. It does not reimplement installation or key persistence — every write still goes through the scripts below. Run it with `--help` for the authoritative flag list. |
+| `setup-from-clone.sh` | **One-shot after `git clone`** on Apple Silicon. Chains `install-cyclaw.sh` + `setup-cyclaw-keys.sh` (prompts for Telegram / Claude / Grok / GitHub), checks Ollama, builds the retrieval index, then starts both servers. `--dry-run`, `--skip-prompts`, `--no-start`, `--small-model`, `--ollama-model TAG`. Note `--skip-prompts` implies no server start; pass `--start` to launch anyway. The script accepts a wider flag set than the common ones listed here — including `--skip-install`, `--skip-python-deps`, `--skip-keys`, `--skip-ollama`, `--skip-index`, `--skip-advisor`, `--no-browser`, `--no-fsconnect`, `--no-profile-edit`, `--no-path-edit`, `--grok-dummy`, `--rotate-key`, `--ollama-install-script`, and `--yes`; run it with `--help` for the authoritative list. Called directly, it is the multi-question path `setup-cyclaw.sh` exists to front. |
 | `install-cyclaw.sh` | Home layout, venv, `cyclaw` shim, optional PATH / rc function. `--repo-path`, `--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`, `--no-fsconnect`. |
 | `uninstall-cyclaw.sh` | Removes the rc function, PATH entry, and the `cyclaw keys` source block. Keeps `~/.CyClaw` unless `--remove-home`. Optional `--remove-fsconnect`. Best-effort unschedules Dropbox sync and `launchctl bootout`s CyClaw LaunchAgent labels (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate, opentweet). |
 | `invoke-cyclaw.sh` | Starts gate + harness from `~/.CyClaw/venv`. `--no-gate` / `--no-harness` / `--no-browser` / `--port` / `--gate-port` / `--repo` (point at a checkout other than the default). |
@@ -29,12 +30,31 @@ Console package: [`harness/README.md`](../harness/README.md).
 Target shells: bash (including macOS 3.2) and zsh. BSD userland on macOS —
 no Homebrew required.
 
+## One command (Apple Silicon)
+
+`setup-cyclaw.sh` is the single entry point for a fresh machine — clone,
+install, keys, index, start, browser, in that order, with the choices asked
+once up front instead of scattered across several scripts' worth of prompts:
+
+```bash
+bash macos/setup-cyclaw.sh          # inside a clone
+```
+
+It offers to clone when no checkout is found, so the same file also works
+standalone: download `macos/setup-cyclaw.sh` by itself and run
+`bash setup-cyclaw.sh` (interactive prompts need a real Terminal, not a
+piped stdin — pass `--skip-prompts` for a non-interactive run instead). It
+delegates to `setup-from-clone.sh` for the actual install/keys/index work
+below — it adds no second secret store or installer of its own.
+
 ## One-shot after clone (Apple Silicon)
 
 `setup-from-clone.sh` is the operator-facing "I just cloned this, make it
-run" path. It does **not** reimplement the scripts above — it chains them
-and fills the four holes `setup-guide.md` documents that Option A leaves
-open (Ollama, the retrieval index, API keys, starting both servers).
+run" path that `setup-cyclaw.sh` calls. It does **not** reimplement the
+scripts above — it chains them and fills the four holes `setup-guide.md`
+documents that Option A leaves open (Ollama, the retrieval index, API keys,
+starting both servers). Use it directly for scripted/CI-style runs where the
+extra clone-detection and browser-autofill layer isn't wanted.
 
 ```bash
 git clone https://github.com/CGFixIT/CyClaw.git && cd CyClaw

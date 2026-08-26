@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import plistlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CANONICAL_HOME_SUFFIX = ".CyClaw"
+_BASH = shutil.which("bash") or "bash"
 
 
 def test_invoke_cyclaw_home_dir_matches_install_cyclaw() -> None:
@@ -175,3 +178,130 @@ def test_setup_cyclaw_keys_warns_when_installed_copy_drifted() -> None:
     assert "_warn_if_installed_copy_drifted" in setup
     assert "cmp -s" in setup
     assert "differs from this script" in setup
+
+
+# --- setup-cyclaw.sh: single-entry onboarding wrapper (#1053) --------------
+
+
+def test_setup_cyclaw_syntax_is_valid() -> None:
+    result = subprocess.run(
+        [_BASH, "-n", str(_REPO_ROOT / "macos" / "setup-cyclaw.sh")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_setup_cyclaw_looks_like_repo_matches_the_files_it_requires() -> None:
+    """The one-script onboarding wrapper's checkout-detection gate must name
+    files that actually exist in this repo, or every invocation falls
+    through to "clone a fresh copy" even when run inside a real checkout."""
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw.sh").read_text(encoding="utf-8")
+    required = re.findall(r'\[ -f "\$1/([^"]+)" \]', setup)
+    assert required, "looks_like_repo's required-file list not found -- update this test's regex"
+    for relative in required:
+        assert (_REPO_ROOT / relative).is_file(), f"looks_like_repo requires {relative}, which is missing"
+
+
+def test_setup_cyclaw_clipboard_clear_job_is_disowned() -> None:
+    """Regression guard mirroring test_setup_cyclaw_keys_disowns_clipboard_clear_job.
+
+    setup-cyclaw.sh's copy_key_fallback forks the same kind of background
+    pasteboard-clear job as setup-cyclaw-keys.sh. Without `disown` it is a
+    job of this script's own shell and is killed by SIGHUP the moment the
+    script exits (Ctrl+C, or simply finishing), before the sleep completes --
+    leaving CYCLAW_API_KEY sitting in the pasteboard indefinitely.
+    """
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw.sh").read_text(encoding="utf-8")
+    match = re.search(r"sleep \"\$ttl\".*?\) >/dev/null 2>&1 &", setup, re.DOTALL)
+    assert match, "clipboard TTL background job not found in setup-cyclaw.sh"
+    after_fork = setup[match.end():match.end() + 500]
+    assert "disown" in after_fork, "clipboard clear job in setup-cyclaw.sh is not disowned"
+    # disown must be the next STATEMENT after the fork -- only comments and
+    # blank lines may sit between them, so it isn't just attached to a later,
+    # unrelated job by coincidence of a wide search window.
+    lines_before_disown = after_fork.split("disown", 1)[0].splitlines()
+    for line in lines_before_disown:
+        stripped = line.strip()
+        assert stripped == "" or stripped.startswith("#"), f"unexpected statement before disown: {line!r}"
+
+
+def test_setup_cyclaw_cleans_up_browser_fill_temp_dir_on_interrupt() -> None:
+    """fill_browser_key stages CYCLAW_API_KEY in a 0600 temp file for osascript
+    to read. An interrupt between mktemp and the function's own closing
+    `rm -rf` must not leave that secret-bearing file behind -- same failure
+    class harness/env_keys.py's _write_temp_file guards against for the
+    harness console's key writer."""
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw.sh").read_text(encoding="utf-8")
+    assert "FILL_KEY_TMP_DIR=" in setup
+    cleanup_match = re.search(r"cleanup_runner\(\) \{.*?\n\}", setup, re.DOTALL)
+    assert cleanup_match, "cleanup_runner function not found"
+    assert "FILL_KEY_TMP_DIR" in cleanup_match.group(0)
+    assert 'rm -rf "$FILL_KEY_TMP_DIR"' in cleanup_match.group(0)
+
+
+def test_setup_cyclaw_never_passes_the_api_key_as_argv() -> None:
+    """Secret values must reach osascript only via the 0600 temp file path,
+    never as a literal argument -- matches the script's own documented
+    security contract ("Secret values are never printed or passed as
+    child-process arguments")."""
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw.sh").read_text(encoding="utf-8")
+    assert 'osascript "$script_file" "$secret_file"' in setup
+    # Every use of the variable must be a redirect (>), a pipe (|), or a
+    # string comparison (=) -- never a bare word handed to a command as an
+    # argv entry, which would put the key in `ps`/process-list output.
+    allowed = (
+        "printf '%s' \"$CYCLAW_API_KEY\" | pbcopy",
+        'printf \'%s\' "$CYCLAW_API_KEY" > "$secret_file"',
+        'if [ "$current" = "$CYCLAW_API_KEY" ]',
+    )
+    for line in setup.splitlines():
+        if '"$CYCLAW_API_KEY"' not in line:
+            continue
+        assert any(pattern in line for pattern in allowed), f"unexpected use of the key: {line!r}"
+
+
+def test_setup_cyclaw_dry_run_takes_no_action(tmp_path: Path) -> None:
+    """--dry-run must plan without cloning, installing, or starting anything."""
+    result = subprocess.run(
+        [
+            _BASH,
+            str(_REPO_ROOT / "macos" / "setup-cyclaw.sh"),
+            "--dry-run",
+            "--repo",
+            str(_REPO_ROOT),
+            "--skip-prompts",
+            "--start",
+            "--browser",
+            "--autofill-api-key",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=tmp_path,
+        env={"CYCLAW_ONBOARDING_SKIP_PLATFORM": "1", "HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "dry-run only; no writes or network actions will occur" in result.stdout
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_setup_cyclaw_help_and_unknown_option() -> None:
+    help_result = subprocess.run(
+        [_BASH, str(_REPO_ROOT / "macos" / "setup-cyclaw.sh"), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert help_result.returncode == 0
+    assert "Usage:" in help_result.stdout
+
+    bad_result = subprocess.run(
+        [_BASH, str(_REPO_ROOT / "macos" / "setup-cyclaw.sh"), "--not-a-real-flag"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert bad_result.returncode == 1
+    assert "unknown option" in bad_result.stderr
