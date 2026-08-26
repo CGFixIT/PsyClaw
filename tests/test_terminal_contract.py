@@ -371,6 +371,34 @@ def test_index_status_poll_has_a_failure_ceiling():
     assert "indexBuild.misses += 1" in js
 
 
+def test_panel_loaders_return_success_and_retry_on_failure():
+    """Subsystem panels must latch 'loaded' only on success and retry later.
+
+    Setting the flag before the await makes a 401/network failure latch the
+    panel as loaded forever; reopening never retries. Each runX helper must
+    return true/false so the toggle can set *Loaded accordingly.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    for runner in ("runSync", "runAgentic", "runFs", "runSql"):
+        body = js.split(f"async function {runner}(", 1)
+        assert len(body) == 2, f"{runner} moved; update this test"
+        block = body[1].split("\n}", 1)[0]
+        assert "return true;" in block, f"{runner} does not return true on success"
+        assert "return false;" in block, f"{runner} does not return false on error"
+
+    for toggle, runner in (
+        ("toggleSyncPanel", "runSync"),
+        ("toggleAgenticPanel", "runAgentic"),
+        ("toggleFsPanel", "runFs"),
+        ("toggleSqlPanel", "runSql"),
+    ):
+        body = js.split(f"async function {toggle}(", 1)
+        assert len(body) == 2, f"{toggle} moved; update this test"
+        block = body[1].split("\n}", 1)[0]
+        assert f"await {runner}('status')" in block, f"{toggle} does not call {runner}('status')"
+        assert "apiKeyInput.value.trim()" in block, f"{toggle} does not check for an API key"
+
+
 def test_audit_panel_fetch_is_wrapped():
     """openAuditPanel is an async click handler; an unwrapped reject is an
     unhandled rejection AND leaves the placeholder text sitting there looking

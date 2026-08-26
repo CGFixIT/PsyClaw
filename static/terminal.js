@@ -1206,8 +1206,10 @@ async function runSync(action, opts = {}) {
     setSyncStatus(`[${action}] ${syncLabelMsg(data)}`, data.ok ? 'success' : 'error');
     document.getElementById('syncBadge').textContent = `last: ${action} → ${data.label}`;
     addEntry('system', '', `→ ops/sync ${action} exit ${data.exit_code} (${data.label})`);
+    return true;
   } catch (e) {
     setSyncStatus(e.message, 'error');
+    return false;
   }
 }
 
@@ -1223,7 +1225,13 @@ async function toggleSyncPanel() {
   const open = syncPanel.classList.contains('open');
   syncToggleBtn.textContent = open ? 'Hide Sync' : 'Sync Console';
   // Lazy first status read only when a key is already present (all ops need auth).
-  if (open && !syncLoaded && apiKeyInput.value.trim()) { syncLoaded = true; await runSync('status'); }
+  if (open && !syncLoaded) {
+    if (!apiKeyInput.value.trim()) {
+      setSyncStatus('Enter an API key above to load sync status.', 'error');
+    } else {
+      syncLoaded = await runSync('status');
+    }
+  }
 }
 
 // ---- Agentic Console -------------------------------------------------------
@@ -1294,8 +1302,10 @@ async function runAgentic(action, opts = {}) {
     }
     setAgenticStatus(`[${action}] ${agenticLabelMsg(data)}${extra}`, data.ok ? 'success' : 'error');
     addEntry('system', '', `→ ops/agentic ${action} exit ${data.exit_code} (${data.label})`);
+    return true;
   } catch (e) {
     setAgenticStatus(e.message, 'error');
+    return false;
   }
 }
 
@@ -1336,7 +1346,13 @@ async function toggleAgenticPanel() {
   const open = agenticPanel.classList.contains('open');
   agenticToggleBtn.textContent = open ? 'Hide Agentic' : 'Agentic Console';
   if (open) refreshAgenticGates();
-  if (open && !agenticLoaded && apiKeyInput.value.trim()) { agenticLoaded = true; await runAgentic('status'); }
+  if (open && !agenticLoaded) {
+    if (!apiKeyInput.value.trim()) {
+      setAgenticStatus('Enter an API key above to load agentic status.', 'error');
+    } else {
+      agenticLoaded = await runAgentic('status');
+    }
+  }
 }
 
 // ---- FS Console --------------------------------------------------------------
@@ -1370,8 +1386,10 @@ async function runFs(action, opts = {}) {
     renderOps(fsBox, fsMeta, fsWarning, fsPreview, data);
     setFsStatus(`[${action}] ${fsLabelMsg(data)}`, data.ok ? 'success' : 'error');
     addEntry('system', '', `→ ops/fsconnect ${action} exit ${data.exit_code} (${data.label})`);
+    return true;
   } catch (e) {
     setFsStatus(e.message, 'error');
+    return false;
   }
 }
 
@@ -1418,7 +1436,13 @@ async function toggleFsPanel() {
   fsPanel.classList.toggle('open');
   const open = fsPanel.classList.contains('open');
   fsToggleBtn.textContent = open ? 'Hide FS' : 'FS Console';
-  if (open && !fsLoaded && apiKeyInput.value.trim()) { fsLoaded = true; await runFs('status'); }
+  if (open && !fsLoaded) {
+    if (!apiKeyInput.value.trim()) {
+      setFsStatus('Enter an API key above to load fsconnect status.', 'error');
+    } else {
+      fsLoaded = await runFs('status');
+    }
+  }
 }
 
 // ---- SQL Console -------------------------------------------------------------
@@ -1452,8 +1476,10 @@ async function runSql(action, opts = {}) {
     renderOps(sqlBox, sqlMeta, sqlWarning, sqlPreview, data);
     setSqlStatus(`[${action}] ${sqlLabelMsg(data)}`, data.ok ? 'success' : 'error');
     addEntry('system', '', `→ ops/sqlconnect ${action} exit ${data.exit_code} (${data.label})`);
+    return true;
   } catch (e) {
     setSqlStatus(e.message, 'error');
+    return false;
   }
 }
 
@@ -1485,7 +1511,13 @@ async function toggleSqlPanel() {
   sqlPanel.classList.toggle('open');
   const open = sqlPanel.classList.contains('open');
   sqlToggleBtn.textContent = open ? 'Hide SQL' : 'SQL Console';
-  if (open && !sqlLoaded && apiKeyInput.value.trim()) { sqlLoaded = true; await runSql('status'); }
+  if (open && !sqlLoaded) {
+    if (!apiKeyInput.value.trim()) {
+      setSqlStatus('Enter an API key above to load sqlconnect status.', 'error');
+    } else {
+      sqlLoaded = await runSql('status');
+    }
+  }
 }
 
 // TEXT CONTEXTS ONLY -- not attribute-safe. Serializing a text node escapes
