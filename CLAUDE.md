@@ -284,7 +284,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 ### Environment & install
 - **Trap:** `pip install -r requirements.txt` fails or pulls a CUDA torch.
   **Rule:** install `torch==2.13.0+cpu` from the PyTorch CPU index **first**,
-  then `pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML`.
+  then `pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML`.
 - **Trap:** running that same torch line on macOS, or "fixing" the `+cpu` pin in
   the manifests when it 404s there. **Rule:** macOS needs **plain**
   `torch==2.13.0` — Apple Silicon publishes one arm64 wheel, so there is no
@@ -319,8 +319,8 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   is already on disk. Point at it explicitly instead:
   `python3.12 -m venv /root/.venv-cyclaw-312 && /root/.venv-cyclaw-312/bin/pip
   install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-  && /root/.venv-cyclaw-312/bin/pip install -r requirements.txt -c
-  constraints.txt --ignore-installed PyYAML` (outside the repo tree so it
+  && /root/.venv-cyclaw-312/bin/pip install -r requirements.txt -r
+  requirements-test.txt -c constraints.txt --ignore-installed PyYAML` (outside the repo tree so it
   never needs a `.gitignore` entry), then always invoke tests via
   `/root/.venv-cyclaw-312/bin/python -m pytest ...`. This venv does **not**
   survive session end — the container is reclaimed and rebuilt from the same
@@ -672,7 +672,7 @@ Skills reference this section; keep it as the single canonical copy.
 ```bash
 # Install — Linux/Windows (order matters — torch CPU FIRST)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 
 # Install — macOS (Apple Silicon): PLAIN torch, no +cpu suffix, no index override.
 # The +cpu local-version wheel does not exist for macOS and both manifests
@@ -682,7 +682,7 @@ pip install "torch==2.13.0"
 grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
 grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
-pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt --ignore-installed PyYAML
+pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt --ignore-installed PyYAML
 
 # The cyclaw-* console scripts below need the project itself installed —
 # requirements.txt is a third-party pin list with no self-install line, so

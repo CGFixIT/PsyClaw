@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # verify-deps verify — clean-tree pass + mutation self-test for verify-deps.
 # Pure stdlib; safe to run before any pip install. Exit 0 = healthy.
-# It covers requirements.txt <-> constraints.txt plus environment-only install
-# contracts; dep-guard's own verify.sh covers pyproject/constraints mutations.
+# It covers requirements.txt + requirements-test.txt <-> constraints.txt plus
+# environment-only install contracts; dep-guard's own verify.sh covers
+# pyproject/constraints mutations.
 set -uo pipefail
 
 if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
@@ -22,7 +23,7 @@ extractor="$here/extract_pins.py"
 
 echo "== verify-deps verify =="
 
-# 1. Clean tree must run cleanly (exit 0) and report no requirements.txt drift.
+# 1. Clean tree must run cleanly (exit 0) and report no requirements*.txt drift.
 out="$(python3 "$extractor" --repo-root "$repo_root" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "clean tree: FAIL — expected exit 0, got $rc" >&2
@@ -30,7 +31,7 @@ if [ "$rc" -ne 0 ]; then
   exit 1
 fi
 if ! echo "$out" | grep -q "no drift"; then
-  echo "clean tree: FAIL — shipped requirements.txt/constraints.txt disagree" >&2
+  echo "clean tree: FAIL — shipped requirements*.txt/constraints.txt disagree" >&2
   echo "$out" >&2
   exit 1
 fi
@@ -39,7 +40,7 @@ echo "clean tree: PASS (exit 0, no requirements.txt drift)"
 # 2. Mutation: drift requirements.txt's httpx pin away from constraints.txt.
 _mktree() {
   local d; d="$(mktemp -d)"
-  cp "$repo_root/pyproject.toml" "$repo_root/constraints.txt" "$repo_root/requirements.txt" "$d/"
+  cp "$repo_root/pyproject.toml" "$repo_root/constraints.txt" "$repo_root/requirements.txt" "$repo_root/requirements-test.txt" "$d/"
   echo "$d"
 }
 a="$(_mktree)"
@@ -52,6 +53,18 @@ if [ "$rc" -ne 0 ] || ! echo "$out" | grep -q "DRIFT  httpx: requirements.txt==0
   exit 1
 fi
 echo "mutation (requirements.txt drift): PASS (DRIFT reported, reporting-only so exit stays 0)"
+
+# 2b. Mutation: drift requirements-test.txt's pytest pin away from constraints.txt.
+a2="$(_mktree)"
+sed -i.bak 's/^pytest==9.1.1/pytest==8.0.0/' "$a2/requirements-test.txt"
+out="$(python3 "$extractor" --repo-root "$a2" 2>&1)"; rc=$?
+rm -rf "$a2"
+if [ "$rc" -ne 0 ] || ! echo "$out" | grep -q "DRIFT  pytest: requirements-test.txt==8.0.0 vs constraints.txt==9.1.1"; then
+  echo "mutation (requirements-test.txt drift): FAIL — expected exit 0 + DRIFT line, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "mutation (requirements-test.txt drift): PASS (DRIFT reported, reporting-only so exit stays 0)"
 
 # 3. Missing pin files must fail closed (exit 3), matching the repo convention.
 b="$(mktemp -d)"
@@ -98,6 +111,7 @@ echo "env drift mutation (E1 split tool pin): PASS (exit 2)"
 #    requirements.txt mentions extras in prose and must not trip on that.
 d="$(mktemp -d)"
 printf '# nemoguardrails lives in the guardrails extra, not here\nhttpx==0.28.1\n' > "$d/requirements.txt"
+printf 'pytest==9.1.1\n' > "$d/requirements-test.txt"
 printf 'COPY pyproject.toml constraints.txt requirements.txt ./\nRUN uv pip install --system --no-cache-dir -r requirements.txt -c constraints.txt || ( pip install --no-cache-dir torch==1 --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt -c constraints.txt )\n' > "$d/Dockerfile"
 out="$(python3 "$drift" --repo-root "$d" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ]; then

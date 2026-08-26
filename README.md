@@ -448,7 +448,7 @@ pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 #    --ignore-installed PyYAML avoids a resolver conflict with a system-level
 #    PyYAML some platforms preinstall outside pip's own tracking.
 ```bash
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
 ### Every optional feature in one environment (any platform)
