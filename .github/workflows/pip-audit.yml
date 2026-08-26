@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - 'requirements.txt'
+      - 'requirements-test.txt'
       - 'constraints.txt'
       # pyproject.toml is where EVERY optional extra lives (guardrails,
       # postgres, pgvector, agentic-deepagents, agentic-deepagents-cloud, dev,
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - 'requirements.txt'
+      - 'requirements-test.txt'
       - 'constraints.txt'
       - 'pyproject.toml'
       - '.github/workflows/pip-audit.yml'
@@ -55,6 +57,7 @@ jobs:
           # wheels from a previous run instead of a cold cache.
           cache-dependency-path: |
             requirements.txt
+            requirements-test.txt
             constraints.txt
             pyproject.toml
 
@@ -100,7 +103,7 @@ jobs:
         shell: bash
         run: |
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
-          pip install -r requirements.txt -c constraints.txt
+          pip install -r requirements.txt -r requirements-test.txt -c constraints.txt
 
       - name: Install with constraints (macOS -- plain torch, no +cpu suffix)
         if: runner.os == 'macOS'
@@ -117,7 +120,7 @@ jobs:
           pip install "torch==2.13.0"
           grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' requirements.txt > /tmp/requirements-macos.txt
           grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
-          pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt
+          pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt
 
       - name: Verify dependency consistency + smoke imports
         shell: bash
@@ -159,7 +162,7 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
+          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
         # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
@@ -182,8 +185,8 @@ jobs:
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
         #
-        # (This step audits requirements.txt only, which by its own scope
-        # contract is base runtime + test tools and carries ZERO extras. Every
+        # (This step audits requirements.txt + requirements-test.txt, which
+        # together cover base runtime + test tools and carry ZERO extras. Every
         # optional dependency is audited by the scan-optional job below.)
         #
         # PYSEC-2026-3447 (setuptools, fixed in 83.0.0) — scanner-resolution
@@ -200,10 +203,11 @@ jobs:
         # flags setuptools, treat that as a real finding, not noise.
 
   scan-optional:
-    # Why this job exists: requirements.txt (what the `scan` job above audits)
-    # carries base runtime + test tools and NOTHING else -- that is its declared
-    # scope contract, enforced by .claude/skills/verify-deps/check_env_drift.py
-    # check E4. Every optional capability therefore had zero CVE coverage:
+    # Why this job exists: requirements.txt + requirements-test.txt (what the
+    # `scan` job above audits) carry base runtime + test tools and NOTHING else
+    # -- that is the declared scope contract, enforced by
+    # .claude/skills/verify-deps/check_env_drift.py check E4. Every optional
+    # capability therefore had zero CVE coverage:
     # NeMo Guardrails, the deepagents agentic-coding stack, the Grok and Claude
     # cloud SDKs, and the Postgres/pgvector backends. This job closes that.
     #

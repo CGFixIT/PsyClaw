@@ -1,0 +1,9 @@
+# CyClaw test-only dependencies.
+# These are intentionally kept out of requirements.txt so the production
+# Docker image does not ship the pytest toolchain.
+# Install alongside requirements.txt in CI and local dev/test flows:
+#   pip install -r requirements.txt -r requirements-test.txt -c constraints.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0

@@ -1,8 +1,8 @@
 # CyClaw requirements (legacy compatibility surface — kept in sync with
 # pyproject.toml/constraints.txt by dep-guard)
 # Still consumed by the Dockerfile and legacy CI/tools.
-# Pins below are synced with pyproject.toml [project.dependencies] and CI
-# test/dev tools used by the legacy requirements path.
+# Pins below are synced with pyproject.toml [project.dependencies].
+# Test tools now live in requirements-test.txt (kept out of the Docker image).
 # Always install with constraints for full alignment:
 #   pip install -r requirements.txt -c constraints.txt --extra-index-url https://download.pytorch.org/whl/cpu
 # (matches CLAUDE.md §8's documented install flow: torch first, then this file)
@@ -42,9 +42,6 @@ starlette==1.3.1
 rank-bm25==0.2.2
 numpy==1.26.4
 nltk==3.10.0
-pytest==9.1.1
-pytest-asyncio==1.4.0
-pytest-cov==7.1.0
 
 # Optional Postgres / pgvector / mssql backends (NOT installed by default — the base
 # install stays SQLite + ChromaDB, offline-first). Enable via the pyproject extras instead:
