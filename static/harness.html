@@ -507,6 +507,16 @@ async function api(path, method, body) {
 }
 
 /* ── status / statusbar ── */
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
@@ -1535,18 +1545,23 @@ if (hAuthLogin) {
     const user = document.getElementById('hAuthUser');
     const pass = document.getElementById('hAuthPass');
     const who = document.getElementById('hAuthWho');
-    const r = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: user.value.trim(), password: pass.value }),
-    });
-    pass.value = '';
-    if (!r.ok) { if (who) who.textContent = 'login failed'; return; }
-    const data = await r.json();
-    window.__cyclawRole = data.role;
-    if (who) who.textContent = data.username + ' · ' + data.role;
-    if (hAuthSetup) hAuthSetup.hidden = true;
-    if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+    try {
+      const r = await fetchWithTimeout('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user.value.trim(), password: pass.value }),
+      }, 15000);
+      pass.value = '';
+      if (!r.ok) { if (who) who.textContent = 'login failed'; return; }
+      const data = await r.json();
+      window.__cyclawRole = data.role;
+      if (who) who.textContent = data.username + ' · ' + data.role;
+      if (hAuthSetup) hAuthSetup.hidden = true;
+      if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+    } catch (e) {
+      pass.value = '';
+      if (who) who.textContent = 'network error: login failed';
+    }
   });
 }
 const hAuthSetupBtn = document.getElementById('hAuthSetupBtn');
@@ -1560,17 +1575,21 @@ if (hAuthSetupBtn) {
     if (p1) p1.value = '';
     if (p2) p2.value = '';
     if (password !== confirm) { if (who) who.textContent = 'passwords do not match'; return; }
-    const r = await fetch('/api/auth/bootstrap-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
-    });
-    if (!r.ok) { if (who) who.textContent = 'could not set password'; return; }
-    const data = await r.json();
-    window.__cyclawRole = data.role;
-    if (who) who.textContent = data.username + ' · ' + data.role;
-    if (hAuthSetup) hAuthSetup.hidden = true;
-    if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+    try {
+      const r = await fetchWithTimeout('/api/auth/bootstrap-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      }, 15000);
+      if (!r.ok) { if (who) who.textContent = 'could not set password'; return; }
+      const data = await r.json();
+      window.__cyclawRole = data.role;
+      if (who) who.textContent = data.username + ' · ' + data.role;
+      if (hAuthSetup) hAuthSetup.hidden = true;
+      if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+    } catch (e) {
+      if (who) who.textContent = 'network error: could not set password';
+    }
   });
 }
 refreshHarnessAuth();
