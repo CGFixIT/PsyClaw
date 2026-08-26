@@ -51,6 +51,74 @@ def _utcnow() -> str:
 # An apply completes in milliseconds, so a lock directory older than this is from
 # a crashed run and is safe to reclaim. Mirrors sync/runner's atomic-mkdir lock.
 _LOCK_STALE_SEC = 60
+_LOCK_OWNER_FILE = "owner.json"
+
+
+def _lock_token_path(lock_dir: Path) -> Path:
+    return lock_dir / _LOCK_OWNER_FILE
+
+
+def _write_lock_token(lock_dir: Path) -> None:
+    """Write a PID + timestamp token so release can prove ownership."""
+    token = _lock_token_path(lock_dir)
+    try:
+        token.write_text(
+            json.dumps({"pid": os.getpid(), "started_at": time.time()}),
+            encoding="utf-8",
+        )
+    except OSError:
+        # Token is advisory for release safety; a failure here does not block the
+        # critical section.
+        pass
+
+
+def _read_lock_token(lock_dir: Path) -> dict[str, object] | None:
+    token = _lock_token_path(lock_dir)
+    try:
+        data = json.loads(token.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort check that ``pid`` still exists in this machine's process table."""
+    try:
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _can_reclaim_lock(lock_dir: Path, age: float) -> bool:
+    """Return True only if the lock is safe to steal from a dead/crashed owner.
+
+    If the lock was created by code that did not write a token (tests, older
+    versions), fall back to the original mtime-only heuristic. When a token is
+    present, only reclaim if the recorded PID is dead -- a slow-but-alive owner
+    must keep its lock.
+    """
+    if age <= _LOCK_STALE_SEC:
+        return False
+    token = _read_lock_token(lock_dir)
+    if token is None:
+        return True
+    pid = token.get("pid")
+    if isinstance(pid, int) and not _pid_alive(pid):
+        return True
+    return False
+
+
+def _is_lock_owner(lock_dir: Path) -> bool:
+    """Return True if the token inside ``lock_dir`` names the current process."""
+    token = _read_lock_token(lock_dir)
+    if token is None:
+        # No token means the lock was created by an older version or a test:
+        # preserve backward-compatible behavior and allow release.
+        return True
+    return token.get("pid") == os.getpid()
 
 
 def _acquire_registry_lock(lock_dir: Path) -> None:
@@ -65,6 +133,7 @@ def _acquire_registry_lock(lock_dir: Path) -> None:
     """
     try:
         lock_dir.mkdir()
+        _write_lock_token(lock_dir)
         return
     except FileExistsError:
         # Lock is already held; fall through to the stale-age check below.
@@ -73,10 +142,14 @@ def _acquire_registry_lock(lock_dir: Path) -> None:
         age = time.time() - lock_dir.stat().st_mtime
     except OSError:
         age = 0.0
-    if age > _LOCK_STALE_SEC:
+    if _can_reclaim_lock(lock_dir, age):
         try:
-            lock_dir.rmdir()
+            # Remove the whole directory (token + empty dir) and recreate it.
+            import shutil
+
+            shutil.rmtree(lock_dir, ignore_errors=True)
             lock_dir.mkdir()
+            _write_lock_token(lock_dir)
             return
         except OSError:
             # Another process won the reclaim race; fall through and refuse below.
@@ -91,8 +164,19 @@ def _acquire_registry_lock(lock_dir: Path) -> None:
 
 
 def _release_registry_lock(lock_dir: Path) -> None:
-    """Release the cross-process write lock; tolerant if it is already gone."""
+    """Release the cross-process write lock only if we still own it.
+
+    If another process reclaimed the lock while we were slow, the token no longer
+    matches our PID and we must leave the directory alone.
+    """
     try:
+        if not _is_lock_owner(lock_dir):
+            return
+    except OSError:
+        # Lock dir disappeared under us; nothing to release.
+        return
+    try:
+        _lock_token_path(lock_dir).unlink(missing_ok=True)
         lock_dir.rmdir()
     except OSError:
         # Best-effort: the lock dir may already be gone (or never created).

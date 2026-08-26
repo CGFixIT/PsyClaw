@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,11 @@ from agentic.harness_optimizer import (
     build_proposer_workspace,
     decide_candidate,
 )
+from agentic.harness_optimizer.patching import (
+    _acquire_artifact_lock,
+    _release_artifact_lock,
+)
+from agentic.registry import _LOCK_STALE_SEC, _is_lock_owner, _read_lock_token
 from utils.errors import AgenticError
 
 
@@ -359,3 +365,52 @@ def test_finish_proposal_rejects_blank_content(tmp_path: Path) -> None:
 
     with pytest.raises(AgenticError):
         tools.finish_proposal("   ")
+
+
+def test_artifact_lock_writes_owner_token(tmp_path: Path) -> None:
+    lock = tmp_path / "artifact.lock.d"
+    _acquire_artifact_lock(lock)
+    token = _read_lock_token(lock)
+    assert token is not None
+    assert token["pid"] == os.getpid()
+    assert _is_lock_owner(lock) is True
+    _release_artifact_lock(lock)
+    assert not lock.exists()
+
+
+def test_artifact_lock_release_skips_foreign_token(tmp_path: Path) -> None:
+    lock = tmp_path / "artifact.lock.d"
+    _acquire_artifact_lock(lock)
+    foreign = {"pid": os.getpid() + 1, "started_at": time.time()}
+    lock.joinpath("owner.json").write_text(json.dumps(foreign), encoding="utf-8")
+    _release_artifact_lock(lock)
+    assert lock.exists(), "release must leave a lock owned by another PID"
+
+
+def test_artifact_lock_reclaims_dead_owner(tmp_path: Path) -> None:
+    lock = tmp_path / "artifact.lock.d"
+    lock.mkdir()
+    dead_pid = 999999
+    token = {"pid": dead_pid, "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    _acquire_artifact_lock(lock)
+    assert _is_lock_owner(lock) is True
+    new_token = _read_lock_token(lock)
+    assert new_token["pid"] == os.getpid()
+    _release_artifact_lock(lock)
+    assert not lock.exists()
+
+
+def test_artifact_lock_refuses_live_owner(tmp_path: Path) -> None:
+    lock = tmp_path / "artifact.lock.d"
+    lock.mkdir()
+    token = {"pid": os.getpid(), "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    with pytest.raises(AgenticError, match="another harness-optimizer accept"):
+        _acquire_artifact_lock(lock)

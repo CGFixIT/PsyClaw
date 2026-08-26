@@ -11,6 +11,7 @@ clean it up.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -21,7 +22,14 @@ import pytest
 import yaml
 
 from agentic.config import AgenticConfig
-from agentic.registry import _LOCK_STALE_SEC, SkillRegistry
+from agentic.registry import (
+    _LOCK_STALE_SEC,
+    _acquire_registry_lock,
+    _is_lock_owner,
+    _read_lock_token,
+    _release_registry_lock,
+    SkillRegistry,
+)
 from utils.errors import PromptInjectionError, SkillRegistryError
 from utils.logger import reset_config_cache
 
@@ -431,3 +439,53 @@ def test_atomic_write_cleans_up_staged_file_on_non_oserror_failure(reg, monkeypa
     with pytest.raises(TypeError):
         reg._atomic_write({"version": 1, "updated": None, "skills": {}, "history": []})
     assert not tmp_path.exists()
+
+
+def test_registry_lock_writes_owner_token(tmp_path: Path):
+    lock = tmp_path / "registry.lock.d"
+    _acquire_registry_lock(lock)
+    token = _read_lock_token(lock)
+    assert token is not None
+    assert token["pid"] == os.getpid()
+    assert _is_lock_owner(lock) is True
+    _release_registry_lock(lock)
+    assert not lock.exists()
+
+
+def test_registry_lock_release_skips_foreign_token(tmp_path: Path):
+    lock = tmp_path / "registry.lock.d"
+    _acquire_registry_lock(lock)
+    # Simulate another process reclaiming the lock while we were slow.
+    foreign = {"pid": os.getpid() + 1, "started_at": time.time()}
+    lock.joinpath("owner.json").write_text(json.dumps(foreign), encoding="utf-8")
+    _release_registry_lock(lock)
+    assert lock.exists(), "release must leave a lock owned by another PID"
+
+
+def test_registry_lock_reclaims_dead_owner(tmp_path: Path):
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    dead_pid = 999999  # unlikely to exist on any test host
+    token = {"pid": dead_pid, "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    _acquire_registry_lock(lock)
+    assert _is_lock_owner(lock) is True
+    new_token = _read_lock_token(lock)
+    assert new_token["pid"] == os.getpid()
+    _release_registry_lock(lock)
+    assert not lock.exists()
+
+
+def test_registry_lock_refuses_live_owner(tmp_path: Path):
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    token = {"pid": os.getpid(), "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    with pytest.raises(SkillRegistryError, match="another skills-registry apply"):
+        _acquire_registry_lock(lock)
