@@ -677,6 +677,15 @@ EOF
   step "the job rotates CYCLAW_API_KEY only. Consoles hold the key in memory — re-run --fill-browser after a rotate, or paste once."
 }
 
+_warn_if_installed_copy_drifted() {
+  local installed="$HOME_DIR/bin/setup-cyclaw-keys.sh" src
+  src="${BASH_SOURCE[0]:-$0}"
+  [ -f "$installed" ] || return 0
+  if ! cmp -s "$src" "$installed"; then
+    warn "installed copy at $installed differs from this script; re-run --schedule-rotate to refresh it"
+  fi
+}
+
 _copy_key() {
   local tmp
   if ! command -v pbcopy >/dev/null 2>&1; then
@@ -701,6 +710,7 @@ _copy_key() {
         fi
       fi
     ) >/dev/null 2>&1 &
+    disown
     step "pasteboard will clear in ${CLIP_TTL}s if it still holds this key"
   fi
 }
@@ -1033,6 +1043,8 @@ step "browser     : consoles keep the key in the #apiKey field only (never local
 if [ "$FILL_BROWSER" -eq 0 ]; then
   step "            : paste once, or re-run with --fill-browser after cyclaw is up"
 fi
+_warn_if_installed_copy_drifted
+
 if [ "$GENERATED_NEW" -eq 1 ]; then
   step "server      : restart gate.py to load the new CYCLAW_API_KEY"
   step "            : nothing in CyClaw reads .env at runtime; the key was NOT applied live"
