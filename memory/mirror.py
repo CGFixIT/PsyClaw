@@ -30,7 +30,10 @@ def status_dict(cfg: Mapping[str, Any]) -> dict[str, Any]:
         out["active_facts"] = count_active_facts(cfg)
         out["episodes"] = count_episodes(cfg)
     except Exception as exc:  # noqa: BLE001 — status must never fail hard
-        out["error"] = str(exc)
+        # Never echo raw SQLite/OS exception text: it can contain absolute
+        # filesystem paths and schema details. Log the full exception for the
+        # operator and return only the exception type to the API consumer.
+        out["error"] = f"{type(exc).__name__}: memory store unavailable"
     return out
 
 
