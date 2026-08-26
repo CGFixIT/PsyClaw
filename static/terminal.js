@@ -307,8 +307,14 @@ function setSoulStatus(message, tone = '') {
 // retrieval.indexer" -- a CLI command, in a browser, to someone who may not
 // have a terminal open. /health has always carried index_ready; the console
 // just never read it. Now the empty state becomes an actionable panel instead.
-const indexBuild = { state: 'idle', timer: null };
+const indexBuild = { state: 'idle', timer: null, misses: 0 };
 const INDEX_POLL_MS = 1500;
+// A dropped poll is not a failed build, so the poll retries -- but it needs a
+// ceiling. Without one, a gateway that dies mid-build leaves the tab hammering
+// /index/status every 1.5s forever while the panel still reads "Building your
+// library", telling the operator nothing is wrong. 20 x 1.5s = ~30s of silence
+// before we admit we've lost contact, which comfortably outlasts a restart.
+const INDEX_POLL_MAX_MISSES = 20;
 
 function renderFirstRun(data) {
   const emptyState = document.getElementById('emptyState');
@@ -385,10 +391,16 @@ async function startIndexBuild() {
   indexBuild.done = 0;
   indexBuild.total = 0;
   indexBuild.error = null;
+  indexBuild.misses = 0;   // Try again must not inherit the previous run's streak
   paintHealthStatus();
   renderFirstRun(lastHealth);
   try {
-    const resp = await fetch(`${API}/index/build`, { method: 'POST' });
+    // Bounded like every other call in this file. A bare fetch that never
+    // settles would strand the panel: state is already 'running' above, and
+    // renderFirstRun's running branch draws no button, so there would be no
+    // Try again affordance and no error -- just "Building your library"
+    // forever. The route only starts a thread and returns, so 15s is generous.
+    const resp = await fetchWithTimeout(`${API}/index/build`, { method: 'POST' }, 15000);
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
       throw new Error(extractErrorMessage(err, `build failed (${resp.status})`));
@@ -408,6 +420,7 @@ function pollIndexStatus() {
     try {
       const resp = await fetchWithTimeout(`${API}/index/status`, {}, 3000);
       const s = await resp.json();
+      indexBuild.misses = 0;   // a reachable server clears the miss streak
       indexBuild.done = s.chunks_done || 0;
       indexBuild.total = s.chunks_total || 0;
       if (s.state === 'running') {
@@ -426,7 +439,17 @@ function pollIndexStatus() {
       checkHealth();
     } catch (e) {
       // A dropped poll is not a failed build -- the build runs server-side and
-      // keeps going. Retry rather than declaring failure.
+      // keeps going. Retry rather than declaring failure, but stop after
+      // INDEX_POLL_MAX_MISSES so a dead gateway surfaces instead of polling
+      // silently forever behind a "Building your library" panel.
+      indexBuild.misses += 1;
+      if (indexBuild.misses >= INDEX_POLL_MAX_MISSES) {
+        indexBuild.state = 'error';
+        indexBuild.error = "Lost contact with CyClaw while building. The build may still be running — reload to check.";
+        paintHealthStatus();
+        renderFirstRun(lastHealth);
+        return;
+      }
       pollIndexStatus();
     }
   }, INDEX_POLL_MS);
@@ -613,12 +636,21 @@ async function openAuditPanel() {
   const box = document.getElementById('auditSummary');
   if (panel) panel.classList.add('open');
   if (!box) return;
-  const resp = await fetchWithTimeout(`${API}/auth/audit/summary`, {}, 15000);
-  if (!resp.ok) {
-    box.textContent = 'audit summary unavailable (' + resp.status + ')';
-    return;
+  // Wrapped like every sibling panel (loadSoul, runSync, runOps). Without this
+  // a network error -- or the 15s abort -- rejected out of an async click
+  // handler as an unhandled rejection, and the box kept whatever it showed
+  // before: on first open, the literal "Load the Audit panel after login."
+  // placeholder, which reads exactly like a panel that loaded successfully.
+  try {
+    const resp = await fetchWithTimeout(`${API}/auth/audit/summary`, {}, 15000);
+    if (!resp.ok) {
+      box.textContent = 'audit summary unavailable (' + resp.status + ')';
+      return;
+    }
+    box.textContent = JSON.stringify(await resp.json(), null, 2);
+  } catch (e) {
+    box.textContent = "Couldn't load the audit summary: " + e.message;
   }
-  box.textContent = JSON.stringify(await resp.json(), null, 2);
 }
 
 async function submitQuery(confirmedOnline = null, onlineProvider = null) {
