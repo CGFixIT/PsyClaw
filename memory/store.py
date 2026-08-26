@@ -26,6 +26,12 @@ from utils.logger import hash_query, redact_sensitive
 
 logger = logging.getLogger("cyclaw.memory")
 
+# Thread-local SQLite connection cache. SQLite connections cannot safely be
+# shared across threads, but creating a connection per store call is expensive
+# (PRAGMAs + full schema script every time). Each thread keeps one connection
+# per DB path and reuses it for the lifetime of that thread.
+_conn_local = threading.local()
+
 # RLock: apply_proposal holds the lock while calling insert/update helpers that
 # re-enter the same lock on the public API paths.
 _write_lock = threading.RLock()
@@ -89,6 +95,25 @@ def connect(cfg: Mapping[str, Any]) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     _ensure_schema(conn)
+    return conn
+
+
+def get_connection(cfg: Mapping[str, Any]) -> sqlite3.Connection:
+    """Return a cached SQLite connection for this thread and DB path.
+
+    Creates and caches on first use; subsequent calls on the same thread reuse
+    the connection without re-running PRAGMAs or the schema script. Callers
+    still own transaction/lock discipline and must not close the connection.
+    """
+    path = str(_db_path(cfg))
+    cache = getattr(_conn_local, "conns", None)
+    if cache is None:
+        cache = {}
+        _conn_local.conns = cache
+    conn = cache.get(path)
+    if conn is None:
+        conn = connect(cfg)
+        cache[path] = conn
     return conn
 
 
@@ -837,18 +862,12 @@ def list_episodes(
 
 
 def count_active_facts(cfg: Mapping[str, Any]) -> int:
-    conn = connect(cfg)
-    try:
-        row = conn.execute("SELECT COUNT(*) AS c FROM facts WHERE active = 1").fetchone()
-        return int(row["c"]) if row else 0
-    finally:
-        conn.close()
+    conn = get_connection(cfg)
+    row = conn.execute("SELECT COUNT(*) AS c FROM facts WHERE active = 1").fetchone()
+    return int(row["c"]) if row else 0
 
 
 def count_episodes(cfg: Mapping[str, Any]) -> int:
-    conn = connect(cfg)
-    try:
-        row = conn.execute("SELECT COUNT(*) AS c FROM episodes").fetchone()
-        return int(row["c"]) if row else 0
-    finally:
-        conn.close()
+    conn = get_connection(cfg)
+    row = conn.execute("SELECT COUNT(*) AS c FROM episodes").fetchone()
+    return int(row["c"]) if row else 0

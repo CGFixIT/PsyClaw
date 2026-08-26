@@ -6,6 +6,7 @@ Lazy-imports ``memory.*`` inside handlers only. Top-level must not import the
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
@@ -83,7 +84,7 @@ def register_memory_routes(
         # Prefer 200 + flags so consoles can probe without treating disabled as error.
         from memory.mirror import status_dict  # lazy
 
-        status = status_dict(cfg)
+        status = await asyncio.to_thread(status_dict, cfg)
         await audit({"event": "memory_status", "enabled": status.get("enabled")})
         return status
 
@@ -93,7 +94,9 @@ def register_memory_routes(
             raise HTTPException(status_code=404, detail="Memory system not enabled")
         from memory.store import list_facts  # lazy
 
-        facts = list_facts(cfg, active_only=True, limit=max(0, min(limit, 500)), offset=max(offset, 0))
+        facts = await asyncio.to_thread(
+            list_facts, cfg, active_only=True, limit=max(0, min(limit, 500)), offset=max(offset, 0),
+        )
         return {"facts": [asdict(f) for f in facts]}
 
     @app.get("/memory/episodes", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
@@ -102,7 +105,9 @@ def register_memory_routes(
             raise HTTPException(status_code=404, detail="Memory system not enabled")
         from memory.store import list_episodes  # lazy
 
-        eps = list_episodes(cfg, limit=max(0, min(limit, 500)), offset=max(offset, 0))
+        eps = await asyncio.to_thread(
+            list_episodes, cfg, limit=max(0, min(limit, 500)), offset=max(offset, 0),
+        )
         return {"episodes": [asdict(e) for e in eps]}
 
     @app.get("/memory/proposals", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
@@ -112,7 +117,9 @@ def register_memory_routes(
         from memory.store import list_proposals  # lazy
 
         st = status if status in ("pending", "applied", "rejected", "all") else "pending"
-        props = list_proposals(cfg, status=None if st == "all" else st, limit=100)
+        props = await asyncio.to_thread(
+            list_proposals, cfg, status=None if st == "all" else st, limit=100,
+        )
         return {"proposals": [asdict(p) for p in props]}
 
     @app.post("/memory/propose", dependencies=[Depends(enforce_rate_limit), Depends(require_api_key)])
@@ -125,7 +132,7 @@ def register_memory_routes(
         try:
             require_reason(req.reason)
             payload = _proposal_payload(req)
-            prop = create_proposal(cfg, req.action, payload, req.reason)
+            prop = await asyncio.to_thread(create_proposal, cfg, req.action, payload, req.reason)
         except ValueError as e:
             await audit({"event": "memory_propose_rejected", "error": str(e)})
             raise HTTPException(
@@ -154,7 +161,7 @@ def register_memory_routes(
         from memory.store import apply_proposal  # lazy
 
         try:
-            result = apply_proposal(cfg, req.proposal_id, req.reason)
+            result = await asyncio.to_thread(apply_proposal, cfg, req.proposal_id, req.reason)
         except PromptInjectionError as e:
             await audit({
                 "event": "memory_apply_injection_blocked",
@@ -183,7 +190,7 @@ def register_memory_routes(
         from memory.store import reject_proposal  # lazy
 
         try:
-            prop = reject_proposal(cfg, req.proposal_id, req.reason)
+            prop = await asyncio.to_thread(reject_proposal, cfg, req.proposal_id, req.reason)
         except ValueError as e:
             code = "INVALID_REASON" if "reason" in str(e).lower() else "MEMORY_BAD_REQUEST"
             await audit({"event": "memory_reject_rejected", "proposal_id": req.proposal_id, "error": str(e)})
@@ -199,6 +206,6 @@ def register_memory_routes(
             raise HTTPException(status_code=404, detail="Memory HTML export not enabled")
         from memory.mirror import export_html  # lazy
 
-        body = export_html(cfg)
+        body = await asyncio.to_thread(export_html, cfg)
         await audit({"event": "memory_export_html"})
         return HTMLResponse(content=body, media_type="text/html; charset=utf-8")

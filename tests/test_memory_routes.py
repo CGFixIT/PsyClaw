@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI, Header, HTTPException
@@ -236,3 +237,22 @@ def test_proposal_payload_builder_omits_defaults_on_update():
 
     payload = _proposal_payload(req)
     assert payload == {"fact_id": 3, "content": "only content"}
+
+
+def test_status_error_does_not_leak_raw_exception_text(memory_app):
+    """A failing memory store must not echo filesystem paths or schema details
+    into the /memory/status JSON payload."""
+    app, _cfg, key, audit = memory_app
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {key}"}
+
+    with patch(
+        "memory.mirror.count_active_facts",
+        side_effect=sqlite3.OperationalError("no such table: facts at /secret/path.db"),
+    ):
+        st = client.get("/memory/status", headers=headers)
+    assert st.status_code == 200
+    body = st.json()
+    assert "error" in body
+    assert "/secret/path.db" not in body["error"]
+    assert "OperationalError" in body["error"]
