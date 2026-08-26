@@ -28,10 +28,12 @@ recorded to `logs/spend.jsonl` — see [`docs/spend/README.md`](../docs/spend/RE
 
 ## Shared behavior
 
-- **Bounded retry** (`_post_with_retry`): timeouts, transport errors, 5xx and
-  429 retry with exponential backoff; other 4xx fail fast (retrying a 400/401
-  wastes time and, for Grok, credits). Config-driven via each model's `retry`
-  block; absent block = single attempt.
+- **Bounded retry** (`_post_with_retry`): transport errors, 5xx and 429 retry
+  with exponential backoff; other 4xx fail fast (retrying a 400/401 wastes
+  time and, for Grok, credits). Timeouts retry for `GrokClient`/`ClaudeClient`
+  only — `LocalLLMClient` passes `retry_on_timeout=False`, so a stalled Ollama
+  read fails fast rather than burning a second full `timeout_sec`.
+  Config-driven via each model's `retry` block; absent block = single attempt.
 - **Local failover** (`models.local_llm.fallback`): optional boot-time probe
   that prefers the primary backend (Ollama) and falls back to the secondary
   (LM Studio) if unreachable; selection cached per process. Ships disabled so

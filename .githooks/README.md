@@ -25,7 +25,7 @@ Also allowed: `main`, `master`, `develop`, `dependabot/*`, `renovate/*`, `releas
 
 The `commit-msg` hook's allowlist is a closed set — `invariant`, `governance`,
 `fsconnect`, `agentic`, `rag`, `harness`, `security`, `docs`, `infra`, `fix`,
-`feat`. It also lets through `chore`, `build`, and `ci(deps)` subjects, and
+`feat`. It also lets through Dependabot/Renovate subjects beginning `chore(deps)`, `build(deps)`, or `ci(deps)` — the `(deps)` scope is required, so a bare `chore:` or `build:` subject is still rejected — and
 skips the check entirely for merge/revert/fixup commits (`Merge`, `Revert`,
 `fixup!`, `squash!`, `Amend!`). Anything else is rejected, so reach for the
 closest listed prefix rather than inventing one.

@@ -6,7 +6,7 @@ Quick reference for Claude Code assistance patterns in CyClaw.
 
 The skills directory holds many more skills than the handful below (operational,
 refactor-loop, memory, and agent skills). For the **authoritative, complete list**, see the
-**"Available Skills (main branch)"** table in the root [`CLAUDE.md`](../CLAUDE.md) — kept in
+**§9 "Skills"** section of the root [`CLAUDE.md`](../CLAUDE.md) — kept in
 sync there so a second list does not drift. A few common entry points:
 
 These are Claude Code slash commands typed into the session, not shell

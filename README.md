@@ -203,7 +203,7 @@ flowchart TD
 
 CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore`) require a **Bearer API key**. Without it they return `HTTP 401` immediately — intentional fail-closed behavior.
 
-> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `GET /auth/setup-status`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated. `POST /auth/bootstrap-password` carries no credential either, but is not open: it is gated on a loopback socket peer plus a same-origin check, returns 403 off-box, and 409 once the first admin password is set.
+> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `GET /index/status`, `GET /auth/setup-status`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated. `POST /index/build` and `POST /auth/bootstrap-password` carry no credential either, but neither is open: each is gated on a loopback socket peer plus a same-origin check and returns 403 off-box — `/index/build` 409 while a build is already running, `/auth/bootstrap-password` 409 once the first admin password is set.
 
 > **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once — but **only for requests arriving from this machine**. The bypass is granted on the socket peer, so a remote caller still needs the real key no matter how the process was launched. Entries in `security.allowed_hosts` do not change that: that list filters request `Host` headers and opens no listening socket. What *would* matter is the bind itself — `gate.py` refuses to start with a non-loopback `api.host` while the flag is `true`, and `config-guard`'s C13 warns on that pair. Note it also does nothing under Docker: NAT rewrites the source address, so the container sees the bridge gateway rather than loopback and the routes stay key-gated (set `CYCLAW_API_KEY` in the container instead).
 
@@ -644,7 +644,7 @@ CyClaw/
 │   ├── personality.py
 │   ├── health.py
 │   ├── ratelimit.py
-│   ├── launchd_plist.py        # stdlib-only plist builder used by every launchd generator
+│   ├── launchd_plist.py        # stdlib-only plist builder shared by the telegram / fsconnect / opentweet / generate_service_plist generators (sync.scheduler builds its own)
 │   ├── guardrail_bridge.py     # only bridge from graph.py to guardrails/ (never a direct import)
 │   ├── numbat_emitter.py       # derived Numbat NDJSON stream: action-plane emits + mainline audit projection
 │   ├── spend.py                # append-only Grok/Claude token ledger (logs/spend.jsonl); dollars derived at read time
@@ -840,9 +840,9 @@ Scoped **reads** and separately-gated **writes** over a local or SMB file share,
 
 ```bash
 python -m agentic.fsconnect.cli status
-python -m agentic.fsconnect.cli read  "<path>"            # scoped read
-python -m agentic.fsconnect.cli grep  "<path>" "<pattern>"
-python -m agentic.fsconnect.cli write "<path>" --reason "..."   # dry-run unless writes_enabled
+python -m agentic.fsconnect.cli read  --path "<path>"                     # scoped read
+python -m agentic.fsconnect.cli grep  --path "<path>" --pattern "<pattern>"
+python -m agentic.fsconnect.cli write --path "<path>" --reason "..."      # dry-run unless writes_enabled
 python -m agentic.fsconnect.cli index --apply           # stage share → corpus
 python -m agentic.fsconnect.cli test                    # pre-flight self-test
 ```
@@ -1068,8 +1068,10 @@ step is gated by a constant in code that no config file can flip.
    `reject` discards. Neither pushes.
 3. **`real-repo-run-push`** puts the `claude/*` branch on origin.
 4. **`real-repo-run-publish`** opens a **draft** PR (`gh pr create --draft`).
-5. **`real-repo-run-discard`** reclaims the clone — the only step that frees disk.
-   An approved run keeps its clone on purpose, since push and publish still need it.
+5. **`real-repo-run-discard`** reclaims a decided (or orphaned) run's clone. It is not
+   the only step that frees disk: `real-repo-run-decide --decision reject` deletes the
+   clone immediately, and so does a run that never passes (`exhausted`). Only an
+   approved run keeps its clone on purpose, since push and publish still need it.
 
 Each escalation is its own command and its own decision, deliberately not folded
 into `approve`.
@@ -1108,7 +1110,9 @@ into `approve`.
   excludes `GH_TOKEN`/`GITHUB_TOKEN`, because that environment is shared with the
   executor that runs model-proposed check commands. It authenticates only via a
   HOME-resident credential helper (`gh auth setup-git`).
-- Branch names are forced into the `claude/` namespace; `run_id` is validated as
+- Branch names are forced into the PR-template vendor namespaces (`claude/`, `codex/`,
+  `grok/`, `kimi/`, `CyClaw/`, `cyclaw/`, `agent/`, plus any `CYCLAW_AGENT_BRANCH_PREFIX`
+  override — `utils/agent_identity.py`); `run_id` is validated as
   32-char lowercase hex before it can become an argv element.
 - **Optional offline slop-detection nudge.** When `unslop.enabled` is `true`,
   each step's model response and any proposed prose files are scanned by the
@@ -1237,9 +1241,11 @@ pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.t
 `pip install -e ".[all]"` in [Quick Start](#quick-start) installs every optional
 extra in one command.)
 
-Neither cloud extra is part of `full` (what CI and `full`-installed dev boxes get)
-— that split is deliberate, so a machine that never touches cloud providers never
-carries their SDKs. The published Docker image installs `requirements.txt` only
+Only one of the two cloud extras is excluded from `full` (what CI and
+`full`-installed dev boxes get): `full` already pulls `agentic-deepagents` (the
+Claude/deepagents SDKs), but deliberately not `agentic-deepagents-cloud`, so a
+machine that never touches Grok never carries `langchain-xai`. `[all]` is the
+only extra that installs both. The published Docker image installs `requirements.txt` only
 (base deps, no extras at all), so running this feature — local *or* cloud — in a
 container means installing on top: add `pip install -e .` for local mode, or one
 of the three commands above for cloud, after the image's own install step.
