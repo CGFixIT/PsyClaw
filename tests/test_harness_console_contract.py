@@ -350,3 +350,30 @@ def test_loop_command_never_starts_a_real_repo_run():
     assert "function replyHasGoalDone(" in html
     assert "never starts a real-repo run" in body
 
+
+def test_slash_commands_are_case_insensitive():
+    """Console commands typed as /Help, /Session, etc. must still dispatch."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("/* ── slash commands ── */")
+    end = html.index("/* ── chat ── */", start)
+    body = html[start:end]
+    assert "const cmd = parts[0].toLowerCase();" in body
+
+
+def test_loop_stop_is_recognized_while_in_flight():
+    """/loop stop must halt an in-flight chat even with extra whitespace or
+    mixed case, matching the parsing used by the normal slash dispatcher."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "function isLoopStopCommand(" in html
+    assert "parts[0].toLowerCase() === 'loop'" in html
+    assert "parts[1].toLowerCase() === 'stop'" in html
+
+
+def test_api_key_error_explains_server_env_requirement():
+    """When the server env lacks CYCLAW_API_KEY, the console must tell the
+    operator to set it in the launching shell rather than implying the input
+    field is broken."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "key_not_configured" in html
+    assert "The harness server was started without CYCLAW_API_KEY" in html
+
