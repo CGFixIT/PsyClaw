@@ -18,6 +18,19 @@ from utils.logger import audit_log, hash_query
 _loopback_http_client: httpx.Client | None = None
 _opentweet_http_client: httpx.Client | None = None
 _OT_TIMEOUT_SEC = 30.0
+# A black-holed TCP handshake must fail fast instead of consuming the entire
+# request timeout. Mirrors llm/client.py and telegram/client.py.
+_OT_CONNECT_TIMEOUT_SEC = 10.0
+
+
+def _client_timeout(overall_timeout_sec: float) -> httpx.Timeout:
+    """Give connect its own short ceiling, capped at overall_timeout_sec."""
+    return httpx.Timeout(overall_timeout_sec, connect=min(overall_timeout_sec, _OT_CONNECT_TIMEOUT_SEC))
+
+
+def _is_retryable_status(status: int) -> bool:
+    """5xx server errors and 429 rate-limit are transient; other 4xx are not."""
+    return status >= 500 or status == 429
 
 
 def _get_loopback_http_client() -> httpx.Client:
@@ -60,7 +73,7 @@ def post_query(cfg: OpenTweetConfig, query: str) -> dict[str, Any]:
     started = time.monotonic()
     try:
         resp = _get_loopback_http_client().post(
-            url, json=payload, headers=headers, timeout=float(cfg.query.timeout_sec)
+            url, json=payload, headers=headers, timeout=_client_timeout(float(cfg.query.timeout_sec))
         )
     except httpx.HTTPError as exc:
         audit_log(
@@ -101,12 +114,16 @@ def post_query(cfg: OpenTweetConfig, query: str) -> dict[str, Any]:
     if resp.status_code != 200:
         raise OpenTweetRuntimeError(
             f"CyClaw /query returned HTTP {resp.status_code}",
-            details={"method": "POST /query", "status": resp.status_code, "retryable": True},
+            details={
+                "method": "POST /query",
+                "status": resp.status_code,
+                "retryable": _is_retryable_status(resp.status_code),
+            },
         )
     if not isinstance(data, dict):
         raise OpenTweetRuntimeError(
             "CyClaw /query returned non-object JSON",
-            details={"method": "POST /query", "retryable": True},
+            details={"method": "POST /query", "retryable": False},
         )
     return data
 
@@ -116,7 +133,9 @@ def get_me(cfg: OpenTweetConfig) -> dict[str, Any]:
     url = f"{cfg.api_base}/api/v1/me"
     headers = {"Authorization": f"Bearer {cfg.resolve_api_key()}"}
     try:
-        resp = _get_opentweet_http_client().get(url, headers=headers, timeout=_OT_TIMEOUT_SEC)
+        resp = _get_opentweet_http_client().get(
+            url, headers=headers, timeout=_client_timeout(_OT_TIMEOUT_SEC)
+        )
     except httpx.HTTPError as exc:
         raise OpenTweetRuntimeError(
             _transport_error_message("OpenTweet /me", exc),
@@ -129,7 +148,11 @@ def get_me(cfg: OpenTweetConfig) -> dict[str, Any]:
     if resp.status_code != 200 or not isinstance(data, dict):
         raise OpenTweetRuntimeError(
             f"OpenTweet /me returned HTTP {resp.status_code}",
-            details={"method": "GET /api/v1/me", "status": resp.status_code},
+            details={
+                "method": "GET /api/v1/me",
+                "status": resp.status_code,
+                "retryable": _is_retryable_status(resp.status_code),
+            },
         )
     return data
 
@@ -154,7 +177,7 @@ def create_post(
         payload["scheduled_date"] = scheduled_date
     try:
         resp = _get_opentweet_http_client().post(
-            url, json=payload, headers=headers, timeout=_OT_TIMEOUT_SEC
+            url, json=payload, headers=headers, timeout=_client_timeout(_OT_TIMEOUT_SEC)
         )
     except httpx.HTTPError as exc:
         raise OpenTweetRuntimeError(
@@ -168,6 +191,10 @@ def create_post(
     if resp.status_code not in (200, 201) or not isinstance(data, dict):
         raise OpenTweetRuntimeError(
             f"OpenTweet /posts returned HTTP {resp.status_code}",
-            details={"method": "POST /api/v1/posts", "status": resp.status_code},
+            details={
+                "method": "POST /api/v1/posts",
+                "status": resp.status_code,
+                "retryable": _is_retryable_status(resp.status_code),
+            },
         )
     return data
