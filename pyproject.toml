@@ -44,13 +44,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# nemoguardrails' own base dependencies (not gated behind any of its extras)
-# include fastembed, onnxruntime, and pandas. fastembed's documented default
-# behavior is to fetch ONNX embedding models from a remote CDN on first use —
-# real friction against CyClaw's offline-first, no-egress posture even though
-# this extra is opt-in and policy.guardrails.enabled stays false by default.
-# Installing it is a deliberate choice; nothing here constrains fastembed to
-# a local-only embedder yet.
 guardrails = [
     "nemoguardrails==0.23.0",
 ]
@@ -79,21 +72,8 @@ agentic-deepagents = [
     "deepagents==0.6.12",
     "langchain==1.3.14",
     "langchain-openai==1.3.5",
-    # langchain-anthropic is a MANDATORY (non-extra) dependency of deepagents
-    # 0.6.12, so installing this extra already pulls it. Pinned explicitly rather
-    # than left floating in deepagents' own >=1.4.7,<2 range, because an unpinned
-    # transitive defeats the exact-pin reproducibility constraints.txt exists for
-    # -- and because the Claude cloud provider imports it directly.
     "langchain-anthropic==1.4.8",
-    # deepagents 0.6.12 ALSO mandatorily requires langchain-google-genai, langsmith,
-    # and wcmatch (verified against its PyPI Requires-Dist, not the package's own
-    # docs, which are silent on this) -- these install unconditionally too, but
-    # nothing in CyClaw imports them directly, so they are pinned in
-    # constraints.txt only (reproducibility), not listed as extra entries here.
 ]
-# Grok only. Deliberately a SEPARATE extra from agentic-deepagents so a local-only
-# install never pulls a cloud SDK it will not use, and deliberately NOT part of
-# `full` below, which is what CI and dev boxes install.
 agentic-deepagents-cloud = [
     "langchain-xai==1.2.2",
 ]
@@ -104,13 +84,6 @@ full = [
     "cyclaw[test]",
     "cyclaw[agentic-deepagents]",
 ]
-# Literally every optional extra, for exercising every gated feature in one
-# install (manual smoke-testing, a from-scratch dev box). NOT what CI/dev boxes
-# install -- that's `full` above, which deliberately excludes the two extras
-# added here for the documented reasons on each: `guardrails` because
-# fastembed's default remote-CDN model fetch cuts against the offline-first
-# posture, `agentic-deepagents-cloud` because a machine that never touches
-# cloud providers shouldn't carry their SDK. Choosing `all` opts into both.
 all = [
     "cyclaw[full]",
     "cyclaw[guardrails]",
@@ -126,110 +99,3 @@ cyclaw-clear-cache = "retrieval.clear_cache:main"
 cyclaw-harness = "harness.server:main"
 cyclaw-user = "utils.authn_cli:main"
 cyclaw-gen-cert = "utils.gen_cert:main"
-
-[tool.hatch.build.targets.wheel]
-# `packages` only pulls in directory packages -- top-level single-file modules
-# (gate.py and friends) and non-package data (config.yaml, static/, data/) were
-# silently dropped by hatchling's default wheel builder even when added to
-# a plain `include` list here (its `only_packages`/file-selection heuristics
-# treat non-package top-level files differently from `include` globs), so
-# `force-include` -- the explicit source->destination mapping hatchling
-# documents for exactly this case -- is required instead. Verified by
-# building the wheel and listing its contents: before this fix, gate.py/
-# gate_ops.py/gate_auth.py/graph.py/mcp_hybrid_server.py/metrics.py/
-# gate_memory.py/memory/ were entirely absent, so every [project.scripts]
-# entry point except the ones rooted at an already-included package
-# (cyclaw-index, cyclaw-clear-cache, cyclaw-harness, cyclaw-user) raised
-# ModuleNotFoundError on a real (non-editable) install -- e.g. `pip install
-# cyclaw` from the wheel python-publish.yml builds on every GitHub Release.
-# `pip install -e .` (the documented dev path) was unaffected: its
-# .pth-based editable mechanism points at the repo root directly and never
-# consults this list.
-packages = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet", "memory"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"gate.py" = "gate.py"
-"gate_ops.py" = "gate_ops.py"
-"gate_auth.py" = "gate_auth.py"
-"gate_memory.py" = "gate_memory.py"
-"graph.py" = "graph.py"
-"mcp_hybrid_server.py" = "mcp_hybrid_server.py"
-"metrics.py" = "metrics.py"
-"mcp_manifest.json" = "mcp_manifest.json"
-"config.yaml" = "config.yaml"
-"static" = "static"
-"data" = "data"
-
-
-[tool.hatch.build.targets.sdist]
-include = [
-    "gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py", "graph.py", "mcp_hybrid_server.py", "metrics.py",
-    "mcp_manifest.json",
-    "config.yaml", "constraints.txt", "environment.yml", "utils", "retrieval", "memory",
-    "llm", "schemas", "static", "data", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet", "powershell", "macos", "windows",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q --tb=short"
-filterwarnings = [
-    # Starlette 1.x steers its TestClient onto the `httpx2` distribution and
-    # warns once per session when classic httpx is installed. Known, tracked,
-    # and actioned only when a future Starlette major hard-cuts over — see
-    # docs/TESTCLIENT_HTTPX_DEPRECATION.md. Scoped by the exact message text
-    # (unique to this warning) and deliberately NOT class-qualified: the conda
-    # lane (python-package-conda.yml) runs fastapi 0.115.9 / starlette 0.4x,
-    # where starlette.exceptions.StarletteDeprecationWarning does not exist,
-    # and a class-qualified filter fails pytest startup there with
-    # AttributeError (observed 2026-07-19). Message-only parses in both lanes.
-    'ignore:Using `httpx` with `starlette\\.testclient` is deprecated; install `httpx2` instead\\.',
-]
-markers = [
-    # Opt out of conftest's _disarm_agentic_write_execution autouse fixture, which
-    # forces agentic.writer.EXECUTION_ENABLED False for the whole suite so a
-    # mis-stubbed test cannot reach a real `gh pr create` (gh is preinstalled on
-    # GitHub Actions runners). Only tests that are ABOUT the shipped armed posture
-    # should carry this, and they own their own stubbing.
-    "uses_shipped_execution_flag: test reads the real shipped EXECUTION_ENABLED value",
-]
-
-[tool.coverage.run]
-source = ["gate", "gate_ops", "gate_auth", "gate_memory", "graph", "mcp_hybrid_server", "metrics", "llm", "retrieval", "utils", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet", "memory"]
-
-# fsconnect/sqlconnect have a POSIX-specific security core (openat/O_NOFOLLOW) whose
-# Windows branch needs a separate Windows CI lane (deferred -- see
-# docs/agentic/FSCONNECT_SQL_ROADMAP.md, FS Phase 4). Their tests run on Linux CI for
-# correctness, but the per-OS coverage gate is unmeasurable on Windows (the POSIX
-# paths skip there), so they are omitted from the coverage metric until that lane
-# exists. Re-include them once Windows coverage is wired. "harness" here is paired
-# with --cov=harness in ci.yml and python-package-conda.yml (dep-guard D10 checks
-# the pairing); tests/test_harness.py measured it at 85% standalone (2026-07-22).
-omit = ["tests/*", "*/test_*", "*/__pycache__/*", "agentic/fsconnect/*", "agentic/sqlconnect/*", "agentic/vendor/*"]
-
-[tool.coverage.report]
-fail_under = 80
-show_missing = true
-exclude_also = [
-    "if __name__ == .__main__.:",
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-]
-
-[tool.ruff]
-line-length = 120
-target-version = "py312"
-exclude = [".claude", "agentic/vendor"]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "B", "C4", "UP", "S"]
-ignore = ["E501"]
-per-file-ignores = { "tests/*" = ["S101", "S603", "S108", "F401", "I001", "S105", "F841", "B007", "C408", "F541", "B904", "E501"], "gate.py" = ["E402", "I001", "B008", "E501"], "gate_auth.py" = ["B008"], "graph.py" = ["E501"], "utils/personality.py" = ["S608"], "utils/authn_manager.py" = ["S608"], "agentic/__init__.py" = ["E402"], "guardrails/__init__.py" = ["E402"], "telegram/__init__.py" = ["E402"], "opentweet/__init__.py" = ["E402"], "harness/server.py" = ["E402", "B008", "E501"] }
-
-
-[tool.ruff.lint.isort]
-known-first-party = ["utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram", "opentweet"]
-
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
