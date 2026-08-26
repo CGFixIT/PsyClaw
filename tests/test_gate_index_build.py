@@ -125,9 +125,11 @@ class TestIndexBuildWorker:
         the new index WITHOUT a restart, because /query resolves compiled_graph
         at call time rather than at import."""
         saved = gate.compiled_graph
+        saved_retriever = gate.retriever
         try:
             def _fake_init(*, boot=False):
                 gate.compiled_graph = object()  # stand-in for a live graph
+                return True
 
             with patch("retrieval.indexer.build_index") as mock_build, \
                  patch.object(gate, "_init_retrieval", side_effect=_fake_init) as mock_init:
@@ -139,20 +141,23 @@ class TestIndexBuildWorker:
             assert gate._index_build["error"] is None
         finally:
             gate.compiled_graph = saved
+            gate.retriever = saved_retriever
 
     def test_build_that_produces_no_index_is_an_error_not_a_success(self, idle_client):
         """build_index returning None is not proof of success -- it always
         returns None. The real check is whether a graph now exists."""
         saved = gate.compiled_graph
+        saved_retriever = gate.retriever
         try:
-            gate.compiled_graph = None
+            gate.compiled_graph = object()
             with patch("retrieval.indexer.build_index"), \
-                 patch.object(gate, "_init_retrieval"):
+                 patch.object(gate, "_init_retrieval", return_value=False):
                 gate._run_index_build()
             assert gate._index_build["state"] == "error"
             assert "no index" in gate._index_build["error"].lower()
         finally:
             gate.compiled_graph = saved
+            gate.retriever = saved_retriever
 
     def test_failure_never_raises_and_is_reported(self, idle_client):
         """Runs on a daemon thread with no caller to catch it, so an escaping
@@ -191,6 +196,61 @@ class TestIndexBuildWorker:
              patch.object(gate, "_init_retrieval"):
             gate._run_index_build()
         assert len(idx_logger.handlers) == before
+
+    def test_hot_init_keeps_old_graph_until_new_graph_is_ready(self, idle_client):
+        """_init_retrieval must build into locals and swap globals only at the
+        end, so an in-flight /query during a hot rebuild does not see a
+        transient 503 INDEX_NOT_FOUND."""
+        saved_graph = gate.compiled_graph
+        saved_retriever = gate.retriever
+        old_graph = object()
+        new_graph = object()
+        gate.compiled_graph = old_graph
+        gate.retriever = object()
+        barrier = threading.Event()
+
+        def _slow_build(*, retriever, **kwargs):
+            # While the new graph is being built, the old graph must still be live
+            assert gate.compiled_graph is old_graph
+            barrier.set()
+            return new_graph
+
+        try:
+            with patch("retrieval.indexer.build_index"), \
+                 patch.object(gate, "HybridRetriever") as mock_retriever_cls, \
+                 patch.object(gate, "build_graph", side_effect=_slow_build):
+                mock_retriever_cls.return_value.close = lambda: None
+                gate._init_retrieval()
+            assert barrier.wait(timeout=5), "build_graph was not called"
+            assert gate.compiled_graph is new_graph
+        finally:
+            gate.compiled_graph = saved_graph
+            gate.retriever = saved_retriever
+
+    def test_hot_init_closes_previous_retriever(self, idle_client):
+        """Each successful rebuild should release the previous retriever's
+        resources instead of leaking it (no-op for ChromaDB, closes the psycopg
+        connection for pgvector)."""
+        from unittest.mock import MagicMock
+
+        saved_graph = gate.compiled_graph
+        saved_retriever = gate.retriever
+        old_retriever = MagicMock()
+        new_retriever = object()
+        new_graph = object()
+        gate.retriever = old_retriever
+
+        try:
+            with patch("retrieval.indexer.build_index"), \
+                 patch.object(gate, "HybridRetriever", return_value=new_retriever), \
+                 patch.object(gate, "build_graph", return_value=new_graph):
+                gate._init_retrieval()
+            assert gate.retriever is new_retriever
+            assert gate.compiled_graph is new_graph
+            old_retriever.close.assert_called_once()
+        finally:
+            gate.compiled_graph = saved_graph
+            gate.retriever = saved_retriever
 
 
 class TestIndexProgressHandler:
