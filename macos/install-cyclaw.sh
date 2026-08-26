@@ -99,7 +99,7 @@ if [ -n "$REPO_PATH" ]; then
     echo "--repo-path '$REPO_PATH' does not look like a CyClaw checkout with the harness package." >&2
     exit 1
   fi
-  REPO_DIR="$(cd "$REPO_PATH" && pwd)"
+  REPO_DIR="$(CDPATH= cd -- "$REPO_PATH" && pwd)"
   step "using existing repo at $REPO_DIR"
 elif [ ! -f "$REPO_DIR/harness/server.py" ]; then
   [ -d "$REPO_DIR" ] && rm -rf "$REPO_DIR"
@@ -254,6 +254,7 @@ RC_FILE="$(detect_rc_file)"
 [ -f "$RC_FILE" ] || touch "$RC_FILE"
 
 if [ "$NO_PATH_EDIT" -eq 0 ]; then
+  reject_shell_metachars "$BIN_DIR"
   PATH_MARKER="# >>> cyclaw harness path >>>"
   if ! grep -qF "$PATH_MARKER" "$RC_FILE" 2>/dev/null; then
     {
