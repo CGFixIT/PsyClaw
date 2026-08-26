@@ -166,19 +166,38 @@ def register_auth_routes(
         origin = request.headers.get("origin")
         if origin is None:
             return
-        parsed = urlparse(origin)
         try:
-            # .port is a lazy property: urlparse() itself never raises, but
-            # reading .port does, for a non-numeric or out-of-range (>65535)
+            parsed = urlparse(origin)
+        except ValueError:
+            # A structurally malformed Origin (e.g. an unbalanced IPv6
+            # bracket: "http://[evil") makes urlparse() itself raise, not
+            # merely a lazy .hostname/.port access. It can never legitimately
+            # be this request's own origin, so treat it as an ordinary
+            # cross-origin mismatch -- attacker-controlled on an
+            # unauthenticated route, so this must fail closed rather than let
+            # the exception escape as a 500.
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {},
+                },
+            ) from None
+        try:
+            # .port is a lazy property: a well-formed urlparse() result can
+            # still raise here, for a non-numeric or out-of-range (>65535)
             # port string -- e.g. Origin: http://localhost:notaport or
-            # http://localhost:99999. Both are attacker-controlled on an
-            # unauthenticated route, so an uncaught ValueError here would
-            # turn a malformed cross-origin request into a 500 instead of the
-            # 403 this check exists to return. A malformed port can never
-            # equal request.url.port (an int or None, never unparseable), so
-            # treating it as None (rather than re-raising) still fails the
-            # comparison below and rejects the request -- it just does so as
-            # CROSS_ORIGIN_BLOCKED, not a crash.
+            # http://localhost:99999. (A structurally malformed Origin raises
+            # earlier, at the urlparse() call itself, guarded above.) Both
+            # are attacker-controlled on an unauthenticated route, so an
+            # uncaught ValueError here would turn a malformed cross-origin
+            # request into a 500 instead of the 403 this check exists to
+            # return. A malformed port can never equal request.url.port (an
+            # int or None, never unparseable), so treating it as None
+            # (rather than re-raising) still fails the comparison below and
+            # rejects the request -- it just does so as CROSS_ORIGIN_BLOCKED,
+            # not a crash.
             origin_port = parsed.port
         except ValueError:
             origin_port = None

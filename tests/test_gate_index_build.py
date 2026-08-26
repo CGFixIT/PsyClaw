@@ -91,6 +91,16 @@ class TestIndexBuildGates:
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
+    def test_malformed_origin_is_refused_not_a_500(self, idle_client):
+        """A structurally malformed Origin (an unbalanced IPv6 bracket) makes
+        urlparse() itself raise ValueError, not merely a lazy .hostname
+        access -- attacker-controlled on this loopback-gated but
+        unauthenticated route, so it must fail closed as cross-site rather
+        than let the exception escape as an unhandled 500."""
+        resp = idle_client.post("/index/build", headers={"Origin": "http://[evil"})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
     def test_second_concurrent_build_is_refused_with_409(self, idle_client):
         """Two builds would write the same ChromaDB collection and the same
         bm25.json, so the loser corrupts the winner."""
