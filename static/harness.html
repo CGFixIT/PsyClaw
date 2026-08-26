@@ -249,7 +249,13 @@ function isSafeRepoRelativePath(raw) {
   const parts = normalized.split('/').filter(part => part !== '' && part !== '.');
   if (!parts.length) return false;
   for (let i = 0; i < parts.length; i++) {
-    if (parts[i] === '..' || parts[i].indexOf(':') !== -1) return false;
+    const part = parts[i];
+    if (part === '..' || part.indexOf(':') !== -1) return false;
+    // Mirror utils/repo_paths.py: Windows silently strips trailing spaces/dots
+    // from a path component, so "README.md." and "README.md" open the same file.
+    // Reject outright rather than letting a confirmed run proceed without the
+    // context the operator declared.
+    if (part !== part.replace(/[ .]+$/, '')) return false;
   }
   return true;
 }
