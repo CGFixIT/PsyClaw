@@ -8,6 +8,7 @@ Sanitizes chunks at ingestion time via prompt filter.
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 
 import yaml
@@ -109,6 +110,14 @@ def chunk_document(text: str, chunk_size: int = 512, overlap: int = 50) -> list[
     while start < len(words):
         end = min(start + chunk_size, len(words))
         chunks.append(" ".join(words[start:end]))
+        if end == len(words):
+            # This window already reached the end of the document, so every
+            # subsequent window (start' = start + step) can only be a strict
+            # subset of it -- the loop would otherwise emit a duplicate tail
+            # chunk (its own chunk_id, its own embedding, its own BM25
+            # document) whenever len(words) % step lands within `overlap` of
+            # a step boundary.
+            break
         start += step
     return chunks
 
@@ -216,8 +225,17 @@ def build_index(config_path: str = "config.yaml") -> None:
 
     logger.info("Building BM25 (keyword) index...")
     # tokenized_corpus was built alongside all_chunks above (single tokenization pass).
-    Path(bm25_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(bm25_path, "w", encoding="utf-8") as f:
+    bm25_target = Path(bm25_path)
+    bm25_target.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a sibling temp file and rename over the target rather than
+    # truncating it in place: build_index runs on a background thread inside
+    # the live server (POST /index/build), so any failure mid-write (disk
+    # full, a SIGTERM/OOM kill) must leave the previous, still-loadable
+    # bm25.json intact rather than a half-written file that fails to parse
+    # on the next boot. os.replace is atomic on POSIX and on Windows for a
+    # same-directory rename, mirroring utils/personality.py's soul write.
+    bm25_tmp = bm25_target.with_suffix(bm25_target.suffix + ".tmp")
+    with open(bm25_tmp, "w", encoding="utf-8") as f:
         json.dump(
             {
                 "tokenized_corpus": tokenized_corpus,
@@ -226,6 +244,7 @@ def build_index(config_path: str = "config.yaml") -> None:
             },
             f,
         )
+    os.replace(bm25_tmp, bm25_target)
 
     logger.info("Done. Semantic backend: %s, BM25: %s", backend, bm25_path)
 
