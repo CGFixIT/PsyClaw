@@ -146,3 +146,32 @@ def test_all_shipped_launchagent_templates_are_well_formed_xml() -> None:
     for path in plist_files:
         document = plistlib.loads(path.read_bytes())
         assert document["Label"].startswith("com.cgfixit.cyclaw.")
+
+
+def test_setup_cyclaw_keys_disowns_clipboard_clear_job() -> None:
+    """The pasteboard TTL clearer must survive script exit.
+
+    Without `disown`, the background subshell receives SIGHUP when the
+    parent script exits and may die before clearing the key from the
+    pasteboard. The clear job must also be silent (no job-control noise).
+    """
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw-keys.sh").read_text(encoding="utf-8")
+    # Locate the block that forks the TTL clearer.
+    match = re.search(
+        r"sleep \"\$CLIP_TTL\".*?\) >/dev/null 2>&1 &",
+        setup,
+        re.DOTALL,
+    )
+    assert match, "clipboard TTL background job not found"
+    # disown must immediately follow the fork so the job is detached.
+    after_fork = setup[match.end():match.end() + 200]
+    assert "disown" in after_fork, "clipboard clear job is not disowned"
+
+
+def test_setup_cyclaw_keys_warns_when_installed_copy_drifted() -> None:
+    """An installed LaunchAgent copy that differs from the running script
+    must warn the operator to re-run --schedule-rotate."""
+    setup = (_REPO_ROOT / "macos" / "setup-cyclaw-keys.sh").read_text(encoding="utf-8")
+    assert "_warn_if_installed_copy_drifted" in setup
+    assert "cmp -s" in setup
+    assert "differs from this script" in setup
