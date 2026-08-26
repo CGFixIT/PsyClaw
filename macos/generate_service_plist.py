@@ -65,6 +65,7 @@ its supervised agent.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import sys
 import types
@@ -174,12 +175,13 @@ def main(argv: list[str] | None = None) -> int:
         # runtime, modify config.yaml directly or bind-mount a custom one in a
         # container context.
     else:
-        port = _DEFAULT_HARNESS_PORT
+        port = int(os.environ.get("CYCLAW_HARNESS_PORT", _DEFAULT_HARNESS_PORT))
         inner_argv = [launchd_plist.python_executable(), "-m", "harness.server"]
         # Non-secret, so directly in EnvironmentVariables (unlike CYCLAW_API_KEY
         # below, which only ever flows through the Keychain wrapper's export).
         env["CYCLAW_HOME"] = str(Path.home() / ".CyClaw")
         env["CYCLAW_REPO"] = str(_REPO_ROOT)
+        env["CYCLAW_HARNESS_PORT"] = str(port)
 
     secrets: list[tuple[str, str]] = []
     if args.api_key_service:
