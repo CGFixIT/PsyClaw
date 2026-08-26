@@ -249,6 +249,84 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "pendingAgentRun = stagedRun" in commands
 
 
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _js_is_safe_repo_relative_path(raw: str, max_len: int = 1024) -> bool:
+    """Python mirror of harness.html's isSafeRepoRelativePath()."""
+    if not isinstance(raw, str) or not raw or len(raw) > max_len or "\x00" in raw:
+        return False
+    normalized = raw.replace("\\", "/")
+    if normalized[:1] in ("/", "-") or _WINDOWS_DRIVE_RE.match(raw) or "://" in normalized:
+        return False
+    parts = [p for p in normalized.split("/") if p not in ("", ".")]
+    if not parts:
+        return False
+    for part in parts:
+        if part == ".." or ":" in part:
+            return False
+        # Mirror utils/repo_paths.py: reject trailing spaces/dots.
+        if part != part.rstrip(" ."):
+            return False
+    return True
+
+
+def _js_canonical_repo_relative_path(raw: str) -> str | None:
+    """Python mirror of harness.html's canonicalRepoRelativePath()."""
+    if not _js_is_safe_repo_relative_path(raw):
+        return None
+    return "/".join(p for p in raw.replace("\\", "/").split("/") if p not in ("", "."))
+
+
+def test_harness_path_validator_matches_repo_paths():
+    """The harness.html JS path validator must agree with utils.repo_paths.py.
+
+    The two implementations live on opposite sides of the request boundary:
+    JS stages read_files in the browser; Python validates them again before
+    forwarding to agentic. Drift here means a path the browser accepts could
+    be rejected server-side after the operator already confirmed the run.
+    """
+    from utils.repo_paths import canonical_repo_relative_path
+
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "function isSafeRepoRelativePath(" in html
+    assert "function canonicalRepoRelativePath(" in html
+    # Static guard: the JS source must contain the trailing-space/dot rule
+    # that keeps it in sync with utils/repo_paths.py.
+    assert "part !== part.replace(/[ .]+$/, '')" in html
+
+    cases = [
+        # (input, expected canonical)
+        ("README.md", "README.md"),
+        ("docs/README.md", "docs/README.md"),
+        ("./README.md", "README.md"),
+        ("docs//README.md", "docs/README.md"),
+        ("a/b/c", "a/b/c"),
+        ("a/./b", "a/b"),
+        ("", None),
+        ("..", None),
+        ("../etc/passwd", None),
+        ("/etc/passwd", None),
+        ("-flag", None),
+        ("C:\\Windows\\file.txt", None),
+        ("C:/Windows/file.txt", None),
+        ("http://example.com", None),
+        ("file\x00name", None),
+        ("a/../b", None),
+        ("README.md.", None),
+        ("README.md ", None),
+        ("docs/README.md.", None),
+        (":foo", None),
+        ("foo:bar", None),
+    ]
+    for raw, expected in cases:
+        js_result = _js_canonical_repo_relative_path(raw)
+        py_result = canonical_repo_relative_path(raw)
+        assert js_result == expected, f"JS mirror mismatch for {raw!r}: got {js_result!r}, expected {expected!r}"
+        assert py_result == expected, f"Python mismatch for {raw!r}: got {py_result!r}, expected {expected!r}"
+        assert js_result == py_result, f"JS/Python drift for {raw!r}: JS={js_result!r}, Python={py_result!r}"
+
+
 def test_console_documents_goal_and_loop_slash_commands():
     from harness.schemas import _MAX_GOAL_LEN
 
