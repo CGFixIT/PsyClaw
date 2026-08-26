@@ -707,7 +707,7 @@ input_guard = build_input_guard(cfg)
 # module-isolation guarantee as build_input_guard above.
 output_guard = build_output_guard(cfg)
 
-def _init_retrieval(*, boot: bool = False) -> None:
+def _init_retrieval(*, boot: bool = False) -> bool:
     """(Re)build ``retriever`` and ``compiled_graph`` from the index on disk.
 
     Called once at import and again after a successful /index/build, which is
@@ -720,23 +720,41 @@ def _init_retrieval(*, boot: bool = False) -> None:
     documented first-run state, not a crash. The stderr banner is boot-only:
     after a build the same condition means "the build produced no index",
     which the caller reports through /index/status instead.
+
+    Builds the new retriever/graph into locals and swaps the globals only at
+    the end, so an in-flight /query during a hot rebuild continues to use the
+    previous graph instead of hitting a transient 503 INDEX_NOT_FOUND. The
+    previous retriever is closed after the swap (no-op for ChromaDB, releases
+    the psycopg connection for pgvector). Returns True when a usable graph now
+    exists.
     """
     global retriever, compiled_graph
+    new_retriever = None
     try:
-        retriever = HybridRetriever()
+        new_retriever = HybridRetriever()
     except IndexNotFoundError as e:
         if boot:
             print(f"FATAL: {e.message}", file=sys.stderr)
             print("Run: python -m retrieval.indexer", file=sys.stderr)
         logger.critical("Retrieval index not found: %s", e.message)
-        retriever = None
 
-    compiled_graph = None
-    if retriever is not None:
-        compiled_graph = build_graph(
-            retriever=retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
+    new_graph = None
+    if new_retriever is not None:
+        new_graph = build_graph(
+            retriever=new_retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
             personality=personality, input_guard=input_guard, output_guard=output_guard,
         )
+
+    old_retriever = retriever
+    retriever = new_retriever
+    compiled_graph = new_graph
+    if old_retriever is not None and old_retriever is not new_retriever:
+        try:
+            old_retriever.close()
+        except Exception:
+            logger.warning("hot-init close failed for previous retriever", exc_info=True)
+
+    return compiled_graph is not None
 
 
 _init_retrieval(boot=True)
@@ -776,23 +794,26 @@ class _IndexProgressHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             if record.msg == "Indexed %d/%d chunks" and record.args:
-                _index_build["chunks_done"] = int(record.args[0])
-                _index_build["chunks_total"] = int(record.args[1])
+                with _INDEX_BUILD_LOCK:
+                    _index_build["chunks_done"] = int(record.args[0])
+                    _index_build["chunks_total"] = int(record.args[1])
         except Exception:  # noqa: BLE001, S110  # nosec B110 -- progress is best-effort only
             pass
 
 
 def _index_status_payload() -> dict[str, Any]:
-    started, finished = _index_build["started_at"], _index_build["finished_at"]
+    with _INDEX_BUILD_LOCK:
+        snapshot = dict(_index_build)
+    started, finished = snapshot["started_at"], snapshot["finished_at"]
     elapsed = None
     if started is not None:
         elapsed = round((finished if finished is not None else time.monotonic()) - started, 1)
     return {
-        "state": _index_build["state"],
+        "state": snapshot["state"],
         "elapsed_sec": elapsed,
-        "chunks_done": _index_build["chunks_done"],
-        "chunks_total": _index_build["chunks_total"],
-        "error": _index_build["error"],
+        "chunks_done": snapshot["chunks_done"],
+        "chunks_total": snapshot["chunks_total"],
+        "error": snapshot["error"],
         "index_ready": compiled_graph is not None,
     }
 
@@ -810,19 +831,22 @@ def _run_index_build() -> None:
     idx_logger.addHandler(handler)
     try:
         build_index(str(_BASE_DIR / "config.yaml"))
-        _init_retrieval()
-        if compiled_graph is None:
-            _index_build["state"] = "error"
-            _index_build["error"] = "Build finished but no index was produced."
-        else:
-            _index_build["state"] = "done"
+        index_ready = _init_retrieval()
+        with _INDEX_BUILD_LOCK:
+            if index_ready:
+                _index_build["state"] = "done"
+            else:
+                _index_build["state"] = "error"
+                _index_build["error"] = "Build finished but no index was produced."
     except Exception as e:  # noqa: BLE001 -- surfaced via /index/status, never raised into a request
         logger.exception("Index build failed")
-        _index_build["state"] = "error"
-        _index_build["error"] = _sanitize_error(e)
+        with _INDEX_BUILD_LOCK:
+            _index_build["state"] = "error"
+            _index_build["error"] = _sanitize_error(e)
     finally:
         idx_logger.removeHandler(handler)
-        _index_build["finished_at"] = time.monotonic()
+        with _INDEX_BUILD_LOCK:
+            _index_build["finished_at"] = time.monotonic()
 
 
 @app.post("/index/build", dependencies=[Depends(_enforce_rate_limit)])
