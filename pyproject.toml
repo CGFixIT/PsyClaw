@@ -32,6 +32,10 @@ dependencies = [
     "pyyaml==6.0.3",
     "numpy==1.26.4",
     "nltk==3.10.0",
+    # tzdata is required on Windows (and any host without a system IANA database)
+    # for zoneinfo to resolve IANA names such as America/New_York. Kept
+    # unconditional so OpenTweet scheduling tests behave identically across platforms.
+    "tzdata==2026.2",
     "langgraph==1.2.9",
     "langchain-core==1.5.0",
     # langgraph-sdk imports websockets.asyncio at graph import time; keep this direct
@@ -178,7 +182,7 @@ filterwarnings = [
     # where starlette.exceptions.StarletteDeprecationWarning does not exist,
     # and a class-qualified filter fails pytest startup there with
     # AttributeError (observed 2026-07-19). Message-only parses in both lanes.
-    'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.',
+    'ignore:Using `httpx` with `starlette\\.testclient` is deprecated; install `httpx2` instead\\.',
 ]
 markers = [
     # Opt out of conftest's _disarm_agentic_write_execution autouse fixture, which
