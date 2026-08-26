@@ -27,26 +27,7 @@ from utils.logger import hash_query, redact_sensitive
 
 logger = logging.getLogger("cyclaw.memory")
 
-# FTS5 treats a MATCH argument as a QUERY EXPRESSION, not a literal string --
-# "?", ":", "(", '"', and a leading "-" are all syntax. A bound parameter
-# prevents SQL injection but does nothing about FTS5 parsing the bound value
-# itself, so an ordinary punctuated question ("what is retrieval?") raises
-# fts5: syntax error rather than matching. Tokenizing into quoted-OR terms
-# turns any natural-language string into a valid expression regardless of
-# punctuation. Mirrors retrieval/hybrid_search.py's tokenize_and_stem, kept
-# separate rather than imported so memory/ stays decoupled from retrieval/
-# (retrieval/README.md: "so the memory package does not pull in Chroma/BM25").
 _FTS_TOKEN_RE = re.compile(r"\w+")
-
-
-def _fts_match_expr(query: str) -> str:
-    """Build a safe FTS5 MATCH expression from free-text ``query``.
-
-    Each token is double-quoted (FTS5's literal-string form) with internal
-    quotes doubled, then OR-joined -- an empty result means no token survived.
-    """
-    tokens = _FTS_TOKEN_RE.findall(query)
-    return " OR ".join('"' + t.replace('"', '""') + '"' for t in tokens)
 
 # Thread-local SQLite connection cache. SQLite connections cannot safely be
 # shared across threads, but creating a connection per store call is expensive
@@ -767,7 +748,19 @@ def search_facts_fts(
     q = (query or "").strip()
     if not q:
         return []
-    match_expr = _fts_match_expr(q)
+    # FTS5 treats a MATCH argument as a QUERY EXPRESSION, not a literal
+    # string -- "?", ":", "(", '"', and a leading "-" are all syntax. A
+    # bound parameter prevents SQL injection but does nothing about FTS5
+    # parsing the bound value itself, so an ordinary punctuated question
+    # ("what is retrieval?") raises fts5: syntax error rather than
+    # matching. Tokenizing into quoted-OR terms turns any natural-language
+    # string into a valid expression regardless of punctuation. Each token
+    # is double-quoted (FTS5's literal-string form) with internal quotes
+    # doubled. Mirrors retrieval/hybrid_search.py's tokenize_and_stem, kept
+    # inline rather than imported so memory/ stays decoupled from
+    # retrieval/ (retrieval/README.md: "so the memory package does not
+    # pull in Chroma/BM25").
+    match_expr = " OR ".join('"' + t.replace('"', '""') + '"' for t in _FTS_TOKEN_RE.findall(q))
     if not match_expr:
         return []
     conn = connect(cfg)
