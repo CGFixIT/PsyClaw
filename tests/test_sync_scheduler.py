@@ -9,6 +9,7 @@ is ever invoked, and no network is touched.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -402,6 +403,50 @@ def test_windows_remove_success_returns_true() -> None:
         patch("sync.scheduler.subprocess.run", return_value=_completed(returncode=0, stdout="SUCCESS")),
     ):
         assert WindowsTaskScheduler(cfg).remove() is True
+
+
+def test_windows_status_not_found_returns_none_without_warning(caplog) -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(
+                returncode=1, stderr="ERROR: The system cannot find the file specified."
+            ),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with caplog.at_level("WARNING"):
+            assert WindowsTaskScheduler(cfg).status() is None
+    assert caplog.text == ""
+
+
+def test_windows_status_unexpected_error_logs_warning(caplog) -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(returncode=1, stderr="ERROR: access is denied."),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with caplog.at_level("WARNING"):
+            assert WindowsTaskScheduler(cfg).status() is None
+    assert "access is denied" in caplog.text
+
+
+def test_windows_status_subprocess_exception_logs_warning(caplog) -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch("sync.scheduler.subprocess.run", side_effect=subprocess.SubprocessError("schtasks crashed")),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with caplog.at_level("WARNING"):
+            assert WindowsTaskScheduler(cfg).status() is None
+    assert "schtasks crashed" in caplog.text
 
 
 def test_windows_missing_schtasks_raises(tmp_path: Path) -> None:

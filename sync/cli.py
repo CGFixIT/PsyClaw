@@ -203,9 +203,12 @@ def _run_auto_reindex(cfg: Any) -> int:
     timeout_sec = getattr(cfg, "sync_timeout_sec", 0) or 0
     timeout = timeout_sec if timeout_sec > 0 else None
     try:
-        completed = subprocess.run(argv, check=False, timeout=timeout)  # noqa: S603 -- fixed argv, no shell
-    except subprocess.TimeoutExpired:
-        _err(f"Indexer timed out after {timeout_sec}s; the index may be stale.")
+        completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
+            argv, check=False, timeout=timeout, capture_output=True, text=True
+        )
+    except subprocess.TimeoutExpired as exc:
+        tail = (exc.stderr or "")[-500:] if exc.stderr else ""
+        _err(f"Indexer timed out after {timeout_sec}s; the index may be stale. {tail}")
         return EXIT_FAIL
     except OSError as exc:
         _err(f"Could not launch the indexer: {exc}")
@@ -213,7 +216,8 @@ def _run_auto_reindex(cfg: Any) -> int:
     if completed.returncode == 0:
         _ok("Index rebuilt; corpus and index are back in sync.")
         return EXIT_OK
-    _err(f"Indexer exited {completed.returncode}; the index may be stale.")
+    tail = ((completed.stdout or "") + (completed.stderr or ""))[-500:]
+    _err(f"Indexer exited {completed.returncode}; the index may be stale. {tail}")
     return EXIT_FAIL
 
 
