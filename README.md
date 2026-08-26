@@ -417,11 +417,15 @@ pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
     --ignore-installed PyYAML
 ```
 
-Just cloned on Apple Silicon? `bash ./macos/setup-from-clone.sh` is the
-one-shot path: installer + Keychain keys (Telegram / Claude / Grok / GitHub)
-+ Ollama check + retrieval index + both servers. It chains the existing
-`macos/` scripts rather than reimplementing them. Flags and privacy notes:
-[`macos/README.md`](macos/README.md#one-shot-after-clone-apple-silicon).
+Just cloned on Apple Silicon? `bash ./macos/setup-cyclaw.sh` is the single
+operator-facing entry point: it offers to clone if you skipped that step,
+asks its few choices (start now? open the consoles? autofill the generated
+key?) once up front, then runs the one-shot path below and, if asked,
+starts both servers. `bash ./macos/setup-from-clone.sh` is what it calls:
+installer + Keychain keys (Telegram / Claude / Grok / GitHub) + Ollama check
++ retrieval index + both servers. Both chain the existing `macos/` scripts
+rather than reimplementing them. Flags and privacy notes:
+[`macos/README.md`](macos/README.md#one-command-apple-silicon).
 
 Prefer the installer only? `bash ./macos/install-cyclaw.sh` branches on
 `uname -s` and handles the torch difference for you — it prepares the
@@ -607,6 +611,7 @@ CyClaw/
 │   ├── Invoke-CyClaw.ps1
 │   └── Uninstall-CyClaw.ps1
 ├── macos/                      # macOS/Linux installer/launchd glue (see macos/README.md)
+│   ├── setup-cyclaw.sh         # single entry point: clone? + one-shot + optional start/browser/autofill
 │   ├── setup-from-clone.sh     # one-shot after git clone (Apple Silicon)
 │   ├── install-cyclaw.sh
 │   ├── uninstall-cyclaw.sh
@@ -991,9 +996,11 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 - **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
   sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
   a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
-- **Install (macOS / Linux):** `bash ./macos/setup-from-clone.sh` is the
-  one-shot after `git clone` (keys + Ollama + index + both servers). Or
-  `bash ./macos/install-cyclaw.sh` sets up the
+- **Install (macOS / Linux):** `bash ./macos/setup-cyclaw.sh` is the single
+  entry point (clone if needed + the one-shot below + optional start/browser/
+  autofill, asked once up front). `bash ./macos/setup-from-clone.sh` is the
+  one-shot after `git clone` it calls (keys + Ollama + index + both servers).
+  Or `bash ./macos/install-cyclaw.sh` sets up the
   same `~/.CyClaw` layout, a venv, a `cyclaw` shim, and a PATH entry plus a
   `cyclaw()` function in your rc file (`~/.zshrc` on zsh; macOS bash preserves
   the first existing login file among `.bash_profile`, `.bash_login`, and
