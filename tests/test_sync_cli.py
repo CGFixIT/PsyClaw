@@ -115,6 +115,40 @@ def test_sync_exception_with_corpus_changed_exits_reindex():
         assert main(["sync"]) == EXIT_REINDEX
 
 
+def test_sync_exception_with_corpus_changed_and_auto_reindex_still_exits_fail():
+    """A sync that raised must never report success just because auto_reindex
+    discharged the reindex obligation -- EXIT_OK from the indexer child means
+    "index rebuilt", not "sync succeeded", and must not escape as this
+    function's return value (the original bug: it returned 0)."""
+    cfg = _cfg()
+    cfg.reindex_on_change = True
+    cfg.auto_reindex = True
+    err = SyncRuntimeError(
+        "rclone sync timed out",
+        details={"corpus_changed": True, "direction": "pull"},
+    )
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", side_effect=err), \
+         patch("sync.cli.subprocess.run", return_value=MagicMock(returncode=0)):
+        assert main(["sync"]) == EXIT_FAIL
+
+
+def test_sync_exception_with_corpus_changed_and_auto_reindex_failure_returns_exit_2():
+    """If the sync failed AND the in-CLI reindex also fails, the reindex's own
+    failure code (not a collapsed 0) must surface."""
+    cfg = _cfg()
+    cfg.reindex_on_change = True
+    cfg.auto_reindex = True
+    err = SyncRuntimeError(
+        "rclone sync timed out",
+        details={"corpus_changed": True, "direction": "pull"},
+    )
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", side_effect=err), \
+         patch("sync.cli.subprocess.run", return_value=MagicMock(returncode=3)):
+        assert main(["sync"]) == EXIT_FAIL
+
+
 def test_sync_exception_without_corpus_changed_exits_fail():
     cfg = _cfg()
     cfg.reindex_on_change = True
