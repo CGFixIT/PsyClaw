@@ -879,9 +879,13 @@ def create_app(
         block = parsed if isinstance(parsed, dict) else {}
         return notes.status(cfg.memory_enabled) | {"rag": rag_flags(block)}
 
-    @app.get("/api/memory")
+    @app.get("/api/memory", dependencies=guarded)
     def memory_status() -> dict:
-        """Harness-local /memory status. Open: notes are operator-local."""
+        """Harness-local /memory status. Guarded: returns full note bodies,
+        which are operator-authored content injected into the chat system
+        prompt -- not boot-time metadata (mirrors the /api/sessions{id} and
+        /api/github/status precedent, and the removed Session.last_excerpt
+        exposure)."""
         return _memory_payload()
 
     @app.post("/api/memory", dependencies=guarded)

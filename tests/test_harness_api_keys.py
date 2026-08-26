@@ -99,6 +99,29 @@ def test_no_partial_write_when_one_key_in_the_batch_is_bad(home):
     assert env_keys.env_file_path().read_text(encoding="utf-8") == before
 
 
+def test_staged_temp_file_does_not_survive_a_write_failure(home, monkeypatch):
+    """A failure while writing the staged file (ENOSPC, an interrupt) must not
+    orphan a secret-bearing .env.* temp file in CYCLAW_HOME -- the same
+    stage-and-replace cleanup contract harness/config.py's _atomic_write_json
+    already pins."""
+    home.mkdir(parents=True, exist_ok=True)
+
+    real_fdopen = os.fdopen
+
+    def _boom(descriptor, *args, **kwargs):
+        stream = real_fdopen(descriptor, *args, **kwargs)
+        stream.write = lambda _text: (_ for _ in ()).throw(OSError("ENOSPC"))
+        return stream
+
+    monkeypatch.setattr(env_keys.os, "fdopen", _boom)
+
+    with pytest.raises(OSError):
+        env_keys.write_keys({"GROK_API_KEY": "good-value-1234"})
+
+    leftovers = [p for p in home.iterdir() if p.name.startswith(".env.")]
+    assert leftovers == [], f"orphaned staged secret file(s): {leftovers}"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not apply on Windows")
 def test_file_is_written_owner_only(home):
     env_keys.write_keys({"GROK_API_KEY": _SECRET})

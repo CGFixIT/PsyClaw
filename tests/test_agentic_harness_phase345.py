@@ -280,6 +280,18 @@ def test_local_lmstudio_proposer_uses_fake_transport(tmp_path: Path) -> None:
     assert workspace.proposal_path.read_text(encoding="utf-8").startswith("# Proposal")
 
 
+def test_local_proposer_client_disables_ambient_proxy() -> None:
+    client = LocalProposerClient(
+        base_url="http://localhost:1234/v1",  # DevSkim: ignore DS162092 - loopback test URL, offline-by-design
+        model="local-test-model",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"choices": []})),
+    )
+    try:
+        assert client._client.trust_env is False
+    finally:
+        client.close()
+
+
 def test_draft_plan_is_a_structured_no_write_plan() -> None:
     task = DeepAgentGitHubTask(task_id="task-1", repo="cgfixit/CyClaw", instruction="do the thing")
 
