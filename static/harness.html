@@ -517,7 +517,14 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
+const STATUS_BASE_INTERVAL = 15000;
+const STATUS_MAX_INTERVAL = 120000;
+let statusBackoffMs = STATUS_BASE_INTERVAL;
+let statusTimer = null;
+let statusVisible = true;
+
 async function refreshStatus() {
+  if (statusTimer) { window.clearTimeout(statusTimer); statusTimer = null; }
   try {
     const s = await api('/api/status');
     $('hModel').textContent = s.model || '(unset)';
@@ -530,10 +537,30 @@ async function refreshStatus() {
     paintSoul();
     paintMemory();
     $('hDot').style.background = 'var(--accent-green)';
+    statusBackoffMs = STATUS_BASE_INTERVAL;
   } catch (e) {
     $('hDot').style.background = 'var(--accent-red)';
+    statusBackoffMs = Math.min(statusBackoffMs * 2, STATUS_MAX_INTERVAL);
+  }
+  scheduleStatusRefresh();
+}
+
+function scheduleStatusRefresh() {
+  if (statusTimer) { window.clearTimeout(statusTimer); statusTimer = null; }
+  if (statusVisible) {
+    statusTimer = window.setTimeout(refreshStatus, statusBackoffMs);
   }
 }
+
+document.addEventListener('visibilitychange', () => {
+  statusVisible = !document.hidden;
+  if (statusVisible) {
+    scheduleStatusRefresh();
+  } else if (statusTimer) {
+    window.clearTimeout(statusTimer);
+    statusTimer = null;
+  }
+});
 function paintSoul() {
   const v = $('sSoulV');
   v.textContent = soulEnabled ? 'on' : 'off';
