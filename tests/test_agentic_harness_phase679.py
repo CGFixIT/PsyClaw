@@ -392,7 +392,7 @@ def test_stale_candidate_lock_is_reclaimed(tmp_path: Path) -> None:
     import os as _os
     import time as _time
 
-    from agentic.harness_optimizer.patching import _LOCK_STALE_SEC
+    from agentic.registry import _LOCK_STALE_SEC
 
     workspace, cfg = _workspace(tmp_path)
     workspace.proposal_path.write_text("# Proposal\n\nGeneral fix.", encoding="utf-8")
