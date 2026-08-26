@@ -1,0 +1,14 @@
+# CyClaw test-only dependencies.
+# These are intentionally kept out of requirements.txt so the production
+# Docker image does not ship the pytest toolchain.
+# Install alongside requirements.txt in CI and local dev/test flows:
+#   pip install -r requirements.txt -r requirements-test.txt -c constraints.txt
+#
+# pygments is a required pytest dependency (pytest>=8.2, `pygments>=2.7.2`).
+# Pin a patched version here so lockfile-less scanners (OSV) cannot resolve
+# the loose pytest range down to pygments 2.9.0 (PYSEC-2023-117 / PYSEC-2026-2987).
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+pygments==2.21.0

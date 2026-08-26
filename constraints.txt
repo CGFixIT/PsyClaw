@@ -111,6 +111,11 @@ pytest-asyncio==1.4.0
 # was unpinned here, so coverage tooling floated to whatever the resolver picked —
 # defeating the reproducibility this file exists for. Pin it alongside its siblings.
 pytest-cov==7.1.0
+# pytest>=8.2 requires pygments>=2.7.2. Pin a patched release so unconstrained
+# scanners cannot resolve the range down to 2.9.0 (PYSEC-2023-117 / PYSEC-2026-2987).
+# Kept in requirements-test.txt (not requirements.txt) so the Docker image stays
+# test-tool-free. Must match the requirements-test.txt pin.
+pygments==2.21.0
 
 # Dev tools (pyproject [project.optional-dependencies].dev + full).
 # Previously unpinned, so `pip install -e ".[dev]" -c constraints.txt` could pull in

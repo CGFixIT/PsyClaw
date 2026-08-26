@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - 'requirements.txt'
+      - 'requirements-test.txt'
       - 'constraints.txt'
       # pyproject.toml is where EVERY optional extra lives (guardrails,
       # postgres, pgvector, agentic-deepagents, agentic-deepagents-cloud, dev,
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - 'requirements.txt'
+      - 'requirements-test.txt'
       - 'constraints.txt'
       - 'pyproject.toml'
       - '.github/workflows/pip-audit.yml'
@@ -55,6 +57,7 @@ jobs:
           # wheels from a previous run instead of a cold cache.
           cache-dependency-path: |
             requirements.txt
+            requirements-test.txt
             constraints.txt
             pyproject.toml
 
@@ -100,7 +103,7 @@ jobs:
         shell: bash
         run: |
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
-          pip install -r requirements.txt -c constraints.txt
+          pip install -r requirements.txt -r requirements-test.txt -c constraints.txt
 
       - name: Install with constraints (macOS -- plain torch, no +cpu suffix)
         if: runner.os == 'macOS'
@@ -117,7 +120,7 @@ jobs:
           pip install "torch==2.13.0"
           grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' requirements.txt > /tmp/requirements-macos.txt
           grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
-          pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt
+          pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt
 
       - name: Verify dependency consistency + smoke imports
         shell: bash
@@ -159,7 +162,7 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
+          pip-audit -r requirements.txt -r requirements-test.txt --ignore-vuln CVE-2026-45829 --ignore-vuln CVE-2026-45830 --ignore-vuln CVE-2026-45831 --ignore-vuln CVE-2026-45833 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
         # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
@@ -169,6 +172,24 @@ jobs:
         #   - Reproducible install gate (verify-install matrix on Ubuntu/Windows/macOS + Python 3.12)
         # Cross-ref: cyclaw-advisor §K / §M, hybrid_search.py:55, indexer.py:58, gate.py:TELEMETRY_KILL
         # Track upstream for patched 1.5.x release; re-evaluate on bump.
+        #
+        # CVE-2026-45830 / CVE-2026-45831 / CVE-2026-45833 — same HTTP-server
+        # surface as CVE-2026-45829; added 2026-08-26 after pip-audit on main
+        # went red on 2026-08-25 (runs 32815649971, 32861024390) when the
+        # advisory DB started reporting them against chromadb 1.5.9. None have
+        # a fixed version as of that date.
+        #   - CVE-2026-45830 (GHSA-2wm9-hf6c-p5cr): authenticated IDOR on the
+        #     FastAPI /api/v2 collections surface — any authenticated HTTP
+        #     user can read/write/update/delete any collection.
+        #   - CVE-2026-45831: SimpleRBACAuthorizationProvider evaluates
+        #     permissions without verifying tenant/database/collection scope.
+        #   - CVE-2026-45833: authenticated code injection via embedding-
+        #     function config for a caller with UPDATE_COLLECTION (the
+        #     post-auth sibling of 45829's pre-auth RCE).
+        # CyClaw never runs the Chroma HTTP server, never enables SimpleRBAC,
+        # and never exposes /api/v2; it uses chromadb.PersistentClient in
+        # embedded mode only. Same acceptance as CVE-2026-45829. Re-evaluate
+        # if a future change introduces HttpClient or a chroma server process.
         #
         # PYSEC-2026-597 (nltk) — risk accepted, 2026-07. nltk bumped 3.9.4->3.10.0
         # on main (dependabot) 2026-07-17; not confirmed here whether 3.10.0 itself
@@ -182,8 +203,8 @@ jobs:
         # already documents this: "the NLTK URL-encoded path-traversal CVE (punkt
         # tokenizer) is not reachable." Re-evaluate when a patched release ships.
         #
-        # (This step audits requirements.txt only, which by its own scope
-        # contract is base runtime + test tools and carries ZERO extras. Every
+        # (This step audits requirements.txt + requirements-test.txt, which
+        # together cover base runtime + test tools and carry ZERO extras. Every
         # optional dependency is audited by the scan-optional job below.)
         #
         # PYSEC-2026-3447 (setuptools, fixed in 83.0.0) — scanner-resolution
@@ -200,10 +221,11 @@ jobs:
         # flags setuptools, treat that as a real finding, not noise.
 
   scan-optional:
-    # Why this job exists: requirements.txt (what the `scan` job above audits)
-    # carries base runtime + test tools and NOTHING else -- that is its declared
-    # scope contract, enforced by .claude/skills/verify-deps/check_env_drift.py
-    # check E4. Every optional capability therefore had zero CVE coverage:
+    # Why this job exists: requirements.txt + requirements-test.txt (what the
+    # `scan` job above audits) carry base runtime + test tools and NOTHING else
+    # -- that is the declared scope contract, enforced by
+    # .claude/skills/verify-deps/check_env_drift.py check E4. Every optional
+    # capability therefore had zero CVE coverage:
     # NeMo Guardrails, the deepagents agentic-coding stack, the Grok and Claude
     # cloud SDKs, and the Postgres/pgvector backends. This job closes that.
     #
@@ -280,7 +302,16 @@ jobs:
           for f in .audit-extras/*.txt; do
             extra="$(basename "$f" .txt)"
             echo "::group::pip-audit -r $f"
-            if pip-audit -r "$f" --ignore-vuln PYSEC-2026-3447; then
+            ok=0
+            for attempt in 1 2 3; do
+              if pip-audit -r "$f" --ignore-vuln PYSEC-2026-3447; then
+                ok=1
+                break
+              fi
+              echo "pip-audit attempt $attempt failed for $extra; retrying..."
+              sleep 5
+            done
+            if [ "$ok" -eq 1 ]; then
               echo "OK: $extra"
             else
               echo "FINDINGS: $extra"

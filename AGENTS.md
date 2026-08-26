@@ -175,6 +175,7 @@ source .venv/bin/activate
 python -m pip install --upgrade "pip>=26.1.2"
 uv pip install torch==2.13.0+cpu --extra-index-url https://download.pytorch.org/whl/cpu
 uv pip install -e . -c constraints.txt
+uv pip install -r requirements-test.txt -c constraints.txt
 ```
 
 Torch must be installed as its own explicit step, torch-first, matching the
@@ -188,12 +189,12 @@ index, not PyPI. This repository currently has no project-level uv source or
 index routing (`[tool.uv.sources]`/`[[tool.uv.index]]`); keep the explicit
 index on any `uv pip`/pip command that needs the CPU profile.
 
-Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
+Legacy/CI-compatible fallback (`CLAUDE.md` §8 documents this exact command; CI runs the same `pip install -r requirements.txt -r requirements-test.txt -c constraints.txt` core but without `--ignore-installed PyYAML`, and installs torch from a cached local wheel rather than the index):
 
 ```bash
 python -m pip install --upgrade "pip>=26.1.2"
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
 Runtime prep required before app/tests that touch the gateway:

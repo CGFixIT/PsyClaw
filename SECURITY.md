@@ -23,10 +23,14 @@ CyClaw is an **offline-first, loopback-only** local AI gateway. The enforced inv
 
 These are tracked, deliberate exceptions — re-reviewed at every release and enforced via the `pip-audit` CI workflow.
 
-### chromadb 1.5.9 — CVE-2026-45829 / [PYSEC-2026-311](https://osv.dev/vulnerability/PYSEC-2026-311) (Critical)
+### chromadb 1.5.9 — CVE-2026-45829 / [PYSEC-2026-311](https://osv.dev/vulnerability/PYSEC-2026-311) (Critical) and siblings CVE-2026-45830 / CVE-2026-45831 / CVE-2026-45833
 
-- **What it is:** pre-auth RCE in Chroma's **server mode** (`chroma run` / `HttpClient`). No upstream patch available.
-- **Why accepted:** CyClaw never runs the Chroma server. It uses the **embedded `PersistentClient`** exclusively (path from `config.yaml`), in-process, with `anonymized_telemetry=False` and no `trust_remote_code`. There is no Chroma network listener to attack; the vulnerable code path is unreachable in this deployment.
+- **What they are:** the Chroma **Python FastAPI server** (`chroma run` / `HttpClient` / `/api/v2`) surface. No upstream patch available for 1.5.9 as of 2026-08-26.
+  - CVE-2026-45829: pre-auth RCE — embedding-function config is instantiated before the auth check (`trust_remote_code` passthrough).
+  - CVE-2026-45830 ([GHSA-2wm9-hf6c-p5cr](https://github.com/advisories/GHSA-2wm9-hf6c-p5cr)): authenticated IDOR — any authenticated HTTP user can read/write/update/delete any collection.
+  - CVE-2026-45831: SimpleRBACAuthorizationProvider evaluates permissions without verifying tenant/database/collection scope.
+  - CVE-2026-45833: authenticated code injection via embedding-function config for a caller with `UPDATE_COLLECTION` (post-auth sibling of 45829).
+- **Why accepted:** CyClaw never runs the Chroma server. It uses the **embedded `PersistentClient`** exclusively (path from `config.yaml`), in-process, with `anonymized_telemetry=False` and no `trust_remote_code`. There is no Chroma network listener, no SimpleRBAC, and no `/api/v2` to attack; the vulnerable code paths are unreachable in this deployment. pip-audit on main first reported 45830/45831/45833 on 2026-08-25; they share the already-accepted 45829 HTTP-server surface.
 - **Guardrails:** any future change introducing `chromadb.HttpClient` or a standalone Chroma server MUST be treated as a security regression and re-open this assessment.
 - **Review date:** next chromadb release or 2026-10-01, whichever comes first.
 
@@ -41,6 +45,6 @@ These are tracked, deliberate exceptions — re-reviewed at every release and en
 ## Verification
 
 - `python -m pytest tests/ -q` — full suite (mocked externals; no live services needed)
-- `pip-audit -r requirements.txt` — dependency CVE sweep (also runs in CI)
+- `pip-audit -r requirements.txt -r requirements-test.txt` — dependency CVE sweep (also runs in CI)
 - `python scripts`/swarm verification harness — config invariants, telemetry kill, due-diligence invariants, terminal contract
 - Network audit: zero non-loopback connections expected in offline mode (see telemetry kill-switch docs in `docs/cyclaw_telemetry_kill.env`)

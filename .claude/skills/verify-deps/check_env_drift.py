@@ -189,7 +189,13 @@ def check_undeclared_imports() -> None:
     print("E3 every third-party module imported by source is declared somewhere")
     manifests = {
         name: (REPO / name).read_text(encoding="utf-8").lower()
-        for name in ("requirements.txt", "constraints.txt", "pyproject.toml", "environment.yml")
+        for name in (
+            "requirements.txt",
+            "requirements-test.txt",
+            "constraints.txt",
+            "pyproject.toml",
+            "environment.yml",
+        )
         if (REPO / name).is_file()
     }
     if not manifests:
@@ -244,21 +250,31 @@ _EXTRA_ONLY_MARKERS = ("deepagents", "nemoguardrails", "psycopg", "pgvector",
 
 def check_install_surface_scope() -> None:
     print("E4 install-surface scope contract (which surface may carry extras)")
-    req = REPO / "requirements.txt"
-    if not req.is_file():
-        warn("E4", "requirements.txt not found")
+    surfaces = {
+        "requirements.txt": REPO / "requirements.txt",
+        "requirements-test.txt": REPO / "requirements-test.txt",
+    }
+    missing = [name for name, path in surfaces.items() if not path.is_file()]
+    if missing:
+        fail("E4", f"required install surface(s) missing: {missing} -- runtime and "
+                   "test tools are split; both manifests must exist")
         return
-    text = req.read_text(encoding="utf-8")
-    # Only real requirement lines -- a package named in a comment (the file
-    # documents the postgres extras in prose) is not an install.
-    lines = [ln.split("#")[0].strip().lower() for ln in text.splitlines()]
-    leaked = [m for m in _EXTRA_ONLY_MARKERS
-              if any(re.match(rf"^{re.escape(m)}\b", ln) for ln in lines if ln)]
-    if leaked:
-        fail("E4", f"requirements.txt installs extras-only package(s) {leaked} -- it is the BASE "
-                   f"surface; extras belong to pyproject.toml, pinned in constraints.txt")
-    else:
-        ok("E4", "requirements.txt carries base runtime + test tools only (no extras) -- as designed")
+    leaked_any = False
+    for name, path in surfaces.items():
+        text = path.read_text(encoding="utf-8")
+        # Only real requirement lines -- a package named in a comment (the file
+        # documents the postgres extras in prose) is not an install.
+        lines = [ln.split("#")[0].strip().lower() for ln in text.splitlines()]
+        leaked = [m for m in _EXTRA_ONLY_MARKERS
+                  if any(re.match(rf"^{re.escape(m)}\b", ln) for ln in lines if ln)]
+        if leaked:
+            leaked_any = True
+            fail("E4", f"{name} installs extras-only package(s) {leaked} -- runtime "
+                       f"and test manifests are the BASE surface; extras belong to "
+                       f"pyproject.toml, pinned in constraints.txt")
+    if not leaked_any:
+        ok("E4", "requirements.txt is runtime-only and requirements-test.txt is "
+           "test tools only (no extras) -- as designed")
     info("E4", "constraints.txt pins extras/transitives NO surface installs by default; that is a "
                "version ceiling, not drift")
 
@@ -288,6 +304,9 @@ def check_docker_install_contract() -> None:
         missing.append("installs fallback CPU torch from the PyTorch CPU index")
     if missing:
         fail("E5", "Dockerfile dependency contract missing: " + "; ".join(missing))
+    elif re.search(r"requirements-test\.txt", text):
+        fail("E5", "Dockerfile must not copy or install requirements-test.txt -- "
+                   "the production image stays test-tool-free")
     else:
         ok("E5", "Docker copies manifests and uses requirements.txt + constraints.txt in both install paths")
 

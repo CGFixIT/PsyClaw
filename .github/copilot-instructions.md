@@ -71,7 +71,7 @@ python -m pip install --upgrade "pip>=26.1.2"
 
 # 2. Linux / Windows: CPU torch FIRST (order is mandatory)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt -c constraints.txt --ignore-installed PyYAML
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 
 # macOS Apple Silicon: plain torch (no +cpu suffix), stripped manifests — see setup-guide.md#macos-apple-silicon
 # ci.yml macos-latest leg and macos/install-cyclaw.sh Darwin branch already do this
