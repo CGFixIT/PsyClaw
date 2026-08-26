@@ -27,14 +27,28 @@ class TestChunkDocument:
         assert chunks == ["alpha beta gamma"]
 
     def test_normal_chunk_count_and_overlap(self):
-        # 10 words, size=4, overlap=2 -> stride 2 -> starts at 0,2,4,6,8 = 5 chunks.
+        # 10 words, size=4, overlap=2 -> stride 2 -> starts at 0,2,4,6 = 4 chunks.
+        # (A naive start-at-8 window would be "w8 w9", a strict subset of the
+        # w6..w9 window before it -- chunk_document stops once a window
+        # already reaches the end rather than emitting that duplicate tail.)
         words = [f"w{i}" for i in range(10)]
         chunks = chunk_document(" ".join(words), chunk_size=4, overlap=2)
-        assert len(chunks) == 5
+        assert len(chunks) == 4
         assert chunks[0] == "w0 w1 w2 w3"
         # Overlap: each chunk shares its first two words with the previous tail.
         assert chunks[1] == "w2 w3 w4 w5"
-        assert chunks[-1] == "w8 w9"
+        assert chunks[-1] == "w6 w7 w8 w9"
+
+    def test_final_window_reaching_document_end_is_not_duplicated(self):
+        """Regression: len(words) % step landing within `overlap` of a step
+        boundary used to emit a trailing chunk that is a strict subset of the
+        chunk before it -- same chunk_id-worthy content indexed twice (its own
+        embedding, its own BM25 document). A window already reaching the end
+        of the document must be the last one emitted."""
+        words = [f"w{i}" for i in range(512)]  # shipped chunk_size, exact boundary
+        chunks = chunk_document(" ".join(words), chunk_size=512, overlap=50)
+        assert len(chunks) == 1
+        assert chunks[0] == " ".join(words)
 
     def test_no_overlap_partitions_exactly(self):
         words = [f"w{i}" for i in range(6)]
@@ -286,6 +300,68 @@ class TestBuildIndexFingerprint:
         fake_writer = self._build_with_mock_writer(config_path)
 
         fake_writer.reset.assert_called_once_with({"model": "", "dim": "", "device": "cpu"})
+
+
+class TestBuildIndexBm25Atomicity:
+    """build_index writes bm25.json via a sibling temp file + os.replace rather
+    than truncating the live file in place, so a failure mid-write (disk full,
+    a SIGTERM/OOM kill on the background index-build thread) leaves the
+    previous, still-loadable index intact instead of a half-written file that
+    fails to parse on the server's next boot."""
+
+    def _write_config(self, tmp_path, corpus):
+        cfg = {
+            "corpus": {"path": str(corpus), "extensions": [".md"]},
+            "indexing": {
+                "chroma_path": str(tmp_path / "chroma"),
+                "bm25_path": str(tmp_path / "bm25.json"),
+                "collection_name": "test_kb",
+                "chunk_size": 512,
+                "chunk_overlap": 50,
+                "batch_size": 10,
+            },
+        }
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg, f)
+        return str(config_path)
+
+    def _build(self, config_path):
+        with (
+            patch("retrieval.indexer.get_embeddings_batch", return_value=[[0.1, 0.2, 0.3]]),
+            patch("retrieval.indexer.get_vector_writer", return_value=MagicMock()),
+        ):
+            build_index(config_path)
+
+    def test_successful_build_leaves_no_tmp_sibling(self, tmp_path):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "a.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        config_path = self._write_config(tmp_path, corpus)
+
+        self._build(config_path)
+
+        bm25_path = tmp_path / "bm25.json"
+        assert bm25_path.exists()
+        assert not bm25_path.with_suffix(".json.tmp").exists()
+
+    def test_failure_mid_write_leaves_previous_bm25_json_intact(self, tmp_path):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "a.md").write_text("hello world cyclaw retrieval fusion", encoding="utf-8")
+        config_path = self._write_config(tmp_path, corpus)
+
+        bm25_path = tmp_path / "bm25.json"
+        previous_content = '{"tokenized_corpus": [], "chunks": [], "metadata": []}'
+        bm25_path.write_text(previous_content, encoding="utf-8")
+
+        with pytest.raises(OSError):
+            with patch("retrieval.indexer.json.dump", side_effect=OSError("disk full")):
+                self._build(config_path)
+
+        # The live index file must be exactly what it was before the failed
+        # build -- never truncated, never a half-written document.
+        assert bm25_path.read_text(encoding="utf-8") == previous_content
 
 
 class TestLoadCorpusCaseInsensitive:

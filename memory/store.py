@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -25,6 +26,8 @@ from memory.policy import (
 from utils.logger import hash_query, redact_sensitive
 
 logger = logging.getLogger("cyclaw.memory")
+
+_FTS_TOKEN_RE = re.compile(r"\w+")
 
 # Thread-local SQLite connection cache. SQLite connections cannot safely be
 # shared across threads, but creating a connection per store call is expensive
@@ -745,6 +748,21 @@ def search_facts_fts(
     q = (query or "").strip()
     if not q:
         return []
+    # FTS5 treats a MATCH argument as a QUERY EXPRESSION, not a literal
+    # string -- "?", ":", "(", '"', and a leading "-" are all syntax. A
+    # bound parameter prevents SQL injection but does nothing about FTS5
+    # parsing the bound value itself, so an ordinary punctuated question
+    # ("what is retrieval?") raises fts5: syntax error rather than
+    # matching. Tokenizing into quoted-OR terms turns any natural-language
+    # string into a valid expression regardless of punctuation. Each token
+    # is double-quoted (FTS5's literal-string form) with internal quotes
+    # doubled. Mirrors retrieval/hybrid_search.py's tokenize_and_stem, kept
+    # inline rather than imported so memory/ stays decoupled from
+    # retrieval/ (retrieval/README.md: "so the memory package does not
+    # pull in Chroma/BM25").
+    match_expr = " OR ".join('"' + t.replace('"', '""') + '"' for t in _FTS_TOKEN_RE.findall(q))
+    if not match_expr:
+        return []
     conn = connect(cfg)
     try:
         # Restrict to active facts via JOIN
@@ -757,11 +775,15 @@ def search_facts_fts(
             ORDER BY rank
             LIMIT ?
             """,
-            (q, int(limit)),
+            (match_expr, int(limit)),
         ).fetchall()
         return [(int(r["id"]), r["content"], float(r["rank"])) for r in rows]
     except sqlite3.OperationalError:
-        # MATCH syntax errors on odd queries — treat as no hits
+        # Tokenizing into quoted-OR terms above should make this unreachable
+        # for ordinary text; log rather than silently swallow so a genuine
+        # fault (missing facts_fts table, a locked/corrupt DB) is no longer
+        # indistinguishable from "no hits".
+        logger.warning("memory FTS query failed for a tokenized expression")
         return []
     finally:
         conn.close()

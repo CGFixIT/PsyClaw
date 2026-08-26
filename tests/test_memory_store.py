@@ -79,6 +79,41 @@ def test_propose_apply_fts(mem_cfg):
     assert "zsh" in hits[0][1].lower()
 
 
+@pytest.mark.parametrize(
+    "punctuated_query",
+    [
+        "what shell do I use?",  # trailing "?" is FTS5 syntax
+        "tell me about zsh.",  # trailing "."
+        "what's my preferred shell",  # apostrophe
+        "shell: which one is it",  # ":" -- "no such column" without tokenizing
+        "-zsh preference",  # leading "-" is FTS5 column-exclusion syntax
+    ],
+)
+def test_fts_search_tolerates_fts5_syntax_characters(mem_cfg, punctuated_query):
+    """FTS5 treats MATCH's argument as a query expression, not a literal --
+    '?', '.', "'", ':', and a leading '-' are all syntax. Before tokenizing,
+    every one of these raised sqlite3.OperationalError, silently swallowed to
+    zero hits, so an ordinary natural-language question never matched."""
+    prop = create_proposal(
+        mem_cfg,
+        "add_fact",
+        {"content": "Preferred shell is zsh", "category": "prefs", "tags": ["shell"]},
+        reason="operator note",
+    )
+    apply_proposal(mem_cfg, prop.id, reason="confirmed")
+
+    hits = search_facts_fts(mem_cfg, punctuated_query, limit=5)
+
+    assert len(hits) >= 1, f"query {punctuated_query!r} found no hits"
+    assert "zsh" in hits[0][1].lower()
+
+
+def test_fts_search_on_punctuation_only_query_returns_no_hits_without_raising(mem_cfg):
+    """A query with no word tokens (e.g. bare punctuation) must degrade to an
+    empty result, not reach FTS5 with an empty/invalid MATCH expression."""
+    assert search_facts_fts(mem_cfg, "???", limit=5) == []
+
+
 def test_reject_proposal(mem_cfg):
     prop = create_proposal(
         mem_cfg, "add_fact", {"content": "temp fact about widgets"}, reason="maybe"
