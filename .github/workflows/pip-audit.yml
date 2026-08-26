@@ -159,8 +159,15 @@ jobs:
 
       - name: Run pip-audit (ignore only mitigated chromadb + nltk CVEs)
         run: |
-          pip-audit -r requirements.txt --ignore-vuln CVE-2026-45829 --ignore-vuln PYSEC-2026-597 --ignore-vuln PYSEC-2026-3447
-        # CVE-2026-45829 (Critical pre-auth RCE) — risk accepted under v1.4.0 invariants.
+          pip-audit -r requirements.txt \
+            --ignore-vuln CVE-2026-45829 \
+            --ignore-vuln CVE-2026-45830 \
+            --ignore-vuln CVE-2026-45831 \
+            --ignore-vuln CVE-2026-45833 \
+            --ignore-vuln PYSEC-2026-597 \
+            --ignore-vuln PYSEC-2026-3447
+        # CVE-2026-45829, CVE-2026-45830, CVE-2026-45831, CVE-2026-45833
+        # (Critical pre-auth RCE family in chromadb 1.5.9) — risk accepted under v1.4.0 invariants.
         # Actual controls:
         #   - chromadb.PersistentClient (local embedded mode, path from config.yaml["indexing"]["chroma_path"])
         #   - No HttpClient / no network-exposed /api/v2 server surface
