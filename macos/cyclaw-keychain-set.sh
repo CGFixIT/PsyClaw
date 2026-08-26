@@ -52,7 +52,19 @@ fi
 SERVICE="$1"
 ACCOUNT="$(id -un)"
 
+if [ "${CYCLAW_KEYCHAIN_SET_TEST_MODE:-}" = "1" ]; then
+  SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+elif [ -x /usr/bin/security ]; then
+  SECURITY_BIN="/usr/bin/security"
+else
+  SECURITY_BIN="$(command -v security 2>/dev/null || true)"
+fi
+if [ -z "$SECURITY_BIN" ]; then
+  echo "cyclaw-keychain-set: 'security' binary not found" >&2
+  exit 1
+fi
+
 echo "[cyclaw] Storing Keychain service '$SERVICE' for account '$ACCOUNT'."
 echo "[cyclaw] You will be prompted by 'security' for the secret value (input is not echoed)."
-security add-generic-password -a "$ACCOUNT" -s "$SERVICE" -T /usr/bin/security -U -w
+"$SECURITY_BIN" add-generic-password -a "$ACCOUNT" -s "$SERVICE" -T "$SECURITY_BIN" -U -w
 echo "[cyclaw] stored Keychain item: service=$SERVICE account=$ACCOUNT"
