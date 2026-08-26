@@ -40,6 +40,7 @@ filename it alone owns.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import plistlib
@@ -52,6 +53,8 @@ from pathlib import Path
 
 from sync.config import RcloneConfig
 from utils.errors import SchedulerError
+
+logger = logging.getLogger(__name__)
 
 TASK_TAG = "CYCLAW_DROPBOX_SYNC"
 WINDOWS_TASK_NAME = "CyClaw Dropbox Sync"
@@ -623,9 +626,14 @@ class WindowsTaskScheduler:
             proc = subprocess.run(  # noqa: S603  # argv list, schtasks resolved via shutil.which
                 argv, capture_output=True, text=True, timeout=15, check=False
             )
-        except subprocess.SubprocessError:
+        except subprocess.SubprocessError as exc:
+            logger.warning("schtasks /Query failed: %s", exc)
             return None
         if proc.returncode != 0:
+            combined = (proc.stdout or "") + (proc.stderr or "")
+            # "not found" is the normal absent-task case; do not warn about it.
+            if "cannot find the file specified" not in combined.lower() and "does not exist" not in combined.lower():
+                logger.warning("schtasks /Query returned rc=%s: %s", proc.returncode, combined[:500].strip())
             return None
         return ScheduleEntry(
             platform_name="windows",

@@ -173,7 +173,7 @@ def test_auto_reindex_runs_indexer_and_returns_0_on_change():
     cfg.auto_reindex = True
     captured = {}
 
-    def fake_run(argv, check=False, timeout=None):
+    def fake_run(argv, check=False, timeout=None, **kwargs):
         captured["argv"] = argv
         captured["timeout"] = timeout
         return MagicMock(returncode=0)
@@ -199,7 +199,7 @@ def test_auto_reindex_propagates_custom_config_identity():
     cfg._config_path = "/alt/dir/custom.yaml"
     captured = {}
 
-    def fake_run(argv, check=False, timeout=None):
+    def fake_run(argv, check=False, timeout=None, **kwargs):
         captured["argv"] = argv
         return MagicMock(returncode=0)
 
@@ -247,6 +247,35 @@ def test_auto_reindex_timeout_returns_exit_2():
         assert main(["sync"]) == EXIT_FAIL
 
 
+def test_auto_reindex_failure_includes_child_output(capsys):
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    child = MagicMock(returncode=1, stdout="indexer stdout line\n", stderr="indexer stderr line\n")
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run", return_value=child):
+        assert main(["sync"]) == EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "indexer stdout line" in err
+    assert "indexer stderr line" in err
+
+
+def test_auto_reindex_timeout_includes_child_stderr(capsys):
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    exc = subprocess.TimeoutExpired(
+        cmd="indexer", timeout=cfg.sync_timeout_sec, stderr="timeout stderr line\n"
+    )
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run", side_effect=exc):
+        assert main(["sync"]) == EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "timeout stderr line" in err
+
+
 def test_auto_reindex_zero_timeout_means_unbounded():
     # sync.sync_timeout_sec == 0 is the documented "disable the timeout" value
     # (sync/config.py); it must become None, not a zero-second deadline.
@@ -255,7 +284,7 @@ def test_auto_reindex_zero_timeout_means_unbounded():
     cfg.sync_timeout_sec = 0
     captured = {}
 
-    def fake_run(argv, check=False, timeout=None):
+    def fake_run(argv, check=False, timeout=None, **kwargs):
         captured["timeout"] = timeout
         return MagicMock(returncode=0)
 
