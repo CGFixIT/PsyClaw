@@ -44,8 +44,8 @@ modules"; this file groups them by concern.
 | `health.py` | `check_all()` behind `/health`. `degraded` without Ollama is normal. External-provider probes are opt-in (`api.health_probe_external_providers`, ships false). |
 | `config_validation.py` | Boot-time config validation; fails fast on a broken `config.yaml`. |
 | `ops_runner.py` | `subprocess.run([...])` shim behind the four `/ops/*` endpoints — core never imports `sync`/`agentic` (I6). |
-| `launchd_plist.py` | Stdlib-only plist builder shared by the `macos/` + `sync`/`telegram`/`fsconnect` launchd generators. |
-| `win_schtasks.py` | Stdlib-only Windows Task Scheduler XML helper shared by `sync`/`agentic.fsconnect`/`telegram`/`windows/generate_service_task.py`; never calls `schtasks /Create` itself — returns the command an operator runs by hand. |
+| `launchd_plist.py` | Stdlib-only plist builder shared by the `macos/` + `telegram`/`opentweet`/`fsconnect` launchd generators. Deliberately NOT used by `sync/scheduler.py`'s `LaunchdScheduler`, which writes its own plist with `plistlib` (see this module's docstring for why the two stay separate). |
+| `win_schtasks.py` | Stdlib-only Windows Task Scheduler XML helper shared by `agentic.fsconnect`/`telegram`/`opentweet`/`windows/generate_service_task.py`; never calls `schtasks /Create` itself — returns the command an operator runs by hand. (`sync/scheduler.py`'s `WindowsTaskScheduler` is separate and drives `schtasks.exe` directly.) |
 | `agent_identity.py` | Driver-agnostic committer identity + branch-prefix allowlist for all agent write surfaces. |
 | `repo_paths.py` | Stdlib-only mirror of `agentic`'s repo-relative path-safety rule (no `..`, no absolute/drive-qualified path, no leading `-`), shared by `harness` and `ops_runner` so they can reject the same escapes without importing `agentic` (I6). |
 | `selftest.py` | Shared self-test plumbing used by the out-of-band subsystems' `test` subcommands. |

@@ -33,7 +33,7 @@ inference:
 | `core.py` | Retired | Serves the `deepagent-plan` probe only |
 | `runners.py` | Retired | Serves the `deepagent-plan` probe only |
 | `memory.py` | Retired | Imported by `builder.py` only |
-| `permissions.py` | Retired | Imported by `builder.py` only |
+| `permissions.py` | Retired | Imported by `builder.py` and `tools.py`; also re-exported from `__init__.py` |
 | `skills.py` | Retired | Imported by `builder.py` only |
 | `subagents.py` | Retired | Imported by `builder.py` only |
 | `tools.py` | Retired | Imported by `builder.py` only |
