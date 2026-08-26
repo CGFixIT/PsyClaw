@@ -44,18 +44,62 @@ from pathlib import Path
 KEYCHAIN_WRAPPER_RELATIVE_PATH = "macos/cyclaw-keychain-env.sh"
 
 
+def _probe_python(candidate: str) -> None:
+    """Fail loudly if *candidate* cannot import the runtime deps.
+
+    A plist that points at a Python without fastapi/uvicorn will crash-loop
+    on launch and KeepAlive will restart it forever. This probe is fast and
+    fail-closed: it raises RuntimeError with a clear message instead of
+    emitting a broken plist.
+    """
+    probe = subprocess.run(  # noqa: S603 -- argv list, interpreter resolved before call
+        [candidate, "-c", "import fastapi, uvicorn"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"launchd plist target interpreter {candidate!r} cannot import fastapi/uvicorn; "
+            "set CYCLAW_PYTHON or ensure ~/.CyClaw/venv/bin/python has the runtime deps"
+        )
+
+
 def python_executable() -> str:
     """Best-guess python interpreter to invoke from a generated plist.
 
     Mirrors ``sync/scheduler.py``'s own ``_python_executable()`` -- kept here
     independently too, per this module's documented decision not to couple
     with ``sync.scheduler`` (see the module docstring).
+
+    Resolution order:
+      1. ``CYCLAW_PYTHON`` environment variable.
+      2. ``$CYCLAW_HOME/venv/bin/python`` if it exists.
+      3. ``sys.executable``.
+      4. ``python3`` / ``python`` on PATH.
+
+    The chosen interpreter is probed for ``fastapi`` and ``uvicorn``; a
+    missing dependency raises ``RuntimeError`` rather than writing a plist
+    that would crash-loop under ``KeepAlive``.
     """
-    candidate = sys.executable or "python"
+    candidate: str | None = os.environ.get("CYCLAW_PYTHON")
+    if not candidate:
+        home = os.environ.get("CYCLAW_HOME")
+        if home:
+            venv_python = Path(home) / "venv" / "bin" / "python"
+            if venv_python.is_file():
+                candidate = str(venv_python)
+    if not candidate:
+        candidate = sys.executable or "python"
     if candidate and os.path.isfile(candidate):
+        _probe_python(candidate)
         return candidate
     found = shutil.which("python3") or shutil.which("python")
-    return found or "python"
+    if found:
+        _probe_python(found)
+        return found
+    return "python"
 
 
 def current_uid() -> int:
