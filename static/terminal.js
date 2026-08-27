@@ -64,7 +64,9 @@ let queryCount = 0;
 // fetch aborts at 3s while the server-side probe allows 5s, so a still-loading
 // or unreachable Ollama is exactly the case where the sync never runs.
 let queryDeadlineMs = 790000;
-let pendingConfirmQuery = null;
+// Map<entryId, queryText>. A single global string was overwritten by each new
+// low-confidence query, so approving a stale prompt submitted the wrong text.
+const pendingConfirmById = new Map();
 let pendingSoulProposal = null;
 let entryCounter = 0;
 let activeQueryController = null;
@@ -671,7 +673,7 @@ async function openAuditPanel() {
   }
 }
 
-async function submitQuery(confirmedOnline = null, onlineProvider = null) {
+async function submitQuery(confirmedOnline = null, onlineProvider = null, confirmEntryId = null) {
   // sendBtn.disabled is this console's in-flight signal (set below, cleared in
   // finally). The button itself can't be clicked while disabled, but the Enter
   // key handler and the confirm-gate buttons call here directly and bypass it.
@@ -684,12 +686,13 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
   // operator's typed text.
   if (sendBtn.disabled) return;
 
-  const query = confirmedOnline !== null ? pendingConfirmQuery : input.value.trim();
-  if (confirmedOnline !== null) pendingConfirmQuery = null;
+  const query = confirmedOnline !== null ? pendingConfirmById.get(confirmEntryId) : input.value.trim();
+  if (confirmedOnline !== null) pendingConfirmById.delete(confirmEntryId);
   if (!query) return;
-  if (confirmedOnline === null && (query === '/users' || query === '/admin')) {
+  if (confirmedOnline === null && (query === '/users' || query === '/admin' || query === '/audit')) {
     input.value = '';
-    openUsersPanel();
+    if (query === '/audit') openAuditPanel();
+    else openUsersPanel();
     return;
   }
 
@@ -750,11 +753,11 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null) {
     queryCount++;
 
     if (data.needs_confirm) {
-      pendingConfirmQuery = query;
-      addConfirmEntry(
+      const entryId = addConfirmEntry(
         data.confirm_message || 'Low confidence. Send online?',
         Array.isArray(data.available_providers) ? data.available_providers : []
       );
+      pendingConfirmById.set(entryId, query);
       return;
     }
 
@@ -938,6 +941,8 @@ function addConfirmEntry(message, availableProviders = []) {
   resultsEl.scrollTop = resultsEl.scrollHeight;
   noBtn.focus();
 
+  return id;
+
   // Trap focus within the modal dialog (Tab cycles through the rendered buttons).
   const focusable = [...providerBtns, noBtn];
   el.addEventListener('keydown', (e) => {
@@ -961,9 +966,15 @@ function handleConfirm(confirmed, entryId, onlineProvider = null) {
     el.removeAttribute('aria-modal');
     el.removeAttribute('aria-labelledby');
   }
+  const storedQuery = pendingConfirmById.get(entryId);
+  if (storedQuery === undefined) {
+    addEntry('system', '', '→ Confirmation expired; please resend your query.');
+    input.focus();
+    return;
+  }
   const providerLabel = onlineProvider === 'claude' ? 'Claude' : 'Grok';
   addEntry('system', '', confirmed ? `→ Escalating to ${providerLabel}...` : '→ Staying offline (local model)');
-  submitQuery(confirmed, onlineProvider);
+  submitQuery(confirmed, onlineProvider, entryId);
   input.focus();
 }
 

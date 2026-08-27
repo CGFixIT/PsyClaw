@@ -219,6 +219,32 @@ def test_users_and_audit_markup_exist():
         assert marker in html, f"missing {marker!r}"
 
 
+def test_audit_slash_command_is_intercepted_client_side():
+    """/audit is documented in the help text and has a dedicated panel. Without
+    interception it is POSTed to /query and returns a raw JSON error."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function submitQuery(", 1)
+    assert len(body) == 2, "submitQuery moved; update this test"
+    after = body[1].split("if (emptyState)", 1)[0]
+    assert "query === '/audit'" in after, "/audit is not intercepted in submitQuery"
+    assert "openAuditPanel()" in after, "/audit interception does not open the audit panel"
+
+
+def test_confirm_prompt_query_is_stored_per_entry():
+    """A single global pendingConfirmQuery string was overwritten by each new
+    low-confidence query, so approving a stale prompt submitted the wrong text.
+    The fix stores query text keyed by confirm-entry id."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "const pendingConfirmById = new Map()" in js
+    assert "pendingConfirmById.set(entryId, query)" in js
+    assert "pendingConfirmById.get(confirmEntryId)" in js
+    assert "pendingConfirmById.delete(confirmEntryId)" in js
+    assert "handleConfirm(true, id, provider)" in js
+    # handleConfirm must validate the stored query before escalating.
+    assert "pendingConfirmById.get(entryId)" in js
+    assert "Confirmation expired" in js
+
+
 def test_query_does_not_send_api_key_as_bearer():
     """Once auth.enabled is on, Authorization on /query is a device token.
     The typed CYCLAW_API_KEY must stay on /soul/* and /ops/* only."""
