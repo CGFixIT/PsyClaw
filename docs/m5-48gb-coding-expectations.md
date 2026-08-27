@@ -1,9 +1,12 @@
-# M5 48 GB coding expectations (local cached 27B)
+# M5 Pro 48 GB coding expectations (local cached 27B)
 
-**Status (2026-08-27):** Operator doctrine for the CyClaw real-repo loop on a
-MacBook Pro with **Apple M5-class silicon and 48 GB unified memory**, running
-the shipped local stack: Ollama `qwen3.8:27b-mlx`, `reasoning_effort: none`,
+**Status (2026-08-27):** Operator doctrine for the CyClaw real-repo loop on the
+machine this repo is developed on: **MacBook Pro, Apple M5 Pro, 48 GB unified
+memory.** Local stack: Ollama `qwen3.8:27b-mlx`, `reasoning_effort: none`,
 `num_ctx` 16384. This is not a hardware upgrade guide and not an invariant.
+
+This box is **not** an M5 Max and **not** a base M5. Do not copy Max tok/s
+benchmarks (70+ decode on 27B+DFlash, 128 GB residency) onto this SKU.
 
 Canonical loop guide: [`docs/agentic/AGENTIC_README.md`](agentic/AGENTIC_README.md) §9–§10.
 Package map: [`agentic/README.md`](../agentic/README.md).
@@ -12,11 +15,36 @@ Yes, 48 GB can do more than burst. **The loop is what keeps it on burst.**
 A scratchpad helps the window, not the model. Used wrong, it just makes 27B
 mistakes durable.
 
+## Which chip this is (M5 vs M5 Pro vs M5 Max)
+
+"MacBook Pro M5 48 GB" in operator speech means **M5 Pro + 48 GB**. Base M5
+cannot be configured with 48 GB (ceiling 32 GB). M5 Max can be configured with
+48 GB on the 40-core GPU SKU, but that is a different SoC (more GPU cores,
+460–614 GB/s bandwidth, ceiling 128 GB). The operator machine is the Pro tier.
+
+| Chip | Typical CPU / GPU | Memory bandwidth | Unified memory ceiling | 48 GB available? |
+|---|---|---|---|---|
+| M5 (base) | 10 / 10 | ~153 GB/s | 32 GB | No |
+| **M5 Pro (this box)** | 15/16 or 18/20 | ~307 GB/s | 64 GB | **Yes — this config** |
+| M5 Max | 18 / 32 or 40 | ~460 or ~614 GB/s | 128 GB | Yes, on 40-core GPU SKUs |
+
+What that means for CyClaw:
+
+- **Capacity** of the 27B job is the 48 GB and the 16k product caps, not the
+  Max GPU. Weights ~18 GB + 16k KV ~1 GB fit with headroom on Pro 48 GB.
+- **Decode speed** on Pro 48 GB is lower than published M5 Max + DFlash2 / MTP
+  screenshots. Do not treat those as this machine's baseline.
+- **Max 128 GB** is how you would resident a 70B / 8-bit second model. That is
+  a different purchase. This doc does not assume it.
+- Raising `num_ctx` on this Pro is still feasible in RAM; it still does not
+  turn 27B into an architect.
+
 ## Hardware vs the loop you actually run
 
 48 GB is enough RAM for 4-bit Qwen3.8-27B plus more context than the product
 gives it. KV on this model is on the order of ~64 KiB/token. 16k context is
-~1 GB of cache on top of ~18 GB weights. That is not a memory emergency.
+~1 GB of cache on top of ~18 GB weights. That is not a memory emergency on
+M5 Pro 48 GB.
 
 What you ship and run is the constraint:
 
@@ -46,7 +74,7 @@ Claude.
 
 ## What this cached model can do on this Mac
 
-**In scope for `qwen3.8:27b-mlx` on the 48 GB box**
+**In scope for `qwen3.8:27b-mlx` on the M5 Pro 48 GB box**
 
 - Implement a human-approved `plan.md` that lists at most one implementation
   file and one test file.
@@ -149,9 +177,10 @@ Red flags:
 
 ## Bottom line
 
-48 GB can run more than burst. You chose 16k and one-file jobs because a 27B
-at long context is slow, stall-prone, and bad at architecture. That was the
-correct product call.
+M5 Pro 48 GB can run more than burst. You chose 16k and one-file jobs because
+a 27B at long context is slow, stall-prone, and bad at architecture. That was
+the correct product call on this SKU. An M5 Max would change decode speed and
+the ceiling for a second resident model. It would not change the 27B's job.
 
 A pre-compact scratchpad is worth doing as **paging**, identical in spirit to
 `plan.md` + session notes. It does not mitigate "only a 27B." It mitigates
