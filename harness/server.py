@@ -58,7 +58,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
-from utils.tool_broker import ToolDenied, assert_allowed
 from harness import env_keys
 from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
@@ -96,6 +95,7 @@ from utils.errors import AgenticError, AuthBootstrapComplete
 from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
+from utils.tool_broker import ToolDenied, assert_allowed
 
 logger = logging.getLogger("cyclaw.harness.server")
 
