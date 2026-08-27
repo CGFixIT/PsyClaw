@@ -80,12 +80,20 @@ def test_generate_plan_rejects_an_invalid_completion_budget(audit_cfg) -> None:
 
 def test_generate_plan_uses_the_plan_prompt_not_the_coder_prompt(audit_cfg) -> None:
     """A planner told to emit '=== FILE ===' blocks would route around the human
-    review entirely -- it would be writing code, not proposing an approach."""
+    review entirely -- it would be writing code, not proposing an approach.
+
+    The plan prompt is also the 27B burst-handoff contract: one implementation
+    file, one test file, and the I6 paths named so a cloud planner cannot
+    schedule work the local coder must not touch.
+    """
     client = _StubClient()
     generate_plan(client, instruction="do a thing", cfg=audit_cfg)
     system = client.system_prompts[0]
     assert system != PLANNER_SYSTEM_PROMPT
     assert "=== FILE" in system and "Do NOT" in system
+    assert "one implementation file" in system
+    assert "one test" in system
+    assert "gate.py" in system
 
 
 def test_generate_plan_fences_untrusted_github_context(audit_cfg) -> None:
