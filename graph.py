@@ -333,18 +333,25 @@ def _generate_or_error(
     *,
     label: str,
     spend_context: dict[str, object] | None = None,
+    query: str = "",
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
 ) -> tuple[str, str | None]:
     """Call client.generate(prompt); translate a RAGError into a safe answer.
 
-    local_llm_node, offline_best_effort_node (both call LocalLLMClient) and
-    grok_fallback_node (GrokClient) and claude_fallback_node (ClaudeClient)
-    each independently re-derived this same try/except + "[<label> Error: ...]"
-    formatting. LLMServiceError, GrokServiceError, and ClaudeServiceError all
-    derive from RAGError with .code/.message, so one handler covers all three
-    clients. Returns (answer, error) where error is the
-    "{code}: {message}" string for audit_logger_node, or None on success —
-    node functions and their public signatures/return dicts are unchanged.
+    When ``generate_guard`` is injected (Phase 3 bridge), NVIDIA ``check()``
+    runs around the existing generate. None (default) is the pre-Phase-3 path.
     """
+    if generate_guard is not None:
+        try:
+            return generate_guard(
+                client,
+                prompt,
+                query=query,
+                label=label,
+                spend_context=spend_context,
+            )
+        except Exception:
+            logger.warning("generate_guard raised; falling back to unwrapped generate", exc_info=True)
     try:
         if spend_context is None:
             return client.generate(prompt), None
@@ -491,8 +498,13 @@ def guardrail_output_node(
         "guardrail_rails": result.get("rails", []),
     }
 
-def local_llm_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
-                    personality: PersonalityManager | None = None) -> dict:
+def local_llm_node(
+    state: GraphState,
+    llm: LocalLLMClient,
+    cfg: dict,
+    personality: PersonalityManager | None = None,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
+) -> dict:
     """Node 3: Build prompt from retrieved docs + query, call Ollama.
 
     REFERENCE IMPLEMENTATION for prompt formatting (see 5.2.26 NOTE).
@@ -542,7 +554,9 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
             est_prompt_tokens, max_ctx_tokens,
         )
 
-    answer, error = _generate_or_error(llm, prompt, label="LLM")
+    answer, error = _generate_or_error(
+        llm, prompt, label="LLM", query=query, generate_guard=generate_guard
+    )
 
     out: dict = {
         "answer": answer,
@@ -577,7 +591,13 @@ def user_gate_node(state: GraphState, cfg: dict) -> dict:
     return {}
 
 def _external_fallback_node(
-    state: GraphState, client: _GeneratingClient | None, cfg: dict, *, provider: str, label: str
+    state: GraphState,
+    client: _GeneratingClient | None,
+    cfg: dict,
+    *,
+    provider: str,
+    label: str,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
 ) -> dict:
     """Shared implementation behind grok_fallback_node / claude_fallback_node.
 
@@ -691,6 +711,8 @@ def _external_fallback_node(
         prompt,
         label=label,
         spend_context=_fallback_spend_context(state, cfg, provider),
+        query=query,
+        generate_guard=generate_guard,
     )
 
     # No fabricated source. A stub {"source": f"{label} Fallback", "score": 0.0,
@@ -710,17 +732,37 @@ def _external_fallback_node(
     return out
 
 
-def grok_fallback_node(state: GraphState, grok: GrokClient | None, cfg: dict) -> dict:
+def grok_fallback_node(
+    state: GraphState,
+    grok: GrokClient | None,
+    cfg: dict,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
+) -> dict:
     """Node 5: Call Grok API. Only reachable when hybrid + confirmed + selected."""
-    return _external_fallback_node(state, grok, cfg, provider="grok", label="Grok")
+    return _external_fallback_node(
+        state, grok, cfg, provider="grok", label="Grok", generate_guard=generate_guard
+    )
 
 
-def claude_fallback_node(state: GraphState, claude: ClaudeClient | None, cfg: dict) -> dict:
+def claude_fallback_node(
+    state: GraphState,
+    claude: ClaudeClient | None,
+    cfg: dict,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
+) -> dict:
     """Call Claude API. Only reachable when hybrid + confirmed + selected."""
-    return _external_fallback_node(state, claude, cfg, provider="claude", label="Claude")
+    return _external_fallback_node(
+        state, claude, cfg, provider="claude", label="Claude", generate_guard=generate_guard
+    )
 
-def offline_best_effort_node(state: GraphState, llm: LocalLLMClient, cfg: dict,
-                             personality: PersonalityManager | None = None) -> dict:
+
+def offline_best_effort_node(
+    state: GraphState,
+    llm: LocalLLMClient,
+    cfg: dict,
+    personality: PersonalityManager | None = None,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
+) -> dict:
     """Node 6: Best-effort local answer when user declines Grok or offline mode.
 
     5.2.26: Prompt formatting now mirrors local_llm_node exactly — query-first
@@ -771,7 +813,9 @@ No local knowledge base context was available for this query.
 
 Provide the best general answer you can. Clearly note that your local knowledge base did not have relevant information for this query."""
 
-    answer, error = _generate_or_error(llm, prompt, label="LLM")
+    answer, error = _generate_or_error(
+        llm, prompt, label="LLM", query=query, generate_guard=generate_guard
+    )
 
     out: dict = {
         "answer": answer,
@@ -1056,6 +1100,7 @@ def build_graph(
     personality: PersonalityManager | None = None,
     input_guard: Callable[[str], dict[str, Any]] | None = None,
     output_guard: Callable[[str, str, str], dict[str, Any]] | None = None,
+    generate_guard: Callable[..., tuple[str, str | None]] | None = None,
 ):
     """Build and compile the CyClaw LangGraph.
 
@@ -1087,6 +1132,8 @@ def build_graph(
                      before audit_logger. None (default) is a pure
                      pass-through; local_llm is the only path it inspects
                      (see guardrail_output_node's docstring).
+        generate_guard: optional Phase 3 wrap around client.generate
+                     (NVIDIA check() via the bridge). None = unwrapped.
 
     Returns:
         Compiled LangGraph (CompiledGraph) ready to invoke.
@@ -1100,13 +1147,13 @@ def build_graph(
     graph.add_node("route_by_score",  partial(route_by_score_node,     cfg=cfg))
     graph.add_node("guardrail_input", partial(guardrail_input_node,    input_guard=input_guard))
     graph.add_node("guardrail_output", partial(guardrail_output_node,  output_guard=output_guard))
-    graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality))
+    graph.add_node("local_llm",       partial(local_llm_node,          llm=llm, cfg=cfg, personality=personality, generate_guard=generate_guard))
     graph.add_node("user_gate",       partial(user_gate_node,          cfg=cfg))
     graph.add_node("pre_action_hook_grok",   partial(pre_action_hook_node, cfg=cfg, provider="grok"))
     graph.add_node("pre_action_hook_claude", partial(pre_action_hook_node, cfg=cfg, provider="claude"))
-    graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg))
-    graph.add_node("claude_fallback", partial(claude_fallback_node,    claude=claude, cfg=cfg))
-    graph.add_node("offline_best_effort", partial(offline_best_effort_node, llm=llm, cfg=cfg, personality=personality))
+    graph.add_node("grok_fallback",   partial(grok_fallback_node,      grok=grok, cfg=cfg, generate_guard=generate_guard))
+    graph.add_node("claude_fallback", partial(claude_fallback_node,    claude=claude, cfg=cfg, generate_guard=generate_guard))
+    graph.add_node("offline_best_effort", partial(offline_best_effort_node, llm=llm, cfg=cfg, personality=personality, generate_guard=generate_guard))
     graph.add_node("audit_logger",    partial(audit_logger_node,       cfg=cfg, personality=personality))
 
     # ── Entry point ──────────────────────────────────────────────
