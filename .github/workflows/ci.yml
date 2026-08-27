@@ -958,6 +958,7 @@ jobs:
             --cov=utils.selftest \
             --cov=utils.launchd_plist \
             --cov=utils.win_schtasks \
+            --cov=utils.endpoint_trust \
             --cov=llm.client \
             --cov=graph \
             --cov=retrieval.embeddings \

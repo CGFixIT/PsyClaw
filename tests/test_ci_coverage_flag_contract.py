@@ -84,3 +84,10 @@ def test_win_schtasks_is_measured() -> None:
     assert (_REPO_ROOT / "utils" / "win_schtasks.py").exists()
     for lane in _COV_LANES:
         assert "utils.win_schtasks" in _cov_flags(lane), f"{lane} does not measure utils.win_schtasks"
+
+
+def test_endpoint_trust_is_measured() -> None:
+    """Regression pin for the module that broke CI on 2026-08-27."""
+    assert (_REPO_ROOT / "utils" / "endpoint_trust.py").exists()
+    for lane in _COV_LANES:
+        assert "utils.endpoint_trust" in _cov_flags(lane), f"{lane} does not measure utils.endpoint_trust"
