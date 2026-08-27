@@ -7,7 +7,6 @@ an installed Chromium browser. It never contacts an external provider.
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 from typing import Any
 

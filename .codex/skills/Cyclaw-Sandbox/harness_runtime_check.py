@@ -80,9 +80,9 @@ def main() -> int:
         "/api/soul", "/api/model", "/api/chat", "/api/chat/cancel", "/api/github/status",
         "/api/harness/runs",
         "/api/sessions/{session_id}/goal",
-        "/api/web", "/api/web/allow", "/api/web/deny",
+        "/api/web/allow", "/api/web/deny",
         "/api/web/fetch", "/api/web/search", "/api/web/inject", "/api/web/forget",
-        "/api/memory", "/api/memory/add", "/api/memory/forget", "/api/memory/clear",
+        "/api/memory/add", "/api/memory/forget", "/api/memory/clear",
         # agentic coding runs: start (blocking), read a record, decide on it.
         # `missing = expected - routes` is a SUBSET check, so a new route is
         # never a failure here -- it is silently uncovered until it is listed.

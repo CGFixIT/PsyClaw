@@ -19,13 +19,14 @@ Usage (called from verify.sh while server is running):
     python terminal_emulation.py <base_url>  (default: loopback:8787)
 """
 
-import json
 import os
 import sys
 
 
 def main() -> int:
-    base = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 — loopback-only by design (api.host in config.yaml)
+    # DevSkim: ignore DS162092,DS137138 — loopback-only by design
+    # (api.host in config.yaml).
+    base = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"
 
     try:
         import httpx
@@ -94,7 +95,7 @@ def main() -> int:
 
         # ── 2. POST /query — vault-hit path ───────────────────────────────────
         CORPUS_QUERY = "What fusion method does CyClaw use to blend semantic and keyword results?"
-        print(f"[2] POST /query  (vault-hit — terminal.html normal flow)")
+        print("[2] POST /query  (vault-hit — terminal.html normal flow)")
         print(f"       query: {CORPUS_QUERY}")
         try:
             r = client.post("/query", json={"query": CORPUS_QUERY})
@@ -118,7 +119,7 @@ def main() -> int:
 
         # ── 3. POST /query — off-topic flow ──────────────────────────────────
         OFFTOPIC_QUERY = "What is the boiling point of water at high altitude?"
-        print(f"[3] POST /query  (off-topic — confirm prompt or confident local hit)")
+        print("[3] POST /query  (off-topic — confirm prompt or confident local hit)")
         print(f"       query: {OFFTOPIC_QUERY}")
         try:
             r = client.post("/query", json={"query": OFFTOPIC_QUERY})
@@ -134,7 +135,7 @@ def main() -> int:
         print()
 
         # ── 4. POST /query — declined-online branch ──────────────────────────
-        print(f"[4] POST /query  user_confirmed_online=false  (terminal.html 'No' branch)")
+        print("[4] POST /query  user_confirmed_online=false  (terminal.html 'No' branch)")
         print(f"       query: {OFFTOPIC_QUERY}")
         try:
             r = client.post("/query", json={

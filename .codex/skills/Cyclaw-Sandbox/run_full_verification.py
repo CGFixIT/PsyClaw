@@ -32,9 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
-import random
 import subprocess
 import sys
 import tempfile
@@ -50,7 +48,12 @@ from typing import Any
 REPO_URL = "https://github.com/CGFixIT/CyClaw.git"
 BRANCH = "main"
 CYCLAW_DIR = Path(os.environ.get("CYCLAW_REPO", str(Path(tempfile.gettempdir()) / "CyClaw")))
-RESULTS_FILE = Path(os.environ.get("CYCLAW_RESULTS_FILE", str(Path(tempfile.gettempdir()) / "cyclaw-sandbox-query-results.json")))
+RESULTS_FILE = Path(
+    os.environ.get(
+        "CYCLAW_RESULTS_FILE",
+        str(Path(tempfile.gettempdir()) / "cyclaw-sandbox-query-results.json"),
+    )
+)
 
 # Which of the 3-tier Ollama realism ladder this run actually exercised (see
 # SKILL.md's "3-tier realism" section). Tier 0 (in-process pytest MockLocalLLM
@@ -60,7 +63,12 @@ RESULTS_FILE = Path(os.environ.get("CYCLAW_RESULTS_FILE", str(Path(tempfile.gett
 OLLAMA_TIER: int | None = None
 
 # ANSI colors
-R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"; B = "\033[94m"; C = "\033[96m"; N = "\033[0m"
+R = "\033[91m"
+G = "\033[92m"
+Y = "\033[93m"
+B = "\033[94m"
+C = "\033[96m"
+N = "\033[0m"
 
 
 @dataclass
@@ -201,7 +209,7 @@ class MockSentenceTransformer:
         for text in texts:
             vec = np.zeros(self._dim, dtype=np.float32)
             for word in text.lower().split():
-                h = hashlib.md5(word.encode()).hexdigest()
+                h = hashlib.md5(word.encode(), usedforsecurity=False).hexdigest()
                 for i in range(3):
                     idx = int(h[i*8:(i+1)*8], 16) % self._dim
                     vec[idx] += 1.0
@@ -376,13 +384,22 @@ def _ensure_repo():
         return
     if CYCLAW_DIR.exists() and (CYCLAW_DIR / ".git").exists():
         log(f"Using existing repo: {CYCLAW_DIR}")
-        subprocess.run(["git", "checkout", BRANCH], cwd=CYCLAW_DIR, capture_output=True)
-        subprocess.run(["git", "pull"], cwd=CYCLAW_DIR, capture_output=True)
+        # Fixed git subcommands only operate on the isolated checkout.
+        subprocess.run(  # noqa: S603
+            ["git", "checkout", BRANCH],  # noqa: S607
+            cwd=CYCLAW_DIR,
+            capture_output=True,
+        )
+        subprocess.run(  # noqa: S603
+            ["git", "pull"],  # noqa: S607
+            cwd=CYCLAW_DIR,
+            capture_output=True,
+        )
     else:
         log(f"Cloning {REPO_URL} -> {CYCLAW_DIR}")
         CYCLAW_DIR.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, str(CYCLAW_DIR)],
+        subprocess.run(  # noqa: S603
+            ["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, str(CYCLAW_DIR)],  # noqa: S607
             check=True, capture_output=True,
         )
     os.chdir(CYCLAW_DIR)
@@ -432,6 +449,7 @@ def phase_config_invariants() -> PhaseResult:
     with open("config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
+    fallback_cfg = cfg.get("policy", {}).get("fallback", {})
     checks = [
         ("app.mode == 'hybrid'", cfg.get("app", {}).get("mode") == "hybrid"),
         ("api.host == 127.0.0.1", cfg.get("api", {}).get("host") == "127.0.0.1"),
@@ -455,11 +473,11 @@ def phase_config_invariants() -> PhaseResult:
         ("agentic.enabled == false", cfg.get("agentic", {}).get("enabled") is False),
         ("agentic.mode == 'write'", cfg.get("agentic", {}).get("mode") == "write"),
         ("agentic.writes_enabled == true", cfg.get("agentic", {}).get("writes_enabled") is True),
-        ("grok_max_prompt_chars == 8000", cfg.get("policy", {}).get("fallback", {}).get("grok_max_prompt_chars") == 8000),
-        ("claude_max_prompt_chars == 8000", cfg.get("policy", {}).get("fallback", {}).get("claude_max_prompt_chars") == 8000),
-        ("send_local_context_to_grok == false", cfg.get("policy", {}).get("fallback", {}).get("send_local_context_to_grok") is False),
-        ("send_local_context_to_claude == false", cfg.get("policy", {}).get("fallback", {}).get("send_local_context_to_claude") is False),
-        ("require_user_confirm present (unwired)", "require_user_confirm" in cfg.get("policy", {}).get("fallback", {})),
+        ("grok_max_prompt_chars == 8000", fallback_cfg.get("grok_max_prompt_chars") == 8000),
+        ("claude_max_prompt_chars == 8000", fallback_cfg.get("claude_max_prompt_chars") == 8000),
+        ("send_local_context_to_grok == false", fallback_cfg.get("send_local_context_to_grok") is False),
+        ("send_local_context_to_claude == false", fallback_cfg.get("send_local_context_to_claude") is False),
+        ("require_user_confirm present (unwired)", "require_user_confirm" in fallback_cfg),
     ]
 
     # Check Anthropic key redaction in config (policy.privacy, not logging.audit)
@@ -559,7 +577,6 @@ def phase_build_corpus() -> PhaseResult:
     # Build BM25 index using the same public tokenizer as retrieval/indexer.py.
     try:
         from retrieval.stemmer import tokenize_and_stem
-        from rank_bm25 import BM25Okapi
 
         tokenized = []
         for fname in files:
@@ -580,7 +597,7 @@ def phase_build_corpus() -> PhaseResult:
                         "chunk_id": c["id"],
                         "stem_tags": json.dumps(tokens[:20]),
                     }
-                    for c, tokens in zip(chunks, tokenized)
+                    for c, tokens in zip(chunks, tokenized, strict=True)
                 ],
             }, f)
 
@@ -597,7 +614,7 @@ def phase_build_corpus() -> PhaseResult:
         Path("index/chroma_db").mkdir(parents=True, exist_ok=True)
         collection = chroma_client.get_or_create_collection("cyclaw_kb")
 
-        for chunk, tokens in zip(chunks, tokenized):
+        for chunk, tokens in zip(chunks, tokenized, strict=True):
             emb = encoder.encode([chunk["text"]])[0].tolist()
             collection.add(
                 embeddings=[emb],
@@ -635,8 +652,12 @@ def phase_execute_queries() -> PhaseResult:
     # reader client in a later phase.
 
     from graph import (
-        retrieve_node, route_by_score_node, local_llm_node,
-        user_gate_node, offline_best_effort_node, audit_logger_node,
+        audit_logger_node,
+        local_llm_node,
+        offline_best_effort_node,
+        retrieve_node,
+        route_by_score_node,
+        user_gate_node,
     )
     from retrieval.hybrid_search import HybridRetriever
 
@@ -656,7 +677,7 @@ def phase_execute_queries() -> PhaseResult:
     ]
 
     all_results = []
-    for query_text, expected_model, expect_answer, description in queries:
+    for query_text, expected_model, _expect_answer, description in queries:
         log(f"\n  {C}--- {description} ---{N}")
         log(f"  Query: \"{query_text}\"")
         state = {"query": query_text}
@@ -763,11 +784,10 @@ def phase_triple_gate() -> PhaseResult:
         from graph import _external_fallback_node
         sig = inspect.signature(_external_fallback_node)
         params = list(sig.parameters.keys())
-        has_provider = "provider" in params
-        has_label = "label" in params
+        has_provider_label = {"provider", "label"} <= set(params)
         has_no_personality = "personality" not in params
         log(f"    {G}PASS{N} _external_fallback_node exists with provider/label params")
-        phase.checks.append(Check("external_fallback_node_exists", True))
+        phase.checks.append(Check("external_fallback_node_exists", has_provider_label))
         phase.checks.append(Check("external_fallback_no_personality", has_no_personality))
     except ImportError:
         log(f"    {R}FAIL{N} _external_fallback_node not found")
@@ -921,6 +941,7 @@ def phase_audit_integrity() -> PhaseResult:
 
     try:
         import yaml
+
         from metrics import summarize_audit
         from utils.logger import audit_log
 
@@ -1301,6 +1322,7 @@ def phase_harness_console() -> PhaseResult:
     # strictly more thorough than checking for endpoint string literals.
     try:
         from fastapi.testclient import TestClient
+
         from harness.config import HarnessConfig
         from harness.ollama import HarnessChatClient
         from harness.server import create_app
@@ -1498,7 +1520,8 @@ def phase_harness_console() -> PhaseResult:
     # this repo's "config.yaml is the single source of truth" convention.
     try:
         import yaml
-        rl_cfg = (yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8")) or {}).get("api", {}).get("rate_limit", {})
+        config = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8")) or {}
+        rl_cfg = config.get("api", {}).get("rate_limit", {})
         max_requests = int(rl_cfg.get("max_requests", 60))
     except (OSError, ValueError):
         max_requests = 60
@@ -1627,9 +1650,9 @@ def phase_harness_html() -> PhaseResult:
 # ---------------------------------------------------------------------------
 def main():
     print(f"\n{B}{'='*60}")
-    print(f"  CyClaw Swarm Verification (Full)")
+    print("  CyClaw Swarm Verification (Full)")
     print(f"  Target: {REPO_URL} @ {BRANCH}")
-    print(f"  5 Queries: 2 vault hit, 1 offline best-effort, 1 Grok API, 1 Claude API")
+    print("  5 Queries: 2 vault hit, 1 offline best-effort, 1 Grok API, 1 Claude API")
     print(f"{'='*60}{N}\n")
 
     _install_stubs()
@@ -1702,15 +1725,19 @@ def main():
         ("Q4", "Grok API connection-only"),
         ("Q5", "Claude API connection-only"),
     ]
-    for (qid, desc), pr in zip(query_descs, results[3].checks[:5] if len(results) > 3 else []):
+    for (qid, desc), pr in zip(
+        query_descs,
+        results[3].checks[:5] if len(results) > 3 else [],
+        strict=True,
+    ):
         status = f"{G}PASS{N}" if pr.passed else f"{R}FAIL{N}"
         print(f"    [{status}] {qid}: {desc}")
 
     print(f"\n{'='*60}")
-    print(f"CyClaw Swarm Verification Complete.")
+    print("CyClaw Swarm Verification Complete.")
     print(f"Full functionality status: {'PASS' if total_passed == total_checks else 'PARTIAL'}.")
     print(f"Total: {total_passed}/{total_checks} checks passed")
-    print(f"")
+    print("")
     print(f"RAG pipeline (5 queries): {'PASS' if results[3].passed else 'FAIL'}")
     print(f"Triple-Gate Online API (Grok): {'PASS' if all(c.passed for c in results[4].checks[:6]) else 'FAIL'}")
     print(f"Triple-Gate Online API (Claude): {'PASS' if all(c.passed for c in results[4].checks[6:]) else 'FAIL'}")
@@ -1743,7 +1770,7 @@ def main():
     }
     with open("verification_report.json", "w") as f:
         json.dump(report, f, indent=2)
-    print(f"\nFull report saved to verification_report.json")
+    print("\nFull report saved to verification_report.json")
 
     return 0 if total_passed == total_checks else 1
 

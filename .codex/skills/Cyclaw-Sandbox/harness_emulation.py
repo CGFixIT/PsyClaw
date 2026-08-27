@@ -48,7 +48,9 @@ _CSRF_META_RE = re.compile(r'<meta name="csrf-token" content="([^"]*)">')
 
 
 def main() -> int:
-    base = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8790"  # DevSkim: ignore DS162092,DS137138 — loopback-only by design (harness.host in harness/config.py)
+    # DevSkim: ignore DS162092,DS137138 — loopback-only by design
+    # (harness.host in harness/config.py).
+    base = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8790"
 
     try:
         import httpx
@@ -313,8 +315,11 @@ def main() -> int:
                 # (HarnessLLMError -> _HTTP_BAD_GATEWAY). Run mock_ollama.py on
                 # :11434 first (matching config.yaml's default base_url) for a
                 # deterministic 200 instead of this fallback branch.
-                check("/api/chat 502: well-formed error envelope",
-                      isinstance(r.json().get("detail"), dict), "no live chat backend — expected without mock_ollama.py")
+                check(
+                    "/api/chat 502: well-formed error envelope",
+                    isinstance(r.json().get("detail"), dict),
+                    "no live chat backend - expected without mock_ollama.py",
+                )
             else:
                 check("/api/chat", False, f"unexpected status={r.status_code}")
         except Exception as exc:
@@ -424,7 +429,11 @@ def main() -> int:
                         "loop": True,
                     },
                 )
-                denied_body = denied.json() if denied.headers.get("content-type", "").startswith("application/json") else {}
+                denied_body = (
+                    denied.json()
+                    if denied.headers.get("content-type", "").startswith("application/json")
+                    else {}
+                )
                 denied_detail = denied_body.get("detail") if isinstance(denied_body, dict) else {}
                 denied_code = denied_detail.get("code") if isinstance(denied_detail, dict) else None
                 check(

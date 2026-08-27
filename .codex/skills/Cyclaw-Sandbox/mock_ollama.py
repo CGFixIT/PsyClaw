@@ -74,7 +74,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11434
 DEFAULT_MODEL = "qwen3.8:27b-mlx"
@@ -221,7 +220,7 @@ class MockOllamaHandler(BaseHTTPRequestHandler):
 
         for item in objects:
             payload = json.dumps(item, ensure_ascii=False)
-            self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+            self.wfile.write(f"data: {payload}\n\n".encode())
             self.wfile.flush()
             time.sleep(0.01)
 

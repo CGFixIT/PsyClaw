@@ -19,13 +19,25 @@ import json
 import os
 import sys
 import time
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
-R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"; B = "\033[94m"; N = "\033[0m"
+R = "\033[91m"
+G = "\033[92m"
+Y = "\033[93m"
+B = "\033[94m"
+N = "\033[0m"
 
 API_KEY = os.environ.get("CYCLAW_API_KEY", "")
 BASE_URL = os.environ.get("CYCLAW_URL", "http://127.0.0.1:8787")
+
+
+def _local_url(path: str) -> str:
+    parsed = urlparse(BASE_URL)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        raise ValueError(f"CYCLAW_URL must be an http loopback URL, got {BASE_URL!r}")
+    return f"{BASE_URL.rstrip('/')}{path}"
 
 
 class ConsoleTest:
@@ -36,15 +48,15 @@ class ConsoleTest:
 
     def _request(self, method: str, path: str, body: dict | None = None,
                  with_auth: bool = True, timeout: int = 15) -> tuple[int, dict]:
-        url = f"{BASE_URL}{path}"
+        url = _local_url(path)
         data = json.dumps(body).encode() if body else None
-        req = Request(url, data=data, method=method)
+        req = Request(url, data=data, method=method)  # noqa: S310
         req.add_header("Content-Type", "application/json")
         if with_auth and API_KEY:
             req.add_header("Authorization", f"Bearer {API_KEY}")
 
         try:
-            with urlopen(req, timeout=timeout) as resp:
+            with urlopen(req, timeout=timeout) as resp:  # noqa: S310
                 return resp.status, json.loads(resp.read().decode())
         except HTTPError as e:
             body_text = e.read().decode() if e.fp else "{}"
@@ -93,9 +105,9 @@ class ConsoleTest:
         self._check("/health has index_ready", "index_ready" in data)
 
         # Security headers
-        req = Request(f"{BASE_URL}/health", method="GET")
+        req = Request(_local_url("/health"), method="GET")  # noqa: S310
         try:
-            with urlopen(req, timeout=5) as resp:
+            with urlopen(req, timeout=5) as resp:  # noqa: S310
                 # HTTPMessage provides case-insensitive lookup; converting it
                 # to a dict first lowercases keys on some Python/HTTP stacks.
                 self._check(
@@ -113,15 +125,20 @@ class ConsoleTest:
         print(f"\n{B}--- API Key Authentication ---{N}")
         for path in ["/soul", "/soul/propose", "/ops/sync", "/ops/agentic", "/ops/fsconnect", "/ops/sqlconnect"]:
             method = "GET" if path == "/soul" else "POST"
-            body = {"action": "status"} if path.startswith("/ops/") else ({"new_soul": "x", "reason": "test"} if "propose" in path else None)
+            if path.startswith("/ops/"):
+                body = {"action": "status"}
+            elif "propose" in path:
+                body = {"new_soul": "x", "reason": "test"}
+            else:
+                body = None
             status, _ = self._request(method, path, body=body, with_auth=False)
             self._check(f"{path} returns 401 without key", status == 401, f"got {status}")
 
         # Bad key test
-        req = Request(f"{BASE_URL}/soul", method="GET")
+        req = Request(_local_url("/soul"), method="GET")  # noqa: S310
         req.add_header("Authorization", "Bearer wrong-key")
         try:
-            with urlopen(req, timeout=5) as resp:
+            with urlopen(req, timeout=5) as resp:  # noqa: S310
                 self._check("/soul returns 401 with bad key", False, "got 200")
         except HTTPError as e:
             self._check("/soul returns 401 with bad key", e.code == 401)
