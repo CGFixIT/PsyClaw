@@ -53,7 +53,7 @@ from pathlib import Path
 
 from sync.config import RcloneConfig
 from utils.errors import SchedulerError
-from utils.telemetry_kill import scheduler_env_overlay
+from utils.telemetry_kill import SCRUBBED_ENV_KEYS, scheduler_env_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -165,9 +165,14 @@ def _sync_command(cfg: RcloneConfig) -> str:
     # environment, and sync/__init__.py's import-time apply (the second
     # layer) cannot run earlier than the interpreter itself. Empty values
     # ("K=") are valid for env(1) and deliberate for the two blank
-    # CHROMA_OTEL_* names.
+    # CHROMA_OTEL_* names. The -u unsets come FIRST: a positive assignment
+    # cannot REMOVE an inherited scrubbed name (a crontab-file
+    # OTEL_CONFIG_FILE would otherwise survive until Python-level scrub,
+    # after any sitecustomize hook), and -u is supported by both GNU and BSD
+    # env (Codex P1).
+    env_unsets = [arg for name in SCRUBBED_ENV_KEYS for arg in ("-u", name)]
     env_pairs = [shlex.quote(f"{k}={v}") for k, v in scheduler_env_overlay().items()]
-    tokens = ["cd", shlex.quote(root), "&&", "env", *env_pairs, shlex.quote(py), "-m", "sync.cli"]
+    tokens = ["cd", shlex.quote(root), "&&", "env", *env_unsets, *env_pairs, shlex.quote(py), "-m", "sync.cli"]
     if cfg_path:
         tokens += ["--config", shlex.quote(cfg_path)]
     tokens.append("sync")
@@ -192,11 +197,14 @@ def _write_windows_launcher(cfg: RcloneConfig) -> str:
     config_arg = f"--config {_bat_quote(cfg_path)} " if cfg_path else ""
     # CRLF line endings + _bat_quote so paths with spaces or % are safe.
     # The set-lines deliver the canonical telemetry/update-check block before
-    # the interpreter starts (Task Scheduler hands the job a near-empty env).
-    # cmd's `set "NAME="` DELETES a variable rather than setting it empty --
-    # deliberate and equivalent for the two blank CHROMA_OTEL_* names: absent
-    # is the state the kill wants, and the child re-blanks them at import.
-    env_lines = "".join(
+    # the interpreter starts. Task Scheduler jobs DO inherit machine/user
+    # environment values, so the scrub names are explicitly DELETED first:
+    # cmd's `set "NAME="` deletes a variable rather than setting it empty --
+    # the desired state for every scrubbed name, and equivalent for the two
+    # blank CHROMA_OTEL_* names in the overlay (the child re-blanks those at
+    # import).
+    scrub_lines = "".join(f'set "{name}="\r\n' for name in SCRUBBED_ENV_KEYS)
+    env_lines = scrub_lines + "".join(
         f'set "{name}={value.replace("%", "%%")}"\r\n'
         for name, value in scheduler_env_overlay().items()
     )

@@ -38,10 +38,13 @@ _MUST_INHERIT = {
     "POWERSHELL_TELEMETRY_OPTOUT": "1",
     "POWERSHELL_UPDATECHECK": "Off",
     "HOMEBREW_NO_ANALYTICS": "1",
-    "HF_HUB_OFFLINE": "1",
-    "TRANSFORMERS_OFFLINE": "1",
     "DO_NOT_TRACK": "1",
 }
+
+# Shipped commented out: sourcing the file must NOT deliver these (an active
+# pair breaks a fresh install's one-time bootstrap download); the file only
+# documents the uncomment for operators with a pre-seeded cache.
+_MUST_STAY_COMMENTED = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
 
 def _parsed_lines() -> list[tuple[int, str, str]]:
@@ -85,6 +88,18 @@ def test_spot_values_match_independent_expectations():
         )
 
 
+def test_strict_offline_pair_ships_commented():
+    text = ENV_FILE.read_text(encoding="utf-8")
+    documented = {name for _, name, _ in _parsed_lines()}
+    for name in _MUST_STAY_COMMENTED:
+        assert f"# export {name}=1" in text, f"{name} must be documented in commented form"
+        assert name not in documented, (
+            f"{name} is actively exported -- the strict-offline pair must stay "
+            "commented; source cannot pick sections and an active export breaks "
+            "first-run bootstrap"
+        )
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell sourcing semantics")
 def test_sourcing_delivers_exact_values_to_a_child_python(tmp_path):
     """The actual promise: source the file, exec a child Python, read the
@@ -110,6 +125,22 @@ def test_sourcing_delivers_exact_values_to_a_child_python(tmp_path):
     assert completed.returncode == 0, completed.stderr
     inherited = json.loads(completed.stdout.strip())
     assert inherited == _MUST_INHERIT
+    # And the commented strict-offline pair must NOT have been delivered.
+    probe2 = tmp_path / "probe2.py"
+    probe2.write_text(
+        "import os\n"
+        "assert 'HF_HUB_OFFLINE' not in os.environ\n"
+        "assert 'TRANSFORMERS_OFFLINE' not in os.environ\n",
+        encoding="utf-8",
+    )
+    completed2 = subprocess.run(
+        ["/bin/bash", "-c", f'set -e\nsource "{ENV_FILE}"\nexec "{sys.executable}" "{probe2}"\n'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+    )
+    assert completed2.returncode == 0, completed2.stderr
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell sourcing semantics")

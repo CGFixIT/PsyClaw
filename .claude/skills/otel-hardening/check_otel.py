@@ -775,16 +775,27 @@ def check_reference_env_file(env_path: Path) -> None:
     if problems:
         fail("T8", f"{env_path.name} format violations -- " + "; ".join(problems))
         return
-    # The shell-only and conditional names come from their named sets above --
-    # the sets ARE the contract for sections 2/3, not documentation beside it
-    # (CodeQL flagged them unused when this map hardcoded the same names).
-    # All four are "1"-valued by their vendors' conventions.
+    # The shell-only names come from their named set above -- the set IS the
+    # contract for section 2's tail, not documentation beside it. Both
+    # shell-only names are "1"-valued by their vendors' conventions. The
+    # conditional strict-offline pair is different: it must appear COMMENTED
+    # ("# export NAME=1"), never active -- `source` cannot pick sections, so
+    # an active pair would break a fresh install's one-time bootstrap
+    # download (Codex P2).
     expected_values = {
         **EXPECTED_TELEMETRY_KILL,
         **EXPECTED_UPDATE_CHECK,
         **dict.fromkeys(sorted(SHELL_ONLY_ENV_KEYS), "1"),
-        **dict.fromkeys(sorted(CONDITIONAL_OFFLINE_PAIR), "1"),
     }
+    for name in sorted(CONDITIONAL_OFFLINE_PAIR):
+        if f"# export {name}=1" not in text:
+            fail("T8", f"{env_path.name} must ship the strict-offline pair commented "
+                       f"('# export {name}=1'); an active export breaks first-run bootstrap")
+            return
+        if name in documented:
+            fail("T8", f"{env_path.name} exports {name} actively -- the strict-offline "
+                       "pair must stay commented (source cannot pick sections)")
+            return
     mismatched = [f"{k}: doc has {documented[k]!r}, oracle says {v!r}"
                   for k, v in expected_values.items() if k in documented and documented[k] != v]
     missing = sorted(set(expected_values) - set(documented))
@@ -875,9 +886,12 @@ def check_docker_delivery(root: Path) -> None:
 
 
 def check_launcher_delivery(root: Path) -> None:
+    # The -S -E flags are part of the contract: the helper interpreter must
+    # not run site init (a venv sitecustomize/.pth hook would fire before the
+    # module emits the safe values) and must ignore ambient PYTHONPATH.
     expectations = (
-        ("macos/invoke-cyclaw.sh", ("-m utils.telemetry_kill --export shell",)),
-        ("powershell/Invoke-CyClaw.ps1", ("-m utils.telemetry_kill --export powershell",)),
+        ("macos/invoke-cyclaw.sh", ("-S -E -m utils.telemetry_kill --export shell",)),
+        ("powershell/Invoke-CyClaw.ps1", ("-S -E -m utils.telemetry_kill --export powershell",)),
         ("powershell/Install-CyClaw.ps1", ('set "POWERSHELL_TELEMETRY_OPTOUT=1"',
                                            'set "POWERSHELL_UPDATECHECK=Off"')),
     )

@@ -320,10 +320,13 @@ def scheduler_env_overlay() -> dict[str, str]:
     environment, before any interpreter starts.
 
     A fresh ``{**TELEMETRY_KILL, **UPDATE_CHECK_OPT_OUT}`` each call -- used by
-    the launchd-plist / Windows-task / cron generators, whose children begin
-    from a near-empty scheduler environment where inheritance delivers nothing.
-    Scrubbed names need no entries here: absent is exactly the state the scrub
-    wants, and a scheduler environment starts absent.
+    the launchd-plist / Windows-task / cron generators. Scrubbed names carry
+    no entries here because a value cannot express "absent" -- the boundaries
+    that can inherit ambient values remove them explicitly instead: the cron
+    line prefixes ``env -u NAME`` per scrubbed name and the generated ``.cmd``
+    launchers emit ``set "NAME="`` deletions (utils/win_schtasks.py); launchd
+    jobs start from launchd's own near-empty environment, not the operator's
+    shell, so there is nothing to remove there.
     """
     return {**TELEMETRY_KILL, **UPDATE_CHECK_OPT_OUT}
 

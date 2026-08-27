@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from utils.telemetry_kill import SCRUBBED_ENV_KEYS
+
 _CREDMAN_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 CREDMAN_WRAPPER_RELATIVE_PATH = "powershell/CyClaw-CredMan-Env.ps1"
@@ -115,6 +117,11 @@ def write_cmd_launcher(
         raise ValueError("argv must be non-empty")
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["@echo off"]
+    # Scheduled tasks inherit machine/user environment values, and a
+    # positive set-line cannot REMOVE one -- delete every scrubbed
+    # credential/declarative-config name before the env block, so no
+    # inherited OTEL_CONFIG_FILE (etc.) survives into the child (Codex P1).
+    lines.extend(f'set "{name}="' for name in SCRUBBED_ENV_KEYS)
     for name, value in (env or {}).items():
         if not name.isidentifier() or not name.isascii():
             raise ValueError(f"refusing invalid env name: {name!r}")

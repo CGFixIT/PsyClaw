@@ -300,6 +300,11 @@ def test_windows_cmd_launcher_set_lines(tmp_path):
     # the deliberate, documented form for the two blank CHROMA_OTEL_* names.
     assert 'set "CHROMA_OTEL_COLLECTION_ENDPOINT="' in content
     assert 'set "CHROMA_OTEL_SERVICE_NAME="' in content
+    # Inherited scrubbed names are deleted before the env block (Task
+    # Scheduler jobs inherit machine/user env; set "NAME=" deletes).
+    assert 'set "OTEL_CONFIG_FILE="' in content
+    assert 'set "LANGSMITH_API_KEY="' in content
+    assert content.index('set "OTEL_CONFIG_FILE="') < content.index('set "GH_TELEMETRY=false"')
     assert content.index('set "GH_TELEMETRY=false"') < content.index("python.exe")
 
 
@@ -319,6 +324,12 @@ def test_sync_cron_line_env_prefix(monkeypatch):
     assert "GH_TELEMETRY=false" in cmd
     assert "OTEL_SDK_DISABLED=true" in cmd
     assert "CHROMA_OTEL_COLLECTION_ENDPOINT=" in cmd
+    # Inherited scrubbed names must be REMOVED pre-interpreter: positive
+    # assignments cannot do that, so the prefix carries env -u unsets.
+    assert "-u OTEL_CONFIG_FILE" in cmd
+    assert "-u OTEL_EXPERIMENTAL_CONFIG_FILE" in cmd
+    assert "-u LANGSMITH_API_KEY" in cmd
+    assert cmd.index("-u OTEL_CONFIG_FILE") < cmd.index("GH_TELEMETRY=false")
     assert cmd.index(" env ") < cmd.index("-m sync.cli"), "env prefix must precede the interpreter"
 
 
@@ -335,6 +346,8 @@ def test_sync_windows_bat_set_lines(tmp_path, monkeypatch):
     content = Path(bat_path).read_text(encoding="utf-8")
     assert 'set "GH_TELEMETRY=false"' in content
     assert 'set "OTEL_SDK_DISABLED=true"' in content
+    assert 'set "OTEL_CONFIG_FILE="' in content, "inherited scrub names must be deleted"
+    assert content.index('set "OTEL_CONFIG_FILE="') < content.index('set "GH_TELEMETRY=false"')
     assert content.index('set "GH_TELEMETRY=false"') < content.index("-m sync.cli")
 
 
@@ -368,7 +381,8 @@ def test_sync_launchd_plist_carries_overlay(tmp_path, monkeypatch):
 
 def test_macos_launcher_exports_canonical_block():
     text = (REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
-    assert "-m utils.telemetry_kill --export shell" in text
+    # -S -E is part of the contract: no site init in the helper interpreter.
+    assert "-S -E -m utils.telemetry_kill --export shell" in text
     # Overwrite semantics: the eval must come AFTER the dotenv sourcing.
     assert text.index("_source_dotenv") < text.index("--export shell")
     # And BEFORE the servers start.
@@ -377,7 +391,7 @@ def test_macos_launcher_exports_canonical_block():
 
 def test_powershell_launcher_exports_canonical_block():
     text = (REPO_ROOT / "powershell" / "Invoke-CyClaw.ps1").read_text(encoding="utf-8")
-    assert "-m utils.telemetry_kill --export powershell" in text
+    assert "-S -E -m utils.telemetry_kill --export powershell" in text
     assert text.index("Import-CyclawDotenv") < text.index("--export powershell")
     assert text.index("--export powershell") < text.index("-m harness.server")
 

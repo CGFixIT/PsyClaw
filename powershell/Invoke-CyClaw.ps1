@@ -134,7 +134,10 @@ try {
     # set-literal and a remove-literal over a validated env-var name), so a
     # compromised or garbled export cannot inject code the way piping it to
     # Invoke-Expression could (DevSkim DS104456).
-    $killLines = & $VenvPy -m utils.telemetry_kill --export powershell 2>$null
+    # -S -E: no site init in the helper interpreter (a venv sitecustomize/.pth
+    # hook must not fire before the module emits the safe values) and no
+    # ambient PYTHONPATH; the module is stdlib-only and repo-local.
+    $killLines = & $VenvPy -S -E -m utils.telemetry_kill --export powershell 2>$null
     if ($LASTEXITCODE -eq 0 -and $killLines) {
         foreach ($line in @($killLines)) {
             if ($line -match "^\`$env:([A-Za-z_][A-Za-z0-9_]*) = '(.*)'$") {

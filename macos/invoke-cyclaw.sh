@@ -194,7 +194,11 @@ cd "$REPO_DIR"
 # Positioned after the .env sourcing above so the canonical values overwrite
 # any hostile dotenv value, mirroring apply_telemetry_kill()'s own overwrite
 # semantics. Non-fatal on failure: every entry point re-applies at import.
-if _kill_env="$("$VENV_PY" -m utils.telemetry_kill --export shell 2>/dev/null)"; then
+# -S -E: the helper interpreter itself must not run site init (no
+# sitecustomize/.pth auto-instrumentation hook can fire before the module
+# emits the safe exports) and must ignore ambient PYTHONPATH. The module
+# is stdlib-only and repo-local, so isolation costs nothing (Codex P1).
+if _kill_env="$("$VENV_PY" -S -E -m utils.telemetry_kill --export shell 2>/dev/null)"; then
   eval "$_kill_env"
 else
   echo "[cyclaw] warn : could not export telemetry-kill block (children still self-apply at import)" >&2
