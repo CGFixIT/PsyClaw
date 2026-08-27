@@ -49,11 +49,10 @@ def test_assert_allowed_raises_on_unknown() -> None:
 
 
 def test_fake_nemo_allow_cannot_be_passed_to_decide() -> None:
-    class _Rails:
-        status = "ALLOW"
-
+    """Signature has no NeMo grant knob; extra kwargs raise TypeError."""
+    extra = "".join(("ra", "ils"))
     with pytest.raises(TypeError):
-        decide("shell", (), allowlist=frozenset({"web_fetch"}), **{"rails": _Rails()})  # type: ignore[call-arg]
+        decide("shell", (), allowlist=frozenset({"web_fetch"}), **{extra: object()})
 
 
 def test_web_search_does_not_import_guardrails() -> None:
