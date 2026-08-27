@@ -941,8 +941,6 @@ function addConfirmEntry(message, availableProviders = []) {
   resultsEl.scrollTop = resultsEl.scrollHeight;
   noBtn.focus();
 
-  return id;
-
   // Trap focus within the modal dialog (Tab cycles through the rendered buttons).
   const focusable = [...providerBtns, noBtn];
   el.addEventListener('keydown', (e) => {
@@ -955,6 +953,8 @@ function addConfirmEntry(message, availableProviders = []) {
     }
     e.preventDefault();
   });
+
+  return id;
 }
 
 function handleConfirm(confirmed, entryId, onlineProvider = null) {
