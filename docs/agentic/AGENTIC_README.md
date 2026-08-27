@@ -213,3 +213,44 @@ the agentic layer as a whole now that the pipeline above exists.
 
 See `docs/THREAT_MODEL.md`'s third and fifth amendments for the fuller,
 dated account of what changed and when.
+
+## 10. Local 27B expectations (M5 48 GB unified memory)
+
+This section is the coding-loop contract for the operator Mac that actually
+runs CyClaw: **Apple M5-class MacBook Pro, 48 GB unified memory**, Ollama
+`qwen3.8:27b-mlx`, thinking off. Full doctrine:
+[`docs/m5-48gb-coding-expectations.md`](../m5-48gb-coding-expectations.md).
+
+48 GB can hold more context than the product uses. The product stays on
+**16k `num_ctx`**, **2048** harness completion tokens / **8** turns, an
+**~8,000-char** local agentic prompt, a **6,000-char** plan file, and
+**3072** `planner_max_tokens` so Ollama does not stall at "0% processing."
+`max_handoff_chars: 200000` is cloud egress, not local context. Raising
+`num_ctx` is a volume change, not a judgment upgrade. The local model remains
+a supervised executor; Grok/Claude (or a human) stays the architect for
+invariant-touching work.
+
+**What the cached model can finish in one `real-repo-run`**
+
+- A human-approved `plan.md` with headings Approach / Goal / Do this /
+  Done when / Do not / Files.
+- At most **one implementation file + one test file**. `--read-file` that
+  implementation path. Executor check = that test file.
+- Edits that do not touch `gate.py`, `graph.py`, `mcp_hybrid_server.py`,
+  `soul.md`, `INVARIANTS.md`, or `config.yaml`.
+
+**What to keep off this box as a single local job**
+
+- NeMo / graph rails, Numbat CEL, DFlash or `models.local_llm` runtime swaps,
+  telemetry kill-switch, new subsystems.
+- Letting the 27B write "insights" into `memory/` facts, `soul.md`, or an
+  uncapped diary that then gets stuffed back into the 16k window.
+
+Paging (optional): write a short schema (`goal`, I6 constraints, files,
+`last_error`, `next_edit`) to the run workspace or `docs/SESSION_NOTES.md`
+**before** compacting chat. Do not invent a fourth memory store. Do not send
+that file to a cloud planner without `--confirm-online`.
+
+Two-stage reminder: `--provider grok --confirm-online` belongs on
+`real-repo-run-plan` only. Omit `--provider` on `real-repo-run` so Qwen
+implements the approved burst plan on loopback.
