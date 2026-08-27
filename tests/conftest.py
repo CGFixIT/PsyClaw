@@ -6,7 +6,6 @@ No live services required — all external deps are mocked.
 
 import copy
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 import yaml
