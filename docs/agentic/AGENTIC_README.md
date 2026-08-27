@@ -214,11 +214,12 @@ the agentic layer as a whole now that the pipeline above exists.
 See `docs/THREAT_MODEL.md`'s third and fifth amendments for the fuller,
 dated account of what changed and when.
 
-## 10. Local 27B expectations (M5 48 GB unified memory)
+## 10. Local 27B expectations (MacBook Pro M5 Pro, 48 GB)
 
 This section is the coding-loop contract for the operator Mac that actually
-runs CyClaw: **Apple M5-class MacBook Pro, 48 GB unified memory**, Ollama
-`qwen3.8:27b-mlx`, thinking off. Full doctrine:
+runs CyClaw: **MacBook Pro, Apple M5 Pro, 48 GB unified memory**, Ollama
+`qwen3.8:27b-mlx`, thinking off. Not a base M5 (32 GB ceiling) and not an
+M5 Max (more GPU / 128 GB ceiling). Full doctrine:
 [`docs/m5-48gb-coding-expectations.md`](../m5-48gb-coding-expectations.md).
 
 48 GB can hold more context than the product uses. The product stays on
