@@ -89,7 +89,7 @@ from utils.sanitizer import check_input
 from utils.errors import (
     PromptInjectionError, IndexNotFoundError
 )
-from utils.guardrail_bridge import build_input_guard, build_output_guard
+from utils.guardrail_bridge import build_generate_guard, build_input_guard, build_output_guard
 from utils.health import check_all, close_http_client
 from utils.personality import PersonalityManager
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
@@ -706,6 +706,7 @@ input_guard = build_input_guard(cfg)
 # (docs/NeMo/phase4_implementation_plan.md). Same enabled gate and the same
 # module-isolation guarantee as build_input_guard above.
 output_guard = build_output_guard(cfg)
+generate_guard = build_generate_guard(cfg)
 
 def _init_retrieval(*, boot: bool = False) -> bool:
     """(Re)build ``retriever`` and ``compiled_graph`` from the index on disk.
@@ -743,6 +744,7 @@ def _init_retrieval(*, boot: bool = False) -> bool:
         new_graph = build_graph(
             retriever=new_retriever, llm=local_llm, grok=grok, claude=claude, cfg=cfg,
             personality=personality, input_guard=input_guard, output_guard=output_guard,
+            generate_guard=generate_guard,
         )
 
     old_retriever = retriever

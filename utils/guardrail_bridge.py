@@ -69,3 +69,42 @@ def build_output_guard(cfg: dict[str, Any]) -> Callable[[str, str, str], dict[st
         return check_output(answer, context, query=query, cfg=gcfg, metrics=metrics)
 
     return _output_guard
+
+
+def build_generate_guard(
+    cfg: dict[str, Any],
+) -> Callable[..., tuple[str, str | None]] | None:
+    """Build the Phase 3 ``check()`` wrap around ``client.generate``, or None.
+
+    Same literal ``enabled is True`` gate. Graph injects the callable into
+    ``_generate_or_error``; it never imports this package.
+    """
+    if not _guardrails_enabled(cfg):
+        return None
+
+    from guardrails.broker import guarded_generate
+    from guardrails.config import load_guardrails_config
+    from guardrails.metrics import GuardrailMetrics
+
+    gcfg = load_guardrails_config()
+    metrics = GuardrailMetrics(gcfg.metrics_path)
+
+    def _generate_guard(
+        client: Any,
+        prompt: str,
+        *,
+        query: str = "",
+        label: str = "LLM",
+        spend_context: dict[str, object] | None = None,
+    ) -> tuple[str, str | None]:
+        return guarded_generate(
+            client,
+            prompt,
+            query=query,
+            label=label,
+            spend_context=spend_context,
+            cfg=gcfg,
+            metrics=metrics,
+        )
+
+    return _generate_guard

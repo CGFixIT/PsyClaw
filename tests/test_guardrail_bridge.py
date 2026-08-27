@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from guardrails.config import GuardrailsConfig
-from utils.guardrail_bridge import build_input_guard, build_output_guard
+from utils.guardrail_bridge import build_generate_guard, build_input_guard, build_output_guard
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,6 +31,7 @@ class TestBuildInputGuardDisabled:
         # YAML typo enabled: "false" must not arm the layer (truthy string).
         assert build_input_guard({"guardrails": {"enabled": "false"}}) is None
         assert build_output_guard({"guardrails": {"enabled": "false"}}) is None
+        assert build_generate_guard({"guardrails": {"enabled": "false"}}) is None
 
     def test_present_but_empty_guardrails_block_returns_none(self):
         # A `guardrails:` key with nothing under it parses to None (valid YAML,
@@ -120,6 +121,7 @@ class TestBuildOutputGuardDisabled:
 
     def test_present_but_empty_guardrails_block_returns_none(self):
         assert build_output_guard({"guardrails": None}) is None
+        assert build_generate_guard({"guardrails": None}) is None
 
     def test_disabled_path_never_imports_guardrails_package(self):
         script = (
