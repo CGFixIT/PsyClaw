@@ -1141,9 +1141,17 @@ def finalize_real_repo_change(
     if decision == "reject":
         return {"status": "rejected", "branch": branch_name}
 
+    from agentic.executor.apply import prove_disposable_copy
     from agentic.executor.manifest import verify_manifest
 
     verify_manifest(
+        Path(tools.worktree),
+        changed_files,
+        run_id=run_id,
+        base_head=acceptance_base_head or "",
+        expected_digest=acceptance_digest or "",
+    )
+    prove_disposable_copy(
         Path(tools.worktree),
         changed_files,
         run_id=run_id,
