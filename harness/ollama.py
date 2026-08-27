@@ -100,6 +100,7 @@ class HarnessChatClient:
         model: str,
         timeout_sec: float = 300.0,
         api_key: str = "",
+        reasoning_effort: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not _is_loopback(base_url):
@@ -110,6 +111,10 @@ class HarnessChatClient:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key.strip()
+        # Already resolved and provider-gated by llm.client.resolve_local_backend
+        # (harness/server.py passes ResolvedLocalBackend.reasoning_effort), so
+        # this is never validated or re-read from config here. None = omit.
+        self.reasoning_effort = reasoning_effort
         self._timeout_sec = timeout_sec
         self._transport = transport
         self._client = httpx.Client(timeout=timeout_sec, transport=transport, trust_env=False)
@@ -145,13 +150,16 @@ class HarnessChatClient:
         use_model = (model or self.model).strip()
         if not use_model:
             raise HarnessLLMError("no model selected; set one with /model use <name>")
-        payload = {
+        payload: dict = {
             "model": use_model,
             "messages": [{"role": "system", "content": system_prompt}, *messages],
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
         }
+        # Same object serves plain chat and /loop, so both carry the control.
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         auth = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         try:
             resp = self._client.post(f"{self.base_url}/chat/completions", json=payload, headers=auth)

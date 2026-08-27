@@ -364,6 +364,9 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
         model=backend.model,
         timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
         api_key=backend.api_key,
+        # Provider-gated upstream by resolve_local_backend, so a fallback to a
+        # non-Ollama backend hands None through and the field is omitted.
+        reasoning_effort=backend.reasoning_effort,
     )
 
 
