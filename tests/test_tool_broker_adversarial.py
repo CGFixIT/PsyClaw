@@ -15,8 +15,9 @@ here. Argv is digested, never executed, never interpreted as a path or shell.
 
 from __future__ import annotations
 
+import ast
 import inspect
-import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -95,11 +96,18 @@ def test_fake_nemo_allow_still_cannot_grant() -> None:
     assert "rails" not in inspect.signature(decide).parameters
 
 
-def test_decide_does_not_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(*_a: object, **_k: object) -> None:
-        raise AssertionError("ToolBroker must not spawn")
-
-    monkeypatch.setattr(subprocess, "run", _boom)
-    monkeypatch.setattr(subprocess, "Popen", _boom)
+def test_decide_does_not_spawn() -> None:
+    """AST pin: ``from subprocess import run`` would bypass a module monkeypatch."""
+    source = (Path(__file__).resolve().parent.parent / "utils" / "tool_broker.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".", 1)[0])
+    assert "subprocess" not in imported
     decide("web_fetch", ("; rm -rf /",), allowlist=_WEB)
     decide("shell", ("id",), allowlist=_WEB)
