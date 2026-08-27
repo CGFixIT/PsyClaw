@@ -39,6 +39,63 @@ EVENT_ALLOWED = "generation_allowed"
 EVENT_SKIPPED = "guardrail_skipped"
 EVENT_SOUL_TOPIC = "soul_topic"
 
+# Keys that must never appear in persisted metric JSONL (raw text / secrets).
+# Keys ending in ``_hash`` (and ``query_hash``) are exempt so digests remain.
+FORBIDDEN_METRIC_KEYS = frozenset(
+    {
+        "prompt",
+        "response",
+        "query",
+        "tool_arguments",
+        "tool_result",
+        "api_key",
+        "authorization",
+        "password",
+        "token",
+    }
+)
+
+_ALWAYS_ALLOWED_FIELDS = frozenset({"event", "timestamp", "query_hash"})
+
+# Per-event allowlist. Unknown kwargs (e.g. payload=) are stripped before persist.
+_EVENT_ALLOWED_FIELDS: dict[str, frozenset[str]] = {
+    EVENT_TOOL_CALL: frozenset({"tool", "ok"}),
+    EVENT_BLOCKED: frozenset({"stage", "rail", "reason"}),
+    EVENT_HALLUCINATION: frozenset({"grounding_score", "threshold"}),
+    EVENT_RAIL_TRIGGERED: frozenset({"rail", "stage"}),
+    EVENT_ALLOWED: frozenset({"grounding_score", "stage"}),
+    EVENT_SKIPPED: frozenset({"reason"}),
+    EVENT_SOUL_TOPIC: frozenset(),
+}
+
+
+def _is_forbidden_metric_key(key: str) -> bool:
+    if key.endswith("_hash"):
+        return False
+    return key in FORBIDDEN_METRIC_KEYS
+
+
+def sanitize_metric_fields(obj: Any) -> Any:
+    """Recursively drop forbidden keys from dict/list trees; leave other values."""
+    if isinstance(obj, dict):
+        cleaned: dict[str, Any] = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and _is_forbidden_metric_key(key):
+                continue
+            cleaned[key] = sanitize_metric_fields(value)
+        return cleaned
+    if isinstance(obj, list):
+        return [sanitize_metric_fields(item) for item in obj]
+    if isinstance(obj, tuple):
+        return [sanitize_metric_fields(item) for item in obj]
+    return obj
+
+
+def _filter_metric_record(event: str, record: dict[str, Any]) -> dict[str, Any]:
+    allowed = _ALWAYS_ALLOWED_FIELDS | _EVENT_ALLOWED_FIELDS.get(event, frozenset())
+    filtered = {key: value for key, value in record.items() if key in allowed}
+    return sanitize_metric_fields(filtered)
+
 
 class GuardrailMetrics:
     """Append-only recorder for guardrail events.
@@ -63,6 +120,9 @@ class GuardrailMetrics:
         if query is not None:
             record["query_hash"] = hash_query(query)
         record["timestamp"] = datetime.now(UTC).isoformat()
+        # Allowlist + recursive secret strip before counters/persist so unknown
+        # kwargs (NonSerializable payload) and nested secrets never hit JSONL.
+        record = _filter_metric_record(event, record)
         self.counters[event] += 1
         if self.persist:
             try:
