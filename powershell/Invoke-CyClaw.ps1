@@ -50,15 +50,63 @@ if (-not (Test-Path $VenvPy)) {
 $env:CYCLAW_HOME = $Home_
 $env:CYCLAW_REPO = $Repo
 $env:CYCLAW_HARNESS_PORT = "$Port"
-# CYCLAW_API_KEY is inherited from the caller; this launcher does not generate
-# it and does not persist it. Unset means Soul/ops 401. Pasting the key into
-# the browser field cannot set the server env.
+# CYCLAW_API_KEY is inherited from the caller, or loaded below from
+# %USERPROFILE%\.CyClaw\.env then the repo .env (Darwin twin:
+# macos/invoke-cyclaw.sh). Browser paste cannot set the server env.
+
+function Test-CyclawDotenvOwnerOnly([string]$Path) {
+    try {
+        $acl = Get-Acl -LiteralPath $Path
+    } catch {
+        return $false
+    }
+    $read = [System.Security.AccessControl.FileSystemRights]::ReadData
+    foreach ($ace in $acl.Access) {
+        if ($ace.AccessControlType -ne 'Allow') { continue }
+        if (($ace.FileSystemRights -band $read) -eq 0) { continue }
+        $id = $ace.IdentityReference.Value
+        if ($id -eq 'Everyone' -or $id -eq 'BUILTIN\Users' -or $id -eq 'NT AUTHORITY\Authenticated Users') {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Import-CyclawDotenv([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    if (-not (Test-CyclawDotenvOwnerOnly $Path)) {
+        Write-Host "[cyclaw] warn    : refusing to source $Path (ACL is not owner-only; want current-user only). Fix with: icacls `"$Path`" /inheritance:r /grant:r `"${env:USERNAME}:R`"" -ForegroundColor Yellow
+        return $false
+    }
+    Get-Content -LiteralPath $Path | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -eq '' -or $line.StartsWith('#')) { return }
+        if ($line.StartsWith('export ')) { $line = $line.Substring(7).Trim() }
+        $eq = $line.IndexOf('=')
+        if ($eq -lt 1) { return }
+        $name = $line.Substring(0, $eq).Trim()
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { return }
+        $val = $line.Substring($eq + 1).Trim()
+        if ($val.Length -ge 2 -and (($val.StartsWith("'") -and $val.EndsWith("'")) -or ($val.StartsWith('"') -and $val.EndsWith('"')))) {
+            $val = $val.Substring(1, $val.Length - 2).Replace("'\''", "'")
+        }
+        Set-Item -Path ("Env:" + $name) -Value $val
+    }
+    return $true
+}
+
+if (-not $env:CYCLAW_API_KEY) {
+    # Chained on the result, not existence: a refused HOME file must not shadow the repo copy.
+    if (-not (Import-CyclawDotenv (Join-Path $Home_ ".env"))) {
+        Import-CyclawDotenv (Join-Path $Repo ".env") | Out-Null
+    }
+}
 
 Write-Host "[cyclaw] repo    : $Repo" -ForegroundColor Cyan
 Write-Host "[cyclaw] home    : $Home_" -ForegroundColor Cyan
 Write-Host "[cyclaw] console : http://127.0.0.1:$Port  (Ctrl+C to stop)" -ForegroundColor Cyan
 if (-not $env:CYCLAW_API_KEY) {
-    Write-Host "[cyclaw] warn    : CYCLAW_API_KEY not set - Soul / ops / harness state-changing routes will 401. Typing the key in the browser cannot configure the server; set the env var, then restart." -ForegroundColor Yellow
+    Write-Host "[cyclaw] warn    : CYCLAW_API_KEY not set - Soul / ops / harness state-changing routes will 401. Typing the key in the browser cannot configure the server; source $Home_\.env or set the env var, then restart." -ForegroundColor Yellow
 }
 
 if (-not $NoBrowser) {
