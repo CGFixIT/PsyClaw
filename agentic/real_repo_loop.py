@@ -93,6 +93,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools, canonical_repo_path
@@ -1067,6 +1068,9 @@ def finalize_real_repo_change(
     protected_write_paths: Sequence[str],
     config_path: str = "config.yaml",
     cfg: dict | None = None,
+    run_id: str = "",
+    acceptance_digest: str | None = None,
+    acceptance_base_head: str | None = None,
 ) -> dict:
     """Materialize or discard an already-accepted real-repo candidate.
 
@@ -1136,6 +1140,25 @@ def finalize_real_repo_change(
     )
     if decision == "reject":
         return {"status": "rejected", "branch": branch_name}
+
+    from agentic.executor.manifest import verify_manifest
+
+    verify_manifest(
+        Path(tools.worktree),
+        changed_files,
+        run_id=run_id,
+        base_head=acceptance_base_head or "",
+        expected_digest=acceptance_digest or "",
+    )
+    audit_log(
+        {
+            "event": "agentic_real_repo_manifest_verified",
+            "branch": branch_name,
+            "acceptance_digest": acceptance_digest,
+        },
+        config_path=config_path,
+        cfg=cfg,
+    )
 
     # Refuse before touching git at all, so a record that fails this check
     # leaves no branch behind for a retry to trip over.

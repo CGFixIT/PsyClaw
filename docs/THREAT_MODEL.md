@@ -330,8 +330,14 @@ narrower and more precise reason than "nothing executes":
   now assigns a disposable `HOME`/`USERPROFILE` and requires
   `production_sandbox()`: Windows Job Object (`KILL_ON_JOB_CLOSE`),
   Linux/Darwin raise `HardSandboxUnavailable`. Sockets still work on
-  Windows. Approval-manifest TOCTOU (issue §10) is the next stacked PR,
-  not this slice.
+  Windows.
+
+  **[Fifth amendment, issue #1134 Phase 4 approval-manifest slice.]**
+  `finalize_real_repo_change` now rebuilds an acceptance digest
+  (`run_id + base HEAD + path→sha256`) and refuses approve on drift.
+  Digest only in audit. This is not a cryptographic signature and not
+  a fresh-clone apply (full issue §10 remaining). Reject remains a git
+  no-op.
 
   **What still does not exist, as of this amendment:** no CLI subcommand, HTTP
   route, or background caller invokes `run_real_repo_loop` — it ships fully

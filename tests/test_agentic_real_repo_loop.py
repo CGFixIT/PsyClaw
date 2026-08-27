@@ -25,6 +25,7 @@ from agentic.config import AgenticConfig
 from agentic.deepagent_github import repo_workspace
 from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
 from agentic.executor import Check, CheckResult, VerificationReport
+from agentic.executor.manifest import build_manifest, git_head
 from agentic.harness_optimizer.model_adapter import LocalProposerClient
 from agentic.real_repo_loop import (
     PLANNER_SYSTEM_PROMPT,
@@ -39,6 +40,20 @@ from agentic.real_repo_loop import (
     run_real_repo_loop,
 )
 from utils.errors import AgenticError, AgenticWriteRefused
+
+_TEST_RUN_ID = "0123456789abcdef0123456789abcdef"
+
+
+def _manifest_kw(tools: RepoWorkspaceTools, changed_files) -> dict:
+    head = git_head(tools.worktree)
+    _, digest = build_manifest(
+        tools.worktree, changed_files, run_id=_TEST_RUN_ID, base_head=head,
+    )
+    return {
+        "run_id": _TEST_RUN_ID,
+        "acceptance_digest": digest,
+        "acceptance_base_head": head,
+    }
 
 
 def _cfg(tmp_path: Path, monkeypatch, **overrides) -> AgenticConfig:
@@ -162,13 +177,15 @@ def test_loop_accepts_pending_then_approve_commits(tmp_path, monkeypatch):
         ).stdout.strip()
         assert branch_before != "agent/fixture-topic"
 
+        files = result.iterations[-1].changed_files
         outcome = finalize_real_repo_change(
             tools,
             branch_name=result.branch_name,
             commit_message=result.commit_message,
-            changed_files=result.iterations[-1].changed_files,
+            changed_files=files,
             decision="approve",
             protected_write_paths=(),
+            **_manifest_kw(tools, files),
         )
         assert outcome == {"status": "approved", "branch": "agent/fixture-topic"}
 
@@ -256,15 +273,17 @@ def test_finalize_rechecks_protected_paths_against_the_policy_in_force_now(tmp_p
         (tools.worktree / "a.txt").write_text("changed\n", encoding="utf-8")
         (tools.worktree / "conftest.py").write_text("# judge\n", encoding="utf-8")
 
+        files = ["a.txt", "conftest.py"]
         with pytest.raises(AgenticWriteRefused, match="protected"):
             finalize_real_repo_change(
                 tools,
                 branch_name="agent/tightened-policy",
                 commit_message="should not land",
-                changed_files=["a.txt", "conftest.py"],
+                changed_files=files,
                 decision="approve",
                 # conftest.py was NOT protected when the run was proposed.
                 protected_write_paths=("conftest.py",),
+                **_manifest_kw(tools, files),
             )
 
         git_bin = shutil.which("git")
@@ -283,6 +302,7 @@ def test_finalize_rechecks_protected_paths_against_the_policy_in_force_now(tmp_p
             changed_files=["a.txt", "conftest.py"],
             decision="approve",
             protected_write_paths=(),
+            **_manifest_kw(tools, ["a.txt", "conftest.py"]),
         )
         assert outcome == {"status": "approved", "branch": "agent/original-policy"}
 
@@ -300,6 +320,7 @@ def test_finalize_works_from_reconstructed_primitives_not_just_a_live_result(tmp
             changed_files=["a.txt"],
             decision="approve",
             protected_write_paths=(),
+            **_manifest_kw(tools, ["a.txt"]),
         )
         assert outcome == {"status": "approved", "branch": "agent/reconstructed"}
         git_bin = shutil.which("git")
@@ -404,6 +425,7 @@ def test_accepted_result_reports_files_from_every_iteration_not_just_the_last(tm
             changed_files=result.changed_files,
             decision="approve",
             protected_write_paths=(),
+            **_manifest_kw(tools, result.changed_files),
         )
         assert outcome == {"status": "approved", "branch": "agent/two-files"}
 
