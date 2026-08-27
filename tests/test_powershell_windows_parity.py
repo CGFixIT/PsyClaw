@@ -113,6 +113,54 @@ def test_uninstall_missing_schtasks_delete_is_noop_under_ps51() -> None:
     assert "exit 0" in text
 
 
+def test_installer_requires_explicit_flag_to_replace_existing_repo() -> None:
+    """A stale %USERPROFILE%\\.CyClaw\\repo must not be silently Remove-Item'd."""
+    text = (_PS / "Install-CyClaw.ps1").read_text(encoding="utf-8")
+    assert "[switch]$ReplaceRepo" in text
+    assert "re-run with -ReplaceRepo to overwrite it" in text
+    assert "if (Test-Path $Repo) { Remove-Item -Recurse -Force $Repo }" not in text
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows PowerShell 5.1")
+def test_installer_preserves_an_unusable_default_repo_without_replace_flag(tmp_path: Path) -> None:
+    """Default clone path must fail closed before deleting existing data."""
+    home = tmp_path / "operator"
+    repo = home / ".CyClaw" / "repo"
+    repo.mkdir(parents=True)
+    sentinel = repo / "operator-data.txt"
+    sentinel.write_text("keep me", encoding="utf-8")
+
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not powershell.is_file():
+        pytest.skip("Windows PowerShell 5.1 is unavailable")
+
+    env = os.environ.copy()
+    env["USERPROFILE"] = str(home)
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(_PS / "Install-CyClaw.ps1"),
+            "-SkipPythonDeps",
+            "-NoProfileEdit",
+            "-NoPathEdit",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "keep me"
+    assert "-ReplaceRepo" in output
+
+
 def test_credman_marshal_sites_carry_devskim_suppression() -> None:
     """GHAS DevSkim DS104456 flags Marshal/PtrToStructure as restricted.
 

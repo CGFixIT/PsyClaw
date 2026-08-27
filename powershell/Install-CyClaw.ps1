@@ -33,6 +33,12 @@
 .PARAMETER NoPathEdit
   Do not modify the user PATH environment variable.
 
+.PARAMETER ReplaceRepo
+  If %USERPROFILE%\.CyClaw\repo exists but is not a usable CyClaw checkout
+  (no harness\server.py), delete it and clone origin/main. Without this
+  switch the installer refuses rather than silently Remove-Item -Recurse.
+  Does not apply with -RepoPath.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\Install-CyClaw.ps1
 
@@ -44,7 +50,8 @@ param(
     [string]$RepoPath = "",
     [switch]$SkipPythonDeps,
     [switch]$NoProfileEdit,
-    [switch]$NoPathEdit
+    [switch]$NoPathEdit,
+    [switch]$ReplaceRepo
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,7 +100,12 @@ if ($RepoPath -ne "") {
     Write-Step "using existing repo at $Repo"
 }
 elseif (-not (Test-Path (Join-Path $Repo "harness\server.py"))) {
-    if (Test-Path $Repo) { Remove-Item -Recurse -Force $Repo }
+    if (Test-Path $Repo) {
+        if (-not $ReplaceRepo) {
+            throw "cyclaw: '$Repo' exists but is not a usable CyClaw checkout. Move it aside or re-run with -ReplaceRepo to overwrite it."
+        }
+        Remove-Item -Recurse -Force $Repo
+    }
     Write-Step "cloning CyClaw origin main to $Repo"
     & git clone --depth 1 $RepoUrl $Repo
     if ($LASTEXITCODE -ne 0) { throw "git clone failed (exit $LASTEXITCODE) -- is git installed and GitHub reachable?" }
