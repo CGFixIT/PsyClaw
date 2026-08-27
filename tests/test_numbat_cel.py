@@ -76,7 +76,7 @@ def test_enabled_rule_match_emits_permission_denied(tmp_path: Path):
         guardrail_blocked=False,
         guardrail_rails=[],
         model_provider="ollama",
-        source_hashes=["sha1"],
+        source_hashes=["h1"],
         cfg=cfg,
     )
     out = Path(cfg["numbat"]["output_path"])
