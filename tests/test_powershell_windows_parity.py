@@ -39,7 +39,7 @@ def test_installer_git_failure_stops_before_launcher(tmp_path: Path) -> None:
     shim_dir.mkdir()
     (shim_dir / "git.cmd").write_text("@echo off\r\nexit /b 37\r\n", encoding="ascii")
 
-    system_root = Path(os.environ.get("SystemRoot", r"C:\\Windows"))
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
     powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     if not powershell.is_file():
         pytest.skip("Windows PowerShell 5.1 is unavailable")
@@ -145,9 +145,7 @@ def test_credman_set_ps7_ctrl_c_registers_cancel_keypress() -> None:
     assert "[Environment]::Exit(130)" in text
     assert "WriteByte" in text
     assert "remove_CancelKeyPress" in text
-    # 5.1 must not get the handler in the un-gated path.
     assert "Do not install this on Windows PowerShell" in text
-    assert "cmdkey" not in text.split("cmd-key")[0] or True
 
 
 def test_uninstall_and_setup_never_enable_writes_or_indexing() -> None:
