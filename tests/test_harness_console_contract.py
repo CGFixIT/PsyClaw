@@ -467,3 +467,12 @@ def test_harness_auth_probes_are_bounded_by_a_timeout():
     assert "fetchWithTimeout('/api/auth/setup-status', {}, 5000)" in html
     assert "await fetch('/api/auth/whoami')" not in html, "whoami probe lost its timeout"
     assert "await fetch('/api/auth/setup-status')" not in html, "setup-status probe lost its timeout"
+
+
+def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
+    """api() must timeout non-chat fetches. Chat keeps inflightChat.signal."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "await fetchWithTimeout(path, opts, 15000)" in html
+    assert "const resp = await fetch(path, opts);" not in html
+    assert "fetchWithTimeout(path, init || {}, 15000)" in html
+    assert "fetchFn: function (path, init) { return fetch(path, init); }" not in html

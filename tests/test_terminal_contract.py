@@ -234,6 +234,13 @@ def test_users_and_audit_markup_exist():
         assert marker in html, f"missing {marker!r}"
 
 
+def test_users_panel_fetchfn_is_bounded_by_a_timeout() -> None:
+    """Users-panel fetchFn must not use a bare fetch (harness already wraps it)."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "fetchWithTimeout(API + path, init || {}, 15000)" in js
+    assert "fetchFn: function (path, init) { return fetch(API + path, init); }" not in js
+
+
 def test_audit_slash_command_is_intercepted_client_side():
     """/audit is documented in the help text and has a dedicated panel. Without
     interception it is POSTed to /query and returns a raw JSON error."""
