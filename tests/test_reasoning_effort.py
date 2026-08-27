@@ -618,8 +618,14 @@ class TestAgenticProposerOutboundPayload:
             reasoning_effort="none",
             transport=_proposer_transport([]),
         )
+        # Distinctive sentinels so a substring match cannot collide with an
+        # ordinary field name (plain "sys" hides inside "system_prompt_hash").
         try:
-            client.invoke(system_prompt="sys", user_prompt="usr", cfg=cfg)
+            client.invoke(
+                system_prompt="SYSTEM_SENTINEL_9f3a",
+                user_prompt="USER_SENTINEL_4b7c",
+                cfg=cfg,
+            )
         finally:
             client.close()
 
@@ -633,8 +639,11 @@ class TestAgenticProposerOutboundPayload:
         assert "agentic_harness_proposer_model_failed" not in names
         # Prompts are still hashed, never logged in the clear.
         invoked = next(e for e in events if e["event"] == "agentic_harness_proposer_model_invoked")
-        assert "sys" not in json.dumps(invoked)
-        assert "usr" not in json.dumps(invoked)
+        assert invoked["system_prompt_hash"]
+        assert invoked["user_prompt_hash"]
+        serialized = json.dumps(events)
+        assert "SYSTEM_SENTINEL_9f3a" not in serialized
+        assert "USER_SENTINEL_4b7c" not in serialized
 
     def test_omitted_when_not_configured(self, tmp_path):
         captured: list[dict] = []
@@ -839,6 +848,19 @@ class TestGuardrailsModelParameters:
 # 8. Negative / regression assertions -- the wrong fixes must stay absent
 # =============================================================================
 
+def _code_lines(path: Path) -> str:
+    """Source with whole-line ``#`` comments removed.
+
+    These regression checks assert a field name is ABSENT from a file, and the
+    comments explaining why it is absent necessarily mention it -- so a raw
+    substring scan would fail on its own documentation.
+    """
+    return "\n".join(
+        line for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 _SOURCES = [
     _REPO_ROOT / "llm" / "client.py",
     _REPO_ROOT / "harness" / "ollama.py",
@@ -882,7 +904,9 @@ class TestNoPromptLevelWorkaround:
             _REPO_ROOT / "harness" / "ollama.py",
             _REPO_ROOT / "agentic" / "harness_optimizer" / "model_adapter.py",
         ):
-            assert '"think"' not in path.read_text(encoding="utf-8")
+            assert '"think"' not in _code_lines(path)
 
     def test_native_script_never_sends_reasoning_effort(self):
-        assert "reasoning_effort" not in _THROUGHPUT_SCRIPT.read_text(encoding="utf-8")
+        # Comments legitimately NAME the field to explain why it is absent here,
+        # so only executable lines are checked.
+        assert "reasoning_effort" not in _code_lines(_THROUGHPUT_SCRIPT)
