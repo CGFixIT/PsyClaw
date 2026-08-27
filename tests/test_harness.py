@@ -848,6 +848,55 @@ def test_plain_chat_still_works_without_a_goal(client):
     assert resp.json()["reply"] == "ok"
 
 
+def test_loop_turn_denied_when_broker_allowlist_empty(client, monkeypatch):
+    sid = _goal_session(client)
+    monkeypatch.setattr(harness_server, "_loop_tool_allowlist", lambda: frozenset())
+    calls: list[int] = []
+
+    def _chat_must_not_run(*_a, **_k):
+        calls.append(1)
+        raise AssertionError("client.chat must not run after TOOL_DENIED")
+
+    monkeypatch.setattr(HarnessChatClient, "chat", _chat_must_not_run)
+    resp = client.post(
+        "/api/chat",
+        json={"message": "go", "session_id": sid, "loop": True},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "TOOL_DENIED"
+    assert "go" not in json.dumps(resp.json())
+    assert calls == []
+
+
+def test_loop_tool_denied_releases_inflight_lock(client, monkeypatch):
+    sid = _goal_session(client)
+    monkeypatch.setattr(harness_server, "_loop_tool_allowlist", lambda: frozenset())
+    denied = client.post(
+        "/api/chat",
+        json={"message": "go", "session_id": sid, "loop": True},
+    )
+    assert denied.status_code == 403
+    monkeypatch.setattr(
+        harness_server, "_loop_tool_allowlist", lambda: frozenset({"harness_loop"})
+    )
+    retry = client.post(
+        "/api/chat",
+        json={"message": "go", "session_id": sid, "loop": True},
+    )
+    assert retry.status_code == 200
+    assert retry.json()["reply"] == "ok"
+
+
+def test_plain_chat_does_not_call_tool_broker(client, monkeypatch):
+    def _broker_must_not_run(*_a, **_k):
+        raise AssertionError("loop=false chat must not hit ToolBroker")
+
+    monkeypatch.setattr(harness_server, "assert_allowed", _broker_must_not_run)
+    resp = client.post("/api/chat", json={"message": "hello"})
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "ok"
+
+
 def test_loop_rate_limit_is_independent_of_plain_chat(cfg, monkeypatch):
     monkeypatch.setattr(
         harness_server, "_loop_rate_limit_settings",

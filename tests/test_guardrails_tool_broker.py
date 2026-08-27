@@ -67,6 +67,12 @@ def test_web_search_does_not_import_guardrails() -> None:
     assert "guardrails" not in names
 
 
+def test_harness_loop_name_is_allowable() -> None:
+    v = decide("harness_loop", ("sess-1",), allowlist=frozenset({"harness_loop"}))
+    assert v.allowed is True
+    assert "sess-1" not in v.argv_digest
+
+
 def test_web_fetch_denied_when_broker_allowlist_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
     cfg = HarnessConfig.load()

@@ -95,8 +95,20 @@ from utils.errors import AgenticError, AuthBootstrapComplete
 from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import OpsError, OpsResult, run_agentic_op
 from utils.ratelimit import RateLimiter
+from utils.tool_broker import ToolDenied, assert_allowed
 
 logger = logging.getLogger("cyclaw.harness.server")
+
+# Named-capability ToolBroker gate for /loop turns (issue #1134). Not a
+# NVIDIA ToolRailAction — /loop is chat-toward-goal, not tool_calls.
+# Argv is session_id only; audit stores the digest, never the prompt/goal.
+_HARNESS_LOOP_TOOL = "harness_loop"
+
+
+def _loop_tool_allowlist() -> frozenset[str]:
+    """Closed set for loop turns. Empty deny is covered by monkeypatched tests."""
+    return frozenset((_HARNESS_LOOP_TOOL,))
+
 
 # Own scheme instance rather than importing utils.auth's: that module's is a
 # private (non-`__all__`) module-level name, and this file already treats
@@ -1159,6 +1171,17 @@ def create_app(
 
         if req.loop:
             _guard_loop_turn(req, session, request)
+            try:
+                assert_allowed(
+                    _HARNESS_LOOP_TOOL,
+                    (req.session_id,),
+                    allowlist=_loop_tool_allowlist(),
+                )
+            except ToolDenied as exc:
+                # _guard_loop_turn already claimed loop_inflight; drop it so a
+                # 403 TOOL_DENIED cannot pin the session for _LOOP_INFLIGHT_TTL_SEC.
+                _release_loop_inflight(session.session_id)
+                raise _err(_HTTP_FORBIDDEN, exc) from exc
 
         if not generation_gate.claim():
             # _guard_loop_turn already claimed loop_inflight; drop it here so
