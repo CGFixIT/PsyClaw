@@ -77,6 +77,22 @@ Real engine construction is proven only by the dedicated workflow
 `.github/workflows/nemo-guardrails.yml` (`CYCLAW_NEMO_RUNTIME=1`), against a
 loopback OpenAI-compatible mock, with a loopback socket jail.
 
+### Engine construction (0.23 hygiene)
+
+- `_apply_guardrails_config` overrides **`type: main` only**. `type: self_check`
+  (and other non-main entries) keep the template model tag.
+- Engine instances are keyed by
+  `(policy_fingerprint, provider, model, endpoint)`. Fingerprint is SHA-256 of
+  the policy bundle under `nemo_config_dir`.
+- `nemo_config_dir` must resolve inside the repo, reject `..` / symlink escape,
+  reject `agentic/` roots, and reject unexpected executables in that directory.
+- Init is locked; admission is a bounded semaphore; consecutive construct
+  failures open a circuit breaker so `safe_generate` degrades.
+- `NEMO_GUARDRAILS_IORAILS_ENGINE` set to a truthy value **fails engine
+  startup** (no silent IORails fallback).
+- Template `streaming: False` (no `stream_first`). Telemetry kill runs before
+  `nemoguardrails` import.
+
 ## Metrics
 
 `logs/guardrails.jsonl` is a **separate** stream from `logs/audit.jsonl`.

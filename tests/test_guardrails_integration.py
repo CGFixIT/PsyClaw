@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from guardrails.config import GuardrailsConfig
 from guardrails.integration import (
     NEMO_AVAILABLE,
@@ -281,25 +283,72 @@ def test_live_provider_error_degrades_not_raises(monkeypatch):
     assert m.counters["guardrail_skipped"] == 1
 
 
-def test_apply_guardrails_config_overrides_static_template(monkeypatch):
-    # codex P1: config.yaml's guardrails: block is authoritative -- the static
-    # NeMo template's engine/model/base_url are overridden at engine-build
-    # time, so a stale template can never redirect the live engine.
+def test_apply_guardrails_config_overrides_main_only():
+    # Issue #1134 Phase 2a: generation override must not smash type: self_check.
     from types import SimpleNamespace
 
     from guardrails.integration import _apply_guardrails_config
 
-    fake_config = SimpleNamespace(models=[
-        SimpleNamespace(engine="openai", model="stale-model",
-                        parameters={"base_url": "http://127.0.0.1:1234/v1"}),
-        SimpleNamespace(engine="openai", model="stale-model", parameters=None),
-    ])
-    cfg = GuardrailsConfig(enabled=True, base_url="http://127.0.0.1:11434/v1",
-                           model="qwen3.8:27b-mlx", engine="openai")
+    main = SimpleNamespace(
+        type="main",
+        engine="openai",
+        model="stale-main",
+        parameters={"base_url": "http://127.0.0.1:1234/v1"},
+    )
+    self_check = SimpleNamespace(
+        type="self_check",
+        engine="openai",
+        model="check-only-model",
+        parameters={"base_url": "http://127.0.0.1:1234/v1"},
+    )
+    untyped = SimpleNamespace(
+        engine="openai",
+        model="stale-untyped",
+        parameters=None,
+    )
+    fake_config = SimpleNamespace(models=[main, self_check, untyped])
+    cfg = GuardrailsConfig(
+        enabled=True,
+        base_url="http://127.0.0.1:11434/v1",
+        model="qwen3.8:27b-mlx",
+        engine="openai",
+    )
     _apply_guardrails_config(fake_config, cfg)
-    for m in fake_config.models:
-        assert m.model == "qwen3.8:27b-mlx"
-        assert m.parameters["base_url"] == "http://127.0.0.1:11434/v1"
+    assert main.model == "qwen3.8:27b-mlx"
+    assert main.parameters["base_url"] == "http://127.0.0.1:11434/v1"
+    assert untyped.model == "qwen3.8:27b-mlx"
+    assert untyped.parameters["base_url"] == "http://127.0.0.1:11434/v1"
+    assert self_check.model == "check-only-model"
+    assert self_check.parameters["base_url"] == "http://127.0.0.1:1234/v1"
+
+
+def test_policy_fingerprint_changes_when_bundle_changes(tmp_path, monkeypatch):
+    from guardrails.integration import policy_fingerprint, reset_rails_singleton
+
+    reset_rails_singleton()
+    dest = tmp_path / "policy"
+    dest.mkdir()
+    (dest / "config.yml").write_text("models: []\n", encoding="utf-8")
+    (dest / "rails.co").write_text("# flows\n", encoding="utf-8")
+    # Copy into repo-safe path: fingerprint only needs cfg.nemo_config_dir.
+    cfg = GuardrailsConfig()
+    monkeypatch.setattr(cfg, "nemo_config_dir", str(dest), raising=False)
+    first = policy_fingerprint(cfg)
+    (dest / "rails.co").write_text("# flows changed\n", encoding="utf-8")
+    second = policy_fingerprint(cfg)
+    assert first != second
+    assert len(first) == 64
+
+
+def test_iorails_env_fails_engine_startup(monkeypatch):
+    from guardrails.errors import RailsLoadError
+    from guardrails.integration import get_cyclaw_guardrails, reset_rails_singleton
+
+    reset_rails_singleton()
+    monkeypatch.setenv("NEMO_GUARDRAILS_IORAILS_ENGINE", "1")
+    monkeypatch.setattr("guardrails.integration.NEMO_AVAILABLE", True)
+    with pytest.raises(RailsLoadError, match="IORails is not supported"):
+        get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
 
 
 def test_nemo_template_matches_guardrails_block():

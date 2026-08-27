@@ -17,7 +17,11 @@ this package (``tests/test_guardrails_isolation.py``).
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
+import threading
+from pathlib import Path
 from typing import Any, TypedDict
 
 from guardrails.config import GuardrailsConfig, load_guardrails_config
@@ -31,8 +35,14 @@ from guardrails.rails import (
     register_actions,
     scan_injection,
 )
+from utils.telemetry_kill import apply_telemetry_kill
 
 logger = logging.getLogger("cyclaw.guardrails")
+
+# Kill telemetry immediately before the optional nemoguardrails import
+# (idempotent with guardrails/__init__.py). Verbose prompt/completion logging
+# stays off; content is never passed to a tracer here.
+apply_telemetry_kill()
 
 # --- Soft import: nemoguardrails is optional -------------------------------
 try:  # pragma: no cover - exercised only when the optional dep is installed
@@ -57,30 +67,41 @@ class GuardResult(TypedDict, total=False):
     guardrails_active: bool  # False => skipped (disabled / dep missing)
 
 
-# Singleton so we don't recompile the rails config on every call.
-# Referenced in reset_rails_singleton() and get_cyclaw_guardrails().
-_rails_singleton: Any | None = None
+# Engine cache keyed by (policy_fingerprint, provider, model, endpoint).
+# A process-global unkeyed singleton ignored config drift (issue #1134 Phase 2a).
+_rails_cache: dict[tuple[str, str, str, str], Any] = {}
+_rails_lock = threading.Lock()
+_rails_admit = threading.Semaphore(4)
+_breaker_failures = 0
+_BREAKER_LIMIT = 3
+_MAIN_MODEL_TYPES = frozenset({"main", "", None})
 
 
 def reset_rails_singleton() -> None:
-    """Drop the cached ``LLMRails`` (tests / config reload)."""
-    global _rails_singleton
-    _rails_singleton = None
+    """Drop cached ``LLMRails`` engines (tests / config reload)."""
+    global _breaker_failures
+    with _rails_lock:
+        _rails_cache.clear()
+        _breaker_failures = 0
+
+
+def _model_type(model: Any) -> str | None:
+    raw = getattr(model, "type", None)
+    if raw is None:
+        return None
+    return str(raw)
 
 
 def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
-    """Make ``config.yaml``'s guardrails: block authoritative over the static
-    NeMo directory (codex P1).
+    """Override generation (``type: main``) from ``config.yaml``.
 
-    ``guardrails/config/config.yml`` is a template; the operator-facing source
-    of truth is GuardrailsConfig. Without this override the live engine
-    silently used whatever endpoint/model the static file named -- for a long
-    time the RETIRED LM Studio port (1234) while the gateway ran Ollama
-    (11434), so enabling live rails called a dead endpoint. NeMo Model
-    entries expose .engine/.model/.parameters; override only what cfg
-    explicitly carries.
+    Self-check / facts / classifier entries keep the template's model tag so a
+    dedicated check model is not smashed onto the generation tag (issue #1134).
+    Untyped entries are treated as main (legacy templates).
     """
     for model in getattr(rails_config, "models", None) or []:
+        if _model_type(model) not in _MAIN_MODEL_TYPES:
+            continue
         if cfg.engine:
             model.engine = cfg.engine
         if cfg.model:
@@ -93,15 +114,46 @@ def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
             params["base_url"] = cfg.base_url
 
 
+def policy_fingerprint(cfg: GuardrailsConfig) -> str:
+    """SHA-256 of the NeMo policy bundle (config.yml + rails.co + sibling files)."""
+    root = Path(cfg.nemo_config_dir)
+    hasher = hashlib.sha256()
+    if not root.is_dir():
+        raise RailsLoadError(
+            "NeMo config directory missing for fingerprint",
+            details={"dir": str(root)},
+        )
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        hasher.update(rel.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def _cache_key(cfg: GuardrailsConfig) -> tuple[str, str, str, str]:
+    return (policy_fingerprint(cfg), cfg.engine, cfg.model, cfg.base_url)
+
+
+def _refuse_iorails() -> None:
+    flag = os.environ.get("NEMO_GUARDRAILS_IORAILS_ENGINE", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        raise RailsLoadError(
+            "IORails is not supported; unset NEMO_GUARDRAILS_IORAILS_ENGINE",
+            details={"env": "NEMO_GUARDRAILS_IORAILS_ENGINE"},
+        )
+
+
 def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
-    """Build (once) and return the live ``LLMRails`` engine.
+    """Build (once per policy/provider/model/endpoint) the live ``LLMRails`` engine.
 
     Raises :class:`GuardrailsDependencyError` if ``nemoguardrails`` is not
     installed, and :class:`RailsLoadError` if the NeMo config directory cannot be
     loaded. Callers that want graceful degradation should use
     :func:`safe_generate` instead, which never raises for the missing-dep case.
     """
-    global _rails_singleton
+    global _breaker_failures
     if cfg is None:
         cfg = load_guardrails_config()
     if not NEMO_AVAILABLE:
@@ -110,24 +162,49 @@ def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
             "(`pip install nemoguardrails`). The skeleton runs without it.",
             details={"degraded": True},
         )
-    if _rails_singleton is not None:
-        return _rails_singleton
+    if _breaker_failures >= _BREAKER_LIMIT:
+        raise RailsLoadError(
+            "NeMo engine circuit breaker open",
+            details={"failures": _breaker_failures},
+        )
+    _refuse_iorails()
     if not cfg.nemo_config_present:
         raise RailsLoadError(
             "NeMo config files not found",
             details={"expected": [str(cfg.config_yml_path), str(cfg.rails_co_path)]},
         )
+    key = _cache_key(cfg)
+    with _rails_lock:
+        cached = _rails_cache.get(key)
+        if cached is not None:
+            return cached
+    admitted = _rails_admit.acquire(timeout=30)
+    if not admitted:
+        raise RailsLoadError("NeMo engine admission timeout", details={"timeout_s": 30})
     try:
-        rails_config = RailsConfig.from_path(cfg.nemo_config_dir)
-        _apply_guardrails_config(rails_config, cfg)
-        rails = LLMRails(rails_config)
-    except Exception as exc:  # noqa: BLE001 - surface any NeMo load failure as RailsLoadError
-        raise RailsLoadError(f"failed to load NeMo rails: {exc}", details={"dir": cfg.nemo_config_dir}) from exc
-    # Wire config.yaml guardrails.hallucination_threshold into the live Colang
-    # is_ungrounded action so rails.co no longer hardcodes 0.18.
-    register_actions(rails, hallucination_threshold=cfg.hallucination_threshold)
-    _rails_singleton = rails
-    return rails
+        with _rails_lock:
+            cached = _rails_cache.get(key)
+            if cached is not None:
+                return cached
+        try:
+            rails_config = RailsConfig.from_path(cfg.nemo_config_dir)
+            _apply_guardrails_config(rails_config, cfg)
+            rails = LLMRails(rails_config)
+        except RailsLoadError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface any NeMo load failure as RailsLoadError
+            with _rails_lock:
+                _breaker_failures += 1
+            raise RailsLoadError(
+                f"failed to load NeMo rails: {exc}", details={"dir": cfg.nemo_config_dir}
+            ) from exc
+        register_actions(rails, hallucination_threshold=cfg.hallucination_threshold)
+        with _rails_lock:
+            _rails_cache[key] = rails
+            _breaker_failures = 0
+        return rails
+    finally:
+        _rails_admit.release()
 
 
 def _offline_checks(query: str, cfg: GuardrailsConfig) -> tuple[bool, list[str]]:

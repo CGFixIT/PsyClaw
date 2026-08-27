@@ -168,7 +168,36 @@ class GuardrailsConfig:
                 "guardrails.nemo_config_dir is required",
                 details={"hint": "Directory holding config.yml + rails.co (default: guardrails/config)"},
             )
-        self.nemo_config_dir = _anchor_to_repo_root(self.nemo_config_dir)
+        raw = self.nemo_config_dir
+        if ".." in Path(os.path.expanduser(os.path.expandvars(raw))).parts:
+            raise GuardrailsConfigError(
+                "guardrails.nemo_config_dir must not contain '..'",
+                details={"received": raw},
+            )
+        anchored = Path(_anchor_to_repo_root(raw))
+        try:
+            resolved = anchored.resolve()
+            resolved.relative_to(_REPO_ROOT.resolve())
+        except ValueError as exc:
+            raise GuardrailsConfigError(
+                "guardrails.nemo_config_dir must stay inside the repository",
+                details={"received": raw, "resolved": str(anchored)},
+            ) from exc
+        posix = resolved.as_posix().lower()
+        if "/agentic/" in f"/{posix}/" or posix.rstrip("/").endswith("/agentic"):
+            raise GuardrailsConfigError(
+                "guardrails.nemo_config_dir must not be an agent-writable root",
+                details={"resolved": str(resolved)},
+            )
+        _FORBIDDEN_EXEC = {".py", ".exe", ".bat", ".cmd", ".ps1", ".sh"}
+        if resolved.is_dir():
+            for child in resolved.rglob("*"):
+                if child.is_file() and child.suffix.lower() in _FORBIDDEN_EXEC:
+                    raise GuardrailsConfigError(
+                        "unexpected executable in nemo_config_dir",
+                        details={"file": str(child.relative_to(resolved))},
+                    )
+        self.nemo_config_dir = str(resolved)
 
     def _validate_metrics_path(self) -> None:
         if not self.metrics_path:

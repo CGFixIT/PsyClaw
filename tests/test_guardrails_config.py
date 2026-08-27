@@ -118,6 +118,31 @@ def test_nemo_config_dir_resolved_to_repo_files():
     assert gc.nemo_config_present is True
 
 
+def test_nemo_config_dir_rejects_dotdot():
+    with pytest.raises(GuardrailsConfigError, match="\\.\\."):
+        GuardrailsConfig(nemo_config_dir="guardrails/config/../config")
+
+
+def test_nemo_config_dir_rejects_outside_repo(tmp_path):
+    with pytest.raises(GuardrailsConfigError, match="inside the repository"):
+        GuardrailsConfig(nemo_config_dir=str(tmp_path / "elsewhere"))
+
+
+def test_nemo_config_dir_rejects_unexpected_executable(tmp_path):
+    probe = Path(__file__).resolve().parent / "_nemo_jail_probe"
+    probe.mkdir()
+    (probe / "config.yml").write_text("models: []\n", encoding="utf-8")
+    (probe / "rails.co").write_text("# none\n", encoding="utf-8")
+    (probe / "hack.py").write_text("# unexpected\n", encoding="utf-8")
+    try:
+        with pytest.raises(GuardrailsConfigError, match="unexpected executable"):
+            GuardrailsConfig(nemo_config_dir="tests/_nemo_jail_probe")
+    finally:
+        for child in probe.glob("*"):
+            child.unlink()
+        probe.rmdir()
+
+
 def test_repo_config_yaml_block_is_valid():
     # The guardrails: block shipped in the repo config.yaml must load cleanly.
     reset_config_cache()

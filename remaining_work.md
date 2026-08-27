@@ -24,7 +24,7 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 - **httpx2 / TestClient** — `httpx==0.28.1`; owed before a Starlette major. `docs/TESTCLIENT_HTTPX_DEPRECATION.md`
 - **`websockets` 15 → 16** — still `15.0.1`; blocked on `langgraph-sdk` import of `websockets.asyncio`
 - **NeMo 4b `check_soul_leak`** — listed in `guardrails.output_rails`, not fully built. `docs/NeMo/phase4b_soul_leak.md`
-- **#1134 NeMo program** — sequential drafts. Phase 1 = types/matrix/metrics/real-NeMo CI (no request-path change). Phase 2a = 0.23 engine hygiene (stop self-check smash). 0.24 bump and brokers later. Do not wire `safe_generate` into the graph.
+- **#1134 NeMo program** — sequential drafts. Phase 1 = types/matrix/metrics/real-NeMo CI. Phase 2a = 0.23 engine hygiene (stop self-check smash). 0.24 bump and brokers later. Do not wire `safe_generate` into the graph.
 - **Agentic loop is GitHub-clone-only** — no local-directory attach. Capability boundary, not a bug
 
 ## Shipped in tree (GitHub issue closed unless noted)

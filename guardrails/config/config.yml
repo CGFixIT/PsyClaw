@@ -74,6 +74,11 @@ rails:
     single_call:
       enabled: False              # explicit multi-step rails -> visible, auditable
 
+# Issue #1134 Phase 2a: no speculative generation / streaming transforms.
+# stream_first must stay false until streaming rails are tested. Do not return
+# reasoning content. IORails is refused at engine build if the env flag is set.
+streaming: False
+
 # Self-check prompts (used by the model-assisted rails referenced above). These
 # are deliberately conservative; refine alongside the corpus.
 prompts:
