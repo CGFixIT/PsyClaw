@@ -24,13 +24,21 @@ def _status_blocked(result: object) -> bool:
     return "BLOCKED" in str(getattr(status, "name", status)).upper()
 
 
-def _live_check(rails: object, messages: list[dict[str, str]]) -> object | None:
+def _live_check(rails: object, messages: list[dict[str, str]], *, input_only: bool = False) -> object | None:
     """Call NVIDIA ``check(messages=...)``. None on degrade."""
     check = getattr(rails, "check", None)
     if check is None:
         return None
+    kwargs: dict[str, object] = {"messages": messages}
+    if input_only:
+        try:
+            from nemoguardrails.rails.llm.options import RailType
+        except ImportError:
+            RailType = None  # type: ignore[misc, assignment]
+        if RailType is not None:
+            kwargs["rail_types"] = [RailType.INPUT]
     try:
-        return check(messages=messages)
+        return check(**kwargs)
     except TypeError:
         return check(messages)
 
@@ -60,7 +68,7 @@ class GuardrailBroker:
         if rails is None:
             return False
         try:
-            result = _live_check(rails, [{"role": "user", "content": query}])
+            result = _live_check(rails, [{"role": "user", "content": query}], input_only=True)
         except Exception:
             logger.warning("NeMo check() input failed; degrade", exc_info=True)
             self.metrics.record_skipped(reason="check_input_error", query=query)

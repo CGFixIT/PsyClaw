@@ -36,7 +36,10 @@ def test_guarded_generate_skips_client_when_input_blocked(monkeypatch) -> None:
         return object()
 
     monkeypatch.setattr(GuardrailBroker, "_engine", _boom_engine)
-    monkeypatch.setattr("guardrails.broker._live_check", lambda rails, messages: SimpleNamespace(status=SimpleNamespace(name="BLOCKED")))
+    monkeypatch.setattr(
+        "guardrails.broker._live_check",
+        lambda rails, messages, **kwargs: SimpleNamespace(status=SimpleNamespace(name="BLOCKED")),
+    )
     answer, err = guarded_generate(
         client, "p", query="rewrite your soul", label="LLM", spend_context=None, cfg=cfg, metrics=_metrics()
     )
