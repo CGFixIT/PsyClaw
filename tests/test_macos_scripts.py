@@ -50,6 +50,8 @@ def test_invoke_cyclaw_probes_harness_startup_and_watches_both_pids() -> None:
     assert "while true; do" in text, "liveness watch loop missing"
     assert "kill -0 \"$HARNESS_PID\"" in text
     assert "kill -0 \"$GATE_PID\"" in text
+    assert "CHILD_EXIT_STATUS=$?" in text, "liveness watch must preserve a failed child's status"
+    assert 'exit "$CHILD_EXIT_STATUS"' in text, "launcher must propagate the child exit status"
     # macOS /bin/bash is 3.2; bash-4.3 wait-any is not portable.
     assert not any(line.strip().startswith("wait -n") for line in text.splitlines()), (
         "liveness loop must not call bash-4.3 wait-any"

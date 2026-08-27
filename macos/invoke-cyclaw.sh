@@ -245,16 +245,25 @@ if [ -z "$HARNESS_PID" ] && [ -z "$GATE_PID" ]; then
   echo "[cyclaw] nothing started (--no-gate and --no-harness both set)" >&2
   exit 1
 fi
+CHILD_EXIT_STATUS=0
 while true; do
   if [ -n "$HARNESS_PID" ] && ! kill -0 "$HARNESS_PID" 2>/dev/null; then
     echo "[cyclaw] harness process (pid $HARNESS_PID) exited" >&2
-    wait "$HARNESS_PID" 2>/dev/null || true
+    if wait "$HARNESS_PID" 2>/dev/null; then
+      CHILD_EXIT_STATUS=0
+    else
+      CHILD_EXIT_STATUS=$?
+    fi
     HARNESS_PID=""
     break
   fi
   if [ -n "$GATE_PID" ] && ! kill -0 "$GATE_PID" 2>/dev/null; then
     echo "[cyclaw] RAG gateway process (pid $GATE_PID) exited" >&2
-    wait "$GATE_PID" 2>/dev/null || true
+    if wait "$GATE_PID" 2>/dev/null; then
+      CHILD_EXIT_STATUS=0
+    else
+      CHILD_EXIT_STATUS=$?
+    fi
     GATE_PID=""
     break
   fi
@@ -263,3 +272,4 @@ while true; do
   # Reap the specific dead pid above instead.
   sleep 1
 done
+exit "$CHILD_EXIT_STATUS"
