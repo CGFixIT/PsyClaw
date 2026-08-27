@@ -82,9 +82,12 @@ define flow check injection
     bot refuse prompt extraction
     stop
 
-# Model-assisted jailbreak check (NeMo self_check_input prompt in config.yml).
-define flow check jailbreak
-  $allowed = execute self_check_input
+# CyClaw-named jailbreak sibling. Do not call this ``check jailbreak``:
+# NVIDIA 0.24 documents that name as a library flow that evaluates
+# ``$response.is_blocked`` (RailOutcome). Our actions return bool.
+# Do not ``execute self_check_input`` here for the same reason.
+define flow check cyclaw jailbreak
+  $allowed = execute check_injection
   if not $allowed
     bot refuse prompt extraction
     stop
@@ -126,10 +129,11 @@ define flow check soul leak
     bot refuse prompt extraction
     stop
 
-# Model-assisted factuality check (NeMo self_check_facts prompt in config.yml).
-define flow self check facts
-  $grounded = execute self_check_facts
-  if not $grounded
+# CyClaw-named facts sibling (not NVIDIA ``self check facts``, which is
+# RailOutcome / ``$response.is_blocked`` on 0.24). Bool action: is_ungrounded.
+define flow check cyclaw facts
+  $ungrounded = execute is_ungrounded
+  if $ungrounded
     bot refuse out of knowledge
     stop
 

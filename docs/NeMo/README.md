@@ -50,7 +50,7 @@ Implemented offline rails: `check_injection`, `check_soul_mutation`,
 
 Configured but **not** enforced on the offline floor (must stay public):
 
-- `check_jailbreak` — listed in `input_rails`; Colang `self_check_input` only
+- `check_jailbreak` / Colang `check cyclaw jailbreak` — CyClaw bool `check_injection`; not NVIDIA 0.24 `check jailbreak` (`$response.is_blocked`)
 - `check_soul_leak` — listed in `output_rails`; Colang still calls
   `check_injection(text=$bot_message)`. Decision A in
   [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) forbids promoting that into
@@ -69,7 +69,8 @@ feature, not claim-level NLI.
 
 ## Optional dependency
 
-`nemoguardrails==0.23.0` in the `guardrails` extra (and `constraints.txt`).
+`nemoguardrails==0.24.0` in the `guardrails` extra (and `constraints.txt`).
+Issue #1134 Phase 2b. IORails stays refused.
 Not in `full`. Soft-imported. Installing it can pull fastembed/onnxruntime,
 which may CDN-fetch — that is why the extra is opt-in.
 

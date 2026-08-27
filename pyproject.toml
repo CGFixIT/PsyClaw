@@ -52,7 +52,7 @@ dependencies = [
 # Installing it is a deliberate choice; nothing here constrains fastembed to
 # a local-only embedder yet.
 guardrails = [
-    "nemoguardrails==0.23.0",
+    "nemoguardrails==0.24.0",
 ]
 postgres = [
     "psycopg==3.2.13",
@@ -159,7 +159,7 @@ filterwarnings = [
 ]
 markers = [
     "uses_shipped_execution_flag: test reads the real shipped EXECUTION_ENABLED value",
-    "nemo_runtime: real nemoguardrails==0.23 engine tests (set CYCLAW_NEMO_RUNTIME=1)",
+    "nemo_runtime: real nemoguardrails==0.24 engine tests (set CYCLAW_NEMO_RUNTIME=1)",
 ]
 
 [tool.coverage.run]

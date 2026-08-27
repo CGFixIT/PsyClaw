@@ -1,15 +1,15 @@
-# Real NeMo 0.23 runtime proof (issue #1134 Phase 1).
+# Real NeMo 0.24 runtime proof (issue #1134 Phase 2b).
 # Isolated from ci.yml so later engine-hygiene PRs do not restack this file.
 # Default pytest on the main test job must keep skipping these tests.
 
-name: NeMo Guardrails runtime (0.23)
+name: NeMo Guardrails runtime (0.24)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     # No base-branch filter: stacked PRs (e.g. #1137 onto P1) must still get
-    # the 0.23 construct proof. Filtering to main-only skipped those PRs.
+    # the 0.24 construct proof. Filtering to main-only skipped those PRs.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   nemo-runtime:
-    name: nemoguardrails 0.23 construct + actions
+    name: nemoguardrails 0.24 construct + actions
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -80,7 +80,7 @@ jobs:
           pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -e ".[guardrails,test]" -c constraints.txt
           pip check
-          python -c "import nemoguardrails; assert nemoguardrails.__version__ == '0.23.0', nemoguardrails.__version__"
+          python -c "import nemoguardrails; assert nemoguardrails.__version__ == '0.24.0', nemoguardrails.__version__"
 
       - name: Runtime tests against loopback mock (no unexpected DNS)
         run: |
