@@ -141,7 +141,10 @@ _source_dotenv() {
   case "$mode" in
     600|400) ;;
     *)
-      echo "[cyclaw] warn : refusing to source dotenv (mode ${mode:-unknown}; want 600 or 400)" >&2
+      # Name the file and the remedy. Without them the operator sees only a
+      # mode number here and "CYCLAW_API_KEY not set" below, and the actual
+      # cause -- a dotenv other local accounts can read -- goes unstated.
+      echo "[cyclaw] warn : refusing to source $f (mode ${mode:-unknown}; want 600 or 400). Fix with: chmod 600 $f" >&2
       return 1
       ;;
   esac
@@ -155,11 +158,8 @@ if [ -z "${CYCLAW_API_KEY:-}" ]; then
   case "$-" in
     *x*) echo "[cyclaw] error: refusing to source .env with xtrace on (would print secrets). Re-run without bash -x." >&2; exit 1 ;;
   esac
-  if [ -f "$HOME_DIR/.env" ]; then
-    _source_dotenv "$HOME_DIR/.env" || true
-  elif [ -f "$REPO_DIR/.env" ]; then
-    _source_dotenv "$REPO_DIR/.env" || true
-  fi
+  # Chained on the result, not `-f`: a refused HOME file must not shadow the repo copy.
+  _source_dotenv "$HOME_DIR/.env" || _source_dotenv "$REPO_DIR/.env" || true
 fi
 
 if [ -z "${CYCLAW_API_KEY:-}" ]; then
