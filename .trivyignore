@@ -15,8 +15,17 @@
 # process, with no network listener, so the vulnerable path is unreachable in
 # this deployment. Any change introducing chromadb.HttpClient or a standalone
 # Chroma server re-opens this assessment.
+#
+# CVE-2026-45830/45831/45833 are siblings on the same HTTP-server surface
+# (authenticated IDOR, RBAC scope bug, and post-auth code injection,
+# respectively — see SECURITY.md for the per-CVE breakdown); pip-audit.yml
+# added the same acceptance for all four on 2026-08-26. Added here 2026-08-27
+# so Trivy's fs/image scans stop re-raising an already-accepted risk.
 # Review: next chromadb release or 2026-10-01, whichever comes first.
 CVE-2026-45829
+CVE-2026-45830
+CVE-2026-45831
+CVE-2026-45833
 
 # nltk 3.10.0 — no fixed release available. The advisory is a URL-encoded
 # path-traversal reached through nltk.data.load(), i.e. the punkt tokenizer.
