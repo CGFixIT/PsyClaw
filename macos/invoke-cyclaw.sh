@@ -121,8 +121,49 @@ if [ "$NO_HARNESS" -eq 0 ]; then
 fi
 echo "[cyclaw] Ctrl+C stops all started servers"
 
+# Load persisted keys into THIS process so gate/harness inherit them.
+# ~/.CyClaw/.env is chmod 600 and gitignored. Never print its contents.
+# xtrace would dump every assignment — refuse rather than leak.
+# ponytail: one copy here (shim + cyclaw() + direct script all exec this).
+_dotenv_mode() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    stat -f %Lp "$1" 2>/dev/null || true
+  else
+    stat -c %a "$1" 2>/dev/null || true
+  fi
+}
+
+_source_dotenv() {
+  local f="$1"
+  local mode=""
+  [ -f "$f" ] || return 1
+  mode="$(_dotenv_mode "$f")"
+  case "$mode" in
+    600|400) ;;
+    *)
+      echo "[cyclaw] warn : refusing to source dotenv (mode ${mode:-unknown}; want 600 or 400)" >&2
+      return 1
+      ;;
+  esac
+  # shellcheck disable=SC1090
+  set -a
+  . "$f"
+  set +a
+}
+
 if [ -z "${CYCLAW_API_KEY:-}" ]; then
-  echo "[cyclaw] warn : CYCLAW_API_KEY not set — state-changing console routes will return 401" >&2
+  case "$-" in
+    *x*) echo "[cyclaw] error: refusing to source .env with xtrace on (would print secrets). Re-run without bash -x." >&2; exit 1 ;;
+  esac
+  if [ -f "$HOME_DIR/.env" ]; then
+    _source_dotenv "$HOME_DIR/.env" || true
+  elif [ -f "$REPO_DIR/.env" ]; then
+    _source_dotenv "$REPO_DIR/.env" || true
+  fi
+fi
+
+if [ -z "${CYCLAW_API_KEY:-}" ]; then
+  echo "[cyclaw] warn : CYCLAW_API_KEY not set — Soul / ops / harness state-changing routes will 401. Typing the key in the browser cannot configure the server; source ~/.CyClaw/.env or set the env var, then restart." >&2
 fi
 
 # --- cleanup on exit / signals ---

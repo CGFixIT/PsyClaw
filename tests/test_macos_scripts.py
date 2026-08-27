@@ -97,6 +97,82 @@ def test_invoke_cyclaw_propagates_a_post_start_child_failure(tmp_path: Path) -> 
     assert "harness process" in result.stderr
 
 
+def test_invoke_cyclaw_loads_persisted_api_key_from_dotenv() -> None:
+    """Daily cyclaw / invoke must source ~/.CyClaw/.env when CYCLAW_API_KEY is empty.
+
+    The cyclaw() rc function bypasses the install shim, so the one place all
+    launch paths hit is invoke-cyclaw.sh. Browser paste cannot set the server env.
+    """
+    text = (_REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
+    assert "$HOME_DIR/.env" in text, "invoke must load HOME_DIR/.env"
+    assert "refusing to source .env with xtrace" in text
+    assert "refusing to source dotenv (mode" in text
+    assert "want 600 or 400" in text
+    assert 'stat -f %Lp' in text
+    assert 'stat -c %a' in text
+    load_idx = text.index("$HOME_DIR/.env")
+    uvicorn_idx = text.index("uvicorn gate:app")
+    assert load_idx < uvicorn_idx, "dotenv load must run before uvicorn is spawned"
+    window = text[max(0, load_idx - 400) : load_idx + 400]
+    assert "set -a" in window, "sourced .env assignments must be exported (set -a)"
+    warn = "Typing the key in the browser cannot configure the server"
+    assert warn in text
+    assert load_idx < text.index(warn)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX child-process env inheritance")
+def test_invoke_cyclaw_exports_dotenv_key_to_child_without_printing_it(tmp_path: Path) -> None:
+    """A persisted CYCLAW_API_KEY must reach the child; its value must not print."""
+    home = tmp_path / "home"
+    fake_python = home / "venv" / "bin" / "python"
+    fake_python.parent.mkdir(parents=True)
+    status_file = home / "key_status"
+    # Record presence/match only. Never echo the secret.
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        f'status="{status_file.as_posix()}"\n'
+        'if [ -n "${CYCLAW_API_KEY:-}" ]; then printf "set\\n" > "$status"; else printf "unset\\n" > "$status"; fi\n'
+        'if [ "${CYCLAW_API_KEY:-}" = "from-dotenv" ]; then printf "match\\n" >> "$status"; fi\n'
+        "sleep 4\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    dotenv = home / ".env"
+    dotenv.write_text("CYCLAW_API_KEY=from-dotenv\n", encoding="utf-8")
+    dotenv.chmod(0o600)
+
+    repo = tmp_path / "repo"
+    harness = repo / "harness"
+    harness.mkdir(parents=True)
+    (harness / "server.py").write_text("# launcher probe\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["CYCLAW_HOME"] = str(home)
+    env.pop("CYCLAW_API_KEY", None)
+    result = subprocess.run(
+        [
+            _BASH,
+            str(_REPO_ROOT / "macos" / "invoke-cyclaw.sh"),
+            "--repo",
+            str(repo),
+            "--no-gate",
+            "--no-browser",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert "from-dotenv" not in output
+    assert "Typing the key in the browser cannot configure the server" not in result.stderr
+    assert status_file.read_text(encoding="utf-8") == "set\nmatch\n"
+
+
 def test_installer_preserves_patched_config_across_updates() -> None:
     install_text = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
     assert 'git -C "$REPO_DIR" pull --ff-only --autostash' in install_text
