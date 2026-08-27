@@ -152,6 +152,20 @@ def test_repo_config_yaml_block_is_valid():
     reset_config_cache()
 
 
+def test_shipped_config_yaml_guardrails_enabled_is_literal_false():
+    """Tracked config.yaml must keep guardrails.enabled as a YAML boolean false.
+
+    Parse the file directly (not only via load_guardrails_config) so a quoted
+    ``"false"`` or accidental ``true`` cannot hide behind the loader defaults.
+    Do not flip the shipped default in this PR.
+    """
+    path = Path(__file__).resolve().parent.parent / "config.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    enabled = (data or {}).get("guardrails", {}).get("enabled")
+    assert enabled is False
+    assert type(enabled) is bool
+
+
 @pytest.mark.parametrize("field_name", ["input_rails", "output_rails", "topical_rails", "soul_topics"])
 def test_bare_string_rail_list_raises(tmp_path, field_name):
     # A bare string instead of a one-item list (e.g. `input_rails: check_injection`)
