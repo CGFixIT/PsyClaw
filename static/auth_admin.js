@@ -141,7 +141,7 @@
         passIn.value = "";
         const failed = !resp.ok;
         if (failed) onStatus("create failed " + resp.status);
-        reload(failed); // preserve a refusal's message through the reload, same as mutate()
+        return reload(failed); // keep refresh failures in this handler's promise chain
       }).catch(function (err) {
         // The one path createUser still lacked: an unreachable gateway rejects
         // before any resp exists, so the password field stayed populated and

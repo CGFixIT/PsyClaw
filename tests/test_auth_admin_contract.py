@@ -95,7 +95,9 @@ def test_a_refused_mutation_survives_the_follow_up_reload():
     assert "return reload(failed);" in mutate_body, "mutate() must forward its own failure into reload()"
 
     create_body = js.split('createBtn.addEventListener("click"', 1)[1].split("\n    });", 1)[0]
-    assert "reload(failed);" in create_body, "the create-user handler must forward its own failure into reload()"
+    assert "return reload(failed);" in create_body, (
+        "the create-user handler must keep reload failures in its promise chain"
+    )
 
 
 def test_mutate_clears_status_before_new_attempt():
