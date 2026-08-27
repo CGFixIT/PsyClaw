@@ -23,7 +23,7 @@ import yaml
 BASE_URL = "http://127.0.0.1:8787"
 MOCK_URL = "http://127.0.0.1:11434"
 MODEL_ID = "qwen3.8:27b-mlx"
-# Track config.yaml's shipped grok model (grok-4.5 as of PR #570). _answer() in
+# Track config.yaml's shipped grok model. _answer() in
 # mock_ollama.py dispatches the "[Mock Grok API]" marker on an exact model-id
 # match, so this constant, the mock's, and the patched config's model must agree
 # -- _enable_mock_providers enforces the third leg.

@@ -13,6 +13,8 @@ Read current repository sources instead of copied snapshots:
 4. `docs/THREAT_MODEL.md` and `.github/SECURITY.md` for security-sensitive work.
 5. The current code, `config.yaml`, tests, and subsystem docs for the requested scope.
 
+Current main also includes optional auth, memory, and harness surfaces. Treat route presence and implementation as distinct from shipped configuration: verify each master switch in `config.yaml` before describing them as enabled or part of the core request path.
+
 For roadmap, optimization, or packaging work, also read the current business
 sources linked from `AGENTS.md`. Treat dated market conclusions as dated.
 

@@ -40,6 +40,7 @@ in the same change.
 | `injection-redteam` | Probe sanitizer regressions and adversarial bypasses. |
 | `verification-specialist` | Independently verify a change with executed evidence and a verdict. |
 | `cyclaw-project-guidance` | Load CyClaw invariants, architecture, and canonical references before substantial work. |
+| `cyclaw-advisor` | Read-only current-main architecture, operations, and PR advice. |
 | `verify-dep` | Reconcile dependency/install profiles, Docker, platform installers, and supply-chain checks. |
 | `cyclaw-run-cyclaw` | Prepare, index, start, and verify the local RAG gateway. |
 | `cyclaw-sandbox-test` | Fresh-main sandbox and mocked API/terminal smoke coverage. |
