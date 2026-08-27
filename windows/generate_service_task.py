@@ -43,6 +43,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from utils import win_schtasks  # noqa: E402
+from utils.telemetry_kill import scheduler_env_overlay  # noqa: E402
 
 _TASK_NAMES = types.MappingProxyType({
     "gate": "CyClaw gate",
@@ -144,7 +145,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     task_name = _TASK_NAMES[args.service]
-    env: dict[str, str] = {}
+    # Canonical telemetry/update-check block first: Task Scheduler starts the
+    # job from a near-empty environment, and the generated .cmd's set-lines
+    # are the only env channel (Task XML has none). cmd's `set "NAME="`
+    # DELETES a var -- deliberate for the two blank CHROMA_OTEL_* names (see
+    # utils/win_schtasks.write_cmd_launcher).
+    env: dict[str, str] = dict(scheduler_env_overlay())
 
     if args.service == "gate":
         port = _read_gate_port(Path(args.config).resolve())

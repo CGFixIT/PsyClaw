@@ -11,14 +11,27 @@ import logging
 import os
 from pathlib import Path
 
-import yaml
+from utils.telemetry_kill import apply_telemetry_kill
 
-from utils.errors import CorpusEmptyError
-from utils.sanitizer import sanitize_chunk
+# Applied here directly, not left to .vector_store's transitive module-level
+# apply: `python -m retrieval.indexer` (cyclaw-index) is a documented entry
+# point, and the yaml/sanitizer/embeddings imports below all execute before
+# .vector_store would fire the kill. Today none of them loads a
+# telemetry-capable SDK, but that ordering was one silent module-level import
+# away from breaking (retrieval/embeddings.py keeps sentence-transformers
+# behind TYPE_CHECKING precisely because it is heavy). An explicit apply makes
+# this entry point self-sufficient, same as mcp_hybrid_server.py -- and the
+# # noqa: E402 comments below are load-bearing, not clutter.
+apply_telemetry_kill()
 
-from .embeddings import embedding_fingerprint, get_embeddings_batch
-from .stemmer import tokenize_and_stem
-from .vector_store import get_vector_writer, vector_backend
+import yaml  # noqa: E402
+
+from utils.errors import CorpusEmptyError  # noqa: E402
+from utils.sanitizer import sanitize_chunk  # noqa: E402
+
+from .embeddings import embedding_fingerprint, get_embeddings_batch  # noqa: E402
+from .stemmer import tokenize_and_stem  # noqa: E402
+from .vector_store import get_vector_writer, vector_backend  # noqa: E402
 
 logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[1]

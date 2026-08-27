@@ -180,10 +180,16 @@ DEFAULT_PUSH_TIMEOUT_SEC = 120
 
 # Same allowlist discipline as agentic/executor/runner.py's _scrubbed_env, kept
 # as an independent (smaller) copy rather than an import: these four git
-# subcommands are local-only and never touch the network, so this module has
-# no need for that module's proxy/PIP_NO_INDEX handling, and importing across
-# sibling capability modules before either needs the other would be exactly
-# the premature coupling this effort has avoided everywhere else.
+# subcommands are local-only and never touch the network. Deliberately NOT
+# overlaid with utils/telemetry_kill's canonical block (unlike _scrubbed_env,
+# the gh sites, and sync's indexer child): git reads none of those names, and
+# handing a child unread telemetry keys is the advertise-false-protection
+# anti-pattern the ORT_TELEMETRY_OPT_OUT comment documents. Revisit only if
+# this allowlist ever launches something that is not git. Local-only also
+# means this module has no need for that module's proxy/PIP_NO_INDEX
+# handling, and importing across sibling capability modules before either
+# needs the other would be exactly the premature coupling this effort has
+# avoided everywhere else.
 _GIT_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL")
 
 

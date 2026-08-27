@@ -12,8 +12,12 @@ Hard guarantees (mirrors sync/runner.py):
   - Only an allow-listed set of read-only subcommands can be built. There is no
     code path here that mutates GitHub state -- writes live (disabled/stubbed) in
     agentic/writer.py and are never reachable from this module.
-  - No token is ever placed in argv. ``gh`` resolves its own credential from its
-    keyring / GH_TOKEN; CyClaw neither reads nor forwards it.
+  - No token is ever placed in argv. ``gh`` resolves its own credential from
+    its keyring or from GH_TOKEN in the child's environment; CyClaw never
+    reads the token itself. The child env is the full inherited environment
+    (so an operator's GH_TOKEN still works) with the canonical telemetry/
+    update-check overlay forced on top (``build_telemetry_safe_env``) --
+    GH_TELEMETRY=false always wins over an ambient ``true``/``log``.
 
 This module does NOT import anything from gate.py, graph.py, or the FastAPI / MCP
 layer. It runs strictly out-of-band.
@@ -30,6 +34,7 @@ from functools import lru_cache
 
 from utils.errors import AgenticError, GhNotInstalledError, GhVersionError
 from utils.logger import audit_log
+from utils.telemetry_kill import build_telemetry_safe_env
 
 # ---------------------------------------------------------------------------
 # Version handling
@@ -94,6 +99,10 @@ def check_gh_version(
         try:
             result = subprocess.run(  # noqa: S603 -- argv list, absolute binary, no shell
                 [binary, "version"],
+                # Full inherited env with the canonical telemetry/update-check
+                # overlay forced: gh honors ambient GH_TELEMETRY=true/log, so
+                # inheritance alone is not a guarantee.
+                env=build_telemetry_safe_env(),
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -356,6 +365,9 @@ def run_read(
         try:
             completed = subprocess.run(  # noqa: S603 -- argv list, absolute binary, no shell
                 argv,
+                # Same forced overlay as check_gh_version: GH_TELEMETRY=false
+                # must win over any ambient value.
+                env=build_telemetry_safe_env(),
                 capture_output=True,
                 text=True,
                 timeout=timeout,

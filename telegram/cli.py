@@ -41,6 +41,7 @@ from telegram.runner import poll_forever, send_notify
 from telegram.selftest import run_self_test
 from utils import launchd_plist, win_schtasks
 from utils.errors import TelegramConfigError, TelegramError, TelegramRefused, TelegramRuntimeError
+from utils.telemetry_kill import scheduler_env_overlay
 
 # Fixed Labels the generated plists own -- match the shipped static templates
 # at macos/LaunchAgents/com.cgfixit.cyclaw.telegram-{health,poll}.plist (both
@@ -305,6 +306,10 @@ def cmd_poll_plist(args: argparse.Namespace) -> int:
         "Label": _POLL_LAUNCHD_LABEL,
         "WorkingDirectory": str(repo_root),
         "ProgramArguments": program_args,
+        # launchd hands a job a near-empty environment; deliver the
+        # canonical telemetry/update-check block before anything starts.
+        # Non-secret fixed literals; secrets stay on the Keychain wrapper.
+        "EnvironmentVariables": scheduler_env_overlay(),
         "KeepAlive": True,
         "ThrottleInterval": 10,
         "RunAtLoad": False,
@@ -383,6 +388,10 @@ def cmd_health_plist(args: argparse.Namespace) -> int:
         "Label": _HEALTH_LAUNCHD_LABEL,
         "WorkingDirectory": str(repo_root),
         "ProgramArguments": program_args,
+        # launchd hands a job a near-empty environment; deliver the
+        # canonical telemetry/update-check block before anything starts.
+        # Non-secret fixed literals; secrets stay on the Keychain wrapper.
+        "EnvironmentVariables": scheduler_env_overlay(),
         "StartInterval": args.interval_sec,
         "RunAtLoad": False,
         "StandardOutPath": log_path,
@@ -442,6 +451,9 @@ def cmd_poll_task(args: argparse.Namespace) -> int:
         task_name=_POLL_TASK_NAME,
         argv=argv,
         working_directory=str(repo_root),
+        # Canonical telemetry/update-check block via the .cmd's set-lines
+        # (Task Scheduler starts jobs from a near-empty environment).
+        env=scheduler_env_overlay(),
         triggers=win_schtasks.logon_trigger(),
         restart_interval="PT10S",
         restart_count=999,
@@ -512,6 +524,9 @@ def cmd_health_task(args: argparse.Namespace) -> int:
         task_name=_HEALTH_TASK_NAME,
         argv=argv,
         working_directory=str(repo_root),
+        # Canonical telemetry/update-check block via the .cmd's set-lines
+        # (Task Scheduler starts jobs from a near-empty environment).
+        env=scheduler_env_overlay(),
         triggers=win_schtasks.interval_trigger(args.interval_sec),
     )
 

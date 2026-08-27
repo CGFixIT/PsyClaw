@@ -12,6 +12,7 @@ import yaml
 
 from opentweet.cli import EXIT_ENV, EXIT_OK, main
 from utils.logger import reset_config_cache
+from utils.telemetry_kill import scheduler_env_overlay
 
 
 @pytest.fixture(autouse=True)
@@ -136,7 +137,9 @@ def test_schedule_plist_wraps_keychain_no_secret(tmp_path: Path, capsys: pytest.
     assert document["Label"] == "com.cgfixit.cyclaw.opentweet"
     assert document["StartCalendarInterval"]["Weekday"] == 1
     assert document["StartCalendarInterval"]["Hour"] == 6
-    assert "EnvironmentVariables" not in document
+    # Exactly the canonical non-secret overlay; the API key stays on the
+    # Keychain wrapper argv, never in EnvironmentVariables.
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
     args = document["ProgramArguments"]
     assert args[0].endswith("cyclaw-keychain-env.sh")
     assert "OPENTWEET_API_KEY" in args

@@ -21,6 +21,7 @@ import pytest
 import yaml
 
 from telegram.cli import EXIT_ENV, EXIT_FAIL, EXIT_OK, main
+from utils.telemetry_kill import scheduler_env_overlay
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
 
@@ -76,7 +77,9 @@ def test_poll_plist_generates_valid_plist(tmp_path: Path, capsys) -> None:
     assert document["KeepAlive"] is True
     assert document["ThrottleInterval"] == 10
     assert document["RunAtLoad"] is False
-    assert "EnvironmentVariables" not in document
+    # Exactly the canonical non-secret overlay; the bot token stays on the
+    # Keychain wrapper argv, never in EnvironmentVariables.
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
 
     args = document["ProgramArguments"]
     assert args[0].endswith("cyclaw-keychain-env.sh")
@@ -88,7 +91,10 @@ def test_poll_plist_generates_valid_plist(tmp_path: Path, capsys) -> None:
 
     raw = plist_path.read_bytes()
     assert b"REPLACE_" not in raw
-    assert b"EnvironmentVariables" not in raw  # the only place a literal secret value could hide
+    # EnvironmentVariables now exists by design (canonical overlay). The
+    # secret-hygiene check the absent-key byte-scan used to provide is this
+    # exact-dict equality: only fixed non-secret literals, nothing to hide.
+    assert plistlib.loads(raw)["EnvironmentVariables"] == scheduler_env_overlay()
 
     out = capsys.readouterr().out
     assert "launchctl bootstrap gui/" in out
@@ -264,4 +270,6 @@ def test_health_plist_generated_plist_never_contains_secret_markers(tmp_path: Pa
     plist_path = home / "Library" / "LaunchAgents" / "com.cgfixit.cyclaw.telegram-health.plist"
     raw = plist_path.read_bytes()
     assert b"REPLACE_" not in raw
-    assert b"EnvironmentVariables" not in raw
+    # Canonical overlay only -- exact equality replaces the old absent-key
+    # byte scan while keeping its no-secret guarantee.
+    assert plistlib.loads(raw)["EnvironmentVariables"] == scheduler_env_overlay()

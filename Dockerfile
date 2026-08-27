@@ -80,11 +80,46 @@ RUN groupadd --gid 1000 cyclaw && \
     chown -R cyclaw:cyclaw /app /tmp
 USER cyclaw
 
-# Offline-first + security env
+# Offline-first + security env. CYCLAW_OFFLINE is a human-readable posture
+# marker (no code reads it). The canonical telemetry-kill and update-check
+# values below are REAL delivery: Docker sets them before the interpreter
+# starts, so bare `uvicorn gate:app` (the CMD), the HEALTHCHECK's python -c
+# child, and any `docker exec` all begin inside the canonical environment --
+# earlier than any Python-level apply could run. They must stay in exact
+# agreement with utils/telemetry_kill.py (TELEMETRY_KILL /
+# UPDATE_CHECK_OPT_OUT); the otel-hardening checker pins both files.
 ENV CYCLAW_OFFLINE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    CYCLAW_TELEMETRY_KILL=1
+    PYTHONDONTWRITEBYTECODE=1
+
+# Canonical telemetry kill (unsolicited vendor telemetry/analytics).
+ENV LANGSMITH_TRACING_V2=false \
+    LANGCHAIN_TRACING_V2=false \
+    LANGSMITH_TRACING=false \
+    LANGCHAIN_TRACING=false \
+    LANGSMITH_OTEL_ENABLED=false \
+    LANGGRAPH_CLI_NO_ANALYTICS=1 \
+    NEMO_GUARDRAILS_NO_USAGE_STATS=1 \
+    ANONYMIZED_TELEMETRY=False \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    DO_NOT_TRACK=1 \
+    ORT_DISABLE_TELEMETRY=1 \
+    ORT_TELEMETRY_OPT_OUT=1 \
+    GH_TELEMETRY=false \
+    POWERSHELL_TELEMETRY_OPTOUT=1 \
+    CHROMA_OTEL_GRANULARITY=none \
+    CHROMA_OTEL_COLLECTION_ENDPOINT="" \
+    CHROMA_OTEL_SERVICE_NAME="" \
+    OTEL_SDK_DISABLED=true \
+    OTEL_TRACES_EXPORTER=none \
+    OTEL_METRICS_EXPORTER=none \
+    OTEL_LOGS_EXPORTER=none
+
+# Ancillary update-check opt-outs (version-check egress, NOT telemetry).
+ENV GH_NO_UPDATE_NOTIFIER=1 \
+    GH_NO_EXTENSION_UPDATE_NOTIFIER=1 \
+    POWERSHELL_UPDATECHECK=Off \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 EXPOSE 8787
 

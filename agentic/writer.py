@@ -49,6 +49,7 @@ from utils.agent_identity import BRANCH_NAME_RE as _HEAD_BRANCH_RE
 from utils.agent_identity import allowed_prefixes_help
 from utils.errors import AgenticError, AgenticWriteRefused
 from utils.logger import audit_log
+from utils.telemetry_kill import build_telemetry_safe_env
 
 # EXECUTION SWITCH -- ARMED (operator-signed enablement; see
 # docs/agentic/GITHUB_WRITE_ENABLEMENT.md). True alone is not enough to write:
@@ -402,6 +403,11 @@ def execute_write(
     try:
         completed = subprocess.run(  # noqa: S603  # nosec B603 - argv list, absolute binary, no shell
             argv,
+            # Full inherited env with the canonical telemetry/update-check
+            # overlay forced (same as agentic/gh_client.py): gh honors an
+            # ambient GH_TELEMETRY=true/log, so inheritance alone is not a
+            # guarantee. GH_TOKEN still passes through for auth.
+            env=build_telemetry_safe_env(),
             capture_output=True,
             text=True,
             timeout=timeout_sec,

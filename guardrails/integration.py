@@ -24,10 +24,22 @@ import threading
 from pathlib import Path
 from typing import Any, TypedDict
 
-from guardrails.config import GuardrailsConfig, load_guardrails_config
-from guardrails.errors import GuardrailsDependencyError, RailsLoadError
-from guardrails.metrics import GuardrailMetrics
-from guardrails.rails import (
+from utils.telemetry_kill import apply_telemetry_kill
+
+# Kill telemetry BEFORE the sibling guardrails imports below, not merely before
+# the nemoguardrails soft import: guardrails/rails.py performs its own soft
+# `import nemoguardrails` at module level, so importing it first would give the
+# optional dependency an unkilled window. The package __init__ already applies
+# the kill ahead of any submodule on the normal `import guardrails.*` path --
+# this earlier position makes THIS module self-sufficient too (idempotent with
+# guardrails/__init__.py), which is the property invariant-guard's G1 package
+# rule checks. The # noqa: E402 comments below are load-bearing, not clutter.
+apply_telemetry_kill()
+
+from guardrails.config import GuardrailsConfig, load_guardrails_config  # noqa: E402
+from guardrails.errors import GuardrailsDependencyError, RailsLoadError  # noqa: E402
+from guardrails.metrics import GuardrailMetrics  # noqa: E402
+from guardrails.rails import (  # noqa: E402
     detect_soul_mutation_intent,
     grounding_score,
     is_possible_hallucination,
@@ -35,14 +47,9 @@ from guardrails.rails import (
     register_actions,
     scan_injection,
 )
-from utils.telemetry_kill import apply_telemetry_kill
+from utils.onnx_telemetry import suppress_onnx_telemetry  # noqa: E402
 
 logger = logging.getLogger("cyclaw.guardrails")
-
-# Kill telemetry immediately before the optional nemoguardrails import
-# (idempotent with guardrails/__init__.py). Verbose prompt/completion logging
-# stays off; content is never passed to a tracer here.
-apply_telemetry_kill()
 
 # --- Soft import: nemoguardrails is optional -------------------------------
 try:  # pragma: no cover - exercised only when the optional dep is installed
@@ -201,6 +208,12 @@ def get_cyclaw_guardrails(cfg: GuardrailsConfig | None = None) -> Any:
         try:
             rails_config = RailsConfig.from_path(cfg.nemo_config_dir)
             _apply_guardrails_config(rails_config, cfg)
+            # Post-import ONNX suppression, immediately before the engine that
+            # constructs fastembed/ONNX sessions. force_import: ONNX use is
+            # imminent here, so the API must run even if nothing imported
+            # onnxruntime yet. The env half (ORT_DISABLE_TELEMETRY) was set by
+            # apply_telemetry_kill() above, before any import.
+            suppress_onnx_telemetry(force_import=True)
             rails = LLMRails(rails_config)
         except RailsLoadError:
             raise

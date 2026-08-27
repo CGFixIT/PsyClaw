@@ -99,6 +99,17 @@ def write_cmd_launcher(
 
     Optional *env* becomes ``set "NAME=value"`` lines (non-secret only —
     callers must not pass tokens here).
+
+    cmd.exe semantics for an EMPTY value: ``set "NAME="`` DELETES the variable
+    rather than setting it to an empty string — there is no way to express an
+    empty-but-present variable in a ``.cmd``. That is accepted deliberately
+    for the two blank ``CHROMA_OTEL_*`` names in the canonical telemetry
+    overlay (utils/telemetry_kill.scheduler_env_overlay): absent is exactly
+    the state their scrub wants, the real switch is
+    ``CHROMA_OTEL_GRANULARITY=none`` (non-empty, delivered normally), and the
+    Python child re-blanks both at import. Do not "fix" this by skipping
+    empty values — the deletion line is a real directive against an ambient
+    machine-level value.
     """
     if not argv:
         raise ValueError("argv must be non-empty")

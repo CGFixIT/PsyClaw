@@ -1,11 +1,17 @@
 """Canonical telemetry-kill environment block, shared by every CyClaw entry point.
 
-CyClaw's threat model (docs/THREAT_MODEL.md) forbids telemetry outright: nothing
-in this stack may phone home. The mechanism is a fixed set of environment
-variables that must be in place BEFORE the libraries that read them are
-imported -- LangChain/LangSmith, LangGraph, NeMo Guardrails, ChromaDB's PostHog
-client, and the OpenTelemetry SDK all latch their config at import or
-construction time, so setting these afterwards is too late.
+CyClaw's threat model (docs/THREAT_MODEL.md) forbids unsolicited secondary
+telemetry: no dependency may report usage/analytics home. Stated precisely --
+this module disables *vendor telemetry and analytics*, not networking. It is
+NOT a general network kill switch: intentional, policy-gated feature traffic
+(cloud model calls behind the triple gate, Telegram, OpenTweet, rclone/Dropbox,
+databases, the one-time embedding-model bootstrap fetch) is governed by its own
+gates and documented separately (SECURITY.md "Egress classification"), and no
+environment variable here blocks a socket. The mechanism is a fixed set of
+environment variables that must be in place BEFORE the libraries that read them
+are imported -- LangChain/LangSmith, LangGraph, NeMo Guardrails, ChromaDB's
+PostHog client, ONNX Runtime, and the OpenTelemetry SDK all latch their config
+at import or construction time, so setting these afterwards is too late.
 
 This module exists because that block used to live only in ``gate.py``. Every
 other process that reaches ChromaDB -- ``python -m retrieval.indexer``
@@ -17,7 +23,13 @@ base image, a site-wide observability agent) would be honored.
 
 Deliberately stdlib-only (``os``). It is imported at the very top of entry
 points, ahead of anything heavy, so it must never pull in a third-party package
-of its own.
+of its own. That is also why the real ONNX Runtime *API* suppression
+(``onnxruntime.disable_telemetry_events()``) does NOT live here -- importing
+onnxruntime from this module would drag a heavy transitive into every entry
+point. The API call lives at the optional ONNX load seams instead
+(``utils/onnx_telemetry.py``, called by ``retrieval/vector_store.py`` and
+``guardrails/integration.py``); this module contributes the env half
+(``ORT_DISABLE_TELEMETRY`` below), which must be set before import.
 
 NOT included here on purpose: ``HF_HUB_OFFLINE`` / ``TRANSFORMERS_OFFLINE``.
 docs/security-philosophy/cyclaw_telemetry_kill.env documents both (for an
@@ -56,15 +68,20 @@ cross-ecosystem convention continuing to be honored.
 
 Applying this is an intentional process-wide side effect: it mutates
 ``os.environ`` for the whole interpreter. That is the point -- the libraries
-read the process environment, not a config object.
+read the process environment, not a config object. For child processes built
+from a *minimal* environment (which inherit nothing), use
+``build_telemetry_safe_env`` so the same canonical values reach them too.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, MutableMapping
 
 # Names and values are contractual: tests/test_telemetry_kill.py asserts each
-# one, and treats a failure as P0 (live telemetry leakage).
+# one against an independent expected map, and treats a failure as P0 (live
+# telemetry leakage). .claude/skills/otel-hardening/check_otel.py carries the
+# second, out-of-process copy of the same name -> value contract.
 TELEMETRY_KILL: dict[str, str] = {
     # The four names below are ONE switch with a namespace precedence order,
     # not four mechanisms. Verified 2026-08-15 against the installed
@@ -109,20 +126,54 @@ TELEMETRY_KILL: dict[str, str] = {
     # 1.26.0) for huggingface_hub -- see module docstring. Harmless where
     # unread.
     "DO_NOT_TRACK": "1",
-    # ONNX Runtime, a transitive dependency of chromadb (and of nemoguardrails's
-    # fastembed base, when guardrails is enabled) -- see constraints.txt. Kept
-    # for parity with docs/security-philosophy/cyclaw_telemetry_kill.env, which
-    # documents this as one of the vars "gate.py also sets... at import time"
-    # (it previously did not). Stated precisely: this specific env var is NOT
-    # read by onnxruntime -- verified 2026-07-29 by grepping the installed
-    # 1.28.0 package for the name; zero references. ORT's own Privacy.md
-    # confirms telemetry is implemented ONLY for official Windows builds (ETW/
-    # TraceLogging), off by construction on Linux/macOS, and the real opt-out
-    # is the runtime API `onnxruntime.disable_telemetry_events()` -- not an env
-    # var. Retained as documented, harmless (unread) belt-and-suspenders rather
-    # than silently dropped; wiring the real API call is a separate, deliberate
-    # change this module does not make.
+    # ONNX Runtime (transitive dependency of chromadb, and of nemoguardrails's
+    # fastembed base when guardrails is enabled -- see constraints.txt).
+    # The platform story changed at onnxruntime v1.29.0 (2025-08-12):
+    # non-Windows official builds now carry 1DS-SDK telemetry too
+    # (microsoft/onnxruntime PRs #27379/#29872), and Privacy.md documents
+    # ORT_DISABLE_TELEMETRY=1, read before ONNX Runtime initializes, as the
+    # process-lifetime disable for that path. The runtime API
+    # `onnxruntime.disable_telemetry_events()` remains the post-import
+    # suppression (wired at the load seams via utils/onnx_telemetry.py) --
+    # the API alone cannot prevent an initialization-time event, which is
+    # why this env var must be present before the first import. On Windows,
+    # telemetry is ETW/TraceLogging and only leaves the box when an external
+    # trace session collects it; absolute suppression there requires a
+    # --no_telemetry private build, which CyClaw does not claim to be.
+    # Reviewed 2026-08-27 against
+    # https://github.com/microsoft/onnxruntime/blob/main/docs/Privacy.md and
+    # https://github.com/microsoft/onnxruntime/releases/tag/v1.29.0.
+    "ORT_DISABLE_TELEMETRY": "1",
+    # INERT LEGACY MARKER -- not protection. This name is NOT read by
+    # onnxruntime at all (verified 2026-07-29 by grepping the installed
+    # 1.28.0 package: zero references; re-checked against Privacy.md
+    # 2026-08-27 -- the documented env control is ORT_DISABLE_TELEMETRY
+    # above). Retained solely for parity with the reference
+    # docs/security-philosophy/cyclaw_telemetry_kill.env, which has shipped
+    # this name since before the real control existed. Tests and the
+    # otel-hardening checker classify it as inert and must never count it
+    # toward ONNX coverage.
     "ORT_TELEMETRY_OPT_OUT": "1",
+    # GitHub CLI usage telemetry (gh >= 2.83): GH_TELEMETRY accepts
+    # true/false/log, defaults on. Pinned to the literal "false" so a gh
+    # child spawned by agentic/gh_client.py / agentic/writer.py can never
+    # inherit an ambient "true" or "log". Update-check suppression for gh is
+    # the SEPARATE ancillary pair in UPDATE_CHECK_OPT_OUT below -- version
+    # checks are egress but not telemetry, and the two must not be conflated.
+    # Reviewed 2026-08-27 (gh help environment).
+    "GH_TELEMETRY": "false",
+    # PowerShell 7+ startup/feature telemetry. pwsh reads this ONCE, at its
+    # own process startup -- so this entry protects only pwsh processes that
+    # CyClaw (or a generated .cmd task wrapper) launches AFTER the kill is
+    # applied. It cannot retroactively silence an already-running parent
+    # PowerShell host: an operator's own pwsh session must receive the value
+    # before it starts (shell profile / system env), which
+    # docs/security-philosophy/cyclaw_telemetry_kill.env and the platform
+    # docs state explicitly. Generated Windows task wrappers
+    # (utils/win_schtasks.py) also write it into the .cmd before the
+    # powershell/pwsh line so Task-Scheduler-launched wrappers are covered.
+    # Reviewed 2026-08-27 (learn.microsoft.com about_Telemetry).
+    "POWERSHELL_TELEMETRY_OPTOUT": "1",
     # ChromaDB OpenTelemetry. `chroma_otel_granularity` is the actual on/off
     # switch: chromadb's otel_init() returns immediately when it is "none", and
     # only builds a TracerProvider + BatchSpanProcessor + OTLPSpanExporter when
@@ -133,16 +184,42 @@ TELEMETRY_KILL: dict[str, str] = {
     # chromadb 1.5.9: with granularity left unset and an ambient
     # CHROMA_OTEL_GRANULARITY=all, the OTLP exporter IS constructed and only
     # OTEL_SDK_DISABLED downgrades the tracer to a NoOp; pinning granularity to
-    # "none" makes the early return fire and nothing is built at all.
+    # "none" makes the early return fire and nothing is built at all. These
+    # CHROMA_OTEL_* names are the legacy configuration surface of the PINNED
+    # chromadb 1.5.9 -- current Chroma documentation uses different names, so
+    # record controls by supported version rather than replacing these.
     "CHROMA_OTEL_GRANULARITY": "none",
     "CHROMA_OTEL_COLLECTION_ENDPOINT": "",
     "CHROMA_OTEL_SERVICE_NAME": "",
     # Global OTel SDK kill. Retained as the outer layer even with granularity
     # pinned above: it also covers any other OTel-instrumented dependency.
+    # NOTE: declarative OTel configuration (OTEL_CONFIG_FILE /
+    # OTEL_EXPERIMENTAL_CONFIG_FILE) takes precedence over these SDK-disable /
+    # exporter settings when present, which is why both names are scrubbed
+    # from the environment below rather than merely out-valued here.
     "OTEL_SDK_DISABLED": "true",
     "OTEL_TRACES_EXPORTER": "none",
     "OTEL_METRICS_EXPORTER": "none",
     "OTEL_LOGS_EXPORTER": "none",
+}
+
+# Ancillary update/version-check egress -- deliberately a SEPARATE mapping so
+# no report, test, or checker ever counts these as telemetry controls: a
+# version check is network egress but reports nothing about usage. They are
+# still unconditionally applied (harmless where unread, inherited by every
+# child), because the processes that read them -- gh, pip inside the agentic
+# verifier, PowerShell task wrappers -- are all launched from environments
+# this module governs. HF_HUB_DISABLE_UPDATE_CHECK is deliberately NOT here:
+# it governs the `hf` CLI, which no CyClaw code path launches; it is
+# documented in docs/security-philosophy/cyclaw_telemetry_kill.env for
+# operators who run that CLI by hand (same reasoning as the shell-only
+# HOMEBREW_NO_ANALYTICS there -- a key applied to a program CyClaw never
+# spawns would advertise a protection this process cannot deliver).
+UPDATE_CHECK_OPT_OUT: dict[str, str] = {
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
+    "POWERSHELL_UPDATECHECK": "Off",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
 }
 
 # Credentials that, if present, would let a tracing SDK authenticate to a remote
@@ -166,18 +243,135 @@ _TRACING_CREDENTIALS = (
     "LANGSMITH_RUNS_ENDPOINTS",
 )
 
+# Declarative OTel configuration overrides. When OTEL_EXPERIMENTAL_CONFIG_FILE
+# (or its successor OTEL_CONFIG_FILE) points at a YAML config, the OTel SDK's
+# declarative-configuration path takes precedence over the individual
+# OTEL_SDK_DISABLED / OTEL_*_EXPORTER settings pinned above -- an ambient file
+# path could therefore re-enable an exporter the value pins say are off. Both
+# names are removed outright, before any SDK import, for the same reason the
+# credentials above are popped rather than blanked. Reviewed 2026-08-27
+# (opentelemetry.io declarative-configuration spec).
+_OTEL_DECLARATIVE_CONFIG = (
+    "OTEL_CONFIG_FILE",
+    "OTEL_EXPERIMENTAL_CONFIG_FILE",
+)
 
-def apply_telemetry_kill() -> dict[str, str]:
-    """Set every kill var and drop tracing credentials; return the mapping applied.
+# The full removed-outright set, public so tests and the otel-hardening checker
+# can assert it without reaching for the two private tuples above.
+SCRUBBED_ENV_KEYS: tuple[str, ...] = (*_TRACING_CREDENTIALS, *_OTEL_DECLARATIVE_CONFIG)
 
-    Overwrites unconditionally -- an ambient value is exactly the case this
-    defends against, so an existing setting is never preserved.
 
-    Returns the mapping so a caller can report what it enforced (``gate.py``
-    prints a verification table at startup) without re-importing the constant.
+def _enforce(env: MutableMapping[str, str]) -> None:
+    """Overlay every canonical value and drop every scrubbed name, in place.
+
+    The single enforcement core shared by ``apply_telemetry_kill`` (parent
+    process, mutates ``os.environ``) and ``build_telemetry_safe_env`` (child
+    process, mutates a fresh copy) -- one implementation, so the two can
+    never drift.
     """
     for key, value in TELEMETRY_KILL.items():
-        os.environ[key] = value
-    for key in _TRACING_CREDENTIALS:
-        os.environ.pop(key, None)
-    return TELEMETRY_KILL
+        env[key] = value
+    for key, value in UPDATE_CHECK_OPT_OUT.items():
+        env[key] = value
+    for key in SCRUBBED_ENV_KEYS:
+        env.pop(key, None)
+
+
+def build_telemetry_safe_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Return a NEW dict: *base* (default ``os.environ``) with the canonical
+    kill values overlaid and every scrubbed credential/config name removed.
+
+    Pure with respect to its input -- *base* is copied, never mutated, and the
+    process environment is untouched. Use this wherever a child process is
+    built from an explicit ``env=`` mapping (a minimal allowlist, a generated
+    launcher, a scheduler job): inheritance from a killed parent covers the
+    default ``env=None`` case, but a hand-built environment starts from
+    nothing and would otherwise silently drop the whole block. The return
+    value is a fresh dict each call; mutating it cannot touch the canonical
+    constants.
+    """
+    env = dict(os.environ if base is None else base)
+    _enforce(env)
+    return env
+
+
+def apply_telemetry_kill() -> dict[str, str]:
+    """Set every kill var and drop scrubbed names in ``os.environ``; return a
+    copy of the telemetry mapping applied.
+
+    Overwrites unconditionally -- an ambient value is exactly the case this
+    defends against, so an existing setting is never preserved. Runs through
+    the same ``_enforce`` core as ``build_telemetry_safe_env``, so parent and
+    child enforcement cannot drift.
+
+    Returns a copy (not the module global) so a caller can report what it
+    enforced (``gate.py`` prints a verification table at startup) without
+    holding a reference through which the canonical mapping could be mutated.
+    The copy carries only ``TELEMETRY_KILL``: the ancillary update-check pairs
+    are applied too, but they are not telemetry controls and stay out of any
+    telemetry report.
+    """
+    _enforce(os.environ)
+    return dict(TELEMETRY_KILL)
+
+
+def scheduler_env_overlay() -> dict[str, str]:
+    """The canonical pairs a generated launcher/job should deliver as literal
+    environment, before any interpreter starts.
+
+    A fresh ``{**TELEMETRY_KILL, **UPDATE_CHECK_OPT_OUT}`` each call -- used by
+    the launchd-plist / Windows-task / cron generators, whose children begin
+    from a near-empty scheduler environment where inheritance delivers nothing.
+    Scrubbed names need no entries here: absent is exactly the state the scrub
+    wants, and a scheduler environment starts absent.
+    """
+    return {**TELEMETRY_KILL, **UPDATE_CHECK_OPT_OUT}
+
+
+def _export_lines(syntax: str) -> list[str]:
+    """Render the canonical block for a shell to eval; values are our own
+    literals, but validate defensively so a future edit cannot smuggle quoting."""
+    lines: list[str] = []
+    sections = (
+        ("telemetry kill (unsolicited vendor telemetry/analytics)", TELEMETRY_KILL),
+        ("ancillary update-check opt-outs (egress, NOT telemetry)", UPDATE_CHECK_OPT_OUT),
+    )
+    for title, mapping in sections:
+        lines.append(f"# --- {title} ---")
+        for name, value in mapping.items():
+            if not (name.isidentifier() and name.isascii()):
+                raise ValueError(f"refusing invalid env name: {name!r}")
+            if "'" in value or '"' in value or "\n" in value or "\r" in value:
+                raise ValueError(f"refusing env value with quotes/newlines: {name}")
+            if syntax == "shell":
+                lines.append(f"export {name}='{value}'")
+            else:
+                lines.append(f"$env:{name} = '{value}'")
+    lines.append("# --- scrubbed (declarative-config/credential overrides, removed outright) ---")
+    for name in SCRUBBED_ENV_KEYS:
+        if syntax == "shell":
+            lines.append(f"unset {name} 2>/dev/null || true")
+        else:
+            lines.append(f"Remove-Item -ErrorAction SilentlyContinue Env:{name}")
+    return lines
+
+
+def _main(argv: list[str] | None = None) -> int:
+    """``python -m utils.telemetry_kill --export {shell,powershell}``.
+
+    Prints eval-able lines so the shipped launchers can place the canonical
+    block into their own process -- and therefore into every child they start
+    -- BEFORE any Python interpreter or tool launches. One source of truth:
+    the launchers never hand-copy a key/value pair.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m utils.telemetry_kill")
+    parser.add_argument("--export", choices=("shell", "powershell"), required=True)
+    args = parser.parse_args(argv)
+    print("\n".join(_export_lines(args.export)))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

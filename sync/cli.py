@@ -49,6 +49,7 @@ from utils.errors import (
     SyncConfigError,
     SyncError,
 )
+from utils.telemetry_kill import build_telemetry_safe_env
 
 EXIT_OK = 0
 EXIT_SAFETY = 1
@@ -204,7 +205,16 @@ def _run_auto_reindex(cfg: Any) -> int:
     timeout = timeout_sec if timeout_sec > 0 else None
     try:
         completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
-            argv, check=False, timeout=timeout, capture_output=True, text=True
+            argv,
+            # Explicit safe env rather than bare inheritance: this path runs
+            # from the scheduled cron/schtasks job where the parent env is
+            # near-empty, and the overlay guarantees the indexer child starts
+            # with the canonical block even before its own import-time apply.
+            env=build_telemetry_safe_env(),
+            check=False,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
         )
     except subprocess.TimeoutExpired as exc:
         tail = (exc.stderr or "")[-500:] if exc.stderr else ""

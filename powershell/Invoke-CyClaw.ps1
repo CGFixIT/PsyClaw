@@ -119,6 +119,23 @@ if (-not $NoBrowser) {
 
 Push-Location $Repo
 try {
+    # Canonical telemetry/update-check block, set in THIS process so the
+    # harness (and every child it spawns) inherits it before any interpreter
+    # starts. Single source of truth: utils/telemetry_kill.py renders the
+    # lines; nothing here hand-copies a key. Positioned after the .env import
+    # above so canonical values overwrite any hostile dotenv value, mirroring
+    # apply_telemetry_kill()'s own overwrite semantics. Non-fatal on failure:
+    # every entry point re-applies the block at import anyway. Note this
+    # cannot un-send THIS PowerShell host's own startup telemetry -- pwsh
+    # reads POWERSHELL_TELEMETRY_OPTOUT once, at its own launch, which is why
+    # the cmd shim written by Install-CyClaw.ps1 sets it before powershell
+    # starts.
+    $killLines = & $VenvPy -m utils.telemetry_kill --export powershell 2>$null
+    if ($LASTEXITCODE -eq 0 -and $killLines) {
+        Invoke-Expression (($killLines | Out-String))
+    } else {
+        Write-Host "[cyclaw] warn    : could not export telemetry-kill block (children still self-apply at import)" -ForegroundColor Yellow
+    }
     & $VenvPy -m harness.server
 }
 finally {
