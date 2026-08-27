@@ -1,9 +1,10 @@
 # NeMo Phase 4b — soul-leak output rail (contract only)
 
-**Status (2026-08-15):** **contract + Colang polarity only.** Phase 4a
-(`check_output` grounding on `local_llm`) stays the live `/query` floor.
-This note records the decisions that a future 4b implementation PR must
-satisfy. It does **not** implement the rail.
+**Status (2026-08-27):** **implemented** on the offline `check_output` floor
+via `detect_soul_leak` (Decision A–C). Graph still only calls that floor for
+`local_llm` (`answer_model != "local"` skip unchanged). `guardrails.enabled`
+still ships false. Body below is the original contract kept as the decision
+log.
 
 Audience: the maintainer who next opens a 4b PR. Read this before writing
 `detect_soul_leak` or touching `check_output`.
@@ -22,7 +23,7 @@ Related:
 
 | Surface | What runs | Soul-leak? |
 |---|---|---|
-| Live `/query` (`guardrail_output` → `check_output`) | Grounding only (`check_grounding`) | **No.** `check_soul_leak` is listed in `config.yaml` `output_rails` and is silently skipped. Pinned by `test_check_soul_leak_is_configured_but_not_offline_enforced`. |
+| Live `/query` (`guardrail_output` → `check_output`) | Grounding + `detect_soul_leak` when listed in `output_rails` | **Yes (Phase 4b).** Graph still skips non-`local_llm` answers. |
 | Offline CLI / `safe_generate` floor | Input injection + soul-mutation heuristics | **No** output soul-leak check. |
 | Live NeMo Colang (`safe_generate` + `nemoguardrails` installed + `enabled: true`) | `check soul leak` flow in `guardrails/config/rails.co` | **Cheap leftover only.** The flow still calls `check_injection(text=$bot_message)` — the input scanner reused on output. That reuse is a known residual risk, not the 4b design. |
 

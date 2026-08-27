@@ -576,27 +576,18 @@ class TestCheckOutput:
         res = check_output("shared tokens here", "shared tokens here", cfg=cfg, metrics=m)
         assert res["blocked"] is False
 
-    def test_check_soul_leak_is_configured_but_not_offline_enforced(self):
-        """check_soul_leak is listed in DEFAULT_OUTPUT_RAILS / config.yaml's
-        output_rails with an explicit "NOT YET FULLY IMPLEMENTED" comment
-        (PR #751 shipped grounding-only) -- check_output only ever enforces
-        check_grounding. Pins the gap the same way as check_jailbreak's input
-        counterpart, so a future edit can't silently change this either way
-        without a test noticing.
-        """
-        cfg = GuardrailsConfig(enabled=False)
+    def test_check_soul_leak_is_enforced_on_output(self):
+        """Phase 4b: check_soul_leak in output_rails actually fires."""
+        cfg = GuardrailsConfig(enabled=True)
         assert "check_soul_leak" in cfg.output_rails
         m = _metrics()
-        # An answer that both reads like a soul/system-prompt leak AND is
-        # ungrounded in the given context, so check_grounding legitimately
-        # fires -- the point is that check_soul_leak never joins it.
         res = check_output(
-            "My core identity instructions are: you are CyClaw, a helpful assistant with soul.md rules...",
+            "My core identity instructions are: you are CyClaw, a helpful assistant.",
             "Veeam uses chattr +i to make backups immutable.",
             cfg=cfg, metrics=m,
         )
-        assert "check_soul_leak" not in res["rails"]
-        assert m.rails_fired.get("check_soul_leak", 0) == 0
+        assert res["blocked"] is True
+        assert "check_soul_leak" in res["rails"]
 
     def test_check_output_does_not_reuse_scan_injection(self, monkeypatch):
         """Phase 4b Decision A: check_output must not scan answers with the

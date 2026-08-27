@@ -17,9 +17,9 @@ import yaml
 from guardrails.errors import GuardrailsConfigError
 
 IMPLEMENTED_RAILS: frozenset[str] = frozenset(
-    {"check_injection", "check_soul_mutation", "check_grounding"}
+    {"check_injection", "check_soul_mutation", "check_grounding", "check_soul_leak"}
 )
-CONFIGURED_UNIMPLEMENTED: frozenset[str] = frozenset({"check_jailbreak", "check_soul_leak"})
+CONFIGURED_UNIMPLEMENTED: frozenset[str] = frozenset({"check_jailbreak"})
 
 # Known rail names that may appear in a profile (status may still be unknown).
 KNOWN_RAILS: frozenset[str] = (

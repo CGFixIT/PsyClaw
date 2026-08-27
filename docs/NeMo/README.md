@@ -51,13 +51,9 @@ Implemented offline rails: `check_injection`, `check_soul_mutation`,
 Configured but **not** enforced on the offline floor (must stay public):
 
 - `check_jailbreak` / Colang `check cyclaw jailbreak` — CyClaw bool `check_injection`; not NVIDIA 0.24 `check jailbreak` (`$response.is_blocked`)
-- `check_soul_leak` — listed in `output_rails`; Colang still calls
-  `check_injection(text=$bot_message)`. Decision A in
-  [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) forbids promoting that into
-  `check_output`. Pins:
-  `test_check_jailbreak_is_configured_but_not_offline_enforced`,
-  `test_check_soul_leak_is_configured_but_not_offline_enforced`,
-  `test_check_output_does_not_reuse_scan_injection`.
+
+Phase 4b: `check_soul_leak` is enforced on `check_output` via `detect_soul_leak`
+(not `scan_injection`). Pin: `test_check_output_does_not_reuse_scan_injection`.
 
 ## Route grounding labels (Phase 3)
 
@@ -122,8 +118,8 @@ verdict (metrics are not policy).
 | [`later_development_guideline.md`](./later_development_guideline.md) | Decision log. Banner: superseded for status. |
 | [`phase2_implementation_plan.md`](./phase2_implementation_plan.md) | Input-rail contract. **SHIPPED.** |
 | [`phase3_implementation_plan.md`](./phase3_implementation_plan.md) | Scanner redirect. **SHIPPED** for 3A; 3C still operator decision. |
-| [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md) | Output-rail design. **4a SHIPPED; 4b open.** |
-| [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) | **Still the open contract** (Decision A–C). |
+| [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md) | Output-rail design. **4a SHIPPED; 4b SHIPPED (offline).** |
+| [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) | **SHIPPED** offline `detect_soul_leak` + `check_output` (Decision A–C). |
 
 ## Isolation
 
