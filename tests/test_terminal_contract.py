@@ -240,7 +240,7 @@ def test_audit_slash_command_is_intercepted_client_side():
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function submitQuery(", 1)
     assert len(body) == 2, "submitQuery moved; update this test"
-    after = body[1].split("if (emptyState)", 1)[0]
+    after = body[1].split("const loadingId = addLoadingEntry()", 1)[0]
     assert "slash === '/audit'" in after, "/audit is not intercepted in submitQuery"
     assert "openAuditPanel()" in after, "/audit interception does not open the audit panel"
 
@@ -250,7 +250,7 @@ def test_help_slash_command_is_intercepted_client_side():
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function submitQuery(", 1)
     assert len(body) == 2, "submitQuery moved; update this test"
-    after = body[1].split("if (emptyState)", 1)[0]
+    after = body[1].split("const loadingId = addLoadingEntry()", 1)[0]
     assert "slash === '/help'" in after, "/help is not intercepted in submitQuery"
 
 
