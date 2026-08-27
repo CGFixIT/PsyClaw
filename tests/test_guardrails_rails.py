@@ -154,8 +154,9 @@ def test_jailbreak_flow_uses_nemo_allow_polarity() -> None:
     rails = (
         Path(__file__).resolve().parent.parent / "guardrails" / "config" / "rails.co"
     ).read_text(encoding="utf-8")
-    expected = """define flow check jailbreak
-  $allowed = execute self_check_input
+    assert "define flow check jailbreak\n" not in rails
+    expected = """define flow check cyclaw jailbreak
+  $allowed = execute check_injection
   if not $allowed
     bot refuse prompt extraction
     stop"""

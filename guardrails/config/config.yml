@@ -73,12 +73,12 @@ rails:
     flows:
       - check injection           # offline action: scan_injection
       - check soul mutation       # offline action: detect_soul_mutation_intent
-      - check jailbreak           # NeMo self-check (model-assisted)
+      - check cyclaw jailbreak    # CyClaw bool action; not NVIDIA "check jailbreak"
   output:
     flows:
       - check grounding           # offline action: get_grounding_score
       - check soul leak           # block identity/config exfiltration
-      - self check facts          # NeMo self-check facts (model-assisted)
+      - check cyclaw facts        # CyClaw is_ungrounded; not NVIDIA "self check facts"
     # Official key for stream_first (NVIDIA output-rail-streaming). Default is
     # True (client sees tokens before rails). Keep both flags false.
     streaming:

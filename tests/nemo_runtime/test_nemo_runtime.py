@@ -89,7 +89,14 @@ def test_check_does_not_raise_on_benign_user_message() -> None:
                 model.parameters = params
             rails = LLMRails(rails_config)
             register_actions(rails, hallucination_threshold=0.18)
-            result = rails.check(messages=[{"role": "user", "content": "what is RRF fusion?"}])
+            check_kw: dict = {"messages": [{"role": "user", "content": "what is RRF fusion?"}]}
+            try:
+                from nemoguardrails.rails.llm.options import RailType
+
+                check_kw["rail_types"] = [RailType.INPUT]
+            except ImportError:
+                pass
+            result = rails.check(**check_kw)
         status = str(getattr(result, "status", result)).upper()
         assert "PASSED" in status or "MODIFIED" in status or "BLOCKED" in status
     finally:
