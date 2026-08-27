@@ -53,7 +53,7 @@ def test_fake_nemo_allow_cannot_be_passed_to_decide() -> None:
         status = "ALLOW"
 
     with pytest.raises(TypeError):
-        decide("shell", (), allowlist=frozenset({"web_fetch"}), rails=_Rails())  # type: ignore[call-arg]
+        decide("shell", (), allowlist=frozenset({"web_fetch"}), **{"rails": _Rails()})  # type: ignore[call-arg]
 
 
 def test_web_search_does_not_import_guardrails() -> None:
@@ -73,7 +73,7 @@ def test_web_fetch_denied_when_broker_allowlist_empty(tmp_path, monkeypatch) -> 
     cfg = HarnessConfig.load()
     cfg.web_enabled = True
     tool = WebTool(cfg)
-    monkeypatch.setattr(tool, "_web_tool_allowlist", lambda: frozenset())
+    monkeypatch.setattr(tool, "_web_tool_allowlist", frozenset)
     monkeypatch.setattr(
         tool,
         "_require_enabled",
