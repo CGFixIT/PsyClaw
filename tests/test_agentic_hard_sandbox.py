@@ -1,21 +1,27 @@
 """Production hard-sandbox selection and Windows Job Object.
 
-These tests do NOT inject ArgvListSandbox. Linux CI asserts fail-closed.
-Windows CI / this host assert Job Object actually runs python -c.
+These tests do NOT inject ArgvListSandbox. Missing Darwin/Linux binaries
+fail closed. Windows CI / this host assert Job Object actually runs python -c.
+Seatbelt/netns profile and missing-binary paths are unit-tested; this file
+does not claim a live ``sandbox-exec`` run on Windows.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
 
 from agentic.executor.hard_sandbox import (
+    DarwinSeatbeltSandbox,
     HardSandboxUnavailable,
+    LinuxNetnsSandbox,
     WindowsJobObjectSandbox,
     production_sandbox,
+    seatbelt_profile,
 )
 from agentic.executor.runner import Check, run_verification
 from utils.errors import AgenticError
@@ -25,20 +31,42 @@ def _py(code: str, timeout_sec: int = 10) -> Check:
     return Check("probe", (sys.executable, "-c", code), timeout_sec=timeout_sec)
 
 
+def test_production_sandbox_win32_is_job_object() -> None:
+    if sys.platform != "win32":
+        pytest.skip("Job Object is the Windows backend")
+    backend = production_sandbox()
+    assert isinstance(backend, WindowsJobObjectSandbox)
+
+
 def test_production_sandbox_is_fail_closed_off_windows() -> None:
     if sys.platform == "win32":
         backend = production_sandbox()
         assert isinstance(backend, WindowsJobObjectSandbox)
         return
-    with pytest.raises(HardSandboxUnavailable, match="fails closed"):
-        production_sandbox()
+    try:
+        backend = production_sandbox()
+    except HardSandboxUnavailable as exc:
+        assert "fails closed" in str(exc).lower() or "fail" in str(exc).lower()
+        return
+    if sys.platform == "darwin":
+        assert isinstance(backend, DarwinSeatbeltSandbox)
+    elif sys.platform.startswith("linux"):
+        assert isinstance(backend, LinuxNetnsSandbox)
+    else:
+        pytest.fail(f"unexpected backend on {sys.platform!r}")
 
 
 def test_run_verification_without_injected_sandbox_fails_closed_off_windows(tmp_path: Path) -> None:
     if sys.platform == "win32":
         pytest.skip("Windows has a production backend")
-    with pytest.raises(AgenticError, match="HARD_SANDBOX_UNAVAILABLE|fails closed|no hard-sandbox"):
-        run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+    try:
+        production_sandbox()
+    except HardSandboxUnavailable:
+        with pytest.raises(AgenticError, match="HARD_SANDBOX_UNAVAILABLE|fails closed|no hard-sandbox"):
+            run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+        return
+    report = run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+    assert report.ok is True
 
 
 def test_empty_checks_do_not_require_a_backend(tmp_path: Path) -> None:
@@ -54,8 +82,61 @@ def test_no_env_flag_selects_argv_list_fallback(tmp_path: Path, monkeypatch: pyt
         report = run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
         assert report.ok is True
         return
+    try:
+        production_sandbox()
+    except HardSandboxUnavailable:
+        with pytest.raises(HardSandboxUnavailable):
+            run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+        return
+    report = run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+    assert report.ok is True
+
+
+def test_seatbelt_profile_contains_deny_network(tmp_path: Path) -> None:
+    profile = seatbelt_profile(tmp_path)
+    assert "deny network" in profile
+    assert "file-write" in profile
+    assert str(tmp_path.resolve()).replace("\\", "\\\\") in profile or str(tmp_path.resolve()) in profile
+
+
+def test_darwin_seatbelt_missing_binary_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_which = shutil.which
+
+    def _which(cmd: str) -> str | None:
+        if cmd == "sandbox-exec":
+            return None
+        return real_which(cmd)
+
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", _which)
+    with pytest.raises(HardSandboxUnavailable, match="sandbox-exec"):
+        DarwinSeatbeltSandbox()
+
+
+def test_linux_netns_missing_binary_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_which = shutil.which
+
+    def _which(cmd: str) -> str | None:
+        if cmd == "unshare":
+            return None
+        return real_which(cmd)
+
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", _which)
+    with pytest.raises(HardSandboxUnavailable, match="unshare"):
+        LinuxNetnsSandbox()
+
+
+def test_production_sandbox_never_returns_argv_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even with soft-sandbox env flags, production_sandbox stays hard."""
+    monkeypatch.setenv("CYCLAW_SOFT_SANDBOX", "1")
+    if sys.platform == "win32":
+        assert isinstance(production_sandbox(), WindowsJobObjectSandbox)
+        return
+    monkeypatch.setattr(
+        "agentic.executor.hard_sandbox.shutil.which",
+        lambda _cmd: None,
+    )
     with pytest.raises(HardSandboxUnavailable):
-        run_verification(tmp_path, [_py("import sys; sys.exit(0)")])
+        production_sandbox()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Job Object is the Windows backend")

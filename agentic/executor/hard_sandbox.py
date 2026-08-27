@@ -1,8 +1,9 @@
 """Hard sandbox backends for agentic verification.
 
 Production ``run_verification`` must not call unconstrained ``subprocess.run``.
-Windows uses a Job Object (kill-on-close + active-process cap). Other platforms
-raise ``HardSandboxUnavailable`` -- fail closed, no software fallback.
+Platform backends: Windows Job Object, Darwin ``sandbox-exec`` Seatbelt, Linux
+``unshare --net``. Missing binary or failed capability probe raises
+``HardSandboxUnavailable`` -- fail closed, no software fallback.
 
 ``ArgvListSandbox`` is the old argv-list ``subprocess.run`` path, imported by
 tests only. It is not selected by ``production_sandbox``.
@@ -10,6 +11,7 @@ tests only. It is not selected by ``production_sandbox``.
 
 from __future__ import annotations
 
+import shutil
 import subprocess  # noqa: S404 -- argv-list only; no shell
 import sys
 from collections.abc import Mapping, Sequence
@@ -122,17 +124,121 @@ class ArgvListSandbox:
         )
 
 
+def seatbelt_profile(cwd: Path) -> str:
+    """SBPL profile: deny network; deny file-write outside ``cwd``."""
+    root = str(cwd.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        "(version 1)\n"
+        "(allow default)\n"
+        "(deny network*)\n"
+        f'(deny file-write* (require-not (subpath "{root}")))\n'
+    )
+
+
 def production_sandbox() -> HardSandbox:
     """Return the host backend, or raise. Never falls back to ArgvListSandbox."""
     if sys.platform == "win32":
         return WindowsJobObjectSandbox()
+    if sys.platform == "darwin":
+        return DarwinSeatbeltSandbox()
+    if sys.platform.startswith("linux"):
+        return LinuxNetnsSandbox()
     raise HardSandboxUnavailable(
         f"no hard-sandbox backend for platform {sys.platform!r}; "
-        "agentic verification fails closed (issue #1134 Phase 4). "
-        "Windows Job Object is the shipped backend; Darwin Seatbelt / Linux "
-        "netns are not implemented in this PR.",
+        "agentic verification fails closed (issue #1134 Phase 4).",
         details={"platform": sys.platform},
     )
+
+
+class DarwinSeatbeltSandbox:
+    """macOS Seatbelt via ``sandbox-exec -p PROFILE -- argv``.
+
+    Missing ``sandbox-exec`` raises ``HardSandboxUnavailable`` (fail closed).
+    Profile denies network and file-write outside the pinned cwd.
+    """
+
+    def __init__(self) -> None:
+        path = shutil.which("sandbox-exec")
+        if not path:
+            raise HardSandboxUnavailable(
+                "sandbox-exec not found; Darwin Seatbelt fails closed "
+                "(issue #1134 Phase 4).",
+                details={"platform": sys.platform},
+            )
+        self._sandbox_exec = path
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_sec: int,
+    ) -> SandboxOutcome:
+        wrapped = [
+            self._sandbox_exec,
+            "-p",
+            seatbelt_profile(cwd),
+            "--",
+            *list(argv),
+        ]
+        return ArgvListSandbox().run(
+            wrapped, cwd=cwd, env=env, timeout_sec=timeout_sec
+        )
+
+
+class LinuxNetnsSandbox:
+    """Linux network namespace via ``unshare --net -- argv``.
+
+    Requires ``unshare`` on PATH and a successful ``unshare --net /bin/true``
+    probe. Missing binary or non-zero probe (EPERM) fails closed.
+    """
+
+    def __init__(self) -> None:
+        path = shutil.which("unshare")
+        if not path:
+            raise HardSandboxUnavailable(
+                "unshare not found; Linux netns fails closed "
+                "(issue #1134 Phase 4).",
+                details={"platform": sys.platform},
+            )
+        try:
+            probe = subprocess.run(  # noqa: S603 -- fixed argv, no shell
+                [path, "--net", "/bin/true"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except OSError as exc:
+            raise HardSandboxUnavailable(
+                f"unshare --net probe could not run: {exc}; "
+                "Linux netns fails closed (issue #1134 Phase 4).",
+                details={"platform": sys.platform},
+            ) from exc
+        if probe.returncode != 0:
+            raise HardSandboxUnavailable(
+                "unshare --net probe failed (EPERM or unsupported); "
+                "Linux netns fails closed (issue #1134 Phase 4).",
+                details={
+                    "platform": sys.platform,
+                    "returncode": probe.returncode,
+                    "stderr": truncate_output(stream_to_str(probe.stderr)),
+                },
+            )
+        self._unshare = path
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout_sec: int,
+    ) -> SandboxOutcome:
+        wrapped = [self._unshare, "--net", "--", *list(argv)]
+        return ArgvListSandbox().run(
+            wrapped, cwd=cwd, env=env, timeout_sec=timeout_sec
+        )
 
 
 class WindowsJobObjectSandbox:
