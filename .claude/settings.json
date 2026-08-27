@@ -92,8 +92,8 @@
       "Bash(bash .claude/skills/index-doctor/verify.sh)",
       "Bash(python3 .claude/skills/injection-redteam/redteam.py)",
       "Bash(bash .claude/skills/injection-redteam/verify.sh)",
-      "Bash(python3 .claude/skills/OTel-Hardening/check_otel.py)",
-      "Bash(bash .claude/skills/OTel-Hardening/verify.sh)",
+      "Bash(python3 .claude/skills/otel-hardening/check_otel.py)",
+      "Bash(bash .claude/skills/otel-hardening/verify.sh)",
       "Bash(bash .claude/skills/CyClaw-Sandbox/verify.sh)",
       "Bash(bash .claude/skills/CyClaw-Sandbox/macos-smoke.sh)",
       "Bash(bash .claude/skills/cyclaw-advisor/verify.sh)"

@@ -140,6 +140,32 @@ def first_other_import_line(tree: ast.Module, skip_dotted_module: str) -> int | 
     return min(lines, default=None)
 
 
+def first_non_stdlib_import_line(tree: ast.Module, allow: frozenset[str]) -> int | None:
+    """Line of the first module-body-level import that could load third-party
+    code: root module neither in the stdlib nor in *allow* (the telemetry-kill
+    import itself plus the handful of stdlib-only first-party utils modules a
+    chokepoint legitimately needs before the kill fires).
+
+    The middle tier between gate.py's curated heavy-set rule and the package
+    __init__ every-import rule: module-level appliers like mcp_hybrid_server
+    or retrieval/vector_store.py keep ordinary stdlib imports above the kill,
+    so the every-import bar would false-positive there -- but ANY third-party
+    import above the kill is exactly the escape G1 exists to prevent.
+    """
+    lines: list[int] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                root_name = a.name.split(".")[0]
+                if a.name not in allow and root_name not in sys.stdlib_module_names:
+                    lines.append(node.lineno)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            root_name = node.module.split(".")[0]
+            if node.module not in allow and root_name not in sys.stdlib_module_names:
+                lines.append(node.lineno)
+    return min(lines, default=None)
+
+
 def kill_call_line(tree: ast.Module) -> int | None:
     """Line of the telemetry-kill invocation, in either shape CyClaw uses.
 
@@ -271,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
         mcp_tree = parse(root / "mcp_hybrid_server.py")
         agentic_init_tree = parse(root / "agentic" / "__init__.py")
         guardrails_init_tree = parse(root / "guardrails" / "__init__.py")
+        telegram_init_tree = parse(root / "telegram" / "__init__.py")
+        opentweet_init_tree = parse(root / "opentweet" / "__init__.py")
+        sync_init_tree = parse(root / "sync" / "__init__.py")
     except (OSError, SyntaxError) as exc:
         print(f"env error: cannot parse core file: {exc}", file=sys.stderr)
         return 3
@@ -508,7 +537,17 @@ def main(argv: list[str] | None = None) -> int:
     # telemetry-capable library (agentic.registry -> guardrails.rails is one such
     # path today), so the bar here is stricter -- precede EVERY other import, not
     # just a known-heavy subset.
-    for label, tree in (("agentic/__init__.py", agentic_init_tree), ("guardrails/__init__.py", guardrails_init_tree)):
+    for label, tree in (
+        ("agentic/__init__.py", agentic_init_tree),
+        ("guardrails/__init__.py", guardrails_init_tree),
+        # Same thin-__init__ reasoning for the other out-of-band packages
+        # (issue #1135): telegram/opentweet always applied the kill but were
+        # never guarded here; sync gained its kill in that issue after being
+        # the one package with none.
+        ("telegram/__init__.py", telegram_init_tree),
+        ("opentweet/__init__.py", opentweet_init_tree),
+        ("sync/__init__.py", sync_init_tree),
+    ):
         pkg_kill_line = kill_call_line(tree)
         first_import = first_other_import_line(tree, skip_dotted_module="utils.telemetry_kill")
         if pkg_kill_line is not None and first_import is not None and pkg_kill_line < first_import:
@@ -517,6 +556,43 @@ def main(argv: list[str] | None = None) -> int:
             fail(f"{label}: telemetry kill precedes first other import",
                  f"kill at {pkg_kill_line}, first other import at {first_import} — env vars must be "
                  "set before any submodule import or telemetry escapes")
+
+    # Module-level appliers (the maintained chokepoints, issue #1135): the bar
+    # is "kill precedes the first import that could load third-party code" --
+    # stdlib imports above the kill are fine, one `import yaml` above it is
+    # the exact regression class retrieval/indexer.py used to carry silently.
+    # The allow set is the kill import itself plus the stdlib-only first-party
+    # modules a chokepoint legitimately needs before the kill fires.
+    _KILL_SAFE_IMPORTS = frozenset({
+        "utils.telemetry_kill", "utils.errors", "utils.onnx_telemetry",
+    })
+    for label in (
+        "mcp_hybrid_server.py",
+        "metrics.py",
+        "harness/server.py",
+        "retrieval/vector_store.py",
+        "retrieval/indexer.py",
+        "retrieval/clear_cache.py",
+        "guardrails/integration.py",
+        "utils/gen_cert.py",
+        "utils/authn_cli.py",
+    ):
+        try:
+            mod_tree = parse(root / label)
+        except (OSError, SyntaxError) as exc:
+            fail(f"{label}: telemetry kill ordering", f"cannot parse: {exc}")
+            continue
+        mod_kill_line = kill_call_line(mod_tree)
+        first_third_party = first_non_stdlib_import_line(mod_tree, allow=_KILL_SAFE_IMPORTS)
+        if mod_kill_line is None:
+            fail(f"{label}: telemetry kill ordering", "no apply_telemetry_kill() call found")
+        elif first_third_party is None or mod_kill_line < first_third_party:
+            ok(f"{label}: kill (line {mod_kill_line}) precedes first third-party import "
+               f"(line {first_third_party})")
+        else:
+            fail(f"{label}: telemetry kill precedes third-party imports",
+                 f"kill at {mod_kill_line}, first third-party import at {first_third_party} — "
+                 "a telemetry-capable SDK can latch its config before the env is pinned")
 
     # ── G2 Auth fail-closed ─────────────────────────────────────────────────
     print("G2 Auth fail-closed")

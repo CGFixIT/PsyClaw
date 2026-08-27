@@ -31,6 +31,142 @@ import pytest
 # imports (graph, retrieval, etc.) resolve when the subprocess imports it.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# ---------------------------------------------------------------------------
+# INDEPENDENT expected maps -- the test-side copy of the contract. Deliberately
+# NOT imported or derived from utils.telemetry_kill (most tests below derive,
+# which catches enforcement but not a hostile edit to the constants
+# themselves): if a production value is deleted or reversed, equality against
+# THESE literals fails. Update both sides in the same commit for a deliberate
+# change; .claude/skills/otel-hardening/check_otel.py carries the third copy.
+# ---------------------------------------------------------------------------
+_EXPECTED_KILL = {
+    "LANGSMITH_TRACING_V2": "false",
+    "LANGCHAIN_TRACING_V2": "false",
+    "LANGSMITH_TRACING": "false",
+    "LANGCHAIN_TRACING": "false",
+    "LANGSMITH_OTEL_ENABLED": "false",
+    "LANGGRAPH_CLI_NO_ANALYTICS": "1",
+    "NEMO_GUARDRAILS_NO_USAGE_STATS": "1",
+    "ANONYMIZED_TELEMETRY": "False",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "DO_NOT_TRACK": "1",
+    "ORT_DISABLE_TELEMETRY": "1",
+    "ORT_TELEMETRY_OPT_OUT": "1",
+    "GH_TELEMETRY": "false",
+    "POWERSHELL_TELEMETRY_OPTOUT": "1",
+    "CHROMA_OTEL_GRANULARITY": "none",
+    "CHROMA_OTEL_COLLECTION_ENDPOINT": "",
+    "CHROMA_OTEL_SERVICE_NAME": "",
+    "OTEL_SDK_DISABLED": "true",
+    "OTEL_TRACES_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_LOGS_EXPORTER": "none",
+}
+_EXPECTED_UPDATE = {
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER": "1",
+    "POWERSHELL_UPDATECHECK": "Off",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+}
+_EXPECTED_SCRUBBED = frozenset({
+    "LANGCHAIN_API_KEY", "LANGSMITH_API_KEY", "LANGCHAIN_ENDPOINT",
+    "LANGSMITH_ENDPOINT", "LANGSMITH_RUNS_ENDPOINTS",
+    "OTEL_CONFIG_FILE", "OTEL_EXPERIMENTAL_CONFIG_FILE",
+})
+
+
+def test_production_maps_match_independent_literals():
+    """Deleting or reversing a production value must fail SOMETHING.
+
+    Every other assertion in this file that iterates the production constants
+    proves enforcement of whatever they currently say -- this one proves they
+    still say the right thing.
+    """
+    from utils.telemetry_kill import (
+        SCRUBBED_ENV_KEYS,
+        TELEMETRY_KILL,
+        UPDATE_CHECK_OPT_OUT,
+    )
+
+    assert TELEMETRY_KILL == _EXPECTED_KILL
+    assert UPDATE_CHECK_OPT_OUT == _EXPECTED_UPDATE
+    assert set(SCRUBBED_ENV_KEYS) == _EXPECTED_SCRUBBED
+
+
+def test_build_telemetry_safe_env_pure_and_exact():
+    """The child-env builder: copies, overlays, scrubs; never mutates base or
+    exposes a mutable canonical global."""
+    from utils.telemetry_kill import TELEMETRY_KILL, build_telemetry_safe_env
+
+    base = {
+        "PATH": "/usr/bin",
+        "GH_TELEMETRY": "log",
+        "OTEL_SDK_DISABLED": "false",
+        "OTEL_CONFIG_FILE": "/tmp/evil.yaml",
+        "LANGSMITH_API_KEY": "leak",
+    }
+    before = dict(base)
+    safe = build_telemetry_safe_env(base)
+    assert base == before, "base mapping was mutated"
+    assert safe["PATH"] == "/usr/bin", "unrelated base entries must survive"
+    for key, value in {**_EXPECTED_KILL, **_EXPECTED_UPDATE}.items():
+        assert safe[key] == value, f"{key} not overlaid to canonical value"
+    for key in _EXPECTED_SCRUBBED:
+        assert key not in safe, f"scrubbed name {key} survived"
+    # Fresh dict per call; mutating it cannot reach the canonical constants.
+    safe["GH_TELEMETRY"] = "tampered"
+    assert build_telemetry_safe_env(base)["GH_TELEMETRY"] == "false"
+    assert TELEMETRY_KILL["GH_TELEMETRY"] == "false"
+
+
+def test_apply_telemetry_kill_returns_copy():
+    """The historical aliasing hazard: apply used to return the module global
+    itself, so a caller mutation rewrote the contract for the whole process."""
+    snippet = (
+        "from utils.telemetry_kill import TELEMETRY_KILL, apply_telemetry_kill\n"
+        "ret = apply_telemetry_kill()\n"
+        "assert ret == TELEMETRY_KILL\n"
+        "assert ret is not TELEMETRY_KILL, 'apply must return a copy'\n"
+        "ret['GH_TELEMETRY'] = 'tampered'\n"
+        "assert TELEMETRY_KILL['GH_TELEMETRY'] == 'false'\n"
+    )
+    result = _run_in_subprocess(snippet)
+    _assert_subprocess_ok(result, "apply_telemetry_kill_returns_copy")
+
+
+def test_otel_declarative_config_files_scrubbed():
+    """OTEL_CONFIG_FILE / OTEL_EXPERIMENTAL_CONFIG_FILE outrank the
+    SDK-disable values, so both are removed outright before any SDK import."""
+    snippet = (
+        "import gate, os\n"
+        "assert 'OTEL_CONFIG_FILE' not in os.environ\n"
+        "assert 'OTEL_EXPERIMENTAL_CONFIG_FILE' not in os.environ\n"
+    )
+    result = _run_in_subprocess(
+        snippet,
+        extra_env={
+            "OTEL_CONFIG_FILE": "/tmp/evil-otel-config.yaml",
+            "OTEL_EXPERIMENTAL_CONFIG_FILE": "/tmp/evil-otel-config2.yaml",
+        },
+    )
+    _assert_subprocess_ok(result, "otel_declarative_config_files_scrubbed")
+
+
+def test_update_check_opt_outs_applied():
+    """The ancillary map is applied too (visibly separate, jointly delivered)."""
+    snippet = (
+        "import gate, os\n"
+        "assert os.environ['GH_NO_UPDATE_NOTIFIER'] == '1'\n"
+        "assert os.environ['GH_NO_EXTENSION_UPDATE_NOTIFIER'] == '1'\n"
+        "assert os.environ['POWERSHELL_UPDATECHECK'] == 'Off'\n"
+        "assert os.environ['PIP_DISABLE_PIP_VERSION_CHECK'] == '1'\n"
+    )
+    result = _run_in_subprocess(
+        snippet,
+        extra_env={"POWERSHELL_UPDATECHECK": "Default", "PIP_DISABLE_PIP_VERSION_CHECK": "0"},
+    )
+    _assert_subprocess_ok(result, "update_check_opt_outs_applied")
+
 
 def _run_in_subprocess(snippet: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:
     """Run a Python snippet in a fresh subprocess with gate importable.
@@ -263,6 +399,12 @@ _HOSTILE_ENV = {
     "CHROMA_OTEL_SERVICE_NAME": "leaky",
     "OTEL_SDK_DISABLED": "false",
     "OTEL_TRACES_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    # Declarative config outranks the SDK-disable values -- the most dangerous
+    # ambient pair after LANGSMITH_TRACING_V2. Must be REMOVED, not out-valued.
+    "OTEL_CONFIG_FILE": "/tmp/evil-otel.yaml",
+    "OTEL_EXPERIMENTAL_CONFIG_FILE": "/tmp/evil-otel2.yaml",
     "ANONYMIZED_TELEMETRY": "True",
     # Every name in the tracing namespace, not just the two originally listed:
     # LANGSMITH_TRACING_V2 outranks all of them, so an ambient 'true' there is
@@ -274,23 +416,38 @@ _HOSTILE_ENV = {
     "LANGSMITH_OTEL_ENABLED": "true",
     "LANGCHAIN_API_KEY": "leaked-key-should-be-removed",
     "LANGSMITH_API_KEY": "leaked-key-should-be-removed",
+    "LANGCHAIN_ENDPOINT": "https://collector.example.invalid",
     "LANGSMITH_ENDPOINT": "https://collector.example.invalid",
     "LANGSMITH_RUNS_ENDPOINTS": '{"https://collector.example.invalid": "k"}',
     "HF_HUB_DISABLE_TELEMETRY": "0",
     "DO_NOT_TRACK": "0",
+    "LANGGRAPH_CLI_NO_ANALYTICS": "0",
+    "NEMO_GUARDRAILS_NO_USAGE_STATS": "0",
+    "ORT_DISABLE_TELEMETRY": "0",
+    "ORT_TELEMETRY_OPT_OUT": "0",
+    "GH_TELEMETRY": "true",
+    "POWERSHELL_TELEMETRY_OPTOUT": "0",
+    "GH_NO_UPDATE_NOTIFIER": "0",
+    "GH_NO_EXTENSION_UPDATE_NOTIFIER": "0",
+    "POWERSHELL_UPDATECHECK": "Default",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "0",
 }
 
-# Both halves are derived from the module's own constants rather than a
-# hardcoded list, so any name added to either one is enforced here without a
+# All three halves are derived from the module's own constants rather than a
+# hardcoded list, so any name added to any of them is enforced here without a
 # matching edit -- the drift that let the LANGSMITH_ tracing/endpoint names go
-# unpinned in the first place.
+# unpinned in the first place. (Whether the constants still SAY the right
+# thing is test_production_maps_match_independent_literals' job.)
 _ASSERT_KILLED = (
-    "from utils.telemetry_kill import TELEMETRY_KILL, _TRACING_CREDENTIALS\n"
+    "from utils.telemetry_kill import (\n"
+    "    SCRUBBED_ENV_KEYS, TELEMETRY_KILL, UPDATE_CHECK_OPT_OUT,\n"
+    ")\n"
     "bad = [f'{k}: expected={v!r} actual={os.environ.get(k)!r}'\n"
-    "       for k, v in TELEMETRY_KILL.items() if os.environ.get(k) != v]\n"
+    "       for m in (TELEMETRY_KILL, UPDATE_CHECK_OPT_OUT)\n"
+    "       for k, v in m.items() if os.environ.get(k) != v]\n"
     "assert not bad, 'kill vars not enforced: ' + '; '.join(bad)\n"
-    "leaked = [k for k in _TRACING_CREDENTIALS if k in os.environ]\n"
-    "assert not leaked, f'tracing credentials survived: {leaked}'\n"
+    "leaked = [k for k in SCRUBBED_ENV_KEYS if k in os.environ]\n"
+    "assert not leaked, f'scrubbed names survived: {leaked}'\n"
 )
 
 
@@ -305,6 +462,18 @@ _ASSERT_KILLED = (
         "import harness.server",
         "import metrics",
         "import retrieval.clear_cache",
+        # issue #1135 additions: the remaining out-of-band packages, the two
+        # console-script CLI modules, the direct guardrails seam, and the
+        # retrieval module whose own imports (yaml, rank_bm25) precede its
+        # transitive kill. With gate covered by the tests above, every
+        # [project.scripts] target module is now subprocess-pinned.
+        "import telegram",
+        "import opentweet",
+        "import sync",
+        "import utils.gen_cert",
+        "import utils.authn_cli",
+        "import guardrails.integration",
+        "import retrieval.hybrid_search",
     ],
 )
 def test_kill_switch_applied_without_importing_gate(entry_import: str) -> None:

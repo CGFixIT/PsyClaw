@@ -3,10 +3,10 @@ name: otel-hardening
 description: Re-verify that CyClaw telemetry-kill controls block dependency phone-home paths. Use before changing telemetry, instrumentation, dependency imports, startup ordering, or network egress policy; use the maintained checker instead of duplicating telemetry logic.
 ---
 
-# OTel-Hardening
+# otel-hardening
 
 Use this for a focused telemetry-boundary review. The maintained checker under
-`.claude/skills/OTel-Hardening/` is the single static implementation; this
+`.claude/skills/otel-hardening/` is the single static implementation; this
 skill provides the Codex workflow around it.
 
 ## Workflow
@@ -16,7 +16,7 @@ skill provides the Codex workflow around it.
 2. Run the deterministic baseline:
 
    ```text
-   python .claude/skills/OTel-Hardening/check_otel.py
+   python .claude/skills/otel-hardening/check_otel.py
    ```
 
 3. Trace all new or changed SDK imports and environment reads. Telemetry
@@ -24,7 +24,7 @@ skill provides the Codex workflow around it.
 4. Validate the affected runtime path without credentials or external egress
    when the environment supports it. Do not turn on telemetry to test a kill
    switch.
-5. Run `bash .claude/skills/OTel-Hardening/verify.sh` when Bash is available;
+5. Run `bash .claude/skills/otel-hardening/verify.sh` when Bash is available;
    otherwise report the mutation self-test as skipped rather than inferred.
 
 Preserve CyClaw's telemetry-kill guarantees:
