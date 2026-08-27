@@ -817,3 +817,20 @@ def test_invariant_guard_and_config_guard_profiles_actually_run_correctly(tmp_pa
     report = run_verification(repo_root, checks, cfg=audit_cfg)
 
     assert report.ok is True, [(r.name, r.exit_code, r.stderr[-500:]) for r in report.results if not r.ok]
+
+
+def test_agent_run_denied_when_broker_allowlist_empty(client, calls, monkeypatch):
+    monkeypatch.setattr(harness_server, "_agent_run_tool_allowlist", lambda: frozenset())
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "TOOL_DENIED"
+    assert calls == []
+    blob = resp.text
+    assert "fix the typo" not in blob
+    assert "operator asked" not in blob
+
+
+def test_agent_run_happy_path_still_calls_shim(client, calls):
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 200
+    assert calls and calls[0][0] == "real-repo-run"
