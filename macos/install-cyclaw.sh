@@ -26,6 +26,7 @@
 #
 # Options:
 #   --repo-path PATH     use an existing CyClaw clone instead of cloning
+#   --replace-repo       replace an existing non-repo directory at the default path
 #   --skip-python-deps   create the home layout + shim but skip venv/pip installs
 #                        (use when deps are already installed in an env you'll point to)
 #   --no-profile-edit    do not add the cyclaw() function to the shell rc file
@@ -41,6 +42,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/CGFixIT/CyClaw.git"
 REPO_PATH=""
+REPLACE_REPO=0
 SKIP_PYTHON_DEPS=0
 NO_PROFILE_EDIT=0
 NO_PATH_EDIT=0
@@ -49,6 +51,7 @@ NO_FSCONNECT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo-path) REPO_PATH="${2:?--repo-path requires a value}"; shift 2 ;;
+    --replace-repo) REPLACE_REPO=1; shift ;;
     --skip-python-deps) SKIP_PYTHON_DEPS=1; shift ;;
     --no-profile-edit) NO_PROFILE_EDIT=1; shift ;;
     --no-path-edit) NO_PATH_EDIT=1; shift ;;
@@ -102,7 +105,14 @@ if [ -n "$REPO_PATH" ]; then
   REPO_DIR="$(CDPATH= cd -- "$REPO_PATH" && pwd)"
   step "using existing repo at $REPO_DIR"
 elif [ ! -f "$REPO_DIR/harness/server.py" ]; then
-  [ -d "$REPO_DIR" ] && rm -rf "$REPO_DIR"
+  if [ -d "$REPO_DIR" ]; then
+    if [ "$REPLACE_REPO" -ne 1 ]; then
+      echo "[cyclaw] error: '$REPO_DIR' exists but is not a usable CyClaw checkout." >&2
+      echo "[cyclaw]        Move it aside or re-run with --replace-repo to overwrite it." >&2
+      exit 1
+    fi
+    rm -rf "$REPO_DIR"
+  fi
   step "cloning CyClaw origin main to $REPO_DIR"
   git clone --depth 1 "$REPO_URL" "$REPO_DIR"
 else

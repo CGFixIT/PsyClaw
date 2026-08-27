@@ -249,7 +249,10 @@ clone_checkout() {
     die "git is required. On macOS, run 'xcode-select --install', then retry."
 
   if [ -e "$CLONE_DIR" ]; then
-    die "clone destination already exists but is not a usable CyClaw checkout: $CLONE_DIR"
+    if [ -d "$CLONE_DIR" ] && ! looks_like_repo "$CLONE_DIR"; then
+      die "clone destination '$CLONE_DIR' exists but is not a usable CyClaw checkout. Move it aside, or re-run with --repo PATH to use an existing checkout or --clone-dir PATH to pick a different destination."
+    fi
+    die "clone destination already exists but is not a usable CyClaw checkout: $CLONE_DIR. Re-run with --repo PATH or --clone-dir PATH."
   fi
 
   mkdir -p "$(dirname -- "$CLONE_DIR")"

@@ -102,6 +102,17 @@ def test_installer_preserves_patched_config_across_updates() -> None:
     assert 'git -C "$REPO_DIR" pull --ff-only --autostash' in install_text
 
 
+def test_installer_requires_explicit_flag_to_replace_existing_repo() -> None:
+    """A pre-existing directory at the default repo path must not be silently
+    rm -rf'd; the operator must pass --replace-repo or move it aside."""
+    install_text = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
+    assert "--replace-repo" in install_text
+    assert "REPLACE_REPO=1" in install_text
+    assert "Move it aside or re-run with --replace-repo" in install_text
+    # The unconditional rm -rf that this replaced must be gone.
+    assert '[ -d "$REPO_DIR" ] && rm -rf "$REPO_DIR"' not in install_text
+
+
 def test_macos_scripts_never_enable_writes_or_indexing() -> None:
     script_names = ("install-cyclaw.sh", "setup-fsconnect.sh", "setup-from-clone.sh")
 
@@ -249,6 +260,15 @@ def test_setup_cyclaw_syntax_is_valid() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_setup_cyclaw_error_names_the_alternative_flags() -> None:
+    """When the default clone destination is unusable, the error must tell the
+    operator how to recover (--repo or --clone-dir), not just die."""
+    text = (_REPO_ROOT / "macos" / "setup-cyclaw.sh").read_text(encoding="utf-8")
+    assert "--repo PATH" in text
+    assert "--clone-dir PATH" in text
+    assert "Move it aside, or re-run with --repo PATH" in text
 
 
 def test_setup_cyclaw_looks_like_repo_matches_the_files_it_requires() -> None:
