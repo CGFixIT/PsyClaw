@@ -329,6 +329,14 @@ local accounts can read:
 chmod 600 .env
 ```
 
+On Windows, a hand-created file often inherits `BUILTIN\Users` read. Tighten it
+the same way `powershell/Invoke-CyClaw.ps1` requires before it will source the
+file (owner-only; refuse Everyone / Users / Authenticated Users):
+
+```powershell
+icacls .env /inheritance:r /grant:r "${env:USERNAME}:(R,W)"
+```
+
 `macos/setup-cyclaw-keys.sh` and the harness console's `/api` panel both already
 write `~/.CyClaw/.env` at `600`; only a hand-made file needs this step.
 

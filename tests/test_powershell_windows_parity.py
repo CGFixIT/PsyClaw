@@ -113,6 +113,25 @@ def test_uninstall_missing_schtasks_delete_is_noop_under_ps51() -> None:
     assert "exit 0" in text
 
 
+def test_invoke_loads_persisted_api_key_from_dotenv() -> None:
+    """Daily cyclaw / Invoke-CyClaw.ps1 must source ~/.CyClaw/.env when empty."""
+    text = (_PS / "Invoke-CyClaw.ps1").read_text(encoding="utf-8")
+    assert 'Join-Path $Home_ ".env"' in text
+    assert 'Join-Path $Repo ".env"' in text
+    assert "Test-CyclawDotenvOwnerOnly" in text
+    assert "BUILTIN\\Users" in text
+    assert "FileSystemRights]::ReadData" not in text
+    assert "(R,W)" in text
+    assert "refusing to source" in text
+    assert "ACL is not owner-only" in text
+    load_idx = text.index('Join-Path $Home_ ".env"')
+    start_idx = text.index("-m harness.server")
+    assert load_idx < start_idx
+    warn = "Typing the key in the browser cannot configure the server"
+    assert warn in text
+    assert load_idx < text.index(warn)
+
+
 def test_installer_requires_explicit_flag_to_replace_existing_repo() -> None:
     """A stale %USERPROFILE%\\.CyClaw\\repo must not be silently Remove-Item'd."""
     text = (_PS / "Install-CyClaw.ps1").read_text(encoding="utf-8")
