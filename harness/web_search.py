@@ -11,7 +11,8 @@ httpx re-resolves on connect, so a residual rebinding window remains
 (see ``assert_public_host``). Empty allowlist is fail-closed.
 
 I6: this module is harness-local. It never imports ``gate``, ``graph``,
-``mcp_hybrid_server``, or ``agentic``. It never starts ``/api/agent/*``.
+``mcp_hybrid_server``, ``agentic``, ``sync``, or ``guardrails``. Tool
+name-gating uses ``utils.tool_broker``. It never starts ``/api/agent/*``.
 """
 
 from __future__ import annotations
@@ -22,42 +23,42 @@ import logging
 import socket
 from html import parser, unescape
 from pathlib import Path
-from typing import Final
 from urllib.parse import urlparse
 
 import httpx
 
 from harness.config import HarnessConfig, _atomic_write_json
 from utils.errors import AgenticError
+from utils.tool_broker import ToolDenied, assert_allowed
 
 log = logging.getLogger("cyclaw.harness.web_search")
 
-_UTF8: Final = "utf-8"
-_SCHEMES: Final = frozenset(("http", "https"))
-_MAX_ALLOW: Final = 32
-_MAX_BYTES: Final = 262_144
-_TIMEOUT_SEC: Final = 8.0
-_MAX_QUERY: Final = 200
-_MAX_SNIPPET: Final = 160
-_MAX_HITS_PER_URL: Final = 3
-_MAX_SEARCH_URLS: Final = 8
-_MAX_CONTEXT: Final = 4000
-_MAX_RAW: Final = 500
-_SNIP_BEFORE: Final = 40
-_SNIP_AFTER: Final = 120
-_HTTP_OK_BELOW: Final = 400
-_BLOCKED_HOSTS: Final = frozenset((
+_UTF8 = "utf-8"
+_SCHEMES = frozenset(("http", "https"))
+_MAX_ALLOW = 32
+_MAX_BYTES = 262_144
+_TIMEOUT_SEC = 8.0
+_MAX_QUERY = 200
+_MAX_SNIPPET = 160
+_MAX_HITS_PER_URL = 3
+_MAX_SEARCH_URLS = 8
+_MAX_CONTEXT = 4000
+_MAX_RAW = 500
+_SNIP_BEFORE = 40
+_SNIP_AFTER = 120
+_HTTP_OK_BELOW = 400
+_BLOCKED_HOSTS = frozenset((
     "localhost",
     "localhost.localdomain",
     "metadata.google.internal",
     "metadata.goog",
 ))
-_SKIP_TAGS: Final = frozenset(("script", "style", "noscript", "template"))
-_PATH_CHARS: Final = frozenset(
+_SKIP_TAGS = frozenset(("script", "style", "noscript", "template"))
+_PATH_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~/=+-"
 )
-_BREAK_TAGS: Final = frozenset(("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "pre"))
-_TEXT_TYPES: Final = (
+_BREAK_TAGS = frozenset(("p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "pre"))
+_TEXT_TYPES = (
     "text/",
     "application/json",
     "application/xml",
@@ -291,10 +292,12 @@ class WebTool:
         *,
         transport: httpx.BaseTransport | None = None,
         resolver=assert_public_host,
+        audit_cfg: dict | None = None,
     ) -> None:
         self._cfg = cfg
         self._resolver = resolver
         self._transport = transport
+        self._audit_cfg = audit_cfg
 
     def status(self) -> dict:
         entries = _load_entries(_allow_path(self._cfg))
@@ -417,8 +420,22 @@ class WebTool:
         text = extract_text(body.decode("utf-8", errors="replace"), ctype)
         return {"url": target, "status": resp.status_code, "content_type": ctype, "text": text, "chars": len(text)}
 
+    def _web_tool_allowlist(self) -> frozenset[str]:
+        if not self._cfg.web_enabled:
+            return frozenset()
+        return frozenset(("web_fetch", "web_search"))
+
+    def _gate_tool(self, name: str, argv: tuple[str, ...]) -> None:
+        try:
+            assert_allowed(name, argv, allowlist=self._web_tool_allowlist(), cfg=self._audit_cfg)
+        except ToolDenied as exc:
+            raise WebToolError(exc.message, code="WEB_TOOL_DENIED", details=exc.details) from exc
+
     def fetch(self, url: str) -> dict:
-        page = self._get((url or "").strip(), self._require_enabled())
+        target = (url or "").strip()
+        entries = self._require_enabled()
+        self._gate_tool("web_fetch", (target,))
+        page = self._get(target, entries)
         _atomic_write_json(_last_path(self._cfg), page)
         return page
 
@@ -427,6 +444,7 @@ class WebTool:
         if not needle or len(needle) > _MAX_QUERY:
             raise WebToolError("search query must be 1–200 characters", code="WEB_BAD_QUERY")
         entries = self._require_enabled()[:_MAX_SEARCH_URLS]
+        self._gate_tool("web_search", (needle,))
         hits: list[dict] = []
         errors: list[dict] = []
         # _get() no longer writes _last_path itself (see fetch()) -- a search
