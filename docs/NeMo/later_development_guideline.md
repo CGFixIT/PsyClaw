@@ -13,17 +13,15 @@ related:
 > for the live path×stage×engine matrix. This guideline remains a historical
 > contract and decision log (body still mentions LM Studio in places).
 
-**Status banner (2026-08-15):** Phases **1–3 and 4a are implemented** on main
-(input rail + output grounding on `local_llm`, both via
-`utils/guardrail_bridge.py`, still `guardrails.enabled: false` by default).
-Phase **4b** (soul-leak output rail) is **contract only** — Colang polarity
-is fixed, live `/query` stays grounding-only, and a new primitive + FP sweep
-are required before any wire. See [`phase4b_soul_leak.md`](./phase4b_soul_leak.md).
-This guideline remains the **historical contract and decision log**. Prefer
-[`README.md`](./README.md) for current status. Body below still mentions LM
-Studio in places because it was written against an earlier local-LLM default;
-shipped CyClaw uses **Ollama** at `http://127.0.0.1:11434/v1` and
-`qwen3.8:27b-mlx` (see `config.yaml` `models.local_llm` / `guardrails.base_url`).
+**Status banner (2026-08-27):** Phases **1–5 as sliced in #1134 are on main**
+(issue closed). Still `guardrails.enabled: false` by default. Phase **4b**
+soul-leak is **shipped** (`detect_soul_leak` on `check_output`). See
+[`phase4b_soul_leak.md`](./phase4b_soul_leak.md). This guideline remains the
+**historical contract and decision log**. Prefer [`README.md`](./README.md)
+for current status. Body below still mentions LM Studio in places because it
+was written against an earlier local-LLM default; shipped CyClaw uses
+**Ollama** at `http://127.0.0.1:11434/v1` and `qwen3.8:27b-mlx` (see
+`config.yaml` `models.local_llm` / `guardrails.base_url`).
 
 ## Summary
 
