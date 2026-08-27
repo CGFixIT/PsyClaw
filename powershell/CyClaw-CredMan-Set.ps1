@@ -5,7 +5,7 @@
 .DESCRIPTION
   Windows twin of macos/cyclaw-keychain-set.sh. Prompts on a TTY via
   Read-Host -AsSecureString and writes a GENERIC credential with CredWriteW.
-  The secret is never a process argv token (the built-in cmd-key helper
+  The secret is never a process argv token (the built-in cmdkey helper
   cannot store a password without putting it on the command line).
 
   Usage:
@@ -16,6 +16,12 @@
 
 .NOTES
   Requires an interactive console. Fail-closed if stdin is redirected.
+
+  Cleanup: one try/finally wipes the unmanaged CredWrite blob, ZeroFreeBSTR,
+  and Disposes the SecureString. PowerShell 7+ also registers
+  [Console]::CancelKeyPress so Ctrl+C cannot skip that finally (5.1 often
+  aborts the pipeline without running it). The handler is not installed on
+  5.1 — e.Cancel=$true there can hang the host.
 #>
 [CmdletBinding()]
 param(
@@ -69,59 +75,109 @@ public static class CyClawCredMan {
 }
 "@
 
+# Script-scope so the PS7 CancelKeyPress handler can see live pointers.
+$script:CyclawCredBstr = [IntPtr]::Zero
+$script:CyclawCredPtr = [IntPtr]::Zero
+$script:CyclawCredBlobSize = 0
+$script:CyclawCredSecure = $null
+$script:CyclawCredCleaned = $false
+$script:CyclawCredCancelHandler = $null
+
+function Invoke-CyclawCredCleanup {
+    if ($script:CyclawCredCleaned) { return }
+    $script:CyclawCredCleaned = $true
+    if ($script:CyclawCredPtr -ne [IntPtr]::Zero) {
+        for ($i = 0; $i -lt $script:CyclawCredBlobSize; $i++) {
+            [Runtime.InteropServices.Marshal]::WriteByte($script:CyclawCredPtr, $i, 0)  # DevSkim: ignore DS104456 — wipe CredWrite blob before FreeHGlobal
+        }
+        [Runtime.InteropServices.Marshal]::FreeHGlobal($script:CyclawCredPtr)  # DevSkim: ignore DS104456
+        $script:CyclawCredPtr = [IntPtr]::Zero
+        $script:CyclawCredBlobSize = 0
+    }
+    if ($script:CyclawCredBstr -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($script:CyclawCredBstr)  # DevSkim: ignore DS104456
+        $script:CyclawCredBstr = [IntPtr]::Zero
+    }
+    if ($null -ne $script:CyclawCredSecure) {
+        $script:CyclawCredSecure.Dispose()
+        $script:CyclawCredSecure = $null
+    }
+}
+
+# PowerShell 7+: CancelKeyPress runs on Ctrl+C *before* the pipeline is torn
+# down. e.Cancel=$true stops the default process-kill so cleanup can finish,
+# then we exit 130 (128+SIGINT). Do not install this on Windows PowerShell
+# 5.1 — treating Ctrl+C as cancelable input can hang that host, and its
+# CancelKeyPress behavior is not the same as pwsh.
+$script:UsePs7Cancel = $false
+try {
+    $script:UsePs7Cancel = (
+        $PSVersionTable.PSVersion.Major -ge 7 -and
+        [Environment]::UserInteractive -and
+        -not [Console]::IsInputRedirected
+    )
+} catch {
+    $script:UsePs7Cancel = $false
+}
+if ($script:UsePs7Cancel) {
+    $script:CyclawCredCancelHandler = [ConsoleCancelEventHandler]{
+        param($sender, $eventArgs)
+        $eventArgs.Cancel = $true
+        Invoke-CyclawCredCleanup
+        [Environment]::Exit(130)
+    }
+    [Console]::add_CancelKeyPress($script:CyclawCredCancelHandler)
+}
+
 $account = $env:USERNAME
 Write-Host "[cyclaw] Storing Credential Manager target '$Target' for account '$account'."
 Write-Host "[cyclaw] You will be prompted for the secret value (input is not echoed)."
-$secure = Read-Host "Secret" -AsSecureString
-if ($null -eq $secure -or $secure.Length -eq 0) {
-    Write-Error "cyclaw-credman-set: refusing to store an empty secret"
-    exit 1
-}
 
-$bstr = [IntPtr]::Zero
-$ptr = [IntPtr]::Zero
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)  # DevSkim: ignore DS104456 — TTY SecureString to CredWrite blob; never argv
+$exitCode = 1
 try {
-    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)  # DevSkim: ignore DS104456
+    $script:CyclawCredSecure = Read-Host "Secret" -AsSecureString
+    if ($null -eq $script:CyclawCredSecure -or $script:CyclawCredSecure.Length -eq 0) {
+        Write-Error "cyclaw-credman-set: refusing to store an empty secret"
+        throw "empty secret"
+    }
+
+    $script:CyclawCredBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($script:CyclawCredSecure)  # DevSkim: ignore DS104456 — TTY SecureString to CredWrite blob; never argv
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($script:CyclawCredBstr)  # DevSkim: ignore DS104456
     $bytes = [Text.Encoding]::Unicode.GetBytes($plain)
     $plain = $null
-    $ptr = [Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)  # DevSkim: ignore DS104456
-    try {
-        [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)  # DevSkim: ignore DS104456
-        for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 0 }
-        $cred = New-Object CyClawCredMan+CREDENTIAL
-        $cred.Type = [CyClawCredMan]::CRED_TYPE_GENERIC
-        $cred.TargetName = $Target
-        $cred.UserName = $account
-        $cred.CredentialBlobSize = $bytes.Length
-        $cred.CredentialBlob = $ptr
-        $cred.Persist = [CyClawCredMan]::CRED_PERSIST_LOCAL_MACHINE
-        $cred.Comment = "CyClaw generated credential; read only via CyClaw-CredMan-Env.ps1"
-        if (-not [CyClawCredMan]::CredWrite([ref]$cred, 0)) {
-            $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()  # DevSkim: ignore DS104456
-            Write-Error "cyclaw-credman-set: CredWrite failed (win32=$err)"
-            exit 1
-        }
-    } finally {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)  # DevSkim: ignore DS104456
-        $bstr = [IntPtr]::Zero
-        if ($ptr -ne [IntPtr]::Zero) {
-            [Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)  # DevSkim: ignore DS104456
-            $ptr = [IntPtr]::Zero
-        }
+    $script:CyclawCredBlobSize = $bytes.Length
+    $script:CyclawCredPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal($script:CyclawCredBlobSize)  # DevSkim: ignore DS104456
+    [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $script:CyclawCredPtr, $script:CyclawCredBlobSize)  # DevSkim: ignore DS104456
+    for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 0 }
+
+    $cred = New-Object CyClawCredMan+CREDENTIAL
+    $cred.Type = [CyClawCredMan]::CRED_TYPE_GENERIC
+    $cred.TargetName = $Target
+    $cred.UserName = $account
+    $cred.CredentialBlobSize = $script:CyclawCredBlobSize
+    $cred.CredentialBlob = $script:CyclawCredPtr
+    $cred.Persist = [CyClawCredMan]::CRED_PERSIST_LOCAL_MACHINE
+    $cred.Comment = "CyClaw generated credential; read only via CyClaw-CredMan-Env.ps1"
+    if (-not [CyClawCredMan]::CredWrite([ref]$cred, 0)) {
+        $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()  # DevSkim: ignore DS104456
+        Write-Error "cyclaw-credman-set: CredWrite failed (win32=$err)"
+        throw "CredWrite failed"
     }
+    $exitCode = 0
 } catch {
-    if ($bstr -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)  # DevSkim: ignore DS104456
-        $bstr = [IntPtr]::Zero
+    if ($exitCode -eq 0) { $exitCode = 1 }
+    if ($_.Exception.Message -ne "empty secret" -and $_.Exception.Message -ne "CredWrite failed") {
+        throw
     }
-    throw
 } finally {
-    if ($null -ne $secure) {
-        $secure.Dispose()
-        $secure = $null
+    Invoke-CyclawCredCleanup
+    if ($null -ne $script:CyclawCredCancelHandler) {
+        try { [Console]::remove_CancelKeyPress($script:CyclawCredCancelHandler) } catch { }
+        $script:CyclawCredCancelHandler = $null
     }
 }
 
-Write-Host "[cyclaw] stored Credential Manager item: target=$Target account=$account"
-exit 0
+if ($exitCode -eq 0) {
+    Write-Host "[cyclaw] stored Credential Manager item: target=$Target account=$account"
+}
+exit $exitCode
