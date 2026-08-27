@@ -215,3 +215,81 @@ the agentic layer as a whole now that the pipeline above exists.
 
 See `docs/THREAT_MODEL.md`'s third and fifth amendments for the fuller,
 dated account of what changed and when.
+
+## 10. Local 27B expectations (MacBook Pro M5 Pro, 48 GB)
+
+This section is the coding-loop contract for the operator Mac that actually
+runs CyClaw: **MacBook Pro, Apple M5 Pro, 48 GB unified memory**, Ollama
+`qwen3.8:27b-mlx`, thinking off. Not a base M5 (32 GB ceiling) and not an
+M5 Max (more GPU / 128 GB ceiling). Full doctrine:
+[`docs/m5-48gb-coding-expectations.md`](../m5-48gb-coding-expectations.md).
+
+48 GB can hold more context than the product uses. The product stays on
+**16k `num_ctx`**, **2048** harness completion tokens / **8** turns, an
+**~8,000-char** local agentic prompt, a **6,000-char** plan file, and
+**3072** `planner_max_tokens` so Ollama does not stall at "0% processing."
+`max_handoff_chars: 200000` is cloud egress, not local context. Raising
+`num_ctx` is a volume change, not a judgment upgrade. The local model remains
+a supervised executor; Grok/Claude (or a human) stays the architect for
+invariant-touching work.
+
+**What the cached model can finish in one `real-repo-run`**
+
+- A human-approved `plan.md` with headings Approach / Goal / Do this /
+  Done when / Do not / Files.
+- At most **one implementation file + one test file**. `--read-file` that
+  implementation path. Executor check = that test file.
+- Edits that do not touch `gate.py`, `graph.py`, `mcp_hybrid_server.py`,
+  `soul.md`, `INVARIANTS.md`, or `config.yaml`.
+
+**What to keep off this box as a single local job**
+
+- NeMo / graph rails, Numbat CEL, DFlash or `models.local_llm` runtime swaps,
+  telemetry kill-switch, new subsystems.
+- Letting the 27B write "insights" into `memory/` facts, `soul.md`, or an
+  uncapped diary that then gets stuffed back into the 16k window.
+
+Paging (optional): write a short schema (`goal`, I6 constraints, files,
+`last_error`, `next_edit`) to the run workspace or `docs/SESSION_NOTES.md`
+**before** compacting chat. Do not invent a fourth memory store. Do not send
+that file to a cloud planner without `--confirm-online`.
+
+Two-stage reminder: `--provider grok --confirm-online` belongs on
+`real-repo-run-plan` only. Omit `--provider` on `real-repo-run` so Qwen
+implements the approved burst plan on loopback.
+
+**Prompt safety invariants (plan handoff)**
+
+These are the controls that keep a cloud `plan.md` from becoming a jailbreak
+into the 27B coder. They already existed; the burst prompt does not relax them.
+
+1. **Instruction-only.** The planner obeys text under `Instruction:`. GitHub
+   PR/issue/diff text is fenced `<<<UNTRUSTED-GITHUB-CONTEXT` …
+   `UNTRUSTED-GITHUB-CONTEXT>>>` and is background, not a permission.
+2. **Fence defuse.** Quoted context cannot close the untrusted block
+   (`_defuse_fence`). Instruction comes first; untrusted last.
+3. **No coder grammar in the plan.** `=== FILE ===` is the implementing
+   model's output. A plan that emits it would skip human review.
+4. **Scan before trust.** `--instruction` is injection-scanned before any
+   GitHub fetch. `--plan-file` is scanned before `run_real_repo_loop`. Audit
+   stores a hash, never the plan text.
+5. **Cloud is opt-in.** `--provider` on `real-repo-run-plan` still needs
+   `--confirm-online`. Default is loopback Ollama.
+6. **I6 named off-limits** in the plan prompt: `gate.py`, `graph.py`,
+   `mcp_hybrid_server.py`, `soul.md`, `INVARIANTS.md`, `config.yaml`.
+
+**MCP integration strategy (this loop)**
+
+`real-repo-run` / `real-repo-run-plan` are **not** MCP clients. They are
+`python -m agentic.cli` subprocesses (harness `/ops` uses the same CLI shim).
+They must not import `mcp_hybrid_server.py`.
+
+| Surface | Role | This PR |
+|---|---|---|
+| `mcp_hybrid_server.py` | Request-path MCP server (I6) | Untouched. Named as a do-not-plan path. |
+| `agentic/harness_optimizer/mcp` | Sidecar tool-boundary package. **Not** an MCP server and does not speak MCP. | Untouched. |
+| `real_repo_loop.generate_plan` | One-shot planner invoke | Prompt only. |
+
+Do not hand the 27B a plan to add MCP tools, bind a VPS as an MCP server, or
+route LangChain DeepAgent through `mcp_hybrid_server.py`. That is architect
+work on Claude/Grok, then a separate I6-touching PR — not a burst job.
