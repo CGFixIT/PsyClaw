@@ -4,6 +4,8 @@ import copy
 import json
 import os
 import pickle
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,6 +48,26 @@ def test_generated_index_is_not_baked_into_the_image_and_is_writable_at_runtime(
 
     assert all(f"{root}/" in ignored for root in index_roots)
     assert all(f"./{root}:/app/{root}:rw" in volumes for root in index_roots)
+
+
+def test_git_does_not_track_python_bytecode() -> None:
+    """GitHub 'Add files via upload' bypasses .gitignore; CI must catch .pyc."""
+    git_bin = shutil.which("git")
+    if git_bin is None:
+        pytest.skip("git is not on PATH")
+    repo_root = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [git_bin, "-C", str(repo_root), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tracked = [
+        line
+        for line in result.stdout.splitlines()
+        if "__pycache__" in line.replace("\\", "/") or line.endswith((".pyc", ".pyo", ".pyd"))
+    ]
+    assert tracked == [], f"bytecode must not be tracked: {tracked}"
 
 
 # ---------------------------------------------------------------------------
