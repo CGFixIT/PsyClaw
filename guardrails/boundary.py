@@ -135,7 +135,12 @@ def guardrail_decision(**kwargs: Any) -> GuardrailDecision:
 
 @dataclass(frozen=True, slots=True)
 class SafetyEnvelope:
-    """ponytail: stub -- egress / consent envelope not wired until Phase 3+."""
+    """Egress/consent facts. Hashes and hosts only — never raw query/corpus/soul."""
+
+    destination_host: str = ""
+    trust: TrustLevel = TrustLevel.UNTRUSTED
+    confirm_digest: str = ""
+    send_local_context: bool = False
 
 
 @dataclass(frozen=True, slots=True)

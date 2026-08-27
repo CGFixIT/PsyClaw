@@ -92,6 +92,7 @@ from langgraph.graph import END, StateGraph
 
 from llm.client import ClaudeClient, GrokClient, LocalLLMClient
 from retrieval.hybrid_search import HybridRetriever
+from utils.endpoint_trust import EndpointTrustError, assert_loopback, assert_online_destination
 from utils.errors import RAGError
 from utils.external_pre_hook import run_pre_action_hook
 from utils.logger import audit_log, hash_query
@@ -554,6 +555,18 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
             est_prompt_tokens, max_ctx_tokens,
         )
 
+    local_url = str((cfg.get("models") or {}).get("local_llm", {}).get("base_url") or "")
+    if local_url:
+        try:
+            assert_loopback(local_url)
+        except EndpointTrustError as exc:
+            return {
+                "answer": f"[LLM Error: {exc}]",
+                "answer_model": "local",
+                "answer_sources": [],
+                "error": f"ENDPOINT_TRUST: {exc}",
+            }
+
     answer, error = _generate_or_error(
         llm, prompt, label="LLM", query=query, generate_guard=generate_guard
     )
@@ -632,6 +645,20 @@ def _external_fallback_node(
         }
 
     query = state["query"]
+    dest = str((cfg.get("models") or {}).get(provider, {}).get("base_url") or "")
+    try:
+        assert_online_destination(
+            provider=provider,
+            base_url=dest,
+            confirmed=state.get("user_confirmed_online"),
+        )
+    except EndpointTrustError as exc:
+        return {
+            "answer": f"[{label} Error: {exc}]",
+            "answer_model": provider,
+            "answer_sources": [],
+            "error": f"ENDPOINT_TRUST: {exc}",
+        }
     fallback_cfg = cfg.get("policy", {}).get("fallback", {})
     send_ctx = fallback_cfg.get(f"send_local_context_to_{provider}", False)
     docs = state.get("retrieved_docs", []) if send_ctx else []
