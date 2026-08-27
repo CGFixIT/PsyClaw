@@ -8,7 +8,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    # No base-branch filter: stacked PRs (e.g. #1137 onto P1) must still get
+    # the 0.23 construct proof. Filtering to main-only skipped those PRs.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -52,9 +53,31 @@ jobs:
             constraints.txt
             pyproject.toml
 
-      - name: Install cyclaw[guardrails,test] under constraints
+      - name: Cache torch CPU wheel
+        # Same pin/index as ci.yml. constraints.txt names torch==2.13.0+cpu,
+        # which is not on PyPI — pip install -e ".[guardrails,test]" -c
+        # constraints.txt fails ResolutionImpossible without this wheel first
+        # (run 33070991796).
+        id: torch-wheel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: .torch-wheels
+          key: torch-cpu-2.13.0-${{ runner.os }}-py312
+          restore-keys: |
+            torch-cpu-2.13.0-${{ runner.os }}-
+
+      - name: Download torch wheel (cache miss only)
+        if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
         run: |
           python -m pip install --upgrade "pip==26.1.2"
+          pip download "torch==2.13.0+cpu" \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --no-deps -d .torch-wheels
+
+      - name: Install torch CPU then cyclaw[guardrails,test]
+        run: |
+          python -m pip install --upgrade "pip==26.1.2"
+          pip install --no-index --no-deps --find-links .torch-wheels "torch==2.13.0+cpu"
           pip install -e ".[guardrails,test]" -c constraints.txt
           pip check
           python -c "import nemoguardrails; assert nemoguardrails.__version__ == '0.23.0', nemoguardrails.__version__"
