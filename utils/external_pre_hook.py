@@ -27,6 +27,21 @@ DEFAULT_TIMEOUT_SEC = 5
 MIN_TIMEOUT_SEC = 1
 MAX_TIMEOUT_SEC = 30
 
+# Only the literal Python True arms the hook / emission. A YAML string such as
+# "false" or "true" must not be treated as a security-enabling boolean.
+
+
+def _is_literal_true(value: Any) -> bool:
+    return value is True
+
+
+# Provider string -> Numbat-friendly model_provider value. Keep in sync with
+# utils/numbat_emitter._AUDIT_MODEL_PROVIDERS where possible.
+_PROVIDER_TO_VENDOR = {
+    "grok": "xai",
+    "claude": "anthropic",
+}
+
 
 def _hook_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
     """Return the policy.fallback.pre_action_hook block, if any."""
@@ -52,6 +67,49 @@ def _normalize_timeout(raw: Any) -> int:
     return value
 
 
+def _emit_hook_verdict(
+    *,
+    provider: str,
+    model: str,
+    query_hash: str,
+    event_type: str,
+    reason_code: str,
+    confidence: str,
+    cfg: dict[str, Any] | None,
+    decision: str | None = None,
+) -> None:
+    """Project a hook verdict into the Numbat stream, fail-soft.
+
+    Lazy-imports utils.numbat_emitter so this module stays free of a module-
+    scope emitter import (I6 hygiene) and so a projection failure cannot change
+    the hook's graph verdict.
+    """
+    try:
+        from utils.numbat_emitter import emit_numbat_event
+    except Exception as exc:  # noqa: BLE001 - projection must not break the hook
+        logger.warning("pre_action_hook could not load numbat_emitter: %s", exc)
+        return
+
+    try:
+        emit_numbat_event(
+            event_type,
+            model=model,
+            model_provider=_PROVIDER_TO_VENDOR.get(provider, provider),
+            tool_name="external_llm_call",
+            decision=decision,
+            approval_required=True if event_type == "permission.denied" else None,
+            approval_decision="denied" if event_type == "permission.denied" else None,
+            approval_reason=reason_code,
+            actor="system",
+            entrypoint="cyclaw",
+            tags=["pre_action_hook", reason_code],
+            confidence=confidence,
+            cfg=cfg,
+        )
+    except Exception as exc:  # noqa: BLE001 - derived stream must never fail the caller
+        logger.warning("pre_action_hook numbat emit failed: %s", exc)
+
+
 def run_pre_action_hook(
     provider: str,
     model: str,
@@ -70,7 +128,7 @@ def run_pre_action_hook(
     """
     block = _hook_cfg(cfg)
 
-    if not block.get("enabled", False):
+    if not _is_literal_true(block.get("enabled", False)):
         return {"verdict": "allow"}
 
     command = block.get("command")
@@ -81,7 +139,18 @@ def run_pre_action_hook(
         logger.warning("pre_action_hook command is not a list of strings; denying")
         return {"verdict": "deny", "reason": "invalid hook command configuration"}
 
+    # Only "enforce" is a legal enabled mode in this PR. "monitor" is a policy
+    # flip that still allows the provider call on exit 2; it must not ship
+    # until a separate dual-run observation issue is filed (I3).
+    fail_mode = block.get("fail_mode", "enforce")
+    if fail_mode != "enforce":
+        logger.warning(
+            "pre_action_hook fail_mode=%r is not supported; using enforce",
+            fail_mode,
+        )
+
     timeout = _normalize_timeout(block.get("timeout_sec", DEFAULT_TIMEOUT_SEC))
+    emit_verdict = _is_literal_true(block.get("emit_verdict", False))
 
     payload = {
         "action": "external_llm_call",
@@ -101,9 +170,29 @@ def run_pre_action_hook(
         )
     except subprocess.TimeoutExpired:
         logger.warning("pre_action_hook timed out after %ss; denying", timeout)
+        if emit_verdict:
+            _emit_hook_verdict(
+                provider=provider,
+                model=model,
+                query_hash=query_hash,
+                event_type="network.indicator",
+                reason_code="hook_timeout",
+                confidence="low",
+                cfg=cfg,
+            )
         return {"verdict": "deny", "reason": f"hook timed out after {timeout}s"}
     except (OSError, ValueError) as exc:
         logger.warning("pre_action_hook failed to run: %s; denying", exc)
+        if emit_verdict:
+            _emit_hook_verdict(
+                provider=provider,
+                model=model,
+                query_hash=query_hash,
+                event_type="network.indicator",
+                reason_code="hook_error",
+                confidence="low",
+                cfg=cfg,
+            )
         return {"verdict": "deny", "reason": f"hook execution failed: {exc}"}
 
     if proc.returncode == 0:
@@ -113,6 +202,17 @@ def run_pre_action_hook(
         stderr_text = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
         reason = stderr_text or "hook returned exit code 2 (deny)"
         logger.warning("pre_action_hook denied %s: %s", provider, reason)
+        if emit_verdict:
+            _emit_hook_verdict(
+                provider=provider,
+                model=model,
+                query_hash=query_hash,
+                event_type="permission.denied",
+                reason_code="hook_denied",
+                confidence="high",
+                cfg=cfg,
+                decision="denied",
+            )
         return {"verdict": "deny", "reason": reason}
 
     # Any other non-zero exit is treated as a failure and fails closed.
@@ -120,4 +220,14 @@ def run_pre_action_hook(
     stderr_text = proc.stderr.decode("utf-8", errors="replace").strip() if proc.stderr else ""
     detail = stderr_text or stdout_text or f"exit code {proc.returncode}"
     logger.warning("pre_action_hook failed for %s: %s; denying", provider, detail)
+    if emit_verdict:
+        _emit_hook_verdict(
+            provider=provider,
+            model=model,
+            query_hash=query_hash,
+            event_type="network.indicator",
+            reason_code="hook_failure",
+            confidence="low",
+            cfg=cfg,
+        )
     return {"verdict": "deny", "reason": f"hook failure: {detail}"}

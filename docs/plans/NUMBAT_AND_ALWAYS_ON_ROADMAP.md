@@ -3,12 +3,13 @@
 Status: living plan
 Related PR: feat/numbat-audit-ndjson-v1 (mainline audit-trail projection)
 
-> Reality check (2026-08-21, baseline `main`): parts of the original Step 1–2
-> scope already shipped — the out-of-band action-plane emitter
-> (`utils/numbat_emitter.py`, #959/#973), the rules-test fixture CI job
-> (#961/#981), and the pre-external hook runner
-> (`utils/external_pre_hook.py`, `policy.fallback.pre_action_hook`).
-> This document tracks what is DONE upstream vs what remains.
+> Reality check (2026-08-27, baseline `main` `8a2bda97`): Step 1 action-plane
+> and mainline audit projection, the rules-test fixture CI job (#961/#981), and
+> the pre-external hook runner (`utils/external_pre_hook.py`) are all shipped.
+> The remaining Numbat work is tracked by [#1128](https://github.com/cgfixit/CyClaw/issues/1128):
+> hook-verdict first-party emission (Slice A) and a monitor-only CEL sanitizer
+> backend (Slice B). On-path sequence policy (Slice C) is parked pending
+> checkpointer / hashed `session_id` plumbing.
 
 ## North star
 
@@ -44,11 +45,11 @@ fsconnect/sqlconnect operations project to `logs/numbat-events.ndjsonl`
 `source_type: "hook"`, `tags: ["cyclaw", ...]`). #981 pins the CLI in CI
 with emitter-shaped fixtures.
 
-**THIS PR (mainline request path):** `utils/logger.audit_log()` now also
-projects every redacted legacy audit record (`rag_query`, `user_gate_pause`,
-`prompt_injection_blocked`, `rate_limit_exceeded`, soul governance events,
-`mcp_rag_*`, `retrieval_degraded`, `*_prompt_truncated`, …) into the same
-Numbat stream via `project_audit_record()`:
+**DONE (mainline request path):** #1033 merged `project_audit_record()` into
+`utils/logger.audit_log()`. Every redacted legacy audit record (`rag_query`,
+`user_gate_pause`, `prompt_injection_blocked`, `rate_limit_exceeded`, soul
+governance events, `mcp_rag_*`, `retrieval_degraded`, `*_prompt_truncated`, …)
+is projected into the same Numbat stream:
 
 - Explicit event-name mapping table; unknown events degrade to
   `tool.call` at `confidence: "low"` — an audit line is never dropped.
@@ -70,8 +71,6 @@ switch, fail-soft on disk error) plus existing
 `tests/test_numbat_emitter.py`, `tests/test_audit.py`,
 `tests/test_logger.py`, `tests/test_due_diligence_invariants.py`.
 
-**Exit criteria:** tests green; sample lines documented in the PR body.
-
 ### Step 2 — Pre-external hook contract (exit code 2 = deny)
 
 **DONE (runner):** `utils/external_pre_hook.py` implements the contract —
@@ -80,9 +79,15 @@ exit 2 deny / anything else fail-closed deny + audit, hard timeout clamped
 to [1, 30]s (default 5). Wired on the external fallback path in `graph.py`;
 configured via `policy.fallback.pre_action_hook`. Disabled by default.
 
-**Remaining:** monitor/enforce mode split (`hooks.fail_mode`), Numbat-shaped
-`permission.denied` / `network.indicator` emission from the hook verdict
-itself (today the external hook command owns its own emission).
+**DONE (runner):** The hook contract (exit 0 allow / 2 deny / else fail-closed)
+is implemented in `utils/external_pre_hook.py` and wired into `graph.py`.
+
+**Remaining ([#1128](https://github.com/cgfixit/CyClaw/issues/1128) Slice A):**
+Numbat-shaped `permission.denied` / `network.indicator` emission from the
+hook verdict itself, gated by `policy.fallback.pre_action_hook.emit_verdict`.
+The `monitor` `fail_mode` (allow the provider call while still emitting +
+auditing) is intentionally not shipped yet — it is a policy flip that requires
+a separate dual-run observation issue.
 
 ### Step 3 — CEL sanitizer backend (monitor-first)
 
@@ -172,14 +177,15 @@ first-party NDJSON projection.
 ## Implementation order & estimated effort
 
 1. ~~Step 1 action-plane emitter~~ — DONE (#973)
-2. Step 1 mainline audit projection (this PR) — ~1 day
-3. `session_id` plumbing — 0.5 day (still required for on-path Step 4 *policy*; offline join detector for #966 is shipped)
-4. Step 2 hook runner — DONE; monitor/enforce split remains — 0.5 day
-5. Phase 0 daemon — 0.5–1 day
-6. Phase 1 Telegram allowlist hardening — 1 day
-7. Steps 3–4 CEL/sequence — 2–3 days
-8. Phase 2–3 jobs/collectors — 2–4 days
-9. Step 5 templates + Phase 4 enforce — 2+ days
+2. ~~Step 1 mainline audit projection~~ — DONE (#1033)
+3. Step 2 hook-verdict emission (Slice A, #1128) — ~0.5 day
+4. Step 3 CEL sanitizer backend, monitor-only (Slice B, #1128) — ~0.5–1 day
+5. `session_id` / checkpointer plumbing — parked (required for on-path Step 4 policy; offline join detector for #966 is shipped)
+6. Phase 0 daemon — 0.5–1 day
+7. Phase 1 Telegram allowlist hardening — 1 day
+8. Step 4 on-path sequence policy — 2–3 days (unpark only after #5)
+9. Phase 2–3 jobs/collectors — 2–4 days
+10. Step 5 templates + Phase 4 enforce — 2+ days
 
 ## Exit criteria per step
 
