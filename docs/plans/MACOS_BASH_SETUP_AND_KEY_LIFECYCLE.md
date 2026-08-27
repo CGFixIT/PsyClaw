@@ -5,6 +5,8 @@ This file is planning only. It does not change runtime behavior, I1–I6, graph 
 
 **Home for this work:** stacked installer PR **#1115** (`kimi/cyclaw-optimize-installer-safety`, base `#1114` / `invoke-cyclaw.sh` liveness). Do not fold these fixes into `#1111`–`#1113` (console JS) or `#1103` (Origin header / auth).
 
+Twin plan: `docs/plans/WINDOWS_POWERSHELL_SETUP_AND_KEY_LIFECYCLE.md`.
+
 ## What is already correct
 
 Do not rip up the persist contract. It is coherent:
@@ -60,10 +62,7 @@ Those items stay readable by any local process that can run `/usr/bin/security` 
 
 `_copy_key` has a shorter window of the same shape (`$TMPDIR/cyclaw.clip.*`).
 
-**Fix shape**
-
-- Same idiom as `#1032`: `trap 'rm -f "$tmp"' EXIT` around the store / copy, then `trap - EXIT` after the explicit `rm`.
-- Pin in `tests/test_setup_cyclaw_keys.py` that the script text contains an EXIT trap covering `cyclaw.kc.` (and ideally `cyclaw.clip.`).
+**Fix shape:** copy the `#1032` idiom below onto those two functions. Do not invent a new trap style.
 
 ## P1 — `cyclaw` shim / `invoke-cyclaw.sh` do not load the dotenv
 
@@ -107,7 +106,7 @@ By design the same secret lands in Keychain + `~/.CyClaw/.env` + optional `<chec
 
 ## P2 — Keychain ACL is “anyone who can run `security`”
 
-Already documented in the wrapper headers. Not fixable in shell. A signed helper binary is the only narrow ACL. Leave it. Item P0 (delete on uninstall) is what stops leftover items from being immortal.
+Already documented in the wrapper headers. Not fixable in shell. A signed helper binary is the only narrow ACL. Leave it. Item P0 (delete on uninstall) is what stops leftover items from being immortal. Detail of the three ACL layers is in the appendix below — do not treat `-T /usr/bin/security` as CyClaw-only.
 
 ## P3 — smaller Darwin / bash nits
 
@@ -134,6 +133,7 @@ Keep this as installer-stack work. Separate commits, same branch or a follow-up 
 - Flipping `auth.enabled` / `api.tls.enabled`.
 - Loading LaunchAgents from setup scripts.
 - Anything in `static/terminal.js` / `static/harness.html` / `gate.py`.
+- Custom keychain files / `set-generic-password-partition-list` (see ACL appendix).
 
 ## Verify when code lands
 
@@ -154,3 +154,166 @@ No Darwin required for the tests above. Real-hardware checks that still need a M
 - `ps -ww` during the prompt shows no secret in argv
 - `-T /usr/bin/security` suppresses the later read dialog for launchd
 - `--remove-keychain` deletes only the five named items for this account
+- `security dump-keychain -a` on the login keychain shows trusted app `/usr/bin/security` and usually partition `apple-tool:,apple:`
+
+---
+
+## Appendix A — bash EXIT trap idiom (`#1032` and the missing store trap)
+
+`_fill_browser` on main is the pattern to copy. Cleartext lives in `$TMPDIR/cyclaw.fillkey.*` only while `osascript` runs.
+
+```bash
+_fill_browser() {
+  local secret_file scpt
+  secret_file="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fillkey.XXXXXX")"
+  scpt="$(mktemp "${TMPDIR:-/tmp}/cyclaw.fill.XXXXXX")"
+  trap 'rm -f "$secret_file" "$scpt"' EXIT
+  umask 077
+  printf '%s' "$_api_value" > "$secret_file"
+  chmod 600 "$secret_file"
+  # ... write AppleScript, osascript "$scpt" "$secret_file" ...
+  rm -f "$secret_file" "$scpt"
+  trap - EXIT
+}
+```
+
+Why that shape:
+
+| Choice | Why |
+| --- | --- |
+| `trap ... EXIT` | bash runs EXIT on normal return, `exit`, `set -e` death, and after INT/TERM. One trap covers the function. |
+| Single-quoted body `trap 'rm -f "$tmp"' EXIT` | The text is stored literally. `$tmp` expands when EXIT **fires**, which is the mktemp path assigned two lines earlier. |
+| Register **after** mktemp, **before** the first write | If mktemp fails there is nothing to shred. If printf fails the empty 0600 file still goes away. |
+| `trap - EXIT` after the explicit `rm` | bash has one handler per signal. Leaving the function-local trap installed lets the next `_prompt_secret` (which also uses EXIT to restore `stty echo`) clobber it, or a later `exit` `rm` empty names. |
+| `rm -f` never `rm -rf` | Names are files from `mktemp`. No glob. |
+
+Wrong forms:
+
+```bash
+trap "rm -f $secret_file $scpt" EXIT   # expands NOW — empty if set before mktemp
+trap 'rm -f $secret_file' EXIT         # unquoted → word-split if TMPDIR has spaces
+```
+
+### Drop-in for `_keychain_store_value` (still missing on main)
+
+```bash
+_keychain_store_value() {
+  local service="$1" value="$2" tmp rc old_umask
+  old_umask="$(umask)"
+  umask 077
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.kc.XXXXXX")"
+  trap 'rm -f "$tmp"' EXIT
+  printf '%s' "$value" > "$tmp"
+  chmod 600 "$tmp"
+  umask "$old_umask"
+  rc=0
+  _keychain_store_file "$service" "$tmp" || rc=$?
+  rm -f "$tmp"
+  trap - EXIT
+  return "$rc"
+}
+```
+
+Same for `_copy_key` (`cyclaw.clip.*`). Do **not** extend that trap across the clipboard TTL background job — that job holds `$_api_value` in memory, not the temp file.
+
+### Trap stacking
+
+- `_prompt_secret` sets `trap '_restore_tty_echo' EXIT` plus INT/TERM handlers that restore echo **and** `exit 130` / `exit 143`. A restore-only INT trap plus `read || true` would treat Ctrl-C as “skip” and keep writing state. Leave that alone.
+- Never call `_prompt_secret` while the kc trap is installed (persist happens after the prompt returns today).
+- Do not write a process-level `trap 'rm -f "$tmp"; _restore_tty_echo' EXIT`. That couples two lifetimes.
+- `#1032` did not add a second INT trap on fill-browser. Do not add one on the store path. With `set -euo pipefail` and no custom INT trap, bash 3.2 runs EXIT then exits.
+
+### What the trap does **not** do
+
+- No `srm` / overwrite. APFS SSD wear-leveling makes overwrite theater. `rm` unlinks the name. Same bar `#1032` accepted.
+- Does not cover expect’s own Tcl copy (`set secret [read ...]`). That dies with expect.
+- Does not cover `security` after the item is in the Keychain. That is Appendix B.
+
+Contract pin for `tests/test_setup_cyclaw_keys.py` (string pin, no Darwin):
+
+```python
+def test_keychain_store_value_traps_temp_file() -> None:
+    text = (_REPO_ROOT / "macos" / "setup-cyclaw-keys.sh").read_text(encoding="utf-8")
+    assert 'mktemp "${TMPDIR:-/tmp}/cyclaw.kc.XXXXXX"' in text
+    assert "trap 'rm -f \"$tmp\"' EXIT" in text
+    assert "cyclaw.fillkey." in text  # #1032 still present
+```
+
+---
+
+## Appendix B — macOS Keychain ACL layers
+
+CyClaw does not talk to Security.framework. Store and read exec `/usr/bin/security`. The ACL decision is about **that binary**, not about `setup-cyclaw-keys.sh`.
+
+Three different checks. People collapse them into “ACL” and then get surprised.
+
+### 1. Access object (legacy ACL, what `-T` / `-A` write)
+
+Each item has an access instance. Each ACL entry is operations + trusted applications. On access, macOS looks for an entry that lists the operation (decrypt / export-clear / etc.). Caller in that entry’s app list → allow. Otherwise prompt Allow / Always Allow / Deny. Always Allow appends the caller.
+
+Trusted-app list can be:
+
+- `nil` — everyone trusted for that operation (`-A`). Never use it here.
+- empty — nobody trusted (`-T ""`).
+- explicit paths (`-T /usr/bin/security`). Multiple `-T` allowed; CyClaw passes one.
+
+Default if you pass neither `-T` nor `-A`: **the creating application is trusted**. The creator here is `/usr/bin/security`, not bash. The script headers already corrected the earlier “Always Allow goes to `/bin/bash`” myth.
+
+### 2. Partition ID (Sierra / 10.12+)
+
+On top of the app list, items in the **default login keychain** carry a partition list (`apple:`, `apple-tool:`, `teamid:ABCD123456`, `cdhash:…`). `security(1)` itself is an Apple tool and runs in the `apple-tool:` partition. That partition is why `-T` on a login-keychain item often **does not stop** another `security find-generic-password -w`. The trusted-app list is not the final word once `apple-tool:` is on the item.
+
+`security set-generic-password-partition-list` can change that list. It requires the **keychain password**, not just the item ACL. CyClaw never calls it. Out of scope.
+
+### 3. Keychain lock + session
+
+Login keychain is unlocked by the GUI login. A LaunchAgent in `gui/$(id -u)` can read unlocked items without a password prompt. A LaunchDaemon in the system domain cannot use the user login keychain the same way. CyClaw only generates user LaunchAgents. That part is right.
+
+iCloud Keychain items use a different ACL model. CyClaw writes the default login keychain. Do not sync these items to iCloud.
+
+### What the CyClaw store line actually writes
+
+```bash
+"$SECURITY_BIN" add-generic-password \
+  -a "$ACCOUNT" \
+  -s "$SERVICE" \
+  -T "$SECURITY_BIN" \
+  -U \
+  -w
+```
+
+| Flag | Effect |
+| --- | --- |
+| `-a "$(id -un)"` | Account attribute. Set and env wrappers must match. |
+| `-s com.cgfixit.cyclaw.*` | Service name. Lookup key, not a permission. |
+| `-T /usr/bin/security` | Add that path to the trusted-app list. |
+| `-U` | Update if the item exists. **Caveat:** an update may not replace an older item’s ACL the way a fresh add does. A pre-`-T` item can keep its old trust list. Delete + add is the only clean ACL reset — another reason `--remove-keychain` must exist. |
+| bare `-w` | No password on argv. `security` prompts (or expect types). |
+| no `-A` | Correct. |
+| no `-T ""` | They did not strip creator trust. Creator is already `security`. |
+
+Inspect after a real store (VERIFY ON REAL HARDWARE; never `dump-keychain -d` in a log or gist):
+
+```bash
+security dump-keychain -a ~/Library/Keychains/login.keychain-db
+# GUI: Keychain Access → item → Access Control
+# Look for trusted apps: /usr/bin/security
+# Look for partition list: usually apple-tool:,apple:
+```
+
+### What that ACL does *not* buy you
+
+1. **Any local process that can exec `/usr/bin/security`** and knows `(account, service)` can `find-generic-password -w`. That includes every other script on the box. `-T /usr/bin/security` does not mean “only CyClaw.”
+2. **`apple-tool:` on the login keychain** often lets `security` skip the trusted-app list entirely. A tighter `-T /path/to/signed-helper` may still be readable via `security -w` unless you also change the partition list (keychain password required) or stop using the login keychain.
+3. **Unsigned shell scripts cannot be ACL subjects.** `SecTrustedApplicationCreateFromPath` binds a code signature / designated requirement, not a shebang file. `macos/cyclaw-keychain-env.sh` will never show up as “this wrapper only.”
+4. **Launchd does not get a special ACL.** The plist has no token. At start, `cyclaw-keychain-env.sh` runs `security find-generic-password -w` as the logged-in user. Unlocked login keychain → no prompt. Locked → fail closed (already written).
+
+### What would actually narrow the ACL (not this PR)
+
+| Approach | Narrows to | Cost |
+| --- | --- | --- |
+| Signed helper + `-T` that helper + `set-generic-password-partition-list` to `teamid:YOURTEAM` (drop `apple-tool:`) | That helper’s team ID | Developer ID, keychain password at set time, `security` CLI can no longer read — so `cyclaw-keychain-env.sh` must die |
+| Custom keychain file (`security create-keychain`) with no partition IDs | `-T` starts meaning something | Separate unlock password; LaunchAgent must unlock it; new operational surface |
+| Leave login keychain + current `-T` | Honest “any `security` reader” | What you have. Pair it with uninstall-delete and no argv leak |
+
+The bash trap only limits how long the secret sits in `$TMPDIR` *before* it reaches that Keychain item. After `add-generic-password` succeeds, Appendix B is the whole remaining control.
