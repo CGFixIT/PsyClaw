@@ -108,12 +108,13 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
 - **A hard network boundary around the verification executor.** `agentic/executor`
   now requires `production_sandbox()` (issue #1134 Phase 4). On Windows that is a
   Job Object with `KILL_ON_JOB_CLOSE` (process-tree kill, active-process cap).
-  Linux/Darwin fail closed — there is no silent `subprocess.run` fallback.
-  The environment scrub (dropping proxy variables and API keys, setting
-  `PIP_NO_INDEX`, disposable `HOME`/`USERPROFILE`) is still not a network
-  namespace. Ordinary TCP/UDP sockets still work on Windows. Treat any claim
-  that a verified worktree "had no network access" as unverified until a real
-  namespace/firewall control exists (§6, stage 5).
+  Darwin uses `sandbox-exec` (network deny; writes limited to the worktree and
+  a disposable `TMPDIR`). Linux uses `unshare --net`. Missing binary or failed
+  probe fails closed — there is no silent `subprocess.run` fallback. POSIX
+  timeouts kill the process group, not only the wrapper. Ordinary TCP/UDP
+  sockets still work on Windows. Treat any claim that a verified worktree
+  "had no network access" as unverified on Windows until a real namespace
+  exists (§6, stage 5).
 - **Kernel / hypervisor escape.** There is **no per-workload microVM**
   (gVisor/Firecracker). Container isolation shares the container host's Linux
   kernel. On Docker Desktop that kernel is in the managed Linux VM rather than
@@ -329,8 +330,9 @@ narrower and more precise reason than "nothing executes":
   amendment's "HOME remains inherited" line is **stale**. `run_verification`
   now assigns a disposable `HOME`/`USERPROFILE` and requires
   `production_sandbox()`: Windows Job Object (`KILL_ON_JOB_CLOSE`),
-  Linux/Darwin raise `HardSandboxUnavailable`. Sockets still work on
-  Windows.
+  Darwin Seatbelt (`sandbox-exec`, network deny, worktree+TMPDIR writes),
+  Linux `unshare --net`. Missing backend fails closed. POSIX timeout
+  kills the process group. Sockets still work on Windows.
 
   **[Fifth amendment, issue #1134 Phase 4 approval-manifest slice.]**
   `finalize_real_repo_change` now rebuilds an acceptance digest

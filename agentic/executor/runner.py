@@ -5,18 +5,19 @@
 to the worktree, environment scrubbed to a minimal allowlist, a hard
 per-check wall-clock timeout, ``check=False`` (the exit code is data, not an
 exception). Production selects :func:`production_sandbox` (Windows Job
-Object). Missing backends raise ``HardSandboxUnavailable``; there is no
-silent fallback to unconstrained ``subprocess.run``.
+Object, Darwin Seatbelt, or Linux ``unshare --net``). Missing backends raise
+``HardSandboxUnavailable``; there is no silent fallback to unconstrained
+``subprocess.run``.
 
 **Live caller:** ``agentic/real_repo_loop.py`` calls :func:`run_verification`
 as the verify step of its plan/patch/verify loop.
 
-**Containment (issue #1134 Phase 4, this slice):** Windows Job Object with
-``KILL_ON_JOB_CLOSE`` plus an active-process cap. That is a process-tree
-kill boundary, not a network namespace -- ordinary sockets still work.
-Linux/Darwin fail closed until a later Seatbelt/netns PR. Env scrub still
-drops proxy variables and API keys. Child ``HOME`` / ``USERPROFILE`` is a
-disposable directory, not the operator's.
+**Containment (issue #1134 Phase 4):** Windows Job Object
+(``KILL_ON_JOB_CLOSE``, process-tree kill — not a netns). Darwin
+``sandbox-exec`` denies network and off-cwd writes. Linux ``unshare --net``
+drops the network namespace when the probe succeeds; otherwise fail closed.
+Env scrub still drops proxy variables and API keys. Child ``HOME`` /
+``USERPROFILE`` is a disposable directory, not the operator's.
 """
 
 from __future__ import annotations
