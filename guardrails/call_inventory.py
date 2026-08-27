@@ -1,8 +1,10 @@
-"""Advisory inventory of direct model-generation call sites.
+"""Fail-closed inventory of direct model-generation call sites.
 
-Phase 1 of issue #1134: fail-open / advisory. Phase 3 will fail the build on
-new callers outside registered adapters. This scanner never imports
-nemoguardrails and never runs on the /query path.
+Issue #1134 Phase 5 slice: a new ``ChatXAI`` / ``ChatAnthropic`` /
+``ChatOpenAI`` constructor or ``generate_async`` call outside the registered
+adapter files fails the test suite and this module's CLI (exit 1).
+
+Never imports ``nemoguardrails``. Never runs on the ``/query`` path.
 """
 
 from __future__ import annotations
@@ -14,21 +16,19 @@ from typing import NamedTuple
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Narrow: generic ``.generate()`` is LocalLLMClient / graph helpers, not NeMo.
-# Phase 1 inventories LLMRails.generate_async and vendor chat constructors.
 _GENERATE_ATTRS = frozenset({"generate_async"})
 _GENERATE_NAMES = frozenset({"ChatOpenAI", "ChatAnthropic", "ChatXAI"})
 
-# Paths relative to repo root that are allowed to mention generation APIs
-# (adapters, tests, docs-adjacent examples). Advisory: extras are reported,
-# not rejected, until Phase 3.
-_ALLOW_PREFIXES = (
-    "tests/",
-    "guardrails/",
-    "llm/",
-    "harness/",
-    "agentic/",
-    "docs/",
+# Registered adapters only. Package prefixes (agentic/, harness/, llm/) were
+# how Phase 1 stayed advisory-empty. A new caller in those trees must be
+# added here explicitly or the build fails.
+_ALLOW_FILES = frozenset(
+    {
+        "agentic/deepagent_github/model_adapter.py",
+        "guardrails/integration.py",
+    }
 )
+_ALLOW_PREFIXES = ("tests/",)
 
 
 class CallSite(NamedTuple):
@@ -39,6 +39,8 @@ class CallSite(NamedTuple):
 
 def _is_allowed(rel: str) -> bool:
     posix = rel.replace("\\", "/")
+    if posix in _ALLOW_FILES:
+        return True
     return any(posix.startswith(p) for p in _ALLOW_PREFIXES)
 
 
@@ -71,7 +73,7 @@ def scan_tree(root: Path | None = None) -> list[CallSite]:
 
 
 def extra_call_sites(root: Path | None = None) -> list[CallSite]:
-    """Call sites outside the advisory allowlist (empty today is OK)."""
+    """Call sites outside the registered-adapter allowlist."""
     return [site for site in scan_tree(root) if not _is_allowed(site.path)]
 
 
@@ -80,10 +82,10 @@ def main() -> int:
     if not extras:
         print("call_inventory: no extra generation call sites")
         return 0
-    print("call_inventory: advisory extras (not a merge blocker in Phase 1):")
+    print("call_inventory: unregistered generation call sites:")
     for site in extras:
         print(f"  {site.path}:{site.line} {site.name}")
-    return 0  # advisory
+    return 1
 
 
 if __name__ == "__main__":
