@@ -41,7 +41,7 @@ effectively empty. Both are confirmed live, not just in static code.
 | Area | Method | Result |
 | --- | --- | --- |
 | Auth (`utils/auth*.py`, `gate_auth.py`) | Static review vs. `docs/AUTHENTICATION_DESIGN.md` | 1 Low, 5 Informational |
-| Memory (`memory/`, `gate_memory.py`) | Static review vs. `docs/memory/*` | 1 Medium, 2 Low, 4 Informational |
+| Memory (`memory/`, `gate_memory.py`) | Static review vs. `docs/memory/*` | 3 Low, 4 Informational |
 | Harness backend (`harness/server.py` + package) | Static review vs. `harness/README.md`, `docs/HARNESS_*.md` | 1 Low, 3 Informational |
 | Consoles (`terminal.html`/`.js`, `harness.html`, `auth_admin.js`) | Static review + live Playwright render | 2 Medium (both live-confirmed), 1 Informational |
 | `gate.py` boot + `/` + `/health` | Live (venv + `python gate.py`) | PASS — index missing is fail-soft (503 on `/query` only), matches documented behavior |
@@ -107,12 +107,15 @@ the more privileged console (the one that can run checks, push branches, and
 open PRs), while the less-privileged terminal console keeps `script-src
 'self'`.
 
-Suggested fix: mint a per-process nonce alongside the harness console's
-existing per-process CSRF token, inject it into both the CSP header
-(`script-src 'self' 'nonce-...'`) and the inline `<script nonce="...">` tag
-at serve time, instead of dropping `script-src` (and friends) entirely.
+Suggested fix: mint a fresh nonce on every `GET /` response (not a
+per-process value shared like the CSRF token — a nonce reused across the
+process lifetime is replayable by any injected markup until restart, which
+defeats the purpose), inject that same per-response value into both the CSP
+header (`script-src 'self' 'nonce-...'`) and the inline
+`<script nonce="...">` tag in the returned HTML, instead of dropping
+`script-src` (and friends) entirely.
 
-### F-03 (Medium): `memory.facts.enabled` gates retrieval fusion only, not persistence
+### F-03 (Low): `memory.facts.enabled` gates retrieval fusion only, not persistence
 
 Traced `create_proposal`/`apply_proposal` (`memory/store.py:488-524`,
 `595-694`): neither checks `cfg["memory"]["facts"]["enabled"]`. The only
@@ -133,16 +136,21 @@ switch). The inconsistency is operator-visible: `memory/mirror.py:12-37`'s
 before writing — the codebase's own internal gating pattern is inconsistent
 between the two data types.
 
-The progressive-enablement doc narrative arguably intends this ordering, so
-it may be by design rather than an outright bug — but the flag's name and
-its appearance in the status dict create a real operator-expectation and
-data-retention surprise.
+This ordering is in fact the documented rollout, not an accident:
+`docs/memory/README.md`'s step 2 (propose/apply facts) precedes step 3
+(`facts.enabled` + `retrieval_fusion.enabled` together), and
+`docs/memory/IMPLEMENTATION_PLAN.md` §11 walks the same sequence — persisting
+and verifying facts is meant to happen before they are exposed to retrieval.
+So this is a naming/clarity gap, not a persistence defect: the flag's name
+and its appearance in the status dict just don't make that staged intent
+obvious to an operator reading them cold.
 
-Suggested fix: either rename `facts.enabled` to something like
+Suggested fix: rename `facts.enabled` to something like
 `facts.retrieval_enabled` (and update `config.yaml`'s comment + both memory
-docs to say explicitly it only gates fusion), or — if the intent really is
-"no facts exist while this is false" — add an explicit `facts.enabled` check
-to `create_proposal`/`apply_proposal`.
+docs to say explicitly it only gates fusion, not persist/apply/read). Do not
+gate `create_proposal`/`apply_proposal` on this flag — that would break the
+documented staged rollout, where facts are proposed and applied before
+retrieval fusion is turned on.
 
 ### F-04 (Low): `GET /api/harness/runs` has no auth or rate limit, leaks an absolute filesystem path
 
@@ -346,14 +354,11 @@ These were traced and confirmed but don't warrant a standalone fix:
    console's static-serving path) are good candidates for a single focused
    PR — same root area, same file (`harness/server.py`'s `create_app()`),
    reviewable together.
-2. F-03 (memory facts-enabled semantics) needs a product decision — rename
-   the flag vs. change its enforcement — before a fix PR, since either
-   choice changes documented/expected behavior for anyone already using
-   propose/apply.
-3. F-04 through F-08 are independent, narrow, low-risk fixes each
-   reviewable as its own small PR or grouped as a "harness/memory hygiene"
-   batch.
-4. None of the six invariants (`CLAUDE.md` §3) or I6 module isolation are
+2. F-03 through F-08 are independent, narrow, low-risk fixes — F-03 is a
+   rename/doc-clarity change only (the propose/apply behavior itself matches
+   the documented staged rollout and should not change) — each reviewable
+   as its own small PR or grouped as a "harness/memory hygiene" batch.
+3. None of the six invariants (`CLAUDE.md` §3) or I6 module isolation are
    implicated by any finding above — no graph edge, auth gate, or import
    structure change is required by any suggested fix.
 
