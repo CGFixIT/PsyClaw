@@ -79,8 +79,12 @@ loopback OpenAI-compatible mock, with a loopback socket jail.
 
 ### Engine construction (0.23 hygiene)
 
-- `_apply_guardrails_config` overrides **`type: main` only**. `type: self_check`
-  (and other non-main entries) keep the template model tag.
+- `_apply_guardrails_config` overrides **`type: main` only**. NVIDIA task types
+  `self_check_input` / `self_check_output` keep the template model tag.
+- Output streaming uses the official nested keys
+  `rails.output.streaming.enabled: false` and `stream_first: false` (NVIDIA
+  default for `stream_first` is **true** — tokens would leak before rails).
+  Top-level `streaming: False` is the deprecated global switch, also kept off.
 - Engine instances are keyed by
   `(policy_fingerprint, provider, model, endpoint)`. Fingerprint is SHA-256 of
   the policy bundle under `nemo_config_dir`.

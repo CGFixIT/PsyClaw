@@ -295,10 +295,16 @@ def test_apply_guardrails_config_overrides_main_only():
         model="stale-main",
         parameters={"base_url": "http://127.0.0.1:1234/v1"},
     )
-    self_check = SimpleNamespace(
-        type="self_check",
+    self_check_input = SimpleNamespace(
+        type="self_check_input",
         engine="openai",
-        model="check-only-model",
+        model="check-input-model",
+        parameters={"base_url": "http://127.0.0.1:1234/v1"},
+    )
+    self_check_output = SimpleNamespace(
+        type="self_check_output",
+        engine="openai",
+        model="check-output-model",
         parameters={"base_url": "http://127.0.0.1:1234/v1"},
     )
     untyped = SimpleNamespace(
@@ -306,7 +312,7 @@ def test_apply_guardrails_config_overrides_main_only():
         model="stale-untyped",
         parameters=None,
     )
-    fake_config = SimpleNamespace(models=[main, self_check, untyped])
+    fake_config = SimpleNamespace(models=[main, self_check_input, self_check_output, untyped])
     cfg = GuardrailsConfig(
         enabled=True,
         base_url="http://127.0.0.1:11434/v1",
@@ -318,8 +324,10 @@ def test_apply_guardrails_config_overrides_main_only():
     assert main.parameters["base_url"] == "http://127.0.0.1:11434/v1"
     assert untyped.model == "qwen3.8:27b-mlx"
     assert untyped.parameters["base_url"] == "http://127.0.0.1:11434/v1"
-    assert self_check.model == "check-only-model"
-    assert self_check.parameters["base_url"] == "http://127.0.0.1:1234/v1"
+    assert self_check_input.model == "check-input-model"
+    assert self_check_input.parameters["base_url"] == "http://127.0.0.1:1234/v1"
+    assert self_check_output.model == "check-output-model"
+    assert self_check_output.parameters["base_url"] == "http://127.0.0.1:1234/v1"
 
 
 def test_policy_fingerprint_changes_when_bundle_changes(tmp_path, monkeypatch):
@@ -366,6 +374,12 @@ def test_nemo_template_matches_guardrails_block():
     for model in nemo["models"]:
         assert model["parameters"]["base_url"] == gr["base_url"]
         assert model["model"] == gr["model"]
+    types = {model["type"] for model in nemo["models"]}
+    assert types == {"main", "self_check_input", "self_check_output"}
+    streaming = nemo["rails"]["output"]["streaming"]
+    assert streaming["enabled"] is False
+    assert streaming["stream_first"] is False
+    assert nemo.get("streaming") is False
 
 
 # --- Phase 2 input rail: check_input (sync, offline-only) --------------------
