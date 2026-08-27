@@ -775,13 +775,15 @@ def check_reference_env_file(env_path: Path) -> None:
     if problems:
         fail("T8", f"{env_path.name} format violations -- " + "; ".join(problems))
         return
+    # The shell-only and conditional names come from their named sets above --
+    # the sets ARE the contract for sections 2/3, not documentation beside it
+    # (CodeQL flagged them unused when this map hardcoded the same names).
+    # All four are "1"-valued by their vendors' conventions.
     expected_values = {
         **EXPECTED_TELEMETRY_KILL,
         **EXPECTED_UPDATE_CHECK,
-        "HF_HUB_DISABLE_UPDATE_CHECK": "1",
-        "HOMEBREW_NO_ANALYTICS": "1",
-        "HF_HUB_OFFLINE": "1",
-        "TRANSFORMERS_OFFLINE": "1",
+        **dict.fromkeys(sorted(SHELL_ONLY_ENV_KEYS), "1"),
+        **dict.fromkeys(sorted(CONDITIONAL_OFFLINE_PAIR), "1"),
     }
     mismatched = [f"{k}: doc has {documented[k]!r}, oracle says {v!r}"
                   for k, v in expected_values.items() if k in documented and documented[k] != v]
