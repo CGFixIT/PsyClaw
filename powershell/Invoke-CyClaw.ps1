@@ -50,17 +50,15 @@ if (-not (Test-Path $VenvPy)) {
 $env:CYCLAW_HOME = $Home_
 $env:CYCLAW_REPO = $Repo
 $env:CYCLAW_HARNESS_PORT = "$Port"
-# CYCLAW_API_KEY is passed through from the caller's environment, never generated
-# or defaulted here, and deliberately NOT written into the installed shim (that
-# would put the secret in a profile file on disk). Unset means the console's
-# state-changing routes fail closed with 401 -- paste the key into the console's
-# key field, or set the variable before launching.
+# CYCLAW_API_KEY is inherited from the caller; this launcher does not generate
+# it and does not persist it. Unset means Soul/ops 401. Pasting the key into
+# the browser field cannot set the server env.
 
 Write-Host "[cyclaw] repo    : $Repo" -ForegroundColor Cyan
 Write-Host "[cyclaw] home    : $Home_" -ForegroundColor Cyan
 Write-Host "[cyclaw] console : http://127.0.0.1:$Port  (Ctrl+C to stop)" -ForegroundColor Cyan
 if (-not $env:CYCLAW_API_KEY) {
-    Write-Host "[cyclaw] warn    : CYCLAW_API_KEY not set - state-changing console routes will return 401" -ForegroundColor Yellow
+    Write-Host "[cyclaw] warn    : CYCLAW_API_KEY not set - Soul / ops / harness state-changing routes will 401. Typing the key in the browser cannot configure the server; set the env var, then restart." -ForegroundColor Yellow
 }
 
 if (-not $NoBrowser) {
