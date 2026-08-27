@@ -657,7 +657,7 @@ function openUsersPanel() {
       base: '/auth',
       actorRole: authRole,
       getCsrf: function () { return csrfToken; },
-      fetchFn: function (path, init) { return fetch(API + path, init); },
+      fetchFn: function (path, init) { return fetchWithTimeout(API + path, init || {}, 15000); },
       onStatus: function (msg) {
         const el = document.getElementById('usersPanelStatus');
         if (!el) return;
