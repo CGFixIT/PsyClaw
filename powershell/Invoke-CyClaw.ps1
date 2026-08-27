@@ -60,10 +60,8 @@ function Test-CyclawDotenvOwnerOnly([string]$Path) {
     } catch {
         return $false
     }
-    $read = [System.Security.AccessControl.FileSystemRights]::ReadData
     foreach ($ace in $acl.Access) {
         if ($ace.AccessControlType -ne 'Allow') { continue }
-        if (($ace.FileSystemRights -band $read) -eq 0) { continue }
         $id = $ace.IdentityReference.Value
         if ($id -eq 'Everyone' -or $id -eq 'BUILTIN\Users' -or $id -eq 'NT AUTHORITY\Authenticated Users') {
             return $false
@@ -75,7 +73,7 @@ function Test-CyclawDotenvOwnerOnly([string]$Path) {
 function Import-CyclawDotenv([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     if (-not (Test-CyclawDotenvOwnerOnly $Path)) {
-        Write-Host "[cyclaw] warn    : refusing to source $Path (ACL is not owner-only; want current-user only). Fix with: icacls `"$Path`" /inheritance:r /grant:r `"${env:USERNAME}:R`"" -ForegroundColor Yellow
+        Write-Host "[cyclaw] warn    : refusing to source $Path (ACL is not owner-only; want current-user only). Fix with: icacls `"$Path`" /inheritance:r /grant:r `"${env:USERNAME}:(R,W)`"" -ForegroundColor Yellow
         return $false
     }
     Get-Content -LiteralPath $Path | ForEach-Object {

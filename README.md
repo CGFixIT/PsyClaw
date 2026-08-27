@@ -334,7 +334,7 @@ the same way `powershell/Invoke-CyClaw.ps1` requires before it will source the
 file (owner-only; refuse Everyone / Users / Authenticated Users):
 
 ```powershell
-icacls .env /inheritance:r /grant:r "${env:USERNAME}:R"
+icacls .env /inheritance:r /grant:r "${env:USERNAME}:(R,W)"
 ```
 
 `macos/setup-cyclaw-keys.sh` and the harness console's `/api` panel both already

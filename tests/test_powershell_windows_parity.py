@@ -120,6 +120,8 @@ def test_invoke_loads_persisted_api_key_from_dotenv() -> None:
     assert 'Join-Path $Repo ".env"' in text
     assert "Test-CyclawDotenvOwnerOnly" in text
     assert "BUILTIN\\Users" in text
+    assert "FileSystemRights]::ReadData" not in text
+    assert "(R,W)" in text
     assert "refusing to source" in text
     assert "ACL is not owner-only" in text
     load_idx = text.index('Join-Path $Home_ ".env"')
