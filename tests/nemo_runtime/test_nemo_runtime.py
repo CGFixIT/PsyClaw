@@ -39,7 +39,8 @@ def test_rails_config_loads_and_compiles() -> None:
     assert cfg.models
     types = {getattr(m, "type", None) for m in cfg.models}
     assert "main" in types
-    assert "self_check" in types
+    assert "self_check_input" in types
+    assert "self_check_output" in types
 
 
 def test_construct_engine_register_actions_loopback_mock() -> None:

@@ -28,10 +28,20 @@ models:
       base_url: http://127.0.0.1:11434/v1  # DevSkim: ignore DS162092
       api_key: "not-needed-for-local"
 
-  # Optional: a smaller/faster local model dedicated to guardrail checks keeps
-  # latency low. Point it at a second Ollama model if you pull one. Until then
-  # it can mirror `main`.
-  - type: self_check
+  # NVIDIA task-specific types (docs: configure-guardrails/yaml-schema/model-configuration).
+  # Generic `type: self_check` is no longer the documented identifier.
+  # Both entries may share the Ollama tag until the operator points a second model.
+  # `_apply_guardrails_config` overrides `type: main` only — these are not smashed.
+  - type: self_check_input
+    engine: openai
+    model: qwen3.8:27b-mlx
+    parameters:
+      # Loopback-only binding to local Ollama is a core CyClaw security
+      # invariant (offline-first), not debug code -- suppress devskim heuristic.
+      base_url: http://127.0.0.1:11434/v1  # DevSkim: ignore DS162092
+      api_key: "not-needed-for-local"
+
+  - type: self_check_output
     engine: openai
     model: qwen3.8:27b-mlx
     parameters:
@@ -69,10 +79,18 @@ rails:
       - check grounding           # offline action: get_grounding_score
       - check soul leak           # block identity/config exfiltration
       - self check facts          # NeMo self-check facts (model-assisted)
+    # Official key for stream_first (NVIDIA output-rail-streaming). Default is
+    # True (client sees tokens before rails). Keep both flags false.
+    streaming:
+      enabled: False
+      stream_first: False
   # Dialog/topical flows that keep answers inside the local-knowledge boundary.
   dialog:
     single_call:
       enabled: False              # explicit multi-step rails -> visible, auditable
+
+# Deprecated global switch (NVIDIA: prefer rails.output.streaming). Keep False.
+streaming: False
 
 # Self-check prompts (used by the model-assisted rails referenced above). These
 # are deliberately conservative; refine alongside the corpus.
