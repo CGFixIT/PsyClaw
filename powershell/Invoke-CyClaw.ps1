@@ -130,9 +130,19 @@ try {
     # reads POWERSHELL_TELEMETRY_OPTOUT once, at its own launch, which is why
     # the cmd shim written by Install-CyClaw.ps1 sets it before powershell
     # starts.
+    # Parsed as DATA, never executed: only two rigid line shapes act (a
+    # set-literal and a remove-literal over a validated env-var name), so a
+    # compromised or garbled export cannot inject code the way piping it to
+    # Invoke-Expression could (DevSkim DS104456).
     $killLines = & $VenvPy -m utils.telemetry_kill --export powershell 2>$null
     if ($LASTEXITCODE -eq 0 -and $killLines) {
-        Invoke-Expression (($killLines | Out-String))
+        foreach ($line in @($killLines)) {
+            if ($line -match "^\`$env:([A-Za-z_][A-Za-z0-9_]*) = '(.*)'$") {
+                Set-Item -Path ("Env:" + $Matches[1]) -Value $Matches[2]
+            } elseif ($line -match "^Remove-Item -ErrorAction SilentlyContinue Env:([A-Za-z_][A-Za-z0-9_]*)$") {
+                Remove-Item -ErrorAction SilentlyContinue -Path ("Env:" + $Matches[1])
+            }
+        }
     } else {
         Write-Host "[cyclaw] warn    : could not export telemetry-kill block (children still self-apply at import)" -ForegroundColor Yellow
     }
