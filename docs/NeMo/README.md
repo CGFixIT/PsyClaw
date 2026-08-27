@@ -35,7 +35,7 @@ uses `is True`.
 | `agentic/executor` | n/a | n/a | n/a | n/a | argv-list `subprocess.run` | **best-effort** isolation (no netns); see `runner.py` | no NeMo |
 
 Official non-generating APIs (`LLMRails.check` / `check_async`, server
-`/v1/checks`, NVIDIA 0.21+) exist in **0.23.0**. CyClaw does **not** call them
+`/v1/checks`, NVIDIA 0.21+) exist in the pinned **0.24.0**. CyClaw does **not** call them
 on `/query` yet. Phase 3 of #1134 may wrap the existing single generation with
 `check`/`check_async`. Do not “fix” that by calling `safe_generate`.
 
@@ -88,7 +88,7 @@ Real engine construction is proven only by the dedicated workflow
 `.github/workflows/nemo-guardrails.yml` (`CYCLAW_NEMO_RUNTIME=1`), against a
 loopback OpenAI-compatible mock, with a loopback socket jail.
 
-### Engine construction (0.23 hygiene)
+### Engine construction (0.24 hygiene)
 
 - `_apply_guardrails_config` overrides **`type: main` only**. NVIDIA task types
   `self_check_input` / `self_check_output` keep the template model tag.

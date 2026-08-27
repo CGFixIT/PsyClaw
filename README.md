@@ -1184,8 +1184,14 @@ pieces — the planner's model call, a jailed real clone
 executor (`agentic/executor/`). Out-of-band like every other agentic feature:
 never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py` (invariant I6).
 
-**It ships fully disarmed.** Every gate below defaults to closed, and the draft-PR
-step is gated by a constant in code that no config file can flip.
+**It ships held, not disarmed.** The three switches that gate whether a run
+happens at all — `agentic.enabled`, `deepagent_github.enabled`,
+`allow_git_write_tools` — ship `false`. The write-path constant
+`agentic/writer.py::EXECUTION_ENABLED` and the cloud switches (`mode: "write"`,
+`writes_enabled`, `allow_cloud_providers`, both providers) ship **open** since
+the signed enablement of 2026-08-07, so on a default checkout it is the master
+switches plus a per-call `reason`/`confirm` that refuse (see "already armed,
+waiting on the master switches" below).
 
 ### How a run works
 

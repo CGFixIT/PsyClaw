@@ -586,8 +586,8 @@ security:
   # Operator opt-out from the CYCLAW_API_KEY Bearer-token gate (require_api_key
   # in gate.py and utils/auth.py) -- NOT the separate session/RBAC /auth/*
   # system, which stays governed by auth.enabled regardless of this flag.
-  # Read by both gate.py (soul/*, ops/*, memory/*, audit/summary -- 17 routes)
-  # and harness/server.py (26 routes behind its `guarded` list, including
+  # Read by both gate.py (soul/*, ops/*, memory/*, audit/summary -- 18 routes)
+  # and harness/server.py (29 routes behind its `guarded` list, including
   # /api/agent/run+push+publish and /api/keys).
   #
   # Ships false: unchanged fail-closed behavior (an unset CYCLAW_API_KEY

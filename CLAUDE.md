@@ -125,7 +125,7 @@ The four `/ops/*` endpoints reach out-of-band subsystems ONLY through
 `utils/ops_runner.py` (a `subprocess.run([...])` shim). They never import those
 subsystems.
 
-Every route marked **API key** above — plus the harness console's 28
+Every route marked **API key** above — plus the harness console's 29
 `guarded` routes (`harness/server.py`, including `/api/agent/run`/`push`/
 `publish`) — is gated by `require_api_key` (two independent implementations,
 one per app; see `utils/auth.py`'s module docstring for why). `config.yaml`'s
