@@ -32,7 +32,7 @@ uses `is True`.
 | MCP retrieval | embeddings + BM25 | sanitizer only | retrieval-only, `sampling: None` | n/a | n/a | fail closed on sanitizer | no NeMo |
 | `safe_generate` / `guardrail_safety_node` | optional `LLMRails.generate_async` | offline floor then NeMo | context-role `relevant_chunks` | token-overlap after generate | none | degrade on load/provider error | **unused example**. Wiring it into the graph would double-generate. **Do not.** |
 | harness `:8790` | local Ollama | not the graph rails | web results are untrusted | n/a | tools via harness policy | harness-local | no NeMo |
-| `agentic/executor` | n/a | n/a | n/a | n/a | argv-list `subprocess.run` | **best-effort** isolation (no netns); see `runner.py` | no NeMo |
+| `agentic/executor` | n/a | n/a | n/a | n/a | argv-list inside `production_sandbox()` | **Windows Job Object** (`KILL_ON_JOB_CLOSE`); Linux/Darwin **fail closed** (`HardSandboxUnavailable`). Not a netns. HOME is disposable. See `runner.py` | no NeMo |
 
 Official non-generating APIs (`LLMRails.check` / `check_async`, server
 `/v1/checks`, NVIDIA 0.21+) exist in the pinned **0.24.0**. CyClaw does **not** call them

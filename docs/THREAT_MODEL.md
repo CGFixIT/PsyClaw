@@ -105,12 +105,13 @@ topology=policy, triple-gated external, audit convergence, soul governance) and
   claims, and what remains true: this is not multi-tenant, and it is not a
   platform for arbitrary *third-party* code — see §5 for the distinction and its
   limits.
-- **A hard network boundary around the verification executor.** `agentic/executor`'s
-  environment scrub (dropping proxy variables and API keys, setting
-  `PIP_NO_INDEX`) is a best-effort software control, not a network namespace or
-  firewall. It stops the common case — an HTTP-library-based request, or an
-  accidental secret-env leak into a check's output — and does **not** stop a
-  direct ordinary TCP/UDP socket, which never consults `HTTPS_PROXY`. Treat any claim
+- **A hard network boundary around the verification executor.** `agentic/executor`
+  now requires `production_sandbox()` (issue #1134 Phase 4). On Windows that is a
+  Job Object with `KILL_ON_JOB_CLOSE` (process-tree kill, active-process cap).
+  Linux/Darwin fail closed — there is no silent `subprocess.run` fallback.
+  The environment scrub (dropping proxy variables and API keys, setting
+  `PIP_NO_INDEX`, disposable `HOME`/`USERPROFILE`) is still not a network
+  namespace. Ordinary TCP/UDP sockets still work on Windows. Treat any claim
   that a verified worktree "had no network access" as unverified until a real
   namespace/firewall control exists (§6, stage 5).
 - **Kernel / hypervisor escape.** There is **no per-workload microVM**
@@ -323,6 +324,14 @@ narrower and more precise reason than "nothing executes":
   checks I named passed against this patch," not as "this patch is safe" —
   the human `reason` and `confirm` gates exist so that reading is a deliberate
   choice, not an assumption baked into the tooling.
+
+  **[Fourth amendment, issue #1134 Phase 4 sandbox slice.]** The third
+  amendment's "HOME remains inherited" line is **stale**. `run_verification`
+  now assigns a disposable `HOME`/`USERPROFILE` and requires
+  `production_sandbox()`: Windows Job Object (`KILL_ON_JOB_CLOSE`),
+  Linux/Darwin raise `HardSandboxUnavailable`. Sockets still work on
+  Windows. Approval-manifest TOCTOU (issue §10) is the next stacked PR,
+  not this slice.
 
   **What still does not exist, as of this amendment:** no CLI subcommand, HTTP
   route, or background caller invokes `run_real_repo_loop` — it ships fully

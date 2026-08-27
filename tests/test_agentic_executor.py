@@ -15,11 +15,26 @@ from pathlib import Path
 import pytest
 
 from agentic.executor import Check, VerificationReport, default_checks, run_verification
+from agentic.executor.hard_sandbox import ArgvListSandbox
 from agentic.executor.runner import MAX_OUTPUT_CHARS, _scrubbed_env
 
 
 def _py(code: str, timeout_sec: int = 10) -> Check:
     return Check("probe", (sys.executable, "-c", code), timeout_sec=timeout_sec)
+
+
+@pytest.fixture(autouse=True)
+def _argv_list_sandbox(monkeypatch):
+    """Executor unit tests cover argv/cwd/timeout plumbing, not Job Objects.
+
+    Production ``production_sandbox`` is fail-closed on Linux and is tested in
+    ``test_agentic_hard_sandbox.py``. This file injects the test double so CI
+    stays green without a software fallback in production.
+    """
+    monkeypatch.setattr(
+        "agentic.executor.runner.production_sandbox",
+        lambda: ArgvListSandbox(),
+    )
 
 
 @pytest.fixture(autouse=True)
