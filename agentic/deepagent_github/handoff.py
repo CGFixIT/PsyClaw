@@ -33,7 +33,10 @@ class HandoffEnvelope:
     prompt_sha256: str
     prompt_chars: int
     context_doc_ids: tuple[str, ...]
-    redactions_applied: int
+    # Whether redaction changed the prompt at all. Not a count: redact_sensitive
+    # returns only the final string, so the number of individual substitutions
+    # is unavailable here -- do not rename this back to something count-shaped.
+    had_redactions: bool
 
 
 def sanitize_handoff(
@@ -68,7 +71,7 @@ def sanitize_handoff(
         prompt_sha256=hash_query(redacted),
         prompt_chars=len(redacted),
         context_doc_ids=tuple(doc_ids),
-        redactions_applied=int(redacted != checked),
+        had_redactions=redacted != checked,
     )
     audit_log({"event": HANDOFF_EVENT, **asdict(envelope)}, config_path=config_path, cfg=cfg)
     return redacted, envelope
