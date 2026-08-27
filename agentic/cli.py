@@ -179,6 +179,29 @@ def _read_body(args: argparse.Namespace) -> str:
     return args.body or ""
 
 
+def _local_reasoning_effort(cfg, app_cfg: dict | None) -> str | None:
+    """models.local_llm.reasoning_effort for a LocalProposerClient, or None.
+
+    Shared by the two LocalProposerClient construction sites so the provider
+    gate cannot drift between them. Returns None for any non-Ollama provider,
+    since reasoning_effort is an Ollama-only field.
+
+    Caveat: agentic retired "lmstudio" as a provider id (see agentic/config.py),
+    so an operator pointing this plane at an LM Studio compatibility endpoint
+    still configures provider "ollama". That makes this gate the best signal
+    available here, not a hard guarantee -- unlike llm.client, which resolves a
+    real per-backend provider.
+    """
+    from utils.config_validation import resolve_reasoning_effort
+
+    if getattr(cfg.deepagent_github, "provider", "") != "ollama":
+        return None
+    models = (app_cfg or {}).get("models")
+    if not isinstance(models, dict):
+        return None
+    return resolve_reasoning_effort(models.get("local_llm"))
+
+
 def cmd_deepagent_plan(args: argparse.Namespace) -> int:
     """Read-only probe for the (retired) Deep Agents harness. Writes nothing.
 
@@ -623,6 +646,7 @@ def cmd_real_repo_run_plan(args: argparse.Namespace) -> int:
             base_url=cfg.deepagent_github.base_url,
             model=cfg.deepagent_github.model,
             timeout_sec=cfg.deepagent_github.planner_timeout_sec,
+            reasoning_effort=_local_reasoning_effort(cfg, app_cfg),
         )
     try:
         plan = generate_plan(
@@ -855,6 +879,7 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             base_url=cfg.deepagent_github.base_url,
             model=cfg.deepagent_github.model,
             timeout_sec=cfg.deepagent_github.planner_timeout_sec,
+            reasoning_effort=_local_reasoning_effort(cfg, app_cfg),
         )
         from agentic.unslop_bridge import build_unslop_probe
 

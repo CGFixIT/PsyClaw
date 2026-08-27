@@ -112,6 +112,18 @@ def _apply_guardrails_config(rails_config: Any, cfg: GuardrailsConfig) -> None:
             model.parameters = params
         if cfg.base_url:
             params["base_url"] = cfg.base_url
+        # NeMo hands `parameters` to a LangChain provider constructor. langchain-openai
+        # is pinned 1.3.5, which has no first-class `reasoning_effort` argument (that
+        # convenience param arrived later), so route it through model_kwargs -- the
+        # long-standing passthrough for arbitrary request-body fields. The
+        # engine/endpoint gate already ran in load_guardrails_config, so a non-None
+        # value here is by construction safe to put on the wire.
+        if cfg.reasoning_effort is not None:
+            model_kwargs = params.get("model_kwargs")
+            if not isinstance(model_kwargs, dict):
+                model_kwargs = {}
+                params["model_kwargs"] = model_kwargs
+            model_kwargs["reasoning_effort"] = cfg.reasoning_effort
 
 
 def policy_fingerprint(cfg: GuardrailsConfig) -> str:

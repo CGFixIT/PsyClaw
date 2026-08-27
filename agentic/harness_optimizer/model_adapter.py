@@ -55,11 +55,16 @@ class LocalProposerClient:
         model: str,
         timeout_sec: float = 30.0,
         api_key: str = "",
+        reasoning_effort: str | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key.strip()
+        # Already validated and provider-gated by the caller (agentic/cli.py
+        # passes it only when deepagent_github.provider is "ollama"), so this
+        # class neither reads config nor re-validates. None = omit the field.
+        self.reasoning_effort = reasoning_effort
         # Kept as a scalar alongside the client purely so a timeout failure can
         # name the budget it exceeded -- httpx.Client exposes it only as a
         # Timeout object with four separate fields.
@@ -93,19 +98,22 @@ class LocalProposerClient:
             config_path=config_path,
             cfg=cfg,
         )
+        payload: dict = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if self.reasoning_effort is not None:
+            payload["reasoning_effort"] = self.reasoning_effort
         try:
             response = self._client.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()

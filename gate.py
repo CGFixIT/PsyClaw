@@ -169,6 +169,7 @@ from utils.config_validation import (
     validate_boot_timeout_config,
     validate_tls_config,
     validate_fallback_confirm_placeholder,
+    validate_local_llm_reasoning_effort,
     validate_personality_config,
     validate_retrieval_config,
 )
@@ -190,6 +191,9 @@ validate_retrieval_config(cfg)
 validate_personality_config(cfg)
 validate_auth_config(cfg)
 validate_tls_config(cfg)
+# An unrecognized reasoning_effort would otherwise reach Ollama and come back as
+# an HTTP 400 on the first /query -- surface it here instead, before any socket.
+validate_local_llm_reasoning_effort(cfg)
 _rl_cfg = ((cfg.get("api", {}) or {}).get("rate_limit", {})) or {}
 RATE_LIMIT_REQUESTS = _rl_cfg.get("max_requests", 60)
 RATE_LIMIT_WINDOW = _rl_cfg.get("window_seconds", 60)  # seconds

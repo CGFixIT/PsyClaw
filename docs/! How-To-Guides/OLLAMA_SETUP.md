@@ -208,6 +208,69 @@ ollama pull mistral:7b
 
 ---
 
+## Thinking / Reasoning (disabled in the shipped config)
+
+`qwen3.8:27b-mlx` is a thinking-capable model, and **Ollama turns thinking on by
+itself for such a model whenever a request carries no reasoning control**. The
+shipped `config.yaml` therefore sets it off explicitly:
+
+```yaml
+models:
+  local_llm:
+    reasoning_effort: "none"
+```
+
+Accepted values are `none`, `low`, `medium`, `high`, `max`. Only `none` disables
+thinking; an unrecognized value fails at CyClaw startup with a `ConfigError`
+rather than reaching Ollama. **Omitting the key leaves thinking ON** — that is
+the backward-compatible path for a custom config, not a way to turn it off.
+
+### The two endpoints do not share a vocabulary
+
+| Endpoint | Control | Used by |
+|---|---|---|
+| `/v1/chat/completions` (OpenAI-compatible) | `"reasoning_effort": "none"` | `/query`, the harness console and `/loop`, the agentic local proposer, NeMo guardrails |
+| `/api/chat`, `/api/generate` (native) | `"think": false` | `scripts/measure_local_llm_throughput.py` |
+
+Sending `think` to the OpenAI-compatible endpoint does nothing, and
+`reasoning_effort` is not accepted on the native ones. There is no `"none"`
+spelling for native `think` — the disable form there is the boolean `false`.
+
+### What does NOT disable thinking
+
+- **Lowering `max_tokens`.** That shrinks the reply budget; the model still
+  reasons, and now has less room left for the answer.
+- **Changing the context length (`num_ctx`).**
+- **Changing `temperature`.**
+- **Hiding a `<think>` block in the response.** The tokens were still generated
+  and still cost time. Disabled and hidden are not the same thing.
+
+### Preflight: confirm your Ollama build accepts it
+
+Ollama validates this field server-side and returns an error for a value it does
+not know. Older builds accepted only `high`/`medium`/`low`/`true`/`false` — no
+`none`. Ollama publishes no minimum version for this, so **test it rather than
+trusting a version number**, on the machine that actually serves the model:
+
+```bash
+curl -sS http://127.0.0.1:11434/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"qwen3.8:27b-mlx","messages":[{"role":"user","content":"2+2"}],"reasoning_effort":"none","max_tokens":16,"stream":false}'
+```
+
+A normal completion means you are fine. A `400` mentioning `invalid think value`
+means that build predates `none`: upgrade Ollama, or remove the key from
+`config.yaml` (which leaves thinking on) until you do.
+
+### Applying a change
+
+Restart CyClaw after editing `config.yaml`. **Ollama itself does not need a
+restart** — the control travels on each request, unlike `num_ctx` below.
+
+The field is sent only when the *active resolved* local backend is Ollama. If
+`models.local_llm.fallback` is enabled and CyClaw fails over to LM Studio, the
+Ollama-only field is dropped from that request automatically.
+
+---
+
 ## Ollama Context Size (Advanced)
 
 If you hit the "0% processing" stall on large context queries, increase Ollama's context window:

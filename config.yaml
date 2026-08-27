@@ -31,6 +31,23 @@ models:
     # authentication, and QUOTE it as a string (api_key: "your-key") so YAML
     # doesn't parse a bare number as an int.
     model: "qwen3.8:27b-mlx"            # keep in sync with guardrails.model
+    # Disables the model's reasoning/thinking pass IN THE REQUEST, not in the
+    # response rendering. qwen3.8 is thinking-capable, and Ollama auto-enables
+    # thinking on such a model when no control is sent -- so omitting this key
+    # means thinking is ON. Accepted: none | low | medium | high | max; "none"
+    # is the only value that disables it. An invalid value fails at boot.
+    #
+    # This is the OpenAI-compatible spelling, sent on /v1/chat/completions.
+    # Ollama's NATIVE /api/chat and /api/generate use "think": false instead and
+    # do not understand "none" -- see scripts/measure_local_llm_throughput.py.
+    # Lowering max_tokens does NOT disable thinking; only this does.
+    #
+    # Sent only when the ACTIVE resolved backend is Ollama, so the LM Studio
+    # fallback below never receives it. Restart CyClaw after changing this;
+    # Ollama itself needs no restart (the control is per request). Requires an
+    # Ollama build that accepts "none" -- verify with the preflight curl in
+    # docs/! How-To-Guides/OLLAMA_SETUP.md before relying on it.
+    reasoning_effort: "none"
     # max_tokens = RESERVED OUTPUT BUDGET. Ollama allocates it up front before
     # generating token #1, so if (prompt tokens + max_tokens) > the loaded context
     # length, Ollama stalls at "0% processing". The graph bounds the prompt

@@ -129,6 +129,12 @@ def run_suite(
                     "model": model,
                     "prompt": "ping",
                     "stream": False,
+                    # Native /api/generate takes `think`, NOT the OpenAI-compatible
+                    # `reasoning_effort` -- the two endpoints do not share that
+                    # vocabulary, and there is no "none" spelling here. Warm-up must
+                    # match the measured calls below or it primes a different code
+                    # path than the one being timed.
+                    "think": False,
                     "options": {"num_predict": 8, "temperature": 0},
                     "keep_alive": "30m",
                 },
@@ -142,6 +148,11 @@ def run_suite(
             "model": model,
             "prompt": prompt,
             "stream": False,
+            # Measure decode throughput without a reasoning pass, matching the
+            # shipped config.yaml posture (models.local_llm.reasoning_effort:
+            # "none"). Leaving it out would let Ollama auto-enable thinking on a
+            # capable model and report tok/s for a workload CyClaw never runs.
+            "think": False,
             "options": {"num_predict": num_predict, "temperature": 0},
             "keep_alive": "30m",
         }

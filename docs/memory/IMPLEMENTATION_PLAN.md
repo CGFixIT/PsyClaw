@@ -561,7 +561,7 @@ Dataclasses only:
 - Schema migrate/create idempotent
 - `stage_episode(cfg, state: Mapping) -> None`
 - `list_facts`, `get_fact`, `insert_fact`, `update_fact`, `deactivate_fact`
-- `create_proposal`, `get_proposal`, `set_proposal_status`
+- `create_proposal`, `get_proposal`, `apply_proposal`, `reject_proposal`
 - `search_facts_fts(query, limit) -> list[tuple[id, content, rank]]`
 - Thread lock around writes (mirror personality `threading.Lock`)
 - Prune episodes by TTL amortized (`prune_every`)

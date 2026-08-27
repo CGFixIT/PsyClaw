@@ -23,9 +23,19 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from guardrails.errors import GuardrailsConfigError
 from utils.logger import _get_config
+
+# Defined locally rather than imported from llm/client.py: that module is the
+# core request path, and guardrails must not import it (out-of-band isolation).
+# harness/ollama.py keeps its own copy for the same reason.
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback_url(url: str) -> bool:
+    return (urlparse(url).hostname or "").lower() in _LOOPBACK_HOSTS
 
 # Defaults -- every key here can be overridden by config.yaml.
 DEFAULT_ENGINE = "openai"  # Ollama exposes an OpenAI-compatible API
@@ -100,6 +110,12 @@ class GuardrailsConfig:
     # hallucination (ungrounded in retrieved context). Offline heuristic; the
     # NeMo self-check rail is the model-assisted complement (see rails.co).
     hallucination_threshold: float = 0.18
+    # Ollama's OpenAI-compatible reasoning control. Deliberately NOT read from
+    # the guardrails: block -- load_guardrails_config sources it from
+    # models.local_llm.reasoning_effort so there is one key, not two that can
+    # disagree (config-guard C11 already keeps guardrails.model in step with
+    # local_llm.model for the same reason). None means "omit the field".
+    reasoning_effort: str | None = None
     input_rails: list[str] = field(default_factory=lambda: list(DEFAULT_INPUT_RAILS))
     output_rails: list[str] = field(default_factory=lambda: list(DEFAULT_OUTPUT_RAILS))
     topical_rails: list[str] = field(default_factory=lambda: list(DEFAULT_TOPICAL_RAILS))
@@ -261,6 +277,28 @@ def load_guardrails_config(config_path: str = "config.yaml") -> GuardrailsConfig
     known_fields = set(GuardrailsConfig.__dataclass_fields__)
     unknown = set(block.keys()) - known_fields
     kwargs = {k: v for k, v in block.items() if k in known_fields}
+    # Single source of truth: models.local_llm owns this value, so a stray
+    # guardrails.reasoning_effort is overwritten rather than allowed to diverge.
+    # resolve_reasoning_effort raises ConfigError on an invalid value.
+    #
+    # Gated HERE rather than at the NeMo call site so the value carried on the
+    # config object is, by construction, already safe to put on the wire (same
+    # principle as ResolvedLocalBackend.reasoning_effort in llm/client.py):
+    # reasoning_effort is Ollama-only, so an engine that is not OpenAI-speaking
+    # or an endpoint repointed off loopback at a real OpenAI server resolves to
+    # None instead of leaking an unknown field to a third party.
+    from utils.config_validation import resolve_reasoning_effort
+
+    models = cfg.get("models")
+    effective_engine = kwargs.get("engine", DEFAULT_ENGINE)
+    effective_base_url = kwargs.get("base_url", DEFAULT_BASE_URL)
+    kwargs["reasoning_effort"] = (
+        resolve_reasoning_effort(models.get("local_llm"))
+        if isinstance(models, dict)
+        and effective_engine in ("openai", "ollama")
+        and _is_loopback_url(effective_base_url)
+        else None
+    )
 
     try:
         gc = GuardrailsConfig(**kwargs)
