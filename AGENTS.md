@@ -95,6 +95,8 @@ Skills:
 - `.codex/skills/cyclaw-project-guidance/` - use before substantial CyClaw work
   to load repository invariants, architecture, test expectations, and canonical
   reference docs.
+- `.codex/skills/cyclaw-advisor/` - use for read-only current-main architecture,
+  operations, design-safety, or PR advice; re-verify mutable claims first.
 - `.codex/skills/verify-dep/` - use before changing dependencies, install
   manifests, Docker/Compose/deploy files, dependency CI, or a release install
   path to reconcile selected install profiles and supply-chain controls.
