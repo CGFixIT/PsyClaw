@@ -182,7 +182,6 @@ personality:
   # /soul/apply HTTP boundary (SoulEvolutionRequest) caps input at 8192.
   soul_max_chars: 8000
   interaction_ttl_days: 365
-  injection_patterns_path: null  # uses built-in patterns in policy.prompt_filter
   # database_url: null  # Set to "postgresql://user:pass@host/dbname" or use CYCLAW_DB_URL env var.
   #                     # Optional Postgres backend — see docs/POSTGRES_BACKEND.md (install, TLS,
   #                     # least-privilege role). Default SQLite stays zero-config / offline-first.

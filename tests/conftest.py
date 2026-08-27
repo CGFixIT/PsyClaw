@@ -5,9 +5,8 @@ No live services required — all external deps are mocked.
 """
 
 import copy
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -114,34 +113,6 @@ def test_config(tmp_path):
     return cfg, str(config_file)
 
 
-@pytest.fixture
-def mock_search_results():
-    return [
-        SearchResult(text="RAG is retrieval augmented generation", score=0.92,
-                     source="rag_basics.md", chunk_id=0, stem_tags=["rag", "retriev"],
-                     retrieval_mode="hybrid", rrf_score=0.92),
-        SearchResult(text="ChromaDB stores vector embeddings", score=0.85,
-                     source="chromadb_guide.md", chunk_id=1, stem_tags=["chroma", "embed"],
-                     retrieval_mode="hybrid", rrf_score=0.85),
-    ]
-
-
-@pytest.fixture
-def mock_retriever(mock_search_results):
-    retriever = MagicMock()
-    retriever.hybrid_search.return_value = mock_search_results
-    retriever.semantic_search.return_value = mock_search_results
-    retriever.keyword_search.return_value = mock_search_results
-    return retriever
-
-
-@pytest.fixture
-def mock_llm():
-    llm = MagicMock()
-    llm.generate.return_value = "This is a test answer from the local LLM."
-    return llm
-
-
 # =============================================================================
 # Class-style mocks + result constants used by test_graph.py / test_gate.py.
 #
@@ -220,15 +191,3 @@ class MockGrokClient:
 
 class MockClaudeClient(MockGrokClient):
     """Stand-in for ClaudeClient; same generate/is_available contract."""
-
-
-@pytest.fixture
-def bm25_index(tmp_path):
-    chunks = ["RAG retrieval augmented generation", "ChromaDB vector database",
-              "BM25 keyword search algorithm"]
-    metadata = [{"source": f"doc{i}.md", "chunk_id": i, "stem_tags": "[]"}  for i in range(len(chunks))]
-    tokenized = [c.lower().split() for c in chunks]
-    bm25_path = tmp_path / "bm25.json"
-    with open(bm25_path, "w", encoding="utf-8") as f:
-        json.dump({"tokenized_corpus": tokenized, "chunks": chunks, "metadata": metadata}, f)
-    return str(bm25_path), chunks, metadata
