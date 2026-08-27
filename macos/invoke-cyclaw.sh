@@ -125,20 +125,40 @@ echo "[cyclaw] Ctrl+C stops all started servers"
 # ~/.CyClaw/.env is chmod 600 and gitignored. Never print its contents.
 # xtrace would dump every assignment — refuse rather than leak.
 # ponytail: one copy here (shim + cyclaw() + direct script all exec this).
+_dotenv_mode() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    stat -f %Lp "$1" 2>/dev/null || true
+  else
+    stat -c %a "$1" 2>/dev/null || true
+  fi
+}
+
+_source_dotenv() {
+  local f="$1"
+  local mode=""
+  [ -f "$f" ] || return 1
+  mode="$(_dotenv_mode "$f")"
+  case "$mode" in
+    600|400) ;;
+    *)
+      echo "[cyclaw] warn : refusing to source dotenv (mode ${mode:-unknown}; want 600 or 400)" >&2
+      return 1
+      ;;
+  esac
+  # shellcheck disable=SC1090
+  set -a
+  . "$f"
+  set +a
+}
+
 if [ -z "${CYCLAW_API_KEY:-}" ]; then
   case "$-" in
     *x*) echo "[cyclaw] error: refusing to source .env with xtrace on (would print secrets). Re-run without bash -x." >&2; exit 1 ;;
   esac
   if [ -f "$HOME_DIR/.env" ]; then
-    # shellcheck disable=SC1090
-    set -a
-    . "$HOME_DIR/.env"
-    set +a
+    _source_dotenv "$HOME_DIR/.env" || true
   elif [ -f "$REPO_DIR/.env" ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . "$REPO_DIR/.env"
-    set +a
+    _source_dotenv "$REPO_DIR/.env" || true
   fi
 fi
 

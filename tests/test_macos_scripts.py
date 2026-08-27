@@ -106,6 +106,10 @@ def test_invoke_cyclaw_loads_persisted_api_key_from_dotenv() -> None:
     text = (_REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
     assert "$HOME_DIR/.env" in text, "invoke must load HOME_DIR/.env"
     assert "refusing to source .env with xtrace" in text
+    assert "refusing to source dotenv (mode" in text
+    assert "want 600 or 400" in text
+    assert 'stat -f %Lp' in text
+    assert 'stat -c %a' in text
     load_idx = text.index("$HOME_DIR/.env")
     uvicorn_idx = text.index("uvicorn gate:app")
     assert load_idx < uvicorn_idx, "dotenv load must run before uvicorn is spawned"
@@ -134,7 +138,9 @@ def test_invoke_cyclaw_exports_dotenv_key_to_child_without_printing_it(tmp_path:
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
-    (home / ".env").write_text("CYCLAW_API_KEY=from-dotenv\n", encoding="utf-8")
+    dotenv = home / ".env"
+    dotenv.write_text("CYCLAW_API_KEY=from-dotenv\n", encoding="utf-8")
+    dotenv.chmod(0o600)
 
     repo = tmp_path / "repo"
     harness = repo / "harness"
