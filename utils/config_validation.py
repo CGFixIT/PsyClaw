@@ -112,6 +112,63 @@ def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
         )
 
 
+# Ollama's OpenAI-compatible /v1/chat/completions accepts reasoning_effort with
+# exactly these five values; "none" is the one that disables thinking. The
+# native /api/chat and /api/generate endpoints take `think` instead (a boolean
+# or a level, with no "none" spelling), so a value resolved here must never be
+# forwarded to a native endpoint -- the two vocabularies are not interchangeable.
+_VALID_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "max"})
+
+
+def resolve_reasoning_effort(llm_cfg: dict[str, Any]) -> str | None:
+    """Normalized ``models.local_llm.reasoning_effort``, or None when unset.
+
+    None means "omit the field", which preserves the behaviour that predates
+    this key: Ollama auto-enables thinking on a capable model when no reasoning
+    control is sent. An absent key and an empty/whitespace value are both
+    treated as unset, matching the ``.strip() or <default>`` idiom
+    ``llm.client.resolve_local_backend`` already uses for base_url/model/provider.
+
+    A present-but-unrecognized value raises instead of falling back to a
+    default. Ollama rejects an unknown value with an HTTP error of its own, so
+    silently substituting one here would only hide a real misconfiguration
+    until the first request.
+    """
+    if not isinstance(llm_cfg, dict):
+        return None
+    raw = llm_cfg.get("reasoning_effort")
+    if raw is None:
+        return None
+    valid = sorted(_VALID_REASONING_EFFORTS)
+    if not isinstance(raw, str):
+        raise ConfigError(
+            f"models.local_llm.reasoning_effort must be a string, got: {raw!r}",
+            details={"received": raw, "valid": valid},
+        )
+    normalized = raw.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _VALID_REASONING_EFFORTS:
+        raise ConfigError(
+            f"models.local_llm.reasoning_effort must be one of {valid}, got: {raw!r}",
+            details={"received": raw, "valid": valid},
+        )
+    return normalized
+
+
+def validate_local_llm_reasoning_effort(cfg: dict[str, Any]) -> None:
+    """Reject an invalid ``models.local_llm.reasoning_effort`` at boot.
+
+    Thin wrapper over :func:`resolve_reasoning_effort` so a typo fails before
+    any socket opens, rather than at the first ``/query``. No-op when the
+    ``models`` block, the ``local_llm`` block, or the key itself is absent.
+    """
+    models = cfg.get("models")
+    if not isinstance(models, dict):
+        return
+    resolve_reasoning_effort(models.get("local_llm"))
+
+
 def validate_fallback_confirm_placeholder(cfg: dict[str, Any]) -> None:
     """Reject a false ``policy.fallback.require_user_confirm`` placeholder.
 

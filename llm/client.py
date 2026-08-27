@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 
+from utils.config_validation import resolve_reasoning_effort
 from utils.errors import ClaudeServiceError, GrokServiceError, LLMServiceError, RAGError
 from utils.spend import record_external_usage
 
@@ -373,6 +374,13 @@ class ResolvedLocalBackend:
     # boot-must-not-die fallback to primary, rather than a positive selection.
     # Callers use it to know the choice was a guess worth re-checking later.
     degraded: bool = False
+    # OpenAI-compatible reasoning control, carried HERE rather than read from
+    # config at each call site so it can only ever travel with the backend that
+    # was actually selected. reasoning_effort is Ollama-specific: an LM Studio
+    # (or any other) fallback resolves to None, so a failover cannot leak an
+    # Ollama-only field onto a backend that never advertised it. None means
+    # "omit the field", which is what preserves pre-existing behaviour.
+    reasoning_effort: str | None = None
 
 
 # Process-level resolution cache so LocalLLMClient and /health share one probe.
@@ -432,6 +440,9 @@ def _cache_key_for_local_llm(llm_cfg: dict) -> str:
             str((fb or {}).get("model", "")),
             str((fb or {}).get("provider", "")),
             str((fb or {}).get("probe_timeout_sec", _DEFAULT_PROBE_TIMEOUT_SEC)),
+            # Part of the key so editing reasoning_effort and reloading actually
+            # takes effect instead of returning a backend cached with the old value.
+            str(llm_cfg.get("reasoning_effort", "")),
         ]
     )
 
@@ -462,12 +473,24 @@ def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLoca
             details={"base_url": primary_url},
         )
 
+    # Resolved once, then attached per backend below via _effort_for(). Raises
+    # ConfigError on an invalid value, so a typo fails here -- before any probe
+    # or generate call opens a socket -- rather than as an Ollama HTTP 400.
+    configured_effort = resolve_reasoning_effort(llm_cfg)
+
+    def _effort_for(provider: str) -> str | None:
+        # reasoning_effort is an Ollama field. Gating on the provider of the
+        # backend being built (not on the primary provider, and not on the URL)
+        # is what keeps it off an LM Studio or generic OpenAI-compatible server.
+        return configured_effort if provider == "ollama" else None
+
     primary = ResolvedLocalBackend(
         provider=primary_provider,
         base_url=primary_url.rstrip("/"),
         model=primary_model,
         source="primary",
         api_key=primary_key,
+        reasoning_effort=_effort_for(primary_provider),
     )
 
     fb = llm_cfg.get("fallback") or {}
@@ -506,6 +529,7 @@ def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLoca
         model=fb_model,
         source="fallback",
         api_key=str(fb.get("api_key") or "").strip(),
+        reasoning_effort=_effort_for(fb_provider),
     )
     if _probe_openai_models(secondary.base_url, timeout_sec=probe_timeout, api_key=secondary.api_key):
         log.warning(
@@ -554,6 +578,9 @@ class LocalLLMClient:
         self.base_url = resolved.base_url
         self.model = resolved.model
         self.backend_source = resolved.source  # "primary" | "fallback"
+        # Read off the RESOLVED backend, not llm_cfg, so a fallback to a
+        # non-Ollama server starts out (and stays) without the Ollama-only field.
+        self.reasoning_effort = resolved.reasoning_effort
         self.max_tokens = llm_cfg["max_tokens"]
         self.temperature = llm_cfg["temperature"]
         self.timeout = llm_cfg["timeout_sec"]
@@ -626,6 +653,11 @@ class LocalLLMClient:
             self.model = resolved.model
             self.backend_source = resolved.source
             self.api_key = resolved.api_key
+            # Swapped under the same lock as the address: a failover from Ollama
+            # to LM Studio must clear this in the same atomic update, or a
+            # concurrent request could pair the new base_url with the old
+            # Ollama-only reasoning_effort.
+            self.reasoning_effort = resolved.reasoning_effort
             self._label = _provider_label(self.provider)
             self._degraded = False
         log.info("local LLM backend: adopted %s after post-boot probe", self.provider)
@@ -654,16 +686,23 @@ class LocalLLMClient:
             # torn base_url/model/api_key combination.
             with self._backend_lock:
                 base_url, model, api_key = self.base_url, self.model, self.api_key
+                effort = self.reasoning_effort
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            payload: dict[str, object] = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature
+            }
+            # Only when the resolved backend is Ollama (see ResolvedLocalBackend).
+            # Absent key -> None -> field omitted -> Ollama auto-enables thinking,
+            # which is exactly the behaviour that predates this setting.
+            if effort is not None:
+                payload["reasoning_effort"] = effort
             return self._client.post(
                 f"{base_url}/chat/completions",
                 headers=headers,
-                json={
-                    "model": model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": self.max_tokens,
-                    "temperature": self.temperature
-                },
+                json=payload,
             )
 
         try:

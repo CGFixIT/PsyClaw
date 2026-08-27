@@ -557,41 +557,6 @@ def list_proposals(
         conn.close()
 
 
-def set_proposal_status(
-    cfg: Mapping[str, Any],
-    proposal_id: int,
-    status: str,
-    *,
-    resolved_reason: str = "",
-) -> MemoryProposal:
-    if status not in ("pending", "applied", "rejected"):
-        raise ValueError(f"invalid status: {status}")
-    now = _now()
-    with _write_lock:
-        conn = connect(cfg)
-        try:
-            conn.execute(
-                """
-                UPDATE memory_proposals
-                SET status=?, resolved_at=?, resolved_reason=?
-                WHERE id=?
-                """,
-                (status, now, resolved_reason, int(proposal_id)),
-            )
-            conn.commit()
-            row = conn.execute(
-                "SELECT * FROM memory_proposals WHERE id = ?", (int(proposal_id),)
-            ).fetchone()
-            if row is None:
-                raise ValueError(f"proposal {proposal_id} not found")
-            return _row_to_proposal(row)
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-
 def apply_proposal(cfg: Mapping[str, Any], proposal_id: int, reason: str) -> dict[str, Any]:
     """Apply a pending proposal: enforce injection, mutate facts, mark applied.
 
