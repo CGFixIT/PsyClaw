@@ -248,14 +248,18 @@ fi
 while true; do
   if [ -n "$HARNESS_PID" ] && ! kill -0 "$HARNESS_PID" 2>/dev/null; then
     echo "[cyclaw] harness process (pid $HARNESS_PID) exited" >&2
+    wait "$HARNESS_PID" 2>/dev/null || true
+    HARNESS_PID=""
     break
   fi
   if [ -n "$GATE_PID" ] && ! kill -0 "$GATE_PID" 2>/dev/null; then
     echo "[cyclaw] RAG gateway process (pid $GATE_PID) exited" >&2
+    wait "$GATE_PID" 2>/dev/null || true
+    GATE_PID=""
     break
   fi
   # Wait a bit; any signal still fires the cleanup trap.
+  # Do not use bash-4.3 wait-any here: macOS /bin/bash is 3.2.
+  # Reap the specific dead pid above instead.
   sleep 1
-  # Reap any child that has exited so pid reuse / zombie risk is minimized.
-  wait -n 2>/dev/null || true
 done
