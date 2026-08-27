@@ -209,7 +209,7 @@ class MockSentenceTransformer:
         for text in texts:
             vec = np.zeros(self._dim, dtype=np.float32)
             for word in text.lower().split():
-                h = hashlib.md5(word.encode(), usedforsecurity=False).hexdigest()
+                h = hashlib.sha256(word.encode()).hexdigest()
                 for i in range(3):
                     idx = int(h[i*8:(i+1)*8], 16) % self._dim
                     vec[idx] += 1.0
@@ -337,8 +337,9 @@ class MockClaudeClient(MockGrokClient):
             raise ClaudeServiceError("ANTHROPIC_API_KEY not set")
         return self.response
 
-    def _verify_request_shape(self) -> bool:
+    def _verify_request_shape(self, expected_headers: dict | None = None) -> bool:
         """Verify the last HTTP request had the correct headers for Claude."""
+        del expected_headers  # Grok parent arity; Claude checks last_headers only.
         if not self.last_headers:
             return False
         return (
@@ -584,7 +585,6 @@ def phase_build_corpus() -> PhaseResult:
             chunks.append({"text": text, "source": fname, "id": len(chunks)})
             tokenized.append(tokenize_and_stem(text))
 
-        import json
         index_dir = Path("index")
         index_dir.mkdir(exist_ok=True)
         with open(index_dir / "bm25.json", "w", encoding="utf-8") as f:
@@ -1085,6 +1085,7 @@ def phase_metrics_and_invariants() -> PhaseResult:
         log(f"  [{'PASS' if has_both_models else 'FAIL'}] Both grok+claude in audit model set")
         phase.checks.append(Check("both_models_in_audit", has_both_models))
     except FileNotFoundError:
+        # graph.py missing in a stub sandbox — skip the source pin.
         pass
 
     # 7c: require_user_confirm is NOT read by production code
@@ -1121,6 +1122,7 @@ def phase_metrics_and_invariants() -> PhaseResult:
         graph_src = Path("graph.py").read_text(encoding="utf-8")
         has_retrieve_entry = 'set_entry_point("retrieve")' in graph_src
     except FileNotFoundError:
+        # graph.py missing in a stub sandbox — fail the retrieve-entry pin below.
         pass
     log(f"\n    [{'PASS' if has_retrieve_entry else 'FAIL'}] retrieve_node is graph entry point")
     phase.checks.append(Check("rag_first_entry_point", has_retrieve_entry))
