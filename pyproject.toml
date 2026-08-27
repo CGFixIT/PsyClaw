@@ -64,6 +64,12 @@ pgvector = [
 mssql = [
     "pyodbc==5.3.0",
 ]
+# Optional CEL sanitizer backend for Numbat monitor-only rules (issue #1128
+# Slice B). Not in `full` because it is default-off and a local-only install
+# should not carry an extra policy engine it will not use.
+numbat-cel = [
+    "cel-python==0.5.0",
+]
 test = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
@@ -115,6 +121,7 @@ all = [
     "cyclaw[full]",
     "cyclaw[guardrails]",
     "cyclaw[agentic-deepagents-cloud]",
+    "cyclaw[numbat-cel]",
 ]
 
 [project.scripts]

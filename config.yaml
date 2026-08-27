@@ -558,6 +558,16 @@ numbat:
   output_path: "logs/numbat-events.ndjsonl"
   source_agent: "unknown"   # "cyclaw" is not a legal Numbat enum
   source_type: "hook"
+  # CEL sanitizer backend (issue #1128 Slice B). Monitor-only: rules evaluate
+  # structured fields (query_hash, top_score, answer_model, guardrail_*,
+  # model_provider, source_hashes) and emit a low-confidence Numbat event on
+  # match. They do NOT block /query. The regex banned_patterns remain the
+  # fail-closed baseline. Disabled by default; when false, cel-python is not
+  # imported on the request path.
+  cel:
+    enabled: false
+    rules: []               # list of CEL expression strings
+    max_rule_ms: 20         # per-rule budget; log warning if exceeded
 
 security:
   # Decorative: no code reads require_env (verified repo-wide grep, 2026-07).
