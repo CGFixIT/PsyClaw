@@ -135,6 +135,7 @@ jobs:
           --cov=utils.launchd_plist \
           --cov=utils.win_schtasks \
           --cov=utils.endpoint_trust \
+          --cov=utils.tool_broker \
           --cov=llm.client \
           --cov=graph \
           --cov=retrieval.embeddings \
