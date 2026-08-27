@@ -190,3 +190,18 @@ class MockGrokClient:
 
 class MockClaudeClient(MockGrokClient):
     """Stand-in for ClaudeClient; same generate/is_available contract."""
+
+
+@pytest.fixture(autouse=True)
+def _inject_argv_list_sandbox_except_hard_sandbox(request, monkeypatch):
+    """Keep Linux/macOS CI green without a production software fallback.
+
+    ``test_agentic_hard_sandbox.py`` is the only file allowed to call the real
+    ``production_sandbox()`` factory so fail-closed stays covered.
+    """
+    path = getattr(request.node, "fspath", None)
+    if path is not None and "test_agentic_hard_sandbox" in str(path):
+        return
+    from tests.executor_sandbox_double import inject_argv_list_sandbox
+
+    inject_argv_list_sandbox(monkeypatch)
