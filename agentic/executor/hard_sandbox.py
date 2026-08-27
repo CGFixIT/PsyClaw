@@ -211,8 +211,8 @@ class WindowsJobObjectSandbox:
 
 def _win_kernel32():  # type: ignore[no-untyped-def]
     import ctypes
-    from ctypes import wintypes
 
+    wintypes = ctypes.wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
     k32.CreateJobObjectW.restype = wintypes.HANDLE
