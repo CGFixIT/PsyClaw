@@ -103,11 +103,17 @@ logger = logging.getLogger("cyclaw.harness.server")
 # NVIDIA ToolRailAction — /loop is chat-toward-goal, not tool_calls.
 # Argv is session_id only; audit stores the digest, never the prompt/goal.
 _HARNESS_LOOP_TOOL = "harness_loop"
+_AGENT_RUN_TOOL = "agent_run"
 
 
 def _loop_tool_allowlist() -> frozenset[str]:
     """Closed set for loop turns. Empty deny is covered by monkeypatched tests."""
     return frozenset((_HARNESS_LOOP_TOOL,))
+
+
+def _agent_run_tool_allowlist() -> frozenset[str]:
+    """Closed set for POST /api/agent/run. Empty deny is monkeypatched in tests."""
+    return frozenset((_AGENT_RUN_TOOL,))
 
 
 # Own scheme instance rather than importing utils.auth's: that module's is a
@@ -1372,6 +1378,14 @@ def create_app(
                 _HTTP_BAD_REQUEST,
                 AgenticError(str(exc), code="UNKNOWN_CHECK_PROFILE", details={"requested": req.checks}),
             ) from exc
+        try:
+            assert_allowed(
+                _AGENT_RUN_TOOL,
+                ("real-repo-run",),
+                allowlist=_agent_run_tool_allowlist(),
+            )
+        except ToolDenied as exc:
+            raise _err(_HTTP_FORBIDDEN, exc) from exc
         return _agentic_call(
             "real-repo-run",
             lambda: run_agentic_op(
