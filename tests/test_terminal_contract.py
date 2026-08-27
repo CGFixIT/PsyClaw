@@ -189,6 +189,19 @@ def test_enter_handler_ignores_ime_composition():
     )
 
 
+def test_health_polling_is_visibility_aware():
+    """Background tabs should not keep polling /health; harness.html already
+    does this for /api/status. The terminal must pause scheduling when hidden
+    and refresh immediately when visible again."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "let healthVisible = true" in js
+    assert "document.addEventListener('visibilitychange'" in js
+    body = js.split("function scheduleHealthCheck(", 1)
+    assert len(body) == 2, "scheduleHealthCheck moved; update this test"
+    after = body[1].split("}", 1)[0]
+    assert "if (healthVisible)" in after, "scheduleHealthCheck must guard on healthVisible"
+
+
 def test_login_form_controls_exist():
     html = _console_source()
     for marker in (

@@ -1591,10 +1591,24 @@ document.addEventListener('keydown', function(e) {
 });
 
 let healthTimer = null;
+let healthVisible = true;
 function scheduleHealthCheck() {
   if (healthTimer) clearTimeout(healthTimer);
-  healthTimer = setTimeout(checkHealth, healthBackoffMs);
+  if (healthVisible) {
+    healthTimer = setTimeout(checkHealth, healthBackoffMs);
+  }
 }
+document.addEventListener('visibilitychange', () => {
+  healthVisible = !document.hidden;
+  if (healthVisible) {
+    // The tab is visible again: refresh immediately so the status dot is
+    // current, then resume the normal polling schedule.
+    checkHealth();
+  } else if (healthTimer) {
+    clearTimeout(healthTimer);
+    healthTimer = null;
+  }
+});
 checkHealth();
 input.focus();
 

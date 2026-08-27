@@ -1545,7 +1545,12 @@ async function onSend() {
 
 /* ── wiring ── */
 sendBtn.addEventListener('click', onSend);
-input.addEventListener('keydown', e => { if (e.key === 'Enter') onSend(); });
+input.addEventListener('keydown', e => {
+  // Ignore Enter while an IME composition is in progress; sending on the
+  // commit keystroke submits a half-typed query.
+  if (e.isComposing) return;
+  if (e.key === 'Enter') onSend();
+});
 document.querySelectorAll('.side-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.side-tab').forEach(t => t.classList.remove('active'));
