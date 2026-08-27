@@ -721,6 +721,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
   if (confirmedOnline === null && (slash === '/users' || slash === '/admin' || slash === '/audit' || slash === '/help')) {
     input.value = '';
     if (slash === '/help') {
+      if (emptyState) emptyState.remove();
       addEntry('system', '', 'Commands: /users, /admin, /audit, /help. Soul, Sync, Agentic, FS, and SQL are Advanced toolbar buttons. This is the RAG console — other /text is sent as a query.');
       return;
     }
