@@ -72,6 +72,32 @@ def test_the_initial_paint_reports_its_own_failure():
     assert "reload().catch(" in code, "the bootstrap reload() lost its rejection handler"
 
 
+def test_a_refused_mutation_survives_the_follow_up_reload():
+    """A CSRF-rejected role change / delete / password reset (or a
+    validation-rejected create) must keep its error on screen.
+
+    mutate() and the create handler both call reload() right after a refused
+    mutation, to repaint the (unchanged) list from the server. reload()'s own
+    success path used to call onStatus() unconditionally, clearing the error
+    the very same handler had just shown one line above -- so the failure
+    flashed for a moment and then the panel went quiet, indistinguishable
+    from the mutation having gone through. reload() must accept a
+    preserveStatus flag, and every caller that just recorded a failure must
+    pass it through instead of reloading bare.
+    """
+    js = _source()
+    assert "async function reload(preserveStatus)" in js, "reload() lost its preserveStatus parameter"
+    assert "if (!preserveStatus) onStatus();" in js, (
+        "reload()'s successful path must skip clearing status when preserveStatus is set"
+    )
+
+    mutate_body = js.split("function mutate(", 1)[1].split("\n    }", 1)[0]
+    assert "return reload(failed);" in mutate_body, "mutate() must forward its own failure into reload()"
+
+    create_body = js.split('createBtn.addEventListener("click"', 1)[1].split("\n    });", 1)[0]
+    assert "reload(failed);" in create_body, "the create-user handler must forward its own failure into reload()"
+
+
 def test_mutate_clears_status_before_new_attempt():
     """A stale error must not persist across a fresh attempt, or the operator
     cannot tell whether the new click failed or the old one did."""
