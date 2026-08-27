@@ -1591,7 +1591,7 @@ document.addEventListener('keydown', function(e) {
 });
 
 let healthTimer = null;
-let healthVisible = true;
+let healthVisible = !document.hidden;
 function scheduleHealthCheck() {
   if (healthTimer) clearTimeout(healthTimer);
   if (healthVisible) {

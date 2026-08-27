@@ -194,7 +194,9 @@ def test_health_polling_is_visibility_aware():
     does this for /api/status. The terminal must pause scheduling when hidden
     and refresh immediately when visible again."""
     js = _TERMINAL_JS.read_text(encoding="utf-8")
-    assert "let healthVisible = true" in js
+    assert "let healthVisible = !document.hidden" in js, (
+        "a terminal loaded in an already-hidden tab must not start a polling loop"
+    )
     assert "document.addEventListener('visibilitychange'" in js
     body = js.split("function scheduleHealthCheck(", 1)
     assert len(body) == 2, "scheduleHealthCheck moved; update this test"
