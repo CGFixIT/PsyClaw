@@ -58,7 +58,7 @@ mode. Never raw text, never Bearer tokens.
 
 ## Threat notes
 
-This is a **public-write** egress. The human gate is the OpenTweet
+This is a **public-write** egress — SECURITY.md class 3 (intentional, policy-gated feature traffic from a first-party httpx client; no vendor SDK, no SDK telemetry key; never labeled telemetry, never blocked by the kill map). The human gate is the OpenTweet
 dashboard (draft default; opt-in `scheduled_date` still leaves a review
 window before the slot). Corpus-derived text must not appear in launchd
 or Task Scheduler logs. Loopback `/query` keeps I1–I5 on the generation

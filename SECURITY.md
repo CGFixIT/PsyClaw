@@ -16,7 +16,7 @@ CyClaw is an **offline-first, loopback-only** local AI gateway. The enforced inv
 4. **Audit convergence** — every path terminates in `audit_logger` (SHA-256 query hashes, PII + secret redaction, append-only JSONL).
 5. **Soul governance** — identity evolution requires a human-authored reason; atomic writes; SHA-256 drift detection on startup.
 6. **Out-of-band connectors** — `agentic/`, `sync/`, `guardrails/` are never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`. They ship disabled by default. `sync/` and `agentic/` run via audited argv-list subprocess shims. Optional live NeMo (`nemoguardrails`) is **not** fail-closed on the request path: `check_input` / `check_output` are an offline heuristic floor; engine load or provider errors **degrade** (`guardrail_skipped`) and cannot grant a route. Graph nodes are pass-through while `guardrails.enabled` is not literal `True`. Agentic verification containment is **best-effort** software (`agentic/executor/runner.py`), not a network namespace.
-7. **Zero telemetry** — kill-switch env vars set at import time before any langchain/chromadb import; verified at startup.
+7. **No unsolicited secondary telemetry** — every vendor telemetry/analytics path is disabled before the dependency that reads it initializes: canonical env maps (`utils/telemetry_kill.py`) applied at import time by every Python entry point AND delivered as literal environment at every process boundary (Docker ENV, launchers, generated launchd plists / Windows tasks / cron lines, verifier and `gh` children), plus the post-import ONNX Runtime API call at the load seams. `gate.py` prints a verification table at startup; the other appliers enforce silently and are pinned by tests + the `otel-hardening` checker. Stated precisely: these controls silence telemetry readers — they are **not** a general network kill switch, and CyClaw's *intentional* egress is governed by its own gates (see **Egress classification** below).
 8. **Loopback binding** — `127.0.0.1:8787` (gateway) and `127.0.0.1:11434` (Ollama); API-key gate on all mutating endpoints; per-IP rate limiting; strict security headers + TrustedHost.
 
 ## Accepted Dependency Risks
@@ -47,4 +47,66 @@ These are tracked, deliberate exceptions — re-reviewed at every release and en
 - `python -m pytest tests/ -q` — full suite (mocked externals; no live services needed)
 - `pip-audit -r requirements.txt -r requirements-test.txt` — dependency CVE sweep (also runs in CI)
 - `python scripts`/swarm verification harness — config invariants, telemetry kill, due-diligence invariants, terminal contract
-- Network audit: zero non-loopback connections expected in offline mode (see telemetry kill-switch docs in `docs/cyclaw_telemetry_kill.env`)
+- Network audit: zero non-loopback connections expected in offline mode (see telemetry kill-switch docs in `docs/security-philosophy/cyclaw_telemetry_kill.env`)
+- `python3 .claude/skills/otel-hardening/check_otel.py --strict` — telemetry-kill value oracle, boundary delivery, and egress-classification sweep; `bash .claude/skills/otel-hardening/verify.sh` runs its 21-scenario mutation self-test
+
+## Egress classification
+
+Every component that can touch a network carries exactly one class — the full
+machine-readable inventory (with official source URLs, affected versions, and
+review dates) lives in `.claude/skills/otel-hardening/check_otel.py`, whose
+strict mode fails when a new dependency, executable, connector, scheduled job,
+or launcher lands unclassified:
+
+1. **Unsolicited telemetry/analytics, disabled via an official control** —
+   LangSmith/LangChain tracing, ChromaDB PostHog + legacy 1.5.9 `CHROMA_OTEL_*`
+   OTel, huggingface_hub's telemetry ping, NeMo Guardrails usage stats,
+   ONNX Runtime (env `ORT_DISABLE_TELEMETRY=1` pre-import for the
+   non-Windows 1DS path added in v1.29.0, plus
+   `onnxruntime.disable_telemetry_events()` at the load seams — on Windows the
+   ETW path only leaves the box when an external trace session collects it,
+   the API cannot undo an init-time event, and absolute suppression requires a
+   `--no_telemetry` private build CyClaw does not claim), the generic OTel SDK
+   (with `OTEL_CONFIG_FILE`/`OTEL_EXPERIMENTAL_CONFIG_FILE` removed outright
+   because declarative config outranks the SDK-disable values), GitHub CLI
+   usage telemetry (`GH_TELEMETRY=false` forced on every `gh` child), and
+   PowerShell host telemetry (`POWERSHELL_TELEMETRY_OPTOUT=1`, which pwsh
+   reads once at its own startup — the installed cmd shim and generated task
+   wrappers set it *before* the `powershell` line; setting it inside a running
+   host cannot un-send that host's startup event).
+2. **Ancillary update/version checks (egress, not telemetry)** — gh update
+   notifiers, PowerShell update check, pip's version check, the hf CLI's
+   update check and Homebrew analytics (both shell-only: no CyClaw code
+   launches those programs; `macos/setup-from-clone.sh` exports
+   `HOMEBREW_NO_ANALYTICS=1` before its own `brew` calls). Kept in a separate
+   map (`UPDATE_CHECK_OPT_OUT`) so no report counts them as telemetry.
+3. **Intentional, policy-gated feature traffic** — triple-gated Grok/Claude
+   cloud fallbacks, the gated cloud-planner adapters, Telegram and OpenTweet
+   (first-party httpx clients performing intentional remote API operations;
+   there is no installed vendor SDK and therefore no SDK telemetry key to
+   set), rclone/Dropbox corpus sync, operator-configured SQL endpoints, the
+   harness's allowlist-only `/web`, and the one-time embedding-model
+   bootstrap fetch (`HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` stay conditional
+   on the model being cached). Never mislabeled as telemetry, never blocked
+   by the kill maps.
+4. **Local-only observability/storage** — `audit.jsonl`, `spend.jsonl`, and
+   the Numbat projection (`logs/numbat-events.ndjsonl`): a **second sensitive
+   local log**, not telemetry — every event carries hostname/username/uid
+   endpoint metadata; it ships `numbat.enabled: true` and is disabled with
+   `numbat.enabled: false`; no runtime HTTP sink exists or is implicitly
+   configured, and it never belongs in the env kill map. Ollama traffic is
+   loopback inference; the daemon's own cloud/web features are daemon policy —
+   local-only mode requires `OLLAMA_NO_CLOUD=1` (or `disable_ollama_cloud`)
+   set on the independently-running daemon, then a daemon restart.
+5. **No mechanism found (negative findings, dated in the inventory)** — LM
+   Studio (no documented telemetry env switch; its updater/model/cloud
+   operations remain app-level policy), fastembed (no telemetry of its own;
+   its first-use CDN model fetch is functional egress under the guardrails
+   opt-in), uv, git (documented out of the overlay: it reads none of the
+   canonical names), the vendored Unslop scanners, and the core
+   web/runtime/dev libraries.
+
+`CYCLAW_TELEMETRY_KILL` no longer exists: it was set in the Docker surfaces
+but read by no code — a decorative marker advertising enforcement that
+Python-side maps actually provided. The real canonical values now ride the
+image ENV instead.

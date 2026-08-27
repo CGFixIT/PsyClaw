@@ -177,7 +177,8 @@ overloading soul). Episode staging and FTS fusion hooks are lazy and non-fatal.
 | Path | Role |
 |---|---|
 | `gate.py` | FastAPI entry, auth, rate limit, sanitizer, security headers, telemetry kill |
-| `utils/telemetry_kill.py` | The canonical telemetry-kill env mapping + `apply_telemetry_kill()`. Applied by `gate.py`, `mcp_hybrid_server.py`, and `retrieval/vector_store.py` (the sole ChromaDB chokepoint, which covers `python -m retrieval.indexer`). Stdlib-only on purpose — it loads ahead of everything heavy. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
+| `utils/telemetry_kill.py` | The canonical maps — `TELEMETRY_KILL` (21 telemetry pairs), a visibly-separate `UPDATE_CHECK_OPT_OUT` (4 ancillary pairs), and `SCRUBBED_ENV_KEYS` (5 tracing credentials + the 2 declarative-OTel config names, removed outright) — plus `apply_telemetry_kill()`, the pure child builder `build_telemetry_safe_env(base)`, `scheduler_env_overlay()` for generated jobs, and the launcher CLI `python -m utils.telemetry_kill --export {shell,powershell}`. Applied at import by every maintained chokepoint (invariant-guard G1 pins 15 orderings) and delivered as literal env by Docker/launchers/generators. Stdlib-only on purpose — it loads ahead of everything heavy; the ONNX API half deliberately lives in `utils/onnx_telemetry.py` instead. Deliberately excludes `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` — see `retrieval/embeddings.py` |
+| `utils/onnx_telemetry.py` | `suppress_onnx_telemetry()` — the post-import ONNX Runtime API suppression (`disable_telemetry_events()`), getattr-guarded, idempotent, absent-safe; called at the two load seams (`retrieval/vector_store.py`, `guardrails/integration.py` with `force_import=True` before `LLMRails`). Env half (`ORT_DISABLE_TELEMETRY=1`) rides the kill map |
 | `gate_ops.py` | The four `/ops/*` endpoints, registered onto gate.py's app with its auth/rate-limit/audit callables injected; never imports `sync`/`agentic` |
 | `gate_auth.py` | The three `/auth/*` endpoints (Stage 2 of `docs/AUTHENTICATION_DESIGN.md`), registered onto gate.py's app the same way `gate_ops.py` registers `/ops/*`. Session cookie + CSRF for browsers, bearer device tokens for programmatic clients; Stage 3 attaches `require_session_or_token` to `/query` by name (`_AUTH_DEPENDENCY_NAME`) only when `auth_manager` is not None |
 | `gate_memory.py` | Optional default-off memory admin surface (`/memory/*` + `/query/export/html`), registered onto gate.py's app the same way `gate_ops.py`/`gate_auth.py` register their routes. Lazy-imports package `memory` only inside handlers; never OOB. See `docs/memory/README.md` |
@@ -260,10 +261,14 @@ statically; run it after any change to the core files.
 | I5 | **Soul governance** — soul mutation requires a human `reason` string; writes are atomic | `utils/personality.py` `apply_evolution` | `test_personality` | write `soul.md` without a non-empty `reason`, or bypass `PersonalityManager` |
 | I6 | **Module isolation** — `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`/`opentweet`, and those never import the core six | import graph | invariant-guard I6; `test_agentic_isolation` (AST, both directions) | `import agentic` (etc.) anywhere in the core six to "reuse" something |
 
-Supporting guards (also checked by `invariant-guard`): telemetry-kill precedes
-heavy imports in `gate.py` (the block itself is shared from
-`utils/telemetry_kill.py` and applied by the MCP server and the ChromaDB
-chokepoint too, so no entry point inherits an ambient telemetry env);
+Supporting guards (also checked by `invariant-guard`): telemetry-kill ordering
+across 15 files — gate.py's `_TELEMETRY_KILL` anchor precedes its heavy
+imports; every out-of-band package `__init__.py` (agentic, guardrails,
+telegram, opentweet, sync) applies the kill before ANY other import; and the
+nine module-level appliers (MCP server, metrics, harness server,
+vector_store, indexer, clear_cache, guardrails/integration, gen_cert,
+authn_cli) apply it before any third-party import — so no entry point
+inherits an ambient telemetry env;
 unset `CYCLAW_API_KEY` fails auth **closed** (401);
 the sanitizer contract phrases stay caught; BM25 stays JSON (pickle = RCE); MCP
 declares `sampling: None`.
@@ -379,14 +384,19 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   import latches the offline constant before the vars are set) — the actual
   gate is `local_files_only=eligible` passed to `SentenceTransformer(...)`.
 - **Trap:** treating ONNX Runtime's `ORT_TELEMETRY_OPT_OUT` env var as a real
-  kill switch. **Rule:** it isn't read by onnxruntime at all (verified by
-  grepping the installed package — zero references). ORT's actual telemetry
-  exists only in official Windows builds via ETW/TraceLogging and is entirely
-  absent on Linux/macOS by construction (see the package's own `Privacy.md`);
-  the real opt-out is the runtime API `onnxruntime.disable_telemetry_events()`,
-  which nothing in this repo currently calls. The env var is kept in
-  `TELEMETRY_KILL` as documented, harmless (unread) parity with the reference
-  `.env` file — don't mistake its presence for an active mitigation.
+  kill switch — or, since issue #1135, assuming ORT telemetry is still
+  Windows-only. **Rule:** `ORT_TELEMETRY_OPT_OUT` isn't read by onnxruntime at
+  all (zero references in the installed package; kept only as an inert legacy
+  marker for reference-`.env` parity — tests and the otel-hardening checker
+  must never count it as protection). The platform story changed at v1.29.0
+  (2025-08-12): non-Windows official builds carry 1DS telemetry too, and the
+  documented pre-init env control is `ORT_DISABLE_TELEMETRY=1` — now in
+  `TELEMETRY_KILL`. The runtime API `onnxruntime.disable_telemetry_events()`
+  IS wired since #1135 (`utils/onnx_telemetry.py`, called at both load
+  seams), but it is the post-import second layer: it cannot undo an
+  init-time event, which is why the env var must come first. On Windows
+  (ETW/TraceLogging, collected only by an external trace session) absolute
+  suppression needs a `--no_telemetry` private build — never claim it.
 
 ### Retrieval & config
 - **Trap:** "fixing" `min_score: 0.028` upward toward a cosine-like 0.5.
@@ -752,7 +762,7 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |
-| `/otel-hardening` | check + task | Re-verify telemetry-kill switches (`utils/telemetry_kill.py`, the conditional HF Hub wiring) against a static baseline plus a live vendor-doc sweep; propose/apply additive fixes when a vendor's telemetry contract drifted | Yes (stdlib) for the static half; live sweep needs network |
+| `/otel-hardening` | check + task | Validate the full telemetry-kill contract: an independent name→value oracle over both canonical maps + the scrub set, staleness (`--as-of`), pin drift, reference-`.env` format/values, Docker/launcher/generator delivery, programmatic-bypass sweep, ONNX seams, and a category-1–5 egress classification of every dependency/executable/connector/launcher (strict mode fails on an unclassified one); then the live vendor-doc sweep. 21-scenario mutation self-test in `verify.sh` | Yes (stdlib) for the static half; live sweep needs network |
 
 ### Operational & workflow skills
 

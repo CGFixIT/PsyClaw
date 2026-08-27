@@ -211,5 +211,7 @@ repo, write GitHub, expose unrestricted filesystem tools, or import from the
 core request path -- all still true of THIS subsystem specifically, not of
 the agentic layer as a whole now that the pipeline above exists.
 
+> **Egress classification** (SECURITY.md): the agentic layer's GitHub reads/writes via `gh` and the gated cloud-planner adapters are class-3 intentional policy-gated traffic. Every `gh` child is spawned with `build_telemetry_safe_env()` so `GH_TELEMETRY=false` and the update-notifier opt-outs always win over ambient values, and the verifier's minimal child env re-applies the full canonical telemetry block (`agentic/executor/runner.py`) — note `NO_PROXY="*"` there means "bypass any proxy", a best-effort control, not fail-closed networking.
+
 See `docs/THREAT_MODEL.md`'s third and fifth amendments for the fuller,
 dated account of what changed and when.

@@ -153,8 +153,9 @@ it from the configured environment variable. Never commit tokens or put them in
 5. **Rate limit** — process-local sliding window on outbound + inbound
    (`telegram/ratelimit.py`). Multi-process sqlite limiter remains deferred
    (YAGNI) until more than one poller is real.
-6. **Threat model** — Telegram cloud sees message plaintext. Branding must say *local inference*, not *E2E private channel*.
-7. **T4 media gates** — only an allowlisted private chat with `/save --confirm <reason>` can stage an attachment. The bridge checks configured fsconnect write, strict-root, scan, injection-block, and persistent write-rate-limit gates before it contacts Telegram's file service; its root must be absolute, explicit, outside the repo/corpus, and not overlap a read root. The unresolved exception is host capability: fsconnect's Windows refusal occurs later, so T4 must remain off there until Telegram rejects the request before download. It uses the fsconnect CLI, never an in-process import, and does not auto-index.
+6. **Egress class** — intentional, policy-gated feature traffic (SECURITY.md class 3): a first-party httpx client performing deliberate remote API operations. No vendor SDK is installed, so no SDK telemetry key exists to set — never label this traffic telemetry and never block it with the kill map.
+7. **Threat model** — Telegram cloud sees message plaintext. Branding must say *local inference*, not *E2E private channel*.
+8. **T4 media gates** — only an allowlisted private chat with `/save --confirm <reason>` can stage an attachment. The bridge checks configured fsconnect write, strict-root, scan, injection-block, and persistent write-rate-limit gates before it contacts Telegram's file service; its root must be absolute, explicit, outside the repo/corpus, and not overlap a read root. The unresolved exception is host capability: fsconnect's Windows refusal occurs later, so T4 must remain off there until Telegram rejects the request before download. It uses the fsconnect CLI, never an in-process import, and does not auto-index.
 
 ---
 

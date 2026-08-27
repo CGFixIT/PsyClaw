@@ -789,18 +789,36 @@ network egress this project otherwise avoids for no benefit.
 
 ### Telemetry
 
-Every CyClaw entry point (`gate.py`, `mcp_hybrid_server.py`,
-`retrieval/vector_store.py`) applies a shared telemetry-kill block
-(`utils/telemetry_kill.py`) before any SDK import — LangChain/LangSmith
+Every maintained CyClaw Python chokepoint — the gateway, the MCP server, the
+metrics/indexer/vector-store/cache CLIs, the harness server, the auth/cert
+CLIs, and the sync/agentic/guardrails/telegram/opentweet packages — applies a
+shared telemetry-kill block (`utils/telemetry_kill.py`) before any SDK
+import; the same canonical values are also delivered as literal environment
+before the interpreter starts by the Docker image, the shipped launchers, and
+every generated launchd plist / Windows task / cron line. LangChain/LangSmith
 tracing, ChromaDB's OpenTelemetry and PostHog paths, NeMo Guardrails' usage
-stats, HuggingFace Hub's telemetry ping, and the generic OpenTelemetry SDK are
-all disabled unconditionally, with no manual step needed. `HF_HUB_OFFLINE`/
-`TRANSFORMERS_OFFLINE` are the one deliberate exception: CyClaw sets those two
-itself, but only once it has confirmed the embedding model is already cached
-on disk, so a brand-new install can still complete its one-time model
-download. See `docs/security-philosophy/cyclaw_telemetry_kill.env` for the
-full reference list if you want to source it by hand for a locked-down
-deployment.
+stats, HuggingFace Hub's telemetry ping, ONNX Runtime (env before import plus
+the `disable_telemetry_events()` API at its load seams), GitHub CLI and
+PowerShell host telemetry, and the generic OpenTelemetry SDK are all disabled
+unconditionally, with no manual step needed. Ancillary *update checks* (gh,
+PowerShell, pip, the hf CLI, Homebrew) are opted out too, but tracked as a
+separate class — a version check is egress, not telemetry. None of this is a
+network kill switch: CyClaw's intentional egress (cloud fallbacks, channels,
+sync) is governed by its own gates, classified in SECURITY.md.
+`HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` are the one deliberate exception:
+CyClaw sets those two itself, but only once it has confirmed the embedding
+model is already cached on disk, so a brand-new install can still complete
+its one-time model download. See
+`docs/security-philosophy/cyclaw_telemetry_kill.env` for the full reference
+list if you want to source it by hand for a locked-down deployment (it uses
+`export` lines, so children of your shell really inherit it).
+
+One subsystem deserves its own sentence because it ships **on**: the Numbat
+projection writes a local NDJSON stream (`logs/numbat-events.ndjsonl`) whose
+every event carries hostname/username/uid endpoint metadata — a second
+sensitive *local* log, not telemetry (file sink only, no HTTP anywhere).
+Disable it with `numbat.enabled: false` in `config.yaml`; it never belongs in
+the env kill map.
 
 **Homebrew (macOS) is not covered by any of the above, and is on by default.**
 Homebrew reports its own install and usage counts, independently of CyClaw —
