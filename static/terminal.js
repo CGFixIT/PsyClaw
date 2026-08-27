@@ -717,7 +717,7 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
   const query = confirmedOnline !== null ? pendingConfirmById.get(confirmEntryId) : input.value.trim();
   if (confirmedOnline !== null) pendingConfirmById.delete(confirmEntryId);
   if (!query) return;
-  const slash = query.toLowerCase();
+  const slash = query.toLocaleLowerCase('en-US');
   if (confirmedOnline === null && (slash === '/users' || slash === '/admin' || slash === '/audit' || slash === '/help')) {
     input.value = '';
     if (slash === '/help') {

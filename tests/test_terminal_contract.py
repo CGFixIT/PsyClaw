@@ -241,6 +241,7 @@ def test_audit_slash_command_is_intercepted_client_side():
     body = js.split("async function submitQuery(", 1)
     assert len(body) == 2, "submitQuery moved; update this test"
     after = body[1].split("const loadingId = addLoadingEntry()", 1)[0]
+    assert "toLocaleLowerCase('en-US')" in after, "slash intercept must use en-US, not locale toLowerCase"
     assert "slash === '/audit'" in after, "/audit is not intercepted in submitQuery"
     assert "openAuditPanel()" in after, "/audit interception does not open the audit panel"
 
