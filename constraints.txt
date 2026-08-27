@@ -82,7 +82,7 @@ pyodbc==5.3.0
 # deps (not behind any of its own extras); fastembed fetches ONNX embedding
 # models from a remote CDN by default -- see the caveat next to this extra in
 # pyproject.toml before enabling policy.guardrails.enabled.
-nemoguardrails==0.23.0
+nemoguardrails==0.24.0
 
 # Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
 # not installed by the default offline runtime or legacy requirements path.

@@ -1,4 +1,4 @@
-"""Real nemoguardrails==0.23.0 runtime proof. Gated on CYCLAW_NEMO_RUNTIME=1."""
+"""Real nemoguardrails==0.24.0 runtime proof. Gated on CYCLAW_NEMO_RUNTIME=1."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NEMO_CONFIG = REPO_ROOT / "guardrails" / "config"
 
 
-def test_installed_version_is_0230() -> None:
+def test_installed_version_is_0240() -> None:
     import nemoguardrails
 
-    assert nemoguardrails.__version__ == "0.23.0"
+    assert nemoguardrails.__version__ == "0.24.0"
 
 
 def test_rails_config_loads_and_compiles() -> None:
@@ -72,6 +72,28 @@ def test_python_actions_allow_and_block_without_generation() -> None:
     assert score == 1.0
     ungrounded = grounding_score("green cheese moon", "rrf fusion combines ranks")
     assert ungrounded < 0.18
+
+
+def test_check_does_not_raise_on_benign_user_message() -> None:
+    """NVIDIA check() validates rails without LLMRails.generate of an answer."""
+    from nemoguardrails import LLMRails, RailsConfig
+
+    mock = LoopbackOpenAIMock()
+    mock.start()
+    try:
+        with loopback_only():
+            rails_config = RailsConfig.from_path(str(NEMO_CONFIG))
+            for model in rails_config.models or []:
+                params = getattr(model, "parameters", None) or {}
+                params["base_url"] = mock.base_url
+                model.parameters = params
+            rails = LLMRails(rails_config)
+            register_actions(rails, hallucination_threshold=0.18)
+            result = rails.check(messages=[{"role": "user", "content": "what is RRF fusion?"}])
+        status = str(getattr(result, "status", result)).upper()
+        assert "PASSED" in status or "MODIFIED" in status or "BLOCKED" in status
+    finally:
+        mock.stop()
 
 
 def test_network_jail_blocks_unexpected_dns() -> None:
