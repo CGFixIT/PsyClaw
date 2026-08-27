@@ -8,7 +8,7 @@ are "auth" per `CLAUDE.md`'s own module map); the `memory/` package plus
 `gate_memory.py`; `static/terminal.html`/`static/terminal.js`,
 `static/harness.html`, `static/auth_admin.js`; `harness/server.py` and the
 rest of the `harness/` package (slash commands, skills/tools registries, the
-28-guarded-route surface).
+29-guarded-route surface — see F-07 below on `CLAUDE.md`'s stale count of 28).
 Method: four parallel code-review passes (one per area above) cross-checked
 against `docs/AUTHENTICATION_DESIGN.md`, `docs/memory/README.md` +
 `IMPLEMENTATION_PLAN.md`, `harness/README.md`, `docs/HARNESS_POWERSHELL.md`,
@@ -312,9 +312,11 @@ These were traced and confirmed but don't warrant a standalone fix:
   `agentic/executor/` — every subprocess call is list-form argv.
 - No XSS in `terminal.js`, `harness.html`'s inline script, or
   `auth_admin.js` — every render path uses `textContent`/`createElement` or
-  the attribute-safe `escHtml()` helper; traced end-to-end from `/query`'s
-  `data.answer`, corpus filenames, and LLM chat replies through to their
-  sinks.
+  the `escHtml()` helper; traced end-to-end from `/query`'s `data.answer`,
+  corpus filenames, and LLM chat replies through to their sinks. `escHtml()`
+  is text-context-safe only — it leaves quotes unescaped and its own comment
+  (`static/terminal.js:1564-1569`) warns against using it in an attribute —
+  and every current use is an element-text interpolation, never an attribute.
 - No CWE-1022 (reverse tabnabbing) — neither console contains a
   `target="_blank"` or `window.open()` call at all.
 - No `eval()`/`new Function()`/string-form `setTimeout` anywhere in either
@@ -324,9 +326,14 @@ These were traced and confirmed but don't warrant a standalone fix:
   documented CSRF exemption is backed by `SameSite=Strict` plus an explicit
   same-site check, not bare trust.
 - No `postMessage` handlers in either console.
-- I6 module isolation holds in both directions for `harness/` and
-  `memory/` — confirmed by grep and, for memory, by
-  `tests/test_memory_isolation.py`'s AST-based check.
+- I6 module isolation holds in both directions for `harness/` — confirmed by
+  grep. `memory/` is not one of the six modules I6 names (it's an optional
+  core feature, not an out-of-band subsystem — `graph.py:908` and
+  `retrieval/hybrid_search.py:310` both lazily import it on enabled paths),
+  so "I6" doesn't apply to it; what holds instead is a narrower lazy-import
+  boundary, confirmed by grep plus `tests/test_memory_isolation.py`'s
+  AST-based check (deferred imports into the core six, a restricted reverse
+  dependency set).
 - The harness console's `/web` allowlist is genuinely default-deny (DNS
   re-resolution + `is_global` check at both allow-time and fetch-time, no
   redirect-following, no substring/subdomain bypass) and
