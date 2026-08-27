@@ -122,6 +122,16 @@ in `PLAN_SYSTEM_PROMPT` (`agentic/real_repo_loop.py`). `PLANNER_SYSTEM_PROMPT`
 is the **coder** prompt — the name is a trap. Do not hand the 27B an
 architect prompt and call it local autonomy.
 
+Prompt-safety recap (enforced in code, not just this doc): Instruction-only;
+untrusted GitHub fence + defuse; no `=== FILE ===` in the plan; `--instruction`
+and `--plan-file` injection-scanned; audit hashes; `--confirm-online` for
+cloud. See `docs/agentic/AGENTIC_README.md` §10.
+
+**MCP is not the coding loop.** `real-repo-run` is CLI/subprocess. It does
+not import or start `mcp_hybrid_server.py`. `agentic/harness_optimizer/mcp`
+is a package name for sidecar tool wrappers, not that server. A 27B burst
+must not plan MCP tool additions or a VPS/DeepAgent MCP handoff.
+
 ## Scratchpad before compact
 
 Claude Code, Cursor, and Codex compact when the window fills. The ones that

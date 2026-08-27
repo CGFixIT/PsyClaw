@@ -255,3 +255,39 @@ that file to a cloud planner without `--confirm-online`.
 Two-stage reminder: `--provider grok --confirm-online` belongs on
 `real-repo-run-plan` only. Omit `--provider` on `real-repo-run` so Qwen
 implements the approved burst plan on loopback.
+
+**Prompt safety invariants (plan handoff)**
+
+These are the controls that keep a cloud `plan.md` from becoming a jailbreak
+into the 27B coder. They already existed; the burst prompt does not relax them.
+
+1. **Instruction-only.** The planner obeys text under `Instruction:`. GitHub
+   PR/issue/diff text is fenced `<<<UNTRUSTED-GITHUB-CONTEXT` …
+   `UNTRUSTED-GITHUB-CONTEXT>>>` and is background, not a permission.
+2. **Fence defuse.** Quoted context cannot close the untrusted block
+   (`_defuse_fence`). Instruction comes first; untrusted last.
+3. **No coder grammar in the plan.** `=== FILE ===` is the implementing
+   model's output. A plan that emits it would skip human review.
+4. **Scan before trust.** `--instruction` is injection-scanned before any
+   GitHub fetch. `--plan-file` is scanned before `run_real_repo_loop`. Audit
+   stores a hash, never the plan text.
+5. **Cloud is opt-in.** `--provider` on `real-repo-run-plan` still needs
+   `--confirm-online`. Default is loopback Ollama.
+6. **I6 named off-limits** in the plan prompt: `gate.py`, `graph.py`,
+   `mcp_hybrid_server.py`, `soul.md`, `INVARIANTS.md`, `config.yaml`.
+
+**MCP integration strategy (this loop)**
+
+`real-repo-run` / `real-repo-run-plan` are **not** MCP clients. They are
+`python -m agentic.cli` subprocesses (harness `/ops` uses the same CLI shim).
+They must not import `mcp_hybrid_server.py`.
+
+| Surface | Role | This PR |
+|---|---|---|
+| `mcp_hybrid_server.py` | Request-path MCP server (I6) | Untouched. Named as a do-not-plan path. |
+| `agentic/harness_optimizer/mcp` | Sidecar tool-boundary package. **Not** an MCP server and does not speak MCP. | Untouched. |
+| `real_repo_loop.generate_plan` | One-shot planner invoke | Prompt only. |
+
+Do not hand the 27B a plan to add MCP tools, bind a VPS as an MCP server, or
+route LangChain DeepAgent through `mcp_hybrid_server.py`. That is architect
+work on Claude/Grok, then a separate I6-touching PR — not a burst job.
