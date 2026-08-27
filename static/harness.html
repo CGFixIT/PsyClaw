@@ -1563,10 +1563,16 @@ document.querySelectorAll('.side-tab').forEach(tab => {
 const hAuthLogin = document.getElementById('hAuthLogin');
 const hAuthLoginBox = document.getElementById('hAuthLoginBox');
 const hAuthSetup = document.getElementById('hAuthSetup');
+/* Both probes are bounded, matching terminal.js's refreshAuthUi. The catch
+   below deliberately keeps the last-known UI on failure, but a bare fetch
+   against a gateway that accepted the socket and then stalled never settles,
+   so that catch would never run and the auth panel would stay blank for the
+   life of the page. 5000ms mirrors the terminal console's budget for the same
+   two endpoints. */
 async function refreshHarnessAuth() {
   const who = document.getElementById('hAuthWho');
   try {
-    const me = await fetch('/api/auth/whoami');
+    const me = await fetchWithTimeout('/api/auth/whoami', {}, 5000);
     if (me.status === 503) {
       if (hAuthSetup) hAuthSetup.hidden = true;
       if (hAuthLoginBox) hAuthLoginBox.hidden = true;
@@ -1581,7 +1587,7 @@ async function refreshHarnessAuth() {
       if (who) who.textContent = data.username + ' · ' + data.role;
       return;
     }
-    const setup = await fetch('/api/auth/setup-status');
+    const setup = await fetchWithTimeout('/api/auth/setup-status', {}, 5000);
     if (setup.ok) {
       const status = await setup.json();
       if (status.needs_password) {

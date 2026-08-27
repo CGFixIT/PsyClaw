@@ -455,3 +455,15 @@ def test_api_key_error_explains_server_env_requirement():
     assert "key_not_configured" in html
     assert "The harness server was started without CYCLAW_API_KEY" in html
 
+
+
+def test_harness_auth_probes_are_bounded_by_a_timeout():
+    """refreshHarnessAuth must not use a bare fetch. Its catch keeps the
+    last-known UI, which only runs if the request actually settles -- a
+    gateway that accepts the socket then stalls would otherwise leave the
+    auth panel blank forever. terminal.js bounds the same two endpoints."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "fetchWithTimeout('/api/auth/whoami', {}, 5000)" in html
+    assert "fetchWithTimeout('/api/auth/setup-status', {}, 5000)" in html
+    assert "await fetch('/api/auth/whoami')" not in html, "whoami probe lost its timeout"
+    assert "await fetch('/api/auth/setup-status')" not in html, "setup-status probe lost its timeout"
