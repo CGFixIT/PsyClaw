@@ -74,6 +74,11 @@ test = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
+    # pytest>=8.2 requires pygments>=2.7.2; pin a patched release so a full
+    # dependency resolve of this extra (e.g. `pip install -e ".[test]"` with no
+    # -c constraints.txt) cannot land on 2.9.0 (PYSEC-2023-117 / PYSEC-2026-2987).
+    # Must match the requirements-test.txt / constraints.txt pin.
+    "pygments==2.21.0",
 ]
 dev = [
     "ruff==0.16.1",
