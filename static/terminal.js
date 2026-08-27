@@ -316,6 +316,17 @@ function describeQueryError(err) {
   return { text: (code && ERROR_COPY[code]) || message, code, message };
 }
 
+function describeApiKeyError(err, fallback) {
+  const message = extractErrorMessage(err, fallback);
+  if (message.indexOf('CYCLAW_API_KEY not set') !== -1 || message.indexOf('Soul mutation disabled') !== -1) {
+    return 'The gateway was started without CYCLAW_API_KEY. Typing the key in this box only works when the server process already has the same key. Source ~/.CyClaw/.env (or set the env var) and restart, then paste it here.';
+  }
+  if (message === 'Invalid or missing API key' || message.indexOf('Invalid or missing API key') !== -1) {
+    return 'That API key does not match the server. Check the key field, or restart the gateway after sourcing ~/.CyClaw/.env.';
+  }
+  return message;
+}
+
 function setSoulStatus(message, tone = '') {
   soulStatus.textContent = message || '';
   soulStatus.className = `soul-status${tone ? ` ${tone}` : ''}`;
@@ -673,9 +684,15 @@ async function openAuditPanel() {
   // before: on first open, the literal "Load the Audit panel after login."
   // placeholder, which reads exactly like a panel that loaded successfully.
   try {
-    const resp = await fetchWithTimeout(`${API}/auth/audit/summary`, {}, 15000);
+    const key = apiKeyInput ? apiKeyInput.value.trim() : '';
+    const resp = key
+      ? await fetchWithTimeout(`${API}/audit/summary`, { headers: authHeaders() }, 15000)
+      : await fetchWithTimeout(`${API}/auth/audit/summary`, {}, 15000);
     if (!resp.ok) {
-      box.textContent = 'audit summary unavailable (' + resp.status + ')';
+      box.textContent = describeApiKeyError(
+        await resp.json().catch(() => ({})),
+        'audit summary unavailable (' + resp.status + ')'
+      );
       return;
     }
     box.textContent = JSON.stringify(await resp.json(), null, 2);
@@ -700,9 +717,14 @@ async function submitQuery(confirmedOnline = null, onlineProvider = null, confir
   const query = confirmedOnline !== null ? pendingConfirmById.get(confirmEntryId) : input.value.trim();
   if (confirmedOnline !== null) pendingConfirmById.delete(confirmEntryId);
   if (!query) return;
-  if (confirmedOnline === null && (query === '/users' || query === '/admin' || query === '/audit')) {
+  const slash = query.toLowerCase();
+  if (confirmedOnline === null && (slash === '/users' || slash === '/admin' || slash === '/audit' || slash === '/help')) {
     input.value = '';
-    if (query === '/audit') openAuditPanel();
+    if (slash === '/help') {
+      addEntry('system', '', 'Commands: /users, /admin, /audit, /help. Soul, Sync, Agentic, FS, and SQL are Advanced toolbar buttons. This is the RAG console — other /text is sent as a query.');
+      return;
+    }
+    if (slash === '/audit') openAuditPanel();
     else openUsersPanel();
     return;
   }
@@ -1054,7 +1076,7 @@ async function loadSoul() {
     }, 5000);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(extractErrorMessage(data, 'Failed to load soul'));
+      throw new Error(describeApiKeyError(data, 'Failed to load soul'));
     }
     soulEditor.value = data.soul || '';
     soulVersion.textContent = `version: ${data.version ?? '--'}`;
@@ -1076,7 +1098,7 @@ async function reloadSoul() {
     }, 10000);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(extractErrorMessage(data, 'Failed to reload soul'));
+      throw new Error(describeApiKeyError(data, 'Failed to reload soul'));
     }
     addEntry('system', '', '→ Soul reloaded from disk');
     await loadSoul();
@@ -1106,7 +1128,7 @@ async function proposeSoulEvolution() {
     }, 10000);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(extractErrorMessage(data, 'Failed to create proposal'));
+      throw new Error(describeApiKeyError(data, 'Failed to create proposal'));
     }
 
     pendingSoulProposal = {
@@ -1139,7 +1161,7 @@ async function applySoulEvolution() {
     }, 10000);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(extractErrorMessage(data, 'Failed to apply soul evolution'));
+      throw new Error(describeApiKeyError(data, 'Failed to apply soul evolution'));
     }
 
     addEntry('system', '', '→ Soul updated and active for future queries');
@@ -1161,7 +1183,7 @@ async function restoreSoul() {
     }, 10000);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(extractErrorMessage(data, 'Failed to restore soul'));
+      throw new Error(describeApiKeyError(data, 'Failed to restore soul'));
     }
     addEntry('system', '', '→ Soul restored from .bak');
     await loadSoul();
@@ -1192,7 +1214,7 @@ async function callOps(path, body) {
   }, 60000);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    throw new Error(extractErrorMessage(data, 'Ops request failed'));
+    throw new Error(describeApiKeyError(data, 'Ops request failed'));
   }
   return data;
 }
