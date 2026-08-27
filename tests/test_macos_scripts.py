@@ -12,12 +12,14 @@ the drift.
 
 from __future__ import annotations
 
+import os
 import plistlib
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +58,43 @@ def test_invoke_cyclaw_probes_harness_startup_and_watches_both_pids() -> None:
     assert not any(line.strip().startswith("wait -n") for line in text.splitlines()), (
         "liveness loop must not call bash-4.3 wait-any"
     )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX child-process exit semantics")
+def test_invoke_cyclaw_propagates_a_post_start_child_failure(tmp_path: Path) -> None:
+    """A harness that dies after the startup probe must not become exit 0."""
+    home = tmp_path / "home"
+    fake_python = home / "venv" / "bin" / "python"
+    fake_python.parent.mkdir(parents=True)
+    fake_python.write_text("#!/bin/sh\nsleep 4\nexit 37\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+
+    repo = tmp_path / "repo"
+    harness = repo / "harness"
+    harness.mkdir(parents=True)
+    (harness / "server.py").write_text("# launcher probe\n", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["CYCLAW_HOME"] = str(home)
+    result = subprocess.run(
+        [
+            _BASH,
+            str(_REPO_ROOT / "macos" / "invoke-cyclaw.sh"),
+            "--repo",
+            str(repo),
+            "--no-gate",
+            "--no-browser",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 37, result.stdout + result.stderr
+    assert "harness process" in result.stderr
 
 
 def test_installer_preserves_patched_config_across_updates() -> None:
