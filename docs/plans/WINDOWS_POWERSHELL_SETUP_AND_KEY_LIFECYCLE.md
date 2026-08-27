@@ -1,18 +1,21 @@
 # Windows PowerShell setup and key-lifecycle issues
 
-Status: open follow-up. Reviewed against `origin/main` at `c27a36cf` on 2026-08-26.
+Status: open follow-up. Revalidated against `origin/main` at `7d2ab716` after
+#1114 merged on 2026-08-27, plus #1115's branch diff.
 Planning only for the remaining items. No I1-I6 / topology / write-posture change.
 
 Twin of `docs/plans/MACOS_BASH_SETUP_AND_KEY_LIFECYCLE.md`. Windows scripts live under `powershell/` + `windows/generate_service_task.py`. Do not fold remaining implementation into `#1111`-`#1113` or `#1103`.
 
 ## Implementation status
 
-Legend: **main** = on `origin/main` (`c27a36cf`). **#1115** = coded on this branch, not yet on main. **plan** = documented, not coded. **wont** = out of scope. **missing** = no Windows twin.
+Legend: **main** = on `origin/main` at `7d2ab716`. **#1115** = implemented by
+that PR. **plan** = documented, not coded. **wont** = out of scope.
+**missing** = no Windows twin.
 
 | Darwin | Windows | Exists | Implementation |
 | --- | --- | --- | --- |
-| `macos/install-cyclaw.sh --replace-repo` | `Install-CyClaw.ps1 -ReplaceRepo` | both exist | Darwin **#1115**; Windows still silent `Remove-Item` (**plan**) |
-| `uninstall-cyclaw.sh --remove-keychain` | `Uninstall-CyClaw.ps1 -RemoveCredMan` | both exist | neither deletes secrets (**plan**) |
+| `macos/install-cyclaw.sh --replace-repo` | `Install-CyClaw.ps1 -ReplaceRepo` (planned) | scripts exist; Windows option missing | Darwin **#1115**; Windows still silent `Remove-Item` (**plan**) |
+| `uninstall-cyclaw.sh --remove-keychain` (planned) | `Uninstall-CyClaw.ps1 -RemoveCredMan` (planned) | scripts exist; both options missing | neither deletes secrets (**plan**) |
 | `invoke-cyclaw.sh` gate+harness + `#1114` dual-PID | `Invoke-CyClaw.ps1` | both exist | Windows harness-only, no CredMan inject (**plan**) |
 | `cyclaw-keychain-set.sh` | `CyClaw-CredMan-Set.ps1` | both exist | Set/Env **main**; PS7 CancelKeyPress + blob wipe **#1115** |
 | `cyclaw-keychain-env.sh` (`#1020`) | `CyClaw-CredMan-Env.ps1` | both exist | wrapper **main**; win32 missing-vs-unreadable **plan** |
@@ -23,7 +26,11 @@ Legend: **main** = on `origin/main` (`c27a36cf`). **#1115** = coded on this bran
 | Keychain ACL / partition ID | CredMan GENERIC persist | n/a | **wont** (Appendix B) |
 | This plan + appendices | this file | docs | **#1115** (docs only) |
 
-**Already landed on this branch (#1115), not on main:** `powershell/CyClaw-CredMan-Set.ps1` flattened `try/finally` + unmanaged-blob wipe + PowerShell 7-only `[Console]::CancelKeyPress` (exit 130). Contract pin in `tests/test_powershell_windows_parity.py::test_credman_set_ps7_ctrl_c_registers_cancel_keypress`. 5.1 keeps `try/finally` only -- do not install `e.Cancel=$true` there.
+**Implemented by #1115:** `powershell/CyClaw-CredMan-Set.ps1` flattened
+`try/finally` + unmanaged-blob wipe + PowerShell 7-only
+`[Console]::CancelKeyPress` (exit 130). Contract pin in
+`tests/test_powershell_windows_parity.py::test_credman_set_ps7_ctrl_c_registers_cancel_keypress`.
+5.1 keeps `try/finally` only -- do not install `e.Cancel=$true` there.
 
 There is no Windows equivalent of `~/.CyClaw/.env` + rc source block. Interactive `cyclaw` gets `CYCLAW_API_KEY` only if the parent session already has it, or the operator pastes into the console field.
 
@@ -85,7 +92,12 @@ Set.ps1 wipe + PS7 CancelKeyPress: **#1115**. Env.ps1 CredFree finally: **main**
 
 PowerShell has no `trap EXIT` that reliably shreds a resource across Ctrl+C, `throw`, and `exit`. The right primitive is `try/finally` around unmanaged secret memory. CredMan-Set never writes a temp file, so the `#1032` / `cyclaw.kc.*` class of bug does not exist on the store path.
 
-One native C# cleanup path on this branch is used by both PowerShell `finally` and PS7 Ctrl+C. It uses `Interlocked.Exchange` for idempotence, zeros the unmanaged blob with `Marshal.WriteByte` before `FreeHGlobal`, then calls `ZeroFreeBSTR` and `SecureString.Dispose()`. The console callback stays inside the compiled helper instead of invoking a PowerShell function from the console-control thread.
+One native C# cleanup path introduced by #1115 is used by both PowerShell
+`finally` and PS7 Ctrl+C. It uses `Interlocked.Exchange` for idempotence, zeros
+the unmanaged blob with `Marshal.WriteByte` before `FreeHGlobal`, then calls
+`ZeroFreeBSTR` and `SecureString.Dispose()`. The console callback stays inside
+the compiled helper instead of invoking a PowerShell function from the
+console-control thread.
 
 PowerShell 7 `CancelKeyPress` is gated on `$PSVersionTable.PSVersion.Major -ge 7` plus `UserInteractive` and not redirected. Handler sets `$eventArgs.Cancel = $true`, runs cleanup, `[Environment]::Exit(130)`. **Not installed on 5.1** (`e.Cancel=$true` can hang that host).
 

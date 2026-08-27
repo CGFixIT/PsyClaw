@@ -18,10 +18,10 @@
   Requires an interactive console. Fail-closed if stdin is redirected.
 
   Cleanup: one try/finally wipes the unmanaged CredWrite blob, ZeroFreeBSTR,
-  and Disposes the SecureString. PowerShell 7+ also registers
-  [Console]::CancelKeyPress so Ctrl+C cannot skip that finally (5.1 often
-  aborts the pipeline without running it). The handler is not installed on
-  5.1 — e.Cancel=$true there can hang the host.
+  and Disposes the SecureString. PowerShell 7+ also registers a native
+  [Console]::CancelKeyPress handler so Ctrl+C runs the same cleanup even when
+  PowerShell skips finally. The handler is not installed on 5.1 —
+  e.Cancel=$true there can hang the host.
 #>
 [CmdletBinding()]
 param(
@@ -152,7 +152,8 @@ public static class CyClawCredMan {
 }
 "@
 
-# Script-scope so the PS7 CancelKeyPress handler can see live pointers.
+# Script scope keeps the normal path and finally block aligned with the
+# pointers mirrored into the native cleanup helper.
 $script:CyclawCredBstr = [IntPtr]::Zero
 $script:CyclawCredPtr = [IntPtr]::Zero
 $script:CyclawCredBlobSize = 0

@@ -202,8 +202,11 @@ adds a PATH entry plus a `cyclaw()` function to your rc file (`~/.zshrc` on
 zsh; on macOS bash it preserves the first existing login file among
 `~/.bash_profile`, `~/.bash_login`, and `~/.profile`, creating
 `~/.bash_profile` only when none exists). Useful flags:
-`--repo-path ~/src/CyClaw` (use an existing clone), `--skip-python-deps`,
-`--no-profile-edit`, `--no-path-edit`. Uninstall with
+`--repo-path ~/src/CyClaw` (use an existing clone), `--replace-repo`,
+`--skip-python-deps`, `--no-profile-edit`, `--no-path-edit`.
+`--replace-repo` permits deleting only an unusable directory at the default
+`~/.CyClaw/repo` clone target before cloning; it is intentionally destructive
+and does not apply with `--repo-path`. Uninstall with
 `bash ./macos/uninstall-cyclaw.sh` (`--remove-home` also deletes `~/.CyClaw`,
 with a prompt).
 

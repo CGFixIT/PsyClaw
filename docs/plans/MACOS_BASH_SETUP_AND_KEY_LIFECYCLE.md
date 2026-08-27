@@ -1,15 +1,20 @@
 # macOS bash setup and key-lifecycle issues
 
-Status: open follow-up. Reviewed against `origin/main` at `c27a36cf` on 2026-08-26.
+Status: open follow-up. Revalidated against `origin/main` at `7d2ab716` after
+#1114 merged on 2026-08-27, plus #1115's branch diff.
 This file is planning only except where the Implementation table says otherwise. It does not change I1-I6, graph topology, or write posture.
 
-**Home for this work:** stacked installer PR **#1115** (`kimi/cyclaw-optimize-installer-safety`, base `#1114` / `invoke-cyclaw.sh` liveness). Do not fold these fixes into `#1111`-`#1113` (console JS) or `#1103` (Origin header / auth).
+**Implementation provenance:** installer PR **#1115** was originally stacked on
+**#1114** (`invoke-cyclaw.sh` liveness). Do not fold the remaining follow-ups
+into the console JS work or **#1103** (Origin header / auth).
 
 Twin plan: `docs/plans/WINDOWS_POWERSHELL_SETUP_AND_KEY_LIFECYCLE.md`.
 
 ## Implementation status
 
-Legend: **main** = on `origin/main` (`c27a36cf`). **#1115** / **#1114** = coded on that PR branch, not yet on main. **plan** = documented, not coded. **wont** = out of scope.
+Legend: **main** = on `origin/main` at `7d2ab716`. **#1114** / **#1115** =
+implemented by that PR. **plan** = documented, not coded. **wont** = out of
+scope.
 
 | Item | Pri | Implementation |
 | --- | --- | --- |
@@ -27,7 +32,7 @@ Legend: **main** = on `origin/main` (`c27a36cf`). **#1115** / **#1114** = coded 
 | Rotate job refuses if gateway is up | P1 | plan |
 | README triple-copy / `setup-cyclaw.sh` identity | P2 | plan |
 | Keychain ACL is any `security` reader (`apple-tool:`) | P2 | wont (document only; Appendix B) |
-| `invoke-cyclaw.sh` dual-PID wait | -- | **#1114** (stacked under this PR; do not re-implement here) |
+| `invoke-cyclaw.sh` dual-PID wait | -- | **#1114** (merged; do not re-implement here) |
 | Signed Keychain helper / `set-generic-password-partition-list` | -- | wont |
 
 ## What is already correct
@@ -117,7 +122,7 @@ Implementation: **wont** as a code change. Documented in wrapper headers + Appen
 
 - `expect` heredoc / Tcl metacharacters in username: **plan** if that function is touched.
 - `macos/setup-cyclaw.sh` collision messaging: **#1115**.
-- `invoke-cyclaw.sh` dual-PID wait: **#1114** (stacked; do not re-implement here; stay on bash 3.2, never `wait -n`).
+- `invoke-cyclaw.sh` dual-PID wait: **#1114** (merged; do not re-implement here; stay on bash 3.2, never `wait -n`).
 
 ## Suggested implementation order
 

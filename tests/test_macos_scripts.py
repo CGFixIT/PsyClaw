@@ -113,6 +113,48 @@ def test_installer_requires_explicit_flag_to_replace_existing_repo() -> None:
     assert '[ -d "$REPO_DIR" ] && rm -rf "$REPO_DIR"' not in install_text
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX HOME and shell path semantics")
+def test_installer_preserves_an_unusable_default_repo_without_replace_flag(tmp_path: Path) -> None:
+    """The default clone path must fail closed before deleting existing data."""
+    home = tmp_path / "home"
+    repo = home / ".CyClaw" / "repo"
+    repo.mkdir(parents=True)
+    sentinel = repo / "operator-data.txt"
+    sentinel.write_text("keep me", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    result = subprocess.run(
+        [_BASH, str(_REPO_ROOT / "macos" / "install-cyclaw.sh")],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert sentinel.read_text(encoding="utf-8") == "keep me"
+    assert "Move it aside or re-run with --replace-repo" in result.stderr
+
+
+def test_replace_repo_recovery_is_documented_with_its_destructive_scope() -> None:
+    """Every installer option list must name the recovery flag and its limit."""
+    guide_paths = (
+        _REPO_ROOT / "macos" / "README.md",
+        _REPO_ROOT / "setup-guide.md",
+        _REPO_ROOT / "docs" / "HARNESS_MACOS.md",
+    )
+    for guide_path in guide_paths:
+        text = guide_path.read_text(encoding="utf-8")
+        assert "--replace-repo" in text, f"{guide_path} omits --replace-repo"
+        assert "~/.CyClaw/repo" in text, f"{guide_path} omits the destructive target"
+        assert "does not apply with `--repo-path`" in text, (
+            f"{guide_path} does not distinguish --replace-repo from --repo-path"
+        )
+
+
 def test_macos_scripts_never_enable_writes_or_indexing() -> None:
     script_names = ("install-cyclaw.sh", "setup-fsconnect.sh", "setup-from-clone.sh")
 
