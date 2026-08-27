@@ -275,7 +275,7 @@ def test_handoff_returns_redacted_text_and_records_the_envelope(test_config):
     assert "dev@example.com" not in redacted
     assert isinstance(envelope, HandoffEnvelope)
     assert envelope.provider == "grok"
-    assert envelope.redactions_applied == 1
+    assert envelope.had_redactions is True
     assert envelope.context_doc_ids == ("rag_basics.md",)
     assert envelope.prompt_chars == len(redacted)
 
@@ -311,7 +311,7 @@ def test_clean_prompt_records_zero_redactions(test_config):
     cfg, config_path = test_config
     _, envelope = sanitize_handoff("summarize the retrieval config", provider="grok",
                                    config_path=config_path, cfg=cfg)
-    assert envelope.redactions_applied == 0
+    assert envelope.had_redactions is False
 
 
 def test_handoff_without_an_override_uses_the_rag_chat_cap(test_config):
