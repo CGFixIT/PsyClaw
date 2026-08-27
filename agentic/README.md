@@ -203,9 +203,13 @@ agentic:
 ```
 
 While `enabled: false`, every `agentic.cli` command **except** `status` and
-`test` is a clean no-op (exit 0) — with one exception: `real-repo-run-publish`
-invoked without `--confirm` exits 4 (gate refusal) before the master-switch
-check. `status` always reports the disabled state.
+`test` is a clean no-op (exit 0) — with two exceptions, both argument-shape
+refusals that fire before the master-switch check and exit 4:
+`real-repo-run-publish` invoked without `--confirm`, and `real-repo-run-decide`
+invoked with an inconsistent escalation combination (`--publish` without
+`--push`, `--publish` without `--reason`/`--confirm-publish`, or
+`--push`/`--publish` with a decision other than `approve`). `status` always
+reports the disabled state.
 
 Prerequisites: GitHub CLI `gh` ≥ `gh_min_version`, authenticated (`gh auth login`).
 CyClaw never reads or forwards your token.
