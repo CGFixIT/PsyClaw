@@ -81,3 +81,27 @@ def test_web_fetch_denied_when_broker_allowlist_empty(tmp_path, monkeypatch) -> 
     with pytest.raises(WebToolError) as exc:
         tool.fetch("https://example.com/")
     assert exc.value.code == "WEB_TOOL_DENIED"
+
+
+def test_web_tool_passes_startup_cfg_to_assert_allowed(tmp_path, monkeypatch) -> None:
+    """Request-time audit must reuse create_app's config object, not re-read YAML."""
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path / ".CyClaw"))
+    startup = {"app": {"name": "cyclaw-startup-sentinel"}}
+    seen: list[object] = []
+
+    def _capture(name, argv, **kwargs):
+        seen.append(kwargs.get("cfg"))
+        raise ToolDenied("denied", details={})
+
+    monkeypatch.setattr("harness.web_search.assert_allowed", _capture)
+    cfg = HarnessConfig.load()
+    cfg.web_enabled = True
+    tool = WebTool(cfg, audit_cfg=startup)
+    monkeypatch.setattr(
+        tool,
+        "_require_enabled",
+        lambda: [{"host": "example.com", "path": "/", "scheme": "https", "raw": "https://example.com/"}],
+    )
+    with pytest.raises(WebToolError):
+        tool.fetch("https://example.com/")
+    assert seen == [startup]

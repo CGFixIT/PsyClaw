@@ -25,7 +25,7 @@ from utils.logger import audit_log
 
 
 class ToolDenied(AgenticError):
-    """Unknown or empty tool name. Fail closed."""
+    # Unknown or empty tool name. Fail closed.
 
     def __init__(self, message: str, details: dict | None = None) -> None:
         super().__init__(message, code="TOOL_DENIED", details=details)

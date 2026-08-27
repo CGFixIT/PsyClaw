@@ -500,7 +500,10 @@ def create_app(
 
     backend = _resolve_backend()
     client = chat_client or _default_chat_client(backend)
-    web = web_tool or WebTool(cfg)
+    web = web_tool or WebTool(
+        cfg,
+        audit_cfg=cyclaw_cfg if isinstance(cyclaw_cfg, dict) else None,
+    )
     notes = MemoryNotes(cfg.memory_dir)
 
     # Per-instance, not module-level: create_app() is the harness's test

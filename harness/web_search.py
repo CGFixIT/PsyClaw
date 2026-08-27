@@ -292,10 +292,12 @@ class WebTool:
         *,
         transport: httpx.BaseTransport | None = None,
         resolver=assert_public_host,
+        audit_cfg: dict | None = None,
     ) -> None:
         self._cfg = cfg
         self._resolver = resolver
         self._transport = transport
+        self._audit_cfg = audit_cfg
 
     def status(self) -> dict:
         entries = _load_entries(_allow_path(self._cfg))
@@ -425,7 +427,7 @@ class WebTool:
 
     def _gate_tool(self, name: str, argv: tuple[str, ...]) -> None:
         try:
-            assert_allowed(name, argv, allowlist=self._web_tool_allowlist())
+            assert_allowed(name, argv, allowlist=self._web_tool_allowlist(), cfg=self._audit_cfg)
         except ToolDenied as exc:
             raise WebToolError(exc.message, code="WEB_TOOL_DENIED", details=exc.details) from exc
 
