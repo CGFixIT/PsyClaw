@@ -32,7 +32,7 @@ existing subsystems rather than duplicating them:
 powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1
 
 # Or let the installer clone origin main itself — just run the script.
-# Options: -RepoPath C:\src\CyClaw  -SkipPythonDeps  -NoProfileEdit  -NoPathEdit
+# Options: -RepoPath C:\src\CyClaw  -SkipPythonDeps  -NoProfileEdit  -NoPathEdit  -ReplaceRepo
 ```
 
 The installer: creates `%USERPROFILE%\.CyClaw`, clones or links the repo,
