@@ -1,0 +1,6 @@
+interface:
+  display_name: "CyClaw Advisor"
+  short_description: "Current-main architecture and operations advice"
+  default_prompt: "Use $cyclaw-advisor for read-only, evidence-backed CyClaw architecture, operations, design-safety, or PR advice."
+policy:
+  allow_implicit_invocation: false

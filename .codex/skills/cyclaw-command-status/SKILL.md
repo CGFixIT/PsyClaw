@@ -23,7 +23,7 @@ python -c "import fastapi, uvicorn, chromadb, langchain_core; print('core import
 4. Parse and report current safe-state values:
 
 ```bash
-python -c "import yaml; c=yaml.safe_load(open('config.yaml', encoding='utf-8')); print({'mode': c['app']['mode'], 'host': c['api']['host'], 'port': c['api']['port'], 'top_k_semantic': c['retrieval']['top_k_semantic'], 'top_k_keyword': c['retrieval']['top_k_keyword'], 'min_score': c['retrieval']['min_score'], 'grok_enabled': c['models']['grok'].get('enabled', False), 'claude_enabled': c['models']['claude'].get('enabled', False)})"
+python -c "import yaml; c=yaml.safe_load(open('config.yaml', encoding='utf-8')); print({'mode': c['app']['mode'], 'host': c['api']['host'], 'port': c['api']['port'], 'top_k_semantic': c['retrieval']['top_k_semantic'], 'top_k_keyword': c['retrieval']['top_k_keyword'], 'min_score': c['retrieval']['min_score'], 'grok_enabled': c['models']['grok'].get('enabled', False), 'claude_enabled': c['models']['claude'].get('enabled', False), 'auth_enabled': c.get('auth', {}).get('enabled', False), 'memory_enabled': c.get('memory', {}).get('enabled', False), 'agentic_enabled': c.get('agentic', {}).get('enabled', False), 'telegram_enabled': c.get('telegram', {}).get('enabled', False)})"
 ```
 
 5. Report only whether secret-bearing environment variables are set; never
