@@ -52,6 +52,7 @@ helpers/documentation.
 | Live terminal console helper | PASS, `41/41` |
 | Windows installer-only profile with dependencies skipped and isolated `USERPROFILE` | PASS, exit `0`, expected layout present |
 | macOS setup wrapper under Git Bash: syntax, dry-run, help, unknown option | PASS |
+| GitHub Actions at final PR head `e50b2ea4` | PASS, all 14 workflow runs; main CI, Conda, Codex Skills, and security scans concluded successfully |
 
 The full aggregate `pytest tests/ -q --tb=short` run exposed four failures in
 the repository's macOS shell tests because they invoke the disabled WSL path
@@ -71,8 +72,6 @@ failure.
 - Real Ollama daemon, real Grok/Claude calls, Numbat CLI, Postgres/pgvector,
   Telegram/OpenTweet live services, and opt-in groundedness evaluation: not
   run. Provider checks remained mock/connection-shape only.
-- GitHub Actions at this draft PR head: not yet run; remote CI is the authority
-  after publication.
 
 ## Privacy Boundary
 
