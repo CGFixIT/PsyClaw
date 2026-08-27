@@ -49,6 +49,8 @@ if ($redirected) {
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
+using System.Security;
+using System.Threading;
 
 public static class CyClawCredMan {
     public const int CRED_TYPE_GENERIC = 1;
@@ -72,6 +74,81 @@ public static class CyClawCredMan {
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool CredWrite(ref CREDENTIAL credential, int flags);
+
+    private static IntPtr credentialBstr = IntPtr.Zero;
+    private static IntPtr credentialBlob = IntPtr.Zero;
+    private static int credentialBlobSize;
+    private static SecureString credentialSecure;
+    private static int cleanupStarted;
+    private static int cancelHandlerRegistered;
+
+    public static void TrackSecure(SecureString secure) {
+        credentialSecure = secure;
+    }
+
+    public static void TrackBstr(IntPtr bstr) {
+        credentialBstr = bstr;
+    }
+
+    public static void TrackBlob(IntPtr blob, int size) {
+        credentialBlob = blob;
+        credentialBlobSize = size;
+    }
+
+    public static void RegisterCancelHandler() {
+        if (Interlocked.Exchange(ref cancelHandlerRegistered, 1) == 0) {
+            Console.CancelKeyPress += HandleCancel;
+        }
+    }
+
+    public static void UnregisterCancelHandler() {
+        if (Interlocked.Exchange(ref cancelHandlerRegistered, 0) == 1) {
+            Console.CancelKeyPress -= HandleCancel;
+        }
+    }
+
+    public static void Cleanup() {
+        if (Interlocked.Exchange(ref cleanupStarted, 1) != 0) {
+            return;
+        }
+
+        IntPtr blob = Interlocked.Exchange(ref credentialBlob, IntPtr.Zero);
+        int blobSize = Interlocked.Exchange(ref credentialBlobSize, 0);
+        IntPtr bstr = Interlocked.Exchange(ref credentialBstr, IntPtr.Zero);
+        SecureString secure = Interlocked.Exchange(ref credentialSecure, null);
+        try {
+            if (blob != IntPtr.Zero) {
+                try {
+                    for (int i = 0; i < blobSize; i++) {
+                        Marshal.WriteByte(blob, i, 0);
+                    }
+                } finally {
+                    Marshal.FreeHGlobal(blob);
+                }
+            }
+        } finally {
+            try {
+                if (bstr != IntPtr.Zero) {
+                    Marshal.ZeroFreeBSTR(bstr);
+                }
+            } finally {
+                if (secure != null) {
+                    secure.Dispose();
+                }
+            }
+        }
+    }
+
+    private static void HandleCancel(object sender, ConsoleCancelEventArgs eventArgs) {
+        eventArgs.Cancel = true;
+        try {
+            Cleanup();
+        } catch {
+            // Process termination is mandatory even if a best-effort wipe fails.
+        } finally {
+            Environment.Exit(130);
+        }
+    }
 }
 "@
 
@@ -80,28 +157,13 @@ $script:CyclawCredBstr = [IntPtr]::Zero
 $script:CyclawCredPtr = [IntPtr]::Zero
 $script:CyclawCredBlobSize = 0
 $script:CyclawCredSecure = $null
-$script:CyclawCredCleaned = $false
-$script:CyclawCredCancelHandler = $null
 
 function Invoke-CyclawCredCleanup {
-    if ($script:CyclawCredCleaned) { return }
-    $script:CyclawCredCleaned = $true
-    if ($script:CyclawCredPtr -ne [IntPtr]::Zero) {
-        for ($i = 0; $i -lt $script:CyclawCredBlobSize; $i++) {
-            [Runtime.InteropServices.Marshal]::WriteByte($script:CyclawCredPtr, $i, 0)  # DevSkim: ignore DS104456 — wipe CredWrite blob before FreeHGlobal
-        }
-        [Runtime.InteropServices.Marshal]::FreeHGlobal($script:CyclawCredPtr)  # DevSkim: ignore DS104456
-        $script:CyclawCredPtr = [IntPtr]::Zero
-        $script:CyclawCredBlobSize = 0
-    }
-    if ($script:CyclawCredBstr -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($script:CyclawCredBstr)  # DevSkim: ignore DS104456
-        $script:CyclawCredBstr = [IntPtr]::Zero
-    }
-    if ($null -ne $script:CyclawCredSecure) {
-        $script:CyclawCredSecure.Dispose()
-        $script:CyclawCredSecure = $null
-    }
+    [CyClawCredMan]::Cleanup()
+    $script:CyclawCredPtr = [IntPtr]::Zero
+    $script:CyclawCredBlobSize = 0
+    $script:CyclawCredBstr = [IntPtr]::Zero
+    $script:CyclawCredSecure = $null
 }
 
 # PowerShell 7+: CancelKeyPress runs on Ctrl+C *before* the pipeline is torn
@@ -120,13 +182,9 @@ try {
     $script:UsePs7Cancel = $false
 }
 if ($script:UsePs7Cancel) {
-    $script:CyclawCredCancelHandler = [ConsoleCancelEventHandler]{
-        param($sender, $eventArgs)
-        $eventArgs.Cancel = $true
-        Invoke-CyclawCredCleanup
-        [Environment]::Exit(130)
-    }
-    [Console]::add_CancelKeyPress($script:CyclawCredCancelHandler)
+    # Keep the callback native: a console-control thread cannot safely invoke
+    # this script's active PowerShell runspace and can otherwise hang forever.
+    [CyClawCredMan]::RegisterCancelHandler()
 }
 
 $account = $env:USERNAME
@@ -140,13 +198,16 @@ try {
         Write-Error "cyclaw-credman-set: refusing to store an empty secret"
         throw "empty secret"
     }
+    [CyClawCredMan]::TrackSecure($script:CyclawCredSecure)
 
     $script:CyclawCredBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($script:CyclawCredSecure)  # DevSkim: ignore DS104456 — TTY SecureString to CredWrite blob; never argv
+    [CyClawCredMan]::TrackBstr($script:CyclawCredBstr)
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($script:CyclawCredBstr)  # DevSkim: ignore DS104456
     $bytes = [Text.Encoding]::Unicode.GetBytes($plain)
     $plain = $null
     $script:CyclawCredBlobSize = $bytes.Length
     $script:CyclawCredPtr = [Runtime.InteropServices.Marshal]::AllocHGlobal($script:CyclawCredBlobSize)  # DevSkim: ignore DS104456
+    [CyClawCredMan]::TrackBlob($script:CyclawCredPtr, $script:CyclawCredBlobSize)
     [Runtime.InteropServices.Marshal]::Copy($bytes, 0, $script:CyclawCredPtr, $script:CyclawCredBlobSize)  # DevSkim: ignore DS104456
     for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 0 }
 
@@ -170,10 +231,12 @@ try {
         throw
     }
 } finally {
-    Invoke-CyclawCredCleanup
-    if ($null -ne $script:CyclawCredCancelHandler) {
-        try { [Console]::remove_CancelKeyPress($script:CyclawCredCancelHandler) } catch { }
-        $script:CyclawCredCancelHandler = $null
+    try {
+        Invoke-CyclawCredCleanup
+    } finally {
+        if ($script:UsePs7Cancel) {
+            [CyClawCredMan]::UnregisterCancelHandler()
+        }
     }
 }
 

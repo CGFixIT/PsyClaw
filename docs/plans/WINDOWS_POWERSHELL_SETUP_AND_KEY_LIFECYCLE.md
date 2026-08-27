@@ -85,7 +85,7 @@ Set.ps1 wipe + PS7 CancelKeyPress: **#1115**. Env.ps1 CredFree finally: **main**
 
 PowerShell has no `trap EXIT` that reliably shreds a resource across Ctrl+C, `throw`, and `exit`. The right primitive is `try/finally` around unmanaged secret memory. CredMan-Set never writes a temp file, so the `#1032` / `cyclaw.kc.*` class of bug does not exist on the store path.
 
-One function on this branch, used by both `finally` and PS7 Ctrl+C: `Invoke-CyclawCredCleanup` (idempotent). It zeros the unmanaged blob with `Marshal.WriteByte` then `FreeHGlobal`, `ZeroFreeBSTR`, and `SecureString.Dispose()`.
+One native C# cleanup path on this branch is used by both PowerShell `finally` and PS7 Ctrl+C. It uses `Interlocked.Exchange` for idempotence, zeros the unmanaged blob with `Marshal.WriteByte` before `FreeHGlobal`, then calls `ZeroFreeBSTR` and `SecureString.Dispose()`. The console callback stays inside the compiled helper instead of invoking a PowerShell function from the console-control thread.
 
 PowerShell 7 `CancelKeyPress` is gated on `$PSVersionTable.PSVersion.Major -ge 7` plus `UserInteractive` and not redirected. Handler sets `$eventArgs.Cancel = $true`, runs cleanup, `[Environment]::Exit(130)`. **Not installed on 5.1** (`e.Cancel=$true` can hang that host).
 

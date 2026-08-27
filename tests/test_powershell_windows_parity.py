@@ -139,12 +139,15 @@ def test_credman_set_ps7_ctrl_c_registers_cancel_keypress() -> None:
     text = (_PS / "CyClaw-CredMan-Set.ps1").read_text(encoding="utf-8")
     assert "function Invoke-CyclawCredCleanup" in text
     assert "CancelKeyPress" in text
-    assert "ConsoleCancelEventHandler" in text
+    assert "RegisterCancelHandler" in text
+    assert "private static void HandleCancel" in text
     assert "$PSVersionTable.PSVersion.Major -ge 7" in text
-    assert "$eventArgs.Cancel = $true" in text
-    assert "[Environment]::Exit(130)" in text
-    assert "WriteByte" in text
-    assert "remove_CancelKeyPress" in text
+    assert "eventArgs.Cancel = true" in text
+    assert "Environment.Exit(130)" in text
+    assert "Marshal.WriteByte" in text
+    assert "Interlocked.Exchange" in text
+    assert "UnregisterCancelHandler" in text
+    assert "[ConsoleCancelEventHandler]{" not in text
     assert "Do not install this on Windows PowerShell" in text
 
 
