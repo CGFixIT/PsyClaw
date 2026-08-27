@@ -15,25 +15,46 @@ Yes, 48 GB can do more than burst. **The loop is what keeps it on burst.**
 A scratchpad helps the window, not the model. Used wrong, it just makes 27B
 mistakes durable.
 
+## Operator SKU
+
+Recorded facts only. 14-inch vs 16-inch and the 15/16 vs 18/20 Pro bin are
+not pinned in this repo — confirm on the machine with `sysctl -n machdep.cpu.brand_string`
+and About This Mac if a later change depends on GPU core count.
+
+| Field | This machine |
+|---|---|
+| Product | MacBook Pro (Apple silicon, 2026 M5 Pro / Max generation) |
+| SoC | **Apple M5 Pro** |
+| Unified memory | **48 GB** |
+| Memory bandwidth | **307 GB/s** (M5 Pro, both GPU bins) |
+| CPU / GPU bins possible | 15-core CPU + 16-core GPU, or 18-core CPU + 20-core GPU |
+| Neural Engine | 16-core |
+| Not this machine | Base **M5** (10/10, ~153 GB/s, max **32 GB**) |
+| Not this machine | **M5 Max** (18/32 or 18/40, ~460 or ~614 GB/s, max **128 GB**) |
+| Local coder | `qwen3.8:27b-mlx`, 4-bit, `reasoning_effort: none`, `num_ctx` 16384 |
+
+48 GB on an M5 Pro is a mid-high Pro config (Pro ceiling is 64 GB). It is also
+a valid Max *option* on the 40-core GPU SKU — that coincidence is why Max
+review units get quoted as if they were this laptop. They are not.
+
 ## Which chip this is (M5 vs M5 Pro vs M5 Max)
 
 "MacBook Pro M5 48 GB" in operator speech means **M5 Pro + 48 GB**. Base M5
-cannot be configured with 48 GB (ceiling 32 GB). M5 Max can be configured with
-48 GB on the 40-core GPU SKU, but that is a different SoC (more GPU cores,
-460–614 GB/s bandwidth, ceiling 128 GB). The operator machine is the Pro tier.
+cannot be configured with 48 GB. M5 Max can be configured with 48 GB on the
+40-core GPU SKU, but that is a different SoC.
 
 | Chip | Typical CPU / GPU | Memory bandwidth | Unified memory ceiling | 48 GB available? |
 |---|---|---|---|---|
 | M5 (base) | 10 / 10 | ~153 GB/s | 32 GB | No |
-| **M5 Pro (this box)** | 15/16 or 18/20 | ~307 GB/s | 64 GB | **Yes — this config** |
+| **M5 Pro (this box)** | 15/16 or 18/20 | **307 GB/s** | 64 GB | **Yes — this config** |
 | M5 Max | 18 / 32 or 40 | ~460 or ~614 GB/s | 128 GB | Yes, on 40-core GPU SKUs |
 
 What that means for CyClaw:
 
 - **Capacity** of the 27B job is the 48 GB and the 16k product caps, not the
   Max GPU. Weights ~18 GB + 16k KV ~1 GB fit with headroom on Pro 48 GB.
-- **Decode speed** on Pro 48 GB is lower than published M5 Max + DFlash2 / MTP
-  screenshots. Do not treat those as this machine's baseline.
+- **Decode speed** on Pro 48 GB / 307 GB/s is lower than published M5 Max +
+  DFlash2 / MTP screenshots. Do not treat those as this machine's baseline.
 - **Max 128 GB** is how you would resident a 70B / 8-bit second model. That is
   a different purchase. This doc does not assume it.
 - Raising `num_ctx` on this Pro is still feasible in RAM; it still does not
