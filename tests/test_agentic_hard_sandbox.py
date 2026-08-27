@@ -99,6 +99,16 @@ def test_seatbelt_profile_contains_deny_network(tmp_path: Path) -> None:
     assert str(tmp_path.resolve()).replace("\\", "\\\\") in profile or str(tmp_path.resolve()) in profile
 
 
+def test_seatbelt_profile_allows_a_writable_tmpdir(tmp_path: Path) -> None:
+    cwd = tmp_path / "work"
+    tmp = tmp_path / "tmp"
+    cwd.mkdir()
+    tmp.mkdir()
+    profile = seatbelt_profile(cwd, tmp)
+    assert "require-any" in profile
+    assert str(tmp.resolve()).replace("\\", "\\\\") in profile or str(tmp.resolve()) in profile
+
+
 def test_darwin_seatbelt_missing_binary_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     real_which = shutil.which
 

@@ -11,9 +11,12 @@ tests only. It is not selected by ``production_sandbox``.
 
 from __future__ import annotations
 
+import os
 import shutil
+import signal
 import subprocess  # noqa: S404 -- argv-list only; no shell
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,43 +98,63 @@ class ArgvListSandbox:
         env: Mapping[str, str],
         timeout_sec: int,
     ) -> SandboxOutcome:
+        popen_kw: dict[str, object] = {
+            "cwd": str(cwd),
+            "env": dict(env),
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+        }
+        if sys.platform != "win32":
+            popen_kw["start_new_session"] = True
         try:
-            completed = subprocess.run(  # noqa: S603 -- argv list, no shell
-                list(argv),
-                cwd=str(cwd),
-                env=dict(env),
-                capture_output=True,
-                text=True,
-                timeout=timeout_sec,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return SandboxOutcome(
-                exit_code=-1,
-                stdout=truncate_output(stream_to_str(exc.stdout)),
-                stderr=f"timed out after {timeout_sec}s",
-                timed_out=True,
-            )
+            proc = subprocess.Popen(list(argv), **popen_kw)  # noqa: S603 -- argv list, no shell
         except OSError as exc:
             return SandboxOutcome(
                 exit_code=-2,
                 stderr=f"could not execute {argv[0]!r}: {exc}",
             )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            _kill_sandbox_tree(proc)
+            leftover_out, leftover_err = proc.communicate()
+            return SandboxOutcome(
+                exit_code=-1,
+                stdout=truncate_output(stream_to_str(leftover_out)),
+                stderr=f"timed out after {timeout_sec}s",
+                timed_out=True,
+            )
         return SandboxOutcome(
-            exit_code=completed.returncode,
-            stdout=truncate_output(completed.stdout or ""),
-            stderr=truncate_output(completed.stderr or ""),
+            exit_code=proc.returncode if proc.returncode is not None else -1,
+            stdout=truncate_output(stdout or ""),
+            stderr=truncate_output(stderr or ""),
         )
 
 
-def seatbelt_profile(cwd: Path) -> str:
-    """SBPL profile: deny network; deny file-write outside ``cwd``."""
+def _kill_sandbox_tree(proc: subprocess.Popen[str]) -> None:
+    """Timeout must kill descendants, not only the wrapper (sandbox-exec/unshare)."""
+    if sys.platform != "win32":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    proc.kill()
+
+
+def seatbelt_profile(cwd: Path, tmpdir: Path | None = None) -> str:
+    """SBPL profile: deny network; deny file-write outside ``cwd`` (and TMPDIR)."""
     root = str(cwd.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+    allowed = [root]
+    if tmpdir is not None:
+        allowed.append(str(tmpdir.resolve()).replace("\\", "\\\\").replace('"', '\\"'))
+    except_clause = " ".join(f'(subpath "{p}")' for p in allowed)
     return (
         "(version 1)\n"
         "(allow default)\n"
         "(deny network*)\n"
-        f'(deny file-write* (require-not (subpath "{root}")))\n'
+        f"(deny file-write* (require-not (require-any {except_clause})))\n"
     )
 
 
@@ -175,16 +198,22 @@ class DarwinSeatbeltSandbox:
         env: Mapping[str, str],
         timeout_sec: int,
     ) -> SandboxOutcome:
-        wrapped = [
-            self._sandbox_exec,
-            "-p",
-            seatbelt_profile(cwd),
-            "--",
-            *list(argv),
-        ]
-        return ArgvListSandbox().run(
-            wrapped, cwd=cwd, env=env, timeout_sec=timeout_sec
-        )
+        with tempfile.TemporaryDirectory(prefix="cyclaw-seatbelt-") as tmp:
+            tmp_path = Path(tmp)
+            env_with_tmp = dict(env)
+            env_with_tmp["TMPDIR"] = str(tmp_path)
+            env_with_tmp["TMP"] = str(tmp_path)
+            env_with_tmp["TEMP"] = str(tmp_path)
+            wrapped = [
+                self._sandbox_exec,
+                "-p",
+                seatbelt_profile(cwd, tmp_path),
+                "--",
+                *list(argv),
+            ]
+            return ArgvListSandbox().run(
+                wrapped, cwd=cwd, env=env_with_tmp, timeout_sec=timeout_sec
+            )
 
 
 class LinuxNetnsSandbox:
