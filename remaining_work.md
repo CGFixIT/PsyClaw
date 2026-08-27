@@ -1,9 +1,5 @@
 # Remaining work
 
-# note i must be retarded i did basically everything w the telegram config and even get correct terminal responses after the token and chat id part, but the chatbot in the app itself doesnt respond - i dont use telegram and its prob something easy but i wasted an hour on it today haha - confirmed: mildly ‘tarded: “ Runs as a separate process (python -m telegram.cli“ aka read the readme under telegram/) - oh and it gets better (I’ll say this making fun of myself because the audit log would have showed it so that’s a good thing) - non-allowlisted chat is silent/refused; audit.jsonl shows inbound+query+outbound events.
-
-
-
 Live checklist as of **2026-08-21**, `origin/main` `02447585`.
 
 Code and `config.yaml` win. History of closed 2026-08-02 items lives in

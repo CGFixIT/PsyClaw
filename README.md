@@ -12,6 +12,7 @@
 - [What It Does](#what-it-does)
 - [Architecture](#architecture)
 - [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
+- [Per-User Authentication](#per-user-authentication-v19)
 - [Quick Start](#quick-start)
 - [Docker / GHCR](docs/DOCKER.md)
 - [Full Setup Guide](setup-guide.md)
@@ -320,6 +321,18 @@ GROK_API_KEY=your-xai-key-or-dummy-when-offline
 ANTHROPIC_API_KEY=your-anthropic-key
 ```
 
+Then tighten it — a hand-created file inherits the shell's umask (usually
+`0644`, i.e. world-readable), and `macos/invoke-cyclaw.sh` **refuses to source a
+dotenv that is not `600` or `400`** rather than load secrets from a file other
+local accounts can read:
+
+```bash
+chmod 600 .env
+```
+
+`macos/setup-cyclaw-keys.sh` and the harness console's `/api` panel both already
+write `~/.CyClaw/.env` at `600`; only a hand-made file needs this step.
+
 The Claude variable is **`ANTHROPIC_API_KEY`**, not `CLAUDE_API_KEY` —
 `llm/client.py` and `agentic/config.py` both read the former, and nothing in
 the codebase reads the latter. Setting the wrong name is silent: Claude simply
@@ -351,6 +364,114 @@ CyClaw is loopback-only (`127.0.0.1:8787`) — the key never crosses a network. 
 - Do **not** reuse a password from elsewhere
 - Do **not** commit the key to Git (`.env` is already in `.gitignore`)
 - Don't forget to set the api key via terminal on Mac or env var in Windows or the web app will not recognize it.
+
+## Per-User Authentication (v1.9)
+
+CyClaw ships **two independent credential systems**, and confusing them is the
+most common setup mistake:
+
+| System | Secret | Guards | Toggle |
+|---|---|---|---|
+| **Operator API key** | `CYCLAW_API_KEY` env var (Bearer) | `/soul/*`, `/ops/*`, `/memory/*`, `/audit/summary`, and the harness console's guarded routes | Always on (fail-closed when unset); `security.api_key_optional` is the one deliberate loopback-peer bypass |
+| **Per-user auth** | Per-account scrypt password → session cookie, or a named device token | `POST /query` and the console's user surface | `auth.enabled` in `config.yaml` — ships **`false`** |
+
+The per-user layer is `gate_auth.py` + `utils/authn*`; the full design is
+[`docs/AUTHENTICATION_DESIGN.md`](docs/AUTHENTICATION_DESIGN.md). With
+`auth.enabled: false` (the shipped default) `POST /query` takes no credential
+and every `/auth/*` route answers **503**, not 404 — route presence never
+discloses whether the feature is on.
+
+### Turning it on
+
+1. Set `auth.enabled: true` in `config.yaml` and restart `gate.py`. The store is
+   SQLite at `auth.db_path` (`data/auth/cyclaw_auth.db`); point
+   `CYCLAW_AUTH_DB_URL` — its **own** env var, deliberately not the personality
+   subsystem's `CYCLAW_DB_URL` — at a `postgresql://` DSN for Postgres.
+2. Set the first admin password. The bootstrap account is username **`admin`**,
+   created with no password. Open the terminal console on loopback and use the
+   first-boot box, or post directly:
+
+   ```bash
+   curl -s -X POST http://127.0.0.1:8787/auth/bootstrap-password \
+     -H 'Content-Type: application/json' \
+     -d '{"password":"<a long passphrase>"}'
+   ```
+
+   That route is **loopback-peer + same-origin only** — 403 from off-box, 409
+   once a password is already set, 503 when `auth.enabled` is false. It carries
+   no credential on purpose: on a genuine first run there is nothing to present
+   yet. `GET /auth/setup-status` (unauthenticated, rate-limited) reports
+   `{enabled, needs_password, username}` so a console can tell first-boot from
+   logged-out.
+3. Add the accounts operators actually use with the local-only `cyclaw-user`
+   console script (no HTTP route reaches it):
+
+   ```bash
+   cyclaw-user add alice --role operator     # prompts for the password
+   cyclaw-user list
+   cyclaw-user token create alice laptop     # prints the token ONCE
+   ```
+
+   Subcommands: `add`, `list`, `role`, `disable`, `enable`, `passwd`, and
+   `token create|list|revoke`. New accounts default to `operator`.
+
+### Roles
+
+Three roles, checked server-side on every request — `admin`, `operator`, `audit`:
+
+| Capability | `admin` | `operator` | `audit` |
+|---|---|---|---|
+| `POST /query` | yes | yes | **no** — 403 `AUTH_ROLE_DENIED` |
+| List users (`GET /auth/users`) | yes | yes | no |
+| Create user / reset another user's password | yes | yes, but never on an `admin` account | no |
+| Set role, delete user | yes | no | no |
+| Disable / enable | yes | non-admins only | no |
+| Change own password (`POST /auth/password`) | yes | yes | yes |
+| `GET /auth/audit/summary` | yes | no | yes |
+
+The **last enabled `admin` is protected**: disable, delete, and role-change all
+refuse it, so an operator cannot lock the deployment out of its own admin
+surface. `GET /auth/audit/summary` is the reduced, session-gated audit view —
+it is not the API-key-gated `GET /audit/summary`.
+
+### Sessions, tokens, and lockout
+
+- **Browsers** get a `cyclaw_session` cookie plus a CSRF token; every mutating
+  `/auth/*` route requires that token in the `X-CyClaw-CSRF` header. `POST
+  /query` is deliberately exempt from CSRF — it takes a session *or* a bearer
+  device token and mutates no auth state.
+- **Programmatic clients** send a named device token as
+  `Authorization: Bearer <token>`. A token is displayed once at creation and
+  stored only as a hash; revoke by label with `cyclaw-user token revoke`.
+- **Session lifetime** is governed by two independent limits in
+  `config.yaml`'s `auth.session` block, and a session dies at whichever is
+  reached first: `idle_timeout_sec: 43200` (12 h, a rolling window that resets
+  on every valid use) and `absolute_timeout_sec: 604800` (7 d, which never
+  resets).
+- **Failed logins** back off per account: the first **5** consecutive failures
+  are free, then the delay doubles from 2 s up to a **900 s (15 min) ceiling**.
+  It is a ceiling, not a permanent lock — no admin action is needed to recover.
+- **Passwords** are hashed with scrypt (`utils/authn.py`). No password,
+  session id, CSRF token, or device token is ever written to `audit.jsonl`.
+
+### Serving it beyond loopback
+
+Enabling `auth.enabled` does **not** by itself make a non-loopback bind safe or
+permitted. `gate.py`'s `_require_loopback_bind` still refuses a non-loopback
+`api.host`, and the auth+TLS route past it is refused outright while
+`security.api_key_optional` is `true` — that flag removes the `CYCLAW_API_KEY`
+gate from `/soul/*`, `/ops/*`, and `/memory/*`, which per-user auth does not
+replace. Set `security.api_key_optional` back to `false` first, then generate a
+certificate with the bundled openssl wrapper (no new runtime dependency):
+
+```bash
+cyclaw-gen-cert --hostname "$(hostname)" --days 825
+```
+
+Flags: `--certfile`, `--keyfile`, `--hostname` (defaults to the machine
+hostname), `--days` (default `825`). Read
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before exposing the port —
+CyClaw's stated scope is single-operator and loopback-bound.
 
 ## Quick Start
 
