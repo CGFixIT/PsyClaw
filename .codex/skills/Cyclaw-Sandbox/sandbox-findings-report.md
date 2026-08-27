@@ -2,7 +2,7 @@
 
 Date: 2026-08-27
 Repository: `CGFixIT/CyClaw`
-Baseline: `origin/main` at `b9c0e487ae4fda3c2b78044222c4825b90116d33`
+Baseline: `origin/main` at `57e052ed9222d42a20b95ceb4dec71d21e169f57`
 Host: Windows
 Python: `3.12.0rc3` (`C:\py3dot12\python.exe`)
 
@@ -52,7 +52,8 @@ helpers/documentation.
 | Live terminal console helper | PASS, `41/41` |
 | Windows installer-only profile with dependencies skipped and isolated `USERPROFILE` | PASS, exit `0`, expected layout present |
 | macOS setup wrapper under Git Bash: syntax, dry-run, help, unknown option | PASS |
-| GitHub Actions at final PR head `e50b2ea4` | PASS, all 14 workflow runs; main CI, Conda, Codex Skills, and security scans concluded successfully |
+| GitHub Actions at pre-resync PR head `78d2d1e6` | PASS, all 14 workflow runs; main CI, Conda, Codex Skills, and security scans concluded successfully |
+| Current-main rebase rerun at `57e052ed` | PASS, full mock-safe driver `229/229` after PRs #1122 and #1123 landed |
 
 The full aggregate `pytest tests/ -q --tb=short` run exposed four failures in
 the repository's macOS shell tests because they invoke the disabled WSL path

@@ -2,12 +2,12 @@
 
 ---
 name: cyclaw-swarm-ver-v2
-description: CyClaw Swarm Verification v2 — comprehensive sandbox test system for the CyClaw offline-first RAG project (github.com/CGFixIT/CyClaw), resynced to current main @ b9c0e487ae4fda3c2b78044222c4825b90116d33 / v1.9.0 (2026-08-27). Verifies the LangGraph pipeline (12 nodes incl. pre-action hooks, 5 queries), the Ollama local-LLM path (qwen3.8:27b-mlx, 127.0.0.1:11434) at three realism tiers, LM Studio fallback, triple-gated online API fallback (Grok + Claude) with connection-only tests, pre-action hook gate (#963), API key redaction, due-diligence invariants (14 classes), Phase 2+4 guardrails, spend tracking ledger (logs/spend.jsonl, PRICED_AS_OF staleness), Numbat event emission (logs/numbat-events.ndjsonl), sequence detection forensics, the memory subsystem, the auth subsystem (Stages 1-4: bootstrap, login/session+CSRF, RBAC admin/operator/audit, TLS), the Telegram channel, the OpenTweet channel, unslop bridge, the harness coding console (127.0.0.1:8790 incl. /api/keys, /api/web, /api/memory, /api/tools, /api/skills), MCP manifest drift pin, macOS launchd/Keychain + ollama-mlx glue, Windows Task Scheduler glue, sync schedulers, and ALL terminal.html REST endpoints: /soul, /ops/sync, /ops/agentic, /ops/fsconnect, /ops/sqlconnect — with a full sandbox clone-verification ladder that generates its own CYCLAW_API_KEY and exercises every gated surface. Use when asked to verify, smoke-test, validate, or test CyClaw; mentions CyClaw swarm, terminal consoles, Ollama, triple-gate API, Grok/Claude fallback, key redaction, due diligence invariants, guardrails, memory, telegram, opentweet, harness, macOS launchd, spend tracking, numbat, or running the test suite.
+description: CyClaw Swarm Verification v2 — comprehensive sandbox test system for the CyClaw offline-first RAG project (github.com/CGFixIT/CyClaw), resynced to current main @ 57e052ed9222d42a20b95ceb4dec71d21e169f57 / v1.9.0 (2026-08-27). Verifies the LangGraph pipeline (12 nodes incl. pre-action hooks, 5 queries), the Ollama local-LLM path (qwen3.8:27b-mlx, 127.0.0.1:11434) at three realism tiers, LM Studio fallback, triple-gated online API fallback (Grok + Claude) with connection-only tests, pre-action hook gate (#963), API key redaction, due-diligence invariants (14 classes), Phase 2+4 guardrails, spend tracking ledger (logs/spend.jsonl, PRICED_AS_OF staleness), Numbat event emission (logs/numbat-events.ndjsonl), sequence detection forensics, the memory subsystem, the auth subsystem (Stages 1-4: bootstrap, login/session+CSRF, RBAC admin/operator/audit, TLS), the Telegram channel, the OpenTweet channel, unslop bridge, the harness coding console (127.0.0.1:8790 incl. /api/keys, /api/web, /api/memory, /api/tools, /api/skills), MCP manifest drift pin, macOS launchd/Keychain + ollama-mlx glue, Windows Task Scheduler glue, sync schedulers, and ALL terminal.html REST endpoints: /soul, /ops/sync, /ops/agentic, /ops/fsconnect, /ops/sqlconnect — with a full sandbox clone-verification ladder that generates its own CYCLAW_API_KEY and exercises every gated surface. Use when asked to verify, smoke-test, validate, or test CyClaw; mentions CyClaw swarm, terminal consoles, Ollama, triple-gate API, Grok/Claude fallback, key redaction, due diligence invariants, guardrails, memory, telegram, opentweet, harness, macOS launchd, spend tracking, numbat, or running the test suite.
 ---
 
 # CyClaw Swarm Verification v2
 
-Baseline of this document: **main @ b9c0e487ae4fda3c2b78044222c4825b90116d33, version 1.9.0 (resynced 2026-08-27)**.
+Baseline of this document: **main @ 57e052ed9222d42a20b95ceb4dec71d21e169f57, version 1.9.0 (resynced 2026-08-27 after PRs #1122 and #1123)**.
 Supersedes the 2026-08-15 baseline (main @ 1e14d9c). When the repo has moved,
 re-derive facts from `config.yaml`, `graph.py`, `gate.py`, `pyproject.toml`,
 `tests/README.md`, and `INVARIANTS.md` — those files win over this document.
@@ -110,6 +110,10 @@ re-derive facts from `config.yaml`, `graph.py`, `gate.py`, `pyproject.toml`,
     cyclaw-metrics, cyclaw-clear-cache, cyclaw-harness, cyclaw-user,
     cyclaw-gen-cert; wheel packages now include telegram, opentweet, memory;
     coverage omits agentic/vendor/*; marker `uses_shipped_execution_flag`.
+18. **Terminal/invoker resync**: current main includes the PR #1122/#1123
+    slash-command, API-key, dotenv-permission, and terminal-auth-flow fixes.
+    Re-run the terminal HTML/REST and installer lanes against the fetched main
+    tip; do not treat the older copied console behavior as current.
 
 ## 1. Sandbox environment rules (unchanged, still binding)
 
@@ -504,7 +508,7 @@ Unchanged set, including TestShippedCoreConfigContract — run
 `tests/test_due_diligence*` and report per-class PASS/FAIL with line numbers
 for any failure.
 
-## 5. Known residuals on main @ b9c0e487ae4fda3c2b78044222c4825b90116d33 (2026-08-27)
+## 5. Known residuals on main @ 57e052ed9222d42a20b95ceb4dec71d21e169f57 (2026-08-27)
 
 Track as KNOWN — verify they still exist, never report as new findings:
 
