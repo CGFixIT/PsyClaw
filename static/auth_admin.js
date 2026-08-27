@@ -49,6 +49,7 @@
     // already had the right shape; these did not. Funnel them all through one
     // helper so a future mutation cannot reintroduce the silent path.
     function mutate(label, url, init) {
+      onStatus(); // clear any previous error at the start of a new mutation
       return fetchFn(url, init)
         .then(function (resp) {
           if (!resp.ok) onStatus(label + " failed (" + resp.status + ")");
@@ -71,10 +72,12 @@
       }
       if (!resp.ok) {
         listBox.textContent = "cannot list users (" + resp.status + ")";
+        onStatus("cannot list users (" + resp.status + ")");
         return;
       }
       const users = await resp.json();
       listBox.textContent = "";
+      onStatus(); // successful reload clears any transient error
       users.forEach(function (u) {
         const row = el("div", { class: "auth-user-row" });
         row.appendChild(el("span", null, u.username + " · " + u.role + (u.disabled ? " · disabled" : "")));
@@ -119,6 +122,7 @@
     }
 
     createBtn.addEventListener("click", function () {
+      onStatus(); // clear any previous error at the start of a new mutation
       fetchFn(base + "/users", {
         method: "POST",
         headers: headers(true),

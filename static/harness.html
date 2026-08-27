@@ -143,6 +143,10 @@
   .statusbar .k { color: var(--text-muted); }
   .statusbar .v { color: var(--text-primary); }
   .statusbar .spacer { flex: 1; }
+  .panel-status {
+    font-family: var(--mono); font-size: 12px; color: var(--accent-red);
+    padding: 8px 12px; min-height: 16px;
+  }
   #sGoal {
     max-width: 140px; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; display: inline-block; vertical-align: bottom;
@@ -192,6 +196,7 @@
         <div class="side-pane" id="pane-sessions"></div>
         <div class="side-pane" id="pane-registry"></div>
         <div class="side-pane" id="pane-users">
+          <div id="usersPanelStatus" class="panel-status" hidden></div>
           <div id="usersPanelBody"></div>
         </div>
       </div>
@@ -1335,6 +1340,17 @@ async function runSlash(line) {
               return m ? m.getAttribute('content') : '';
             },
             fetchFn: function (path, init) { return fetch(path, init); },
+            onStatus: function (msg) {
+              const el = document.getElementById('usersPanelStatus');
+              if (!el) return;
+              if (msg) {
+                el.textContent = msg;
+                el.hidden = false;
+              } else {
+                el.textContent = '';
+                el.hidden = true;
+              }
+            },
           });
         }
         sys('users panel opened — same accounts as the gate console');

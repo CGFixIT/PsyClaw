@@ -70,3 +70,30 @@ def test_the_initial_paint_reports_its_own_failure():
     with nothing on screen explaining why."""
     code = _code_only()
     assert "reload().catch(" in code, "the bootstrap reload() lost its rejection handler"
+
+
+def test_mutate_clears_status_before_new_attempt():
+    """A stale error must not persist across a fresh attempt, or the operator
+    cannot tell whether the new click failed or the old one did."""
+    js = _source()
+    body = js.split("function mutate(", 1)[1].split("\n    }", 1)[0]
+    assert "onStatus()" in body, "mutate() must clear status at the start of a new attempt"
+
+
+def test_reload_surfaces_list_failures_and_clears_on_success():
+    """reload() must use onStatus for non-ok responses (not just listBox text)
+    and clear the status after a successful render."""
+    js = _source()
+    body = js.split("async function reload(", 1)[1].split("\n    }", 1)[0]
+    assert 'onStatus("cannot list users' in body, "reload() must surface list failures via onStatus"
+    assert body.count("onStatus()") >= 1, "reload() must clear status on success"
+
+
+def test_embedders_pass_an_onStatus_callback():
+    """Both terminal.html and harness.html instantiate the shared panel with a
+    real status callback; without one the default no-op swallows errors."""
+    static = Path(gate.__file__).resolve().parent / "static"
+    for filename in ("terminal.js", "harness.html"):
+        text = (static / filename).read_text(encoding="utf-8")
+        assert "onStatus:" in text, f"{filename} does not pass onStatus to CyClawAuthAdmin.render"
+        assert "usersPanelStatus" in text, f"{filename} is missing the usersPanelStatus node"
