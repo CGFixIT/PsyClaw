@@ -102,8 +102,11 @@ Skills:
   path to reconcile selected install profiles and supply-chain controls.
 - `.codex/skills/cyclaw-run-cyclaw/` - use when asked to prepare, start, run,
   smoke-test, or interact with the local FastAPI RAG server.
-- `.codex/skills/cyclaw-sandbox-test/` - use for a fresh-main local sandbox
+- `.codex/skills/cyclaw-sandbox-test/` - use for a fast fresh-main local sandbox
   audit with mock Ollama and terminal/API smoke coverage before PRs.
+- `.codex/skills/Cyclaw-Sandbox/` - use for full current-main verification
+  of REST, terminal, harness, audit, installers, platform lanes, CI, and
+  browser rendering; label native-platform gaps explicitly.
 - `.codex/skills/cyclaw-command-status/` - use for read-only environment,
   config, index, soul, telemetry, and live health status checks.
 - `.codex/skills/cyclaw-command-run/` - use for focused endpoint smoke checks
