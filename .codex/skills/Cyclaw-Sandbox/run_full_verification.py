@@ -714,7 +714,6 @@ def phase_execute_queries() -> PhaseResult:
             else:
                 n3 = user_gate_node(state, cfg)
                 state.update(n3)
-                model = "user_gate_pause"
                 log(f"    user_gate: needs_confirm={n3.get('needs_user_confirm')}")
 
         # N4: audit
