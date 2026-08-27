@@ -120,7 +120,7 @@ public static class CyClawCredMan {
             if (blob != IntPtr.Zero) {
                 try {
                     for (int i = 0; i < blobSize; i++) {
-                        Marshal.WriteByte(blob, i, 0);
+                        Marshal.WriteByte(blob, i, 0); // DevSkim: ignore DS104456 -- explicit secret zeroization before FreeHGlobal
                     }
                 } finally {
                     Marshal.FreeHGlobal(blob);

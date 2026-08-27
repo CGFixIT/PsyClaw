@@ -127,6 +127,8 @@ def test_credman_marshal_sites_carry_devskim_suppression() -> None:
     for line in set_text.splitlines():
         if "InteropServices.Marshal" in line:
             assert "DevSkim: ignore DS104456" in line, line
+        if "Marshal.WriteByte" in line:
+            assert "DevSkim: ignore DS104456" in line, line
     assert "Dispose()" in set_text
 
 
