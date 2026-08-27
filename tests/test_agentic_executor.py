@@ -31,9 +31,10 @@ def _argv_list_sandbox(monkeypatch):
     ``test_agentic_hard_sandbox.py``. This file injects the test double so CI
     stays green without a software fallback in production.
     """
+    # Class is a zero-arg factory: production_sandbox() -> ArgvListSandbox().
     monkeypatch.setattr(
         "agentic.executor.runner.production_sandbox",
-        lambda: ArgvListSandbox(),
+        ArgvListSandbox,
     )
 
 
