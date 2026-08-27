@@ -282,7 +282,6 @@ Verify it is set before launching:
 ```powershell
 echo $env:CYCLAW_API_KEY
 ```
-> https://cyclaw-keygen.grok.me
 
 ### Windows — Command Prompt (cmd.exe)
 
