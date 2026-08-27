@@ -168,7 +168,15 @@ _FIRST_PARTY = {
 # huggingface_hub, ...) are NOT listed here on purpose -- PEP 503 treats "_" and
 # "-" as the same character, so those are handled by normalization below rather
 # than by a hand-maintained table that would silently rot.
-_DIST_ALIAS = {"yaml": "pyyaml", "dateutil": "python-dateutil", "dotenv": "python-dotenv"}
+_DIST_ALIAS = {
+    "yaml": "pyyaml",
+    "dateutil": "python-dateutil",
+    "dotenv": "python-dotenv",
+    # utils/numbat_cel.py lazily imports celpy (distribution cel-python)
+    # behind the optional `numbat-cel` extra; PEP 503 normalization does not
+    # bridge the module/distribution name gap, so map it explicitly.
+    "celpy": "cel-python",
+}
 # Only first-party runtime source is in scope. Skipping by name alone is
 # fragile -- the venv in this tree is ".venv312", not ".venv" -- so the rule is
 # structural: any hidden directory, any build output, and any directory that

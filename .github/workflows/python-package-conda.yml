@@ -119,6 +119,7 @@ jobs:
           --cov=utils.errors \
           --cov=utils.logger \
           --cov=utils.numbat_emitter \
+          --cov=utils.numbat_cel \
           --cov=utils.spend \
           --cov=utils.sequence_detect \
           --cov=utils.mcp_manifest \

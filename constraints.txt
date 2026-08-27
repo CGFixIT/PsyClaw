@@ -84,6 +84,10 @@ pyodbc==5.3.0
 # pyproject.toml before enabling policy.guardrails.enabled.
 nemoguardrails==0.24.0
 
+# Optional CEL sanitizer backend for Numbat monitor-only rules (pyproject extra:
+# numbat-cel). Default-off; only installed when the operator opts into CEL rules.
+cel-python==0.5.0
+
 # Optional Deep Agents harness (pyproject extra: agentic-deepagents). These are
 # not installed by the default offline runtime or legacy requirements path.
 deepagents==0.6.12

@@ -82,7 +82,7 @@ from llm.client import ClaudeClient, LocalLLMClient, GrokClient
 from schemas.api import (
     QueryRequest, QueryResponse, SourceInfo, HealthResponse, SoulEvolutionRequest,
 )
-from utils.logger import audit_log, setup_logging
+from utils.logger import audit_log, hash_query, setup_logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from utils.sanitizer import check_input
@@ -91,6 +91,7 @@ from utils.errors import (
 )
 from utils.guardrail_bridge import build_generate_guard, build_input_guard, build_output_guard
 from utils.health import check_all, close_http_client
+from utils.numbat_cel import monitor_request
 from utils.personality import PersonalityManager
 from utils.authn_manager import AuthManager, BOOTSTRAP_USERNAME
 from gate_ops import register_ops_routes
@@ -340,6 +341,15 @@ _SECRET_PATTERNS = [
     re.compile(r'xox[baprs]-[0-9a-zA-Z\-]+'), # Slack tokens
     re.compile(r'AKIA[0-9A-Z]{16}'),           # AWS access keys
 ]
+
+def _model_provider_for(answer_model: str) -> str:
+    """Map an answer_model string to a Numbat-friendly provider label."""
+    if answer_model.startswith("grok"):
+        return "xai"
+    if answer_model.startswith("claude"):
+        return "anthropic"
+    return "ollama"
+
 
 def _sanitize_error(exc: Exception) -> str:
     """Strip credential-like content from exception messages before HTTP response."""
@@ -966,6 +976,27 @@ async def query_endpoint(request: Request, req: QueryRequest):
         safe_msg = _sanitize_error(e)
         await _audit_query(request, {"event": "graph_error", "query": req.query, "error": safe_msg})
         raise HTTPException(status_code=500, detail={"error": safe_msg, "code": "GRAPH_ERROR"}) from e
+
+    # Optional CEL monitor-only rules over structured, safe fields. Runs after
+    # graph invoke so top_score/answer_model/guardrail_* are known. Fail-open:
+    # any error here is logged and must not affect the response or audit trail.
+    try:
+        sources = result.get("sources", []) or []
+        monitor_request(
+            query_hash=hash_query(req.query),
+            top_score=result.get("top_score"),
+            answer_model=result.get("answer_model"),
+            guardrail_blocked=result.get("guardrail_blocked"),
+            guardrail_rails=result.get("guardrail_rails"),
+            model_provider=_model_provider_for(result.get("answer_model", "")),
+            source_hashes=[
+                hash_query(f"{s.get('source', '')}:{s.get('chunk_id', -1)}")
+                for s in sources
+            ],
+            cfg=cfg,
+        )
+    except Exception as exc:
+        logger.warning("CEL monitor request failed: %s", exc)
 
     needs_confirm = result.get("needs_user_confirm", False)
     answer_model = result.get("answer_model", "")
