@@ -47,9 +47,9 @@ effectively empty. Both are confirmed live, not just in static code.
 | `gate.py` boot + `/` + `/health` | Live (venv + `python gate.py`) | PASS — index missing is fail-soft (503 on `/query` only), matches documented behavior |
 | `harness/server.py` boot + `/` | Live (venv + `python -m harness.server`) | PASS |
 | Console rendering (`terminal.html`) | Live Playwright, full-page screenshot | PASS — no console exceptions; only 4xx seen is `/auth/whoami` 503 (expected, `auth.enabled` ships `false`) and a harmless `/favicon.ico` 404 |
-| Console rendering (`harness.html`) | Live Playwright, full-page screenshot | PARTIAL — renders and functions (COMMANDS/SESSIONS/REGISTRY tabs, `/skills all` listed 32 skills, `/tools all` listed 27 tools), but see F-04 |
+| Console rendering (`harness.html`) | Live Playwright, full-page screenshot | PARTIAL — renders and functions (COMMANDS/SESSIONS/REGISTRY tabs, `/skills all` listed 32 skills, `/tools all` listed 27 tools), but see F-01 and F-02 |
 | `/skills`, `/tools` slash commands | Live, interactive (typed into the console, screenshotted) | PASS — correct wired-vs-total counts (4/32 skills, 27/27 tools) |
-| Users tab on harness console | Live, interactive | FAIL — see F-04 |
+| Users tab on harness console | Live, interactive | FAIL — see F-01 |
 
 ## Findings
 

@@ -38,14 +38,13 @@ id = "PYSEC-2026-311"
 reason = "Alias of CVE-2026-45829 / GHSA-f4j7-r4q5-qw2c (same chromadb pre-auth code injection; OSV serves it under both IDs). Same acceptance: PyPI-sourced ID requires the Chroma HTTP server API with trust_remote_code=true; CyClaw uses embedded PersistentClient only, never the server surface. Verified via OSV API 2026-07-20: still reported against chromadb 1.5.9, last_affected 1.5.9, no fixed version."
 
 # --- GHSA-2wm9-hf6c-p5cr / GHSA-36p7-vc44-83pf / GHSA-xph7-9rjv-w5fr (chromadb siblings) ---
-# ID: sibling advisories for CVE-2026-45830 (GHSA-2wm9-hf6c-p5cr, confirmed by
-#   SECURITY.md) / CVE-2026-45831 / CVE-2026-45833 — same chromadb Chroma-server
-#   HTTP surface as the already-accepted CVE-2026-45829 above. This scanner's
-#   own osv-scan job reported all three against chromadb 1.5.9 on 2026-08-27
-#   (CVSS 8.8 / 9.4 / 8.8); pip-audit.yml already ignores all four CVEs
-#   (added 2026-08-26). Not independently re-mapped GHSA-to-CVE for the latter
-#   two beyond SECURITY.md's own breakdown -- all three are confirmed chromadb
-#   1.5.9, no-fixed-version findings on the same accepted server-only surface.
+# ID: CVE-2026-45830 = GHSA-2wm9-hf6c-p5cr (authenticated IDOR),
+#   CVE-2026-45831 = GHSA-xph7-9rjv-w5fr (SimpleRBAC scope bypass), and
+#   CVE-2026-45833 = GHSA-36p7-vc44-83pf (authenticated code injection).
+#   GitHub's reviewed advisories independently confirm each mapping and the
+#   affected Chroma server surface. This scanner's own osv-scan job reported
+#   all three against chromadb 1.5.9 on 2026-08-27 (CVSS 8.8 / 8.8 / 9.4);
+#   pip-audit.yml already ignores all four sibling CVEs (added 2026-08-26).
 # Package: chromadb
 # Version: 1.5.9
 # Date added: 2026-08-27
@@ -64,11 +63,11 @@ reason = "CVE-2026-45830 (authenticated IDOR on the Chroma HTTP server — any a
 
 [[IgnoredVulns]]
 id = "GHSA-36p7-vc44-83pf"
-reason = "Sibling of CVE-2026-45829 on the same chromadb Chroma-server HTTP surface (CVE-2026-45831 or CVE-2026-45833 per SECURITY.md's breakdown; this scanner reported it directly against chromadb 1.5.9, CVSS 9.4, no fixed version). Same mitigation: embedded PersistentClient only, never the HttpClient/server surface."
+reason = "CVE-2026-45833 (authenticated code injection through a malicious model repository plus trust_remote_code=true on the Chroma HTTP server's collection-update endpoint, CVSS 9.4). Same mitigation: CyClaw uses embedded PersistentClient only, never the HttpClient/server surface. See SECURITY.md."
 
 [[IgnoredVulns]]
 id = "GHSA-xph7-9rjv-w5fr"
-reason = "Sibling of CVE-2026-45829 on the same chromadb Chroma-server HTTP surface (CVE-2026-45831 or CVE-2026-45833 per SECURITY.md's breakdown; this scanner reported it directly against chromadb 1.5.9, CVSS 8.8, no fixed version). Same mitigation: embedded PersistentClient only, never the HttpClient/server surface."
+reason = "CVE-2026-45831 (SimpleRBACAuthorizationProvider fails to scope permissions to a tenant, database, or collection, allowing authenticated cross-tenant actions on the Chroma server, CVSS 8.8). Same mitigation: CyClaw uses embedded PersistentClient only, never the HttpClient/server surface. See SECURITY.md."
 
 # === Pruned 2026-07-20 (dead entries — advisories no longer match the pins) ===
 #
