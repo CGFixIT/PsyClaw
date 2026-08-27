@@ -106,7 +106,7 @@ def test_invoke_cyclaw_loads_persisted_api_key_from_dotenv() -> None:
     text = (_REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
     assert "$HOME_DIR/.env" in text, "invoke must load HOME_DIR/.env"
     assert "refusing to source .env with xtrace" in text
-    assert "refusing to source dotenv (mode" in text
+    assert "refusing to source $f (mode" in text
     assert "want 600 or 400" in text
     assert 'stat -f %Lp' in text
     assert 'stat -c %a' in text
@@ -501,3 +501,77 @@ def test_setup_cyclaw_help_and_unknown_option() -> None:
     )
     assert bad_result.returncode == 1
     assert "unknown option" in bad_result.stderr
+
+
+def test_invoke_cyclaw_names_the_file_and_remedy_when_refusing_a_dotenv() -> None:
+    """A refused dotenv must name the path and the chmod that fixes it.
+
+    The operator otherwise sees a bare mode number, then "CYCLAW_API_KEY not
+    set", with nothing connecting the two.
+    """
+    text = (_REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
+    assert "refusing to source $f (mode" in text
+    assert "Fix with: chmod 600 $f" in text
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX child-process env inheritance")
+def test_invoke_cyclaw_falls_back_to_repo_dotenv_when_home_dotenv_is_refused(tmp_path: Path) -> None:
+    """A refused HOME dotenv must not shadow a loadable repo dotenv.
+
+    The load used to branch on `-f` (`if -f HOME / elif -f REPO`). Once the
+    mode check landed, existing stopped implying loadable, so a world-readable
+    HOME file consumed the `if` and the repo copy was never tried.
+    """
+    home = tmp_path / "home"
+    fake_python = home / "venv" / "bin" / "python"
+    fake_python.parent.mkdir(parents=True)
+    status_file = home / "key_status"
+    fake_python.write_text(
+        "#!/bin/sh\n"
+        f'status="{status_file.as_posix()}"\n'
+        'if [ "${CYCLAW_API_KEY:-}" = "from-repo" ]; then printf "repo\\n" > "$status";'
+        ' else printf "other:${CYCLAW_API_KEY:-unset}\\n" > "$status"; fi\n'
+        "sleep 4\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    # Group/world readable: invoke-cyclaw.sh must refuse this one.
+    home_dotenv = home / ".env"
+    home_dotenv.write_text("CYCLAW_API_KEY=from-home\n", encoding="utf-8")
+    home_dotenv.chmod(0o644)
+
+    repo = tmp_path / "repo"
+    harness = repo / "harness"
+    harness.mkdir(parents=True)
+    (harness / "server.py").write_text("# launcher probe\n", encoding="utf-8")
+    repo_dotenv = repo / ".env"
+    repo_dotenv.write_text("CYCLAW_API_KEY=from-repo\n", encoding="utf-8")
+    repo_dotenv.chmod(0o600)
+
+    env = os.environ.copy()
+    env["CYCLAW_HOME"] = str(home)
+    env.pop("CYCLAW_API_KEY", None)
+    result = subprocess.run(
+        [
+            _BASH,
+            str(_REPO_ROOT / "macos" / "invoke-cyclaw.sh"),
+            "--repo",
+            str(repo),
+            "--no-gate",
+            "--no-browser",
+        ],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    output = result.stdout + result.stderr
+    assert "from-home" not in output, "a refused dotenv's value must never print"
+    assert "from-repo" not in output, "a loaded dotenv's value must never print"
+    assert "Fix with: chmod 600" in result.stderr, "the refusal must state the remedy"
+    assert status_file.read_text(encoding="utf-8") == "repo\n"
