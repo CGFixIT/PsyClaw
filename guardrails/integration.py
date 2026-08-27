@@ -40,6 +40,7 @@ from guardrails.config import GuardrailsConfig, load_guardrails_config  # noqa: 
 from guardrails.errors import GuardrailsDependencyError, RailsLoadError  # noqa: E402
 from guardrails.metrics import GuardrailMetrics  # noqa: E402
 from guardrails.rails import (  # noqa: E402
+    detect_soul_leak,
     detect_soul_mutation_intent,
     grounding_score,
     is_possible_hallucination,
@@ -302,13 +303,9 @@ def check_output(
 ) -> dict[str, Any]:
     """Phase 4 output rail -- sync, offline-only, NEVER generates.
 
-    Mirrors check_input's non-generating guarantee in reverse: check_input runs
-    before generation and can skip an LLM call; this runs after generation and can
-    only replace an answer that already exists. Grounding-only in this cut --
-    callers decide WHICH answer paths reach this function at all; it does not
-    re-derive that policy itself. Phase 4b soul-leak is deliberately not
-    implemented here (docs/NeMo/phase4b_soul_leak.md): do not reuse
-    ``scan_injection`` on the answer.
+    Mirrors check_input's non-generating guarantee in reverse. Grounding plus
+    Phase 4b ``detect_soul_leak`` when that name is in ``output_rails``.
+    Does not reuse ``scan_injection`` on the answer.
 
     Returns ``{"blocked": bool, "message": str, "rails": list[str]}``.
     """
@@ -317,16 +314,27 @@ def check_output(
     if metrics is None:
         metrics = GuardrailMetrics(cfg.metrics_path)
 
+    triggered: list[str] = []
+    if "check_soul_leak" in cfg.output_rails and detect_soul_leak(answer):
+        triggered.append("check_soul_leak")
     score = grounding_score(answer, context)
-    if "check_grounding" not in cfg.output_rails or not is_possible_hallucination(
+    if "check_grounding" in cfg.output_rails and is_possible_hallucination(
         answer, context, cfg.hallucination_threshold
     ):
+        triggered.append("check_grounding")
+        metrics.record_hallucination(
+            score=score, threshold=cfg.hallucination_threshold, query=query,
+        )
+    if not triggered:
         metrics.record_allowed(stage="output", score=score, query=query)
         return {"blocked": False, "message": "", "rails": []}
 
-    metrics.record_hallucination(score=score, threshold=cfg.hallucination_threshold, query=query)
-    metrics.record_blocked(stage="output", rail="check_grounding", reason="low grounding", query=query)
-    return {"blocked": True, "message": cfg.block_message, "rails": ["check_grounding"]}
+    rail = triggered[0]
+    reason = "soul leak" if rail == "check_soul_leak" else "low grounding"
+    metrics.record_blocked(stage="output", rail=rail, reason=reason, query=query)
+    for extra_rail in triggered[1:]:
+        metrics.record_rail(extra_rail, stage="output", query=query)
+    return {"blocked": True, "message": cfg.block_message, "rails": triggered}
 
 
 async def safe_generate(

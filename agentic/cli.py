@@ -934,6 +934,25 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
         client.close()
 
     if result.accepted:
+        from agentic.executor.manifest import build_manifest, git_head
+
+        _acceptance_base_head = git_head(Path(tools.worktree))
+        _payload, _acceptance_digest = build_manifest(
+            Path(tools.worktree),
+            result.changed_files,
+            run_id=run_id,
+            base_head=_acceptance_base_head,
+        )
+        audit_log(
+            {
+                "event": "agentic_real_repo_manifest_built",
+                "run_id": run_id,
+                "acceptance_digest": _acceptance_digest,
+                "files": len(result.changed_files),
+            },
+            config_path=args.config,
+            cfg=app_cfg,
+        )
         record = RealRepoRunRecord(
             run_id=run_id,
             repo=cfg.repo,
@@ -951,6 +970,8 @@ def cmd_real_repo_run(args: argparse.Namespace) -> int:
             changed_files=list(result.changed_files),
             iterations=len(result.iterations),
             plan_sha256=plan_sha256,
+            acceptance_digest=_acceptance_digest,
+            acceptance_base_head=_acceptance_base_head,
         )
         # Keep the accepted clone for the later human decision, but release
         # ScopedRoots' authority handles now.  On Windows they deliberately
@@ -1219,6 +1240,9 @@ def cmd_real_repo_run_decide(args: argparse.Namespace) -> int:
             protected_write_paths=cfg.deepagent_github.protected_write_paths,
             config_path=args.config,
             cfg=app_cfg,
+            run_id=record.run_id,
+            acceptance_digest=record.acceptance_digest,
+            acceptance_base_head=record.acceptance_base_head,
         )
     except AgenticWriteRefused as exc:
         if args.decision == "approve":

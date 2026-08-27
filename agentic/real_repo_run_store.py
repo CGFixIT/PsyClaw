@@ -94,6 +94,11 @@ class RealRepoRunRecord:
     # answer "which plan produced this diff" when the operator still has the
     # file, which is the question a reviewer actually asks.
     plan_sha256: str | None = None
+    # SHA-256 of the acceptance manifest (path→blob hashes + base HEAD + run_id).
+    # Digest only — never the file bytes. None on pre-manifest records; approve
+    # must fail closed if this is missing.
+    acceptance_digest: str | None = None
+    acceptance_base_head: str | None = None
     created_at: str = ""
     updated_at: str = ""
 

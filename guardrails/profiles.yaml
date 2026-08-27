@@ -5,8 +5,8 @@
 # Rail mode:     enforced | audit-only | out-of-scope
 #
 # Offline floor that actually runs on /query (via check_input / check_output):
-#   check_injection, check_soul_mutation, check_grounding.
-# Listed-but-skipped: check_jailbreak, check_soul_leak.
+#   check_injection, check_soul_mutation, check_grounding, check_soul_leak.
+# Listed-but-skipped: check_jailbreak.
 # Colang model-assisted rails are not on the /query path today.
 
 profiles:
@@ -29,8 +29,8 @@ profiles:
   - name: deterministic
     description: >
       Offline floor that check_input / check_output actually run today when
-      guardrails.enabled is true. check_jailbreak and check_soul_leak are
-      listed in DEFAULT_*_RAILS but silently skipped.
+      guardrails.enabled is true. check_jailbreak is listed in DEFAULT_INPUT_RAILS
+      but silently skipped. check_soul_leak is enforced on output (Phase 4b).
     stages:
       input: enforced
       retrieval: out-of-scope
@@ -59,8 +59,8 @@ profiles:
         mode: enforced
         stage: output
       - name: check_soul_leak
-        status: configured-unimplemented
-        mode: out-of-scope
+        status: implemented
+        mode: enforced
         stage: output
 
   - name: nemo_local
@@ -96,8 +96,8 @@ profiles:
         mode: enforced
         stage: output
       - name: check_soul_leak
-        status: configured-unimplemented
-        mode: out-of-scope
+        status: implemented
+        mode: enforced
         stage: output
       - name: self_check_facts
         status: configured-unimplemented
@@ -137,6 +137,6 @@ profiles:
         mode: enforced
         stage: output
       - name: check_soul_leak
-        status: configured-unimplemented
-        mode: out-of-scope
+        status: implemented
+        mode: enforced
         stage: output

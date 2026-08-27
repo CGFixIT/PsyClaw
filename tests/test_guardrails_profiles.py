@@ -38,9 +38,9 @@ def test_shipped_yaml_loads():
     loaded = load_profiles()
     assert set(loaded) == {"off", "deterministic", "nemo_local", "strict_agentic"}
     assert IMPLEMENTED_RAILS == frozenset(
-        {"check_injection", "check_soul_mutation", "check_grounding"}
+        {"check_injection", "check_soul_mutation", "check_grounding", "check_soul_leak"}
     )
-    assert CONFIGURED_UNIMPLEMENTED == frozenset({"check_jailbreak", "check_soul_leak"})
+    assert CONFIGURED_UNIMPLEMENTED == frozenset({"check_jailbreak"})
 
 
 def test_off_has_all_stages_out_of_scope():
@@ -55,8 +55,8 @@ def test_deterministic_does_not_claim_unimplemented_rails_enforced():
     by_name = {r["name"]: r for r in det["rails"]}
     assert by_name["check_jailbreak"]["mode"] != "enforced"
     assert by_name["check_jailbreak"]["status"] == "configured-unimplemented"
-    assert by_name["check_soul_leak"]["mode"] != "enforced"
-    assert by_name["check_soul_leak"]["status"] == "configured-unimplemented"
+    assert by_name["check_soul_leak"]["mode"] == "enforced"
+    assert by_name["check_soul_leak"]["status"] == "implemented"
     assert by_name["check_injection"]["mode"] == "enforced"
     assert by_name["check_soul_mutation"]["mode"] == "enforced"
     assert by_name["check_grounding"]["mode"] == "enforced"

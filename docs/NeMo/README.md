@@ -32,7 +32,7 @@ uses `is True`.
 | MCP retrieval | embeddings + BM25 | sanitizer only | retrieval-only, `sampling: None` | n/a | n/a | fail closed on sanitizer | no NeMo |
 | `safe_generate` / `guardrail_safety_node` | optional `LLMRails.generate_async` | offline floor then NeMo | context-role `relevant_chunks` | token-overlap after generate | none | degrade on load/provider error | **unused example**. Wiring it into the graph would double-generate. **Do not.** |
 | harness `:8790` | local Ollama | not the graph rails | web results are untrusted | n/a | tools via harness policy | harness-local | no NeMo |
-| `agentic/executor` | n/a | n/a | n/a | n/a | argv-list `subprocess.run` | **best-effort** isolation (no netns); see `runner.py` | no NeMo |
+| `agentic/executor` | n/a | n/a | n/a | n/a | argv-list inside `production_sandbox()` | **Windows Job Object** (`KILL_ON_JOB_CLOSE`); Linux/Darwin **fail closed** (`HardSandboxUnavailable`). Not a netns. HOME is disposable. See `runner.py` | no NeMo |
 
 Official non-generating APIs (`LLMRails.check` / `check_async`, server
 `/v1/checks`, NVIDIA 0.21+) exist in the pinned **0.24.0**. CyClaw does **not** call them
@@ -51,13 +51,9 @@ Implemented offline rails: `check_injection`, `check_soul_mutation`,
 Configured but **not** enforced on the offline floor (must stay public):
 
 - `check_jailbreak` / Colang `check cyclaw jailbreak` — CyClaw bool `check_injection`; not NVIDIA 0.24 `check jailbreak` (`$response.is_blocked`)
-- `check_soul_leak` — listed in `output_rails`; Colang still calls
-  `check_injection(text=$bot_message)`. Decision A in
-  [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) forbids promoting that into
-  `check_output`. Pins:
-  `test_check_jailbreak_is_configured_but_not_offline_enforced`,
-  `test_check_soul_leak_is_configured_but_not_offline_enforced`,
-  `test_check_output_does_not_reuse_scan_injection`.
+
+Phase 4b: `check_soul_leak` is enforced on `check_output` via `detect_soul_leak`
+(not `scan_injection`). Pin: `test_check_output_does_not_reuse_scan_injection`.
 
 ## Route grounding labels (Phase 3)
 
@@ -122,8 +118,8 @@ verdict (metrics are not policy).
 | [`later_development_guideline.md`](./later_development_guideline.md) | Decision log. Banner: superseded for status. |
 | [`phase2_implementation_plan.md`](./phase2_implementation_plan.md) | Input-rail contract. **SHIPPED.** |
 | [`phase3_implementation_plan.md`](./phase3_implementation_plan.md) | Scanner redirect. **SHIPPED** for 3A; 3C still operator decision. |
-| [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md) | Output-rail design. **4a SHIPPED; 4b open.** |
-| [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) | **Still the open contract** (Decision A–C). |
+| [`!phase4_implementation_plan.md`](./!phase4_implementation_plan.md) | Output-rail design. **4a SHIPPED; 4b SHIPPED (offline).** |
+| [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) | **SHIPPED** offline `detect_soul_leak` + `check_output` (Decision A–C). |
 
 ## Isolation
 

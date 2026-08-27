@@ -57,7 +57,7 @@ def test_construct_engine_register_actions_loopback_mock() -> None:
                 model.parameters = params
             rails = LLMRails(rails_config)
             n = register_actions(rails, hallucination_threshold=0.18)
-        assert n == 4
+        assert n == 5
     finally:
         mock.stop()
 

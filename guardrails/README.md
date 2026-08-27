@@ -45,7 +45,7 @@ python -m guardrails.cli test
 | `errors.py` | `GuardrailsError` hierarchy, rooted at `utils.errors.RAGError` — kept local rather than added to `utils/errors.py` while the package is still skeleton-status |
 | `boundary.py` | Provider-independent typed decisions + provenance (issue #1134 Phase 1). Decisions carry hashes and reason codes only — never raw prompts/responses. Never imported by the core three (I6) |
 | `broker.py` | NeMo's non-generating `LLMRails.check` wrapped around the existing generation helper (issue #1134 Phase 3). Never grants I3, never calls `generate_async`; the graph reaches it only via `utils/guardrail_bridge` |
-| `call_inventory.py` | Advisory AST inventory of direct model-generation call sites. Fail-open today; Phase 3 will fail the build on unregistered callers. Never imports `nemoguardrails`, never runs on `/query` |
+| `call_inventory.py` | Fail-closed AST inventory of `ChatOpenAI`/`ChatXAI`/`ChatAnthropic`/`generate_async` call sites. Unregistered files fail pytest and `python -m guardrails.call_inventory` (exit 1). Never imports `nemoguardrails`, never runs on `/query` |
 | `profiles.py` / `profiles.yaml` | Machine-readable guardrail profile matrix; rejects any profile claiming `mode: enforced` for a rail outside `IMPLEMENTED_RAILS` |
 | `qwen_registry.py` / `qwen_manifest.yaml` | Optional Qwen/Ollama tag manifest; strict mode default-off, no weight fetch |
 | `config/` | NeMo `config.yml` + Colang templates |
