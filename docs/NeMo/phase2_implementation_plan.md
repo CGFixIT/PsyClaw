@@ -9,6 +9,10 @@ related:
   - graph.py
 ---
 
+> **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
+> [`README.md`](./README.md). This file is the historical input-rail contract
+> (still valid for the decisions it recorded). Do not treat the body as a to-do.
+
 **Status (2026-08-04):** **SHIPPED.** `guardrail_input` is on the live graph
 (via `utils/guardrail_bridge.py`); still opt-in / pass-through when
 `guardrails.enabled: false`. This file remains the historical implementation

@@ -1,5 +1,9 @@
 # NeMo Phase 4 — query-path output rail (`guardrail_output`) design
 
+> **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
+> [`README.md`](./README.md). 4a is shipped; 4b remains the open contract in
+> [`phase4b_soul_leak.md`](./phase4b_soul_leak.md). This body is a decision log.
+
 **Status (updated 2026-08-04):** **Phase 4a SHIPPED** on main — graph node
 `guardrail_output` is wired via `utils/guardrail_bridge.py`, grounding-only,
 scoped to the `local_llm` answer path, still opt-in behind

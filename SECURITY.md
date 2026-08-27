@@ -15,7 +15,7 @@ CyClaw is an **offline-first, loopback-only** local AI gateway. The enforced inv
 3. **Triple-gated external access** — Grok/Claude require `app.mode=="hybrid"` AND `models.<provider>.enabled` AND per-query human confirmation; both default off.
 4. **Audit convergence** — every path terminates in `audit_logger` (SHA-256 query hashes, PII + secret redaction, append-only JSONL).
 5. **Soul governance** — identity evolution requires a human-authored reason; atomic writes; SHA-256 drift detection on startup.
-6. **Out-of-band connectors** — `agentic/`, `sync/`, `guardrails/` are never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`; they run only via audited subprocess shims, disabled by default, fail-closed.
+6. **Out-of-band connectors** — `agentic/`, `sync/`, `guardrails/` are never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`. They ship disabled by default. `sync/` and `agentic/` run via audited argv-list subprocess shims. Optional live NeMo (`nemoguardrails`) is **not** fail-closed on the request path: `check_input` / `check_output` are an offline heuristic floor; engine load or provider errors **degrade** (`guardrail_skipped`) and cannot grant a route. Graph nodes are pass-through while `guardrails.enabled` is not literal `True`. Agentic verification containment is **best-effort** software (`agentic/executor/runner.py`), not a network namespace.
 7. **Zero telemetry** — kill-switch env vars set at import time before any langchain/chromadb import; verified at startup.
 8. **Loopback binding** — `127.0.0.1:8787` (gateway) and `127.0.0.1:11434` (Ollama); API-key gate on all mutating endpoints; per-IP rate limiting; strict security headers + TrustedHost.
 

@@ -9,6 +9,10 @@ related:
   - docs/NeMo/README.md
 ---
 
+> **Superseded for status (2026-08-27).** Prefer [`README.md`](./README.md)
+> for the live path×stage×engine matrix. This guideline remains a historical
+> contract and decision log (body still mentions LM Studio in places).
+
 **Status banner (2026-08-15):** Phases **1–3 and 4a are implemented** on main
 (input rail + output grounding on `local_llm`, both via
 `utils/guardrail_bridge.py`, still `guardrails.enabled: false` by default).

@@ -5,12 +5,28 @@ from __future__ import annotations
 import json
 
 from guardrails.metrics import (
+    EVENT_ALLOWED,
     EVENT_BLOCKED,
     EVENT_HALLUCINATION,
+    EVENT_RAIL_TRIGGERED,
+    EVENT_SKIPPED,
+    EVENT_SOUL_TOPIC,
     EVENT_TOOL_CALL,
+    FORBIDDEN_METRIC_KEYS,
     GuardrailMetrics,
     compute_guardrail_metrics,
     load_events,
+    sanitize_metric_fields,
+)
+
+_ALL_EVENT_TYPES = (
+    EVENT_TOOL_CALL,
+    EVENT_BLOCKED,
+    EVENT_HALLUCINATION,
+    EVENT_RAIL_TRIGGERED,
+    EVENT_ALLOWED,
+    EVENT_SKIPPED,
+    EVENT_SOUL_TOPIC,
 )
 
 
@@ -57,13 +73,16 @@ def test_persistence_failure_does_not_break_metrics_call(tmp_path, caplog):
 
 
 def test_serialization_failure_does_not_log_metric_fields(tmp_path, caplog):
+    # After allowlist, unknown NonSerializable kwargs are stripped so json.dumps
+    # succeeds; payload/secret markers must not appear in the persisted record.
     secret_marker = "do-not-log-this-metric-field"
 
     class NonSerializable:
         def __repr__(self):
             return secret_marker
 
-    m = GuardrailMetrics(tmp_path / "guardrails.jsonl")
+    path = tmp_path / "guardrails.jsonl"
+    m = GuardrailMetrics(path)
     record = m.record_blocked(
         stage="input",
         rail="check_injection",
@@ -73,9 +92,71 @@ def test_serialization_failure_does_not_log_metric_fields(tmp_path, caplog):
 
     assert record["event"] == EVENT_BLOCKED
     assert m.counters[EVENT_BLOCKED] == 1
-    assert "Guardrail metrics persistence skipped (TypeError)" in caplog.text
+    assert "payload" not in record
+    events = load_events(path)
+    assert len(events) == 1
+    assert "payload" not in events[0]
+    raw = path.read_text(encoding="utf-8")
+    assert secret_marker not in raw
+    assert "private query" not in raw
     assert secret_marker not in caplog.text
     assert "private query" not in caplog.text
+
+
+def test_forbidden_keys_stripped_from_persist_and_sanitize(tmp_path):
+    path = tmp_path / "guardrails.jsonl"
+    m = GuardrailMetrics(path)
+    m.record_blocked(
+        stage="input",
+        rail="check_injection",
+        reason="x",
+        query="hashed-only",
+        prompt="secret",
+        **{"token": "leak-token"},
+    )
+    events = load_events(path)
+    assert len(events) == 1
+    rec = events[0]
+    assert "prompt" not in rec
+    assert "token" not in rec
+    assert "query" not in rec
+    assert "query_hash" in rec
+    assert len(rec["query_hash"]) == 64
+    raw = path.read_text(encoding="utf-8")
+    assert "secret" not in raw
+    assert "leak-token" not in raw
+
+    nested = sanitize_metric_fields({"auth": {"api_key": "sk-x"}, "ok": 1, "prompt": "nope"})
+    assert nested == {"auth": {}, "ok": 1}
+    assert "api_key" not in nested["auth"]
+    assert "prompt" not in nested
+
+    under_allowed = sanitize_metric_fields({"ok": {"prompt": "secret", "ok": 1}})
+    assert under_allowed == {"ok": {"ok": 1}}
+
+    kept = sanitize_metric_fields({"query_hash": "abc", "token_hash": "def", "token": "drop"})
+    assert kept == {"query_hash": "abc", "token_hash": "def"}
+    assert "token" in FORBIDDEN_METRIC_KEYS
+
+
+def test_response_never_persisted_for_any_event_type(tmp_path):
+    path = tmp_path / "guardrails.jsonl"
+    m = GuardrailMetrics(path)
+    m.record_tool_call("gh_pr_view", ok=True, response="RAW")
+    m.record_blocked(stage="input", rail="check_injection", reason="x", response="RAW")
+    m.record_hallucination(score=0.1, threshold=0.2, response="RAW")
+    m.record_rail("check_injection", stage="input", response="RAW")
+    m.record_allowed(score=0.9, response="RAW")
+    m.record_skipped(reason="disabled", response="RAW")
+    m.record_soul_topic(response="RAW")
+
+    events = load_events(path)
+    assert len(events) == len(_ALL_EVENT_TYPES)
+    seen = {e["event"] for e in events}
+    assert seen == set(_ALL_EVENT_TYPES)
+    for rec in events:
+        assert "response" not in rec
+    assert "RAW" not in path.read_text(encoding="utf-8")
 
 
 def test_compute_summary_aggregates(tmp_path):

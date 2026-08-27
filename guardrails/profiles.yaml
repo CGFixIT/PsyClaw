@@ -1,0 +1,142 @@
+# Machine-readable guardrail profile matrix — truth about today's CyClaw tree.
+# Stage names match GuardrailStage in guardrails/boundary.py.
+# Stage posture: enforced | audit-only | out-of-scope
+# Rail status:   implemented | configured-unimplemented | unknown
+# Rail mode:     enforced | audit-only | out-of-scope
+#
+# Offline floor that actually runs on /query (via check_input / check_output):
+#   check_injection, check_soul_mutation, check_grounding.
+# Listed-but-skipped: check_jailbreak, check_soul_leak.
+# Colang model-assisted rails are not on the /query path today.
+
+profiles:
+  - name: "off"
+    description: >
+      Matches guardrails.enabled false — graph nodes pass through and this
+      package is never imported.
+    stages:
+      input: out-of-scope
+      retrieval: out-of-scope
+      egress: out-of-scope
+      output: out-of-scope
+      reasoning: out-of-scope
+      tool_intent: out-of-scope
+      tool_result: out-of-scope
+      artifact: out-of-scope
+      external_write: out-of-scope
+    rails: []
+
+  - name: deterministic
+    description: >
+      Offline floor that check_input / check_output actually run today when
+      guardrails.enabled is true. check_jailbreak and check_soul_leak are
+      listed in DEFAULT_*_RAILS but silently skipped.
+    stages:
+      input: enforced
+      retrieval: out-of-scope
+      egress: out-of-scope
+      output: enforced
+      reasoning: out-of-scope
+      tool_intent: out-of-scope
+      tool_result: out-of-scope
+      artifact: out-of-scope
+      external_write: out-of-scope
+    rails:
+      - name: check_injection
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_soul_mutation
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_jailbreak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: input
+      - name: check_grounding
+        status: implemented
+        mode: enforced
+        stage: output
+      - name: check_soul_leak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: output
+
+  - name: nemo_local
+    description: >
+      Same offline floor as deterministic. Live Colang model-assisted rails
+      (check_jailbreak, self_check_facts) are not on the /query path —
+      check_input / check_output never call the NeMo engine.
+    stages:
+      input: enforced
+      retrieval: out-of-scope
+      egress: out-of-scope
+      output: enforced
+      reasoning: out-of-scope
+      tool_intent: out-of-scope
+      tool_result: out-of-scope
+      artifact: out-of-scope
+      external_write: out-of-scope
+    rails:
+      - name: check_injection
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_soul_mutation
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_jailbreak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: input
+      - name: check_grounding
+        status: implemented
+        mode: enforced
+        stage: output
+      - name: check_soul_leak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: output
+      - name: self_check_facts
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: output
+
+  - name: strict_agentic
+    description: >
+      Extends the deterministic offline floor. Tool / artifact / external_write
+      stages stay out-of-scope today — claiming mode=enforced for an
+      unimplemented rail fails load (see IMPLEMENTED_RAILS in profiles.py).
+    stages:
+      input: enforced
+      retrieval: out-of-scope
+      egress: out-of-scope
+      output: enforced
+      reasoning: out-of-scope
+      tool_intent: out-of-scope
+      tool_result: out-of-scope
+      artifact: out-of-scope
+      external_write: out-of-scope
+    rails:
+      - name: check_injection
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_soul_mutation
+        status: implemented
+        mode: enforced
+        stage: input
+      - name: check_jailbreak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: input
+      - name: check_grounding
+        status: implemented
+        mode: enforced
+        stage: output
+      - name: check_soul_leak
+        status: configured-unimplemented
+        mode: out-of-scope
+        stage: output
