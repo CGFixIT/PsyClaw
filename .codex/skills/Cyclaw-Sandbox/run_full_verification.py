@@ -805,7 +805,7 @@ def phase_triple_gate() -> PhaseResult:
     # G2: Full triple-gate integration
     graph = build_graph(retriever=retriever, llm=llm, grok=grok, claude=None, cfg=cfg)
     result = graph.invoke({
-        "query": "rocket ship",
+        "query": "orbital launch window forecast",
         "user_confirmed_online": True,
         "online_provider": "grok",
     })
@@ -814,7 +814,7 @@ def phase_triple_gate() -> PhaseResult:
     phase.checks.append(Check("grok_full_triple_gate", passed))
 
     # G3: Deny path
-    result = graph.invoke({"query": "rocket ship", "user_confirmed_online": False})
+    result = graph.invoke({"query": "orbital launch window forecast", "user_confirmed_online": False})
     passed = result.get("answer_model") == "offline-best-effort"
     log(f"    [{'PASS' if passed else 'FAIL'}] Grok deny -> offline_best_effort")
     phase.checks.append(Check("grok_deny_path", passed))
@@ -822,7 +822,7 @@ def phase_triple_gate() -> PhaseResult:
     # G4: Unavailable grok -> offline
     graph_no_grok = build_graph(retriever=retriever, llm=llm, grok=None, claude=None, cfg=cfg)
     result = graph_no_grok.invoke({
-        "query": "rocket", "user_confirmed_online": True, "online_provider": "grok",
+        "query": "orbital launch window forecast", "user_confirmed_online": True, "online_provider": "grok",
     })
     passed = result.get("answer_model") == "offline-best-effort"
     log(f"    [{'PASS' if passed else 'FAIL'}] Unavailable Grok -> offline_best_effort")
@@ -867,7 +867,7 @@ def phase_triple_gate() -> PhaseResult:
     claude_dead = MockClaudeClient(available=False)
     graph_no_claude = build_graph(retriever=retriever, llm=llm, grok=None, claude=claude_dead, cfg=cfg)
     result = graph_no_claude.invoke({
-        "query": "rocket", "user_confirmed_online": True, "online_provider": "claude",
+        "query": "neutrino decoherence tomography", "user_confirmed_online": True, "online_provider": "claude",
     })
     passed = result.get("answer_model") == "offline-best-effort"
     log(f"    [{'PASS' if passed else 'FAIL'}] Unavailable Claude -> offline_best_effort")
