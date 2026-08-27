@@ -48,10 +48,6 @@ class QuotaLedger:
         return json.dumps(asdict(self), indent=2, sort_keys=True).encode("utf-8")
 
 
-def _now_iso(now: datetime) -> str:
-    return iso(now)
-
-
 def load(roots: ScopedRoots, root: str | None) -> QuotaLedger | None:
     """Read ``.cyclaw-quota.json`` for ``root``. Returns ``None`` if missing/corrupt."""
     try:
@@ -123,7 +119,7 @@ def recompute(sr: SafeRoot, now: datetime, generation: int) -> QuotaLedger:
     return QuotaLedger(
         used_bytes=used,
         file_count=files,
-        computed_at=_now_iso(now),
+        computed_at=iso(now),
         generation=generation,
     )
 

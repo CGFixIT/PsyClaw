@@ -22,12 +22,14 @@
 # with a compatible pydantic bump.
 pydantic==2.13.4
 pydantic-core==2.46.4
-# Not currently imported anywhere in source (grepped 2026-07: no `pydantic_settings`
-# or `BaseSettings` usage) and not in pyproject.toml's [project.dependencies], so
-# it is never actually pulled into an install today -- this pin only takes effect
-# if a future direct import is added. Left in place (not removed) since the
-# original intent is undocumented; if config loading is ever migrated onto it,
-# this pin is already lock-step-correct with the pydantic pair above.
+# Not imported directly anywhere in CyClaw's own source and not in pyproject.toml's
+# [project.dependencies] -- but it IS a real, unconditional (non-extra) transitive
+# of chromadb==1.5.9 (`pydantic-settings>=2.0` in chromadb's own requires_dist), so
+# every clean install pulls it in. This pin is load-bearing today, not speculative:
+# removing it lets the resolver pick any pydantic-settings satisfying chromadb's
+# loose >=2.0 floor, which is exactly the reproducibility gap constraints.txt exists
+# to close. Kept lock-step-compatible with the pydantic pair above (requires
+# pydantic>=2.7.0; pinned pydantic==2.13.4 satisfies that).
 pydantic-settings==2.14.2
 
 # Direct dependencies from pyproject.toml [project.dependencies] -- versions MUST match exactly
