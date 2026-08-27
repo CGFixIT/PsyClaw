@@ -198,6 +198,28 @@ if [ "$NO_HARNESS" -eq 0 ]; then
   fi
   "$VENV_PY" -m harness.server &
   HARNESS_PID=$!
+  # Same startup-death race as the gateway above: the harness can fail fast on
+  # a missing dependency or an already-bound port. Probe /api/status while also
+  # checking the process is still alive, so a startup failure surfaces before
+  # we open a browser on a dead port and block forever in wait.
+  HARNESS_READY=0
+  for i in 1 2 3 4 5; do
+    if ! kill -0 "$HARNESS_PID" 2>/dev/null; then
+      wait "$HARNESS_PID" 2>/dev/null || true
+      HARNESS_PID=""
+      echo "[cyclaw] error: coding harness exited during startup (port $PORT)." >&2
+      echo "[cyclaw]        Common causes: port $PORT is already in use or a dependency is missing." >&2
+      exit 1
+    fi
+    if curl -sf "http://127.0.0.1:$PORT/api/status" >/dev/null 2>&1; then
+      HARNESS_READY=1
+      break
+    fi
+    sleep 0.4
+  done
+  if [ "$HARNESS_READY" -eq 0 ]; then
+    echo "[cyclaw] warn : coding harness not answering /api/status yet; still starting (pid $HARNESS_PID)" >&2
+  fi
 fi
 
 # --- open browsers (best-effort) ---
@@ -215,12 +237,25 @@ if [ "$NO_BROWSER" -eq 0 ]; then
   disown 2>/dev/null || true
 fi
 
-# Wait on whichever process(es) we started.
-if [ -n "$HARNESS_PID" ]; then
-  wait "$HARNESS_PID"
-elif [ -n "$GATE_PID" ]; then
-  wait "$GATE_PID"
-else
+# Wait on whichever process(es) we started. A single `wait "$HARNESS_PID"`
+# blocked forever if the harness died first and the gateway was still running
+# (or vice versa), because wait only returns when its target exits. Poll both
+# pids so any death triggers cleanup and exits the script.
+if [ -z "$HARNESS_PID" ] && [ -z "$GATE_PID" ]; then
   echo "[cyclaw] nothing started (--no-gate and --no-harness both set)" >&2
   exit 1
 fi
+while true; do
+  if [ -n "$HARNESS_PID" ] && ! kill -0 "$HARNESS_PID" 2>/dev/null; then
+    echo "[cyclaw] harness process (pid $HARNESS_PID) exited" >&2
+    break
+  fi
+  if [ -n "$GATE_PID" ] && ! kill -0 "$GATE_PID" 2>/dev/null; then
+    echo "[cyclaw] RAG gateway process (pid $GATE_PID) exited" >&2
+    break
+  fi
+  # Wait a bit; any signal still fires the cleanup trap.
+  sleep 1
+  # Reap any child that has exited so pid reuse / zombie risk is minimized.
+  wait -n 2>/dev/null || true
+done

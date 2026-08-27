@@ -39,6 +39,19 @@ def test_invoke_cyclaw_home_dir_matches_install_cyclaw() -> None:
     assert invoke_match.group(1) == install_match.group(1)
 
 
+def test_invoke_cyclaw_probes_harness_startup_and_watches_both_pids() -> None:
+    """The harness must get the same startup-death probe the gateway already
+    has, and the script must not block forever on one PID if the other dies."""
+    text = (_REPO_ROOT / "macos" / "invoke-cyclaw.sh").read_text(encoding="utf-8")
+    assert "/api/status" in text, "harness startup probe must target /api/status"
+    assert "HARNESS_READY=0" in text, "harness startup readiness variable missing"
+    assert "coding harness exited during startup" in text, "harness startup death message missing"
+    # Dual-PID liveness loop replaces the old single wait.
+    assert "while true; do" in text, "liveness watch loop missing"
+    assert "kill -0 \"$HARNESS_PID\"" in text
+    assert "kill -0 \"$GATE_PID\"" in text
+
+
 def test_installer_preserves_patched_config_across_updates() -> None:
     install_text = (_REPO_ROOT / "macos" / "install-cyclaw.sh").read_text(encoding="utf-8")
     assert 'git -C "$REPO_DIR" pull --ff-only --autostash' in install_text
