@@ -1,0 +1,6 @@
+# Optional Qwen/Ollama asset registry (issue #1134 Phase 3).
+# Strict digest enforcement is default-off. No CI download of weights.
+tag: qwen3.8:27b-mlx
+sha256: ""
+source_url: ""
+strict: false

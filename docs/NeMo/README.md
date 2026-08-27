@@ -59,6 +59,16 @@ Configured but **not** enforced on the offline floor (must stay public):
   `test_check_soul_leak_is_configured_but_not_offline_enforced`,
   `test_check_output_does_not_reuse_scan_injection`.
 
+## Route grounding labels (Phase 3)
+
+- `local_llm`: token-overlap on `answer_sources` (graph `guardrail_output`).
+- `grok` / `claude`: **no** grounding claim; destination allowlisted; context is untrusted-cloud.
+- `offline_best_effort`: still **no** `check_output` (4a scope). Do not silently widen.
+
+Retrieval chunks are untrusted `SourceProvenance`. IDs only (`source:chunk_id`) — never raw text in metrics.
+
+Qwen asset registry: `guardrails/qwen_manifest.yaml` (tag, optional sha256). Strict digest default **off**. No CI weight download.
+
 ## Grounding
 
 `guardrails/rails.py::grounding_score` is **token overlap**
