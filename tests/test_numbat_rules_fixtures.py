@@ -156,9 +156,12 @@ def test_clean_fixture_matches_build_event() -> None:
     assert _load_events(CLEAN) == expected
 
 
-def test_executor_jail_live_events_have_zero_rule_hits(tmp_path: Path) -> None:
+def test_executor_jail_live_events_have_zero_rule_hits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC #2: a real executor run under the scrubbed env must not match rules."""
     from agentic.executor import Check, run_verification
+    from tests.executor_sandbox_double import inject_argv_list_sandbox
+
+    inject_argv_list_sandbox(monkeypatch)
 
     reset_config_cache()
     out = tmp_path / "numbat-events.ndjsonl"

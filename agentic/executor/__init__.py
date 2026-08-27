@@ -18,6 +18,7 @@ not, wired.
 
 from __future__ import annotations
 
+from agentic.executor.hard_sandbox import HardSandboxUnavailable, production_sandbox
 from agentic.executor.runner import (
     Check,
     CheckResult,
@@ -29,7 +30,9 @@ from agentic.executor.runner import (
 __all__ = [
     "Check",
     "CheckResult",
+    "HardSandboxUnavailable",
     "VerificationReport",
     "default_checks",
+    "production_sandbox",
     "run_verification",
 ]
