@@ -105,6 +105,31 @@ def detect_soul_mutation_intent(query: str) -> bool:
     return bool(_SOUL_MUTATION_RE.search(query))
 
 
+# Identity / config *exfiltration* in a model answer. Deliberately not
+# scan_injection: that marker set includes "you are now", which is ordinary
+# technical prose on the output side (docs/NeMo/phase4b_soul_leak.md Decision A).
+_SOUL_LEAK_RE = re.compile(
+    r"(?is)("
+    r"my (?:core )?(?:identity )?instructions are\s*:"
+    r"|i was told to .{0,80}(?:system prompt|soul\.md|ignore (?:previous|all) instructions)"
+    r"|(?:here|this) is (?:my )?(?:system prompt|soul\.md)\b"
+    r"|the following is my system (?:prompt|configuration)"
+    r"|verbatim (?:from )?(?:soul\.md|the system prompt)"
+    r"|print(?:ing)? (?:my |the )?(?:system prompt|soul\.md|hidden instructions)"
+    r")"
+)
+
+
+def detect_soul_leak(answer: str) -> bool:
+    """True when the answer restates system/soul/instruction identity.
+
+    Python-side True = leak detected (same sense as
+    :func:`detect_soul_mutation_intent`). The NeMo action inverts to
+    True=allowed.
+    """
+    return bool(_SOUL_LEAK_RE.search(answer or ""))
+
+
 def scan_injection(text: str) -> list[str]:
     """Return the list of light injection markers found in ``text`` (may be empty).
 
@@ -247,16 +272,25 @@ async def _action_check_soul_mutation(context: dict | None = None) -> bool:
 async def _action_check_injection(context: dict | None = None, text: str | None = None) -> bool:
     """NeMo action: True (allowed) unless light injection markers are present.
 
-    Accepts an optional explicit ``text`` so the action can scan a string other
-    than the current user message. The ``check soul leak`` output flow in
-    ``rails.co`` calls ``check_injection(text=$bot_message)`` to reuse this scan on
-    the *bot* message; without a ``text`` parameter NeMo would pass that kwarg to a
-    function that does not accept it and raise ``TypeError`` at rail-execution
-    time. When ``text`` is omitted it falls back to the user message in context,
-    preserving the input-rail behaviour.
+    Optional ``text`` scans a string other than the current user message.
+    Phase 4b output leak uses :func:`_action_check_soul_leak`, not this action.
     """
     target = text if text is not None else _context_user_message(context)
     return not scan_injection(target)
+
+
+@_nemo_action(name="check_soul_leak")
+async def _action_check_soul_leak(context: dict | None = None, text: str | None = None) -> bool:
+    """NeMo action: True (allowed) unless the bot message leaks identity/config."""
+    ctx = context or {}
+    if text is not None:
+        target = text
+    else:
+        raw = ctx.get("bot_message", "")
+        target = raw if isinstance(raw, str) else ""
+    if not isinstance(target, str):
+        target = ""
+    return not detect_soul_leak(target)
 
 
 @_nemo_action(name="get_grounding_score")
@@ -326,6 +360,7 @@ def register_actions(
         return 0
     register(_action_check_soul_mutation, name="check_soul_mutation")
     register(_action_check_injection, name="check_injection")
+    register(_action_check_soul_leak, name="check_soul_leak")
     register(_action_get_grounding_score, name="get_grounding_score")
     register(_action_is_ungrounded, name="is_ungrounded")
-    return 4
+    return 5
