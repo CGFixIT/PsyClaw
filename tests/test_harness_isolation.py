@@ -35,20 +35,6 @@ def _imports(source: str) -> set[str]:
     return names
 
 
-def _import_modules(source: str) -> set[str]:
-    """Full dotted module names (``from guardrails.tool_broker import X``)."""
-    names: set[str] = set()
-    tree = ast.parse(source)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                names.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and node.level == 0:
-                names.add(node.module)
-    return names
-
-
 @pytest.mark.parametrize("module_file", REQUEST_PATH_MODULES)
 def test_request_path_does_not_import_harness(module_file):
     source = (REPO_ROOT / module_file).read_text(encoding="utf-8")
@@ -85,30 +71,14 @@ def test_harness_does_not_import_request_path():
     assert scanned >= 1
 
 
-# I6 still forbids gate/graph/mcp → guardrails. Harness may import ONLY the
-# ToolBroker name-gate (oob-to-oob). broker.py / integration.py stay off-limits.
-_SIBLING_FORBIDDEN_TOP = frozenset({"agentic", "sync", "memory"})
-_GUARDRAILS_ALLOWED = frozenset({"guardrails.tool_broker"})
-
-
 def test_harness_does_not_import_sibling_out_of_band():
-    # Defense in depth: GitHub ops still go through utils.ops_runner, not
-    # agentic imports. ToolBroker is the one allowed guardrails submodule.
+    # Defense in depth: harness must not import agentic/sync/guardrails
+    # directly either -- GitHub operations go through utils.ops_runner's
+    # subprocess shim into agentic.cli, exactly like /ops/agentic, per
+    # harness/server.py's own module docstring.
+    forbidden = {"agentic", "sync", "guardrails", "memory"}
     for py in (REPO_ROOT / "harness").rglob("*.py"):
-        imported = _import_modules(py.read_text(encoding="utf-8"))
+        imported = _imports(py.read_text(encoding="utf-8"))
+        leaked = forbidden & imported
         rel = py.relative_to(REPO_ROOT)
-        for name in imported:
-            top = name.split(".")[0]
-            if top in _SIBLING_FORBIDDEN_TOP:
-                raise AssertionError(f"{rel} imports sibling out-of-band module: {name}")
-            if top == "guardrails" and name not in _GUARDRAILS_ALLOWED:
-                raise AssertionError(
-                    f"{rel} imports {name}; only {_GUARDRAILS_ALLOWED} is allowed"
-                )
-
-
-def test_harness_sibling_guard_flags_nemo_broker_import():
-    planted = "from guardrails.broker import GuardrailBroker\n"
-    imported = _import_modules(planted)
-    assert "guardrails.broker" in imported
-    assert "guardrails.broker" not in _GUARDRAILS_ALLOWED
+        assert not leaked, f"{rel} imports sibling out-of-band module(s): {leaked}"

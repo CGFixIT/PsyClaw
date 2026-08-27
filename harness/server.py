@@ -58,7 +58,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response as StarletteResponse
 
-from guardrails.tool_broker import ToolDenied, assert_allowed
+from utils.tool_broker import ToolDenied, assert_allowed
 from harness import env_keys
 from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
@@ -107,7 +107,7 @@ _HARNESS_LOOP_TOOL = "harness_loop"
 
 def _loop_tool_allowlist() -> frozenset[str]:
     """Closed set for loop turns. Empty deny is covered by monkeypatched tests."""
-    return frozenset({_HARNESS_LOOP_TOOL})
+    return frozenset((_HARNESS_LOOP_TOOL,))
 
 
 # Own scheme instance rather than importing utils.auth's: that module's is a
