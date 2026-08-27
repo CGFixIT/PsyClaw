@@ -12,7 +12,8 @@ from agentic.executor.apply import prove_disposable_copy
 from agentic.executor.manifest import build_manifest, git_head
 from utils.errors import AgenticError
 
-_RUN = "fedcba9876543210fedcba9876543210"
+# Matches RUN_ID_RE (32 hex). Repeated zeros, not a high-entropy token (DS173237).
+_RUN = "0" * 32
 
 
 def _git_init(root: Path) -> None:
