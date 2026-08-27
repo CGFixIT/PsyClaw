@@ -21,8 +21,8 @@ tree rather than a shared abstraction layer.
 bash ./macos/install-cyclaw.sh
 
 # Or let the installer clone origin main itself -- just run the script.
-# Options: --repo-path ~/src/CyClaw  --skip-python-deps  --no-profile-edit
-#          --no-path-edit  --no-fsconnect
+# Options: --repo-path ~/src/CyClaw  --replace-repo  --skip-python-deps
+#          --no-profile-edit  --no-path-edit  --no-fsconnect
 ```
 
 The installer: creates `~/.CyClaw`, clones or links the repo, creates a venv
@@ -34,6 +34,11 @@ rc file (`~/.zshrc` on zsh; on macOS bash, the first existing login file among
 created only when none exists; Linux retains its `.bash_profile`/`.bashrc`
 selection). Target shells: bash (including macOS's stock 3.2) and zsh;
 BSD userland is assumed on macOS — no GNU-only flags, no Homebrew dependency.
+
+`--replace-repo` is a recovery switch only for the default clone target. If
+`~/.CyClaw/repo` exists but is not a usable checkout, the flag permits deleting
+that directory before cloning. It does not apply with `--repo-path`; move aside
+anything you need before using it.
 
 The default install also prepares `~/CyClaw-FS` and enables only confined
 filesystem list/stat/read access. Pass `--no-fsconnect` to prepare the folder

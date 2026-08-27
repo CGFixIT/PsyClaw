@@ -127,7 +127,30 @@ def test_credman_marshal_sites_carry_devskim_suppression() -> None:
     for line in set_text.splitlines():
         if "InteropServices.Marshal" in line:
             assert "DevSkim: ignore DS104456" in line, line
+        if "Marshal.WriteByte" in line:
+            assert "DevSkim: ignore DS104456" in line, line
     assert "Dispose()" in set_text
+
+
+def test_credman_set_ps7_ctrl_c_registers_cancel_keypress() -> None:
+    """PS7 Ctrl+C must run the same wipe path as finally, then exit 130.
+
+    Windows PowerShell 5.1 often skips finally on Ctrl+C. The handler is
+    gated on PSVersion.Major -ge 7 so 5.1 cannot hang on e.Cancel=$true.
+    """
+    text = (_PS / "CyClaw-CredMan-Set.ps1").read_text(encoding="utf-8")
+    assert "function Invoke-CyclawCredCleanup" in text
+    assert "CancelKeyPress" in text
+    assert "RegisterCancelHandler" in text
+    assert "private static void HandleCancel" in text
+    assert "$PSVersionTable.PSVersion.Major -ge 7" in text
+    assert "eventArgs.Cancel = true" in text
+    assert "Environment.Exit(130)" in text
+    assert "Marshal.WriteByte" in text
+    assert "Interlocked.Exchange" in text
+    assert "UnregisterCancelHandler" in text
+    assert "[ConsoleCancelEventHandler]{" not in text
+    assert "Do not install this on Windows PowerShell" in text
 
 
 def test_uninstall_and_setup_never_enable_writes_or_indexing() -> None:
