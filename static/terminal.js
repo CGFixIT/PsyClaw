@@ -647,6 +647,17 @@ function openUsersPanel() {
       actorRole: authRole,
       getCsrf: function () { return csrfToken; },
       fetchFn: function (path, init) { return fetch(API + path, init); },
+      onStatus: function (msg) {
+        const el = document.getElementById('usersPanelStatus');
+        if (!el) return;
+        if (msg) {
+          el.textContent = msg;
+          el.hidden = false;
+        } else {
+          el.textContent = '';
+          el.hidden = true;
+        }
+      },
     });
   }
 }

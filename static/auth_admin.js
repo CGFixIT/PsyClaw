@@ -49,10 +49,17 @@
     // already had the right shape; these did not. Funnel them all through one
     // helper so a future mutation cannot reintroduce the silent path.
     function mutate(label, url, init) {
+      onStatus(); // clear any previous error at the start of a new mutation
       return fetchFn(url, init)
         .then(function (resp) {
-          if (!resp.ok) onStatus(label + " failed (" + resp.status + ")");
-          return reload();
+          const failed = !resp.ok;
+          if (failed) onStatus(label + " failed (" + resp.status + ")");
+          // A refused mutation must keep its message on screen: reload() only
+          // repaints the (unchanged) list, and its own success path used to
+          // call onStatus() unconditionally -- clearing the error this same
+          // handler had just shown one line above. preserveStatus=true skips
+          // that clear so the refusal stays visible until the next action.
+          return reload(failed);
         })
         .catch(function (err) {
           // An unreachable gateway rejects before any status exists. Without
@@ -62,7 +69,7 @@
         });
     }
 
-    async function reload() {
+    async function reload(preserveStatus) {
       const resp = await fetchFn(base + "/users", { method: "GET" });
       if (resp.status === 503) {
         listBox.textContent = "authentication is off";
@@ -71,10 +78,12 @@
       }
       if (!resp.ok) {
         listBox.textContent = "cannot list users (" + resp.status + ")";
+        onStatus("cannot list users (" + resp.status + ")");
         return;
       }
       const users = await resp.json();
       listBox.textContent = "";
+      if (!preserveStatus) onStatus(); // successful reload clears any transient error
       users.forEach(function (u) {
         const row = el("div", { class: "auth-user-row" });
         row.appendChild(el("span", null, u.username + " · " + u.role + (u.disabled ? " · disabled" : "")));
@@ -119,6 +128,7 @@
     }
 
     createBtn.addEventListener("click", function () {
+      onStatus(); // clear any previous error at the start of a new mutation
       fetchFn(base + "/users", {
         method: "POST",
         headers: headers(true),
@@ -129,8 +139,9 @@
         }),
       }).then(function (resp) {
         passIn.value = "";
-        if (!resp.ok) onStatus("create failed " + resp.status);
-        reload();
+        const failed = !resp.ok;
+        if (failed) onStatus("create failed " + resp.status);
+        return reload(failed); // keep refresh failures in this handler's promise chain
       }).catch(function (err) {
         // The one path createUser still lacked: an unreachable gateway rejects
         // before any resp exists, so the password field stayed populated and
