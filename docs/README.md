@@ -37,6 +37,7 @@ grepping.
 | `memories/` | Live agent memory (the only sanctioned location — `.claude/memory/` is legacy). |
 | `work/` | Active planning docs (e.g. `work/MACOS_LAUNCHD_INTEGRATION_PLAN.md`, session notes). |
 | `plans/` | Living forward-looking roadmaps (e.g. `plans/NUMBAT_AND_ALWAYS_ON_ROADMAP.md`). Plans, not authorities — the code and `config.yaml` still win. |
+| `mailtag/IMPLEMENTATION_PLAN.md` | **DRAFT** mailtag (provider-neutral email tagging) plan. Not shipped, not a graph node, not approved. Do not implement from this file without an explicit owner sign-off. |
 | `analysis/`, `zIdeas/`, `zWork/`, `! How-To-Guides/`, `screenshots/` | Working material and archives; not authorities. |
 
 Writing rules for anything added here: every `##` section self-contained
