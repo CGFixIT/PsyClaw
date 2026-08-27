@@ -228,7 +228,7 @@ def test_users_and_audit_markup_exist():
         'id="auditToggleBtn"',
         'id="auditPanel"',
         'id="auditSummary"',
-        "query === '/users'",
+        "slash === '/users'",
         "/static/auth_admin.js",
     ):
         assert marker in html, f"missing {marker!r}"
@@ -240,9 +240,42 @@ def test_audit_slash_command_is_intercepted_client_side():
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function submitQuery(", 1)
     assert len(body) == 2, "submitQuery moved; update this test"
-    after = body[1].split("if (emptyState)", 1)[0]
-    assert "query === '/audit'" in after, "/audit is not intercepted in submitQuery"
+    after = body[1].split("const loadingId = addLoadingEntry()", 1)[0]
+    assert "toLocaleLowerCase('en-US')" in after, "slash intercept must use en-US, not locale toLowerCase"
+    assert "slash === '/audit'" in after, "/audit is not intercepted in submitQuery"
     assert "openAuditPanel()" in after, "/audit interception does not open the audit panel"
+
+
+def test_help_slash_command_is_intercepted_client_side():
+    """/help must stay in the console, not POST to /query as a retrieval query."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function submitQuery(", 1)
+    assert len(body) == 2, "submitQuery moved; update this test"
+    after = body[1].split("const loadingId = addLoadingEntry()", 1)[0]
+    assert "slash === '/help'" in after, "/help is not intercepted in submitQuery"
+
+
+def test_open_audit_panel_uses_api_key_route_when_typed():
+    """Typed CYCLAW_API_KEY must hit GET /audit/summary, not the session route."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("async function openAuditPanel(", 1)
+    assert len(body) == 2, "openAuditPanel moved; update this test"
+    after = body[1].split("async function submitQuery(", 1)[0]
+    assert "`${API}/audit/summary`" in after, "openAuditPanel does not fetch /audit/summary"
+    assert "authHeaders()" in after, "openAuditPanel does not send authHeaders() with the typed key"
+
+
+def test_describe_api_key_error_maps_unset_and_mismatch():
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "function describeApiKeyError(" in js
+    body = js.split("function describeApiKeyError(", 1)[1].split("\nfunction ", 1)[0]
+    assert "CYCLAW_API_KEY not set" in body
+    assert "Invalid or missing API key" in body
+
+
+def test_api_key_placeholder_names_soul_and_ops():
+    html = _TERMINAL_HTML.read_text(encoding="utf-8")
+    assert 'placeholder="CYCLAW_API_KEY (Soul / ops)"' in html
 
 
 def test_confirm_prompt_query_is_stored_per_entry():
