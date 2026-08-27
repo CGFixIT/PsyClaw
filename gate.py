@@ -1261,7 +1261,15 @@ def _looks_cross_site(request: Request) -> bool:
         return True
     origin = request.headers.get("origin")
     if origin is not None:
-        hostname = urlparse(origin).hostname
+        try:
+            hostname = urlparse(origin).hostname
+        except ValueError:
+            # A structurally malformed Origin (e.g. an unbalanced IPv6
+            # bracket: "http://[evil") makes urlparse() itself raise, not
+            # merely a lazy .hostname/.port access -- attacker-controlled on
+            # an unauthenticated route, so this must fail closed as
+            # cross-site rather than let the exception escape as a 500.
+            return True
         return hostname is None or not _is_loopback_host(hostname)
     return False
 

@@ -91,6 +91,29 @@ class TestIndexBuildGates:
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
+    def test_malformed_origin_is_refused_not_a_500(self):
+        """A structurally malformed Origin (an unbalanced IPv6 bracket) makes
+        urlparse() itself raise ValueError, not merely a lazy .hostname
+        access -- attacker-controlled on this loopback-gated but
+        unauthenticated route, so it must fail closed as cross-site rather
+        than let the exception escape as an unhandled 500.
+
+        Own TestClient on a distinct loopback IP (127.0.0.0/8, not just
+        127.0.0.1 -- see _is_loopback_host's own docstring) rather than
+        idle_client: the rate limiter is keyed per-IP, and idle_client's
+        fixed (127.0.0.1, 51234) is shared by every other test in this
+        class, so an extra call on that same address can starve a later
+        test's budget in a full-suite run.
+        """
+        client = TestClient(
+            gate.app,
+            base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+            client=("127.0.0.2", 51234),  # DevSkim: ignore DS162092,DS137138
+        )
+        resp = client.post("/index/build", headers={"Origin": "http://[evil"})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
     def test_second_concurrent_build_is_refused_with_409(self, idle_client):
         """Two builds would write the same ChromaDB collection and the same
         bm25.json, so the loser corrupts the winner."""

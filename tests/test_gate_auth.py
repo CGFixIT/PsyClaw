@@ -318,18 +318,19 @@ class TestSameOrigin:
     @pytest.mark.parametrize(
         "malformed_origin",
         [
-            "http://localhost:notaport",  # non-numeric port
-            "http://localhost:99999",  # out of the 0-65535 range
+            "http://localhost:notaport",  # non-numeric port -- urlparse() succeeds, .port raises
+            "http://localhost:99999",  # out of the 0-65535 range -- same, lazy .port raise
+            "http://[evil",  # unbalanced IPv6 bracket -- urlparse() itself raises
         ],
     )
     def test_malformed_origin_port_is_rejected_not_a_500(self, manager, user, malformed_origin):
-        """urlparse().port is a lazy property that raises ValueError for a
-        non-numeric or out-of-range port string -- urlparse() itself never
-        raises, so nothing catches this until something reads .port. Both
-        values are attacker-controlled on an unauthenticated route; an
-        uncaught ValueError here would turn a malformed cross-origin request
-        into an unhandled 500 instead of the 403 this check exists to
-        return."""
+        """Two distinct ValueError sources, both attacker-controlled on an
+        unauthenticated route: urlparse().port is a lazy property that raises
+        for a non-numeric or out-of-range port string, while a structurally
+        malformed Origin (an unbalanced IPv6 bracket) makes urlparse() itself
+        raise before .port is ever reached. An uncaught ValueError from
+        either source would turn a malformed cross-origin request into an
+        unhandled 500 instead of the 403 this check exists to return."""
         username, password = user
         r = _client(manager).post(
             "/auth/login",

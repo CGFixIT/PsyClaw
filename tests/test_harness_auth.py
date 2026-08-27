@@ -380,6 +380,19 @@ def test_cross_origin_post_is_rejected_even_with_a_valid_key(client):
     assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
 
+def test_malformed_origin_is_rejected_not_a_500(client):
+    """A structurally malformed Origin (an unbalanced IPv6 bracket) makes
+    urlparse() itself raise ValueError, not merely a lazy .hostname access --
+    attacker-controlled on an unauthenticated dependency, so it must fail
+    closed as cross-origin rather than let the exception escape as an
+    unhandled 500."""
+    resp = client.post(
+        "/api/soul", json={"enabled": True}, headers={**_AUTH, "Origin": "http://[evil"}
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
 def test_cross_site_fetch_metadata_is_rejected(client):
     resp = client.post(
         "/api/soul", json={"enabled": True}, headers={**_AUTH, "Sec-Fetch-Site": "cross-site"}

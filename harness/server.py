@@ -586,15 +586,25 @@ def create_app(
                 },
             )
         origin = request.headers.get("origin")
-        if origin is not None and urlparse(origin).hostname not in _LOOPBACK_HOSTS:
-            raise HTTPException(
-                status_code=_HTTP_FORBIDDEN,
-                detail={
-                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
-                    _MESSAGE_KEY: "Cross-origin request rejected",
-                    _DETAILS_KEY: {"origin_host": urlparse(origin).hostname},
-                },
-            )
+        if origin is not None:
+            try:
+                # A structurally malformed Origin (e.g. an unbalanced IPv6
+                # bracket: "http://[evil") makes urlparse() itself raise --
+                # attacker-controlled on an unauthenticated route, so this
+                # must fail closed (treated as a non-loopback host, below)
+                # rather than let the exception escape as a 500.
+                origin_hostname = urlparse(origin).hostname
+            except ValueError:
+                origin_hostname = None
+            if origin_hostname not in _LOOPBACK_HOSTS:
+                raise HTTPException(
+                    status_code=_HTTP_FORBIDDEN,
+                    detail={
+                        _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                        _MESSAGE_KEY: "Cross-origin request rejected",
+                        _DETAILS_KEY: {"origin_host": origin_hostname},
+                    },
+                )
 
     # Per-instance, like rate_limiter above: a module-level singleton would leak
     # across separately-configured create_app() calls in tests, and a fixed
