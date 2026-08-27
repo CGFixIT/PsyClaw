@@ -247,6 +247,13 @@ policy:
       enabled: false
       command: []          # argv list, e.g. ["numbat", "hook", "pre-tool", "--agent", "cyclaw"]
       timeout_sec: 5
+      # Only "enforce" is supported today. "monitor" (allow the provider call
+      # while still emitting + auditing) is a policy flip that must not ship
+      # until a separate dual-run observation issue is filed.
+      fail_mode: enforce
+      # Emit first-party Numbat events for hook verdicts. Requires enabled: true
+      # and numbat.enabled: true. Default false so existing hooks are unaffected.
+      emit_verdict: false
   prompt_filter:
     enabled: true
     # Regex patterns (single-quoted so backslashes reach the regex engine

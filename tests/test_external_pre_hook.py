@@ -5,7 +5,12 @@ No wall-clock sleeps: subprocess.run is monkeypatched.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import sys
+from pathlib import Path
+
+import pytest
 
 from utils.external_pre_hook import (
     DEFAULT_TIMEOUT_SEC,
@@ -14,6 +19,42 @@ from utils.external_pre_hook import (
     _normalize_timeout,
     run_pre_action_hook,
 )
+from utils.numbat_emitter import close_numbat_handles
+
+
+@pytest.fixture(autouse=True)
+def _release_numbat_handles():
+    """Release cached file handles so tmp_path teardown succeeds on Windows."""
+    yield
+    close_numbat_handles()
+
+
+def _hook_config(
+    tmp_path: Path,
+    *,
+    enabled: bool = True,
+    emit_verdict: bool = True,
+    command: tuple[str, ...] = ("false",),
+) -> dict:
+    out = tmp_path / "numbat-events.ndjsonl"
+    return {
+        "numbat": {"enabled": True, "output_path": str(out)},
+        "policy": {
+            "fallback": {
+                "pre_action_hook": {
+                    "enabled": enabled,
+                    "command": list(command),
+                    "emit_verdict": emit_verdict,
+                }
+            }
+        },
+    }
+
+
+def _lines(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def test_invalid_command_type_denies():
@@ -57,3 +98,96 @@ def test_hook_disabled_returns_allow():
 
 def test_missing_config_returns_allow():
     assert run_pre_action_hook("grok", "grok-4.5", "abc", None) == {"verdict": "allow"}
+
+
+def test_emit_verdict_false_no_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _hook_config(tmp_path, emit_verdict=False)
+
+    def _exit_2(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout=b"", stderr=b"deny")
+
+    monkeypatch.setattr(subprocess, "run", _exit_2)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+    assert _lines(Path(cfg["numbat"]["output_path"])) == []
+
+
+def test_emit_verdict_true_exit_2_emits_permission_denied(tmp_path: Path):
+    cfg = _hook_config(
+        tmp_path,
+        command=(
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.write('blocked'); sys.exit(2)",
+        ),
+    )
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+    assert "blocked" in result["reason"]
+
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["event_type"] == "permission.denied"
+    assert rec["decision"] == "denied"
+    assert rec["model"] == "grok-4.5"
+    assert rec["model_provider"] == "xai"
+    assert rec["tool_name"] == "external_llm_call"
+    assert rec["approval_reason"] == "hook_denied"
+    assert rec["entrypoint"] == "cyclaw"
+    assert "cyclaw" in rec["tags"]
+    assert "query" not in json.dumps(rec)
+    assert "blocked" not in json.dumps(rec)
+
+
+def test_emit_verdict_true_timeout_emits_network_indicator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _hook_config(tmp_path, command=("sleep", "60"))
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 5))
+
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+    result = run_pre_action_hook("claude", "claude-sonnet-4", "abc", cfg)
+    assert result["verdict"] == "deny"
+
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["event_type"] == "network.indicator"
+    assert rec["confidence"] == "low"
+    assert rec["model_provider"] == "anthropic"
+    assert "query" not in json.dumps(rec)
+
+
+def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _hook_config(tmp_path)
+
+    def _exit_7(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=7, stdout=b"boom", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _exit_7)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    rec = records[0]
+    assert rec["event_type"] == "network.indicator"
+    assert rec["confidence"] == "low"
+
+
+def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _hook_config(tmp_path)
+
+    def _exit_2(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout=b"", stderr=b"deny")
+
+    monkeypatch.setattr(subprocess, "run", _exit_2)
+
+    def _boom(**kwargs):
+        raise RuntimeError("emit failed")
+
+    monkeypatch.setattr("utils.numbat_emitter.emit_numbat_event", _boom)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+    assert _lines(Path(cfg["numbat"]["output_path"])) == []

@@ -45,5 +45,6 @@ Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://g
 | [#962](https://github.com/cgfixit/CyClaw/issues/962) | LLM-as-judge | Suite on main (#1048). Close-out: accept `CYCLAW_EVAL_LIVE=1 python tests/judge_eval.py` (no Makefile / `JUDGE_API_KEY`) and/or run it live. |
 | [#964](https://github.com/cgfixit/CyClaw/issues/964) | Memory arena | Stretch. Parked until a live groundedness report shows a retrieval miss. |
 | [#1013](https://github.com/cgfixit/CyClaw/issues/1013) | Agentic spend ledger | Code ACs on main. Close-out is live-key Leg 1 (`spend_live_probe.py`) + Leg 2 (`real-repo-run-plan --confirm-online`). |
+| [#1128](https://github.com/cgfixit/CyClaw/issues/1128) | Numbat implementation — remainder | Slice A (hook-verdict emission) + Slice B (CEL monitor) active. Slice C (on-path sequence policy) parked. |
 
 Ignore PR #415 if it reappears (it is **closed**; still skip it during agentic coding if reopened).
