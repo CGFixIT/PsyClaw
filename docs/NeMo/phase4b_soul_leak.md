@@ -1,4 +1,4 @@
-# NeMo Phase 4b — soul-leak output rail (contract only)
+# NeMo Phase 4b — soul-leak output rail
 
 **Status (2026-08-27):** **implemented** on the offline `check_output` floor
 via `detect_soul_leak` (Decision A–C). Graph still only calls that floor for
@@ -6,8 +6,8 @@ via `detect_soul_leak` (Decision A–C). Graph still only calls that floor for
 still ships false. Body below is the original contract kept as the decision
 log.
 
-Audience: the maintainer who next opens a 4b PR. Read this before writing
-`detect_soul_leak` or touching `check_output`.
+Audience: anyone changing `detect_soul_leak` / `check_output`. Body below is
+the original contract kept as the decision log — not a to-do.
 
 Related:
 

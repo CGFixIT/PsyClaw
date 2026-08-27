@@ -1,18 +1,18 @@
-# NeMo Phase 5 — wrap `POST /api/agent/run` through ToolBroker (contract only)
+# NeMo Phase 5 — wrap `POST /api/agent/run` through ToolBroker
 
-**Status (2026-08-27):** **contract only.** This note is the planning doc for
-the next ToolBroker caller after WebTool (#1157) and harness `/loop` (#1158).
-It does **not** implement the wrap.
+**Status (2026-08-27):** **SHIPPED** on `main` as [#1163](https://github.com/cgfixit/CyClaw/pull/1163).
+This file is the decision log. Do not treat the body as a to-do.
 
-Audience: the maintainer who next opens `grok/1134-phase5-agent-run-broker`.
-Read this before touching `harness/server.py` `agent_run`.
+Audience: anyone changing `harness/server.py` `agent_run` — keep the wrap
+(`utils.tool_broker.assert_allowed("agent_run", ("real-repo-run",))` after
+profile resolve, before `_agentic_call`).
 
 Related:
 
 - Issue [#1134](https://github.com/cgfixit/CyClaw/issues/1134) Phase 5 remainder
 - [#1157](https://github.com/cgfixit/CyClaw/pull/1157) `utils.tool_broker` (canonical)
 - [#1158](https://github.com/cgfixit/CyClaw/pull/1158) `/loop` wrap (restack before relying on it; parent moved to `utils.tool_broker`)
-- [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) (same “contract only” shape)
+- [`phase4b_soul_leak.md`](./phase4b_soul_leak.md) (same decision-log shape)
 - `tests/test_tool_broker_adversarial.py` (benign `agent_run` name is already in the allow-table)
 
 ---

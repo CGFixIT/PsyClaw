@@ -42,10 +42,11 @@ python -m guardrails.cli test
 | `rails.py` | Offline floor (injection, soul-mutation intent, grounding) |
 | `metrics.py` | Separate `logs/guardrails.jsonl` (hashes, not the core audit stream) |
 | `cli.py` / `selftest.py` | Operator surface |
-| `errors.py` | `GuardrailsError` hierarchy, rooted at `utils.errors.RAGError` — kept local rather than added to `utils/errors.py` while the package is still skeleton-status |
-| `boundary.py` | Provider-independent typed decisions + provenance (issue #1134 Phase 1). Decisions carry hashes and reason codes only — never raw prompts/responses. Never imported by the core three (I6) |
-| `broker.py` | NeMo's non-generating `LLMRails.check` wrapped around the existing generation helper (issue #1134 Phase 3). Never grants I3, never calls `generate_async`; the graph reaches it only via `utils/guardrail_bridge` |
-| `call_inventory.py` | Fail-closed AST inventory of `ChatOpenAI`/`ChatXAI`/`ChatAnthropic`/`generate_async` call sites. Unregistered files fail pytest and `python -m guardrails.call_inventory` (exit 1). Never imports `nemoguardrails`, never runs on `/query` |
+| `errors.py` | `GuardrailsError` hierarchy, rooted at `utils.errors.RAGError` |
+| `boundary.py` | Provider-independent typed decisions + provenance (#1134 Phase 1). Hashes and reason codes only — never raw prompts/responses. Never imported by the core three (I6) |
+| `broker.py` | NeMo non-generating `LLMRails.check` around the existing generation helper (#1134 Phase 3). Never grants I3, never calls `generate_async`; graph reaches it only via `utils/guardrail_bridge` |
+| `tool_broker.py` | Re-export of `utils.tool_broker` (canonical name-gate). Harness imports `utils`, not this package |
+| `call_inventory.py` | Fail-closed AST inventory of `ChatOpenAI`/`ChatXAI`/`ChatAnthropic`/`generate_async` call sites. Unregistered files fail pytest and `python -m guardrails.call_inventory` (exit 1) |
 | `profiles.py` / `profiles.yaml` | Machine-readable guardrail profile matrix; rejects any profile claiming `mode: enforced` for a rail outside `IMPLEMENTED_RAILS` |
 | `qwen_registry.py` / `qwen_manifest.yaml` | Optional Qwen/Ollama tag manifest; strict mode default-off, no weight fetch |
 | `config/` | NeMo `config.yml` + Colang templates |
@@ -60,16 +61,18 @@ Canonical table: [`docs/NeMo/README.md`](../docs/NeMo/README.md).
 | Input rail via bridge | Shipped |
 | Shared offline scanner helpers | Shipped |
 | Output grounding (`local_llm` only) | Shipped |
-| Soul-leak output rail | **Not fully built** — listed as a candidate in config only |
-| `check_jailbreak` input rail | **Not enforced offline** — configured in `input_rails`, but `integration.py`'s offline checks implement only `check_injection` and `check_soul_mutation`. Model-assisted only; same silent-skip shape as the soul-leak rail. |
-| Topical rails (`stay_in_local_knowledge`, `no_unauthed_external_advice`) | **Not enforced offline** — configured (with a `soul_topics` list) but neither name is referenced anywhere in `integration.py`. |
+| Soul-leak output rail | **Shipped** — `detect_soul_leak` on `check_output` (#1155). Not `scan_injection`. Graph still skips non-`local_llm`. |
+| `check()` wrap around existing generate | **Shipped** when enabled+NeMo installed (`GuardrailBroker`). Disabled path stays pass-through. |
+| ToolBroker name-gate | **Shipped** in `utils.tool_broker` — WebTool, `harness_loop`, `agent_run`. |
+| Generate-call inventory | **Shipped** — fail-closed AST (`python -m guardrails.call_inventory`). |
+| `check_jailbreak` input rail | **Not enforced offline** — configured in `input_rails`; offline floor uses `check_injection` / `check_soul_mutation`. |
+| Topical rails (`stay_in_local_knowledge`, `no_unauthed_external_advice`) | **Not enforced offline** — configured but not referenced in `integration.py`. |
 
-Read that table as: when `nemoguardrails` is absent — which is the shipped
-posture, since it is a soft import — the offline floor enforces exactly two
-checks, `check_injection` and `check_soul_mutation`. Every other rail named in
-`config.yaml`'s `guardrails:` block is configuration for a model-assisted path
-that is not wired, and silently skips rather than failing loudly. Do not read a
-rail's presence in config as evidence it runs.
+When `nemoguardrails` is absent (shipped posture: soft import, `enabled: false`)
+the offline floor, once armed, enforces `check_injection`, `check_soul_mutation`,
+`check_grounding`, and `check_soul_leak`. `check_jailbreak` and the topical rails
+still skip. Do not read a rail's presence in config as evidence it runs.
 
 `guardrail_safety_node` in `integration.py` is an unused example helper, not
-the live graph path.
+the live graph path. Issue #1134 is closed; residuals (NLI, sockets on Job
+Object, live Seatbelt/netns, enabling shipped `enabled`) are follow-ups.

@@ -12,11 +12,15 @@ related:
   - agentic/registry.py
 ---
 
+> **Superseded for status (2026-08-27).** Live matrix: [`README.md`](./README.md).
+> Query-path `check()` wrap, ToolBroker, and harness `/loop` + `agent_run` are
+> on `main`. This file remains a historical redirect, not a to-do.
+
 ## Summary
 
-This document redirects **Phase 3** of the NeMo Guardrails roadmap away from the
-RAG query path and toward `agentic/` and `harness/`. It is a plan, not an
-approved change.
+This document redirected **Phase 3** of the NeMo Guardrails roadmap away from
+the RAG query path and toward `agentic/` and `harness/`. Treat it as a plan
+log, not an open change.
 
 The roadmap in `docs/NeMo/later_development_guideline.md` assumed Phase 3 meant
 "add output rails to the graph." Auditing the shipped code against that

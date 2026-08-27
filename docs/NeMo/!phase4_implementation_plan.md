@@ -1,8 +1,7 @@
 # NeMo Phase 4 — query-path output rail (`guardrail_output`) design
 
 > **Superseded for status (2026-08-27).** Current path×stage×engine matrix:
-> [`README.md`](./README.md). 4a is shipped; 4b remains the open contract in
-> [`phase4b_soul_leak.md`](./phase4b_soul_leak.md). This body is a decision log.
+> [`README.md`](./README.md). 4a and 4b are **shipped**. This body is a decision log.
 
 **Status (updated 2026-08-04):** **Phase 4a SHIPPED** on main — graph node
 `guardrail_output` is wired via `utils/guardrail_bridge.py`, grounding-only,
@@ -11,13 +10,11 @@ scoped to the `local_llm` answer path, still opt-in behind
 history and for open Decision 2 (soul-leak / Phase 4b). Do **not** treat the
 banner that used to say "DESIGN ONLY / no code written" as current.
 
-Still open relative to this design doc:
+Residual relative to this design doc (not #1134 reopen):
 
-- Full `check_soul_leak` implementation (config may list the flow name; offline
-  floor does not fully activate it — see `config.yaml` comments and
-  [`phase4b_soul_leak.md`](./phase4b_soul_leak.md)).
-- Any widening of output-rail scope beyond `local_llm` (Phase 4a deliberately
-  left external fallbacks and offline-best-effort unrailed for grounding).
+- Widening output-rail scope beyond `local_llm` (Phase 4a deliberately left
+  external fallbacks and offline-best-effort unrailed for grounding).
+- `check_soul_leak` is shipped on the offline `check_output` floor (#1155).
 
 This document originally answered the open question
 `docs/NeMo/phase3_implementation_plan.md` left standing ("Do the query-path
