@@ -41,6 +41,7 @@ from pathlib import Path
 
 from utils.logger import audit_log
 from utils.numbat_emitter import emit_numbat_command, redact_argv_for_numbat
+from utils.telemetry_kill import build_telemetry_safe_env
 
 # Same truncation discipline as agentic/gh_client.py's MAX_DIFF_CHARS: a
 # runaway pytest failure dump must not blow up memory, the audit log, or a
@@ -59,17 +60,32 @@ _ALLOWED_ENV_VARS = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONPATH", "VIRTUAL_EN
 
 
 def _scrubbed_env() -> dict[str, str]:
-    """Build the child environment: an allowlisted subset plus explicit network-hostility.
+    """Build the child environment: allowlisted subset + canonical telemetry
+    overlay + explicit proxy hostility.
+
+    The overlay (``build_telemetry_safe_env``) matters precisely BECAUSE this
+    is a minimal allowlist: the child inherits nothing, so without it a check
+    like ``pytest`` over a CyClaw worktree would import chromadb/langgraph/
+    huggingface_hub with every telemetry default back in play. The overlay
+    also carries the ancillary update-check opt-outs (including
+    PIP_DISABLE_PIP_VERSION_CHECK) and removes the scrubbed credential/config
+    names -- which the allowlist already excludes, so secrets stay out either
+    way.
 
     NO_PROXY/no_proxy are set to "*" and HTTPS_PROXY/HTTP_PROXY/ALL_PROXY are
-    simply never copied (the allowlist above doesn't include them) --
-    together these make an HTTP-library-based request in the child fail
-    closed rather than transiting whatever proxy this process itself uses.
+    simply never copied (the allowlist above doesn't include them). Stated
+    precisely: NO_PROXY="*" means "bypass any proxy for every host" -- it
+    directs an HTTP library to connect DIRECTLY, and blocks nothing by
+    itself. Its value here is only to stop a check's traffic silently
+    transiting whatever proxy this parent process uses; it is a best-effort
+    software control, not a network namespace or firewall, and it does not
+    stop a direct TCP/UDP socket, which never consults HTTPS_PROXY (see
+    docs/THREAT_MODEL.md section 4 and the module docstring).
     PIP_NO_INDEX stops an accidental `pip install` inside a check from
-    reaching PyPI. None of this stops a raw socket connection; see the module
-    docstring.
+    reaching PyPI.
     """
     env = {name: os.environ[name] for name in _ALLOWED_ENV_VARS if name in os.environ}
+    env = build_telemetry_safe_env(env)
     env["NO_PROXY"] = "*"
     env["no_proxy"] = "*"
     env["PIP_NO_INDEX"] = "1"

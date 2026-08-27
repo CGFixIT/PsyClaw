@@ -81,6 +81,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from utils import launchd_plist  # noqa: E402
+from utils.telemetry_kill import scheduler_env_overlay  # noqa: E402
 
 _LABELS = types.MappingProxyType({
     "gate": "com.cgfixit.cyclaw.gate",
@@ -163,7 +164,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     label = _LABELS[args.service]
-    env: dict[str, str] = {}
+    # Start from the canonical telemetry/update-check block: launchd hands a
+    # job a near-empty environment, so the plist itself must deliver these
+    # before the interpreter starts (the gate/harness import-time apply is the
+    # second layer, not the first). Non-secret fixed literals only.
+    env: dict[str, str] = dict(scheduler_env_overlay())
 
     if args.service == "gate":
         port = _read_gate_port(Path(args.config).resolve())

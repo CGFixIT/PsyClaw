@@ -24,6 +24,7 @@ from sync.scheduler import (
     get_scheduler,
 )
 from utils.errors import SchedulerError, SyncConfigError
+from utils.telemetry_kill import scheduler_env_overlay
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CORPUS = str(_REPO_ROOT / "data" / "corpus")
@@ -167,7 +168,9 @@ def test_install_never_embeds_a_secret_or_environment_variables(tmp_path: Path) 
     document = plistlib.loads(plist_path.read_bytes())
     raw_bytes = plist_path.read_bytes()
 
-    assert "EnvironmentVariables" not in document
+    # Exactly the canonical non-secret overlay -- the "never embeds a
+    # secret" guarantee now reads: nothing beyond these fixed literals.
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
     assert b"TOKEN" not in raw_bytes
     assert b"SECRET" not in raw_bytes
     assert b"REPLACE_" not in raw_bytes  # generated, not a hand-edit template

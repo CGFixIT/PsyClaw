@@ -18,6 +18,7 @@ import yaml
 
 from agentic.fsconnect import cli
 from utils.logger import reset_config_cache
+from utils.telemetry_kill import scheduler_env_overlay
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
 
@@ -89,7 +90,11 @@ def test_generates_valid_plist_from_default_root(tmp_path: Path, capsys) -> None
     assert args[args.index("--root") + 1] == str(share)
     assert args[args.index("--reason") + 1] == "weekly launchd retention purge"
     assert "--confirm" in args
-    assert "EnvironmentVariables" not in document
+    # Exactly the canonical non-secret telemetry/update-check overlay --
+    # nothing else may land in EnvironmentVariables, so a secret still has
+    # no place to hide (the pre-#1135 form of this guard asserted the key
+    # was absent entirely).
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
 
     out = capsys.readouterr().out
     assert "launchctl bootstrap gui/" in out

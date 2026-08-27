@@ -42,7 +42,7 @@ It verifies 35 assertions across:
 | I4 | Audit convergence | Graph reachability: all 7 upstream nodes reach `audit_logger`; `audit_logger → END` |
 | I5 | Soul governance | `apply_evolution` raises on empty `reason`; writes use atomic `os.replace` |
 | I6 | Module isolation | AST imports both directions: `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py`/`graph.py`/`mcp_hybrid_server.py` never import `agentic`/`sync`/`guardrails`/`harness`/`telegram`, and no file under those packages imports the core set (`gate_ops.py`/`gate_auth.py`/`gate_memory.py` join the check because `gate.py` imports each of them directly, so anything they import is pulled transitively into `gate.py`'s process) |
-| G1 | Telemetry kill | `_TELEMETRY_KILL` assignment line precedes the first heavy import (`graph`/`retrieval`/`llm`/`fastapi`/…) in `gate.py` |
+| G1 | Telemetry kill | Three tiers, 15 files: `gate.py`'s `_TELEMETRY_KILL` assignment precedes its first heavy import (`graph`/`retrieval`/`llm`/`fastapi`/…); the five out-of-band package `__init__.py`s (agentic/guardrails/telegram/opentweet/sync) call `apply_telemetry_kill()` before EVERY other import; and the nine module-level appliers (mcp_hybrid_server, metrics, harness/server, retrieval vector_store/indexer/clear_cache, guardrails/integration, utils gen_cert/authn_cli) call it before any third-party import |
 | G2 | Auth fail-closed | `hmac.compare_digest` present; unset `CYCLAW_API_KEY` → 401 branch present |
 | G3 | Sanitizer contract | The 6 documented contract phrases are each caught by a compiled `banned_patterns` regex from the real `config.yaml` |
 | G4 | BM25 stays JSON | `indexing.bm25_path` ends in `.json` (pickle = RCE, guarded by `test_security`) |
@@ -88,7 +88,7 @@ below, also read and confirm by hand:
 End with a verdict block (paste into the PR body when run as a merge gate):
 
 ```
-Invariant Guard: PASS (35/35) | FAIL (<n> violated)
+Invariant Guard: PASS (47/47) | FAIL (<n> violated)
 Checker: <exit code and any FAIL lines verbatim>
 Manual review: <files read, semantic findings or "none">
 Verdict: safe to merge / fix required: <one line per violation>

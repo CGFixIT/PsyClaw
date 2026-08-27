@@ -156,6 +156,15 @@ _IMPORT_ALLOWLIST = {
     # nothing installed. Declaring it would install an MSSQL driver on every
     # box for a connector that ships disabled.
     "pyodbc",
+    # Lazy in-function import at utils/onnx_telemetry.py's suppression seam
+    # (issue #1135): onnxruntime is DELIBERATELY undeclared -- it arrives only
+    # as a transitive of chromadb (and of fastembed under the guardrails
+    # extra), the helper is a getattr-guarded no-op when it is absent, and its
+    # unbounded-transitive status is a standing recorded review finding in
+    # .claude/skills/otel-hardening/check_otel.py (T13). Declaring a pin here
+    # would be a dependency-policy change that finding exists to make
+    # deliberate, not a lint fix.
+    "onnxruntime",
 }
 _FIRST_PARTY = {
     "utils", "retrieval", "llm", "schemas", "sync", "agentic", "guardrails", "harness", "telegram",

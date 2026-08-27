@@ -53,6 +53,7 @@ from pathlib import Path
 
 from sync.config import RcloneConfig
 from utils.errors import SchedulerError
+from utils.telemetry_kill import SCRUBBED_ENV_KEYS, scheduler_env_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,19 @@ def _sync_command(cfg: RcloneConfig) -> str:
     if platform.system() == "Windows":
         config_arg = f"--config {_bat_quote(cfg_path)} " if cfg_path else ""
         return f'cmd /c "cd /d {_bat_quote(root)} && {_bat_quote(py)} -m sync.cli {config_arg}sync"'
-    tokens = ["cd", shlex.quote(root), "&&", shlex.quote(py), "-m", "sync.cli"]
+    # env(1) prefix so the canonical telemetry/update-check block exists
+    # BEFORE the interpreter starts -- cron hands a job a near-empty
+    # environment, and sync/__init__.py's import-time apply (the second
+    # layer) cannot run earlier than the interpreter itself. Empty values
+    # ("K=") are valid for env(1) and deliberate for the two blank
+    # CHROMA_OTEL_* names. The -u unsets come FIRST: a positive assignment
+    # cannot REMOVE an inherited scrubbed name (a crontab-file
+    # OTEL_CONFIG_FILE would otherwise survive until Python-level scrub,
+    # after any sitecustomize hook), and -u is supported by both GNU and BSD
+    # env (Codex P1).
+    env_unsets = [arg for name in SCRUBBED_ENV_KEYS for arg in ("-u", name)]
+    env_pairs = [shlex.quote(f"{k}={v}") for k, v in scheduler_env_overlay().items()]
+    tokens = ["cd", shlex.quote(root), "&&", "env", *env_unsets, *env_pairs, shlex.quote(py), "-m", "sync.cli"]
     if cfg_path:
         tokens += ["--config", shlex.quote(cfg_path)]
     tokens.append("sync")
@@ -183,8 +196,21 @@ def _write_windows_launcher(cfg: RcloneConfig) -> str:
     cfg_path = getattr(cfg, "_config_path", None)
     config_arg = f"--config {_bat_quote(cfg_path)} " if cfg_path else ""
     # CRLF line endings + _bat_quote so paths with spaces or % are safe.
+    # The set-lines deliver the canonical telemetry/update-check block before
+    # the interpreter starts. Task Scheduler jobs DO inherit machine/user
+    # environment values, so the scrub names are explicitly DELETED first:
+    # cmd's `set "NAME="` deletes a variable rather than setting it empty --
+    # the desired state for every scrubbed name, and equivalent for the two
+    # blank CHROMA_OTEL_* names in the overlay (the child re-blanks those at
+    # import).
+    scrub_lines = "".join(f'set "{name}="\r\n' for name in SCRUBBED_ENV_KEYS)
+    env_lines = scrub_lines + "".join(
+        f'set "{name}={value.replace("%", "%%")}"\r\n'
+        for name, value in scheduler_env_overlay().items()
+    )
     content = (
         "@echo off\r\n"
+        f"{env_lines}"
         f"cd /d {_bat_quote(root)}\r\n"
         f"{_bat_quote(py)} -m sync.cli {config_arg}sync\r\n"
     )
@@ -455,6 +481,10 @@ class LaunchdScheduler:
             "Label": LAUNCHD_LABEL,
             "WorkingDirectory": _repo_root(self.cfg),
             "ProgramArguments": _launchd_program_arguments(self.cfg),
+            # launchd hands a job a near-empty environment; deliver the
+            # canonical telemetry/update-check block before the interpreter
+            # starts. Non-secret by construction (fixed literals only).
+            "EnvironmentVariables": scheduler_env_overlay(),
             "StartCalendarInterval": interval,
             "RunAtLoad": False,
             "StandardOutPath": log_path,

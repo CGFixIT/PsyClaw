@@ -182,6 +182,12 @@ $Shim = Join-Path $Bin "cyclaw.cmd"
 $ShimBody = @"
 @echo off
 rem CyClaw harness launcher (installed shim). PowerShell 5.1+ required.
+rem The two telemetry/update-check lines below must run BEFORE powershell
+rem starts: pwsh reads POWERSHELL_TELEMETRY_OPTOUT once, at its own process
+rem startup, so setting it inside an already-running host is too late for
+rem that host. This cmd layer is the parent-process fix.
+set "POWERSHELL_TELEMETRY_OPTOUT=1"
+set "POWERSHELL_UPDATECHECK=Off"
 set "CYCLAW_HOME=%USERPROFILE%\.CyClaw"
 set "CYCLAW_REPO=$Repo"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\.CyClaw\bin\Invoke-CyClaw.ps1" %*
@@ -214,6 +220,11 @@ if (-not $NoProfileEdit) {
 
 $Marker
 function global:cyclaw {
+    # Set before the child powershell below starts (it reads the opt-out at
+    # its own launch). This cannot un-send the CURRENT host's startup
+    # telemetry -- for that, set the variable machine/user-wide first.
+    `$env:POWERSHELL_TELEMETRY_OPTOUT = "1"
+    `$env:POWERSHELL_UPDATECHECK = "Off"
     `$env:CYCLAW_HOME = "`$env:USERPROFILE\.CyClaw"
     `$env:CYCLAW_REPO = "$Repo"
     & powershell -NoProfile -ExecutionPolicy Bypass -File "`$env:USERPROFILE\.CyClaw\bin\Invoke-CyClaw.ps1" @args

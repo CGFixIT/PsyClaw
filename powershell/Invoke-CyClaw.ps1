@@ -119,6 +119,36 @@ if (-not $NoBrowser) {
 
 Push-Location $Repo
 try {
+    # Canonical telemetry/update-check block, set in THIS process so the
+    # harness (and every child it spawns) inherits it before any interpreter
+    # starts. Single source of truth: utils/telemetry_kill.py renders the
+    # lines; nothing here hand-copies a key. Positioned after the .env import
+    # above so canonical values overwrite any hostile dotenv value, mirroring
+    # apply_telemetry_kill()'s own overwrite semantics. Non-fatal on failure:
+    # every entry point re-applies the block at import anyway. Note this
+    # cannot un-send THIS PowerShell host's own startup telemetry -- pwsh
+    # reads POWERSHELL_TELEMETRY_OPTOUT once, at its own launch, which is why
+    # the cmd shim written by Install-CyClaw.ps1 sets it before powershell
+    # starts.
+    # Parsed as DATA, never executed: only two rigid line shapes act (a
+    # set-literal and a remove-literal over a validated env-var name), so a
+    # compromised or garbled export cannot inject code the way piping it to
+    # Invoke-Expression could (DevSkim DS104456).
+    # -S -E: no site init in the helper interpreter (a venv sitecustomize/.pth
+    # hook must not fire before the module emits the safe values) and no
+    # ambient PYTHONPATH; the module is stdlib-only and repo-local.
+    $killLines = & $VenvPy -S -E -m utils.telemetry_kill --export powershell 2>$null
+    if ($LASTEXITCODE -eq 0 -and $killLines) {
+        foreach ($line in @($killLines)) {
+            if ($line -match "^\`$env:([A-Za-z_][A-Za-z0-9_]*) = '(.*)'$") {
+                Set-Item -Path ("Env:" + $Matches[1]) -Value $Matches[2]
+            } elseif ($line -match "^Remove-Item -ErrorAction SilentlyContinue Env:([A-Za-z_][A-Za-z0-9_]*)$") {
+                Remove-Item -ErrorAction SilentlyContinue -Path ("Env:" + $Matches[1])
+            }
+        }
+    } else {
+        Write-Host "[cyclaw] warn    : could not export telemetry-kill block (children still self-apply at import)" -ForegroundColor Yellow
+    }
     & $VenvPy -m harness.server
 }
 finally {

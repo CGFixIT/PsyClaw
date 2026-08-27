@@ -186,6 +186,24 @@ trap cleanup EXIT INT TERM
 
 cd "$REPO_DIR"
 
+# Canonical telemetry/update-check block, exported into THIS shell so both
+# servers (and every child they spawn) inherit it BEFORE any interpreter
+# starts -- including the bare `uvicorn gate:app` below, whose own module-level
+# kill fires only after uvicorn's stack has loaded. Single source of truth:
+# utils/telemetry_kill.py renders the lines; nothing here hand-copies a key.
+# Positioned after the .env sourcing above so the canonical values overwrite
+# any hostile dotenv value, mirroring apply_telemetry_kill()'s own overwrite
+# semantics. Non-fatal on failure: every entry point re-applies at import.
+# -S -E: the helper interpreter itself must not run site init (no
+# sitecustomize/.pth auto-instrumentation hook can fire before the module
+# emits the safe exports) and must ignore ambient PYTHONPATH. The module
+# is stdlib-only and repo-local, so isolation costs nothing (Codex P1).
+if _kill_env="$("$VENV_PY" -S -E -m utils.telemetry_kill --export shell 2>/dev/null)"; then
+  eval "$_kill_env"
+else
+  echo "[cyclaw] warn : could not export telemetry-kill block (children still self-apply at import)" >&2
+fi
+
 # --- start RAG gateway (serves terminal.html) ---
 if [ "$NO_GATE" -eq 0 ]; then
   if [ ! -f "$REPO_DIR/gate.py" ]; then

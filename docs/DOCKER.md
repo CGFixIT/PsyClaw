@@ -126,13 +126,19 @@ docker run -d \
   --memory 4g \
   --pids-limit 256 \
   --cpus 2.0 \
-  -e CYCLAW_TELEMETRY_KILL=1 \
   -e PYTHONPATH=/app \
   -e HF_HOME=/app/data/.hf_cache \
   -e HUGGINGFACE_HUB_CACHE=/app/data/.hf_cache \
   -e SENTENCE_TRANSFORMERS_HOME=/app/data/.st_cache \
   "ghcr.io/cgfixit/cyclaw:${CYCLAW_IMAGE_TAG:-1.9.0}"
 ```
+
+> The old `-e CYCLAW_TELEMETRY_KILL=1` line is gone on purpose: no code ever
+> read that name. The image itself now carries the real canonical
+> telemetry-kill and update-check values as `ENV` (checker-pinned against
+> `utils/telemetry_kill.py`), so every process in the container -- the
+> uvicorn CMD, the HEALTHCHECK probe, any `docker exec` -- starts inside
+> the canonical environment with nothing to pass at `docker run` time.
 
 ## Ollama / local model
 

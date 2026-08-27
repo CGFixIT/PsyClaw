@@ -115,6 +115,7 @@ jobs:
           --cov=utils.gen_cert \
           --cov=utils.sanitizer \
           --cov=utils.telemetry_kill \
+          --cov=utils.onnx_telemetry \
           --cov=utils.config_validation \
           --cov=utils.errors \
           --cov=utils.logger \

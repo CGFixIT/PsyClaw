@@ -58,7 +58,7 @@ multi-tenant workloads.
 | **Unauthorized cross-origin reads** | CORS allow-list | `gate.py`, `config.yaml` |
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
 | **Uncontrolled evaluation egress** | Standalone CLI refuses unless `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY` are both present; Anthropic origin is exact-pinned; contestant is loopback-only; embedding downloads are forced offline | `tests/judge_eval.py`, `tests/test_judge_eval.py` |
-| **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any import, by **every** entry point (gateway, MCP server, indexer CLI) from one shared mapping — an ambient value in the operator's environment is overwritten, not inherited; HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
+| **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any third-party import from one shared mapping (`utils/telemetry_kill.py`), applied at import time by every maintained Python chokepoint — gateway, MCP server, metrics, harness server, the retrieval indexer/vector-store/cache CLIs, the auth/cert CLIs, and the sync/agentic/guardrails/telegram/opentweet packages (invariant-guard G1 pins 15 of these orderings) — AND delivered as literal environment before the interpreter starts at every process boundary: Docker ENV, the shipped launchers, generated launchd plists / Windows tasks / cron lines, verifier and `gh` children (`build_telemetry_safe_env`). An ambient value in the operator's environment is overwritten, not inherited; the declarative-OTel config names are removed outright. These controls silence telemetry readers only — they are not a network kill switch, and intentional policy-gated egress is classified separately (SECURITY.md); HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
 | **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; Docker builtin seccomp; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
 
@@ -627,17 +627,22 @@ describing its own point in time and is retained as a historical record.
   calls any local process — or any page in the operator's browser, `GET` being
   CORS-simple — could trigger. Those probes are now opt-in via
   `api.health_probe_external_providers`, which ships `false`.
-- **A posture regression cannot fail a build, though a config *error* can.**
-  `invariant-guard` passes 35/35 because I1–I6 and G1–G5 are structural and none
-  encodes a shipped-default posture. `config-guard` **is** build-blocking:
-  `ci.yml`'s `discover-skills` job finds every `.claude/skills/*/verify.sh` by
-  `find` and runs them as the `verify-skills` matrix, and `config-guard`'s
-  `verify.sh` runs the checker against the real shipped `config.yaml` and fails
-  the job on a non-zero exit. So C1–C8/C10/C11 **failures** do block a merge.
-  What does not block is a **warning**: `C9` (external/online posture), `C7`
-  (RRF-scale `min_score`) and `C12` (context arithmetic) exit 0, and `--strict`
-  — which promotes warnings to failures — is used only inside `verify.sh`'s own
-  mutation self-test, never against the shipped file. Wiring `--strict` against
+- **A posture regression cannot fail a build, though a config *error* can turn
+  a leg red.** `invariant-guard` passes 47/47 because I1–I6 and G1–G5 are
+  structural and none encodes a shipped-default posture — and invariant-guard
+  is the ONLY skill checker CI runs blocking (`ci.yml`'s dedicated step).
+  `config-guard` is **not** build-blocking, despite what this section used to
+  claim: `ci.yml`'s `discover-skills` job does find every
+  `.claude/skills/*/verify.sh` and run them as the `verify-skills` matrix, but
+  that whole matrix is `continue-on-error: true` — a C1–C8/C10/C11 failure
+  (or an otel-hardening oracle failure) marks the leg red without blocking
+  the merge; the authoritative gate is the `test` job's unit suite + RAG
+  smoke. Treat a red verify-skills leg as real work, not noise.
+  A **warning** does not even turn the leg red: `C9` (external/online
+  posture), `C7` (RRF-scale `min_score`) and `C12` (context arithmetic) exit
+  0, and config-guard's `--strict` — which promotes warnings to failures — is
+  used only inside `verify.sh`'s own mutation self-test, never against the
+  shipped file. Wiring `--strict` against
   the real config would fail immediately and for the wrong reason: the hybrid
   posture is deliberate, so `C9` would have to be silenced to go green, which is
   the same "resolve a fail-closed objection by removing the objection" pattern
@@ -761,13 +766,21 @@ What path (2) now also does (when launched via `python gate.py` /
 true and both files are readable. Missing files fail closed. The Docker
 `CMD` and a hand-run `uvicorn gate:app` still bypass `_serve`.
 
-**The boundary, stated precisely rather than overclaimed.** The guard covers the
-documented entry points — `python gate.py` and the `cyclaw-server` console script.
-It does **not** cover `uvicorn gate:app --host 0.0.0.0` run by hand, and it
-deliberately does not cover the container, whose `CMD` is exactly that: there the
-bind is inside the network namespace and `docker-compose.yml` owns exposure by
-publishing `127.0.0.1:8787:8787`. Anyone invoking uvicorn directly has stepped
-outside the supported launch path and owns the resulting exposure.
+**The boundary, stated precisely rather than overclaimed.** The guard covers
+`python gate.py` and the `cyclaw-server` console script. It does **not** cover
+`uvicorn gate:app` invoked directly — and, corrected under issue #1135, that
+is no longer only a hand-run misuse case: the container `CMD` is exactly that
+(there the bind is inside the network namespace and `docker-compose.yml` owns
+exposure by publishing `127.0.0.1:8787:8787`), and the shipped macOS launcher
+(`macos/invoke-cyclaw.sh`) starts the gateway as `python -m uvicorn gate:app
+--host 127.0.0.1` — a supported launch path that bypasses `_serve`, so it gets
+neither the bind guard (it hardcodes loopback instead) nor TLS wiring. Both
+bare-uvicorn paths now receive the canonical telemetry environment *before*
+uvicorn loads (the Docker ENV block; the launcher's eval of
+`python -m utils.telemetry_kill --export shell`), so the earlier gap — gate's
+module-level kill firing only after uvicorn's stack imported — is closed at
+the environment layer. An operator who invokes uvicorn by hand with a
+non-loopback host outside these two shipped paths still owns that exposure.
 
 **Provenance.** The operator wrote this concern down first, in
 `docs/zIdeas/note.txt`: *"curl requests or powershell api commands can still query

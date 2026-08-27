@@ -22,10 +22,15 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 cp "$repo_root"/gate.py "$repo_root"/gate_ops.py "$repo_root"/gate_auth.py \
-   "$repo_root"/gate_memory.py "$repo_root"/graph.py \
+   "$repo_root"/gate_memory.py "$repo_root"/graph.py "$repo_root"/metrics.py \
    "$repo_root"/mcp_hybrid_server.py "$repo_root"/config.yaml "$tmp"/
+# telegram/opentweet/retrieval/harness joined the copy set with issue #1135's
+# G1 extension: the checker's required-parse block reads the three package
+# __init__.py files (exit 3 when absent), and the module tier parses
+# metrics.py, harness/server.py, and the three retrieval chokepoints.
 cp -r "$repo_root"/utils "$repo_root"/agentic "$repo_root"/sync \
-      "$repo_root"/guardrails "$tmp"/ 2>/dev/null || true
+      "$repo_root"/guardrails "$repo_root"/telegram "$repo_root"/opentweet \
+      "$repo_root"/retrieval "$repo_root"/harness "$tmp"/ 2>/dev/null || true
 
 # Violation A: core module imports an out-of-band package (breaks I6).
 sed -i.bak 's/^import hmac/import hmac\nimport agentic/' "$tmp/gate.py"

@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from utils.telemetry_kill import scheduler_env_overlay
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
 
@@ -113,7 +114,10 @@ def test_gate_plist_structure(tmp_path: Path, capsys) -> None:
     assert document["RunAtLoad"] is True
     assert document["KeepAlive"] == {"SuccessfulExit": False}
     assert document["ThrottleInterval"] == 30
-    assert "EnvironmentVariables" not in document  # gate.py needs none by default
+    # The gate plist now delivers exactly the canonical non-secret
+    # telemetry/update-check overlay (it used to carry no env at all);
+    # exact equality keeps the original secret-hygiene guarantee.
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
     args = document["ProgramArguments"]
     assert args[-1].endswith("gate.py")
     assert document["WorkingDirectory"] == str(_REPO_ROOT)
@@ -189,7 +193,9 @@ def test_gate_plist_api_key_service_wraps_keychain(tmp_path: Path) -> None:
     assert args[2] == "CYCLAW_API_KEY"
     assert args[3] == "--"
     assert args[-1].endswith("gate.py")
-    assert "EnvironmentVariables" not in document  # secret never lands here
+    # Secret still never lands here: EnvironmentVariables is exactly the
+    # canonical overlay; the key itself rides the Keychain wrapper argv.
+    assert document["EnvironmentVariables"] == scheduler_env_overlay()
 
 
 # ---------------------------------------------------------------------------

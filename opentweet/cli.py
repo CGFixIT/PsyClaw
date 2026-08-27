@@ -31,6 +31,7 @@ from opentweet.selftest import run_self_test
 from utils import launchd_plist, win_schtasks
 from utils.errors import OpenTweetConfigError, OpenTweetError, OpenTweetRefused, OpenTweetRuntimeError
 from utils.logger import audit_log
+from utils.telemetry_kill import scheduler_env_overlay
 
 _LAUNCHD_LABEL = "com.cgfixit.cyclaw.opentweet"
 _TASK_NAME = "CyClaw opentweet"
@@ -231,6 +232,10 @@ def cmd_schedule_plist(args: argparse.Namespace) -> int:
         "Label": _LAUNCHD_LABEL,
         "WorkingDirectory": str(repo_root),
         "ProgramArguments": program_args,
+        # launchd hands a job a near-empty environment; deliver the
+        # canonical telemetry/update-check block before anything starts.
+        # Non-secret fixed literals; secrets stay on the Keychain wrapper.
+        "EnvironmentVariables": scheduler_env_overlay(),
         "StartCalendarInterval": {"Weekday": weekday, "Hour": hour, "Minute": minute},
         "RunAtLoad": False,
         "StandardOutPath": log_path,
@@ -278,6 +283,9 @@ def cmd_schedule_task(args: argparse.Namespace) -> int:
         task_name=_TASK_NAME,
         argv=argv,
         working_directory=str(repo_root),
+        # Canonical telemetry/update-check block via the .cmd's set-lines
+        # (Task Scheduler starts jobs from a near-empty environment).
+        env=scheduler_env_overlay(),
         triggers=win_schtasks.weekly_calendar_trigger(weekday, hour, minute),
         restart_interval=None,
         restart_count=0,

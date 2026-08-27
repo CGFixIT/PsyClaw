@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.errors import IndexNotFoundError
+from utils.onnx_telemetry import suppress_onnx_telemetry
 from utils.telemetry_kill import apply_telemetry_kill
 
 # Applied at import, not at client construction, because this module is the ONLY
@@ -107,6 +108,13 @@ class _ChromaWriter:
         import chromadb
         from chromadb.config import Settings
 
+        # If chromadb's import pulled onnxruntime in (its default embedding
+        # function is ONNX-backed), disable the post-import event stream before
+        # any collection work. No force_import: CyClaw always passes
+        # precomputed vectors, so ONNX may legitimately never load here -- the
+        # ORT_DISABLE_TELEMETRY env var from the kill block above covers a
+        # later lazy import.
+        suppress_onnx_telemetry()
         Path(self._chroma_path).mkdir(parents=True, exist_ok=True)
         client = chromadb.PersistentClient(
             path=self._chroma_path, settings=Settings(anonymized_telemetry=False)
@@ -143,6 +151,9 @@ class _ChromaReader:
         import chromadb
         from chromadb.config import Settings
 
+        # Same post-import ONNX suppression as _ChromaWriter.reset; see the
+        # comment there for why force_import stays off on this seam.
+        suppress_onnx_telemetry()
         chroma_path = cfg["indexing"]["chroma_path"]
         collection_name = cfg["indexing"]["collection_name"]
         if not Path(chroma_path).exists():

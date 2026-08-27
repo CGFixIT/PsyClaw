@@ -11,6 +11,6 @@ description: >-
   periodic re-verification sweep.
 ---
 
-Invoke the `OTel-Hardening` skill for the given task. $ARGUMENTS
+Invoke the `otel-hardening` skill for the given task. $ARGUMENTS
 
-See `.claude/skills/OTel-Hardening/SKILL.md` for full detail.
+See `.claude/skills/otel-hardening/SKILL.md` for full detail.
