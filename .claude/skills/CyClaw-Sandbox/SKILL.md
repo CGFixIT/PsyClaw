@@ -479,7 +479,7 @@ for the six canonical ones plus supporting guards this table extends).
 | 7 | Loopback Only | `api.host == "127.0.0.1"` |
 | 8 | FsConnect Read-Only Default | `fsconnect.writes_enabled=false`, `follow_symlinks=false` |
 | 9 | FsConnect Pathsafe | All paths resolve through `ScopedRoots` with `O_NOFOLLOW` |
-| 10 | FsConnect Op Whitelist | Capability list is closed (derive the current set from `config.yaml`'s `fsconnect.capabilities` -- it grows over time, e.g. `fs_largest`) |
+| 10 | FsConnect Op Whitelist | Capability list is closed (derive the current set from `config.yaml`'s `fsconnect.allowed_fs_ops` -- it grows over time, e.g. `fs_largest`) |
 | 11 | SQL Read-Only Default | `sqlconnect.read_only=true`, `allow_write=false` |
 | 12 | SQL Query Guard | Only SELECT/WITH; comments and `;` rejected |
 | 13 | Module Isolation (I6) | `agentic/sync/guardrails/harness/telegram/opentweet/netconnect` never imported by `gate.py`/`graph.py`/`mcp_hybrid_server.py`, and vice versa |
