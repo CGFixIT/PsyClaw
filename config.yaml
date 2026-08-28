@@ -416,11 +416,19 @@ policy:
       - "AKIA[0-9A-Z]{16}"           # AWS access keys
       - "xox[baprs]-[0-9a-zA-Z-]+"  # Slack tokens
       - "ghp_[a-zA-Z0-9]{36}"        # GitHub PATs
+      - "sk-[a-zA-Z0-9]{32,}"        # OpenAI-style keys (? - kimi the same day it 
+      # Went cray cray swapped 32 for 20 and i dont use openai yet to confirm
       - "sk-[a-zA-Z0-9]{20,}"        # OpenAI-style keys
       # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
       # so the OpenAI-style pattern above (no hyphens allowed) never matches them.
       - "sk-ant-[a-zA-Z0-9_-]{20,}"  # Anthropic (Claude) API keys
       - "xai-[a-zA-Z0-9]{20,}"       # xAI (Grok) API keys
+      # - **** github key pattern here
+      # - telegram key pattern here
+      # - opentweet key pattern here
+      # - placeholder key pattern here
+      # - placeholder key pattern here
+
 
 api:
   # Enforced at runtime, not just documented: gate.py's main() refuses to serve
