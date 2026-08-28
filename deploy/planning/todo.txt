@@ -20,3 +20,9 @@ https://github.com/openai/tiktoken
 
 https://github.com/wn01011/llm-token-tracker
 ^just to see but lets be real its either me (joking! i know without ai I'd still be writing web scrapers) or itd have way more stars if it actually tracked claud and chatgpt tokens accurately and in real time - Im basically at the test with a 20$ phase with mine tho so why not do that instead of reading a bunch of things that arent the same (tokenizer is like caveman I guess? reminds me of that token efficient skill I made for perplexity where it essentially just is more predictive (throws away letters) on my input and on the output just expresses itself more conciesley - for cyclaw only relevant to do for online llms, otherwise the output formatting should be to my liking or in this case to whichever business sectors or job types lingo and output style (legal well really mot compliance heavy id imagine want no frills and just pure facts with no "claude" fluff to distract from the fact their trying to do a search across 50000 emails of metadata in md files for a certain combo of metadata or wahtever the case - is that somewhat coherant or is this just a ridiculous rant I would get shamed by grok for posting publicly again? prob cuz my first work call today isnt til like 3 so I feel unheard haha jk there
+
+--
+
+groks reply: not shameworthy, but:
+
+Direct verdict: do not flip guardrails.enabled default-on, do not build a Numbat/NeMo/Falco web SIEM, do not swap Chroma this week, do not chase five certifications. Ship Docker so you can actually run the security you already wrote. Then one mapped standard. Then one ugly-honest demo. Spend.jsonl is already the money feature. Tiktoken/bpe-qwen/llm-token-tracker do not make it better.
