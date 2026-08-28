@@ -50,7 +50,7 @@ It checks (severity in brackets):
 | C2 | FAIL | `api.graph_timeout_sec` **>** `models.local_llm.timeout_sec`, with the documented ≥30s margin (else the graph is cut mid-LLM-call → orphaned invocation) |
 | C3 | FAIL | `indexing.chunk_overlap` **<** `indexing.chunk_size` (else chunking never advances) |
 | C4 | FAIL | `api.host` is loopback (`127.0.0.1`/`localhost`/`::1`) — the threat-model boundary |
-| C5 | FAIL | `personality.soul_max_chars` is positive and **<** `retrieval.max_context_tokens*4` (soul cannot crowd out retrieved context) |
+| C5 | FAIL | `personality.soul_max_chars` is positive and **<** `retrieval.max_context_tokens * _CHARS_PER_TOKEN` (3 — mirrors `graph.py CHARS_PER_TOKEN`, the worst-case chars/token floor used to derive the character budget) so the soul cannot crowd out retrieved context |
 | C6 | FAIL | `api.rate_limit.max_requests` / `window_seconds` are positive integers |
 | C7 | WARN | `retrieval.min_score` stays on the RRF scale (≤ 0.1) — **the acknowledged trap**; a stricter gate belongs in 0.05–0.08, never the cosine-scale 0.5 |
 | C8 | WARN | `retrieval.rrf_k == 60` (the documented authoritative fusion constant) |
@@ -137,8 +137,12 @@ fail CI.
   changed `rrf_k`, or an operator running `mode: hybrid` are legitimate — the
   WARN exists so the change is conscious and documented, not silent. Use
   `--strict` only where you want the shipped defaults locked.
-- **C5 uses ~4 chars/token.** `soul_max_chars < max_context_tokens*4` is the
-  documented budget rule; it is a coarse guard, not an exact tokenizer count.
+- **C5 uses a worst-case 3 chars/token.** `soul_max_chars <
+  max_context_tokens * 3` is the documented budget rule, mirroring `graph.py`'s
+  `CHARS_PER_TOKEN`. It is a coarse guard, not an exact tokenizer count — 3 is
+  a deliberate floor rather than the conventional prose average of 4, because
+  symbol-dense corpus text (digests, base64, minified code) tokenizes far below
+  4 and it is the *small* ratio that keeps the derived budget inside `num_ctx`.
 - **Needs PyYAML.** Nested config needs a real parser; unlike `invariant-guard`
   there is no stdlib fallback. In a fresh container, `pip install ... PyYAML`
   first (CLAUDE.md §8) — `verify.sh` skips cleanly until then.
