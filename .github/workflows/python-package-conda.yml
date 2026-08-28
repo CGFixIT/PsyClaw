@@ -78,7 +78,15 @@ jobs:
       shell: bash -leo pipefail {0}
       run: |
         mkdir -p data/personality index logs
-        echo '# Soul' > data/personality/soul.md
+        # Stub only when in context of ci or github actions: the committed data/personality/soul.md is the
+        # real artifact, and skill verify scripts back it up, stub it, then
+        # restore it -- an unconditional stub here means they back up and
+        # "restore" 7 chars (full rationale in ci.yml's "Prepare hermetic env").
+        [ -f data/personality/soul.md ] || printf '# Soul\n' > data/personality/soul.md
+        #
+        # note:
+        # dont get it twisted and think this is an invite to delete anyones soul. its not. if it happens again copilot gets turned off and ill prep this env a different way.
+        #
         echo 'GROK_API_KEY=dummy' >> "$GITHUB_ENV"
 
     - name: Cache embeddings model (sentence-transformers)

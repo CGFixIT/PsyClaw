@@ -201,7 +201,7 @@ jobs:
           python -m pip install --upgrade "pip==26.1.2"
           # Same two tools python-publish.yml uses to build the released
           # artifact; keep them in step if that workflow's build stack changes.
-          python -m pip install build
+          python -m pip install "build==1.6.0"
           python -m build --wheel
 
       - name: Every [project.scripts] entry point resolves inside the wheel

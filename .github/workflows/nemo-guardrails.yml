@@ -7,9 +7,15 @@ name: NeMo Guardrails runtime (0.24)
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - "docs/**"
+      - ".claude/**"
   pull_request:
     # No base-branch filter: stacked PRs (e.g. #1137 onto P1) must still get
     # the 0.24 construct proof. Filtering to main-only skipped those PRs.
+    paths-ignore:
+      - "docs/**"
+      - ".claude/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
