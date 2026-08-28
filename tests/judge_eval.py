@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,7 +101,7 @@ class Retriever(Protocol):
 class GenerateClient(Protocol):
     model: str
 
-    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+    def generate(self, prompt: str, *, spend_context: MutableMapping[str, object] | None = None) -> str:
         raise NotImplementedError
 
     def close(self) -> None:

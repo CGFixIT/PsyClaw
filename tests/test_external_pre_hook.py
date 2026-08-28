@@ -229,11 +229,24 @@ def test_emit_verdict_query_hash_omitted_when_disabled(tmp_path: Path, monkeypat
     assert "content_preview" not in rec
 
 
-def test_payload_query_hash_honors_optout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """The hook's stdin payload carries query_hash by default and omits it
-    under logging.audit_fields.include_query_hash: false -- the same opt-out
-    the Numbat projection above already honors. The hook (often a Numbat hook)
-    may persist what it receives, so the payload is a leak leg too."""
+def test_payload_query_hash_present_regardless_of_audit_hash_setting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The hook's stdin payload always carries query_hash -- a documented,
+    unconditional contract (config.yaml:255-260, graph.py's pre_action_hook_node
+    docstring, docs/plans/NUMBAT_AND_ALWAYS_ON_ROADMAP.md Step 2). Regression
+    for a Codex review finding on PR #1187: an earlier revision of this test
+    asserted the opposite (payload omits query_hash under
+    logging.audit_fields.include_query_hash: false), which both broke that
+    documented contract and could make a fail-closed hook deny every call.
+
+    include_query_hash is not a "hide the hash everywhere" switch -- per
+    utils/logger.py::audit_log, false means the RAW query text is left in the
+    primary audit.jsonl record (see
+    test_disabling_hashing_persists_raw_text__documented_leak), so a hook
+    receiving a one-way hash of that same query on stdin discloses nothing
+    the operator's own choice hasn't already exposed on the primary log.
+    """
     captured: list[bytes] = []
 
     def _capture(*args, **kwargs):
@@ -249,7 +262,7 @@ def test_payload_query_hash_honors_optout(tmp_path: Path, monkeypatch: pytest.Mo
     cfg["logging"] = {"audit_fields": {"include_query_hash": False}}
     assert run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg) == {"verdict": "allow"}
     optout_payload = json.loads(captured[-1])
-    assert "query_hash" not in optout_payload
+    assert optout_payload["query_hash"] == _TEST_QUERY_HASH
     assert optout_payload["provider"] == "grok"
 
 
