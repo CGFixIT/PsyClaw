@@ -16,6 +16,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger("cyclaw.agentic.unslop_bridge")
+
 _FILE_BLOCK_RE = re.compile(
     r"=== FILE (?P<path>[^\n]+?) ===\n(?P<body>.*?)\n=== END FILE ===",
     re.DOTALL,
@@ -60,7 +62,7 @@ def _append_record(path: Path, record: dict[str, Any]) -> None:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception as exc:
         # Observability failure must not abort the coding run.
-        logging.debug("unslop metrics append failed: %s", type(exc).__name__)
+        logger.debug("unslop metrics append failed: %s", type(exc).__name__)
 
 
 def _run_scan(
@@ -157,7 +159,8 @@ def build_unslop_probe(
 
     try:
         from agentic.vendor.unslop import suggest
-    except Exception:
+    except Exception as exc:
+        logger.debug("agentic.vendor.unslop import failed: %s", type(exc).__name__)
         return None
 
     def _suggest(text: str) -> dict[str, Any]:

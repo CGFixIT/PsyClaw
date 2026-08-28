@@ -152,7 +152,8 @@ def _capture_http_usage(response: httpx.Response) -> None:
         usage = data.get("usage") if isinstance(data, dict) else None
         if isinstance(usage, dict):
             _HTTP_USAGE.set(usage)
-    except Exception:
+    except Exception as exc:
+        logger.debug("http usage capture failed: %s", type(exc).__name__)
         return
 
 

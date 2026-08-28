@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess  # nosec B404 - list-form only, no shell, operator-configured argv
 from typing import Any
 
 logger = logging.getLogger("cyclaw.external_pre_hook")
+
+# Same shape as utils/spend.py's _QUERY_HASH_RE (kept separate on purpose --
+# only 2 call sites, not worth a shared helper).
+_QUERY_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 DEFAULT_TIMEOUT_SEC = 5
 MIN_TIMEOUT_SEC = 1
@@ -52,6 +57,24 @@ def _hook_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
         return {}
     block = fallback.get("pre_action_hook", {})
     return block if isinstance(block, dict) else {}
+
+
+def _include_query_hash(cfg: dict[str, Any] | None) -> bool:
+    """Mirror graph.py's ctx-builder gate: True unless the operator opted out.
+
+    logging.audit_fields.include_query_hash defaults True; this hook must
+    honor the same opt-out the mainline audit path does, or a Numbat
+    projection would leak the hash the operator explicitly disabled.
+    """
+    if not isinstance(cfg, dict):
+        return True
+    logging_cfg = cfg.get("logging", {})
+    if not isinstance(logging_cfg, dict):
+        return True
+    audit_fields = logging_cfg.get("audit_fields", {})
+    if not isinstance(audit_fields, dict):
+        return True
+    return bool(audit_fields.get("include_query_hash", True))
 
 
 def _normalize_timeout(raw: Any) -> int:
@@ -91,6 +114,14 @@ def _emit_hook_verdict(
         return
 
     try:
+        # Schema 0.3.0 has additionalProperties:false and no query_hash
+        # property, so the hash rides inside content_preview -- the same
+        # contract as the mainline audit projection. Gated the same way too:
+        # a hash that is not 64-hex, OR logging.audit_fields.include_query_hash
+        # is false, is dropped (no content_preview) rather than emitted.
+        content_preview = None
+        if _include_query_hash(cfg) and _QUERY_HASH_RE.fullmatch(query_hash):
+            content_preview = json.dumps({"query_hash": query_hash}, separators=(",", ":"))
         emit_numbat_event(
             event_type,
             model=model,
@@ -104,6 +135,7 @@ def _emit_hook_verdict(
             entrypoint="cyclaw",
             tags=["pre_action_hook", reason_code],
             confidence=confidence,
+            content_preview=content_preview,
             cfg=cfg,
         )
     except Exception as exc:  # noqa: BLE001 - derived stream must never fail the caller
