@@ -11,7 +11,7 @@ import yaml
 
 from agentic.fsconnect import context
 from agentic.fsconnect import pathsafe
-from agentic.fsconnect.client import FsClient
+from agentic.fsconnect.client import _MAX_GREP_LINE_CHARS, FsClient
 from agentic.fsconnect.config import load_fsconnect_config
 from utils.errors import FsConnectError, FsPathError
 from utils.logger import _get_config, reset_config_cache
@@ -212,3 +212,22 @@ def test_context_run_read_and_overview(env):
     ov = context.overview(cfg, fs_cfg, config_path=cp)
     assert ov["op"] == "overview"
     assert ov["roots"][0]["count"] >= 3
+
+
+def test_fs_grep_truncates_oversized_matched_lines(env):
+    # _MAX_GREP_MATCHES bounds match COUNT, not bytes: a minified single-line
+    # file (one line up to max_file_bytes) would otherwise echo the entire line
+    # per match -- up to ~1 GiB of JSON from one call. The stored text is
+    # clipped per match; matching itself still runs against the full line.
+    cfg, fs_cfg, cp, share, _audit = env
+    long_tail = "x" * (_MAX_GREP_LINE_CHARS * 3)
+    (share / "minified.txt").write_text(f"prefix needle {long_tail}\nshort needle\n", encoding="utf-8")
+    with FsClient(cfg, fs_cfg, config_path=cp) as c:
+        res = c.fs_grep("minified.txt", "needle")
+    assert res["match_count"] == 2
+    long_text = res["matches"][0]["text"]
+    assert long_text.startswith("prefix needle")
+    assert "truncated" in long_text
+    assert len(long_text) < _MAX_GREP_LINE_CHARS + 100  # clipped + marker, not the full line
+    # A short line is returned verbatim (no marker).
+    assert res["matches"][1]["text"] == "short needle"

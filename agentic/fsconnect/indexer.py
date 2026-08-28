@@ -31,6 +31,7 @@ from agentic.fsconnect.config import FsConnectConfig
 from agentic.fsconnect.pathsafe import ScopedRoots, split_components
 from utils.errors import FsConnectError, FsConnectRuntimeError, FsMacOSPermissionError
 from utils.logger import audit_log
+from utils.telemetry_kill import build_telemetry_safe_env
 
 _DEFAULT_STAGING = Path("data/corpus/fsconnect")
 # Skip-cache for incremental apply(), kept beside the staged files so the cache
@@ -324,6 +325,13 @@ class FsIndexer:
         try:
             completed = subprocess.run(  # noqa: S603 -- argv list, no shell
                 cmd,
+                # Explicit safe env rather than bare inheritance, mirroring
+                # sync/cli.py's auto-reindex child: fsconnect apply() can be
+                # triggered from scheduled/operator contexts with a near-empty
+                # or ambient parent env, and the overlay guarantees the indexer
+                # starts with the canonical telemetry kill block in place even
+                # before its own import-time apply.
+                env=build_telemetry_safe_env(),
                 capture_output=True, text=True, timeout=900, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:

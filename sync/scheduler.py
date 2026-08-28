@@ -219,6 +219,24 @@ def _write_windows_launcher(cfg: RcloneConfig) -> str:
     return bat_path
 
 
+def _frequency_drift_note(cfg: RcloneConfig, backend: str) -> str:
+    """Operator-facing note when a configured non-daily frequency is not honored.
+
+    Only LaunchdScheduler maps weekly/monthly into the installed job; the cron
+    line and the schtasks registration both hardcode a daily run (documented on
+    the schedule_frequency field in sync/config.py). Without this note,
+    cmd_schedule/cmd_status print the CONFIGURED frequency as if it were live
+    while the installed job actually fires daily.
+    """
+    if getattr(cfg, "schedule_frequency", "daily") == "daily":
+        return ""
+    return (
+        f"sync.schedule_frequency is {cfg.schedule_frequency!r}, but the {backend} backend installs a "
+        "DAILY job at the configured time -- weekly/monthly is honored only by "
+        "sync.scheduler_backend: launchd (macOS)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Linux / macOS -- cron
 # ---------------------------------------------------------------------------
@@ -256,6 +274,11 @@ class CronScheduler:
                 "crontab not available on this system",
                 details={"hint": "Install cron or schedule via a systemd --user timer manually."},
             ) from exc
+        except subprocess.TimeoutExpired as exc:
+            # A wedged crontab must surface through the typed hierarchy like the
+            # schtasks paths: a raw TimeoutExpired escapes main()'s typed-error
+            # mapping and exits 1, colliding with EXIT_SAFETY (max-delete fuse).
+            raise SchedulerError(f"crontab -l timed out: {exc}") from exc
         # `crontab -l` returns 1 when the user has no crontab -- not an error.
         if result.returncode not in (0, 1):
             raise SchedulerError(
@@ -277,6 +300,10 @@ class CronScheduler:
             )
         except FileNotFoundError as exc:
             raise SchedulerError("crontab binary not available") from exc
+        except subprocess.TimeoutExpired as exc:
+            # Same typed-hierarchy rule as _read_crontab: never let a raw
+            # timeout escape as exit 1 (EXIT_SAFETY) via main().
+            raise SchedulerError(f"crontab write timed out: {exc}") from exc
         if proc.returncode != 0:
             raise SchedulerError(
                 f"crontab write failed (rc={proc.returncode}): {proc.stderr.strip()}",
@@ -307,6 +334,7 @@ class CronScheduler:
             command=_sync_command(self.cfg),
             cron_or_time=f"{self.cfg.schedule_min} {self.cfg.schedule_hour} * * *",
             raw=line,
+            note=_frequency_drift_note(self.cfg, "cron"),
         )
 
     def remove(self) -> bool:
@@ -332,6 +360,7 @@ class CronScheduler:
                         command=parts[5].rsplit("#", 1)[0].strip(),
                         cron_or_time=cron_expr,
                         raw=ln,
+                        note=_frequency_drift_note(self.cfg, "cron"),
                     )
         return None
 
@@ -388,7 +417,16 @@ def _launchd_human_schedule(interval: dict[str, int]) -> str:
     """
     time_str = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
     if "Weekday" in interval:
-        return f"weekly {_WEEKDAY_NAMES[interval['Weekday']]} {time_str}"
+        weekday = interval["Weekday"]
+        # The interval dict can come from an operator-EDITED plist on disk
+        # (status() re-reads the file), so the validated 0-7 range from
+        # sync.config does not apply here -- index defensively.
+        name = (
+            _WEEKDAY_NAMES[weekday]
+            if isinstance(weekday, int) and not isinstance(weekday, bool) and 0 <= weekday <= 7
+            else f"weekday {weekday!r}"
+        )
+        return f"weekly {name} {time_str}"
     if "Day" in interval:
         return f"monthly day {interval['Day']} {time_str}"
     return f"daily {time_str}"
@@ -520,13 +558,19 @@ class LaunchdScheduler:
             # Tolerate "not loaded"/"no such process" -- bootout on an agent
             # that was written but never bootstrapped is an expected no-op,
             # not a failure; we only need the file gone afterward either way.
-            subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
-                [launchctl, "bootout", f"gui/{self._uid()}", str(plist_path)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
+            try:
+                subprocess.run(  # noqa: S603  # argv list, launchctl resolved via shutil.which
+                    [launchctl, "bootout", f"gui/{self._uid()}", str(plist_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                # Best-effort unload: a wedged launchctl (timeout) must not
+                # block the plist removal below, which is the part remove()
+                # is contracted to do.
+                logger.warning("launchctl bootout failed (proceeding to delete plist): %s", exc)
         plist_path.unlink()
         return True
 
@@ -543,8 +587,18 @@ class LaunchdScheduler:
         if not plist_path.exists():
             return None
 
-        with open(plist_path, "rb") as f:
-            document = plistlib.load(f)
+        try:
+            with open(plist_path, "rb") as f:
+                document = plistlib.load(f)
+        except (OSError, ValueError) as exc:
+            # The plist is operator-editable state, not our own output: a
+            # truncated or malformed file must surface through the typed
+            # hierarchy (cmd_status catches SchedulerError and warns) rather
+            # than as a raw plistlib.InvalidFileException traceback.
+            raise SchedulerError(
+                f"could not parse launchd plist {plist_path}: {exc}",
+                details={"plist": str(plist_path)},
+            ) from exc
 
         loaded_note = "load state unknown (launchctl unavailable)"
         launchctl = self._launchctl()
@@ -626,6 +680,7 @@ class WindowsTaskScheduler:
             command=launcher,
             cron_or_time=time_str,
             raw=proc.stdout.strip(),
+            note=_frequency_drift_note(self.cfg, "schtasks"),
         )
 
     def remove(self) -> bool:
@@ -670,6 +725,7 @@ class WindowsTaskScheduler:
             command=_sync_command(self.cfg),
             cron_or_time=f"{self.cfg.schedule_hour:02d}:{self.cfg.schedule_min:02d}",
             raw=proc.stdout.strip(),
+            note=_frequency_drift_note(self.cfg, "schtasks"),
         )
 
 

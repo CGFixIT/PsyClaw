@@ -604,3 +604,115 @@ def test_cron_line_escapes_percent_in_config_path(monkeypatch) -> None:
     # Command field (between schedule and tag) has no unescaped %.
     cmd_field = line.rsplit("#", 1)[0].split(None, 5)[5]
     assert "%" not in cmd_field.replace(r"\%", "")
+
+
+# ---------------------------------------------------------------------------
+# Typed-error hardening: crontab timeouts must not escape as exit 1
+# ---------------------------------------------------------------------------
+
+
+def test_cron_read_timeout_raises_typed_scheduler_error() -> None:
+    # A wedged `crontab -l` must surface through SchedulerError. A raw
+    # TimeoutExpired escapes sync.cli.main()'s typed mapping and exits 1 --
+    # which sync's exit-code API defines as EXIT_SAFETY (max-delete fuse).
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="crontab", timeout=10),
+        ),
+    ):
+        with pytest.raises(SchedulerError, match="timed out"):
+            CronScheduler(cfg).status()
+
+
+def test_cron_write_timeout_raises_typed_scheduler_error() -> None:
+    cfg = _make_cfg()
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout="")
+        raise subprocess.TimeoutExpired(cmd="crontab", timeout=10)
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        with pytest.raises(SchedulerError, match="timed out"):
+            CronScheduler(cfg).install()
+
+
+# ---------------------------------------------------------------------------
+# Frequency drift: cron/schtasks install daily regardless of schedule_frequency
+# ---------------------------------------------------------------------------
+
+
+def _cron_install(cfg: RcloneConfig) -> tuple[ScheduleEntry, dict[str, str]]:
+    written: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout="")
+        written["content"] = kwargs["input"]
+        return _completed()
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        return CronScheduler(cfg).install(), written
+
+
+def test_cron_install_warns_when_non_daily_frequency_is_installed_daily() -> None:
+    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=3)
+    entry, written = _cron_install(cfg)
+
+    # The installed line is still daily (unchanged behavior) ...
+    tagged = [ln for ln in written["content"].splitlines() if TASK_TAG in ln]
+    assert tagged[0].startswith("0 2 * * *")
+    # ... but the operator is told the configured frequency is not what runs.
+    assert "weekly" in entry.note
+    assert "DAILY" in entry.note
+
+
+def test_cron_install_daily_frequency_carries_no_drift_note() -> None:
+    entry, _written = _cron_install(_make_cfg())
+    assert entry.note == ""
+
+
+def test_cron_status_carries_frequency_drift_note() -> None:
+    cfg = _make_cfg(schedule_frequency="monthly", schedule_day=15)
+    existing = f"0 2 * * * some-cmd # {TASK_TAG}\n"
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", return_value=_completed(stdout=existing)),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        entry = CronScheduler(cfg).status()
+    assert entry is not None
+    assert "monthly" in entry.note
+    assert "DAILY" in entry.note
+
+
+def test_windows_install_warns_when_non_daily_frequency_is_installed_daily(tmp_path: Path) -> None:
+    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=1, log_dir=str(tmp_path / "logs"))
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        captured["argv"] = argv
+        return _completed(stdout="SUCCESS")
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        entry = WindowsTaskScheduler(cfg).install()
+
+    argv = captured["argv"]
+    assert argv[argv.index("/SC") + 1] == "DAILY"  # installed cadence unchanged
+    assert "weekly" in entry.note
+    assert "DAILY" in entry.note

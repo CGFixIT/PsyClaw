@@ -387,7 +387,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         if entry:
             _ok(f"Scheduled: {entry.cron_or_time}")
             if entry.note:
-                _kv("launchd state", entry.note)
+                # ScheduleEntry.note is generic guidance, not launchd-only:
+                # cron/schtasks now use it for the frequency-drift warning.
+                _warn(entry.note)
         else:
             print("  [-] Not scheduled.")
     except SchedulerError as exc:
