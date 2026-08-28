@@ -473,10 +473,18 @@ def _rollover_if_needed(path: Path, max_bytes: int) -> None:
         try:
             handle.close()
         except OSError:
+            # Best-effort, same as close_numbat_handles(): the pop() above already
+            # dropped our reference, so the next write reopens the path regardless
+            # of whether this close succeeded. Raising here would break the
+            # never-raise contract for a handle we are discarding anyway.
             pass
     try:
         os.replace(path, path.with_name(path.name + ".1"))
     except OSError:
+        # Rename refused (read-only mount, a .1 held open by a reader on Windows,
+        # a vanished parent). Falling through leaves the oversized file in place
+        # and the next write reopens it: the stream keeps flowing, which is the
+        # right trade for a derived forensic log -- audit.jsonl is authoritative.
         pass
 
 
