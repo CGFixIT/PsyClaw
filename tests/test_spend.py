@@ -576,7 +576,7 @@ def test_recording_warns_once_when_rates_are_stale(tmp_path, monkeypatch, caplog
     Before this, a server billing against a >30-day-stale table emitted nothing
     until an operator separately ran metrics.py.
     """
-    monkeypatch.setattr(spend, "_STALE_WARNED", False)
+    spend._warn_once_if_stale.cache_clear()
     monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: True)
     ledger = tmp_path / "spend.jsonl"
 
@@ -594,7 +594,7 @@ def test_recording_warns_once_when_rates_are_stale(tmp_path, monkeypatch, caplog
 
 
 def test_recording_is_silent_when_rates_are_fresh(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(spend, "_STALE_WARNED", False)
+    spend._warn_once_if_stale.cache_clear()
     monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: False)
     ledger = tmp_path / "spend.jsonl"
 

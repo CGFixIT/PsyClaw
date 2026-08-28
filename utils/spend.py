@@ -13,6 +13,7 @@ import re
 import threading
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from utils.logger import _anchor, _get_config
@@ -292,25 +293,22 @@ def rates_are_stale(now: datetime | None = None) -> bool:
     return (current.date() - priced).days > STALE_AFTER_DAYS
 
 
-# Warn-once latch for the recording path. metrics.py warns on every run because
-# it is an operator-invoked report; the server records a line per external call,
-# so warning there per call would be log spam and get filtered out -- exactly
-# when it matters. Not lock-guarded: a race costs one duplicate line, never a
-# missed one.
-_STALE_WARNED = False
-
-
+@lru_cache(maxsize=1)
 def _warn_once_if_stale() -> None:
     """Emit the stale-rate warning at most once per process.
 
     record_external_usage() prices live Grok/Claude calls; before this, a server
     billing against a >STALE_AFTER_DAYS table emitted no signal at all until an
-    operator separately ran metrics.py.
+    operator separately ran metrics.py. metrics.py still warns on every run --
+    it is an operator-invoked report -- but the server records a line per
+    external call, and a per-call warning there is spam that gets filtered out
+    exactly when it matters.
+
+    lru_cache is the latch (a nullary cached call runs its body once), which
+    keeps the state out of a module global and gives tests a public reset:
+    ``_warn_once_if_stale.cache_clear()``. A thread race can emit one duplicate
+    line, never a missed one.
     """
-    global _STALE_WARNED
-    if _STALE_WARNED:
-        return
-    _STALE_WARNED = True
     warn_if_priced_as_of_stale()
 
 
