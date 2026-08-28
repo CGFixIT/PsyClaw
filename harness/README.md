@@ -239,7 +239,7 @@ enabling it.
 
 ## Verify `/goal` + `/loop` + `/web`
 
-Do not run the full 14-phase swarm just to check these commands. Use
+Do not run the full swarm audit just to check these commands. Use
 ladder **A** in [`.claude/skills/CyClaw-Sandbox/SKILL.md`](../.claude/skills/CyClaw-Sandbox/SKILL.md)
 (operator map):
 
