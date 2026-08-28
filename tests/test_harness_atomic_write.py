@@ -50,7 +50,7 @@ def test_atomic_write_discards_staged_file_on_circular_reference(tmp_path):
     target = tmp_path / "config.json"
     payload: dict = {}
     payload["self"] = payload
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Circular reference"):
         _atomic_write_json(target, payload)
     assert _staged(tmp_path) == []
 

@@ -63,11 +63,14 @@ def test_malformed_hybrid_confirmation_fails_closed(tmp_path: Path) -> None:
 def test_session_path_rejects_path_shaped_or_invalid_chat_ids(
     tmp_path: Path, chat_id: object
 ) -> None:
-    with pytest.raises(ValueError):
+    # Params span both validators: non-integer-shaped ids raise "chat_id must
+    # be a signed integer", 2**63 raises "chat_id is outside signed 64-bit
+    # range" -- both carry the chat_id prefix.
+    with pytest.raises(ValueError, match="chat_id"):
         grant_hybrid_confirm(chat_id, provider="grok", ttl_sec=120, path=tmp_path / "state.json")
 
 
 @pytest.mark.parametrize("provider", ["", "GROK", "other"])
 def test_session_rejects_unknown_provider(tmp_path: Path, provider: str) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="provider must be grok or claude"):
         grant_hybrid_confirm(42, provider=provider, ttl_sec=120, path=tmp_path / "state.json")

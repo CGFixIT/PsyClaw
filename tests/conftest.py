@@ -4,11 +4,14 @@ Mocks: LLM services, embedding model, retriever, test config.
 No live services required — all external deps are mocked.
 """
 
+import contextlib
 import copy
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 
 from retrieval.hybrid_search import SearchResult
 
@@ -85,8 +88,14 @@ def _disarm_agentic_write_execution(request, monkeypatch):
         return
     try:
         import agentic.writer as _writer
-    except ImportError:  # agentic extras absent -- nothing to disarm
-        return
+    except ModuleNotFoundError as exc:
+        # Only the absent agentic package itself means "nothing to disarm".
+        # A ModuleNotFoundError naming anything else is a broken transitive
+        # import INSIDE agentic/writer.py -- swallowing it would leave
+        # EXECUTION_ENABLED armed for the whole session, so re-raise.
+        if exc.name == "agentic" or (exc.name or "").startswith("agentic."):
+            return
+        raise
     monkeypatch.setattr(_writer, "EXECUTION_ENABLED", False)
 
 
@@ -190,6 +199,97 @@ class MockGrokClient:
 
 class MockClaudeClient(MockGrokClient):
     """Stand-in for ClaudeClient; same generate/is_available contract."""
+
+
+@contextlib.contextmanager
+def _mocked_gateway(tmp_path, *, peer=("127.0.0.1", 51234)):  # DevSkim: ignore DS162092,DS137138 - test loopback peer
+    """Mocked-gateway TestClient shared by test_gate.py / test_edge_cases.py.
+
+    Yields ``(test_client, mock_graph)``; per-test behavior differences are
+    expressed by overriding ``mock_graph.invoke`` (return_value/side_effect).
+
+    gate.py binds its config at module import time, so patching gate.open /
+    gate.yaml.safe_load here would be dead code -- the real mechanism is the
+    direct module-global assignment below, wrapped in save/restore so no mock
+    leaks into the next test.
+
+    ``peer`` is a parameter, not a constant, because gate's rate limiter is a
+    process-global keyed per client IP with a 60 req/60 s budget: every file
+    sharing one peer shares one budget, and a full-suite run can starve a
+    later test (429 where 200/409 was asserted). Each consuming file picks its
+    own loopback IP (127.0.0.0/8 is all loopback -- see
+    gate._is_loopback_host).
+    """
+    from utils.logger import reset_config_cache
+    reset_config_cache()
+
+    cfg = copy.deepcopy(TEST_CONFIG)
+    cfg["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
+    cfg["logging"]["log_file"] = str(tmp_path / "gateway.log")
+
+    with patch("gate.cfg", cfg), \
+         patch("gate.HybridRetriever"), \
+         patch("gate.LocalLLMClient"), \
+         patch("gate.ClaudeClient"), \
+         patch("gate.build_graph") as mock_build, \
+         patch("gate.check_input", side_effect=lambda q: q), \
+         patch("gate.check_all", return_value=[]):
+
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = {
+            "query": "test query",
+            "answer": "Test answer from local LLM.",
+            "answer_model": "local",
+            "answer_sources": [
+                {"source": "test.md", "score": 0.9, "chunk_id": 0, "stem_tags": ["test"], "text": "...", "mode": "hybrid"}
+            ],
+            "retrieved_docs": [{"text": "...", "score": 0.9, "source": "test.md", "chunk_id": 0, "stem_tags": [], "mode": "hybrid"}],
+            "top_score": 0.9,
+            "retrieval_mode": "hybrid",
+            "needs_user_confirm": False,
+            "audit_event": {}
+        }
+        mock_build.return_value = mock_graph
+
+        import gate
+        gate.cfg = cfg
+        _globals = ("retriever", "local_llm", "grok", "claude", "compiled_graph")
+        _saved = {k: getattr(gate, k, None) for k in _globals}
+        try:
+            gate.retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
+            gate.local_llm = MockLocalLLM()
+            gate.grok = None
+            gate.claude = None
+            gate.compiled_graph = mock_graph
+
+            # base_url uses an allowed Host (localhost) so TrustedHostMiddleware
+            # (added at import from the real config.yaml allowed_hosts) admits the
+            # request; the default "testserver" host would otherwise 400.
+            test_client = TestClient(
+                gate.app,
+                base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+                # Starlette defaults the peer to ("testclient", 50000), which is
+                # deliberately NOT loopback under _is_loopback_peer. A real
+                # loopback peer exercises the ordinary local-operator case; the
+                # non-loopback case is asserted explicitly in test_gate.py's
+                # TestApiKeyOptionalPeer.
+                client=peer,
+            )
+            yield test_client, mock_graph
+        finally:
+            for k, v in _saved.items():
+                setattr(gate, k, v)
+
+    reset_config_cache()
+
+
+@pytest.fixture
+def client(tmp_path):
+    """Default mocked-gateway client: the (127.0.0.1, 51234) rate-limit bucket
+    is the one test_gate.py has always used -- do not point a second file's
+    fixture at it; give each file its own loopback IP via _mocked_gateway."""
+    with _mocked_gateway(tmp_path) as pair:
+        yield pair
 
 
 @pytest.fixture(autouse=True)
