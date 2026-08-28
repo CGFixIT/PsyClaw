@@ -94,8 +94,13 @@ jobs:
           BASE_REF="${BASE_REF_INPUT:-main}"
           git fetch origin "$BASE_REF"
           BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD)
+          # docs/** is excluded: it holds standalone operator scripts/notes, not
+          # shipped package code. The repo-wide ruff gate above still lints them
+          # (syntax, unused imports, real bugs); only the strict WPS style layer
+          # skips them — otherwise fixing one line in a docs script forces a
+          # full WPS-clean rewrite of a file that was never WPS-clean.
           mapfile -d '' -t FILES < <(
-            git diff --name-only -z --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py'
+            git diff --name-only -z --diff-filter=ACMR "$BASE_SHA" HEAD -- '*.py' ':(exclude)docs/**'
           )
           if (( ${#FILES[@]} == 0 )); then
             echo "No changed Python files; skipping wemake-python-styleguide."
