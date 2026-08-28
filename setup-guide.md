@@ -928,6 +928,7 @@ README for product overview and
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for security scope. A
 Docker/`docker-compose` path also exists (`Dockerfile`, `docker-compose.yml`).
 
+<<<<<<< HEAD
 For passive LAN inventory, first configure a narrow RFC1918 or loopback scope:
 
 ```yaml
@@ -945,6 +946,17 @@ python -m agentic.netconnect.cli arp
 
 These commands do not ping, sweep, probe ports, or register a scheduler. Cache
 results are hints, not a complete or live reachability map.
+=======
+For live filesystem metadata, enable `fsconnect`, configure `allowed_roots`,
+then rank files without staging them into the RAG corpus:
+
+```bash
+python -m agentic.fsconnect.cli largest --root "<configured-root>" --path "<dir>" --top 20 --min-bytes 1048576
+```
+
+The walk is read-only, never follows symlinks/reparse points, and reports
+`truncated: true` when it reaches `fsconnect.largest_max_entries`.
+>>>>>>> origin/main
 
 ---
 

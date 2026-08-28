@@ -24,6 +24,8 @@ def run_read(
     pattern: str | None = None,
     regex: bool = False,
     recursive: bool = True,
+    top: int = 20,
+    min_bytes: int = 0,
 ) -> dict:
     """Open a client, run one read op, and return its result bundle."""
     with FsClient(cfg, fs_cfg, config_path=config_path) as client:
@@ -37,6 +39,8 @@ def run_read(
             return client.fs_grep(target, pattern or "", root=root, regex=regex)
         if op == "fs_glob":
             return client.fs_glob(target, pattern or "", root=root, recursive=recursive)
+        if op == "fs_largest":
+            return client.fs_largest(target, root=root, top=top, min_bytes=min_bytes)
         # Typed, not ValueError: fsconnect/cli.py's _run_read() only catches
         # FsConnectError, so a bare builtin would escape as an uncaught traceback
         # (exit 1) instead of the documented fsconnect exit-code API. Mirrors

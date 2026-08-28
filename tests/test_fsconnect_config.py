@@ -37,7 +37,15 @@ def test_defaults_when_minimal(tmp_path):
     assert fc.allowed_roots == [str(tmp_path)]
     assert fc.writes_enabled is False
     assert fc.allow_macos_volume_roots is False
-    assert fc.allowed_fs_ops == ["fs_list", "fs_stat", "fs_read", "fs_grep", "fs_glob"]
+    assert fc.allowed_fs_ops == [
+        "fs_list",
+        "fs_stat",
+        "fs_read",
+        "fs_grep",
+        "fs_glob",
+        "fs_largest",
+    ]
+    assert fc.largest_max_entries == 100_000
     # null writable root expands to the OS default; index_root defaults to it
     assert fc.write_root_strs == [fsconfig.os_default_writable_root()]
     assert fc.index_root == fsconfig.os_default_writable_root()
@@ -69,6 +77,12 @@ def test_follow_symlinks_true_rejected(tmp_path):
 
 def test_negative_cap_rejected(tmp_path):
     path = _write_cfg(tmp_path, {"enabled": True, "max_file_bytes": 0})
+    with pytest.raises(FsConnectConfigError):
+        fsconfig.load_fsconnect_config(path)
+
+
+def test_non_positive_largest_walk_cap_rejected(tmp_path):
+    path = _write_cfg(tmp_path, {"enabled": True, "largest_max_entries": 0})
     with pytest.raises(FsConnectConfigError):
         fsconfig.load_fsconnect_config(path)
 

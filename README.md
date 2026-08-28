@@ -975,6 +975,7 @@ Scoped **reads** and separately-gated **writes** over a local or SMB file share,
 python -m agentic.fsconnect.cli status
 python -m agentic.fsconnect.cli read  --path "<path>"                     # scoped read
 python -m agentic.fsconnect.cli grep  --path "<path>" --pattern "<pattern>"
+python -m agentic.fsconnect.cli largest --path "<dir>" --top 20 --min-bytes 1048576
 python -m agentic.fsconnect.cli write --path "<path>" --reason "..."      # dry-run unless writes_enabled
 python -m agentic.fsconnect.cli index --apply           # stage share → corpus
 python -m agentic.fsconnect.cli test                    # pre-flight self-test
@@ -987,6 +988,7 @@ fsconnect:
   enabled: true
   allowed_roots: ["/srv/share"]   # REQUIRED when enabled; existing dirs
   max_file_bytes: 5242880         # 5 MiB read cap
+  largest_max_entries: 100000     # truthful traversal ceiling per largest command
   writes_enabled: false           # master write switch (dry-run plans while false)
   writable_roots: [null]          # null => ~/CyClaw-FS (macOS) | /var/lib/cyclaw-fs (Linux) | C:\CyClaw-FS
   max_write_bytes: 10485760       # 10 MiB write cap

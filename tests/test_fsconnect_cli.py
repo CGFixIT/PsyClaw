@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -72,6 +73,45 @@ def test_glob_enabled(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "a.md" in out and "sub/b.md" in out
     assert "c.txt" not in out  # different extension
+
+
+def test_largest_ranks_and_filters_files(tmp_path, capsys):
+    share = tmp_path / "share"
+    (share / "nested").mkdir(parents=True)
+    (share / "small.bin").write_bytes(b"x")
+    (share / "medium.bin").write_bytes(b"12345")
+    (share / "nested" / "large.bin").write_bytes(b"1234567890")
+    cp = _cfg(tmp_path, {"enabled": True, "allowed_roots": [str(share)]})
+
+    rc = cli.main([
+        "--config", cp, "largest", "--top", "2", "--min-bytes", "4",
+    ])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [entry["path"] for entry in payload["entries"]] == [
+        "nested/large.bin",
+        "medium.bin",
+    ]
+    assert [entry["bytes"] for entry in payload["entries"]] == [10, 5]
+    assert payload["truncated"] is False
+
+
+def test_largest_reports_walk_cap_truthfully(tmp_path, capsys):
+    share = tmp_path / "share"
+    share.mkdir()
+    (share / "a.bin").write_bytes(b"a")
+    (share / "b.bin").write_bytes(b"bb")
+    cp = _cfg(tmp_path, {
+        "enabled": True,
+        "allowed_roots": [str(share)],
+        "largest_max_entries": 1,
+    })
+
+    assert cli.main(["--config", cp, "largest", "--top", "1"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["scanned_entries"] == 1
+    assert payload["truncated"] is True
 
 
 def test_write_dryrun_when_disabled(tmp_path, capsys):
