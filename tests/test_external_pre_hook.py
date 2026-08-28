@@ -138,9 +138,10 @@ def test_emit_verdict_true_exit_2_emits_permission_denied(tmp_path: Path):
     assert rec["approval_reason"] == "hook_denied"
     assert rec["entrypoint"] == "cyclaw"
     assert "cyclaw" in rec["tags"]
-    assert rec["query_hash"] == _TEST_QUERY_HASH
-    rec_sans_hash = {k: v for k, v in rec.items() if k != "query_hash"}
-    assert "query" not in json.dumps(rec_sans_hash)
+    # Schema 0.3.0 additionalProperties:false — the hash rides inside
+    # content_preview, never as a top-level field.
+    assert "query_hash" not in rec
+    assert json.loads(rec["content_preview"]) == {"query_hash": _TEST_QUERY_HASH}
     assert "blocked" not in json.dumps(rec)
 
 
@@ -160,9 +161,8 @@ def test_emit_verdict_true_timeout_emits_network_indicator(tmp_path: Path, monke
     assert rec["event_type"] == "network.indicator"
     assert rec["confidence"] == "low"
     assert rec["model_provider"] == "anthropic"
-    assert rec["query_hash"] == _TEST_QUERY_HASH
-    rec_sans_hash = {k: v for k, v in rec.items() if k != "query_hash"}
-    assert "query" not in json.dumps(rec_sans_hash)
+    assert "query_hash" not in rec
+    assert json.loads(rec["content_preview"]) == {"query_hash": _TEST_QUERY_HASH}
 
 
 def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -180,7 +180,26 @@ def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, mo
     rec = records[0]
     assert rec["event_type"] == "network.indicator"
     assert rec["confidence"] == "low"
-    assert rec["query_hash"] == _TEST_QUERY_HASH
+    assert "query_hash" not in rec
+    assert json.loads(rec["content_preview"]) == {"query_hash": _TEST_QUERY_HASH}
+
+
+def test_emit_verdict_invalid_query_hash_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _hook_config(tmp_path)
+
+    def _exit_7(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=7, stdout=b"boom", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _exit_7)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    rec = records[0]
+    # Non-64-hex query_hash is dropped: no top-level field, no content_preview.
+    assert "query_hash" not in rec
+    assert "query_hash" not in rec.get("content_preview", "")
 
 
 def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

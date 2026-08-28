@@ -40,7 +40,6 @@ import json
 import logging
 import os
 import platform
-import re
 import socket
 import threading
 import uuid
@@ -116,7 +115,6 @@ _KNOWN_FIELDS = frozenset({
     "model_provider",
     "git_branch",
     "entrypoint",
-    "query_hash",
     "cli_version",
     "sub_agent",
     "content_preview",
@@ -195,9 +193,6 @@ _SENSITIVE_ARGV_PREFIXES = (
     "--desc=",
     "--plan=",
 )
-# Same shape as utils/spend.py's _QUERY_HASH_RE (kept separate on purpose --
-# only 2 call sites, not worth a shared helper).
-_QUERY_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _WRITE_LOCK = threading.Lock()
 _PROCESS_RUN_ID = uuid.uuid4().hex
@@ -335,7 +330,6 @@ def build_event(
     mcp_server: str | None = None,
     mcp_tool: str | None = None,
     url: str | None = None,
-    query_hash: str | None = None,
     cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one CLI-legal Numbat event record (schema 0.3.0)."""
@@ -349,8 +343,6 @@ def build_event(
         approval_decision = None
     if actor is not None and actor not in _ACTORS:
         actor = None
-    if query_hash is not None and not _QUERY_HASH_RE.fullmatch(query_hash):
-        query_hash = None
 
     record: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -385,7 +377,6 @@ def build_event(
         "model_provider": model_provider,
         "entrypoint": entrypoint,
         "content_preview": content_preview,
-        "query_hash": query_hash,
         # Action fields (stripped per event-type allowlist below):
         "mcp_server": mcp_server,
         "mcp_tool": mcp_tool,
@@ -482,7 +473,6 @@ def emit_numbat_event(
     mcp_server: str | None = None,
     mcp_tool: str | None = None,
     url: str | None = None,
-    query_hash: str | None = None,
     config_path: str = "config.yaml",
     cfg: dict[str, Any] | None = None,
 ) -> None:
@@ -518,7 +508,6 @@ def emit_numbat_event(
             mcp_server=mcp_server,
             mcp_tool=mcp_tool,
             url=url,
-            query_hash=query_hash,
             cfg=cfg,
         )
         write_ndjson(record, _output_path(cfg))

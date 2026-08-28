@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess  # nosec B404 - list-form only, no shell, operator-configured argv
 from typing import Any
 
 logger = logging.getLogger("cyclaw.external_pre_hook")
+
+# Same shape as utils/spend.py's _QUERY_HASH_RE (kept separate on purpose --
+# only 2 call sites, not worth a shared helper).
+_QUERY_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 DEFAULT_TIMEOUT_SEC = 5
 MIN_TIMEOUT_SEC = 1
@@ -91,6 +96,13 @@ def _emit_hook_verdict(
         return
 
     try:
+        # Schema 0.3.0 has additionalProperties:false and no query_hash
+        # property, so the hash rides inside content_preview -- the same
+        # contract as the mainline audit projection. A hash that is not
+        # 64-hex is dropped (no content_preview) rather than emitted.
+        content_preview = None
+        if _QUERY_HASH_RE.fullmatch(query_hash):
+            content_preview = json.dumps({"query_hash": query_hash}, separators=(",", ":"))
         emit_numbat_event(
             event_type,
             model=model,
@@ -104,7 +116,7 @@ def _emit_hook_verdict(
             entrypoint="cyclaw",
             tags=["pre_action_hook", reason_code],
             confidence=confidence,
-            query_hash=query_hash,
+            content_preview=content_preview,
             cfg=cfg,
         )
     except Exception as exc:  # noqa: BLE001 - derived stream must never fail the caller
