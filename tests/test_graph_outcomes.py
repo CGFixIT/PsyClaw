@@ -176,15 +176,14 @@ def _assert_expected_route(case: dict[str, Any], result: dict[str, Any]) -> None
 
 
 def _run_gate_row(case: dict[str, Any]) -> None:
+    # The row's expected_route/expected_error_code constants are validated
+    # once against the layer contract in test_fixture_layer_contract, not here.
     with pytest.raises(PromptInjectionError):
         check_input(str(case["query"]), str(_SHIPPED_CONFIG))
-    assert case.get("expected_error_code") == 400
-    assert case.get("expected_route") == "gate_block"
 
 
 def _run_retrieval_row(case: dict[str, Any]) -> None:
     hits = _bm25_retriever().keyword_search(str(case["query"]))
-    assert case.get("expected_route") == "keyword_hit"
     matching = [h for h in hits if h.source in set(case.get("must_retrieve") or [])]
     assert matching, f"no keyword hit for {case.get('must_retrieve')!r} in {_hit_sources(hits)}"
     for hit in matching:
@@ -239,11 +238,19 @@ def _run_graph_row(case: dict[str, Any], tmp_path: Path) -> None:
     got_model = result.get("answer_model") or ""
     assert got_model == (case.get("expected_answer_model") or "")
     _assert_expected_route(case, result)
-    # route_by_score sets needs_user_confirm on a low top_score and later
-    # nodes do not clear it. Only assert the pause (True). An answered
-    # low-score path is identified by answer_model, not by this flag.
-    if case.get("expected_needs_confirm") is True:
-        assert result.get("needs_user_confirm") is True
+    # route_by_score sets needs_user_confirm=True on a low top_score and no
+    # later node clears it (user_gate_node returns {} once the user has
+    # answered), so an ANSWERED low-score row still finishes True -- the
+    # fixture declares true for those rows. Only the high-score path sets the
+    # flag False explicitly, so False is asserted there and nowhere else. The
+    # gate/retrieval layers never run the graph; their rows declare the field
+    # but it is not observable and not asserted here.
+    expected_flag = case.get("expected_needs_confirm")
+    if expected_flag is not None:
+        assert result.get("needs_user_confirm") is expected_flag, (
+            f"needs_user_confirm={result.get('needs_user_confirm')!r} != "
+            f"expected {expected_flag!r}"
+        )
 
     _assert_sources(_source_names(result), case)
 
@@ -266,6 +273,23 @@ def test_outcome_row(case: dict[str, Any], tmp_path: Path) -> None:
     if layer != "graph":
         raise AssertionError(f"unknown layer {layer!r}")
     _run_graph_row(case, tmp_path)
+
+
+def test_fixture_layer_contract() -> None:
+    """One-time fixture validation: each layer's rows must carry the constants
+    the runner relies on. Comparing fixture data to hardcoded constants inside
+    the per-row runners is dead as behavioral coverage, so it lives here."""
+    for case in CASES:
+        layer = case["layer"]
+        if layer == "gate":
+            assert case.get("expected_route") == "gate_block", case["id"]
+            assert case.get("expected_error_code") == 400, case["id"]
+        elif layer == "retrieval":
+            assert case.get("expected_route") == "keyword_hit", case["id"]
+        elif layer == "graph":
+            assert case.get("expected_error_code") is None, case["id"]
+        else:
+            raise AssertionError(f"{case['id']}: unknown layer {layer!r}")
 
 
 def test_battery_covers_required_categories() -> None:

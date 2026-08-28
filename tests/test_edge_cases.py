@@ -9,75 +9,21 @@ Covers gaps identified during optimization scan:
 - score_router and user_gate_router routing logic
 """
 
-import copy
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from tests.conftest import (
-    MockRetriever, MockLocalLLM, MockGrokClient, MockClaudeClient,
-    MOCK_HIGH_SCORE_RESULTS, TEST_CONFIG
-)
+from tests.conftest import MockGrokClient, MockClaudeClient, _mocked_gateway
 
 
 @pytest.fixture
 def client(tmp_path):
-    """Create a test client with mocked dependencies."""
-    import yaml
-    from utils.logger import reset_config_cache
-    reset_config_cache()
-
-    cfg = copy.deepcopy(TEST_CONFIG)
-    cfg["logging"]["audit_file"] = str(tmp_path / "audit.jsonl")
-    cfg["logging"]["log_file"] = str(tmp_path / "gateway.log")
-
-    config_path = tmp_path / "config.yaml"
-    with open(config_path, "w") as f:
-        yaml.dump(cfg, f)
-
-    with patch("gate.open", create=True), \
-         patch("gate.yaml.safe_load", return_value=cfg), \
-         patch("gate.cfg", cfg), \
-         patch("gate.HybridRetriever") as MockRet, \
-         patch("gate.LocalLLMClient") as MockLLM, \
-         patch("gate.build_graph") as MockBuild, \
-         patch("gate.check_input", side_effect=lambda q: q), \
-         patch("gate.check_all", return_value=[]):
-
-        retriever = MockRetriever(MOCK_HIGH_SCORE_RESULTS)
-        llm = MockLocalLLM()
-
-        mock_graph = MagicMock()
-        mock_graph.invoke.return_value = {
-            "query": "test query",
-            "answer": "Test answer.",
-            "answer_model": "local",
-            "answer_sources": [
-                {"source": "test.md", "score": 0.9, "chunk_id": 0,
-                 "stem_tags": ["test"], "text": "...", "mode": "hybrid"}
-            ],
-            "retrieved_docs": [
-                {"text": "...", "score": 0.9, "source": "test.md",
-                 "chunk_id": 0, "stem_tags": [], "mode": "hybrid"}
-            ],
-            "top_score": 0.9,
-            "retrieval_mode": "hybrid",
-            "needs_user_confirm": False,
-            "audit_event": {}
-        }
-        MockBuild.return_value = mock_graph
-
-        import gate
-        gate.cfg = cfg
-        gate.retriever = retriever
-        gate.local_llm = llm
-        gate.grok = None
-        gate.compiled_graph = mock_graph
-
-        from fastapi.testclient import TestClient
-        client = TestClient(gate.app, base_url="http://localhost")  # DevSkim: ignore DS162092,DS137138 - test loopback host
-        yield client, mock_graph
-
-    reset_config_cache()
+    """Thin wrapper over conftest._mocked_gateway on this file's OWN loopback
+    IP: the default (127.0.0.1, 51234) bucket is shared by test_gate.py and
+    test_gate_index_build.py, and gate's per-IP 60 req/60 s limiter is
+    process-global -- a second file on the same peer can starve a later
+    test's budget in a full-suite run (429 where 200/409 was asserted)."""
+    with _mocked_gateway(tmp_path, peer=("127.0.0.3", 51234)) as pair:  # DevSkim: ignore DS162092,DS137138 - test loopback peer
+        yield pair
 
 
 class TestTerminalServing:

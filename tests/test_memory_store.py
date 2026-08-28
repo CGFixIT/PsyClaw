@@ -136,9 +136,9 @@ def test_injection_blocks_apply(mem_cfg):
 
 
 def test_reason_required(mem_cfg):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="reason must not be empty"):
         require_reason("  ")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="reason must not be empty"):
         create_proposal(mem_cfg, "add_fact", {"content": "x"}, reason="")
 
 
