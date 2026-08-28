@@ -229,6 +229,30 @@ def test_emit_verdict_query_hash_omitted_when_disabled(tmp_path: Path, monkeypat
     assert "content_preview" not in rec
 
 
+def test_payload_query_hash_honors_optout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The hook's stdin payload carries query_hash by default and omits it
+    under logging.audit_fields.include_query_hash: false -- the same opt-out
+    the Numbat projection above already honors. The hook (often a Numbat hook)
+    may persist what it receives, so the payload is a leak leg too."""
+    captured: list[bytes] = []
+
+    def _capture(*args, **kwargs):
+        captured.append(kwargs["input"])
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _capture)
+
+    cfg = _hook_config(tmp_path)
+    assert run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg) == {"verdict": "allow"}
+    assert json.loads(captured[-1])["query_hash"] == _TEST_QUERY_HASH
+
+    cfg["logging"] = {"audit_fields": {"include_query_hash": False}}
+    assert run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg) == {"verdict": "allow"}
+    optout_payload = json.loads(captured[-1])
+    assert "query_hash" not in optout_payload
+    assert optout_payload["provider"] == "grok"
+
+
 def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _hook_config(tmp_path)
 
