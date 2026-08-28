@@ -74,6 +74,7 @@ def _nvidia_check(rails: object, content: str) -> object:
 
         check_kw["rail_types"] = [RailType.INPUT]
     except ImportError:
+        # RailType is optional on older nemoguardrails; check() still works without it.
         pass
     return rails.check(**check_kw)  # type: ignore[attr-defined]
 

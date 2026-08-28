@@ -141,26 +141,39 @@ def test_a_hung_check_times_out_without_crashing_the_run(tmp_path):
 
 
 def test_timeout_stdout_that_is_already_str_does_not_crash(tmp_path, monkeypatch):
-    """DEF-4: the Windows branch of subprocess.run's TimeoutExpired handling.
+    """DEF-4: timeout leftover streams may already be str (text-mode communicate).
 
-    CPython's non-Windows branch leaves TimeoutExpired.stdout as raw bytes (the
-    case the prior unconditional .decode() call was written for); its
-    _mswindows branch instead calls process.communicate() in text mode, which
-    returns str. Calling .decode() on that raised AttributeError, turning a
-    hung check -- the exact case this module exists to contain -- into an
-    uncaught crash on the one platform harness/ is a primary operator surface
-    for. This test breaks this module's own "real subprocess, not a mock"
-    convention deliberately: _mswindows's code path cannot be produced on the
-    Linux CI runner these tests execute on, so subprocess.run is monkeypatched
-    to raise the exact shape CPython's Windows branch produces (str output,
-    not bytes) -- the only way to exercise it without a Windows runner.
+    ArgvListSandbox (and the production backends) use Popen + communicate(
+    text=True), not subprocess.run. After a TimeoutExpired they drain leftover
+    stdout/stderr and pass them through stream_to_str. An unconditional
+    .decode() on that leftover would crash when the stream is already str —
+    the original Windows subprocess.run bug, now reachable on every platform.
+    Patch Popen, not subprocess.run; run is no longer on this path.
     """
     import subprocess
 
-    def fake_run(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=["x"], timeout=1, output="partial output\n", stderr="")
+    class _FakeProc:
+        pid = 1
+        returncode = None
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(
+                    cmd=["x"], timeout=timeout, output="partial output\n", stderr=""
+                )
+            return ("partial output\n", "")
+
+        def kill(self) -> None:
+            self.returncode = -1
+
+    monkeypatch.setattr(subprocess, "Popen", _FakeProc)
+    monkeypatch.setattr(
+        "agentic.executor.hard_sandbox._kill_sandbox_tree",
+        lambda proc: None,
+    )
     report = run_verification(tmp_path, [_py("pass", timeout_sec=1)])
     assert report.ok is False
     assert report.results[0].timed_out is True
