@@ -96,7 +96,7 @@ def test_agentic_does_not_import_request_path():
 
 def test_subpackages_are_covered_by_isolation_scan():
     # Explicitly assert the new connectors exist and would be scanned above.
-    for sub in ("fsconnect", "sqlconnect"):
+    for sub in ("fsconnect", "sqlconnect", "netconnect"):
         pkg = REPO_ROOT / "agentic" / sub
         assert pkg.is_dir(), f"expected out-of-band sub-package agentic/{sub}"
         assert list(pkg.rglob("*.py")), f"agentic/{sub} has no modules"

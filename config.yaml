@@ -960,6 +960,22 @@ sqlconnect:
   allow_write: false             # reserved; v0.1 cannot write regardless
 
 # ===========================
+# Passive LAN inventory connector (out-of-band)  [v0.1]
+# ===========================
+# Reads only local host metadata and the operating system's existing neighbor
+# cache. No ping, port probe, subnet sweep, packet send, scheduler, or API route.
+# Every returned address must fall inside one of the explicit RFC1918/loopback
+# subnets below; enabling with an empty or broader scope fails closed.
+netconnect:
+  enabled: false
+  allowed_cidrs: []              # e.g. ["192.168.1.0/24"]; required when enabled
+  allowed_net_ops:
+    - self
+    - arp
+  command_timeout_sec: 5
+  max_neighbors: 512
+
+# ===========================
 # NeMo Guardrails (out-of-band, content-safety layer)  [v0.1 — skeleton]
 # ===========================
 # Disabled-by-default, opt-in defense-in-depth layer. Absence of this block, or

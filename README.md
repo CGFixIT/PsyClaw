@@ -43,7 +43,7 @@ CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
 5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration
 6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
-7. **Extends the agentic layer to local data** (v1.8) with an opt-in **filesystem connector** (`agentic/fsconnect/` — scoped held-handle reads + gated writes over local/SMB shares) and a read-only **SQL connector** (`agentic/sqlconnect/` — SELECT-only Postgres/MSSQL scaffold) — both disabled by default and out-of-band
+7. **Extends the agentic layer to local data** (v1.8+) with opt-in **filesystem** (`agentic/fsconnect/`), read-only **SQL** (`agentic/sqlconnect/`), and passive **LAN inventory** (`agentic/netconnect/`) connectors -- all disabled by default and out-of-band
 8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority. When `guardrails.enabled` is the literal `true`, `utils/guardrail_bridge.py` wires visible `guardrail_input` / `guardrail_output` nodes; see [`guardrails/README.md`](guardrails/README.md)
 9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
 10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, `/goal` + human-gated `/loop`, wired `/skills` and `/tools` diagrams, and allowlist-only `/web` (off by default). Home layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
@@ -958,9 +958,9 @@ The **Agentic Console** panel drives these from the terminal UI via `POST /ops/a
 
 ---
 
-## Filesystem & SQL Connectors (v1.8)
+## Filesystem, SQL & Passive Network Connectors (v1.8+)
 
-v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulated or security conscious use case where AI use is compliance heavy. Both connectors are **opt-in, disabled by default, and fully out-of-band** — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`, so the six security invariants hold by construction. While disabled, their CLIs are a pure no-op (exit 0).
+v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulated or security conscious use case where AI use is compliance heavy. All three connectors are **opt-in, disabled by default, and fully out-of-band** — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`, so the six security invariants hold by construction. While disabled, their CLIs are a pure no-op (exit 0).
 
 ### `agentic/fsconnect/` — local / SMB filesystem connector
 
@@ -1014,6 +1014,30 @@ sqlconnect:
   statement_timeout_ms: 5000
   max_rows: 1000
   allow_write: false             # reserved; v0.1 cannot write regardless
+```
+
+### `agentic/netconnect/` -- passive LAN inventory (v0.1 scaffold)
+
+This disabled-by-default connector reports best-effort local host metadata and
+reads the operating system's existing ARP/neighbor cache. It performs no ping,
+port probe, subnet sweep, packet send, scheduling, or request-path integration.
+Every returned IPv4 address is filtered through operator-supplied CIDRs that
+must be subnets of RFC1918 or loopback space.
+
+```bash
+python -m agentic.netconnect.cli status
+python -m agentic.netconnect.cli self
+python -m agentic.netconnect.cli arp
+python -m agentic.netconnect.cli test
+```
+
+```yaml
+netconnect:
+  enabled: false
+  allowed_cidrs: ["192.168.1.0/24"]
+  allowed_net_ops: [self, arp]
+  command_timeout_sec: 5
+  max_neighbors: 512
 ```
 
 ---
@@ -1484,6 +1508,7 @@ are in [`macos/README.md`](macos/README.md) and
 | Agentic writes | `pr_create` implemented; the source constant and two config gates ship open since 2026-08-07, so `agentic.enabled` (ships `false`) plus per-call reason/confirm is what refuses. `pr_comment`/`issue_comment` remain plan-only. Git-level writes (real-repo commit/push and draft-PR publish) are additionally gated on `deepagent_github.allow_git_write_tools`, which ships `false` |
 | Filesystem connector | Reads scoped to `allowed_roots` (5 MiB cap) with POSIX held-fd descent and Windows same-handle containment; writes default-OFF and hard-refused on Windows, otherwise confined to separate `writable_roots`, gated by human `reason` + `--confirm`, and atomic; UNC/ADS/device-path/`..`/symlink escapes are denied |
 | SQL connector | Read-only: SELECT/WITH-only query guard + session read-only + hard `allow_write: false`; DSN from env var only; disabled scaffold by default |
+| Network connector | Passive only and disabled by default; explicit RFC1918/loopback CIDRs; `self` plus existing OS neighbor-cache reads; no ping, sweep, port probe, packet send, scheduler, or `/ops` route |
 | Guardrails | Out-of-band, opt-in defense-in-depth; degrades to offline heuristic rails without `nemoguardrails`; never a routing authority; separate hash-only metrics stream |
 | Telegram channel | Out-of-band, ships `enabled: false`; non-empty `allowed_chat_ids` allowlist required to arm; inbound chat reaches the pipeline only via loopback `POST /query` (never a direct `graph.py` call); T3 hybrid-confirm consent (`allow_hybrid_confirm`) ships off — only an explicit `/online on <grok|claude>` grants one TTL-capped per-request consent; T4 media staging off and confined to the fsconnect write path |
 | OpenTweet channel | Out-of-band, ships `enabled: false`; answers only via loopback `POST /query` with `user_confirmed_online: false`; default write is a draft; schedulers generate-don't-load and never send `publish_now`; API key from env / Keychain / CredMan, never YAML or a plist `EnvironmentVariables` dict |

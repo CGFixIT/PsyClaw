@@ -917,6 +917,7 @@ several opt-in, disabled-by-default, out-of-band layers — none of them
 required to get the server above running, and none of them ever imported into
 the request path: a GitHub-context/governed-skills **agentic layer**, a
 local/SMB **filesystem connector** and read-only **SQL connector**, an
+explicitly scoped passive **network connector**, an
 optional **NeMo Guardrails** content-safety layer (Phase 2 input + Phase 4a
 output grounding when enabled), a separate **coding-harness** console on
 `127.0.0.1:8790` (Windows via `powershell/`, macOS/Linux via `macos/` — same
@@ -927,6 +928,25 @@ README for product overview and
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) for security scope. A
 Docker/`docker-compose` path also exists (`Dockerfile`, `docker-compose.yml`).
 
+<<<<<<< HEAD
+For passive LAN inventory, first configure a narrow RFC1918 or loopback scope:
+
+```yaml
+netconnect:
+  enabled: true
+  allowed_cidrs: ["192.168.1.0/24"]
+```
+
+Then inspect only local metadata or the existing OS neighbor cache:
+
+```bash
+python -m agentic.netconnect.cli self
+python -m agentic.netconnect.cli arp
+```
+
+These commands do not ping, sweep, probe ports, or register a scheduler. Cache
+results are hints, not a complete or live reachability map.
+=======
 For live filesystem metadata, enable `fsconnect`, configure `allowed_roots`,
 then rank files without staging them into the RAG corpus:
 
@@ -936,6 +956,7 @@ python -m agentic.fsconnect.cli largest --root "<configured-root>" --path "<dir>
 
 The walk is read-only, never follows symlinks/reparse points, and reports
 `truncated: true` when it reaches `fsconnect.largest_max_entries`.
+>>>>>>> origin/main
 
 ---
 

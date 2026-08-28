@@ -235,6 +235,34 @@ class FsConnectRuntimeError(FsConnectError):
         super().__init__(message, code="FSCONNECT_RUNTIME_ERROR", details=details)
 
 
+class NetConnectError(RAGError):
+    """Base error for the out-of-band passive LAN connector."""
+
+    def __init__(self, message: str, code: str = "NETCONNECT_ERROR", details: dict | None = None):
+        super().__init__(message, code=code, details=details)
+
+
+class NetConnectConfigError(NetConnectError):
+    """The netconnect block or explicit network scope is invalid."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="NETCONNECT_CONFIG_INVALID", details=details)
+
+
+class NetCommandNotInstalledError(NetConnectError):
+    """The host's passive neighbor-cache command is unavailable."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="NET_COMMAND_NOT_INSTALLED", details=details)
+
+
+class NetConnectRuntimeError(NetConnectError):
+    """A passive host or neighbor-cache operation failed at runtime."""
+
+    def __init__(self, message: str, details: dict | None = None):
+        super().__init__(message, code="NETCONNECT_RUNTIME_ERROR", details=details)
+
+
 class SqlConnectError(RAGError):
     """Base error for the out-of-band read-only SQL connector (agentic/sqlconnect).
 
