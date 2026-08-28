@@ -24,7 +24,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -171,12 +171,27 @@ def _extract_and_record_spend(
             if isinstance(raw_spend_file, (str, Path)):
                 spend_file = Path(raw_spend_file)
         try:
-            usage = resp.json().get("usage")
+            body = resp.json()
+            usage = body.get("usage")
         except Exception as exc:
             # Billed 2xx with a non-JSON body still consumed quota. Record
             # usage_missing rather than skipping the line (issue #1013).
             log.debug("spend usage parse failed: %s", type(exc).__name__)
+            body = None
             usage = None
+        # The response's own `model` is the vendor-resolved id that actually
+        # served (and billed) the request. With an unpinned alias configured
+        # (e.g. claude-sonnet-5) an upstream re-point changes what ran while
+        # every ledger line keeps showing the alias, so record both. Handed
+        # back through the caller-owned spend_context dict as well, so the
+        # graph node can surface it on the audit event.
+        served_model: str | None = None
+        if isinstance(body, dict):
+            raw_served = body.get("model")
+            if isinstance(raw_served, str) and raw_served.strip():
+                served_model = raw_served
+        if served_model is not None and isinstance(spend_context, MutableMapping):
+            spend_context["served_model"] = served_model
         try:
             record_external_usage(
                 provider=provider,
@@ -186,6 +201,7 @@ def _extract_and_record_spend(
                 source=source,
                 query_hash=query_hash,
                 route_path=route_path,
+                served_model=served_model,
             )
         except Exception as exc:
             # Type-only: spend is best-effort and must not leak body fragments.

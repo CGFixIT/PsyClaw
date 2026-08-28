@@ -494,3 +494,53 @@ def test_live_probe_refuses_without_env(monkeypatch: pytest.MonkeyPatch) -> None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.main() == 2
+
+
+def test_estimate_usd_prices_config_endorsed_grok43() -> None:
+    """config.yaml's grok.model comment invites pinning grok-4.3 ($1.25/$2.50
+    per Mtok); following that advice must not price every row rate_unknown."""
+    tokens = spend.parse_grok_usage({"prompt_tokens": 100_000, "completion_tokens": 100_000})
+    priced = spend.estimate_usd("grok-4.3", tokens)
+    assert priced["rate_unknown"] is False
+    assert priced["usd"] == pytest.approx(100_000 * 1.25 / 1_000_000 + 100_000 * 2.50 / 1_000_000)
+    assert priced["usd_source"] == "rate_table"
+
+
+def test_estimate_usd_grok43_long_context_band() -> None:
+    """grok-4.3 bills the long band for ALL tokens once the prompt hits 200k."""
+    tokens = spend.parse_grok_usage({"prompt_tokens": 200_000, "completion_tokens": 100_000})
+    priced = spend.estimate_usd("grok-4.3", tokens)
+    assert priced["usd"] == pytest.approx(200_000 * 2.50 / 1_000_000 + 100_000 * 5.00 / 1_000_000)
+
+
+def test_record_persists_served_model_when_given(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="claude",
+        model="claude-sonnet-5",
+        usage=CLAUDE_USAGE,
+        spend_file=ledger,
+        served_model="claude-sonnet-5-20260701",
+    )
+    record = json.loads(ledger.read_text(encoding="utf-8").splitlines()[0])
+    assert record["model"] == "claude-sonnet-5"
+    assert record["served_model"] == "claude-sonnet-5-20260701"
+
+
+def test_record_omits_served_model_when_absent_or_blank(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage=GROK_USAGE,
+        spend_file=ledger,
+    )
+    spend.record_external_usage(
+        provider="grok",
+        model="grok-4.5",
+        usage=GROK_USAGE,
+        spend_file=ledger,
+        served_model="   ",
+    )
+    for line in ledger.read_text(encoding="utf-8").splitlines():
+        assert "served_model" not in json.loads(line)

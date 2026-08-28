@@ -731,6 +731,72 @@ class TestFallbackSpendContext:
         assert set(claude_hops) <= node_names
 
 
+class _ServedModelGrok(MockGrokClient):
+    """MockGrokClient whose response carried a vendor-resolved model id.
+
+    The real client stamps the response's `model` back onto the request's
+    spend_context dict (llm/client.py); this fake reproduces that write so the
+    graph-side forwarding can be tested without HTTP.
+    """
+
+    def __init__(self, served_model: str, **kwargs):
+        super().__init__(**kwargs)
+        self._served_model = served_model
+
+    def generate(self, prompt, **kwargs):
+        ctx = kwargs.get("spend_context")
+        if isinstance(ctx, dict):
+            ctx["served_model"] = self._served_model
+        return super().generate(prompt, **kwargs)
+
+
+class TestFallbackServedModel:
+    """Alias re-point visibility: the vendor-resolved id reaches state + audit
+    alongside the configured tag, never replacing it."""
+
+    def test_fallback_state_carries_served_model(self):
+        grok = _ServedModelGrok("grok-4.5-2026-08-01")
+        result = grok_fallback_node(
+            {"query": "q"},
+            grok=grok,
+            cfg={"policy": {"fallback": {"send_local_context_to_grok": False}}},
+        )
+        assert result["answer_model"] == "grok"
+        assert result["served_model"] == "grok-4.5-2026-08-01"
+
+    def test_audit_event_carries_both_configured_and_served_model(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        grok = _ServedModelGrok("grok-4.5-2026-08-01", response="Grok answer.")
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_LOW_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=grok,
+            cfg=cfg,
+        )
+        event = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+        })["audit_event"]
+        assert event["model_used"] == "grok"
+        assert event["llm_model"] == cfg["models"]["grok"]["model"]
+        assert event["served_model"] == "grok-4.5-2026-08-01"
+
+    def test_audit_event_omits_served_model_when_response_lacks_it(self, tmp_path):
+        cfg = _make_cfg(tmp_path, mode="hybrid", grok_enabled=True)
+        graph = build_graph(
+            retriever=MockRetriever(MOCK_LOW_SCORE_RESULTS),
+            llm=MockLocalLLM(),
+            grok=MockGrokClient(),
+            cfg=cfg,
+        )
+        event = graph.invoke({
+            "query": "Explain quantum physics basics",
+            "user_confirmed_online": True,
+        })["audit_event"]
+        assert event["model_used"] == "grok"
+        assert "served_model" not in event
+
+
 class TestGrokFallbackPrompt:
     """grok_fallback_node prompt structure when forwarding local context."""
 

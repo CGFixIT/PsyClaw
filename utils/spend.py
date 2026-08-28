@@ -50,6 +50,19 @@ _RATES: dict[str, dict[str, float]] = {
         "cache_creation_1h": 4.00,
         "cache_read": 0.20,
     },
+    # config.yaml's grok.model comment explicitly invites pinning grok-4.3 for
+    # cost/window; without this row every such line priced as rate_unknown.
+    # $1.25/$2.50 matches that comment; cached + ≥200k long band from
+    # https://docs.x.ai/developers/pricing (verified 2026-08-27).
+    "grok-4.3": {
+        "input": 1.25,
+        "output": 2.50,
+        "cached_input": 0.20,
+        "long_input": 2.50,
+        "long_cached_input": 0.40,
+        "long_output": 5.00,
+        "long_prompt_threshold": 200_000.0,
+    },
 }
 
 _TOKEN_KEYS = (
@@ -199,8 +212,15 @@ def record_external_usage(
     source: str = "query",
     query_hash: str | None = None,
     route_path: list[str] | None = None,
+    served_model: str | None = None,
 ) -> None:
-    """Append one JSON line. Write failures log WARNING and do not raise."""
+    """Append one JSON line. Write failures log WARNING and do not raise.
+
+    ``model`` is the configured tag sent in the request; ``served_model`` is the
+    vendor-resolved id echoed back in the response. Both are kept because an
+    unpinned alias (e.g. ``claude-sonnet-5``) can be re-pointed upstream, and
+    the ledger must show what actually served/billed alongside what was asked.
+    """
     normalized = _normalize_provider(provider)
     tokens = _tokens_for_provider(normalized, usage)
     record: dict[str, object] = {
@@ -217,6 +237,10 @@ def record_external_usage(
     hops = _normalized_route_path(route_path)
     if hops is not None:
         record["route_path"] = hops
+    # Additive optional field like query_hash/route_path: absent when the
+    # response carried no usable model id, so old readers see no shape change.
+    if isinstance(served_model, str) and served_model.strip():
+        record["served_model"] = served_model
     line = json.dumps(record) + "\n"
     path = _resolve_spend_path(spend_file)
     try:

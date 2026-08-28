@@ -150,6 +150,9 @@ class GraphState(TypedDict, total=False):
     # Model outputs
     answer: str
     answer_model: str  # "local" | "grok" | "claude" | "offline-best-effort" | "guardrail-blocked" | "hook-denied" | "external-unavailable"
+    # Vendor-resolved model id echoed in an external provider's response, when
+    # it sent one; can differ from the configured tag behind an unpinned alias.
+    served_model: str
     answer_sources: list[RetrievedDoc]
 
     # Guardrail (Phase 2 offline input rail; only set when a guard is configured)
@@ -733,11 +736,12 @@ def _external_fallback_node(
             "query": state.get("query", ""),
         })
 
+    spend_context = _fallback_spend_context(state, cfg, provider)
     answer, error = _generate_or_error(
         client,
         prompt,
         label=label,
-        spend_context=_fallback_spend_context(state, cfg, provider),
+        spend_context=spend_context,
         query=query,
         generate_guard=generate_guard,
     )
@@ -754,6 +758,12 @@ def _external_fallback_node(
         "answer_model": provider,
         "answer_sources": included_docs,
     }
+    # llm/client.py stamps the response's own vendor-resolved model id back onto
+    # this request's spend_context dict; forward it so the audit event shows what
+    # actually served next to the configured tag (llm_model).
+    served_model = spend_context.get("served_model")
+    if isinstance(served_model, str) and served_model.strip():
+        out["served_model"] = served_model
     if error is not None:
         out["error"] = error
     return out
@@ -950,6 +960,11 @@ def audit_logger_node(state: GraphState, cfg: dict,
     username = state.get("username")
     if username:
         event["username"] = username
+    # Vendor-resolved id from the provider's response (external fallbacks only);
+    # additive to llm_model, which stays the configured tag from config.yaml.
+    served_model = state.get("served_model")
+    if isinstance(served_model, str) and served_model:
+        event["served_model"] = served_model
 
     # Record to personality DB before audit_log so a failure is durable in the
     # JSONL event (personality_db_error), not only in process logs. The call is
