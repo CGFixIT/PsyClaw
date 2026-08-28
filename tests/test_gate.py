@@ -395,6 +395,24 @@ class TestCelMonitorRequestPath:
         assert records[0]["tool_name"] == "cel_monitor"
         assert records[0]["approval_reason"] == "cel_rules_matched:0"
 
+    def test_monitor_receives_answer_source_hashes_without_celpy(self, client):
+        # celpy-free complement to test_monitor_emits_on_real_source_hash (which
+        # importorskips celpy and therefore skips in CI): with numbat.cel.enabled
+        # true, the gate must read the graph result's answer_sources key and hand
+        # monitor_request the hash of the mock graph's "test.md:0" entry. The
+        # mock intercepts the call before monitor_request's lazy celpy import,
+        # so this runs without the optional dependency installed.
+        import gate
+        from utils.logger import hash_query
+
+        test_client, _ = client
+        gate.cfg["numbat"] = {"cel": {"enabled": True}}
+        with patch("gate.monitor_request") as mock_monitor:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+        assert resp.status_code == 200
+        mock_monitor.assert_called_once()
+        assert mock_monitor.call_args.kwargs["source_hashes"] == [hash_query("test.md:0")]
+
     def test_monitor_skipped_when_cel_disabled(self, client):
         # TEST_CONFIG carries no numbat block, so numbat.cel.enabled is false:
         # no hash_query and no monitor_request call on the request path.
