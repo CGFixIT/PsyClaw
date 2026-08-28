@@ -1,3 +1,9 @@
+once all already added fully optimized and documented, docker and the 3 (and cracker/vm?) security methods for that deployment option, guardrails default on and NeMo tuned, numbat tuned and would be cool to add alerting to web portal view for numbat, nemo, and falco maybe more like the tcpview and whatever mac offers for remote port that isnt the expected os or other vendor to internet (okay last thing but I did see chromadb on my windows sent a packet to chroma or someone I didnt look during chroma corpus index. it still has the critical vuln. and its i guess a real ai module for rag in 2026? that was the version when I was messing with this in like march so see if the other 2 acronyms on my website or just similar python local secure and fast rag corpus chunking methods (maybe just a really good index toc and files loose with qwen or a specialize model for that would be an option too
+
+from there see if real security peeps or third party evals or audits can be done and become an expert on 2-5 compliance standards to various degrees and one implemented in cyclaw to demonstrate how others could be implemented
+
+*is that eu ai bill relevant at all to america other than claude leaves watermarks? i guess if the company is global
+
 https://jytan.net/blog/2025/bpe/#version-3-parallel-pretokenization
 
 tiktoken
