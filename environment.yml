@@ -72,6 +72,22 @@ dependencies:
   # conda-forge currently carries 1.42.1 and 1.43.0 (checked 2026-07-29).
   - opentelemetry-exporter-otlp-proto-grpc>=1.42
   - sentence-transformers=5.6.0
+  # pytorch is sentence-transformers' hard transitive and is pinned explicitly
+  # here for the same reason constraints.txt pins torch==2.13.0+cpu: post-
+  # CVE-2025-32434 safety plus keeping the conda lane testing the same 2.13
+  # line the pip path ships. Left unpinned, the solver floats conda-forge's
+  # newest pytorch and the two install surfaces silently diverge. conda-forge
+  # names the package `pytorch` (not `torch`) and has no `+cpu` local tag; the
+  # `=cpu*` build glob forces the CPU-only builds (cpu_generic/cpu_mkl) over
+  # the multi-GB cuda12x/cuda13x variants, mirroring the +cpu intent (the cuda
+  # builds carry higher build numbers, so an unadorned version pin does NOT
+  # guarantee a CPU resolve). pytorch 2.13.0 cpu builds confirmed present on
+  # conda-forge for linux-64 py312 via the anaconda.org API, 2026-08-26; full
+  # solve not run locally (no conda/mamba on the dev box) -- exercised by the
+  # conda CI lane instead. dep-guard's D9 does not cross-check this pin against
+  # the torch manifest pin (package name differs) -- bump it by hand whenever
+  # constraints.txt's torch pin moves.
+  - pytorch=2.13.0=cpu*
   # huggingface_hub is imported directly by retrieval/embeddings.py (not just an
   # implicit sentence-transformers transitive) and is now pinned explicitly on
   # the pip path too (pyproject.toml/constraints.txt). Safe to mirror here
