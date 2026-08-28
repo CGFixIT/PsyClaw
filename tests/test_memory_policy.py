@@ -18,25 +18,25 @@ CFG = {
 
 def test_require_reason():
     require_reason("ok")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="reason must not be empty"):
         require_reason("")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="reason must not be empty"):
         require_reason("   \n")
 
 
 def test_size_cap():
     check_content_size("short", CFG)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="fact content exceeds max_content_chars"):
         check_content_size("x" * 100, CFG)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="fact content must not be empty"):
         check_content_size("  ", CFG)
 
 
 def test_tags():
     assert check_tags(["a", " b "]) == ["a", "b"]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="tag exceeds max length"):
         check_tags(["x" * 100])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="too many tags"):
         check_tags([f"t{i}" for i in range(40)])
 
 
