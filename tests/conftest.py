@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
-from fastapi.testclient import TestClient
 
 from retrieval.hybrid_search import SearchResult
 
@@ -220,6 +219,11 @@ def _mocked_gateway(tmp_path, *, peer=("127.0.0.1", 51234)):  # DevSkim: ignore 
     own loopback IP (127.0.0.0/8 is all loopback -- see
     gate._is_loopback_host).
     """
+    # Lazy: conftest must import cleanly in minimal-dep CI jobs (e.g.
+    # ollama-mock-smoke) that never install fastapi -- a top-level import
+    # broke collection there (exit 4) on the first push of this fixture.
+    from fastapi.testclient import TestClient
+
     from utils.logger import reset_config_cache
     reset_config_cache()
 
