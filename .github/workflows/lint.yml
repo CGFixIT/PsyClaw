@@ -31,6 +31,7 @@ name: Lint
 on:
   push:
     branches:
+      - 'main'
       - 'claude/**'
       - 'grok/**'
       - 'codex/**'
@@ -40,7 +41,9 @@ on:
 
 concurrency:
   group: lint-${{ github.ref }}
-  cancel-in-progress: true
+  # Pushes to main are exempt so main keeps a complete lint history, matching
+  # the scanner siblings (trivy.yml, semgrep.yml, ...).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read

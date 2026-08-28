@@ -1,18 +1,19 @@
 # .github/workflows/devskim.yml
 #
 # Static security scan with Microsoft DevSkim
-# Tailored for CGFixIT/CyClaw (Python project with Poetry)
+# Tailored for CGFixIT/CyClaw (Python project, hatchling/pyproject.toml)
 
 name: "DevSkim – CyClaw"
 
 on:
   push:
-    branches: [ "main", "dev", "release/**" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "dev", "release/**" ]
+    branches: [ "main" ]
   schedule:
     # Every Sunday at 03:11 UTC
     - cron: "11 3 * * 0"
+  workflow_dispatch:
 
 # Workflow-level grant stays read-only; the SARIF-upload permission is declared
 # per-job below. zizmor's excessive-permissions audit flags a workflow-level
@@ -88,12 +89,14 @@ jobs:
 
       # Upload SARIF to GitHub Security tab
       - name: Publish findings to Security tab
+        if: always()
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28  # v4
         with:
           sarif_file: devskim-results.sarif
 
       # Also keep the SARIF as a downloadable run artefact (optional)
       - name: Save SARIF artefact
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: devskim-results
