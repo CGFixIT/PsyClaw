@@ -147,9 +147,10 @@ The 29–34 figure should be treated as unverified until then.
    the local path would give 4,096 for, and Sonnet-5-generation tokenizers emit more
    tokens for the same text; raising is a per-call spend increase, so it stays an
    explicit operator decision.
-6. **Doc drift, cosmetic** — sandbox skill says "sections A–G" where `smoke.sh` emits A–F;
-   `config-guard` SKILL.md's table omits its own C13; `--strict` cannot pass on the
-   deliberately-armed hybrid posture (C9) yet is offered as a merge gate.
+6. **Doc drift, cosmetic** — `config-guard` SKILL.md's rule table omits its own C13;
+   `--strict` cannot pass on the deliberately-armed hybrid posture (C9) yet is offered
+   as a merge gate. (A suspected "A–G vs A–F" smoke.sh drift did not survive a live
+   run — the suite does emit section G.)
 7. **`harness/ollama.py` 300 s fallback default** vs core 720 s applies only when
    `models.local_llm.timeout_sec` is absent from config (shipped config sets it, so the
    harness runs 720 s today); aligning the fallback constant is a one-liner when touched next.
@@ -163,15 +164,39 @@ The 29–34 figure should be treated as unverified until then.
 - `ruff check --select E,F,I,B,C4,UP,S .` (pinned 0.16.1) — clean.
 - `mypy --strict` on the touched modules — no errors in touched files (pre-existing
   legacy-module errors documented in `CLAUDE.md` §4 unchanged).
-- Full `pytest tests/` with CI coverage flags, `smoke.sh` (sections A–F against a live
-  gate), console HTTP emulations, and a Playwright-rendered browser pass over both
-  consoles: results recorded below.
-- Known environment-caused failure on unmodified main in this container:
-  `tests/test_fsconnect_quota.py::test_quota_recompute_fail_closed_on_unreadable_root`
-  fails **as root** (an unreadable root is still readable by root); passes in CI's
-  non-root runner. Not introduced by this change.
-
-<!-- VALIDATION-RESULTS -->
+- Full `pytest tests/` with the CI coverage flags: **TOTAL coverage 89%** (gate: 80).
+  Exactly one failing test across the full suite:
+  `tests/test_fsconnect_quota.py::test_quota_recompute_fail_closed_on_unreadable_root`,
+  which fails **as root on unmodified main too** (an unreadable root is still readable
+  by root; CI's non-root runner passes it). Not introduced by this change.
+- `smoke.sh` (Ladder D, sections A–G against a live gate it managed itself):
+  **all checks passed (10 passed, 3 skipped — Postgres, no DSN)**.
+- `run_full_verification.py` (Ladder B, 11 phases, `CYCLAW_REPO` pointed at a scratch
+  copy of this tree, realism Tier 2 — it detected and used the live mock daemon):
+  venv run **222/225**; the 3 failures all carry the identical
+  `cannot import name 'Settings' from 'chromadb.config'` error — the stub-collision
+  artifact the skill itself documents for partially-real-deps venvs. A bare-interpreter
+  cross-run failed only on genuinely absent third-party modules. Both runs: RAG
+  pipeline (5 live queries), both triple gates, due-diligence invariants, REST surface,
+  and both HTML contracts **PASS**; Security Invariants **24/24**.
+- The one check green in neither mode (`anthropic_key_sanitized`) was proven directly
+  against the real module, no stubs: with `GROK_API_KEY`/`ANTHROPIC_API_KEY` set to
+  realistic values, `gate._sanitize_error` redacted both (`_SECRET_PATTERNS` also
+  carries dedicated `sk-ant-` and `xai-` shapes).
+- Console lifecycle emulations against the live stack (gate :8787 + harness :8790 +
+  Tier-1 mock Ollama :11434): `terminal_emulation.py` **PASSED**, `harness_emulation.py`
+  **PASSED** (all endpoint flows matched).
+- Playwright browser lane (pre-installed Chromium, desktop 1440×1000 + mobile 390×844,
+  pageerror/console/requestfailed listeners, full-page screenshots): both consoles
+  rendered with **zero page errors**; the terminal completed a real `/query` round-trip
+  through the actual DOM (type → send → rendered answer from the live graph);
+  `page.evaluate` confirmed the live page carries `queryDeadlineMs = 790,000 =
+  (graph_timeout_sec 780 + 10) × 1000` and the harness page carries
+  `AGENT_RUN_TIMEOUT_MS = 3,630,000` / `AGENT_CLI_TIMEOUT_MS = 130,000` with the
+  4-parameter `api()`. Console noise was exactly the documented-expected pair
+  (auth-off 503 + favicon 404) plus two **pre-existing** findings already on file in
+  `docs/audits/2026-08-27-auth-memory-console-harness-review.md`: F-01 (harness never
+  serves `/static/auth_admin.js`) and F-02 (harness CSP) — both out of this change's scope.
 
 ## On-Mac runbook (the empirical half — cannot run from this container)
 
