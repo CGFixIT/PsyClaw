@@ -8,6 +8,7 @@ Subcommands:
     stat     Stat a path under a read root.
     grep     Search a file for a pattern (--pattern [--regex]).
     glob     Find files matching a glob under a read root (--pattern [--no-recursive]).
+    largest  Rank the largest files under a read root (--top [--min-bytes]).
     write    Write a file in a writable root (gated; --reason; --overwrite/--confirm).
     append   Append to a file in a writable root (gated; --reason).
     mkdir    Make a directory in a writable root (gated; --reason).
@@ -126,6 +127,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("allow_unc_roots", fc.allow_unc_roots)
     _kv("allow_macos_volume_roots", fc.allow_macos_volume_roots)
     _kv("max_file_bytes", fc.max_file_bytes)
+    _kv("largest_max_entries", fc.largest_max_entries)
     _kv("writes_enabled", fc.writes_enabled)
     _kv("writable_roots", ", ".join(fc.write_root_strs) or "(none)")
     _kv("require_confirm_destructive", fc.require_confirm_destructive)
@@ -150,6 +152,8 @@ def _run_read(args: argparse.Namespace, op: str) -> int:
             pattern=getattr(args, "pattern", None),
             regex=getattr(args, "regex", False),
             recursive=getattr(args, "recursive", True),
+            top=getattr(args, "top", 20),
+            min_bytes=getattr(args, "min_bytes", 0),
         )
     except FsConnectError as exc:
         _err(exc.message)
@@ -176,6 +180,10 @@ def cmd_grep(args: argparse.Namespace) -> int:
 
 def cmd_glob(args: argparse.Namespace) -> int:
     return _run_read(args, "fs_glob")
+
+
+def cmd_largest(args: argparse.Namespace) -> int:
+    return _run_read(args, "fs_largest")
 
 
 def _run_write(args: argparse.Namespace, op: str) -> int:
@@ -519,6 +527,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_glob.add_argument("--no-recursive", action="store_false", dest="recursive",
                         help="Search only the immediate directory, not subdirectories.")
     p_glob.set_defaults(func=cmd_glob, recursive=True)
+
+    p_largest = sub.add_parser("largest", help="Rank the largest files under a read root.")
+    p_largest.add_argument("--root", help="Which read root (required if multiple).")
+    p_largest.add_argument("--path", default="", help="Directory to search under (default: root).")
+    p_largest.add_argument("--top", type=int, default=20, help="Number of files to return (default: 20).")
+    p_largest.add_argument(
+        "--min-bytes", type=int, default=0,
+        help="Ignore files smaller than this many bytes (default: 0).",
+    )
+    p_largest.set_defaults(func=cmd_largest)
 
     for name, func in (("write", cmd_write), ("append", cmd_append)):
         p = sub.add_parser(name, help=f"{name.capitalize()} a file in a writable root (gated).")

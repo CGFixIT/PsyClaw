@@ -15,6 +15,7 @@ Never imported by gate.py / graph.py / mcp_hybrid_server.py.
 from __future__ import annotations
 
 import fnmatch
+import heapq
 import re
 
 from agentic.fsconnect.config import FsConnectConfig
@@ -248,6 +249,90 @@ class FsClient:
         return {"op": "fs_glob", "path": target or ".", "pattern": pattern,
                 "recursive": recursive, "match_count": len(matches),
                 "truncated": truncated, "matches": matches}
+
+    def fs_largest(
+        self,
+        target: str = "",
+        *,
+        root: str | None = None,
+        top: int = 20,
+        min_bytes: int = 0,
+    ) -> dict:
+        """Return the largest regular files under *target*, bounded by config.
+
+        Traversal deliberately reuses ``ScopedRoots.list_dir`` rather than the
+        quota walk. The quota helper is accounting-only and path-string based;
+        list_dir preserves the connector's held-fd/handle containment on every
+        platform and never follows a symlink or Windows reparse point.
+        """
+        self._guard_op("fs_largest")
+        if not isinstance(top, int) or isinstance(top, bool) or top <= 0:
+            raise FsConnectError(
+                "fs_largest top must be a positive integer",
+                code="FSCONNECT_BAD_ARG",
+                details={"top": top},
+            )
+        if top > self.fs_cfg.largest_max_entries:
+            raise FsConnectError(
+                "fs_largest top exceeds largest_max_entries",
+                code="FSCONNECT_BAD_ARG",
+                details={"top": top, "largest_max_entries": self.fs_cfg.largest_max_entries},
+            )
+        if not isinstance(min_bytes, int) or isinstance(min_bytes, bool) or min_bytes < 0:
+            raise FsConnectError(
+                "fs_largest min_bytes must be a non-negative integer",
+                code="FSCONNECT_BAD_ARG",
+                details={"min_bytes": min_bytes},
+            )
+
+        ranked: list[tuple[int, str, float]] = []
+        stack = [target]
+        scanned_entries = 0
+        truncated = False
+        while stack and not truncated:
+            rel = stack.pop()
+            for entry in self._roots.list_dir(rel, root=root, skip_macos_metadata=True):
+                if scanned_entries >= self.fs_cfg.largest_max_entries:
+                    truncated = True
+                    break
+                scanned_entries += 1
+                name = str(entry["name"])
+                child = f"{rel}/{name}" if rel else name
+                if entry["type"] == "dir":
+                    stack.append(child)
+                    continue
+                if entry["type"] != "file":
+                    continue
+                size = int(entry.get("size", 0))
+                if size < min_bytes:
+                    continue
+                candidate = (size, child, float(entry.get("mtime", 0.0)))
+                if len(ranked) < top:
+                    heapq.heappush(ranked, candidate)
+                elif candidate > ranked[0]:
+                    heapq.heapreplace(ranked, candidate)
+
+        entries = [
+            {"path": path, "bytes": size, "mtime": mtime}
+            for size, path, mtime in sorted(ranked, key=lambda item: (-item[0], item[1]))
+        ]
+        self._audit({
+            "event": "fsconnect_read",
+            "op": "fs_largest",
+            "path": target or ".",
+            "scanned_entries": scanned_entries,
+            "result_count": len(entries),
+            "truncated": truncated,
+        })
+        return {
+            "op": "fs_largest",
+            "path": target or ".",
+            "top": top,
+            "min_bytes": min_bytes,
+            "scanned_entries": scanned_entries,
+            "truncated": truncated,
+            "entries": entries,
+        }
 
 
 __all__ = ["FsClient", "build_injection_patterns"]
