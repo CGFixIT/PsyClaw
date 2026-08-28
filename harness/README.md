@@ -1,3 +1,5 @@
+## https://github.com/cgfixit/CyClaw/blob/main/harness/prompts.py - give it good output voice
+
 # `harness/` — CyClaw coding console
 
 Out-of-band slash-command console and small FastAPI control plane. Separate
