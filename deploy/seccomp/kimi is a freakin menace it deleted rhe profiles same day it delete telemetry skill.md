@@ -1,0 +1,1 @@
+restore next time at computer and rememeber this - create a agent or readme at kini local projec troot snd limit vis githuv agents file and ideally permissions to not change things in critical files or certsin folders it would rarely touch for a legit reason (clean up that folder too codex works way better after you cleaned up all that stake crap and creayed new project folder 
