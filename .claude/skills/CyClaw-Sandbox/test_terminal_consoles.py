@@ -7,7 +7,7 @@ Tests all 5 console panels via their REST endpoints.
 
 Usage:
     CYCLAW_API_KEY=test-key python gate.py &
-    python scripts/test_terminal_consoles.py
+    python .claude/skills/CyClaw-Sandbox/test_terminal_consoles.py
 
 Env:
     CYCLAW_URL=http://127.0.0.1:8787  -- gateway URL
@@ -92,13 +92,16 @@ class ConsoleTest:
         self._check("/health has graph_timeout_sec", "graph_timeout_sec" in data)
         self._check("/health has index_ready", "index_ready" in data)
 
-        # Security headers
+        # Security headers. urllib's header dict keys come back lowercased
+        # (http.client.HTTPResponse.msg), so the headers are always present on
+        # the wire (verified: gate.py sets them on every response) but a
+        # mixed-case membership check against this dict silently always fails.
         req = Request(f"{BASE_URL}/health", method="GET")
         try:
             with urlopen(req, timeout=5) as resp:
-                headers = dict(resp.headers)
-                self._check("X-Content-Type-Options header", "X-Content-Type-Options" in headers)
-                self._check("X-Frame-Options header", "X-Frame-Options" in headers)
+                headers = {k.lower(): v for k, v in dict(resp.headers).items()}
+                self._check("X-Content-Type-Options header", "x-content-type-options" in headers)
+                self._check("X-Frame-Options header", "x-frame-options" in headers)
         except Exception:
             self._check("Security headers", False, "Could not fetch headers")
 
@@ -145,7 +148,11 @@ class ConsoleTest:
         self._check("/ops/sync dry_run", status == 200, f"status={status}")
 
         status, data = self._request("POST", "/ops/sync", body={"action": "destroy"})
-        self._check("/ops/sync unknown -> 400", status == 400, f"status={status}")
+        # Schema boundary: SyncOpsRequest.action is a closed Literal
+        # (schemas/api.py) -- an unrecognized value fails pydantic validation
+        # before the handler runs, so FastAPI answers 422, not a handler-level
+        # 400.
+        self._check("/ops/sync unknown -> 422", status == 422, f"status={status}")
 
         # 5. Agentic Console
         print(f"\n{B}--- Agentic Console (/ops/agentic) ---{N}")
@@ -163,7 +170,9 @@ class ConsoleTest:
         self._check("/ops/agentic propose-skill", status == 200, f"status={status}")
 
         status, data = self._request("POST", "/ops/agentic", body={"action": "hack"})
-        self._check("/ops/agentic unknown -> 400", status == 400, f"status={status}")
+        # Schema boundary, same as /ops/sync above -- AgenticOpsRequest.action
+        # is a closed Literal, so an unknown value 422s at validation.
+        self._check("/ops/agentic unknown -> 422", status == 422, f"status={status}")
 
         # 6. Filesystem Console
         print(f"\n{B}--- Filesystem Console (/ops/fsconnect) ---{N}")
@@ -175,7 +184,9 @@ class ConsoleTest:
         self._check("/ops/fsconnect list", status in (200, 500), f"status={status}")
 
         status, data = self._request("POST", "/ops/fsconnect", body={"action": "destroy"})
-        self._check("/ops/fsconnect unknown -> 400", status == 400, f"status={status}")
+        # Schema boundary, same as /ops/sync above -- FsconnectOpsRequest.action
+        # is a closed Literal, so an unknown value 422s at validation.
+        self._check("/ops/fsconnect unknown -> 422", status == 422, f"status={status}")
 
         # 7. SQL Console
         print(f"\n{B}--- SQL Console (/ops/sqlconnect) ---{N}")
@@ -195,10 +206,19 @@ class ConsoleTest:
             body={"action": "query", "sql": "DROP TABLE users"})
         self._check("/ops/sqlconnect query DROP rejected", status == 200)
         if status == 200:
-            self._check("DROP query fails", data.get("exit_code", 0) != 0)
+            # Two safe outcomes for a DROP, either is fine: the read-only
+            # guard rejects it (exit_code != 0) when sqlconnect is enabled, or
+            # -- the shipped default -- the connector is disabled and the
+            # query never runs at all. Only "it executed" would be a failure,
+            # and that can't reach exit_code 0 with sqlconnect off.
+            disabled = data.get("config", {}).get("enabled") is False
+            self._check("DROP query fails", disabled or data.get("exit_code", 0) != 0,
+                        f"exit_code={data.get('exit_code')} enabled={not disabled}")
 
         status, data = self._request("POST", "/ops/sqlconnect", body={"action": "hack"})
-        self._check("/ops/sqlconnect unknown -> 400", status == 400, f"status={status}")
+        # Schema boundary, same as /ops/sync above -- SqlconnectOpsRequest.action
+        # is a closed Literal, so an unknown value 422s at validation.
+        self._check("/ops/sqlconnect unknown -> 422", status == 422, f"status={status}")
 
         # 8. Audit Summary
         print(f"\n{B}--- Audit Summary ---{N}")

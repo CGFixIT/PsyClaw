@@ -52,10 +52,20 @@ def main() -> int:
     all_set = bool(kill) and all(os.environ.get(k) == v for k, v in kill.items())
     check("telemetry-kill env vars active", all_set, f"{len(kill)} keys")
 
-    # 4. Expected endpoints are registered.
+    # 4. Expected endpoints are registered. Subset check -- gate_ops.py,
+    # gate_auth.py and gate_memory.py register onto this same app (see
+    # gate.py's register_*_routes() calls), so a new route added to any of
+    # them is silently uncovered here until it's listed, same convention as
+    # harness_runtime_check.py's own comment on this exact pattern.
     routes = {getattr(r, "path", None) for r in getattr(app, "routes", [])}
-    expected = {"/health", "/query", "/soul", "/soul/propose", "/soul/apply",
-                "/soul/reload", "/"}
+    expected = {
+        "/health", "/query", "/soul", "/soul/propose", "/soul/apply",
+        "/soul/reload", "/",
+        "/index/build", "/index/status",
+        "/ops/sync", "/ops/agentic", "/ops/fsconnect", "/ops/sqlconnect",
+        "/auth/setup-status", "/auth/login",
+        "/memory/status",
+    }
     missing = expected - routes
     check("expected endpoints registered", not missing,
           f"{len(routes)} routes, missing={sorted(missing) or 'none'}")

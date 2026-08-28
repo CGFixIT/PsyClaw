@@ -72,6 +72,17 @@ def main() -> int:
     all_set = bool(TELEMETRY_KILL) and all(os.environ.get(k) == v for k, v in TELEMETRY_KILL.items())
     check("telemetry-kill env vars active", all_set, f"{len(TELEMETRY_KILL)} keys")
 
+    # 3b. Named-capability ToolBroker gate (issue #1134) importable. This is
+    # presence-only: harness/server.py now calls assert_allowed() in front of
+    # /loop turns and POST /api/agent/run, but forcing a real denial needs
+    # monkeypatching the broker's allowlist (its own code comment: "empty
+    # deny is monkeypatched in tests") -- out of scope for an import-time check.
+    try:
+        from utils.tool_broker import ToolDenied, assert_allowed
+        check("utils.tool_broker.assert_allowed/ToolDenied import", True)
+    except Exception as exc:  # noqa: BLE001 -- surface any import error verbatim
+        check("utils.tool_broker.assert_allowed/ToolDenied import", False, repr(exc))
+
     # 4. Expected endpoints are registered.
     routes = {getattr(r, "path", None) for r in getattr(app, "routes", [])}
     expected = {
@@ -88,6 +99,10 @@ def main() -> int:
         # never a failure here -- it is silently uncovered until it is listed.
         "/api/agent/checks", "/api/agent/run",
         "/api/agent/runs/{run_id}", "/api/agent/runs/{run_id}/decision",
+        "/api/agent/runs/{run_id}/push", "/api/agent/runs/{run_id}/publish",
+        "/api/agent/runs/{run_id}/discard",
+        "/api/keys",
+        "/api/auth/setup-status", "/api/auth/login",
     }
     missing = expected - routes
     check(

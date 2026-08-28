@@ -6,26 +6,43 @@ Runs in sandbox mode (no external dependencies needed) or full-dependency mode.
 Executes 5 queries covering: vault hit x2, offline best-effort (Qwen),
 Grok API connection-only, Claude API connection-only.
 
+Runs 11 phases (Phase 1 Config & Security Invariants ... Phase 11 Harness HTML
+Contract) totalling ~189 checks; each phase prints its own PASS/FAIL tally and
+the final report is never hand-counted here -- see verification_report.json.
+
 Verifies:
-  1. LangGraph pipeline (5 queries through real node functions)
-  2. Triple-gate online API fallback (Grok + Claude) with mocked HTTP
-  3. API key redaction parity (Anthropic keys redacted same as Grok)
-  4. _external_fallback_node shared implementation
-  5. All 5 terminal console REST endpoints (soul, sync, agentic, fs, sql)
-  6. Due-diligence invariants (unwired require_user_confirm, module isolation)
-  7. Terminal HTML contract (5 panels, explicit provider buttons)
-  8. Harness console REST API (status, registry, sessions, soul/model
-     toggles, chat, GitHub status, harness runs) via a real FastAPI
-     TestClient -- plus rate-limit, auto-docs-disabled, and DNS-rebinding
-     checks against the live app object
-  9. Harness HTML contract (panes, API endpoints, slash commands, and an
-     XSS-safety check that the console never uses innerHTML)
+  1. Config & security invariants (config.yaml contract, static read)
+  2. Telemetry kill canonical maps (utils.telemetry_kill, not a gate.py grep)
+  3. Mock corpus + BM25/Chroma index build (retrieval.stemmer.tokenize_and_stem)
+  4. LangGraph pipeline (5 queries through real node functions)
+  5. Triple-gate online API fallback (Grok + Claude) with mocked HTTP
+  6. API key redaction parity (Anthropic keys redacted same as Grok)
+  7. Metrics escalation + due-diligence invariants (unwired
+     require_user_confirm, module isolation, RAG-first entry point)
+  8. Terminal + harness REST endpoint registration (gate.py + gate_ops.py +
+     gate_auth.py + gate_memory.py; SQL read-only guards; security headers)
+  9. Terminal console contract (terminal.html + terminal.js combined source --
+     panels, provider buttons, all 4 slash commands, REST endpoint calls)
+  10. Harness console REST API (status, registry, tools/skills wiring,
+      sessions, soul/model toggles, /api/keys, chat, GitHub status, harness
+      runs, agent routes) via a real FastAPI TestClient -- plus rate-limit,
+      auto-docs-disabled, and DNS-rebinding checks against the live app object
+  11. Harness HTML contract (panes, API endpoints, the full slash-command
+      palette derived from harness.html's own COMMANDS array, XSS safety)
 
 Usage:
     python3 .claude/skills/CyClaw-Sandbox/run_full_verification.py
 
 Env:
-    CYCLAW_REPO=/path/to/CyClaw  -- use existing clone instead of fresh
+    CYCLAW_REPO=/path/to/CyClaw  -- use existing clone instead of fresh.
+                                    NOTE: if this checkout is NOT a scratch
+                                    clone, the run still writes
+                                    data/corpus/*.md, index/bm25.json,
+                                    query_results.json and
+                                    verification_report.json into it (Phase 3
+                                    onward) -- point this at a throwaway
+                                    clone, not a working tree, unless you
+                                    intend those writes.
     FULL_DEPS=1                  -- attempt full dependency install first
 """
 from __future__ import annotations
@@ -35,6 +52,7 @@ import json
 import math
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -288,7 +306,20 @@ def banner(msg: str):
 
 
 def _ensure_repo():
-    if CYCLAW_DIR.exists() and (CYCLAW_DIR / ".git").exists():
+    # An operator-supplied CYCLAW_REPO is used AS-IS -- no checkout/pull. This
+    # script writes into CYCLAW_DIR from Phase 3 onward (mock corpus, BM25
+    # index, query_results.json, verification_report.json); silently switching
+    # branches or pulling on a directory the caller pointed us at on purpose
+    # (a real working tree, not a scratch clone) would be a surprise mutation
+    # of state they didn't ask for. Unset CYCLAW_REPO (the default) still gets
+    # the original clone-to-/tmp/CyClaw behavior untouched.
+    if os.environ.get("CYCLAW_REPO"):
+        log(f"CYCLAW_REPO set -- using {CYCLAW_DIR} as-is (no checkout/pull)", Y)
+        log(f"  This run WILL write data/corpus/*.md, index/bm25.json, "
+            f"query_results.json and verification_report.json into it.", Y)
+        if not (CYCLAW_DIR / ".git").exists():
+            log(f"  WARNING: {CYCLAW_DIR} does not look like a git checkout", Y)
+    elif CYCLAW_DIR.exists() and (CYCLAW_DIR / ".git").exists():
         log(f"Using existing repo: {CYCLAW_DIR}")
         subprocess.run(["git", "checkout", BRANCH], cwd=CYCLAW_DIR, capture_output=True)
         subprocess.run(["git", "pull"], cwd=CYCLAW_DIR, capture_output=True)
@@ -354,7 +385,7 @@ def phase_config_invariants() -> PhaseResult:
         ("claude block present", "claude" in cfg.get("models", {})),
         ("claude.enabled == true", cfg.get("models", {}).get("claude", {}).get("enabled") is True),
         ("retrieval.min_score == 0.028", abs(cfg.get("retrieval", {}).get("min_score", 0) - 0.028) < 0.001),
-        ("33 banned patterns", len(cfg.get("policy", {}).get("prompt_filter", {}).get("banned_patterns", [])) >= 33),
+        (">=40 banned patterns", len(cfg.get("policy", {}).get("prompt_filter", {}).get("banned_patterns", [])) >= 40),
         ("fsconnect block present", "fsconnect" in cfg),
         ("fsconnect.enabled == false", cfg.get("fsconnect", {}).get("enabled") is False),
         ("fsconnect.allow_macos_volume_roots == false",
@@ -394,7 +425,12 @@ def phase_telemetry_kill() -> PhaseResult:
     banner("Phase 2: Telemetry Kill Verification")
     phase = PhaseResult("Telemetry Kill")
 
-    gate_src = Path("gate.py").read_text()
+    # The canonical source of truth is utils/telemetry_kill.py's three maps
+    # (issue #1135) -- checking for literal names in gate.py's source text
+    # is a lie the moment a name is added/renamed there and gate.py itself
+    # only ever imports apply_telemetry_kill(). One gate.py grep is kept
+    # below for the G1 wiring anchor, which IS load-bearing text.
+    from utils.telemetry_kill import SCRUBBED_ENV_KEYS, TELEMETRY_KILL, UPDATE_CHECK_OPT_OUT
 
     kill_vars = [
         "LANGCHAIN_TRACING_V2",
@@ -410,10 +446,27 @@ def phase_telemetry_kill() -> PhaseResult:
     ]
 
     for var in kill_vars:
-        found = var in gate_src
+        found = var in TELEMETRY_KILL
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
-        log(f"  [{status}] {var} killed at import")
+        log(f"  [{status}] {var} is a TELEMETRY_KILL key")
         phase.checks.append(Check(f"telemetry_kill_{var}", found))
+
+    for label, mapping, floor in (
+        ("TELEMETRY_KILL", TELEMETRY_KILL, 21),
+        ("UPDATE_CHECK_OPT_OUT", UPDATE_CHECK_OPT_OUT, 4),
+        ("SCRUBBED_ENV_KEYS", SCRUBBED_ENV_KEYS, 7),
+    ):
+        ok = len(mapping) >= floor
+        log(f"  [{'PASS' if ok else 'FAIL'}] {label} has >={floor} entries ({len(mapping)})")
+        phase.checks.append(Check(f"telemetry_kill_size_{label}", ok))
+
+    # The G1 ordering anchor invariant-guard checks by AST: gate.py must bind
+    # this name before its heavy imports. A text grep here is a coarse but
+    # useful early warning if that binding vanishes entirely.
+    gate_src = Path("gate.py").read_text()
+    has_anchor = "_TELEMETRY_KILL = apply_telemetry_kill()" in gate_src
+    log(f"  [{'PASS' if has_anchor else 'FAIL'}] gate.py's G1 anchor line present")
+    phase.checks.append(Check("telemetry_kill_g1_anchor", has_anchor))
 
     return phase
 
@@ -476,17 +529,19 @@ def phase_build_corpus() -> PhaseResult:
 
     # Build BM25 index
     try:
-        from retrieval.stemmer import PorterStemmer
         from rank_bm25 import BM25Okapi
-        stemmer = PorterStemmer()
+        from retrieval.stemmer import tokenize_and_stem
 
         chunks = []
         tokenized = []
         for fname in files:
             text = (corpus_dir / fname).read_text()
             chunks.append({"text": text, "source": fname, "id": len(chunks)})
-            tokens = [stemmer.stem(w) for w in text.lower().split()]
-            tokenized.append(tokens)
+            # Same call retrieval/indexer.py and retrieval/hybrid_search.py make
+            # when tokenizing real corpus/query text -- PorterStemmer is not a
+            # public symbol here (removed), and hand-stemming would tokenize
+            # this mock index differently from how a real query is tokenized.
+            tokenized.append(tokenize_and_stem(text))
 
         import json
         index_dir = Path("index")
@@ -850,13 +905,14 @@ def phase_key_redaction() -> PhaseResult:
         log(f"  {Y}SKIP{N}] _sanitize_error not importable: {e}")
         phase.checks.append(Check("anthropic_key_sanitized", False, str(e)))
 
-    # Verify in config.yaml
+    # Verify in config.yaml -- policy.privacy, not logging.audit (Phase 1's
+    # check at "privacy redact sk-ant-* pattern" reads the same, correct path).
     import yaml
     with open("config.yaml") as f:
         cfg = yaml.safe_load(f)
-    redact_patterns = cfg.get("logging", {}).get("audit", {}).get("redact_secrets_like", [])
+    redact_patterns = cfg.get("policy", {}).get("privacy", {}).get("redact_secrets_like", [])
     has_sk_ant_config = any("sk-ant" in str(p) for p in redact_patterns)
-    log(f"  [{'PASS' if has_sk_ant_config else 'FAIL'}] sk-ant-* in config.yaml audit redact")
+    log(f"  [{'PASS' if has_sk_ant_config else 'FAIL'}] sk-ant-* in config.yaml policy.privacy redact")
     phase.checks.append(Check("sk_ant_in_config_redact", has_sk_ant_config))
 
     return phase
@@ -941,12 +997,26 @@ def phase_terminal_consoles() -> PhaseResult:
     banner("Phase 8: Terminal Console REST API Verification")
     phase = PhaseResult("Terminal Consoles")
 
-    gate_src = Path("gate.py").read_text()
+    # gate.py registers its own core routes directly, but /ops/* live in
+    # gate_ops.py, /auth/* in gate_auth.py, and /memory/* + the export route
+    # in gate_memory.py (register_*_routes() calls in gate.py wire them onto
+    # the same app) -- a gate.py-only grep silently "loses" every route that
+    # moved out during that split. Concatenating the four files' source stays
+    # in this script's existing style (every other phase here is static-text
+    # analysis; Phase 10 is deliberately the only one that live-imports an
+    # app, and only harness.server's, which -- unlike gate.py -- has none of
+    # the heavy retrieval/graph dependencies this sandbox stubs).
+    gate_src = "\n".join(
+        Path(f).read_text()
+        for f in ("gate.py", "gate_ops.py", "gate_auth.py", "gate_memory.py")
+        if Path(f).exists()
+    )
 
-    # Verify all 12 endpoints
     endpoints = [
         ("/health", "GET"),
         ("/query", "POST"),
+        ("/index/build", "POST"),
+        ("/index/status", "GET"),
         ("/soul", "GET"),
         ("/soul/propose", "POST"),
         ("/soul/apply", "POST"),
@@ -957,9 +1027,14 @@ def phase_terminal_consoles() -> PhaseResult:
         ("/ops/agentic", "POST"),
         ("/ops/fsconnect", "POST"),
         ("/ops/sqlconnect", "POST"),
+        ("/auth/setup-status", "GET"),
+        ("/auth/login", "POST"),
+        ("/auth/whoami", "GET"),
+        ("/memory/status", "GET"),
+        ("/query/export/html", "GET"),
     ]
 
-    log("\n  --- Endpoint Registration ---")
+    log("\n  --- Endpoint Registration (gate.py + gate_ops.py + gate_auth.py + gate_memory.py) ---")
     for path, method in endpoints:
         found = f'"{path}"' in gate_src or f"'{path}'" in gate_src
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
@@ -1037,7 +1112,15 @@ def phase_terminal_html() -> PhaseResult:
     banner("Phase 9: Terminal HTML Console Contract")
     phase = PhaseResult("Terminal HTML Contract")
 
-    html = Path("static/terminal.html").read_text()
+    # terminal.html's own console logic (the CSP forces script-src 'self')
+    # lives in the sibling static/terminal.js -- reading terminal.html alone
+    # misses everything that moved, matching tests/test_terminal_contract.py's
+    # own _console_source() combined-read.
+    html = (
+        Path("static/terminal.html").read_text()
+        + "\n"
+        + Path("static/terminal.js").read_text()
+    )
 
     # All 5 console panels
     log("\n  --- Console Panels ---")
@@ -1054,13 +1137,16 @@ def phase_terminal_html() -> PhaseResult:
         log(f"    [{status}] {name}")
         phase.checks.append(Check(f"panel_{name.lower().replace(' ', '_')}", passed))
 
-    # Online provider buttons (PR#441 explicit buttons)
+    # Online provider buttons (PR#441 explicit buttons). handleConfirm() is
+    # now one generic function taking a provider argument (terminal.js), not
+    # two literal per-provider call sites -- the per-button wiring is the
+    # addEventListener call passing its own `provider` closure variable.
     log("\n  --- Online Provider Buttons ---")
     for name, found in [
         ("grok_button_text", "Send to Grok" in html),
         ("claude_button_text", "Send to Claude" in html),
-        ("grok_handler_explicit", "handleConfirm(true, id, 'grok')" in html),
-        ("claude_handler_explicit", "handleConfirm(true, id, 'claude')" in html),
+        ("handle_confirm_generic", "handleConfirm(true, id, provider)" in html),
+        ("handle_confirm_signature", "function handleConfirm(confirmed, entryId, onlineProvider" in html),
         ("provider_in_request_body", "body.online_provider = onlineProvider" in html),
         ("provider_label_display", "${providerLabel}" in html),
         ("confirm_offline_option", "Choose Offline" in html or "offline" in html.lower()),
@@ -1068,6 +1154,15 @@ def phase_terminal_html() -> PhaseResult:
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
         log(f"    [{status}] {name}")
         phase.checks.append(Check(f"terminal_{name}", found))
+
+    # All four terminal slash commands (only /users, /admin, /audit, /help --
+    # Soul/Sync/Agentic/FS/SQL are Advanced toolbar buttons, not commands).
+    log("\n  --- Slash Commands ---")
+    for cmd in ("/users", "/admin", "/audit", "/help"):
+        found = f"'{cmd}'" in html or f'"{cmd}"' in html
+        status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
+        log(f"    [{status}] {cmd}")
+        phase.checks.append(Check(f"terminal_cmd_{cmd.lstrip('/')}", found))
 
     # API endpoint calls
     log("\n  --- Console API Endpoints ---")
@@ -1279,8 +1374,25 @@ def phase_harness_console() -> PhaseResult:
     phase.checks.append(Check("harness_soul_toggle_flips", flipped == (not before)))
     client.post("/api/soul", json={"enabled": before})  # restore
 
-    r = client.post("/api/model", json={"model": "llama3.1:8b"})
-    phase.checks.append(Check("harness_model_select", r.json().get("model") == "llama3.1:8b"))
+    # /api/model stores whatever string is posted (model_select() does not
+    # validate against a registry) -- use the shipped local model tag rather
+    # than an unrelated literal, matching harness_emulation.py's own check.
+    r = client.post("/api/model", json={"model": "qwen3.8:27b-mlx"})
+    phase.checks.append(Check("harness_model_select", r.json().get("model") == "qwen3.8:27b-mlx"))
+
+    log("  --- API keys panel (/api set) ---")
+    r = client.get("/api/keys")
+    phase.checks.append(Check("harness_keys_200", r.status_code == 200))
+    keys_payload = r.json() if r.status_code == 200 else {}
+    phase.checks.append(Check(
+        "harness_keys_shape", "keys" in keys_payload and "env_file" in keys_payload,
+    ))
+    # The one secret value this process actually holds (the Bearer key this
+    # very phase authenticates with) must never round-trip in the response --
+    # a direct leak check, not a length heuristic.
+    phase.checks.append(Check(
+        "harness_keys_no_secret_leak", _key not in json.dumps(keys_payload),
+    ))
 
     log("  --- Chat (mocked backend) ---")
     r = client.post("/api/chat", json={"message": "hi", "session_id": sid})
@@ -1314,6 +1426,44 @@ def phase_harness_console() -> PhaseResult:
     r = client.get("/api/harness/runs")
     rd = r.json()
     phase.checks.append(Check("harness_runs_shape", "runs" in rd and "count" in rd))
+
+    log("  --- Agent run routes (auth-gate only -- never a real invocation) ---")
+    # /api/agent/run and /decision drive `python -m agentic.cli`: a real run
+    # clones a repo, calls a model, and can block ~900s; push/publish/discard
+    # reach a git write. None of that belongs in a sandbox check -- only that
+    # a bad bearer is rejected, mirroring harness_emulation.py's own approach.
+    r = client.get("/api/agent/checks")
+    profiles = r.json().get("profiles") if r.status_code == 200 else None
+    phase.checks.append(Check("harness_agent_checks_lists_profiles", bool(profiles)))
+
+    bad_auth = {"Authorization": "Bearer wrong-key"}
+    for path in (
+        "/api/agent/run",
+        f"/api/agent/runs/{'0' * 32}/decision",
+        f"/api/agent/runs/{'0' * 32}/push",
+        f"/api/agent/runs/{'0' * 32}/publish",
+        f"/api/agent/runs/{'0' * 32}/discard",
+    ):
+        resp = client.post(path, json={}, headers=bad_auth)
+        phase.checks.append(Check(
+            f"harness_agent_route_rejects_bad_key_{path.rsplit('/', 1)[-1]}",
+            resp.status_code == 401,
+            f"status={resp.status_code}",
+        ))
+
+    log("  --- Auth setup status (/api/auth/setup-status) ---")
+    # Shipped default is auth.enabled: false -> _require_harness_auth() raises
+    # 503 AUTH_DISABLED (harness/server.py), matching gate_auth.py's own
+    # /auth/setup-status contract exactly. This asserts the DEFAULT posture;
+    # an operator config with auth enabled would instead see 200 + the three
+    # {enabled, needs_password, username} fields.
+    r = client.get("/api/auth/setup-status")
+    detail = (r.json().get("detail") or {}) if r.status_code != 200 else {}
+    phase.checks.append(Check(
+        "harness_auth_setup_status_disabled_by_default",
+        r.status_code == 503 and detail.get("code") == "AUTH_DISABLED",
+        f"status={r.status_code}",
+    ))
 
     log("  --- Security: rate limit, auto-docs, host rebinding ---")
     # /api/chat rate limit (per-IP, reusing utils.ratelimit.RateLimiter and
@@ -1385,16 +1535,19 @@ def phase_harness_html() -> PhaseResult:
         ("sessions_list", "/api/sessions"),
         ("soul", "/api/soul"),
         ("model", "/api/model"),
+        ("keys", "/api/keys"),
         ("chat", "/api/chat"),
         ("chat_cancel", "/api/chat/cancel"),
         ("github_status", "/api/github/status"),
         ("harness_runs", "/api/harness/runs"),
+        ("agent_checks", "/api/agent/checks"),
         ("tools", "/api/tools"),
         ("skills", "/api/skills"),
         ("web", "/api/web"),
         ("web_fetch", "/api/web/fetch"),
         ("memory", "/api/memory"),
         ("memory_add", "/api/memory/add"),
+        ("auth_setup_status", "/api/auth/setup-status"),
     ]:
         found = endpoint in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
@@ -1406,16 +1559,29 @@ def phase_harness_html() -> PhaseResult:
         "+ '/goal'" in html or "/goal', 'POST'" in html,
     ))
 
-    log("\n  --- Slash Commands ---")
-    slash = (
-        "/session", "/soul", "/model", "/skills", "/tools", "/web", "/memory", "/github",
-        "/harness", "/tokens", "/status", "/goal", "/loop",
-    )
+    log("\n  --- Slash Commands (derived from harness.html's own COMMANDS array) ---")
+    # A hardcoded list drifts the moment a command is added -- derive the base
+    # token of every row instead. Each row is ['/cmd rest-of-syntax', 'help
+    # text']; the regex takes the leading /word before the first space/quote,
+    # so '/agent run|plan|...' and '/agent status|approve|...' both collapse
+    # to /agent (deduped via the set).
+    commands_block_match = re.search(r"const COMMANDS\s*=\s*\[(.*?)\n\s*\];", html, re.DOTALL)
+    commands_block = commands_block_match.group(1) if commands_block_match else ""
+    slash = sorted(set(re.findall(r"\['(/[^'\s]+)", commands_block)))
+    phase.checks.append(Check("harness_html_commands_array_found", bool(slash)))
     for cmd in slash:
         found = f"'{cmd}" in html or f'"{cmd}' in html or f"case '{cmd.lstrip('/')}" in html
         status = f"{G}PASS{N}" if found else f"{R}FAIL{N}"
         log(f"    [{status}] {cmd}")
         phase.checks.append(Check(f"harness_html_cmd_{cmd.lstrip('/')}", found))
+
+    # The hidden `registry` alias of /connectors (shares its case label,
+    # SKILL.md's operator map calls it out explicitly) -- worth its own
+    # check since it wouldn't otherwise be found by the COMMANDS-array walk
+    # above (it isn't a COMMANDS row at all, just a second case label).
+    has_registry_alias = "case 'connectors': case 'registry':" in html
+    log(f"    [{'PASS' if has_registry_alias else 'FAIL'}] hidden 'registry' alias of /connectors")
+    phase.checks.append(Check("harness_html_registry_alias", has_registry_alias))
 
     log("\n  --- XSS Safety (untrusted model/registry output) ---")
     # harness.html's own comment documents this invariant explicitly: model
@@ -1516,6 +1682,16 @@ def main():
             if check.detail and not check.passed:
                 print(f"          -> {check.detail}")
 
+    # Name-based lookup, not positional indices -- a phase insert/reorder
+    # used to silently mislabel this summary (verified: the old checks[:6]/
+    # [6:] split didn't even match the Grok/Claude boundary correctly on the
+    # phase list as it stood). PhaseResult.name is the stable key each phase
+    # function sets for itself.
+    by_name = {p.name: p for p in results}
+
+    def _phase(name: str) -> PhaseResult:
+        return by_name.get(name, PhaseResult(name))
+
     # Query-specific summary
     print(f"\n{C}  Query Results:{N}")
     query_descs = [
@@ -1525,25 +1701,35 @@ def main():
         ("Q4", "Grok API connection-only"),
         ("Q5", "Claude API connection-only"),
     ]
-    for (qid, desc), pr in zip(query_descs, results[3].checks[:5] if len(results) > 3 else []):
+    for (qid, desc), pr in zip(query_descs, _phase("5 Queries").checks[:5]):
         status = f"{G}PASS{N}" if pr.passed else f"{R}FAIL{N}"
         print(f"    [{status}] {qid}: {desc}")
+
+    triple_gate_checks = _phase("Triple-Gate Online API").checks
+    grok_checks = [c for c in triple_gate_checks if c.name.startswith("grok_")]
+    claude_checks = [c for c in triple_gate_checks if c.name.startswith("claude_")]
+    shared_checks = [
+        c for c in triple_gate_checks
+        if not c.name.startswith(("grok_", "claude_"))
+    ]
 
     print(f"\n{'='*60}")
     print(f"CyClaw Swarm Verification Complete.")
     print(f"Full functionality status: {'PASS' if total_passed == total_checks else 'PARTIAL'}.")
     print(f"Total: {total_passed}/{total_checks} checks passed")
     print(f"")
-    print(f"RAG pipeline (5 queries): {'PASS' if results[3].passed else 'FAIL'}")
-    print(f"Triple-Gate Online API (Grok): {'PASS' if all(c.passed for c in results[4].checks[:6]) else 'FAIL'}")
-    print(f"Triple-Gate Online API (Claude): {'PASS' if all(c.passed for c in results[4].checks[6:]) else 'FAIL'}")
-    print(f"API Key Redaction (both providers): {'PASS' if results[5].passed else 'FAIL'}")
-    print(f"Due-Diligence Invariants: {'PASS' if results[6].passed else 'FAIL'}")
-    print(f"REST API surface: {'PASS' if results[7].passed else 'FAIL'}")
-    print(f"Terminal HTML contract: {'PASS' if results[8].passed else 'FAIL'}")
-    print(f"Harness Console REST API: {'PASS' if results[9].passed else 'FAIL'}")
-    print(f"Harness HTML contract: {'PASS' if results[10].passed else 'FAIL'}")
-    print(f"Security Invariants: {results[0].passed_count}/{len(results[0].checks)} passed")
+    print(f"RAG pipeline (5 queries): {'PASS' if _phase('5 Queries').passed else 'FAIL'}")
+    print(f"Triple-Gate Online API (Grok): {'PASS' if all(c.passed for c in grok_checks) else 'FAIL'}")
+    print(f"Triple-Gate Online API (Claude): {'PASS' if all(c.passed for c in claude_checks) else 'FAIL'}")
+    print(f"Triple-Gate shared/cross-provider: {'PASS' if all(c.passed for c in shared_checks) else 'FAIL'}")
+    print(f"API Key Redaction (both providers): {'PASS' if _phase('Key Redaction').passed else 'FAIL'}")
+    print(f"Due-Diligence Invariants: {'PASS' if _phase('Metrics & Invariants').passed else 'FAIL'}")
+    print(f"REST API surface: {'PASS' if _phase('Terminal Consoles').passed else 'FAIL'}")
+    print(f"Terminal HTML contract: {'PASS' if _phase('Terminal HTML Contract').passed else 'FAIL'}")
+    print(f"Harness Console REST API: {'PASS' if _phase('Harness Console').passed else 'FAIL'}")
+    print(f"Harness HTML contract: {'PASS' if _phase('Harness HTML Contract').passed else 'FAIL'}")
+    config_phase = _phase("Config Invariants")
+    print(f"Security Invariants: {config_phase.passed_count}/{len(config_phase.checks)} passed")
     tier_note = "real daemon/mock already up" if OLLAMA_TIER == 2 else "own mock_ollama.py needed"
     print(f"Ollama realism tier: {OLLAMA_TIER} ({tier_note})")
     print(f"{'='*60}")
