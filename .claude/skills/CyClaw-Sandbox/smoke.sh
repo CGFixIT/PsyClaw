@@ -502,6 +502,12 @@ echo "[smoke] Running full test suite (postgres tests skip if no DSN)..."
 # dependency, exactly like section E's missing CYCLAW_DB_URL), never a pass --
 # the old grep-based logic reported "PASS (passed=0)" here, which is how a lane
 # that never ran a single test looked green for as long as it has existed.
+# Seed the counters BEFORE the branch: section G's report interpolates $PASSED
+# and $SKIPPED unconditionally, and this script runs under `set -u`, so leaving
+# them unset on the skip path aborts the whole run at the report (it did --
+# "line 540: PASSED: unbound variable"). "n/a" is honest here: on the skip path
+# no suite ran, so there is no count to report.
+PASSED="n/a"; FAILED_C="n/a"; SKIPPED="n/a"
 if ! "$PYTHON" -c "import pytest" >/dev/null 2>&1; then
   skip "Full pytest suite (pytest not installed for $PYTHON — skip)"
 else
