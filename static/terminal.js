@@ -450,6 +450,13 @@ function pollIndexStatus() {
   indexBuild.timer = setTimeout(async () => {
     try {
       const resp = await fetchWithTimeout(`${API}/index/status`, {}, 3000);
+      // Mirror checkHealth's guard: a JSON-bodied non-2xx (a 429 from the
+      // front-running rate limiter, a 503) must not reach the state machine --
+      // s.state comes back undefined, and the assignment below reads that as
+      // a FAILED build while the build keeps running server-side. Throwing
+      // routes it through the miss counter instead: transient, retried, and
+      // bounded by INDEX_POLL_MAX_MISSES like any other dropped poll.
+      if (!resp.ok) throw new Error(`index status ${resp.status}`);
       const s = await resp.json();
       indexBuild.misses = 0;   // a reachable server clears the miss streak
       indexBuild.done = s.chunks_done || 0;

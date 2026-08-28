@@ -452,6 +452,39 @@ def test_index_status_poll_has_a_failure_ceiling():
     assert "indexBuild.misses += 1" in js
 
 
+def test_index_status_poll_treats_a_non_ok_response_as_a_dropped_poll():
+    """pollIndexStatus must guard on resp.ok before it reads the build state.
+
+    It parsed the body unconditionally. A gateway answering a JSON-bodied
+    non-2xx -- a 429 from the front-running rate limiter (the console spends
+    40 of the 60 req/min budget polling this route every INDEX_POLL_MS), a 503,
+    FastAPI's {"detail": ...} -- parsed fine, so s.state came back undefined and
+    `s.state === 'done' ? 'idle' : 'error'` read that as a FAILED build. The
+    panel announced the build had stopped while it kept running server-side.
+
+    checkHealth (same file) already documents and fixes this exact class, and
+    its comment claims "every other fetch in this file guards on resp.ok" --
+    this poller was the one that did not. Throwing routes a JSON-bodied failure
+    down the same miss-counter path a network error already took: retried, and
+    bounded by INDEX_POLL_MAX_MISSES.
+    """
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    body = js.split("function pollIndexStatus(", 1)
+    assert len(body) == 2, "pollIndexStatus is no longer declared as expected; update this test"
+    after = body[1].split("\n}", 1)[0]
+    assert "if (!resp.ok)" in after, "pollIndexStatus does not guard on resp.ok"
+    # Ordering is the load-bearing half. A guard placed after either of these
+    # does nothing: the body would already be parsed, and the miss streak the
+    # catch block depends on would already have been cleared by a failed poll.
+    assert after.index("if (!resp.ok)") < after.index("await resp.json()"), (
+        "the resp.ok guard must precede the body parse"
+    )
+    assert after.index("if (!resp.ok)") < after.index("indexBuild.misses = 0"), (
+        "the resp.ok guard must precede the miss-streak reset, or a failing "
+        "gateway keeps clearing the streak that surfaces lost contact"
+    )
+
+
 def test_panel_loaders_return_success_and_retry_on_failure():
     """Subsystem panels must latch 'loaded' only on success and retry later.
 
