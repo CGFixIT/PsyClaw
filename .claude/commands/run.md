@@ -1,5 +1,5 @@
 ---
-description: Run the CyClaw smoke test suite against your current checkout. Starts the server if needed, executes all 29 smoke checks, and reports pass/fail with endpoint details.
+description: Run the CyClaw smoke test suite against your current checkout. Starts the server if needed, executes the smoke suite (sections A-G), and reports pass/fail with endpoint details.
 ---
 
 Run the CyClaw smoke test against the local server. $ARGUMENTS
@@ -19,10 +19,12 @@ REST surface, 3.12 runtime gate, dated report + draft PR), use
    ```bash
    bash .claude/skills/CyClaw-Sandbox/smoke.sh
    ```
-3. Report results for all 29 checks (core API, `agentic/fsconnect`,
-   `agentic/sqlconnect`, NeMo guardrails, opt-in PostgreSQL backends, full
-   pytest suite) — see `.claude/skills/CyClaw-Sandbox/SKILL.md` §6b for the
-   per-check breakdown.
+3. Report results for the smoke suite's sections A-G (core API,
+   `agentic/fsconnect`, `agentic/sqlconnect`, NeMo guardrails, opt-in
+   PostgreSQL backends, full pytest suite) — the script prints its own
+   pass/fail totals and writes them to `.claude/sandbox-test.txt`; see
+   `.claude/skills/CyClaw-Sandbox/SKILL.md`'s **Quick Mode** section for
+   what it does and does not cover.
 4. Exit summary:
    - ✅ All checks passed — server is healthy
    - ❌ N checks failed — list each failure with the actual vs expected response

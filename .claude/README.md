@@ -17,7 +17,7 @@ terminal only produces "No such file or directory".
 /invariant-guard         # Static-assert the six security invariants (stdlib)
 /config-guard            # Static-validate config.yaml's relational/value/threat-model contract
 /dep-guard               # Static-validate dependency-pin invariants (pyproject + constraints)
-/run                     # Smoke-test the FastAPI server (29 smoke checks)
+/run                     # Smoke-test the FastAPI server (smoke suite, sections A-G)
 /architecture-refactor   # Start architecture refactor loop
 /tests-refactor          # Start test coverage loop
 /logging-refactor        # Start logging audit loop

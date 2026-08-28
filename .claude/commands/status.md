@@ -55,11 +55,15 @@ If running, report: `status`, `index_ready`, `graph_ready`, `mode`.
 ```bash
 python3 -c "
 import os
-kill_vars = ['LANGCHAIN_TRACING_V2','LANGCHAIN_API_KEY','CHROMA_TELEMETRY','ANONYMIZED_TELEMETRY','OTEL_EXPORTER_OTLP_ENDPOINT']
-for v in kill_vars:
-    print(f'{v}: {os.environ.get(v, "not set")}')
+from utils.telemetry_kill import TELEMETRY_KILL
+for v in sorted(TELEMETRY_KILL):
+    print(f'{v}: {os.environ.get(v, \"not set\")}')
 "
 ```
+Source the canonical map directly rather than a hand-copied name list --
+`utils/telemetry_kill.py`'s `TELEMETRY_KILL` is the contract the
+`otel-hardening` skill enforces; a name list here drifts the moment the
+map grows or a name is renamed.
 
 ## Output Format
 
@@ -69,7 +73,7 @@ Python:        3.12.x  ✅
 Soul file:     EXISTS  ✅
 ChromaDB:      EXISTS  ✅
 BM25 index:    EXISTS  ✅
-Config mode:   offline ✅
+Config mode:   hybrid ✅
 Server:        RUNNING / NOT RUNNING
 Health status: healthy / degraded (normal without a live Ollama daemon)
 ```
