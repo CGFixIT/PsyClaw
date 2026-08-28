@@ -29,7 +29,7 @@ def memory_app(tmp_path: Path, api_key: str):
         "memory": {
             "enabled": True,
             "db_path": str(tmp_path / "mem.db"),
-            "facts": {"enabled": True, "max_content_chars": 8192, "max_active": 10000},
+            "facts": {"retrieval_enabled": True, "max_content_chars": 8192, "max_active": 10000},
             "episodes": {"enabled": True, "store_raw_query": False, "max_answer_summary_chars": 200},
             "retrieval_fusion": {"enabled": False},
             "propose_apply": {"enabled": True},
@@ -118,7 +118,7 @@ def test_disabled_master_404_on_facts(tmp_path, api_key):
         "memory": {
             "enabled": False,
             "db_path": str(tmp_path / "x.db"),
-            "facts": {"enabled": False},
+            "facts": {"retrieval_enabled": False},
             "episodes": {"enabled": False},
             "retrieval_fusion": {"enabled": False},
             "propose_apply": {"enabled": False},

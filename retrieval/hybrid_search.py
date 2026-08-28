@@ -301,11 +301,16 @@ class HybridRetriever:
         try:
             mem_cfg = (self.cfg.get("memory") or {})
             fusion_cfg = mem_cfg.get("retrieval_fusion") or {}
-            if not (
-                mem_cfg.get("enabled") is True
-                and fusion_cfg.get("enabled") is True
-                and (mem_cfg.get("facts") or {}).get("enabled") is True
-            ):
+            if mem_cfg.get("enabled") is not True or fusion_cfg.get("enabled") is not True:
+                return hits
+            # Lazy on purpose: tests/test_memory_isolation.py forbids a
+            # top-level memory import here. Reaching this line already means
+            # memory is on, so the fuse_memory_hits import below would load the
+            # package anyway -- resolving the flag through the shared helper
+            # costs nothing extra and keeps this gate from drifting from
+            # retrieval_adapter's.
+            from memory.flags import facts_retrieval_enabled  # lazy
+            if not facts_retrieval_enabled(mem_cfg):
                 return hits
             from memory.retrieval_adapter import fuse_memory_hits  # lazy
             return fuse_memory_hits(query, hits, self.cfg)

@@ -6,6 +6,7 @@ import html
 from collections.abc import Mapping
 from typing import Any
 
+from memory.flags import facts_retrieval_enabled
 from memory.store import count_active_facts, count_episodes, list_episodes, list_facts
 
 
@@ -15,7 +16,7 @@ def status_dict(cfg: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {
         "enabled": enabled,
         "db_path": mem.get("db_path", "data/memory/cyclaw_memory.db"),
-        "facts_enabled": bool((mem.get("facts") or {}).get("enabled")),
+        "facts_retrieval_enabled": facts_retrieval_enabled(mem),
         "episodes_enabled": bool((mem.get("episodes") or {}).get("enabled")),
         "retrieval_fusion_enabled": bool((mem.get("retrieval_fusion") or {}).get("enabled")),
         "propose_apply_enabled": bool((mem.get("propose_apply") or {}).get("enabled")),

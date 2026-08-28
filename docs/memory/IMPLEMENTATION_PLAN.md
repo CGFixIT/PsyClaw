@@ -324,7 +324,7 @@ memory:
   enabled: false                    # master switch
   db_path: "data/memory/cyclaw_memory.db"
   facts:
-    enabled: false
+    retrieval_enabled: false        # fusion exposure ONLY; not persist/apply/read
     max_content_chars: 8192
     max_active: 10000
   episodes:
@@ -337,7 +337,6 @@ memory:
     enabled: false                  # fuse FTS hits into hybrid_search
     max_hits: 3
     rrf_k: 60                       # match corpus RRF k
-    min_fts_score: 0.0              # bm25-ish; tune in selftest
     source_prefix: "memory:fact:"   # SearchResult.source prefix
   propose_apply:
     enabled: false                  # admin propose/apply routes useful only if true
@@ -700,7 +699,7 @@ Memory is **not** OOB like telegram. It is an optional core feature. Isolation m
 1. Deploy code (defaults off) → behavior identical to today.  
 2. Set `memory.enabled: true` + `episodes.enabled: true` → episodes start staging.  
 3. Set `propose_apply.enabled: true`, set `CYCLAW_API_KEY`, propose/apply facts.  
-4. Optionally enable `retrieval_fusion.enabled: true` after verifying FTS quality.  
+4. Optionally enable `facts.retrieval_enabled: true` + `retrieval_fusion.enabled: true` after verifying FTS quality — both are required to fuse.  
 5. Export HTML only if needed.
 
 ---

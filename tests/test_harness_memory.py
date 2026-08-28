@@ -99,7 +99,7 @@ def test_notes_cap(tmp_path):
 
 
 def test_rag_flags_are_read_only_and_default_off():
-    flags = rag_flags({"memory": {"enabled": False, "facts": {"enabled": False}}})
+    flags = rag_flags({"memory": {"enabled": False, "facts": {"retrieval_enabled": False}}})
     assert flags["enabled"] is False
     assert flags["writable_from_harness"] is False
     assert rag_flags(None)["writable_from_harness"] is False

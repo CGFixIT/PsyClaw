@@ -214,7 +214,10 @@ memory:
   enabled: false                    # master switch
   db_path: "data/memory/cyclaw_memory.db"
   facts:
-    enabled: false
+    # Gates retrieval fusion ONLY -- never persistence, apply, or read (those
+    # are memory.enabled + propose_apply.enabled). Legacy name `enabled` is
+    # still honored with a startup warning; see memory/flags.py.
+    retrieval_enabled: false
     max_content_chars: 8192
     max_active: 10000
   episodes:
@@ -227,7 +230,6 @@ memory:
     enabled: false                  # fuse FTS fact hits into hybrid_search
     max_hits: 3
     rrf_k: 60
-    min_fts_score: 0.0
     source_prefix: "memory:fact:"
   propose_apply:
     enabled: false                  # /memory/propose|apply|reject
