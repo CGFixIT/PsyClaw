@@ -128,18 +128,22 @@ class _FakePost:
         return self._response
 
 
-def _ok_response(content: str = "hello from llm", usage: dict | None = None) -> httpx.Response:
+def _ok_response(content: str = "hello from llm", usage: dict | None = None, model: str | None = None) -> httpx.Response:
     payload: dict = {"choices": [{"message": {"content": content}}]}
     if usage is not None:
         payload["usage"] = usage
+    if model is not None:
+        payload["model"] = model
     req = httpx.Request("POST", _URL)
     return httpx.Response(200, json=payload, request=req)
 
 
-def _claude_ok_response(content: str = "hello from claude", usage: dict | None = None) -> httpx.Response:
+def _claude_ok_response(content: str = "hello from claude", usage: dict | None = None, model: str | None = None) -> httpx.Response:
     payload: dict = {"content": [{"type": "text", "text": content}]}
     if usage is not None:
         payload["usage"] = usage
+    if model is not None:
+        payload["model"] = model
     req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
     return httpx.Response(200, json=payload, request=req)
 
@@ -633,6 +637,67 @@ class TestExternalSpendRecording:
         assert record["reasoning_tokens"] is None
         assert "query_hash" not in record
         assert "route_path" not in record
+        client.close()
+
+    def test_grok_spend_records_served_model_alongside_configured(
+        self, tmp_path, monkeypatch, _spend_ledger
+    ):
+        """The response's own `model` is the vendor-resolved id; with an
+        unpinned alias configured it can differ from what was requested, and the
+        ledger must show both (configured `model` is never replaced)."""
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={"prompt_tokens": 41, "completion_tokens": 104},
+                model="grok-4.5-2026-08-01",
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "grok answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["model"] == "grok-4.5"
+        assert record["served_model"] == "grok-4.5-2026-08-01"
+        client.close()
+
+    def test_claude_spend_records_served_model_alongside_configured(
+        self, tmp_path, monkeypatch, _spend_ledger
+    ):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-secret")
+        client = ClaudeClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_claude_ok_response(
+                "claude answer",
+                usage={"input_tokens": 10, "output_tokens": 4},
+                model="claude-sonnet-5-20260701",
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "claude answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["model"] == "claude-sonnet-5"
+        assert record["served_model"] == "claude-sonnet-5-20260701"
+        client.close()
+
+    def test_spend_omits_served_model_when_response_lacks_it(
+        self, tmp_path, monkeypatch, _spend_ledger
+    ):
+        """No `model` in the response body -> no served_model key, so the line
+        shape is unchanged for backends that do not echo one."""
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={"prompt_tokens": 41, "completion_tokens": 104},
+            )
+        )
+        client._client.post = fake
+        assert client.generate("a prompt") == "grok answer"
+        record = json.loads(_spend_ledger.read_text(encoding="utf-8").splitlines()[0])
+        assert record["model"] == "grok-4.5"
+        assert "served_model" not in record
         client.close()
 
     def test_grok_spend_context_persists_join_fields(self, tmp_path, monkeypatch, _spend_ledger):
