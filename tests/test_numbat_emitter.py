@@ -377,6 +377,11 @@ def test_zero_max_bytes_disables_rollover(tmp_path: Path) -> None:
     assert not out.with_name(out.name + ".1").exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX rename-over-open-file semantics; Windows locks an open file, so the "
+           "cross-process rollover this guards against cannot occur there",
+)
 def test_rollover_by_another_process_does_not_orphan_the_cached_handle(tmp_path: Path) -> None:
     """Regression: a rename underneath a cached handle must force a reopen.
 
