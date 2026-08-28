@@ -497,6 +497,14 @@ echo "[smoke] Running full test suite (postgres tests skip if no DSN)..."
 # false green in the one place that is supposed to catch them. Verified
 # 2026-08-28 against a deliberately failing suite. The counts are kept, but
 # only as best-effort commentary on a line that may legitimately be absent.
+# pytest is not always present: the verify-skills CI lane runs this script in a
+# minimal interpreter with no test deps. That is a SKIP (an absent optional
+# dependency, exactly like section E's missing CYCLAW_DB_URL), never a pass --
+# the old grep-based logic reported "PASS (passed=0)" here, which is how a lane
+# that never ran a single test looked green for as long as it has existed.
+if ! "$PYTHON" -c "import pytest" >/dev/null 2>&1; then
+  skip "Full pytest suite (pytest not installed for $PYTHON — skip)"
+else
 set +e
 PYTEST_OUT=$( GROK_API_KEY="$GROK_API_KEY" CYCLAW_API_KEY="$CYCLAW_API_KEY" \
   "$PYTHON" -m pytest tests/ --tb=short --continue-on-collection-errors 2>&1 )
@@ -513,6 +521,7 @@ if [ "$PYTEST_RC" -eq 0 ]; then
   pass "Full pytest suite (exit 0; $COUNTS)"
 else
   fail "Full pytest suite (pytest exit $PYTEST_RC; $COUNTS)"
+fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
