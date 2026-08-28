@@ -497,7 +497,11 @@ def test_ops_calls_cover_server_side_budgets():
     exit-code envelope."""
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     assert "const OPS_CLI_TIMEOUT_MS = 130000;" in js
-    assert "const OPS_SYNC_TIMEOUT_MS = 7320000;" in js
     assert "callOps(path, body, timeoutMs = OPS_CLI_TIMEOUT_MS)" in js
-    assert "action === 'sync' ? OPS_SYNC_TIMEOUT_MS : OPS_CLI_TIMEOUT_MS" in js
+    assert "action === 'sync' ? opsSyncDeadlineMs : OPS_CLI_TIMEOUT_MS" in js
+    # sync.sync_timeout_sec has no upper bound, so the sync deadline must come
+    # from the server (/health) rather than a constant that cannot cover every
+    # valid configuration; the literal below is only the pre-/health fallback.
+    assert "let opsSyncDeadlineMs = 7320000;" in js
+    assert "opsSyncDeadlineMs = (data.ops_sync_timeout_sec + 60) * 1000;" in js
     assert "}, 60000);" not in js, "flat 60s ops ceiling regressed"

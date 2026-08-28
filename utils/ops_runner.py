@@ -49,7 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 # Default wall-clock for short ops (status/test/agentic/fsconnect/sqlconnect).
 # The full Dropbox sync path uses config sync.sync_timeout_sec instead — see
-# _sync_timeout_sec() — so POST /ops/sync does not kill rclone mid-transfer.
+# sync_timeout_sec() — so POST /ops/sync does not kill rclone mid-transfer.
 _TIMEOUT_SEC = 120
 
 # action whitelists — the ONLY subcommands a caller may reach.
@@ -108,7 +108,7 @@ REAL_REPO_RUN_MAX_TIMEOUT_SEC = 3600
 def real_repo_run_budget_sec(max_iterations: int | None, check_count: int) -> int:
     """UNCAPPED wall-clock budget for one ``real-repo-run`` request shape.
 
-    Mirrors :func:`_sync_timeout_sec`'s shape -- read the authoritative value
+    Mirrors :func:`sync_timeout_sec`'s shape -- read the authoritative value
     from config, fall back safely when it is missing or unusable, add overhead
     -- but is per-call rather than per-action, because this action's cost
     scales with two request fields (``max_iterations`` and how many check
@@ -219,7 +219,7 @@ def _redact_ops_value(value: Any, cfg: dict) -> Any:
     return value
 
 
-def _sync_timeout_sec() -> int:
+def sync_timeout_sec() -> int:
     """Wall-clock budget for ``sync.cli sync`` launched via the ops shim.
 
     Aligns with ``sync.sync_timeout_sec`` (default 3600) so console-driven
@@ -233,13 +233,18 @@ def _sync_timeout_sec() -> int:
     timeout for the ``rclone check`` — both under the single-instance lock
     (the same lifecycle ``sync.runner._lock_stale_after_sec`` scales to).
     Mirror that doubled budget here or the shim kills a healthy run mid-check.
+
+    Never raises: callers include gate.py's /health, which must answer even
+    when config.yaml is unreadable or malformed. AttributeError is in the
+    caught set (matching :func:`real_repo_run_budget_sec`) because a config
+    file that parses to a non-mapping makes ``cfg.get`` itself fail.
     """
     try:
         cfg = _get_config(str(_CONFIG_PATH))
         block = cfg.get("sync") or {}
         sec = int(block.get("sync_timeout_sec", 3600))
         post_sync_check = bool(block.get("post_sync_check", False))
-    except (OSError, TypeError, ValueError, KeyError):
+    except (OSError, TypeError, ValueError, KeyError, AttributeError):
         sec, post_sync_check = 3600, False
     if sec <= 0:
         sec = 3600
@@ -336,7 +341,7 @@ def run_sync_op(action: str, *, dry_run: bool = False) -> OpsResult:
 
     # status/test/schedule stay on the short default; only the full transfer
     # needs the config-aligned ceiling (rclone can run for up to an hour).
-    timeout = _sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
+    timeout = sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
     proc = _run(argv, timeout_sec=timeout)
     ok, label = _SYNC_LABELS.get(proc.returncode, (False, "unknown"))
     result = OpsResult("sync", action, proc.returncode, ok, label, proc.stdout, proc.stderr)

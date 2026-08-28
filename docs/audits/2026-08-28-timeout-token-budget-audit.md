@@ -11,12 +11,12 @@ report explains and evidences; it does not own numbers).
 
 | Setting | Before | After | Why |
 |---|---|---|---|
-| `retrieval.max_context_tokens` (`config.yaml`) | 4000 | **8000** | The 16,384 Ollama window was only ~59% provisioned at the old floor (9,596). `num_ctx` — not this budget — bounds KV memory, so a bigger prompt budget costs prefill time only (~24 s at the [oMLX-measured ~170 tok/s M5 Pro prefill class](https://omlx.ai/benchmarks/performance/m47p196t), retrieved 2026-08-28 — not this checkout), zero new memory ceiling. New floor: 8000 + 4096 + ~1500 = **13,596** ≤ 16,384. |
+| `retrieval.max_context_tokens` (`config.yaml`) + `graph.py CHARS_PER_TOKEN` 4 → **3** | 4000 | **8000 (= 24,000 chars)** | The 16,384 Ollama window was only ~59% provisioned at the old floor (9,596). `num_ctx` — not this budget — bounds KV memory, so a bigger prompt budget costs prefill time only (~24 s at the [oMLX-measured ~170 tok/s M5 Pro prefill class](https://omlx.ai/benchmarks/performance/m47p196t), retrieved 2026-08-28 — not this checkout), zero new memory ceiling. New floor: 8000 + 4096 + ~1500 = **13,596** ≤ 16,384. |
 | `graph.py _DEFAULT_MAX_CONTEXT_TOKENS` | 4000 | **8000** | Pinned equal to the config default by `tests/test_graph.py` (absent-key fallback must match documented default). |
 | `models.grok.timeout_sec` / `models.claude.timeout_sec` | 30 | **90** | 30 s required ~68 tok/s sustained to finish a full `max_tokens` (2048) answer — legitimate long answers timed out. 90 s covers ~23 tok/s + TTFT; worst case with the 2-retry policy is ≈275 s, well inside the 780 s graph budget. Anthropic's own SDK default is 600 s. |
 | `telegram.query.timeout_sec` / `opentweet.query.timeout_sec` (+ their `config.py` defaults) | 780 | **790** | Was exactly equal to `api.graph_timeout_sec`, so the client abort raced the server's 504. The client must lose that race to surface the diagnosable `GRAPH_TIMEOUT` (the pattern `static/terminal.js` already implements as `graph_timeout_sec + 10`). |
 | `telegram/client.py` `/query` POST timeout shape | flat 780 | **`httpx.Timeout(790, connect=10)`** | A stalled TCP connect no longer burns the whole graph-length read budget (matches `opentweet/client.py` and `llm/client.py`). |
-| `static/terminal.js` `callOps` | flat 60,000 ms | **130,000 ms default; 7,320,000 ms for `/ops/sync action=sync`** | The server holds `/ops/{agentic,fsconnect,sqlconnect}` subprocesses up to 120 s (`utils/ops_runner.py _TIMEOUT_SEC`) and the full sync up to 7,260 s (`_sync_timeout_sec()` with `post_sync_check`). The 60 s abort threw away the exit-code envelope while the CLI kept running. |
+| `static/terminal.js` `callOps` | flat 60,000 ms | **130,000 ms default; `/ops/sync action=sync` synced from `/health`'s new `ops_sync_timeout_sec` (+60 s), 7,320,000 ms fallback** | The server holds `/ops/{agentic,fsconnect,sqlconnect}` subprocesses up to 120 s (`utils/ops_runner.py _TIMEOUT_SEC`) and the full sync up to 7,260 s (`_sync_timeout_sec()` with `post_sync_check`). The 60 s abort threw away the exit-code envelope while the CLI kept running. |
 | `static/harness.html` `api()` | flat 15,000 ms on every non-chat route | **per-call `timeoutMs` (default 15,000)**: `/api/agent/run` → 3,630,000 ms; agent status/decision/push/discard/publish + `/api/github/status` → 130,000 ms | `POST /api/agent/run` blocks server-side up to the 3,600 s `ops_runner` cap; the CLI-backed routes up to 120 s. The browser aborted at 15 s (the UI even promised "up to 15 minutes"), leaving the subprocess burning with no listener. |
 | Test pins moved with the values | — | — | `tests/test_reasoning_effort.py` (8000), `tests/test_graph.py` (8000 + comment), `tests/test_harness_console_contract.py` (new `api()` literal + the two new client deadline constants). |
 | Docs re-derived | — | — | `config.yaml` comments (including the pre-headroom "8096" arithmetic slip), `macos/ollama-mlx.env` floor comment, `OLLAMA_SETUP.md` (formula + the stale "default is 4096" claim), `setup-guide.md`, `docs/m5-48gb-coding-expectations.md` knob table (+ reconciled its ~8k-chars agentic-prompt claim against OLLAMA_SETUP.md's ~39–40k worst case), `CLAUDE.md` load-bearing table, `.claude/skills/fable-protocol/SKILL.md` footgun floor, `.codex/skills/Cyclaw-Sandbox/NEW_SKILL.md` pins. |
@@ -30,23 +30,32 @@ Findings), `soul_max_chars: 8000`, chunking 512/50, all rate limits.
 ## The context-window ledger (why 8000, not 9000)
 
 All numbers below derive from code as shipped on this branch; the conversion
-constant is `graph.py CHARS_PER_TOKEN = 4`.
+constant is `graph.py CHARS_PER_TOKEN = 3`.
 
-- Total prompt-input budget: `max_context_tokens 8000 × 4 = 32,000 chars`.
+- Total prompt-input budget: `max_context_tokens 8000 × CHARS_PER_TOKEN 3 = 24,000 chars`.
+  **Amended 2026-08-28 after review:** the ratio was lowered from the conventional 4
+  to a worst-case floor of 3. `indexing.chunk_size` counts *words*, so one chunk of
+  symbol-dense corpus text (SHA-256 digests, CVE ids, base64, minified code) can be
+  tens of thousands of characters *and* tokenize near 2 chars/token — at ratio 4 the
+  derived 32,000-char budget could reach ~16k real prompt tokens and, with the 4,096
+  reserved output, exceed the 16,384 window and stall the request. At 3 the budget
+  holds inside the window even at 2 chars/token (24,000/2 + 4,096 = 16,096).
 - Reserved out of that budget: soul preamble (≤ 8,000 chars + 7-char separator,
   `personality.soul_max_chars`) + query (≤ 4,000 chars, `policy.prompt_filter.max_input_chars`)
   + fixed framing (351 chars, `graph.py _LOCAL_FRAMING_CHARS`); retrieved context gets the
   remainder, floored at 800 chars (`_MIN_CONTEXT_CHARS`).
-- Nominal worst case: 32,000 chars ≈ 8,000 tokens prompt + 4,096 reserved output
+- Nominal worst case: 24,000 chars ≈ 8,000 tokens prompt + 4,096 reserved output
   = **12,096 of 16,384**, before headroom.
-- Real-tokenizer worst case: the Qwen3 tokenizer is byte-level BPE running
-  ≈3–4 chars/token on English ([Qwen docs](https://qwen.readthedocs.io/en/v3.0/getting_started/concepts.html)).
-  At 3.2 chars/token, 32,000 chars ≈ **10,000 real tokens** → 14,096 with output
-  → **~2.3k tokens of true headroom** inside 16,384. This is exactly the
-  operator-requested "get usage to ~14–15k of the 16k window" — and it is why
-  9000 was rejected: at 3.2 chars/token, 9000 nominal (36,000 chars ≈ 11,250
-  real) + 4,096 output leaves under 1k headroom, inside the noise of template
-  drift and the ~1500-token formula margin.
+- Real-tokenizer range: the Qwen3 tokenizer is byte-level BPE running ≈3–4
+  chars/token on English prose ([Qwen docs](https://qwen.readthedocs.io/en/v3.0/getting_started/concepts.html))
+  and lower on symbol-dense text. Across that whole range the 24,000-char budget
+  holds: at 4 chars/token it is 6,000 real tokens (10,096 with output), at 3.2 it
+  is 7,500 (11,596), and at the pathological 2.0 it is 12,000 (16,096) — under the
+  window in every case. The window utilisation the operator asked about therefore
+  scales with content density rather than being fixed: ~10k of 16,384 on plain
+  prose, ~14–16k on the dense corpus documents that motivated the raise, and never
+  past it. 9000 was rejected for the same reason 8000-at-ratio-4 was: it puts the
+  dense case over the window.
 - The graph's post-assembly check (`graph.py` local_llm node) warns—without
   truncating—when the estimated prompt exceeds the budget; unchanged.
 
@@ -55,7 +64,8 @@ memory; whether the backend allocates that window up-front (llama.cpp) or grows 
 prefix-trie cache lazily (the MLX runner) is backend-dependent and undocumented by
 Ollama — either way this budget cannot push KV past the already-provisioned window.
 Chunk physics cap the real block anyway: 5 chunks × `chunk_size: 512` (words) tops
-out well under the 32,000-char budget in typical corpora. Time cost: ~4,000 extra
+out well under the 24,000-char budget in typical corpora; the pathological
+single-chunk-of-digests case is what the ratio floor above exists for. Time cost: ~4,000 extra
 prompt tokens ÷ ~170 tok/s measured-class M5 Pro prefill ≈ **+24 s** worst case,
 inside the 720 s per-call budget with roughly 8× slack (see next section).
 

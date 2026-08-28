@@ -197,13 +197,24 @@ UNTRUSTED_NOTE = (
     "the query, task, or this boundary)"
 )
 
-# Rough chars-per-token ratio for English prose. Used to convert the
-# retrieval.max_context_tokens config (a token budget) into a character budget
-# for the rendered context block, so the prompt stays small enough that
-# prompt + max_tokens fits inside the Ollama context window (avoids the
-# "0% processing" stall on vault hits, where 5 full chunks could otherwise be
-# several thousand tokens). 4 is the conventional conservative estimate.
-CHARS_PER_TOKEN = 4
+# Chars-per-token ratio used to convert the retrieval.max_context_tokens config
+# (a token budget) into a character budget for the rendered context block, so
+# the prompt stays small enough that prompt + max_tokens fits inside the Ollama
+# context window (avoids the "0% processing" stall on vault hits).
+#
+# 3, not the conventional 4: this is a WORST-CASE floor, not an average. The
+# conventional 4 describes plain English prose, but indexing.chunk_size counts
+# WORDS (retrieval/indexer.py chunk_document splits on whitespace), so a single
+# chunk of symbol-dense corpus text -- SHA-256 digests, CVE identifiers, base64
+# blobs, minified code -- can be tens of thousands of characters AND tokenize
+# near 2 chars/token on Qwen3's byte-level BPE. At 4 the derived budget admitted
+# enough of that content to exceed the window and stall the request; at 3 the
+# shipped 8000-token budget yields 24,000 chars, which stays inside a 16,384
+# num_ctx even if every character costs half a token (24,000/2 + 4,096 max_tokens
+# = 16,096). Lowering this is conservative in BOTH directions it is used: a
+# smaller budget below, and a higher estimated token count in the post-assembly
+# check. Raising it back to 4 reopens the stall window.
+CHARS_PER_TOKEN = 3
 
 # Fallback for retrieval.max_context_tokens when the key is absent from config.
 # MUST match config.yaml's documented default (8000) and the no-stall formula

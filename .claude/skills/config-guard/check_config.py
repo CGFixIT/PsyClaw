@@ -46,6 +46,10 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # Documented graph-timeout margin: graph_timeout_sec >= local_llm.timeout_sec + 30
 # (config.yaml api.graph_timeout_sec comment; covers retrieval + routing + audit).
+# Mirrors graph.py CHARS_PER_TOKEN: the worst-case chars/token floor used to
+# turn retrieval.max_context_tokens into the assembled-prompt character
+# budget. Keep in step with that constant.
+_CHARS_PER_TOKEN = 3
 _TIMEOUT_MARGIN_SEC = 30
 
 # min_score lives on the RRF scale (~top-3-4 rank ≈ 0.028); fused ranks rarely
@@ -149,12 +153,14 @@ def run_checks(cfg: dict[str, Any]) -> None:
     elif not _is_pos_int(soul_cap):
         fail("C5", f"soul_max_chars must be a positive integer, got {soul_cap!r} "
                    "(0 silently drops the soul from every prompt)")
-    elif _is_num(max_ctx) and soul_cap >= max_ctx * 4:
-        fail("C5", f"soul_max_chars ({soul_cap}) must stay below max_context_tokens*4 "
-                   f"({int(max_ctx * 4)}, ~4 chars/token) or the soul crowds out retrieved context")
+    elif _is_num(max_ctx) and soul_cap >= max_ctx * _CHARS_PER_TOKEN:
+        fail("C5", f"soul_max_chars ({soul_cap}) must stay below "
+                   f"max_context_tokens*{_CHARS_PER_TOKEN} ({int(max_ctx * _CHARS_PER_TOKEN)}, the "
+                   "character budget graph.py derives) or the soul crowds out retrieved context")
     else:
-        ok("C5", f"soul_max_chars ({soul_cap}) fits within max_context_tokens*4 "
-                 f"({int(max_ctx * 4) if _is_num(max_ctx) else '?'})")
+        ok("C5", f"soul_max_chars ({soul_cap}) fits within "
+                 f"max_context_tokens*{_CHARS_PER_TOKEN} "
+                 f"({int(max_ctx * _CHARS_PER_TOKEN) if _is_num(max_ctx) else '?'})")
 
     # ── C6 rate-limit knobs are usable ──────────────────────────────────────
     print("C6 api.rate_limit is a positive window")

@@ -189,9 +189,13 @@ retrieval:
   # budget — bounds KV memory, so the larger prompt costs additional prefill time
   # only (measure it on the operator machine: scripts/measure_local_llm_throughput.py),
   # no new memory ceiling.
-  # Do NOT raise past 8000 without raising num_ctx: the ~4 chars/token estimate
-  # under-counts Qwen3 BPE on technical text (~3.2-3.6 chars/token), so 8000
-  # nominal can already reach ~10k real prompt tokens (~14.1k with max_tokens).
+  # This is a NOMINAL budget: graph.py converts it to a character budget at
+  # CHARS_PER_TOKEN (3, a worst-case floor -- see that constant's comment), so
+  # 8000 here means 24,000 characters of assembled prompt input. That holds
+  # inside a 16,384 num_ctx even for symbol-dense corpus text that tokenizes
+  # near 2 chars/token (24,000/2 + 4,096 = 16,096). Do NOT raise past 8000
+  # without raising num_ctx, and do NOT raise CHARS_PER_TOKEN to reclaim
+  # characters -- that is the knob that reopens the "0% processing" stall.
   # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
   max_context_tokens: 8000

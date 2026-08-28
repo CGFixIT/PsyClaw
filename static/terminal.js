@@ -576,6 +576,9 @@ async function checkHealth() {
     if (Number.isFinite(data.graph_timeout_sec) && data.graph_timeout_sec > 0) {
       queryDeadlineMs = (data.graph_timeout_sec + 10) * 1000;
     }
+    if (Number.isFinite(data.ops_sync_timeout_sec) && data.ops_sync_timeout_sec > 0) {
+      opsSyncDeadlineMs = (data.ops_sync_timeout_sec + 60) * 1000;
+    }
     renderFirstRun(data);
     healthBackoffMs = HEALTH_BASE_INTERVAL;
   } catch (e) {
@@ -1213,7 +1216,13 @@ async function restoreSoul() {
 // its server budget so the envelope (or the gateway's typed error) always
 // arrives. A hung subprocess is still bounded — by the server's kill.
 const OPS_CLI_TIMEOUT_MS = 130000;    // 120s ops_runner._TIMEOUT_SEC + 10s margin
-const OPS_SYNC_TIMEOUT_MS = 7320000;  // 7260s worst-case sync budget + 60s margin
+// Re-synced from /health (ops_sync_timeout_sec + 60s margin) because
+// sync.sync_timeout_sec has no upper bound -- no constant here can cover every
+// valid server configuration, so the server is asked rather than guessed at.
+// This default covers the shipped 3600s config (x2 for post_sync_check, +60)
+// and carries the wait until the first successful /health, exactly like
+// queryDeadlineMs above.
+let opsSyncDeadlineMs = 7320000;
 async function callOps(path, body, timeoutMs = OPS_CLI_TIMEOUT_MS) {
   const resp = await fetchWithTimeout(`${API}${path}`, {
     method: 'POST',
@@ -1272,7 +1281,7 @@ async function runSync(action, opts = {}) {
   setSyncStatus(`Running sync ${action}...`);
   try {
     const data = await callOps('/ops/sync', { action, ...opts },
-      action === 'sync' ? OPS_SYNC_TIMEOUT_MS : OPS_CLI_TIMEOUT_MS);
+      action === 'sync' ? opsSyncDeadlineMs : OPS_CLI_TIMEOUT_MS);
     applySyncConfig(data.config);
     renderOps(syncBox, syncMeta, syncWarning, syncPreview, data);
     setSyncStatus(`[${action}] ${syncLabelMsg(data)}`, data.ok ? 'success' : 'error');

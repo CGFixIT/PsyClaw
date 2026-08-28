@@ -67,7 +67,7 @@ def test_sync_action_uses_config_aligned_timeout(monkeypatch: pytest.MonkeyPatch
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(ops_runner, "_run", _runner)
-    monkeypatch.setattr(ops_runner, "_sync_timeout_sec", lambda: 3660)
+    monkeypatch.setattr(ops_runner, "sync_timeout_sec", lambda: 3660)
     run_sync_op("sync")
     assert captured[0][1] == 3660
     # Non-transfer actions keep the short default path (timeout_sec=_TIMEOUT_SEC).
@@ -739,7 +739,7 @@ def test_sync_timeout_sec_single_budget_without_post_sync_check(monkeypatch: pyt
         ops_runner, "_get_config",
         lambda _path: {"sync": {"sync_timeout_sec": 3600}},
     )
-    assert ops_runner._sync_timeout_sec() == 3600 + 60
+    assert ops_runner.sync_timeout_sec() == 3600 + 60
 
 
 def test_sync_timeout_sec_doubles_when_post_sync_check_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -750,7 +750,7 @@ def test_sync_timeout_sec_doubles_when_post_sync_check_enabled(monkeypatch: pyte
         ops_runner, "_get_config",
         lambda _path: {"sync": {"sync_timeout_sec": 3600, "post_sync_check": True}},
     )
-    assert ops_runner._sync_timeout_sec() == 2 * 3600 + 60
+    assert ops_runner.sync_timeout_sec() == 2 * 3600 + 60
 
 
 def test_sync_timeout_sec_fallback_on_unreadable_config(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -758,7 +758,7 @@ def test_sync_timeout_sec_fallback_on_unreadable_config(monkeypatch: pytest.Monk
         raise OSError("config missing")
 
     monkeypatch.setattr(ops_runner, "_get_config", _boom)
-    assert ops_runner._sync_timeout_sec() == 3600 + 60
+    assert ops_runner.sync_timeout_sec() == 3600 + 60
 
 
 def test_real_repo_run_push_and_discard_argv(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -805,3 +805,10 @@ def test_real_repo_run_refuses_a_whitespace_only_free_text_field(field: str) -> 
     kwargs[field] = "   "
     with pytest.raises(OpsError, match=f"non-empty {field}"):
         run_agentic_op("real-repo-run", **kwargs)
+
+
+def test_sync_timeout_sec_never_raises_on_a_malformed_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gate.py's /health calls this unguarded, so a config.yaml that parses to a
+    non-mapping must degrade to the shipped budget rather than 500 the probe."""
+    monkeypatch.setattr(ops_runner, "_get_config", lambda _path: "not-a-mapping")
+    assert ops_runner.sync_timeout_sec() == 3660
