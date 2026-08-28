@@ -32,7 +32,7 @@ no Homebrew required.
 
 ## One command (Apple Silicon)
 
-`setup-cyclaw.sh` is the single entry point for a fresh machine — clone,
+`setup-cyclaw.sh` is (arguably) the single entry point for a fresh machine — clone,
 install, keys, index, start, browser, in that order, with the choices asked
 once up front instead of scattered across several scripts' worth of prompts:
 
