@@ -143,7 +143,10 @@ def register_ops_routes(
             # embeds the full argv, which does not belong in an HTTP body.
             timeout_sec = int(e.timeout)
             await audit({"event": f"ops_{route}_timeout", "action": action, "timeout_sec": timeout_sec})
-            logger.error("/ops/%s action=%r exceeded its %ds budget and was killed", route, _log_safe(action), timeout_sec)
+            logger.error(
+                "/ops/%s action=%r exceeded its %ds budget and was killed",
+                route, _log_safe(action), timeout_sec,
+            )
             raise HTTPException(
                 status_code=504,
                 detail={

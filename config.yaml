@@ -600,6 +600,14 @@ logging:
 numbat:
   enabled: true
   output_path: "logs/numbat-events.ndjsonl"
+  # Size-based single-generation rollover: at or past this many bytes the
+  # stream is renamed to <output_path>.1 (replacing any previous .1) and a
+  # fresh file starts. The mainline plane projects EVERY audit record here,
+  # so without a cap the file grows without bound on a busy instance. 0
+  # disables. Fail-soft like the rest of the emitter -- a failed rename keeps
+  # appending rather than dropping events. audit.jsonl (the authoritative
+  # stream) is unrelated and never rotated by this.
+  max_bytes: 52428800       # 50 MiB
   source_agent: "unknown"   # "cyclaw" is not a legal Numbat enum
   source_type: "hook"
   # CEL sanitizer backend (issue #1128 Slice B). Monitor-only: rules evaluate

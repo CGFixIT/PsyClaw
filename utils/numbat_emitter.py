@@ -250,6 +250,22 @@ def _output_path(cfg: dict[str, Any] | None) -> Path:
     return _anchor(str(raw))
 
 
+# The mainline plane projects EVERY audit record into the stream, so without a
+# cap the file grows without bound on a busy instance. 50 MiB, single .1
+# generation -- forensics that need more history archive the .1 themselves.
+DEFAULT_MAX_BYTES = 52428800
+
+
+def _max_bytes(cfg: dict[str, Any] | None) -> int:
+    """numbat.max_bytes: rollover threshold; 0 (or negative/garbage) disables."""
+    block = _numbat_cfg(cfg)
+    try:
+        value = int(block.get("max_bytes", DEFAULT_MAX_BYTES))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_BYTES
+    return value if value > 0 else 0
+
+
 def _source_agent(cfg: dict[str, Any] | None) -> str:
     block = _numbat_cfg(cfg)
     value = str(block.get("source_agent") or DEFAULT_SOURCE_AGENT)
@@ -437,10 +453,43 @@ def close_numbat_handles() -> None:
 atexit.register(close_numbat_handles)
 
 
-def write_ndjson(record: dict[str, Any], path: Path) -> None:
-    """Append one JSON line. Caller holds no lock; this function does."""
+def _rollover_if_needed(path: Path, max_bytes: int) -> None:
+    """Single-generation size rollover: rename to ``<name>.1``, start fresh.
+
+    Caller must hold _WRITE_LOCK. The cached handle is closed and dropped
+    BEFORE the rename -- on POSIX an open handle would keep appending to the
+    renamed file, and on Windows renaming an open file fails outright. Every
+    branch is fail-soft (the module's contract: it runs inside gate/graph on
+    every audit_log and must never raise); on any OSError the stream simply
+    keeps appending to the oversized file rather than dropping events.
+    """
+    try:
+        if path.stat().st_size < max_bytes:
+            return
+    except OSError:
+        return
+    handle = _NUMBAT_HANDLES.pop(str(path), None)
+    if handle is not None:
+        try:
+            handle.close()
+        except OSError:
+            pass
+    try:
+        os.replace(path, path.with_name(path.name + ".1"))
+    except OSError:
+        pass
+
+
+def write_ndjson(record: dict[str, Any], path: Path, *, max_bytes: int = 0) -> None:
+    """Append one JSON line. Caller holds no lock; this function does.
+
+    ``max_bytes`` > 0 arms the size rollover above, checked before the write
+    so no single append is split across generations.
+    """
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
     with _WRITE_LOCK:
+        if max_bytes:
+            _rollover_if_needed(path, max_bytes)
         handle = _numbat_handle(path)
         handle.write(line)
         handle.flush()
@@ -510,7 +559,7 @@ def emit_numbat_event(
             url=url,
             cfg=cfg,
         )
-        write_ndjson(record, _output_path(cfg))
+        write_ndjson(record, _output_path(cfg), max_bytes=_max_bytes(cfg))
     except Exception as exc:  # noqa: BLE001 - forensic projection must never fail the caller
         logger.warning("numbat emit failed for %s: %s", event_type, exc)
 
