@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,6 +72,49 @@ logger = logging.getLogger("cyclaw.agentic.chat_client")
 _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.ContextVar(
     "cyclaw_agentic_http_usage", default=None
 )
+
+# Bounded retry for the single model.invoke() below -- classification mirrors
+# llm/client.py's _post_with_retry rules: transport/connection failures and
+# HTTP 429/5xx are retried (2 extra attempts, 1s/2s backoff, 30s ceiling),
+# every other 4xx fails fast. Unlike the cloud clients in llm/client.py, a
+# TIMEOUT is deliberately NOT retried: utils/ops_runner budgets each loop
+# iteration at one planner_timeout_sec (720s shipped), so retrying a
+# timed-out call could burn up to 3x that inside a budget sized for 1x and
+# get the whole run SIGKILLed at the 3600s cap. Worst-case wall clock per
+# call is therefore ~planner_timeout_sec (one full timeout, not retried) or
+# two fast-failing retryable errors + ~3s of backoff on top of the attempt
+# that succeeds. LangChain's own max_retries client parameter was considered
+# and rejected: the underlying SDKs retry timeouts as connection errors,
+# and the provider packages are optional deps this module cannot import to
+# tune -- so classification below is duck-typed on the raised exception.
+_INVOKE_MAX_RETRIES = 2
+_INVOKE_BACKOFF_BASE_SEC = 1.0
+_INVOKE_BACKOFF_MAX_SEC = 30.0
+
+
+def _invoke_error_status_code(exc: Exception) -> int | None:
+    """HTTP status carried by a provider SDK error, wherever it keeps it."""
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _invoke_error_is_retryable(exc: Exception) -> bool:
+    """True only for transport/connection failures and HTTP 429/5xx.
+
+    Timeout classes are checked FIRST because both openai's and anthropic's
+    APITimeoutError subclass their APIConnectionError -- the name check keeps
+    the no-timeout-retry rule from being swallowed by the connection branch.
+    """
+    name = type(exc).__name__
+    if "Timeout" in name or isinstance(exc, TimeoutError):
+        return False
+    status = _invoke_error_status_code(exc)
+    if status is not None:
+        return status == 429 or status >= 500
+    return "Connection" in name or isinstance(exc, ConnectionError)
 
 
 @dataclass(frozen=True)
@@ -290,27 +334,41 @@ class ChatModelProposerClient:
             invoke_kwargs: dict[str, object] = {"max_tokens": max_tokens}
             if temperature is not None and provider != "claude":
                 invoke_kwargs["temperature"] = temperature
-            try:
-                ai_message = model.invoke(messages, **invoke_kwargs)
-            except Exception as exc:
-                # The concrete exception type depends on which SDK is active
-                # (openai/xai/anthropic clients, none importable here to enumerate) --
-                # mirrors llm/client.py's own "log only the type, never the message"
-                # discipline, since a provider error message can echo request content.
-                audit_log(
-                    {
-                        "event": "agentic_deepagent_cloud_model_failed",
-                        "provider": provider,
-                        "model": self.settings.model,
-                        "error_type": type(exc).__name__,
-                    },
-                    config_path=config_path,
-                    cfg=cfg,
-                )
-                raise AgenticError(
-                    f"cloud proposer invocation failed ({type(exc).__name__})",
-                    details={"provider": provider, "error_type": type(exc).__name__},
-                ) from exc
+            attempts = 0
+            while True:
+                attempts += 1
+                try:
+                    ai_message = model.invoke(messages, **invoke_kwargs)
+                    break
+                except Exception as exc:
+                    if attempts <= _INVOKE_MAX_RETRIES and _invoke_error_is_retryable(exc):
+                        # Same "type only, never the message" discipline as the
+                        # terminal failure below.
+                        logger.warning(
+                            "cloud proposer attempt %d/%d failed retryably (%s); backing off",
+                            attempts, _INVOKE_MAX_RETRIES + 1, type(exc).__name__,
+                        )
+                        time.sleep(min(_INVOKE_BACKOFF_BASE_SEC * (2 ** (attempts - 1)), _INVOKE_BACKOFF_MAX_SEC))
+                        continue
+                    # The concrete exception type depends on which SDK is active
+                    # (openai/xai/anthropic clients, none importable here to enumerate) --
+                    # mirrors llm/client.py's own "log only the type, never the message"
+                    # discipline, since a provider error message can echo request content.
+                    audit_log(
+                        {
+                            "event": "agentic_deepagent_cloud_model_failed",
+                            "provider": provider,
+                            "model": self.settings.model,
+                            "error_type": type(exc).__name__,
+                            "attempts": attempts,
+                        },
+                        config_path=config_path,
+                        cfg=cfg,
+                    )
+                    raise AgenticError(
+                        f"cloud proposer invocation failed ({type(exc).__name__})",
+                        details={"provider": provider, "error_type": type(exc).__name__, "attempts": attempts},
+                    ) from exc
 
             try:
                 content = _coerce_text_content(ai_message.content)
