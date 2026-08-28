@@ -38,7 +38,7 @@ tree. Verified against the repo, 2026-08-02:
 
 | Surface | What it installs | Extras? |
 |---|---|---|
-| `pip install -r requirements.txt -c constraints.txt` | Base runtime + torch CPU + the CI test/dev tools. 17 requirement lines. Header declares itself **DEPRECATED**, kept for legacy CI | **None.** Zero extras, by design |
+| `pip install -r requirements.txt -c constraints.txt` | Base runtime + torch CPU + the CI test/dev tools. 17 requirement lines. Header declares itself a **legacy compatibility surface**, kept in sync with `pyproject.toml`/`constraints.txt` for the Dockerfile and legacy CI/tools | **None.** Zero extras, by design |
 | `pip install -e ".[<extra>]" -c constraints.txt` | The 12 base deps, plus whichever of the 9 extras are named | **Yes — the only surface that can install one** |
 | `Dockerfile` | Runs `uv pip install --system -r requirements.txt -c constraints.txt`, with a pip fallback (`Dockerfile:39-41`) | **None** — it *is* surface #1, containerized |
 | `conda env create -f environment.yml` | Base runtime + test/dev tools from conda-forge, plus a 3-package `pip:` tail | **None** |
