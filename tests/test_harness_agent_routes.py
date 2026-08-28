@@ -865,6 +865,18 @@ def test_agent_run_refuses_over_budget_shape_before_subprocess(client, calls):
     assert detail["details"]["estimated_sec"] > REAL_REPO_RUN_MAX_TIMEOUT_SEC
     assert calls == []  # the shim -- and therefore the subprocess -- never ran
 
+    # The refusal must be ACTIONABLE: the envelope is tight and config-dependent
+    # (it shrinks as planner_timeout_sec or the check count grows), so a bare
+    # "too big" would leave the operator guessing which knob to turn.
+    fitting = detail["details"]["max_iterations_that_fit"]
+    assert fitting < 10, "a fitting count below the schema ceiling is the whole point"
+    assert f"max_iterations={fitting}" in detail["message"] or "select fewer checks" in detail["message"]
+    if fitting:
+        # And the number it advertises must actually be accepted by the guard.
+        ok = dict(_VALID_BODY, max_iterations=fitting,
+                  checks=[name for name, _desc in available_profiles()])
+        assert client.post(_RUN, json=ok).status_code == 200
+
 
 def test_agent_run_default_shape_clears_the_budget_guard(client, calls):
     """The default shape (3 iterations x 1 profile = 2820s with the shipped

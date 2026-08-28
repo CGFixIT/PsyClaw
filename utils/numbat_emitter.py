@@ -418,6 +418,27 @@ def build_event(
 _NUMBAT_HANDLES: dict[str, TextIO] = {}
 
 
+def _handle_still_points_at(handle: TextIO, path: Path) -> bool:
+    """True when the cached handle still refers to the file living at ``path``.
+
+    The cache is keyed on the path STRING, but a rename moves the name off the
+    inode the handle holds. Another process rolls this same stream over -- the
+    action plane runs in ops_runner children while a long-lived gate.py holds
+    its handle open -- so after that child's os.replace, an unchecked cached
+    handle keeps appending into the .1 generation, and the NEXT rollover
+    deletes the whole backlog. Verified: without this check the live file stops
+    existing and every later event lands in .1.
+
+    This is the check logging.handlers.WatchedFileHandler makes, for exactly
+    this reason. Fail-soft: any stat error answers "not current", which costs a
+    reopen and never an exception (this module must never raise).
+    """
+    try:
+        return os.fstat(handle.fileno()).st_ino == path.stat().st_ino
+    except OSError:
+        return False
+
+
 def _numbat_handle(path: Path) -> TextIO:
     """Return the cached append-mode handle for path, opening it if needed.
 
@@ -425,10 +446,19 @@ def _numbat_handle(path: Path) -> TextIO:
     """
     key = str(path)
     handle = _NUMBAT_HANDLES.get(key)
+    if handle is not None and not handle.closed and not _handle_still_points_at(handle, path):
+        # Someone rolled the stream over underneath us; drop the stale inode.
+        try:
+            handle.close()
+        except OSError:
+            # Losing the fd is acceptable -- the reopen below is what matters,
+            # and this module's contract forbids raising from the write path.
+            pass
+        _NUMBAT_HANDLES.pop(key, None)
+        handle = None
     if handle is None or handle.closed:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115  # codeql[py/file-not-closed] closed via atexit.register below and close_numbat_handles()
-        atexit.register(handle.close)
+        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115  # codeql[py/file-not-closed] closed via close_numbat_handles() at exit
         _NUMBAT_HANDLES[key] = handle
     return handle
 
@@ -475,7 +505,11 @@ def _rollover_if_needed(path: Path, max_bytes: int) -> None:
     try:
         if path.stat().st_size < max_bytes:
             return
-    except OSError:
+    except OSError as exc:
+        # Rollover is now effectively off for this path (an unreadable parent, a
+        # too-long name). Say so once at debug rather than growing unbounded in
+        # total silence -- every other fail-soft path in this module logs.
+        logger.debug("numbat rollover size check failed (%s); cap not enforced", type(exc).__name__)
         return
     handle = _NUMBAT_HANDLES.pop(str(path), None)
     if handle is not None:
@@ -502,6 +536,13 @@ def write_ndjson(record: dict[str, Any], path: Path, *, max_bytes: int = 0) -> N
 
     ``max_bytes`` > 0 arms the size rollover above, checked before the write
     so no single append is split across generations.
+
+    It defaults to 0 (uncapped) even though the module ships DEFAULT_MAX_BYTES:
+    config.yaml is the single source of truth for tunables, and only
+    emit_numbat_event() holds the cfg to read numbat.max_bytes from. A caller
+    handed just a path therefore gets the old unbounded behaviour rather than a
+    surprise rename it never configured. The shipped path always passes the
+    configured value -- see the emit_numbat_event() call site.
     """
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
     with _WRITE_LOCK:

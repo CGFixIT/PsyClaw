@@ -246,8 +246,17 @@ def run_checks(cfg: dict[str, Any]) -> None:
     llm_max = _dig(cfg, "models", "local_llm", "max_tokens")
     if _is_num(max_ctx) and _is_num(llm_max):
         floor = int(max_ctx) + int(llm_max) + 1500
+        # The nominal floor assumes the char->token conversion is exact. It is a
+        # worst-case FLOOR of 3 (see _CHARS_PER_TOKEN), so symbol-dense corpus
+        # text that tokenizes near 2 chars/token consumes more real context than
+        # the nominal number implies. Report both, or an operator sizes num_ctx
+        # off the smaller one and reopens the "0% processing" stall this check
+        # exists to prevent.
+        dense = int(max_ctx) * _CHARS_PER_TOKEN // 2 + int(llm_max)
         info("C12", f"set the local model's context length (num_ctx) >= {floor} "
                     f"(max_context_tokens {max_ctx} + max_tokens {llm_max} + ~1500 headroom) to avoid a stall")
+        info("C12", f"symbol-dense worst case needs >= {dense} "
+                    f"({max_ctx}*{_CHARS_PER_TOKEN} chars at ~2 chars/token + max_tokens {llm_max})")
     else:
         info("C12", "max_context_tokens/max_tokens not both numeric — skipping no-stall arithmetic")
 

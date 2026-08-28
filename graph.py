@@ -560,6 +560,13 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
 
     # Observability: if the assembled input still exceeds the token budget (e.g. a
     # very large query or soul), surface it so a downstream stall is diagnosable.
+    # This is deliberately near-unreachable, which is the point -- it is a
+    # tripwire, not a routine check. _context_char_budget() already sized the
+    # context block as max_context_tokens * CHARS_PER_TOKEN, so dividing the
+    # assembled prompt by that same constant can only exceed the same budget via
+    # the _MIN_CONTEXT_CHARS floor, or a soul + query that together overrun the
+    # budget before any context is added. If this ever fires, the reservation
+    # arithmetic above is wrong -- not merely tight.
     max_ctx_tokens = cfg.get("retrieval", {}).get("max_context_tokens", _DEFAULT_MAX_CONTEXT_TOKENS)
     est_prompt_tokens = len(prompt) // CHARS_PER_TOKEN
     if est_prompt_tokens > max_ctx_tokens:

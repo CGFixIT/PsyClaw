@@ -75,7 +75,7 @@ _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.Cont
 
 # Bounded retry for the single model.invoke() below -- classification mirrors
 # llm/client.py's _post_with_retry rules: transport/connection failures and
-# HTTP 429/5xx are retried (2 extra attempts, 1s/2s backoff, 30s ceiling),
+# HTTP 429/5xx are retried (2 extra attempts, 1s then 2s backoff),
 # every other 4xx fails fast. Unlike the cloud clients in llm/client.py, a
 # TIMEOUT is deliberately NOT retried: utils/ops_runner budgets each loop
 # iteration at one planner_timeout_sec (720s shipped), so retrying a
@@ -89,7 +89,6 @@ _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.Cont
 # tune -- so classification below is duck-typed on the raised exception.
 _INVOKE_MAX_RETRIES = 2
 _INVOKE_BACKOFF_BASE_SEC = 1.0
-_INVOKE_BACKOFF_MAX_SEC = 30.0
 
 
 def _invoke_error_status_code(exc: Exception) -> int | None:
@@ -107,6 +106,18 @@ def _invoke_error_is_retryable(exc: Exception) -> bool:
     Timeout classes are checked FIRST because both openai's and anthropic's
     APITimeoutError subclass their APIConnectionError -- the name check keeps
     the no-timeout-retry rule from being swallowed by the connection branch.
+
+    Two further choices that are not obvious from the code:
+
+    * Classification is by exception NAME, not isinstance, because the provider
+      packages are optional dependencies -- this module cannot import openai /
+      anthropic / xai to name their classes without making them hard deps and
+      breaking the offline install. The name comes from the locally installed
+      SDK class, never from the wire, so a hostile provider cannot spoof it.
+    * A carried status code SHORT-CIRCUITS the connection branch: once the
+      transport got far enough to read an HTTP status, the outcome is decided by
+      that status and nothing else. An error that both carries e.g. 404 and has
+      "Connection" in its name is a terminal 404, not a retryable blip.
     """
     name = type(exc).__name__
     if "Timeout" in name or isinstance(exc, TimeoutError):
@@ -348,7 +359,7 @@ class ChatModelProposerClient:
                             "cloud proposer attempt %d/%d failed retryably (%s); backing off",
                             attempts, _INVOKE_MAX_RETRIES + 1, type(exc).__name__,
                         )
-                        time.sleep(min(_INVOKE_BACKOFF_BASE_SEC * (2 ** (attempts - 1)), _INVOKE_BACKOFF_MAX_SEC))
+                        time.sleep(_INVOKE_BACKOFF_BASE_SEC * (2 ** (attempts - 1)))
                         continue
                     # The concrete exception type depends on which SDK is active
                     # (openai/xai/anthropic clients, none importable here to enumerate) --

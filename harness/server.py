@@ -67,6 +67,7 @@ from harness.ollama import HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
+    _MAX_ITERATIONS_CEILING,
     AgentDecisionRequest,
     AgentPublishRequest,
     AgentRunRequest,
@@ -1395,18 +1396,38 @@ def create_app(
         # outcome -- and unlike the SIGKILL it costs nothing.
         estimated_sec = real_repo_run_budget_sec(req.max_iterations, len(checks))
         if estimated_sec > REAL_REPO_RUN_MAX_TIMEOUT_SEC:
+            # The envelope is tight and config-dependent: the budget sums
+            # planner_timeout_sec (720 shipped) per iteration plus 120s per
+            # check per iteration, so with the shipped config this admits about
+            # 3 iterations at one check, and fewer as checks are added --
+            # selecting every available profile at the default iteration count
+            # already exceeds the cap. A bare refusal would leave the operator
+            # guessing which knob to turn, so compute the largest iteration
+            # count that fits THEIR check count by asking the same authoritative
+            # function (never a second copy of the arithmetic).
+            fits = [
+                n for n in range(1, _MAX_ITERATIONS_CEILING + 1)
+                if real_repo_run_budget_sec(n, len(checks)) <= REAL_REPO_RUN_MAX_TIMEOUT_SEC
+            ]
+            max_fitting = max(fits, default=0)
+            remedy = (
+                f"at {len(checks)} check profile(s) the most that fits is max_iterations={max_fitting}"
+                if max_fitting
+                else f"no iteration count fits with {len(checks)} check profile(s) -- select fewer checks"
+            )
             raise _err(
                 _HTTP_UNPROCESSABLE,
                 AgenticError(
                     f"requested shape budgets ~{estimated_sec}s but the synchronous run cap is "
-                    f"{REAL_REPO_RUN_MAX_TIMEOUT_SEC}s -- lower max_iterations and/or the check count "
-                    "so the run cannot be killed mid-flight",
+                    f"{REAL_REPO_RUN_MAX_TIMEOUT_SEC}s, so the run would be killed mid-flight; "
+                    f"{remedy}",
                     code="AGENTIC_BUDGET_EXCEEDED",
                     details={
                         "estimated_sec": estimated_sec,
                         "cap_sec": REAL_REPO_RUN_MAX_TIMEOUT_SEC,
                         "max_iterations": req.max_iterations,
                         "check_count": len(checks),
+                        "max_iterations_that_fit": max_fitting,
                     },
                 ),
             )

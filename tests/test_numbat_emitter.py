@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -374,3 +375,29 @@ def test_zero_max_bytes_disables_rollover(tmp_path: Path) -> None:
         emit_numbat_event("command.exec", command="echo hi", config_path=config_path)
     assert out.stat().st_size > 1200  # grew well past any small threshold
     assert not out.with_name(out.name + ".1").exists()
+
+
+def test_rollover_by_another_process_does_not_orphan_the_cached_handle(tmp_path: Path) -> None:
+    """Regression: a rename underneath a cached handle must force a reopen.
+
+    The handle cache is keyed on the path string, but a rename moves that name
+    off the inode the handle holds. The action plane rolls this same stream over
+    from ops_runner child processes while a long-lived gate.py holds its handle
+    open. Without an inode check the server keeps appending into the .1
+    generation for the rest of its uptime -- and the next rollover deletes that
+    whole backlog, silently ending the mainline plane's projection.
+    """
+    config_path, out = _rollover_cfg(tmp_path, max_bytes=0)
+    rolled = out.with_name(out.name + ".1")
+
+    emit_numbat_event("command.exec", command="echo before", config_path=config_path)
+    assert out.exists()
+
+    # Stand in for another process's rollover: rename the file out from under us.
+    os.replace(out, rolled)
+    emit_numbat_event("command.exec", command="echo after", config_path=config_path)
+
+    assert out.exists(), "live stream must be reopened, not abandoned"
+    fresh = out.read_text(encoding="utf-8")
+    assert "echo after" in fresh, "post-rename events must land in the live file"
+    assert "echo before" in rolled.read_text(encoding="utf-8")

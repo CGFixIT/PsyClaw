@@ -141,7 +141,10 @@ def register_ops_routes(
             # operator distinguish "ran too long, killed" from "errored". The
             # message is built here, never from str(e) -- TimeoutExpired's repr
             # embeds the full argv, which does not belong in an HTTP body.
-            timeout_sec = int(e.timeout)
+            # `or 0`: subprocess.run always populates .timeout when it raises, but a
+            # TypeError here would fire INSIDE the handler and escape as the very
+            # untyped 500 this branch exists to replace.
+            timeout_sec = int(e.timeout or 0)
             await audit({"event": f"ops_{route}_timeout", "action": action, "timeout_sec": timeout_sec})
             logger.error(
                 "/ops/%s action=%r exceeded its %ds budget and was killed",

@@ -124,7 +124,13 @@ def real_repo_run_budget_sec(max_iterations: int | None, check_count: int) -> in
         cfg = _get_config(str(_CONFIG_PATH))
         deep = ((cfg.get("agentic") or {}).get("deepagent_github") or {})
         planner_sec = int(deep.get("planner_timeout_sec", _REAL_REPO_RUN_FALLBACK_PLANNER_SEC))
-    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+    except Exception:  # noqa: BLE001 - contractually fail-soft; see below
+        # Deliberately broad. An enumerated tuple already proved incomplete
+        # once: yaml.YAMLError derives straight from Exception, so a malformed
+        # (not merely unreadable) config.yaml escaped it. This function and
+        # sync_timeout_sec() both promise "never raises" to callers that must
+        # answer anyway -- including gate.py's UNAUTHENTICATED /health -- so the
+        # promise is implemented rather than approximated.
         planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
     if planner_sec <= 0:
         planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
@@ -139,7 +145,15 @@ def real_repo_run_budget_sec(max_iterations: int | None, check_count: int) -> in
 
 
 def _real_repo_run_timeout_sec(max_iterations: int | None, check_count: int) -> int:
-    """Capped subprocess budget: the request-shape budget, held to the ceiling."""
+    """Capped subprocess budget: the request-shape budget, held to the ceiling.
+
+    Whether the min() actually binds depends on the caller. The harness route
+    (POST /api/agent/run) now refuses over-cap shapes up front, so for that path
+    this is provably a no-op. It stays load-bearing for every caller that skips
+    the route -- gate.py's /ops/agentic and direct `python -m agentic.cli` use --
+    where nothing has pre-validated the shape and an unbounded budget would hand
+    subprocess.run a timeout long enough to look like a hang.
+    """
     return min(real_repo_run_budget_sec(max_iterations, check_count), REAL_REPO_RUN_MAX_TIMEOUT_SEC)
 
 # fsconnect read-only CLI subcommands exposed via /ops/fsconnect.
@@ -244,7 +258,7 @@ def sync_timeout_sec() -> int:
         block = cfg.get("sync") or {}
         sec = int(block.get("sync_timeout_sec", 3600))
         post_sync_check = bool(block.get("post_sync_check", False))
-    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+    except Exception:  # noqa: BLE001 - contractually fail-soft, same rationale as real_repo_run_budget_sec
         sec, post_sync_check = 3600, False
     if sec <= 0:
         sec = 3600
