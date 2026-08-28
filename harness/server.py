@@ -93,7 +93,13 @@ from utils.authn import PasswordPolicyError, validate_role
 from utils.authn_manager import BOOTSTRAP_USERNAME
 from utils.errors import AgenticError, AuthBootstrapComplete
 from utils.logger import _get_config, audit_log, redact_sensitive
-from utils.ops_runner import OpsError, OpsResult, run_agentic_op
+from utils.ops_runner import (
+    REAL_REPO_RUN_MAX_TIMEOUT_SEC,
+    OpsError,
+    OpsResult,
+    real_repo_run_budget_sec,
+    run_agentic_op,
+)
 from utils.ratelimit import RateLimiter
 from utils.tool_broker import ToolDenied, assert_allowed
 
@@ -1360,6 +1366,9 @@ def create_app(
         --max-iterations and check count, capped at 3600s -- it was a flat 900s
         until that flat ceiling started killing legitimate runs once the
         planner timeout became configurable (default 720s x 3 iterations).
+        A shape whose uncapped budget exceeds that cap is refused up front
+        with 422 AGENTIC_BUDGET_EXCEEDED instead of being SIGKILLed at the
+        cap (which leaks the clone and a stuck 'running' record).
 
         Deliberately synchronous, and deliberately not a poll-a-background-job
         design, for two reasons found in the backend rather than chosen here:
@@ -1378,6 +1387,29 @@ def create_app(
                 _HTTP_BAD_REQUEST,
                 AgenticError(str(exc), code="UNKNOWN_CHECK_PROFILE", details={"requested": req.checks}),
             ) from exc
+        # Refuse shapes whose own budget formula exceeds the subprocess cap.
+        # Past the cap, subprocess.run SIGKILLs the CLI mid-flight, which leaks
+        # the repo clone and a permanently-'running' record no later call can
+        # resolve (utils/ops_runner.py documents that path as unrecoverable).
+        # Failing here, with the arithmetic, is the legible version of that
+        # outcome -- and unlike the SIGKILL it costs nothing.
+        estimated_sec = real_repo_run_budget_sec(req.max_iterations, len(checks))
+        if estimated_sec > REAL_REPO_RUN_MAX_TIMEOUT_SEC:
+            raise _err(
+                _HTTP_UNPROCESSABLE,
+                AgenticError(
+                    f"requested shape budgets ~{estimated_sec}s but the synchronous run cap is "
+                    f"{REAL_REPO_RUN_MAX_TIMEOUT_SEC}s -- lower max_iterations and/or the check count "
+                    "so the run cannot be killed mid-flight",
+                    code="AGENTIC_BUDGET_EXCEEDED",
+                    details={
+                        "estimated_sec": estimated_sec,
+                        "cap_sec": REAL_REPO_RUN_MAX_TIMEOUT_SEC,
+                        "max_iterations": req.max_iterations,
+                        "check_count": len(checks),
+                    },
+                ),
+            )
         try:
             assert_allowed(
                 _AGENT_RUN_TOOL,

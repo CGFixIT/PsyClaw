@@ -372,8 +372,12 @@ def test_run_forwards_the_issue_selector(client, calls):
 
 
 def test_run_forwards_max_iterations(client, calls):
-    client.post(_RUN, json={**_VALID_BODY, "max_iterations": 5})
-    assert calls[0][1]["max_iterations"] == 5
+    # 2, not 5: with the shipped 720s planner, shapes above 3 iterations now
+    # exceed the 3600s cap and are 422'd by the budget guard (see the guard
+    # tests at the bottom of this file). Any non-default value proves the
+    # forwarding this test exists for.
+    client.post(_RUN, json={**_VALID_BODY, "max_iterations": 2})
+    assert calls[0][1]["max_iterations"] == 2
 
 
 @pytest.mark.parametrize("bad", [0, -1, 11])
@@ -834,3 +838,37 @@ def test_agent_run_happy_path_still_calls_shim(client, calls):
     resp = client.post(_RUN, json=_VALID_BODY)
     assert resp.status_code == 200
     assert calls and calls[0][0] == "real-repo-run"
+
+
+# --- request-shape budget guard ----------------------------------------------
+
+
+def test_agent_run_refuses_over_budget_shape_before_subprocess(client, calls):
+    """A shape whose own budget formula exceeds the cap is 422'd up front:
+    past the cap subprocess.run SIGKILLs the CLI, leaking the clone and a
+    permanently-'running' record (utils/ops_runner.py documents that path as
+    unrecoverable), so the only good failure is the request-time one."""
+    from utils.ops_runner import REAL_REPO_RUN_MAX_TIMEOUT_SEC, real_repo_run_budget_sec
+
+    # The schema maxima (10 iterations x 8 profiles) are the audit's
+    # pathological case; only 4 real profiles exist, so the route-level probe
+    # below uses all of them -- 10 iterations alone already busts the cap.
+    assert real_repo_run_budget_sec(10, 8) > REAL_REPO_RUN_MAX_TIMEOUT_SEC
+
+    body = dict(_VALID_BODY, max_iterations=10,
+                checks=[name for name, _desc in available_profiles()])
+    resp = client.post(_RUN, json=body)
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["code"] == "AGENTIC_BUDGET_EXCEEDED"
+    assert detail["details"]["cap_sec"] == REAL_REPO_RUN_MAX_TIMEOUT_SEC
+    assert detail["details"]["estimated_sec"] > REAL_REPO_RUN_MAX_TIMEOUT_SEC
+    assert calls == []  # the shim -- and therefore the subprocess -- never ran
+
+
+def test_agent_run_default_shape_clears_the_budget_guard(client, calls):
+    """The default shape (3 iterations x 1 profile = 2820s with the shipped
+    720s planner) must keep passing through the guard to the shim."""
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 200
+    assert [action for action, _kwargs in calls] == ["real-repo-run"]

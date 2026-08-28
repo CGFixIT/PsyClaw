@@ -483,7 +483,7 @@ def test_real_repo_run_budget_is_capped(monkeypatch: pytest.MonkeyPatch) -> None
         ops_runner, "_get_config",
         lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 600}}},
     )
-    assert ops_runner._real_repo_run_timeout_sec(10, 8) == ops_runner._REAL_REPO_RUN_MAX_TIMEOUT_SEC  # noqa: SLF001
+    assert ops_runner._real_repo_run_timeout_sec(10, 8) == ops_runner.REAL_REPO_RUN_MAX_TIMEOUT_SEC  # noqa: SLF001
 
 
 @pytest.mark.parametrize("bad_cfg", [{}, {"agentic": None}, {"agentic": {"deepagent_github": None}}])
