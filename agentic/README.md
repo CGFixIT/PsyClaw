@@ -35,6 +35,7 @@ It is **never imported** by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
 | `agentic/harness_optimizer/` | Fixture/harness optimizer + scoped proposer workspace tools |
 | `agentic/fsconnect/` | Scoped filesystem connector (`python -m agentic.fsconnect.cli`) |
 | `agentic/sqlconnect/` | Read-only SQL connector (`python -m agentic.sqlconnect.cli`) |
+| `agentic/netconnect/` | Passive LAN inventory (`python -m agentic.netconnect.cli`) |
 | `agentic/unslop_bridge.py` | Offline slop-detection rail for the real-repo loop; ships `unslop.enabled: false` |
 | `agentic/vendor/unslop/` | Vendored UNSLOP scanners the bridge wraps (kept inside `agentic/` so they never cross I6) |
 | `agentic/selftest.py` | `python -m agentic.cli test` — offline preflight for the agentic layer |
@@ -189,6 +190,11 @@ sqlconnect:
   read_only: true                # hard requirement in v0.1
   allow_write: false             # must stay false
   allowed_sql_ops: [schema_list, table_preview, run_select, explain, row_count]
+
+netconnect:
+  enabled: false
+  allowed_cidrs: []              # explicit RFC1918/loopback subnets required when enabled
+  allowed_net_ops: [self, arp]   # passive only; no sweep/probe operation exists
 ```
 
 ---
@@ -277,6 +283,17 @@ sqlconnect:
 Set `CYCLAW_SQL_DSN` (or whatever `dsn_env` names). v0.1 **cannot write**
 (`read_only: true`, `allow_write: false` enforced at config load).
 
+### 7. Passive network connector
+
+```yaml
+netconnect:
+  enabled: true
+  allowed_cidrs: ["192.168.1.0/24"]
+```
+
+Only `self` and `arp` exist. `arp` reads the current OS neighbor cache with a
+fixed argv-list command; neither command sends a reachability probe.
+
 ---
 
 ## Security best practices
@@ -295,6 +312,7 @@ this section is how to **use** them without accidentally widening blast radius.
 | Draft PR | `real-repo-run-publish` — highest gate surface |
 | FS reads only | `fsconnect.enabled` with `writes_enabled: false` |
 | SQL | keep `read_only: true` / `allow_write: false` (required in v0.1) |
+| LAN inventory | `netconnect.enabled` plus the narrowest explicit CIDRs; only `self`/`arp` |
 
 Prefer **local model** for implement iterations; use cloud (`--provider` +
 `--confirm-online`) for a **one-shot plan** only when needed. Do not leave
@@ -385,6 +403,14 @@ per [`GITHUB_WRITE_ENABLEMENT.md`](../docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
 - Keep `max_rows` and `statement_timeout_ms` tight for exploratory use.
 - Do not set `allow_write: true` / `read_only: false` — config load fails closed
   in v0.1 for a reason.
+
+### Passive network connector
+
+- Configure the narrowest RFC1918/loopback CIDRs needed; public, link-local,
+  carrier-grade NAT, IPv6, and broader networks fail closed.
+- Treat results as cache-derived hints, not proof of reachability or a complete
+  network map. No active discovery operation exists in v0.1.
+- Audit records contain scope hashes and counts, never returned IP or MAC values.
 
 ### Cloud egress & data minimization
 
@@ -623,7 +649,18 @@ python -m agentic.sqlconnect.cli test
 
 Session-level read-only + SELECT-only query guard. No write path in v0.1.
 
-### J. Explicitly **not** available
+### J. Passive network connector tools (`netconnect`)
+
+```bash
+python -m agentic.netconnect.cli status
+python -m agentic.netconnect.cli self
+python -m agentic.netconnect.cli arp
+python -m agentic.netconnect.cli test
+```
+
+Cache-derived and scope-filtered only. No active scan command exists.
+
+### K. Explicitly **not** available
 
 - Host shell / PowerShell / bash agent tools (no Grok-Build / Kimi-style shell harness)
 - Unrestricted filesystem tools over the live repo
@@ -685,6 +722,7 @@ GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q
 python -m agentic.cli test
 python -m agentic.fsconnect.cli test
 python -m agentic.sqlconnect.cli test
+python -m agentic.netconnect.cli test
 ```
 
 ---

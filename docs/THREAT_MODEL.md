@@ -194,6 +194,14 @@ repository, and explicitly enabled workload are trusted and single-tenant:
 - **Filesystem writes are triple-gated and off by default.** `writes_enabled`
   defaults `False`; writes additionally require a non-empty `reason` and `confirm`,
   and are confined to an allow-list of writable roots via zero-TOCTOU path checks.
+- **Network inventory is passive and explicitly scoped.** `agentic/netconnect/`
+  ships disabled and exposes only best-effort local metadata plus reads of the
+  operating system's existing neighbor cache. Configured IPv4 networks must be
+  subnets of RFC1918 or loopback parents; returned addresses are filtered again
+  at the client boundary. The cache command is a fixed absolute argv list with
+  `shell=False` and a timeout. There is no ping, port probe, subnet sweep,
+  scheduler, `/ops` route, or request-path import. Cache contents are staleable
+  hints and do not prove reachability or completeness.
 - **Local governed writes exist and are not the same thing as GitHub writes.**
   Two agentic write paths are shipped, working, and default-off:
   `agentic/fsconnect/writer.py` (the filesystem writer above, which carries its
