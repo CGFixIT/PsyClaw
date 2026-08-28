@@ -114,7 +114,7 @@ def _neighbor_command(system_name: str) -> list[str]:
     """Return a fixed absolute passive-cache command for the host platform."""
     system_key = system_name.lower()
     if system_key.startswith("win"):
-        root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        root = Path(os.environ.get("SystemRoot", r"C:\\Windows"))
         candidates = (root / "System32" / "arp.exe",)
         args = ("-a",)
     elif system_key == "linux":
@@ -135,6 +135,19 @@ def _neighbor_command(system_name: str) -> list[str]:
         f"passive neighbor-cache command not found for {system_name}",
         details={"platform": system_name},
     )
+
+
+def _scope_interface(raw: str, scope: ScopePolicy) -> str:
+    """Keep named NICs; redact out-of-scope IPv4 interface addresses."""
+    if not raw:
+        return ""
+    try:
+        parsed = ip_address(raw)
+    except ValueError:
+        return raw
+    if parsed.version != 4 or not scope.contains(str(parsed)):
+        return ""
+    return str(parsed)
 
 
 class NetClient:
@@ -233,7 +246,13 @@ class NetClient:
             )
 
         observed = parse_neighbor_cache(result.stdout, system_name)
-        in_scope = [item for item in observed if self.scope.contains(item["ip"])]
+        in_scope = []
+        for item in observed:
+            if not self.scope.contains(item["ip"]):
+                continue
+            filtered = dict(item)
+            filtered["interface"] = _scope_interface(item["interface"], self.scope)
+            in_scope.append(filtered)
         in_scope.sort(
             key=lambda item: (
                 int(ip_address(item["ip"])),

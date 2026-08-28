@@ -69,7 +69,7 @@ def test_arp_uses_fixed_argv_filters_scope_and_redacts_audit(tmp_path, capsys, m
     })
     import agentic.netconnect.client as client
 
-    argv = [r"C:\Windows\System32\arp.exe", "-a"]
+    argv = [r"C:\\Windows\\System32\\arp.exe", "-a"]
     seen: dict = {}
     monkeypatch.setattr(client.platform, "system", lambda: "Windows")
     monkeypatch.setattr(client, "_neighbor_command", lambda _system: argv)
@@ -92,6 +92,7 @@ def test_arp_uses_fixed_argv_filters_scope_and_redacts_audit(tmp_path, capsys, m
     assert cli.main(["--config", path, "arp"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert [item["ip"] for item in payload["neighbors"]] == ["192.168.1.1"]
+    assert payload["neighbors"][0]["interface"] == "192.168.1.50"
     assert payload["active_probe"] is False
     assert seen["argv"] == argv
     assert seen["kwargs"]["shell"] is False
@@ -121,3 +122,36 @@ def test_selftest_never_runs_platform_command(tmp_path, monkeypatch):
     )
     passed, total, _lines = run_self_test(path)
     assert total == 4 and passed == total
+
+
+def test_windows_interface_ip_is_scope_filtered(tmp_path, capsys, monkeypatch):
+    path = _cfg(tmp_path, {
+        "enabled": True,
+        "allowed_cidrs": ["192.168.1.1/32"],
+    })
+    import agentic.netconnect.client as client
+
+    argv = [r"C:\\Windows\\System32\\arp.exe", "-a"]
+    monkeypatch.setattr(client.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(client, "_neighbor_command", lambda _system: argv)
+
+    def fake_run(actual, **kwargs):
+        return subprocess.CompletedProcess(
+            actual,
+            0,
+            stdout=(
+                "Interface: 192.168.1.50 --- 0x6\n"
+                "  192.168.1.1 aa-bb-cc-dd-ee-ff dynamic\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(client.subprocess, "run", fake_run)
+    assert cli.main(["--config", path, "arp"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [item["ip"] for item in payload["neighbors"]] == ["192.168.1.1"]
+    assert payload["neighbors"][0]["interface"] == ""
+    assert payload["active_probe"] is False
+    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert "192.168.1.50" not in audit_text
+    assert "192.168.1.1" not in audit_text
