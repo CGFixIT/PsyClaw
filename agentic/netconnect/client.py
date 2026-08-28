@@ -114,7 +114,7 @@ def _neighbor_command(system_name: str) -> list[str]:
     """Return a fixed absolute passive-cache command for the host platform."""
     system_key = system_name.lower()
     if system_key.startswith("win"):
-        root = Path(os.environ.get("SystemRoot", r"C:\\Windows"))
+        root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
         candidates = (root / "System32" / "arp.exe",)
         args = ("-a",)
     elif system_key == "linux":

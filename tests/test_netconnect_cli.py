@@ -39,6 +39,27 @@ def test_status_and_disabled_noop(tmp_path, capsys):
     assert "disabled" in capsys.readouterr().out.lower()
 
 
+def test_status_surfaces_unknown_config_keys(tmp_path, capsys):
+    """A typo'd netconnect key must show up in status output, not vanish.
+
+    load_netconnect_config() drops unrecognized keys onto _unknown_keys; before
+    this display line nothing on the CLI path read it, so e.g. `max_neighbor`
+    silently ran on the default.
+    """
+    path = _cfg(tmp_path, {"enabled": False, "max_neighbor": 5})
+    assert cli.main(["--config", path, "status"]) == 0
+    captured = capsys.readouterr()
+    assert "max_neighbor" in captured.err
+    assert "unknown netconnect keys" in captured.err
+
+    # And a clean config stays silent on stderr. _cfg reuses the same path and
+    # _get_config caches by path, so drop the cache before the reload.
+    reset_config_cache()
+    clean = _cfg(tmp_path, {"enabled": False})
+    assert cli.main(["--config", clean, "status"]) == 0
+    assert "unknown netconnect keys" not in capsys.readouterr().err
+
+
 def test_self_inventory_never_resolves_or_probes(tmp_path, capsys, monkeypatch):
     path = _cfg(tmp_path, {
         "enabled": True,
