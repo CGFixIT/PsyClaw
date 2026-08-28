@@ -50,7 +50,8 @@ Code modules mirror `CLAUDE.md` §2's "Key modules" table (more granular — tre
 - `static/` - browser consoles: `terminal.html` + `terminal.js` (the gateway
   operator console, served at `/` on `127.0.0.1:8787`), `harness.html` (the
   coding-harness console, served at `/` on `127.0.0.1:8790`), and the shared
-  `auth_admin.js` Users panel. Only `gate.py` mounts `/static`.
+  `auth_admin.js` Users panel. Both servers mount `/static`, so the shared
+  panel works on either console.
 - `tests/` - pytest suite and smoke helpers.
 - `.github/workflows/` - CI, lint, conda, CodeQL, and security workflows.
 - `.claude/` - Claude project skills, commands, hooks, rules, and patterns.
