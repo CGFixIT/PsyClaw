@@ -1015,8 +1015,11 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # _check_rate_limit_async, since CEL compile/eval and the Numbat file write
     # are synchronous. The graph state key is answer_sources (graph.py's
     # GraphState) — result.get("sources") was never populated, which left
-    # source_hashes permanently empty.
-    cel_block = (cfg.get("numbat") or {}).get("cel") or {}
+    # source_hashes permanently empty. The isinstance guard mirrors
+    # utils.numbat_cel._cel_cfg: a truthy non-dict `numbat:` block (malformed
+    # config) must fail open here, not raise AttributeError into a 500.
+    numbat = cfg.get("numbat")
+    cel_block = (numbat.get("cel") or {}) if isinstance(numbat, dict) else {}
     if cel_block.get("enabled") is True:
         try:
             sources = result.get("answer_sources", []) or []
