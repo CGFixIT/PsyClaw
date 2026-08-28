@@ -129,7 +129,15 @@ The 29–34 figure should be treated as unverified until then.
   cache. The env vars are harmless if ignored; the sizing above brackets both cases.
   (Speculating beyond that would violate the repo's own don't-invent rule.)
 
-## Findings kept out of this change (follow-ups)
+## Findings initially kept out of this change (1–4 landed same-day on this branch)
+
+Findings 1–4 below were implemented later the same day as four focused commits on
+this same branch after operator review of this report: the harness 422
+`AGENTIC_BUDGET_EXCEEDED` guard (note: with the shipped 720s planner it also refuses
+shapes above 3 iterations at the route — the uncapped CLI path is unchanged), the
+gate-console 504 `OPS_TIMEOUT` mapping, the cloud-planner bounded retry (timeouts
+deliberately not retried — one planner budget per iteration), and the
+`numbat.max_bytes` single-generation rollover (ships 50 MiB). Findings 5–7 remain open.
 
 1. **Harness run-request formula overflow** — `harness/schemas.py` accepts 10 iterations
    × 8 check profiles (formula ≈ 17,100 s) that `utils/ops_runner.py` silently truncates
