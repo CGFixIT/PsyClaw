@@ -21,6 +21,8 @@ from utils.external_pre_hook import (
 )
 from utils.numbat_emitter import close_numbat_handles
 
+_TEST_QUERY_HASH = "a" * 64
+
 
 @pytest.fixture(autouse=True)
 def _release_numbat_handles():
@@ -121,7 +123,7 @@ def test_emit_verdict_true_exit_2_emits_permission_denied(tmp_path: Path):
             "import sys; sys.stderr.write('blocked'); sys.exit(2)",
         ),
     )
-    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    result = run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg)
     assert result["verdict"] == "deny"
     assert "blocked" in result["reason"]
 
@@ -136,7 +138,9 @@ def test_emit_verdict_true_exit_2_emits_permission_denied(tmp_path: Path):
     assert rec["approval_reason"] == "hook_denied"
     assert rec["entrypoint"] == "cyclaw"
     assert "cyclaw" in rec["tags"]
-    assert "query" not in json.dumps(rec)
+    assert rec["query_hash"] == _TEST_QUERY_HASH
+    rec_sans_hash = {k: v for k, v in rec.items() if k != "query_hash"}
+    assert "query" not in json.dumps(rec_sans_hash)
     assert "blocked" not in json.dumps(rec)
 
 
@@ -147,7 +151,7 @@ def test_emit_verdict_true_timeout_emits_network_indicator(tmp_path: Path, monke
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 5))
 
     monkeypatch.setattr(subprocess, "run", _raise_timeout)
-    result = run_pre_action_hook("claude", "claude-sonnet-4", "abc", cfg)
+    result = run_pre_action_hook("claude", "claude-sonnet-4", _TEST_QUERY_HASH, cfg)
     assert result["verdict"] == "deny"
 
     records = _lines(Path(cfg["numbat"]["output_path"]))
@@ -156,7 +160,9 @@ def test_emit_verdict_true_timeout_emits_network_indicator(tmp_path: Path, monke
     assert rec["event_type"] == "network.indicator"
     assert rec["confidence"] == "low"
     assert rec["model_provider"] == "anthropic"
-    assert "query" not in json.dumps(rec)
+    assert rec["query_hash"] == _TEST_QUERY_HASH
+    rec_sans_hash = {k: v for k, v in rec.items() if k != "query_hash"}
+    assert "query" not in json.dumps(rec_sans_hash)
 
 
 def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -166,7 +172,7 @@ def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, mo
         return subprocess.CompletedProcess(args=args[0], returncode=7, stdout=b"boom", stderr=b"")
 
     monkeypatch.setattr(subprocess, "run", _exit_7)
-    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    result = run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg)
     assert result["verdict"] == "deny"
 
     records = _lines(Path(cfg["numbat"]["output_path"]))
@@ -174,6 +180,7 @@ def test_emit_verdict_true_other_exit_emits_network_indicator(tmp_path: Path, mo
     rec = records[0]
     assert rec["event_type"] == "network.indicator"
     assert rec["confidence"] == "low"
+    assert rec["query_hash"] == _TEST_QUERY_HASH
 
 
 def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

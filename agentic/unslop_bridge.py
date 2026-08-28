@@ -157,7 +157,8 @@ def build_unslop_probe(
 
     try:
         from agentic.vendor.unslop import suggest
-    except Exception:
+    except Exception as exc:
+        logging.debug("agentic.vendor.unslop import failed: %s", type(exc).__name__)
         return None
 
     def _suggest(text: str) -> dict[str, Any]:

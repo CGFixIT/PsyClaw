@@ -104,6 +104,7 @@ def _emit_hook_verdict(
             entrypoint="cyclaw",
             tags=["pre_action_hook", reason_code],
             confidence=confidence,
+            query_hash=query_hash,
             cfg=cfg,
         )
     except Exception as exc:  # noqa: BLE001 - derived stream must never fail the caller
