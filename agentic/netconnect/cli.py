@@ -59,6 +59,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     _kv("command_timeout_sec", net_cfg.command_timeout_sec)
     _kv("max_neighbors", net_cfg.max_neighbors)
     _kv("active_scanning", False)
+    # Same operator-facing typo surfacing as guardrails/cli.py's cmd_status:
+    # load_netconnect_config() drops unrecognized keys onto _unknown_keys, and
+    # without this line a typo'd key silently runs on the default.
+    if getattr(net_cfg, "_unknown_keys", None):
+        _err(f"unknown netconnect keys (typos?): {net_cfg._unknown_keys}")
     return EXIT_OK
 
 
