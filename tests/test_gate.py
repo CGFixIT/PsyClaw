@@ -1092,8 +1092,11 @@ class TestRateLimitAuditThrottle:
         gate._rate_limit_audit_last.clear()
         now = _time.monotonic()
         cap = gate._RATE_LIMIT_AUDIT_CAP
+        # All timestamps within the rate-limit window so stale prune removes
+        # nothing — only the overflow eviction path is exercised. flood-0 is
+        # the oldest (smallest timestamp) and must be evicted.
         for i in range(cap):
-            gate._rate_limit_audit_last[f"flood-{i}"] = now - (cap - i)
+            gate._rate_limit_audit_last[f"flood-{i}"] = now - (cap - i) / cap
         assert gate._should_audit_rate_limit("new-ip", now) is True
         assert len(gate._rate_limit_audit_last) == cap
         assert "new-ip" in gate._rate_limit_audit_last
