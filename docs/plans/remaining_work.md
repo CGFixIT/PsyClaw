@@ -3,9 +3,9 @@
 Live checklist as of **2026-08-21**, `origin/main` `02447585`.
 
 Code and `config.yaml` win. History of closed 2026-08-02 items lives in
-[`docs/zWork/remaining_work_STALE.md`](docs/zWork/remaining_work_STALE.md)
+[`docs/zWork/remaining_work_STALE.md`](../zWork/remaining_work_STALE.md)
 (do not treat that file as the open list). Design history:
-[`docs/ARCHIVE_AND_ROADMAP.md`](docs/ARCHIVE_AND_ROADMAP.md).
+[`docs/ARCHIVE_AND_ROADMAP.md`](../ARCHIVE_AND_ROADMAP.md).
 
 ## Shipped posture (re-read `config.yaml` before citing)
 
@@ -21,10 +21,8 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 
 ## Still open in the tree
 
-- **httpx2 / TestClient** — `httpx==0.28.1`; owed before a Starlette major. `docs/TESTCLIENT_HTTPX_DEPRECATION.md`
+- **httpx2 / TestClient** — `httpx==0.28.1`; owed before a Starlette major. `docs/analysis/TESTCLIENT_HTTPX_DEPRECATION.md`
 - **`websockets` 15 → 16** — still `15.0.1`; blocked on `langgraph-sdk` import of `websockets.asyncio`
-- **NeMo 4b `check_soul_leak`** — listed in `guardrails.output_rails`, not fully built. `docs/NeMo/phase4b_soul_leak.md`
-- **#1134 NeMo program** — sequential drafts. Phase 1 = types/matrix/metrics/real-NeMo CI. Phase 2a = 0.23 engine hygiene (stop self-check smash). 0.24 bump and brokers later. Do not wire `safe_generate` into the graph.
 - **Agentic loop is GitHub-clone-only** — no local-directory attach. Capability boundary, not a bug
 
 ## Shipped in tree (GitHub issue closed unless noted)
@@ -36,6 +34,8 @@ Code and `config.yaml` win. History of closed 2026-08-02 items lives in
 - Offline sequence detection — `utils/sequence_detect.py` joined to `cyclaw-metrics` (audit.jsonl + `source=query` spend.jsonl on `query_hash`). Forensic only; `/query` still has no cross-request policy state. On-path correlation id / checkpointer stays High-tier and out of this work.
 - Groundedness evaluator — merged as [#1048](https://github.com/cgfixit/CyClaw/pull/1048) (`tests/judge_eval.py`, opt-in `CYCLAW_EVAL_LIVE=1`). Issue [#962](https://github.com/cgfixit/CyClaw/issues/962) is still **open** as close-out (live run), not a re-implement.
 - Agentic spend `source:"agentic"` + metrics split — [#1045](https://github.com/cgfixit/CyClaw/pull/1045) / [#1046](https://github.com/cgfixit/CyClaw/pull/1046). Issue [#1013](https://github.com/cgfixit/CyClaw/issues/1013) is still **open** for the live-key bar.
+- NeMo 4b `check_soul_leak` — merged as [#1155](https://github.com/cgfixit/CyClaw/pull/1155). Enforced on `check_output` (`guardrails/integration.py:318-319`), in `DEFAULT_OUTPUT_RAILS` (`guardrails/config.py:74`), and the Colang flow (`guardrails/config/rails.co:122-126`). `docs/NeMo/phase4b_soul_leak.md`
+- **#1134 NeMo program** — issue [#1134](https://github.com/cgfixit/CyClaw/issues/1134) is **closed** (2026-08-27); the 0.24 bump landed (`nemoguardrails==0.24.0`, `constraints.txt:87` / `pyproject.toml:55`, `nemo_runtime` marker). Still do not wire `safe_generate` into the graph.
 
 Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://github.com/cgfixit/CyClaw/issues/958), [#961](https://github.com/cgfixit/CyClaw/issues/961), [#963](https://github.com/cgfixit/CyClaw/issues/963) (pre-action hook shipped), [#965](https://github.com/cgfixit/CyClaw/issues/965), [#966](https://github.com/cgfixit/CyClaw/issues/966), [#974](https://github.com/cgfixit/CyClaw/issues/974).
 

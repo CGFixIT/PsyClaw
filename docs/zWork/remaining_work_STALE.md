@@ -1,7 +1,7 @@
 # Remaining Work (STALE — 2026-08-02)
 
 > **Not the live list.** Current checklist:
-> [`remaining_work.md`](../../remaining_work.md). Keep this file as the
+> [`remaining_work.md`](../plans/remaining_work.md). Keep this file as the
 > closed-item / refutation log from 2026-08-02 (`9282359`).
 
 Open engineering work on CyClaw `main`, as of **2026-08-02** (`9282359`).
@@ -26,7 +26,7 @@ of deletion, per an explicit owner decision that changed the plan mid-stream.
 Each item below is annotated in place rather than silently rewritten, so the
 history stays legible.
 
-**Relationship to other docs.** [`docs/ARCHIVE_AND_ROADMAP.md`](docs/ARCHIVE_AND_ROADMAP.md)
+**Relationship to other docs.** [`docs/ARCHIVE_AND_ROADMAP.md`](../ARCHIVE_AND_ROADMAP.md)
 holds the *history and rationale* — retired designs, superseded plans, why
 things were decided. This file is the *actionable checklist*: what is still
 open, with the file:line that proves it. When they disagree, trust the

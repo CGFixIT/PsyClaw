@@ -28,7 +28,7 @@
 - [Telegram Channel](#telegram-channel-v19)
 - [OpenTweet Channel](#opentweet-channel)
 - [Security Model](#security-model)
-- [Remaining Work](docs/zWork/remaining_work_STALE.md) 
+- [Remaining Work](docs/plans/remaining_work.md) 
 - [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) 
 
 ---

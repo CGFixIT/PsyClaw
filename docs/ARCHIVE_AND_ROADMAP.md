@@ -1,7 +1,7 @@
 # Archive and Roadmap
 
 > **Looking for what is still open?** See
-> [`/remaining_work.md`](../remaining_work.md) — the 2026-08-16 checklist
+> [`docs/plans/remaining_work.md`](plans/remaining_work.md) — the 2026-08-16 checklist
 > (re-created because this link had been dangling). The 2026-08-02 closed-item
 > log is [`docs/zWork/remaining_work_STALE.md`](zWork/remaining_work_STALE.md).
 > This file is history and rationale, not the live backlog.
