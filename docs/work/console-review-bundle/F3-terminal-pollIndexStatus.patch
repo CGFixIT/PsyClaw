@@ -1,0 +1,77 @@
+# F3 — terminal console: pollIndexStatus consumes JSON-bodied non-2xx as build state
+#
+# STATUS: VERIFIED and APPLIED.
+# Target: static/terminal.js
+# Line numbers verified against main @ 8a534ab on 2026-08-28: the file was
+# 1717 lines pre-fix, pollIndexStatus at :448, the fetch at :452, the
+# unguarded resp.json() at :453. The hunk context below matched the file
+# byte-for-byte, so `git apply` landed it without fuzz.
+#
+# Bug: `const s = await resp.json()` ran with no resp.ok guard. Any non-2xx
+# that carries a JSON body -- a 429 from the gate's front-running rate limiter,
+# a 503, FastAPI's {"detail": ...} -- parses fine, s.state comes back undefined,
+# and `indexBuild.state = s.state === 'done' ? 'idle' : 'error'` (:463 pre-fix,
+# :470 now) renders a failed build while the build is still running server-side.
+#
+# The tree was self-inconsistent about this. checkHealth (:552 pre-fix, :559 now)
+# DOES carry the guard, and its own comment (:555 pre-fix, :562 now) asserts
+# "Every other fetch in this file guards on resp.ok" -- which was false
+# precisely because of this poller. The fix makes that comment true.
+#
+# Non-JSON failures already threw inside .json() and hit the retry path; this
+# routes JSON-bodied failures down the same path.
+
+--- a/static/terminal.js
++++ b/static/terminal.js
+@@ -450,6 +450,13 @@ function pollIndexStatus() {
+   indexBuild.timer = setTimeout(async () => {
+     try {
+       const resp = await fetchWithTimeout(`${API}/index/status`, {}, 3000);
++      // Mirror checkHealth's guard: a JSON-bodied non-2xx (a 429 from the
++      // front-running rate limiter, a 503) must not reach the state machine --
++      // s.state comes back undefined, and the assignment below reads that as
++      // a FAILED build while the build keeps running server-side. Throwing
++      // routes it through the miss counter instead: transient, retried, and
++      // bounded by INDEX_POLL_MAX_MISSES like any other dropped poll.
++      if (!resp.ok) throw new Error(`index status ${resp.status}`);
+       const s = await resp.json();
+       indexBuild.misses = 0;   // a reachable server clears the miss streak
+       indexBuild.done = s.chunks_done || 0;
+
+# Regression test shipped with the fix:
+#   tests/test_terminal_contract.py
+#     test_index_status_poll_treats_a_non_ok_response_as_a_dropped_poll
+# Modelled on the sibling test_check_health_treats_a_non_ok_response_as_unreachable
+# (:145), which uses the same split-on-function-name technique. It asserts the
+# guard exists AND precedes both `await resp.json()` and `indexBuild.misses = 0`
+# -- a guard placed after either would silently do nothing.
+#
+# Behavior change matrix:
+#   429/503 mid-build (JSON body)  before: false "build failed" UI, build continues
+#                                  after:  counted as a miss; retried; UI keeps
+#                                          showing progress; INDEX_POLL_MAX_MISSES
+#                                          (20, terminal.js:348) x INDEX_POLL_MS
+#                                          (1500, :342) = ~30s of solid failures
+#                                          => the existing "Lost contact ... reload
+#                                          to check"
+#   network error / non-JSON body  unchanged (already the miss path)
+#   2xx running/done/error         unchanged
+#
+# Left deliberately untouched: the 1.5s poll cadence. That is a server-side
+# decision tracked in the companion issue -- the console spends 40 of the gate's
+# 60 req/min budget on this route, and the remedy is EITHER exempting
+# GET /index/status from the limiter OR raising INDEX_POLL_MS to 3000, never
+# both. This guard makes a limiter hit survivable, not desirable.
+#
+# CORRECTION to the original companion issue's arithmetic: GET /health is NOT
+# rate-limited (gate.py:1164 carries no dependencies= clause), so the 15s health
+# poll spends none of that budget. GET /index/status IS rate-limited
+# (gate.py:913). The squeeze is real but smaller than the issue stated.
+#
+# Manual verification (what the text-parsing test cannot prove):
+# 1. Start a build, then have the server answer /index/status with 429+JSON
+#    (or temporarily drop the route to 503): panel must keep saying
+#    "Building your library…" and recover on the next 2xx poll.
+# 2. Kill the gateway mid-build: after ~30s the existing lost-contact message
+#    must appear (unchanged behavior).
+# 3. Normal build to completion: "Your library is ready" entry unchanged.
