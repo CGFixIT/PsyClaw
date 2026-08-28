@@ -31,10 +31,16 @@ Verifies, in the same order harness.html's own on-load + first-use calls fire:
      JSON envelope -- a sandbox may lack a configured git remote)
  12. GET  /api/harness/runs  (/harness command)
  13. GET  /api/agent/checks  (/agent checks) + auth-gate on the write routes
+     (run, decision, push, publish, discard -- bad bearer only, never a real
+     invocation: a real run clones a repo, calls a model, can block ~900s,
+     and push/publish/discard reach a git write)
  14. POST /api/sessions/{id}/goal  (/goal set, persist; listing omits goal)
  15. POST /api/chat {loop: true}   (/loop with goal = chat-only 200/502;
      clear goal; then 400 LOOP_REQUIRES_GOAL)
  16. POST /api/chat/cancel   (/loop stop -- idempotent when nothing is running)
+ 17. GET  /api/keys       (/api -- presence + masked tail, never a secret value)
+ 18. GET  /api/auth/setup-status  (/users -- 503 AUTH_DISABLED by default;
+     shipped auth.enabled is false)
 
 Usage (called from verify.sh while the harness server is running):
     python harness_emulation.py <base_url>  (default: loopback:8790)
@@ -362,7 +368,13 @@ def main() -> int:
         except Exception as exc:
             check("GET /api/agent/checks", False, repr(exc))
 
-        for path in ("/api/agent/run", f"/api/agent/runs/{'0' * 32}/decision"):
+        for path in (
+            "/api/agent/run",
+            f"/api/agent/runs/{'0' * 32}/decision",
+            f"/api/agent/runs/{'0' * 32}/push",
+            f"/api/agent/runs/{'0' * 32}/publish",
+            f"/api/agent/runs/{'0' * 32}/discard",
+        ):
             try:
                 unauthed = client.post(path, json={}, headers={"Authorization": "Bearer wrong"})
                 check(f"POST {path} rejects a bad key", unauthed.status_code == 401,
@@ -455,6 +467,39 @@ def main() -> int:
             )
         except Exception as exc:
             check("POST /api/chat/cancel", False, repr(exc))
+        print()
+
+        # ── 17. API keys panel (/api) ──────────────────────────────────────
+        print("[17] GET /api/keys  (/api -- presence + masked tail only)")
+        try:
+            r = client.get("/api/keys")
+            d = r.json() if r.status_code == 200 else {}
+            check("/api/keys returns 200", r.status_code == 200, f"status={r.status_code}")
+            check("/api/keys has 'keys' and 'env_file'", "keys" in d and "env_file" in d)
+            check(
+                "/api/keys never echoes this process's own Bearer key",
+                api_key not in r.text if api_key else True,
+            )
+        except Exception as exc:
+            check("GET /api/keys", False, repr(exc))
+        print()
+
+        # ── 18. Auth setup status (/users) ─────────────────────────────────
+        print("[18] GET /api/auth/setup-status  (/users -- shipped default: auth off)")
+        try:
+            r = client.get("/api/auth/setup-status")
+            # Shipped config ships auth.enabled: false -> 503 AUTH_DISABLED,
+            # the same contract gate_auth.py's /auth/setup-status documents.
+            # An operator config with auth enabled would instead see 200 +
+            # {enabled, needs_password, username}.
+            detail = (r.json().get("detail") or {}) if r.status_code != 200 else {}
+            check(
+                "/api/auth/setup-status is 503 AUTH_DISABLED by default",
+                r.status_code == 503 and detail.get("code") == "AUTH_DISABLED",
+                f"status={r.status_code}",
+            )
+        except Exception as exc:
+            check("GET /api/auth/setup-status", False, repr(exc))
         print()
 
     print()
