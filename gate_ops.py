@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -134,6 +135,23 @@ def register_ops_routes(
         except OpsError as e:
             await audit({"event": f"ops_{route}_rejected", "action": action, "error": str(e)})
             raise HTTPException(status_code=400, detail={"error": str(e), "code": "OPS_BAD_ACTION"}) from e
+        except subprocess.TimeoutExpired as e:
+            # The shim SIGKILLed the CLI at its budget. A typed 504 (matching the
+            # harness console's AGENTIC_TIMEOUT for the identical failure) lets the
+            # operator distinguish "ran too long, killed" from "errored". The
+            # message is built here, never from str(e) -- TimeoutExpired's repr
+            # embeds the full argv, which does not belong in an HTTP body.
+            timeout_sec = int(e.timeout)
+            await audit({"event": f"ops_{route}_timeout", "action": action, "timeout_sec": timeout_sec})
+            logger.error("/ops/%s action=%r exceeded its %ds budget and was killed", route, _log_safe(action), timeout_sec)
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": f"CLI exceeded its {timeout_sec}s budget and was killed",
+                    "code": "OPS_TIMEOUT",
+                    "timeout_sec": timeout_sec,
+                },
+            ) from e
         except Exception as e:
             safe_msg = sanitize_error(e)
             await audit({"event": f"ops_{route}_error", "action": action, "error": safe_msg})
