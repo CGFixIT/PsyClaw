@@ -69,6 +69,18 @@ C `sqlconnect` read-only guard, D NeMo guardrails, E PostgreSQL backends
 Result on this branch: `[smoke] All checks passed (10 passed, 3 skipped)` —
 the 3 skips are section E's PostgreSQL lanes, which require `CYCLAW_DB_URL`.
 
+> ⚠️ **Correction (same day): section F's verdict was meaningless until this
+> change, so read that "all checks passed" as covering A–E and G only.**
+> Section F derived pass/fail by grepping pytest's output for `N failed`, but
+> `pyproject.toml` already sets `addopts = "-q --tb=short"`, so smoke.sh's own
+> `-q` made it `-qq` — and at `-qq` pytest prints no count summary at all. Both
+> greps matched nothing on every run, the failure count defaulted to `0`, and
+> the section reported `PASS (passed=0 skipped=0)` unconditionally. Verified by
+> feeding it a deliberately failing suite: it still said PASS. Section F now
+> takes pytest's **exit code** as the verdict and treats the counts as
+> commentary. The full-suite result quoted in the table above comes from a
+> direct `pytest tests/` run, not from smoke.sh, so it stands on its own.
+
 > Note for the skill's own docs: `SKILL.md` and `.claude/commands/run.md`
 > describe the suite as "sections A-G" and a live run confirms **section G
 > exists** — an earlier static reading of `smoke.sh` suggested A–F only, so
