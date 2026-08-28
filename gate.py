@@ -306,8 +306,32 @@ async def _check_rate_limit_async(client_ip: str) -> bool:
     return await asyncio.to_thread(check_rate_limit, client_ip)
 
 
+# Throttle state for rate_limit_exceeded audit lines: without it, a sustained
+# loopback flood writes one audit record per denied request, drowning every
+# real signal in audit.jsonl. One line per IP per rate-limit window keeps the
+# signal while bounding the write volume. Mutated only from the event loop
+# (_enforce_rate_limit is async), so no lock is needed.
+_rate_limit_audit_last: dict[str, float] = {}
+
+
+def _should_audit_rate_limit(client_ip: str, now: float) -> bool:
+    """True at most once per IP per rate-limit window; prunes stale entries."""
+    last = _rate_limit_audit_last.get(client_ip)
+    if last is not None and now - last < RATE_LIMIT_WINDOW:
+        return False
+    _rate_limit_audit_last[client_ip] = now
+    # Bound the map itself under a flood from many distinct IPs: once it grows
+    # past 1024 entries, drop everything older than the current window.
+    if len(_rate_limit_audit_last) > 1024:
+        cutoff = now - RATE_LIMIT_WINDOW
+        for ip in [ip for ip, ts in _rate_limit_audit_last.items() if ts < cutoff]:
+            del _rate_limit_audit_last[ip]
+    return True
+
+
 async def _enforce_rate_limit(request: Request) -> None:
-    """Audit and raise HTTP 429 when the caller's per-IP budget is spent.
+    """Audit (throttled per IP per window) and raise HTTP 429 when the caller's
+    per-IP budget is spent.
 
     Single enforcement point for every rate-limited endpoint (/query, /soul/*,
     /audit/summary, /ops/*). The 429 detail interpolates the configured
@@ -316,7 +340,8 @@ async def _enforce_rate_limit(request: Request) -> None:
     """
     client_ip = request.client.host if request.client else "unknown"
     if not await _check_rate_limit_async(client_ip):
-        await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
+        if _should_audit_rate_limit(client_ip, time.monotonic()):
+            await _audit({"event": "rate_limit_exceeded", "ip": client_ip})
         raise HTTPException(
             status_code=429,
             detail={
@@ -984,23 +1009,33 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # Optional CEL monitor-only rules over structured, safe fields. Runs after
     # graph invoke so top_score/answer_model/guardrail_* are known. Fail-open:
     # any error here is logged and must not affect the response or audit trail.
-    try:
-        sources = result.get("sources", []) or []
-        monitor_request(
-            query_hash=hash_query(req.query),
-            top_score=result.get("top_score"),
-            answer_model=result.get("answer_model"),
-            guardrail_blocked=result.get("guardrail_blocked"),
-            guardrail_rails=result.get("guardrail_rails"),
-            model_provider=_model_provider_for(result.get("answer_model", "")),
-            source_hashes=[
-                hash_query(f"{s.get('source', '')}:{s.get('chunk_id', -1)}")
-                for s in sources
-            ],
-            cfg=cfg,
-        )
-    except Exception as exc:
-        logger.warning("CEL monitor request failed: %s", exc)
+    # Skipped entirely when numbat.cel.enabled is not true (matching
+    # utils.numbat_cel's literal-True check) so no hashing work happens on the
+    # request path; when enabled it runs in a worker thread like _audit and
+    # _check_rate_limit_async, since CEL compile/eval and the Numbat file write
+    # are synchronous. The graph state key is answer_sources (graph.py's
+    # GraphState) — result.get("sources") was never populated, which left
+    # source_hashes permanently empty.
+    cel_block = (cfg.get("numbat") or {}).get("cel") or {}
+    if cel_block.get("enabled") is True:
+        try:
+            sources = result.get("answer_sources", []) or []
+            await asyncio.to_thread(
+                monitor_request,
+                query_hash=hash_query(req.query),
+                top_score=result.get("top_score"),
+                answer_model=result.get("answer_model"),
+                guardrail_blocked=result.get("guardrail_blocked"),
+                guardrail_rails=result.get("guardrail_rails"),
+                model_provider=_model_provider_for(result.get("answer_model", "")),
+                source_hashes=[
+                    hash_query(f"{s.get('source', '')}:{s.get('chunk_id', -1)}")
+                    for s in sources
+                ],
+                cfg=cfg,
+            )
+        except Exception as exc:
+            logger.warning("CEL monitor request failed: %s", exc)
 
     needs_confirm = result.get("needs_user_confirm", False)
     answer_model = result.get("answer_model", "")
