@@ -24,8 +24,16 @@ from tests.conftest import (
 
 
 @pytest.fixture
-def client(tmp_path):
-    """Create a test client with mocked dependencies."""
+def client(tmp_path, request):
+    """Create a test client with mocked dependencies.
+
+    The loopback peer is indirect-parametrizable: request-heavy test classes
+    should pick a dedicated loopback IP (127.0.0.0/8 is all loopback) instead
+    of sharing the default 127.0.0.1 budget — gate's rate limiter is a
+    process-global 60 req/60 s per client IP, and sharing one peer across
+    files let CI ordering starve test_gate_index_build (429 where 200 was
+    asserted) when new tests tipped the shared budget over the edge."""
+    peer = getattr(request, "param", ("127.0.0.1", 51234))  # DevSkim: ignore DS162092,DS137138 - test loopback peer
     import yaml
     from utils.logger import reset_config_cache
     reset_config_cache()
@@ -92,7 +100,7 @@ def client(tmp_path):
                 # deliberately NOT loopback under _is_loopback_peer. Set a real
                 # loopback peer so tests exercise the ordinary local-operator case;
                 # the non-loopback case is asserted explicitly in TestApiKeyOptionalPeer.
-                client=("127.0.0.1", 51234),  # DevSkim: ignore DS162092,DS137138
+                client=peer,  # DevSkim: ignore DS162092,DS137138
             )
             yield client, mock_graph
         finally:
@@ -347,6 +355,9 @@ class TestQueryEndpoint:
         assert resp.json()["retrieval_mode"] == "none"
 
 
+# Dedicated loopback peer: these tests post real requests and must not spend
+# the shared 127.0.0.1 rate-limit budget (see the client fixture docstring).
+@pytest.mark.parametrize("client", [("127.0.0.4", 51234)], indirect=True)  # DevSkim: ignore DS162092,DS137138 - test loopback peer
 class TestCelMonitorRequestPath:
     """The /query CEL monitor hook must read the graph result's real source key
     (answer_sources — GraphState has no "sources" key), and must skip the
@@ -1079,6 +1090,10 @@ class TestFailedAuthDoesNotBypassRateLimit:
         assert mock_check.call_count == 1
 
 
+# Dedicated loopback peer (see the client fixture docstring); the patched
+# limiter means these posts never consume real budget, but isolating the peer
+# keeps the audit-throttle map keyed away from other tests' traffic.
+@pytest.mark.parametrize("client", [("127.0.0.5", 51234)], indirect=True)  # DevSkim: ignore DS162092,DS137138 - test loopback peer
 class TestRateLimitAuditThrottle:
     """A sustained 429 flood must not flood audit.jsonl: rate_limit_exceeded
     audit lines are throttled to at most one per IP per rate-limit window, so
@@ -1118,7 +1133,7 @@ class TestRateLimitAuditThrottle:
             resp = test_client.post("/query", json={"query": "flood"})
             assert resp.status_code == 429
             # Simulate window expiry for the fixture's loopback peer.
-            gate._rate_limit_audit_last["127.0.0.1"] = (
+            gate._rate_limit_audit_last["127.0.0.5"] = (  # DevSkim: ignore DS162092,DS137138 - test loopback peer
                 _time.monotonic() - gate.RATE_LIMIT_WINDOW - 1
             )
             resp = test_client.post("/query", json={"query": "flood"})
