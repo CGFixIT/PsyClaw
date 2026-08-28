@@ -294,8 +294,19 @@ def rates_are_stale(now: datetime | None = None) -> bool:
 
 
 @lru_cache(maxsize=1)
+def _emit_stale_rate_warning_once() -> None:
+    """One-shot EMISSION latch. Only reached when the table is already stale.
+
+    lru_cache is the latch (a nullary cached call runs its body once), which
+    keeps the state out of a module global and gives tests a public reset:
+    ``_emit_stale_rate_warning_once.cache_clear()``. A thread race can emit one
+    duplicate line, never a missed one.
+    """
+    warn_if_priced_as_of_stale()
+
+
 def _warn_once_if_stale() -> None:
-    """Emit the stale-rate warning at most once per process.
+    """Warn at most once per process that the rate table has gone stale.
 
     record_external_usage() prices live Grok/Claude calls; before this, a server
     billing against a >STALE_AFTER_DAYS table emitted no signal at all until an
@@ -304,12 +315,15 @@ def _warn_once_if_stale() -> None:
     external call, and a per-call warning there is spam that gets filtered out
     exactly when it matters.
 
-    lru_cache is the latch (a nullary cached call runs its body once), which
-    keeps the state out of a module global and gives tests a public reset:
-    ``_warn_once_if_stale.cache_clear()``. A thread race can emit one duplicate
-    line, never a missed one.
+    The staleness test runs on EVERY call and only the emission is latched.
+    Latching the test instead would freeze the verdict at process start: a
+    server booted before PRICED_AS_OF + STALE_AFTER_DAYS would evaluate "not
+    stale" once and never look again, so the long-running-server case this
+    exists to catch is precisely the one it would miss. rates_are_stale() is a
+    date subtraction, so re-testing per call is free.
     """
-    warn_if_priced_as_of_stale()
+    if rates_are_stale():
+        _emit_stale_rate_warning_once()
 
 
 def warn_if_priced_as_of_stale(now: datetime | None = None) -> bool:
