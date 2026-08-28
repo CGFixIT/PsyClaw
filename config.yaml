@@ -196,6 +196,12 @@ retrieval:
   # near 2 chars/token (24,000/2 + 4,096 = 16,096). Do NOT raise past 8000
   # without raising num_ctx, and do NOT raise CHARS_PER_TOKEN to reclaim
   # characters -- that is the knob that reopens the "0% processing" stall.
+  # KNOWN BOUND: 2 chars/token is where this sizing stops. A corpus that
+  # tokenizes below it -- CJK is the realistic case, ~1-1.5 chars/token on a
+  # byte-level BPE, since each character is 3 UTF-8 bytes -- overruns the
+  # window again (24,000/1.5 + 4,096 = 20,096). The shipped corpus is English
+  # technical documentation; an operator indexing CJK must lower this value or
+  # raise num_ctx, and will see the documented "0% processing" stall if neither.
   # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
   max_context_tokens: 8000

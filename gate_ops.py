@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
+import subprocess  # nosec B404 - TimeoutExpired type only; utils/ops_runner.py is the sole subprocess boundary
 from collections.abc import Awaitable, Callable
 from typing import Any
 

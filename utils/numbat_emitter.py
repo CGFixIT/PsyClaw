@@ -462,6 +462,15 @@ def _rollover_if_needed(path: Path, max_bytes: int) -> None:
     branch is fail-soft (the module's contract: it runs inside gate/graph on
     every audit_log and must never raise); on any OSError the stream simply
     keeps appending to the oversized file rather than dropping events.
+
+    The size is re-stat'd per write rather than tracked in a counter on
+    purpose: _WRITE_LOCK is per-process, but the action plane (agentic /
+    ops_runner children) writes this same path from OTHER processes, and only
+    the filesystem sees all of them. Two processes crossing the threshold
+    together can still both rename -- the loser's events land in the .1
+    generation instead of the fresh file. That is benign for a derived
+    forensic stream (audit.jsonl stays authoritative) and is the reason this
+    is a single-generation policy rather than a numbered-rotation one.
     """
     try:
         if path.stat().st_size < max_bytes:
