@@ -21,6 +21,13 @@ logger = logging.getLogger("cyclaw.spend")
 
 _SPEND_WRITE_LOCK = threading.Lock()
 _DEFAULT_SPEND_FILE = "logs/spend.jsonl"
+# The OLDEST "verified" date across the rate rows below -- deliberately the
+# oldest, not the most recent. rates_are_stale() alarms off this value, so
+# taking the minimum means the alarm tracks the stalest rate in the table.
+# Bumping it when only SOME rows are re-verified would mask the rest going
+# stale, which is the failure this constant exists to catch: raise it only
+# once EVERY row has been re-checked. tests/test_spend.py pins the invariant
+# against the dates in the comments below.
 PRICED_AS_OF = "2026-08-19"
 STALE_AFTER_DAYS = 30
 
@@ -221,6 +228,7 @@ def record_external_usage(
     unpinned alias (e.g. ``claude-sonnet-5``) can be re-pointed upstream, and
     the ledger must show what actually served/billed alongside what was asked.
     """
+    _warn_once_if_stale()
     normalized = _normalize_provider(provider)
     tokens = _tokens_for_provider(normalized, usage)
     record: dict[str, object] = {
@@ -282,6 +290,28 @@ def rates_are_stale(now: datetime | None = None) -> bool:
     else:
         current = now.astimezone(UTC)
     return (current.date() - priced).days > STALE_AFTER_DAYS
+
+
+# Warn-once latch for the recording path. metrics.py warns on every run because
+# it is an operator-invoked report; the server records a line per external call,
+# so warning there per call would be log spam and get filtered out -- exactly
+# when it matters. Not lock-guarded: a race costs one duplicate line, never a
+# missed one.
+_STALE_WARNED = False
+
+
+def _warn_once_if_stale() -> None:
+    """Emit the stale-rate warning at most once per process.
+
+    record_external_usage() prices live Grok/Claude calls; before this, a server
+    billing against a >STALE_AFTER_DAYS table emitted no signal at all until an
+    operator separately ran metrics.py.
+    """
+    global _STALE_WARNED
+    if _STALE_WARNED:
+        return
+    _STALE_WARNED = True
+    warn_if_priced_as_of_stale()
 
 
 def warn_if_priced_as_of_stale(now: datetime | None = None) -> bool:
