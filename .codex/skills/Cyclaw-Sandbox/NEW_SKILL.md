@@ -29,7 +29,7 @@ re-derive facts from `config.yaml`, `graph.py`, `gate.py`, `pyproject.toml`,
    provider yields `"external-unavailable"` — both joined to spend/audit.
 3. **Model bump**: `qwen3.8:27b-mlx` (was qwen3.6:27b), max_tokens 4096,
    timeout_sec 720, `api.graph_timeout_sec 780`. Recommended Ollama
-   `num_ctx 16384`; `retrieval.max_context_tokens 4000`; `min_score 0.028`.
+   `num_ctx 16384`; `retrieval.max_context_tokens 8000`; `min_score 0.028`.
 4. **Armed shipped posture** (since 2026-08-07): `app.mode: "hybrid"`,
    `models.grok.enabled: true`, `models.claude.enabled: true`,
    `agentic.mode: "write"` + `writes_enabled: true` — but the master
@@ -174,7 +174,7 @@ and `x-api-key` (harness). Never log the full key — use
    api_key_optional false).
 4. Config contract spot-check vs `config.yaml`: model qwen3.8:27b-mlx,
    timeout_sec 720 < graph_timeout_sec 780, max_tokens 4096,
-   retrieval.max_context_tokens 4000, min_score 0.028,
+   retrieval.max_context_tokens 8000, min_score 0.028,
    numbat.enabled true, unslop.enabled false,
    policy.fallback.pre_action_hook.enabled false, opentweet disabled,
    memory consolidation stubbed, api.tls.enabled false (default),
@@ -216,7 +216,7 @@ the mock on 127.0.0.1:11434 in a scratch config via `CYCLAW_CONFIG`):
    route_by_score -> guardrail_input -> local_llm -> guardrail_output ->
    audit_logger; audit record carries `llm` + `llm_model` fields.
 2. **Vault hit, second phrasing**: same path; retrieval respected
-   max_context_tokens 4000.
+   max_context_tokens 8000.
 3. **Offline best-effort**: low-score query with no online confirmation ->
    offline_best_effort node; answer_model `offline-best-effort`.
 4. **Grok connection-only**: with `GROK_API_KEY=dummy` the availability gate

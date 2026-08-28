@@ -21,7 +21,9 @@ DEFAULT_API_KEY_ENV = "OPENTWEET_API_KEY"
 DEFAULT_API_BASE = "https://opentweet.io"
 DEFAULT_QUERY_BASE_URL = "http://127.0.0.1:8787"  # DevSkim: ignore DS162092 - loopback by design
 DEFAULT_QUERY_API_KEY_ENV = "CYCLAW_API_KEY"
-DEFAULT_QUERY_TIMEOUT_SEC = 780
+# 790 = api.graph_timeout_sec (780) + 10s margin so the server's 504 GRAPH_TIMEOUT
+# wins the race against the client abort (same pattern as static/terminal.js).
+DEFAULT_QUERY_TIMEOUT_SEC = 790
 DEFAULT_MAX_TOPIC_CHARS = 500
 DEFAULT_MAX_POST_CHARS = 280
 MAX_POST_CHARS = 280

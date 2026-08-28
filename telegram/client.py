@@ -776,8 +776,13 @@ def post_query(
         payload["online_provider"] = online_provider
     started = time.monotonic()
     try:
+        # Split timeout: a stalled TCP connect must not burn the whole graph-length
+        # read budget (same shape as getUpdates above and opentweet/client.py).
         resp = _get_loopback_http_client().post(
-            url, json=payload, headers=headers, timeout=float(cfg.query.timeout_sec)
+            url,
+            json=payload,
+            headers=headers,
+            timeout=httpx.Timeout(float(cfg.query.timeout_sec), connect=10.0),
         )
     except httpx.HTTPError as exc:
         audit_log(

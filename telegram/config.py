@@ -38,7 +38,9 @@ DEFAULT_MAX_MESSAGE_CHARS = 4000  # align with policy.prompt_filter.max_input_ch
 MAX_MESSAGE_CHARS = 4096  # Telegram Bot API text ceiling; default stays conservative
 DEFAULT_QUERY_BASE_URL = "http://127.0.0.1:8787"  # DevSkim: ignore DS162092 - loopback by design
 DEFAULT_API_KEY_ENV = "CYCLAW_API_KEY"
-DEFAULT_QUERY_TIMEOUT_SEC = 780  # match api.graph_timeout_sec
+# 790 = api.graph_timeout_sec (780) + 10s margin so the server's 504 GRAPH_TIMEOUT
+# wins the race against the client abort (same pattern as static/terminal.js).
+DEFAULT_QUERY_TIMEOUT_SEC = 790
 DEFAULT_RATE_MAX_OPS = 20
 DEFAULT_RATE_WINDOW_SECONDS = 60
 DEFAULT_ALLOW_HYBRID_CONFIRM = False

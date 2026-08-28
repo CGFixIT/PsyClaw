@@ -827,3 +827,25 @@ def test_get_updates_retries_429_after_server_delay(
     assert updates == []
     assert client_cls.return_value.get.call_count == 2
     sleep.assert_called_once_with(2.0)
+
+
+def test_post_query_uses_split_connect_timeout(tmp_path: Path) -> None:
+    """Connect must have its own short ceiling so a black-holed handshake does
+    not burn the entire graph-length read budget (mirrors the opentweet client
+    and llm/client.py; the read side is cfg.query.timeout_sec = graph + margin)."""
+    import httpx
+
+    cfg = _cfg(tmp_path)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"answer": "ok", "model_used": "qwen"}
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client = client_cls.return_value
+        client.post.return_value = mock_resp
+        post_query(cfg, query="what is CyClaw?")
+        kwargs = client.post.call_args
+        timeout = kwargs.kwargs.get("timeout") or kwargs[1].get("timeout")
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 10.0
+    assert timeout.read == float(cfg.query.timeout_sec)

@@ -289,10 +289,10 @@ ollama run qwen3.8:27b-mlx
 >>> /set parameter num_ctx 16384
 ```
 
-> Note: Ollama's default context window is 4096 tokens — below the ~9,600-token floor CyClaw's no-stall formula requires. Setting this is **not optional** with the default config.
+> Note: setting this explicitly is **not optional** with the default config. Older Ollama builds default the context window to 4096 tokens — below the ~13,600-token floor CyClaw's no-stall formula requires, producing the silent stall. Newer builds instead derive the default from available VRAM (per [docs.ollama.com/context-length](https://docs.ollama.com/context-length): 4k below 24 GiB, 32k from 24–48 GiB, 256k above), which on a 48 GB Mac over-provisions KV memory instead. An explicit `16384` is deterministic across Ollama versions and matches what the KV budget in `macos/ollama-mlx.env` was sized for.
 
 The config.yaml formula: `Ollama num_ctx >= max_context_tokens + max_tokens + ~1500 headroom`
-With defaults: `4000 + 4096 + 1500 = 9596`, so **16384** is the safe recommended value.
+With defaults: `8000 + 4096 + 1500 = 13596`, so **16384** remains the recommended value (~2.8k tokens spare — deliberate, because the ~4-chars/token estimate under-counts Qwen3 BPE on technical text; see the `retrieval.max_context_tokens` comment in `config.yaml`).
 
 ### The agentic real-repo coding loop needs more headroom than that
 

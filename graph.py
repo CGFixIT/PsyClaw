@@ -206,11 +206,11 @@ UNTRUSTED_NOTE = (
 CHARS_PER_TOKEN = 4
 
 # Fallback for retrieval.max_context_tokens when the key is absent from config.
-# MUST match config.yaml's documented default (4000) and the no-stall formula
+# MUST match config.yaml's documented default (8000) and the no-stall formula
 # (Ollama context >= max_context_tokens + max_tokens + ~1500). The previous
 # scattered 2000 literal silently HALVED the budget on a missing key — both
 # starving the context block and diverging from the documented stall-safety math.
-_DEFAULT_MAX_CONTEXT_TOKENS = 4000
+_DEFAULT_MAX_CONTEXT_TOKENS = 8000
 
 # Fixed-overhead estimates (chars) for the static framing around the query +
 # context in each node's prompt template. Used to reserve room so the TOTAL

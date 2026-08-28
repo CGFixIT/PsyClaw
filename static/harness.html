@@ -292,6 +292,15 @@ const LOOP_COOLDOWN_MS = 2000;
 const MAX_LOOP_COMPLETION_TOKENS = 12000;
 const MAX_LOOP_FAILURES = 2;
 const LOOP_RETRY_CAP_SEC = 30;
+/* Client deadlines for routes that block on a server-side subprocess
+   (utils/ops_runner.py): POST /api/agent/run holds the request up to
+   min(iters*planner_sec + iters*checks*120 + 300, 3600)s; the run
+   status/decision/push/discard/publish and github-status routes shell a CLI
+   bounded at 120s (_TIMEOUT_SEC). Each client deadline sits above its server
+   budget so the server's typed error envelope arrives instead of a browser
+   abort at 15s while the subprocess keeps burning. */
+const AGENT_RUN_TIMEOUT_MS = 3630000;  /* 3600s ops_runner cap + 30s margin */
+const AGENT_CLI_TIMEOUT_MS = 130000;   /* 120s ops_runner._TIMEOUT_SEC + 10s margin */
 /* Active human-gated /loop. Never starts a real-repo run. Cleared on
    /loop stop, /clear, session switch, budget exhaust, or GOAL_DONE. */
 let loopState = null;
@@ -471,7 +480,7 @@ function renderWebStatus(data) {
    regex, so every call would silently record as GET). Changing only this body is
    invisible to it. The parser also has no comment handling, so this comment must
    avoid writing the helper's name followed by an open paren. */
-async function api(path, method, body) {
+async function api(path, method, body, timeoutMs) {
   const opts = { method: method || 'GET', headers: {} };
   /* Attach the in-flight chat AbortController here (body only) so the
      contract parser that hand-reads call sites stays valid. */
@@ -494,10 +503,13 @@ async function api(path, method, body) {
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   /* Chat keeps inflightChat.signal so /loop stop still aborts. Every other
      route goes through fetchWithTimeout so a stalled gateway cannot hang the
-     status/keys/web panels the way #1126 already bounded the auth probes. */
+     status/keys/web panels the way #1126 already bounded the auth probes.
+     Long-running routes (agent run/CLI-backed reads) pass their own timeoutMs
+     sized above the server-side subprocess budget, so the server's typed
+     AGENTIC_TIMEOUT/OPS envelope wins the race instead of a generic abort. */
   const resp = opts.signal
     ? await fetch(path, opts)
-    : await fetchWithTimeout(path, opts, 15000);
+    : await fetchWithTimeout(path, opts, timeoutMs || 15000);
   let data = null;
   try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
   if (!resp.ok) {
@@ -1065,7 +1077,7 @@ async function runSlash(line) {
 
       case 'github': {
         sys('querying agentic GitHub status (subprocess, read-only)…');
-        const r = await api('/api/github/status');
+        const r = await api('/api/github/status', 'GET', undefined, AGENT_CLI_TIMEOUT_MS);
         sys('ok=' + r.ok + '  label=' + r.label + (r.stdout ? '\n' + r.stdout : '') + (r.stderr ? '\n' + r.stderr : ''));
         break;
       }
@@ -1152,9 +1164,9 @@ async function runSlash(line) {
           const stagedRun = pendingAgentRun;
           const body = Object.assign({}, stagedRun, { reason: why, confirm: true });
           sendBtn.disabled = true;
-          sys('cloning, planning, patching and verifying — this blocks for up to 15 minutes…');
+          sys('cloning, planning, patching and verifying — this blocks until the run finishes (server cap 60 minutes)…');
           try {
-            const rec = agentRecord(await api('/api/agent/run', 'POST', body));
+            const rec = agentRecord(await api('/api/agent/run', 'POST', body, AGENT_RUN_TIMEOUT_MS));
             /* agentRecord() returns null (not a throw) on ok=false or an
                unparsed response, so only clear the staged run once a real
                record confirms the server actually accepted it. */
@@ -1176,21 +1188,21 @@ async function runSlash(line) {
           if (!id) { sys('usage: /agent ' + sub + ' <run id>'); break; }
           let r;
           if (sub === 'status') {
-            r = await api('/api/agent/runs/' + encodeURIComponent(id));
+            r = await api('/api/agent/runs/' + encodeURIComponent(id), 'GET', undefined, AGENT_CLI_TIMEOUT_MS);
           } else {
-            r = await api('/api/agent/runs/' + encodeURIComponent(id) + '/decision', 'POST', { decision: sub });
+            r = await api('/api/agent/runs/' + encodeURIComponent(id) + '/decision', 'POST', { decision: sub }, AGENT_CLI_TIMEOUT_MS);
           }
           const rec = agentRecord(r);
           if (rec) showAgentRecord(rec);
         } else if (sub === 'push') {
           const id = (rest[1] || '').trim();
           if (!id) { sys('usage: /agent push <run id>'); break; }
-          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/push', 'POST', {}));
+          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/push', 'POST', {}, AGENT_CLI_TIMEOUT_MS));
           if (rec) showAgentRecord(rec);
         } else if (sub === 'discard') {
           const id = (rest[1] || '').trim();
           if (!id) { sys('usage: /agent discard <run id>'); break; }
-          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/discard', 'POST', {}));
+          const rec = agentRecord(await api('/api/agent/runs/' + encodeURIComponent(id) + '/discard', 'POST', {}, AGENT_CLI_TIMEOUT_MS));
           if (rec) showAgentRecord(rec);
         } else if (sub === 'publish') {
           const id = (rest[1] || '').trim();
@@ -1198,6 +1210,7 @@ async function runSlash(line) {
           if (!id || !why) { sys('usage: /agent publish <run id> <why you are opening this PR>'); break; }
           const rec = agentRecord(await api(
             '/api/agent/runs/' + encodeURIComponent(id) + '/publish', 'POST', { reason: why, confirm: true },
+            AGENT_CLI_TIMEOUT_MS,
           ));
           if (rec) showAgentRecord(rec);
         } else {

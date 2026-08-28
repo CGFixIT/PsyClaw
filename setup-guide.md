@@ -720,8 +720,9 @@ hangs instead of failing loudly:
    num_ctx  >=  retrieval.max_context_tokens + local_llm.max_tokens + ~1500
    ```
 
-   At the shipped `4000 + 4096 + 1500`, that means **16,384**. Set it
-   server-wide *before* starting Ollama — `num_ctx` is not a CLI flag:
+   At the shipped `8000 + 4096 + 1500` the floor is **13,596**; the shipped
+   recommendation stays **16,384** (~2.8k tokens spare). Set it server-wide
+   *before* starting Ollama — `num_ctx` is not a CLI flag:
 
    ```bash
    export OLLAMA_CONTEXT_LENGTH=16384
