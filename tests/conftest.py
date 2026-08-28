@@ -288,11 +288,16 @@ def _mocked_gateway(tmp_path, *, peer=("127.0.0.1", 51234)):  # DevSkim: ignore 
 
 
 @pytest.fixture
-def client(tmp_path):
+def client(request, tmp_path):
     """Default mocked-gateway client: the (127.0.0.1, 51234) rate-limit bucket
     is the one test_gate.py has always used -- do not point a second file's
-    fixture at it; give each file its own loopback IP via _mocked_gateway."""
-    with _mocked_gateway(tmp_path) as pair:
+    fixture at it; give each file its own loopback IP via _mocked_gateway.
+
+    Supports indirect parametrization: @pytest.mark.parametrize("client",
+    [peer], indirect=True) overrides the peer, e.g. to give one test class its
+    own rate-limit bucket. Direct use keeps the historical default peer."""
+    peer = getattr(request, "param", ("127.0.0.1", 51234))
+    with _mocked_gateway(tmp_path, peer=peer) as pair:
         yield pair
 
 
