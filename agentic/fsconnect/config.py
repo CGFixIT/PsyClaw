@@ -34,9 +34,17 @@ DEFAULT_RATE_MAX_OPS = 30
 DEFAULT_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_RATE_DB_PATH = "data/fsconnect_rate.db"
 
-DEFAULT_ALLOWED_FS_OPS = ("fs_list", "fs_stat", "fs_read", "fs_grep", "fs_glob")
+DEFAULT_ALLOWED_FS_OPS = (
+    "fs_list",
+    "fs_stat",
+    "fs_read",
+    "fs_grep",
+    "fs_glob",
+    "fs_largest",
+)
 VALID_FS_OPS = frozenset(DEFAULT_ALLOWED_FS_OPS)
 DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MiB
+DEFAULT_LARGEST_MAX_ENTRIES = 100_000
 DEFAULT_MAX_WRITE_BYTES = 10 * 1024 * 1024  # 10 MiB
 DEFAULT_INDEX_EXTENSIONS = (".md", ".txt", ".pdf", ".docx", ".csv")
 DEFAULT_INDEX_MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MiB
@@ -131,6 +139,7 @@ class FsConnectConfig:
     allow_unc_roots: bool = False
     allow_macos_volume_roots: bool = False
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES
+    largest_max_entries: int = DEFAULT_LARGEST_MAX_ENTRIES
     follow_symlinks: bool = False
     scan_content: bool = True
     # --- write scope (separate, gated, default-disabled) ---
@@ -191,7 +200,12 @@ class FsConnectConfig:
             )
 
     def _validate_caps(self) -> None:
-        for name in ("max_file_bytes", "max_write_bytes", "index_max_file_bytes"):
+        for name in (
+            "max_file_bytes",
+            "largest_max_entries",
+            "max_write_bytes",
+            "index_max_file_bytes",
+        ):
             val = getattr(self, name)
             if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
                 raise FsConnectConfigError(
