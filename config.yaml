@@ -184,7 +184,7 @@ retrieval:
   rrf_k: 60                # Authoritative RRF k — read by hybrid_search.py
   # Token budget for the prompt INPUT to the local LLM. graph.py reserves room for
   # the soul preamble + query + framing and gives the rest to retrieved context
-  # (query/soul-aware budget, ~4 chars/token), so the assembled prompt input stays
+  # (query/soul-aware budget, CHARS_PER_TOKEN below), so the assembled prompt input stays
   # within this many tokens. This bounds both the RAG (local_llm) and offline
   # best-effort paths. The no-stall guarantee:
   #   Ollama context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
@@ -231,7 +231,8 @@ personality:
   # Bounds prompt inflation so an oversized/edited soul.md can't push the prompt
   # past the Ollama context budget (the in-memory soul is truncated to this
   # on load/apply, with a warning; soul.md on disk is left intact). Keep it well
-  # below retrieval.max_context_tokens*4 so query + context still fit. The
+  # below the derived char budget (retrieval.max_context_tokens * graph.py's
+  # CHARS_PER_TOKEN = 8000 * 3 = 24,000 chars) so query + context still fit. The
   # /soul/apply HTTP boundary (SoulEvolutionRequest) caps input at 8192.
   soul_max_chars: 8000
   interaction_ttl_days: 365
