@@ -243,7 +243,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 print(f"FAIL: {name} listed in manifest but missing from bundle")
                 all_ok = False
                 continue
-            actual_hash = sha256_file.__wrapped__(zf.read(name)) if hasattr(sha256_file, "__wrapped__") else hashlib.sha256(zf.read(name)).hexdigest()
+            actual_hash = sha256_file.__wrapped__(zf.read(name)) 
+            if hasattr(sha256_file, "__wrapped__") 
+                else hashlib.sha256(zf.read(name)).hexdigest()
             if actual_hash != info["sha256"]:
                 print(f"FAIL: {name} hash mismatch (expected {info['sha256'][:16]}, got {actual_hash[:16]})")
                 all_ok = False
