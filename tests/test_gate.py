@@ -422,6 +422,20 @@ class TestCelMonitorRequestPath:
         assert resp.status_code == 200
         mock_monitor.assert_not_called()
 
+    @pytest.mark.parametrize("cel_value", [True, "yes", ["rule"], 1])
+    def test_monitor_fail_open_when_cel_is_not_a_dict(self, client, cel_value):
+        # Nested `numbat.cel` must be isinstance(..., dict) inside the fail-open
+        # try: a truthy non-dict (`cel: true` / `cel: "yes"`) used to
+        # AttributeError on .get("enabled") *outside* the try and 500 /query.
+        import gate
+
+        test_client, _ = client
+        gate.cfg["numbat"] = {"cel": cel_value}
+        with patch("gate.monitor_request") as mock_monitor:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+        assert resp.status_code == 200
+        mock_monitor.assert_not_called()
+
 
 class TestValidationErrorNeverEchoesTheSubmittedValue:
     """FastAPI's default RequestValidationError handler puts each error's raw
@@ -1157,6 +1171,23 @@ class TestRateLimitAuditThrottle:
             resp = test_client.post("/query", json={"query": "flood"})
             assert resp.status_code == 429
         assert len(self._rate_limit_events(audit_file)) == 2
+
+    def test_throttle_map_hard_caps_by_evicting_oldest(self, client):
+        # Stale-window prune alone does not bound the map: 1025 distinct IPs
+        # inside one window have no stale entries. Evict oldest until cap.
+        import time as _time
+        import gate
+
+        _ = client
+        gate._rate_limit_audit_last.clear()
+        now = _time.monotonic()
+        cap = gate._RATE_LIMIT_AUDIT_CAP
+        for i in range(cap):
+            gate._rate_limit_audit_last[f"flood-{i}"] = now - (cap - i)
+        assert gate._should_audit_rate_limit("new-ip", now) is True
+        assert len(gate._rate_limit_audit_last) == cap
+        assert "new-ip" in gate._rate_limit_audit_last
+        assert "flood-0" not in gate._rate_limit_audit_last
 
 
 class TestAuditSummaryEndpoint:

@@ -311,21 +311,31 @@ async def _check_rate_limit_async(client_ip: str) -> bool:
 # real signal in audit.jsonl. One line per IP per rate-limit window keeps the
 # signal while bounding the write volume. Mutated only from the event loop
 # (_enforce_rate_limit is async), so no lock is needed.
+_RATE_LIMIT_AUDIT_CAP = 1024
 _rate_limit_audit_last: dict[str, float] = {}
 
 
 def _should_audit_rate_limit(client_ip: str, now: float) -> bool:
-    """True at most once per IP per rate-limit window; prunes stale entries."""
+    """True at most once per IP per rate-limit window; hard-caps the map."""
     last = _rate_limit_audit_last.get(client_ip)
     if last is not None and now - last < RATE_LIMIT_WINDOW:
         return False
     _rate_limit_audit_last[client_ip] = now
-    # Bound the map itself under a flood from many distinct IPs: once it grows
-    # past 1024 entries, drop everything older than the current window.
-    if len(_rate_limit_audit_last) > 1024:
+    # Bound the map under a flood from many distinct IPs: drop stale entries
+    # first, then evict oldest until we're at the cap. A many-IP flood inside
+    # one window would otherwise grow unbounded because nothing is older than
+    # RATE_LIMIT_WINDOW.
+    if len(_rate_limit_audit_last) > _RATE_LIMIT_AUDIT_CAP:
         cutoff = now - RATE_LIMIT_WINDOW
         for ip in [ip for ip, ts in _rate_limit_audit_last.items() if ts < cutoff]:
             del _rate_limit_audit_last[ip]
+        overflow = len(_rate_limit_audit_last) - _RATE_LIMIT_AUDIT_CAP
+        if overflow > 0:
+            oldest = sorted(
+                _rate_limit_audit_last, key=_rate_limit_audit_last.get
+            )[:overflow]
+            for ip in oldest:
+                del _rate_limit_audit_last[ip]
     return True
 
 
@@ -1015,13 +1025,16 @@ async def query_endpoint(request: Request, req: QueryRequest):
     # _check_rate_limit_async, since CEL compile/eval and the Numbat file write
     # are synchronous. The graph state key is answer_sources (graph.py's
     # GraphState) — result.get("sources") was never populated, which left
-    # source_hashes permanently empty. The isinstance guard mirrors
-    # utils.numbat_cel._cel_cfg: a truthy non-dict `numbat:` block (malformed
-    # config) must fail open here, not raise AttributeError into a 500.
-    numbat = cfg.get("numbat")
-    cel_block = (numbat.get("cel") or {}) if isinstance(numbat, dict) else {}
-    if cel_block.get("enabled") is True:
-        try:
+    # source_hashes permanently empty.
+    #
+    # ALL config access lives inside this try. A truthy non-dict `numbat:` OR
+    # nested `cel:` (malformed YAML: cel: true / cel: "yes") must not
+    # AttributeError into a 500. Nested cel is isinstance(..., dict) before
+    # .get("enabled"), matching utils.numbat_cel._cel_cfg.
+    try:
+        numbat = cfg.get("numbat")
+        cel_block = numbat.get("cel") if isinstance(numbat, dict) else None
+        if isinstance(cel_block, dict) and cel_block.get("enabled") is True:
             sources = result.get("answer_sources", []) or []
             await asyncio.to_thread(
                 monitor_request,
@@ -1037,8 +1050,8 @@ async def query_endpoint(request: Request, req: QueryRequest):
                 ],
                 cfg=cfg,
             )
-        except Exception as exc:
-            logger.warning("CEL monitor request failed: %s", exc)
+    except Exception as exc:
+        logger.warning("CEL monitor request failed: %s", exc)
 
     needs_confirm = result.get("needs_user_confirm", False)
     answer_model = result.get("answer_model", "")
