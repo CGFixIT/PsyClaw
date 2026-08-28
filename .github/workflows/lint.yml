@@ -1,16 +1,22 @@
-# Fast lint gate for pull requests and documented vendor feature prefixes.
+# Advisory lint reporter for pull requests and documented vendor feature prefixes.
 # Sequence: Ruff (fast, modern rules exactly matching pyproject.toml) → wemake-python-styleguide (strict WPS + flake8 plugins).
 # No project deps (torch, ChromaDB, LangGraph, etc.) — full CI (tests + coverage) runs separately.
 #
+# Read-only permissions. Findings are printed in the log but never fail the
+# workflow: both linters use continue-on-error, and the job itself is
+# continue-on-error so a red Ruff/WPS step cannot block merge or skip the
+# other linter. Checkout / Python setup still fail closed (no repo = no report).
+#
 # Ruff first for quick feedback on your tuned select (E,F,I,B,C4,UP,S); it runs
 # repo-wide because the whole tree is expected to already be clean under that
-# select set (CLAUDE.md, §5 Conventions).
+# select set (CLAUDE.md, §5 Conventions). Advisory mode means that expectation
+# is no longer enforced by this workflow's exit code.
 #
 # wemake adds the official complementary strict/opinionated WPS layer, but the
 # existing tree was never brought WPS-clean, so it is scoped to only the
 # .py files actually changed on this branch vs its merge-base with the PR's
-# target branch (main/cc) — otherwise every PR fails on pre-existing findings
-# in files it never touched.
+# target branch (main/cc) — otherwise every PR is noisy on pre-existing
+# findings in files it never touched.
 #
 # wemake/flake8 is run directly via pip + `flake8 <files...>` rather than the
 # wemake-services/wemake-python-styleguide Docker action: that action's
@@ -21,8 +27,8 @@
 # "FileNotFoundError: 'file_a.py file_b.py'" instead of linting each file.
 # Confirmed against wemake-python-styleguide 1.6.2 / flake8 7.3.0 (the same
 # versions pinned below). Running flake8 ourselves loses the action's
-# reviewdog inline-PR-comment reporting, but keeps the actual gate (flake8's
-# exit code) working correctly for any number of changed files.
+# reviewdog inline-PR-comment reporting, but keeps the flake8 log output
+# working correctly for any number of changed files.
 #
 # Rule scope and UP backlog notes preserved from prior ruff-up-alignment work.
 
@@ -50,9 +56,12 @@ permissions:
 
 jobs:
   lint:
-    name: Lint (Ruff + WPS)
+    name: Lint (Ruff + WPS, advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Job-level: workflow run stays green when a linter exits non-zero.
+    # Matches the advisory pattern used by numbat-rules.yml.
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -78,10 +87,13 @@ jobs:
       - name: Install ruff
         run: pip install -c constraints.txt ruff
 
-      - name: Ruff check (fast modern gate)
+      - name: Ruff check (fast modern reporter)
+        continue-on-error: true
         run: ruff check --select E,F,I,B,C4,UP,S .
 
       - name: wemake-python-styleguide on changed Python files
+        if: always()
+        continue-on-error: true
         env:
           # Routed through env instead of interpolated directly into the run
           # script: a template expanded straight into shell text is evaluated
