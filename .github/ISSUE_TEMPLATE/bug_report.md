@@ -2,7 +2,7 @@
 name: Bug report
 about: Something in CyClaw behaves incorrectly
 title: ''
-labels: bug
+labels: bug, enhancement
 assignees: ''
 
 ---
