@@ -254,23 +254,36 @@ def fetch_issue_context(cfg: AgenticConfig, number: int, *, app_cfg: dict | None
     }
 
 
-def fetch_pr_list(cfg: AgenticConfig, max_items: int = 100) -> dict:
+def fetch_pr_list(cfg: AgenticConfig, max_items: int = 100, *, app_cfg: dict | None = None) -> dict:
     """Return open PRs as ``{"items", "count", "has_more"}`` up to *max_items*.
 
     ``has_more=True`` signals that additional PRs exist beyond the returned slice;
     the caller can page by increasing *max_items* or calling the gh CLI directly.
+
+    Titles are attacker-controlled the same as bodies (see
+    :func:`_shortlist_title_fields`), so the returned slice carries the same
+    advisory ``governance_findings`` scan :func:`fetch_repo_context` applies to
+    its shortlists. See :func:`fetch_pr_context` for *app_cfg*.
     """
     _guard_read_op(cfg, "pr_list")
-    return _list_with_more(cfg, "pr_list", limit=max_items)
+    shortlist = _list_with_more(cfg, "pr_list", limit=max_items)
+    shortlist["governance_findings"] = _injection_findings(
+        app_cfg, cfg.repo, None, _shortlist_title_fields(shortlist, "items")
+    )
+    return shortlist
 
 
-def fetch_issue_list(cfg: AgenticConfig, max_items: int = 100) -> dict:
+def fetch_issue_list(cfg: AgenticConfig, max_items: int = 100, *, app_cfg: dict | None = None) -> dict:
     """Return open issues as ``{"items", "count", "has_more"}`` up to *max_items*.
 
-    Same pagination semantics as :func:`fetch_pr_list`.
+    Same pagination semantics and advisory title scan as :func:`fetch_pr_list`.
     """
     _guard_read_op(cfg, "issue_list")
-    return _list_with_more(cfg, "issue_list", limit=max_items)
+    shortlist = _list_with_more(cfg, "issue_list", limit=max_items)
+    shortlist["governance_findings"] = _injection_findings(
+        app_cfg, cfg.repo, None, _shortlist_title_fields(shortlist, "items")
+    )
+    return shortlist
 
 
 def fetch_repo_context(

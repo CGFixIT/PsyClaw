@@ -285,3 +285,44 @@ def test_normalized_hit_reports_the_pattern_once_not_twice(app_cfg):
         bundle = context.fetch_pr_context(_cfg(), 1, include_diff=False, app_cfg=app_cfg)
     patterns = bundle["governance_findings"][0]["patterns"]
     assert len(patterns) == len(set(patterns))
+
+
+# --- list fetchers (titles are attacker-controlled like bodies) --------------
+
+
+def test_pr_list_titles_are_scanned(app_cfg):
+    # fetch_pr_list returned raw lists unscanned while fetch_repo_context scanned
+    # the same titles via _shortlist_title_fields. The standalone fetcher must
+    # carry the same advisory findings.
+    def fake(op: str, repo: str, **kwargs):
+        if op == "pr_list":
+            return {"op": op, "repo": repo, "data": [{"number": 1, "title": INJECTION_TEXT}]}
+        return {"op": op, "repo": repo, "data": []}
+
+    with patch.object(context, "run_read", side_effect=fake):
+        result = context.fetch_pr_list(_cfg(), app_cfg=app_cfg)
+
+    assert result["items"] == [{"number": 1, "title": INJECTION_TEXT}]  # read not blocked
+    findings = result["governance_findings"]
+    assert [f["field"] for f in findings] == ["items[0].title"]
+    assert findings[0]["code"] == INJECTION_FINDING_CODE
+
+
+def test_issue_list_titles_are_scanned(app_cfg):
+    def fake(op: str, repo: str, **kwargs):
+        if op == "issue_list":
+            return {"op": op, "repo": repo, "data": [{"number": 2, "title": INJECTION_TEXT}]}
+        return {"op": op, "repo": repo, "data": []}
+
+    with patch.object(context, "run_read", side_effect=fake):
+        result = context.fetch_issue_list(_cfg(), app_cfg=app_cfg)
+
+    assert [f["field"] for f in result["governance_findings"]] == ["items[0].title"]
+
+
+def test_list_fetchers_always_carry_the_findings_key(app_cfg):
+    # A consumer can branch on the key unconditionally, matching the contract
+    # fetch_pr_context / fetch_repo_context already provide.
+    with patch.object(context, "run_read", side_effect=_reader()):
+        assert context.fetch_pr_list(_cfg(), app_cfg=app_cfg)["governance_findings"] == []
+        assert context.fetch_issue_list(_cfg(), app_cfg=app_cfg)["governance_findings"] == []

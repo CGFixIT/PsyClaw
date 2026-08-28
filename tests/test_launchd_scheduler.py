@@ -11,6 +11,7 @@ writes or reads a plist.
 from __future__ import annotations
 
 import plistlib
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -397,3 +398,64 @@ def test_status_and_remove_on_non_darwin_raise() -> None:
             LaunchdScheduler(cfg).status()
         with pytest.raises(SchedulerError, match="Darwin-only"):
             LaunchdScheduler(cfg).remove()
+
+
+def test_remove_tolerates_launchctl_timeout_and_still_deletes(tmp_path: Path) -> None:
+    # Best-effort unload: a wedged launchctl bootout must not block the plist
+    # removal, which is the part remove() is contracted to do.
+    cfg = _make_cfg()
+    _install(cfg, tmp_path)
+    plist_path = tmp_path / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+
+    with (
+        patch("sync.scheduler.platform.system", return_value="Darwin"),
+        patch("sync.scheduler.Path.home", return_value=tmp_path),
+        patch("sync.scheduler.shutil.which", return_value="/bin/launchctl"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="launchctl", timeout=10),
+        ),
+    ):
+        result = LaunchdScheduler(cfg).remove()
+
+    assert result is True
+    assert not plist_path.exists()
+
+
+def test_status_malformed_plist_raises_typed_scheduler_error(tmp_path: Path) -> None:
+    # The plist is operator-editable state, not our own output: a truncated or
+    # malformed file must surface as SchedulerError (cmd_status catches it and
+    # warns), not as a raw plistlib.InvalidFileException traceback.
+    cfg = _make_cfg()
+    plist_path = tmp_path / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_bytes(b"not a plist at all")
+
+    with (
+        patch("sync.scheduler.platform.system", return_value="Darwin"),
+        patch("sync.scheduler.Path.home", return_value=tmp_path),
+    ):
+        with pytest.raises(SchedulerError, match="could not parse"):
+            LaunchdScheduler(cfg).status()
+
+
+def test_status_out_of_range_weekday_does_not_raise(tmp_path: Path) -> None:
+    # status() renders the ON-DISK interval, which an operator may have edited
+    # outside config validation: Weekday 9 must not IndexError through
+    # _WEEKDAY_NAMES.
+    cfg = _make_cfg()
+    _install(cfg, tmp_path)
+    plist_path = tmp_path / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    document = plistlib.loads(plist_path.read_bytes())
+    document["StartCalendarInterval"] = {"Hour": 2, "Minute": 0, "Weekday": 9}
+    plist_path.write_bytes(plistlib.dumps(document))
+
+    with (
+        patch("sync.scheduler.platform.system", return_value="Darwin"),
+        patch("sync.scheduler.Path.home", return_value=tmp_path),
+        patch("sync.scheduler.shutil.which", return_value=None),
+    ):
+        entry = LaunchdScheduler(cfg).status()
+
+    assert entry is not None
+    assert entry.cron_or_time == "weekly weekday 9 02:00"

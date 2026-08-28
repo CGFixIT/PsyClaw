@@ -29,6 +29,13 @@ from utils.logger import audit_log
 from utils.numbat_emitter import emit_numbat_event
 
 _MAX_GREP_MATCHES = 200
+# Per-match cap on the returned line TEXT, in characters. _MAX_GREP_MATCHES
+# bounds match COUNT only, so a minified single-line file (one line up to
+# max_file_bytes, default 5 MiB) used to echo the whole line per match -- up
+# to ~200 * 5 MiB of JSON from one call. Matching still runs against the FULL
+# line (truncating before the regex would change semantics); only the stored
+# text is clipped, with a marker naming the original length.
+_MAX_GREP_LINE_CHARS = 4096
 _MAX_GLOB_MATCHES = 1000
 # Ceiling on how many directory levels fs_glob will descend. _MAX_GLOB_MATCHES
 # caps RESULTS, not TRAVERSAL, so it never bounded the recursion: _walk recursed
@@ -192,6 +199,8 @@ class FsClient:
                 if len(matches) >= _MAX_GREP_MATCHES:
                     truncated = True
                     break
+                if len(line) > _MAX_GREP_LINE_CHARS:
+                    line = f"{line[:_MAX_GREP_LINE_CHARS]}...[truncated, {len(line)} chars total]"
                 matches.append({"line": lineno, "text": line})
         self._audit({"event": "fsconnect_read", "op": "fs_grep", "path": target,
                      "match_count": len(matches)})
