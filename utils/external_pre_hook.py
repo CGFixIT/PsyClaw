@@ -59,6 +59,24 @@ def _hook_cfg(cfg: dict[str, Any] | None) -> dict[str, Any]:
     return block if isinstance(block, dict) else {}
 
 
+def _include_query_hash(cfg: dict[str, Any] | None) -> bool:
+    """Mirror graph.py's ctx-builder gate: True unless the operator opted out.
+
+    logging.audit_fields.include_query_hash defaults True; this hook must
+    honor the same opt-out the mainline audit path does, or a Numbat
+    projection would leak the hash the operator explicitly disabled.
+    """
+    if not isinstance(cfg, dict):
+        return True
+    logging_cfg = cfg.get("logging", {})
+    if not isinstance(logging_cfg, dict):
+        return True
+    audit_fields = logging_cfg.get("audit_fields", {})
+    if not isinstance(audit_fields, dict):
+        return True
+    return bool(audit_fields.get("include_query_hash", True))
+
+
 def _normalize_timeout(raw: Any) -> int:
     """Coerce timeout to an integer inside [1, 30]; default to 5 on bad input."""
     try:
@@ -98,10 +116,11 @@ def _emit_hook_verdict(
     try:
         # Schema 0.3.0 has additionalProperties:false and no query_hash
         # property, so the hash rides inside content_preview -- the same
-        # contract as the mainline audit projection. A hash that is not
-        # 64-hex is dropped (no content_preview) rather than emitted.
+        # contract as the mainline audit projection. Gated the same way too:
+        # a hash that is not 64-hex, OR logging.audit_fields.include_query_hash
+        # is false, is dropped (no content_preview) rather than emitted.
         content_preview = None
-        if _QUERY_HASH_RE.fullmatch(query_hash):
+        if _include_query_hash(cfg) and _QUERY_HASH_RE.fullmatch(query_hash):
             content_preview = json.dumps({"query_hash": query_hash}, separators=(",", ":"))
         emit_numbat_event(
             event_type,

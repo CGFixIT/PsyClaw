@@ -202,6 +202,33 @@ def test_emit_verdict_invalid_query_hash_dropped(tmp_path: Path, monkeypatch: py
     assert "query_hash" not in rec.get("content_preview", "")
 
 
+def test_emit_verdict_query_hash_omitted_when_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """logging.audit_fields.include_query_hash: false must suppress content_preview.
+
+    Regression for a Codex review finding on PR #1183: content_preview was
+    gated only on hash format, not on the operator's opt-out -- silently
+    reintroducing an unsalted, dictionary-guessable identifier into the
+    Numbat stream even when include_query_hash is explicitly false.
+    """
+    cfg = _hook_config(tmp_path)
+    cfg["logging"] = {"audit_fields": {"include_query_hash": False}}
+
+    def _exit_2(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout=b"", stderr=b"deny")
+
+    monkeypatch.setattr(subprocess, "run", _exit_2)
+    result = run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg)
+    assert result["verdict"] == "deny"
+
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    rec = records[0]
+    # A valid 64-hex hash is still dropped -- the opt-out wins even though
+    # the format check alone would have allowed it through.
+    assert "query_hash" not in rec
+    assert "content_preview" not in rec
+
+
 def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _hook_config(tmp_path)
 
