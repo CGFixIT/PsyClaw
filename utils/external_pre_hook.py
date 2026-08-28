@@ -2,8 +2,7 @@
 
 CyClaw invokes the configured command before any call to Grok or Claude.
 The command receives a JSON payload on stdin describing the proposed action
-(provider, model, and -- unless logging.audit_fields.include_query_hash is
-false -- query_hash) and signals its decision via exit code:
+(provider, model, query_hash) and signals its decision via exit code:
 
   * exit 0  -> allow (proceed to the provider)
   * exit 2  -> deny (route to audit_logger instead)
@@ -189,12 +188,8 @@ def run_pre_action_hook(
         "action": "external_llm_call",
         "provider": provider,
         "model": model,
+        "query_hash": query_hash,
     }
-    # The hook (often a Numbat hook) may persist what it receives, so the
-    # stdin payload honors the same include_query_hash opt-out the mainline
-    # audit path and this module's own Numbat projection already honor.
-    if _include_query_hash(cfg):
-        payload["query_hash"] = query_hash
     payload_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
     try:
