@@ -24,7 +24,7 @@ import math
 import os
 import threading
 import time
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
@@ -142,13 +142,15 @@ def _extract_and_record_spend(
     model: str,
     resp: httpx.Response,
     extract: Callable[[httpx.Response], str],
-    spend_context: Mapping[str, object] | None = None,
+    spend_context: MutableMapping[str, object] | None = None,
 ) -> str:
     """Extract the user-visible answer and append one spend line.
 
     Spend is recorded regardless of whether extraction succeeds, because a
     billed 200 response (e.g. stop_reason=max_tokens) still consumes quota.
     Spend failures must not change the answer. Extract still raises as-is.
+    ``spend_context`` is also an out-param: the vendor-resolved
+    ``served_model`` is written back into it when the response names one.
     """
     try:
         text = extract(resp)
@@ -690,7 +692,7 @@ class LocalLLMClient:
         _resolved_local_backends.pop(_cache_key_for_local_llm(self._llm_cfg), None)
         self._recheck_backend = True
 
-    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+    def generate(self, prompt: str, *, spend_context: MutableMapping[str, object] | None = None) -> str:
         del spend_context  # local calls are unmetered
         if self._degraded or self._recheck_backend:
             self._readopt_backend_if_stale()
@@ -780,7 +782,7 @@ class GrokClient:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+    def generate(self, prompt: str, *, spend_context: MutableMapping[str, object] | None = None) -> str:
         if not self.api_key:
             raise GrokServiceError("GROK_API_KEY not set",
                                     details={"required_env": "GROK_API_KEY"})
@@ -847,7 +849,7 @@ class ClaudeClient:
     def is_available(self) -> bool:
         return bool(self.api_key)
 
-    def generate(self, prompt: str, *, spend_context: Mapping[str, object] | None = None) -> str:
+    def generate(self, prompt: str, *, spend_context: MutableMapping[str, object] | None = None) -> str:
         if not self.api_key:
             raise ClaudeServiceError("ANTHROPIC_API_KEY not set",
                                      details={"required_env": "ANTHROPIC_API_KEY"})
