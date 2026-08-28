@@ -114,9 +114,9 @@ def _facts(mem_on: dict, block: dict | None) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _reset_legacy_warning(monkeypatch):
+def _reset_legacy_warning():
     """The legacy-key warning is once-per-process; reset it per test."""
-    monkeypatch.setattr(memory_flags, "_warned", False)
+    memory_flags._warn_legacy_key.cache_clear()
 
 
 @pytest.mark.parametrize(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 logger = logging.getLogger("cyclaw.memory.flags")
@@ -30,7 +31,24 @@ _KEY = "retrieval_enabled"
 # reporting their facts as present. Honor it and say so instead.
 _LEGACY_KEY = "enabled"
 
-_warned = False
+
+@lru_cache(maxsize=1)
+def _warn_legacy_key() -> None:
+    """Warn once per process that the legacy key is in use.
+
+    lru_cache is the once-only mechanism rather than a module-level flag: the
+    flag needs `global`, and its write is only ever observed by a later call,
+    which static analysis reads as a dead store (CodeQL py/unused-global-variable).
+    Same @lru_cache(maxsize=1) idiom retrieval/embeddings.py uses. Tests reset it
+    with _warn_legacy_key.cache_clear().
+    """
+    logger.warning(
+        "config.yaml uses the legacy memory.facts.%s key; rename it to "
+        "memory.facts.%s. It gates retrieval fusion only -- never "
+        "persistence, apply, or read.",
+        _LEGACY_KEY,
+        _KEY,
+    )
 
 
 def facts_retrieval_enabled(mem_cfg: Mapping[str, Any] | None) -> bool:
@@ -41,22 +59,12 @@ def facts_retrieval_enabled(mem_cfg: Mapping[str, Any] | None) -> bool:
     False. Warns once per process when the legacy key is what supplied the
     value, naming both keys.
     """
-    global _warned
-
     facts = (mem_cfg or {}).get("facts")
     if not isinstance(facts, Mapping):
         return False
     if _KEY in facts:
         return facts.get(_KEY) is True
     if _LEGACY_KEY in facts:
-        if not _warned:
-            _warned = True
-            logger.warning(
-                "config.yaml uses the legacy memory.facts.%s key; rename it to "
-                "memory.facts.%s. It gates retrieval fusion only -- never "
-                "persistence, apply, or read.",
-                _LEGACY_KEY,
-                _KEY,
-            )
+        _warn_legacy_key()
         return facts.get(_LEGACY_KEY) is True
     return False
