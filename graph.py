@@ -1071,8 +1071,9 @@ def pre_action_hook_router(state: GraphState) -> Literal["grok_fallback", "claud
     if state.get("pre_action_hook_denied"):
         return "audit_logger"
     # The hook node is bound to a specific provider, so the only legal allow
-    # target is that same provider node. We recover it from answer_model only
-    # when it was not denied; otherwise we stay with the bound provider.
+    # target is that same provider node. Re-read online_provider with the same
+    # expression and "grok" default user_gate_router used, so allow proceeds to
+    # exactly the provider the gate selected.
     provider = state.get("online_provider") or "grok"
     return "grok_fallback" if provider == "grok" else "claude_fallback"
 
