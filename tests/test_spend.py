@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import threading
+import time
 from datetime import date
 from pathlib import Path
 
@@ -653,3 +655,87 @@ def test_staleness_is_re_evaluated_on_every_call_not_frozen_at_first(tmp_path, m
 
     warnings = [r for r in caplog.records if "priced_as_of" in r.getMessage()]
     assert len(warnings) == 1, "must warn once after going stale -- and exactly once"
+
+
+# Threads for the concurrency test below, and how long the emission body is
+# held open. The delay only has to outlast thread start-up, so the racing
+# threads are provably inside the latch together; it does not gate the
+# assertion -- see the docstring.
+_RACE_THREADS = 12
+_RACE_BODY_DELAY_SEC = 0.05
+
+
+def test_the_stale_warning_emits_once_under_concurrent_recorders(tmp_path, monkeypatch, caplog):
+    """The LOCK, not lru_cache, is what makes the emission single-shot.
+
+    lru_cache alone does not serialize: CPython documents that a cached
+    function "can be called more than once if another thread makes an
+    additional call before the initial call has been completed and cached".
+    gate.py runs each graph invocation through asyncio.to_thread, so concurrent
+    /query requests reach record_external_usage on separate threadpool threads
+    and hit this latch together -- emitting one line per racing thread at the
+    one moment an operator needs the signal to be legible.
+
+    The three sibling tests above are all single-threaded, so every one of them
+    still passes with _STALE_WARNING_LOCK deleted. This is the test that does
+    not.
+
+    Two things make this deterministic rather than timing-dependent:
+
+    - The assertion holds for any delay. The lock guarantees one emission
+      however long the body takes, so this cannot flake in the passing
+      direction. The delay only widens the window that the *mutation*
+      direction needs, i.e. it is what makes the test non-vacuous.
+    - A barrier inside the body would deadlock the correct implementation --
+      the first thread would hold the lock waiting for peers the lock is
+      keeping out -- so the window is widened with a delay instead.
+
+    Exercised through record_external_usage rather than _warn_once_if_stale
+    directly, because that is the real hot path and _SPEND_WRITE_LOCK cannot
+    mask the race: the warn runs on the function's first line, before any
+    ledger write is serialized.
+    """
+    spend._emit_stale_rate_warning_once.cache_clear()
+    monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: True)
+
+    # Wrap, never replace: the real warn still emits the real record that
+    # caplog counts below, so this measures production's emission, not a stub's.
+    real_warn = spend.warn_if_priced_as_of_stale
+
+    def _slow_warn(now=None):
+        time.sleep(_RACE_BODY_DELAY_SEC)
+        return real_warn(now)
+
+    monkeypatch.setattr(spend, "warn_if_priced_as_of_stale", _slow_warn)
+
+    ledger = tmp_path / "spend.jsonl"
+    start = threading.Barrier(_RACE_THREADS)
+    failures: list[BaseException] = []
+
+    def _record() -> None:
+        try:
+            start.wait(timeout=10)
+            spend.record_external_usage(
+                provider="grok", model="grok-4.5",
+                usage={"prompt_tokens": 1, "completion_tokens": 1}, spend_file=ledger,
+            )
+        except BaseException as exc:  # noqa: BLE001 - re-raised in the main thread below
+            failures.append(exc)
+
+    with caplog.at_level("WARNING", logger="cyclaw.spend"):
+        threads = [threading.Thread(target=_record) for _ in range(_RACE_THREADS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+    assert not failures, f"recorder threads raised: {failures!r}"
+    assert not [t for t in threads if t.is_alive()], "a recorder thread did not finish"
+
+    warnings = [r for r in caplog.records if "priced_as_of" in r.getMessage()]
+    assert len(warnings) == 1, (
+        f"expected exactly 1 stale-rate warning across {_RACE_THREADS} concurrent "
+        f"recorders, got {len(warnings)} -- _STALE_WARNING_LOCK is not holding"
+    )
+    # Every caller must still be recorded: the latch guards the warning only.
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == _RACE_THREADS
