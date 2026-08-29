@@ -9,6 +9,7 @@ here.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -37,9 +38,17 @@ _TEXT_SUFFIXES = frozenset(
 
 def _tracked_text_files() -> list[Path]:
     """Tracked files with a text suffix, via git so ignored/untracked junk is excluded."""
+    # Resolved to an absolute path rather than passed as the bare name "git":
+    # a bare name is looked up through PATH, which both ruff (S607) and CodeQL
+    # (py/partial-path-command) flag as running whatever happens to shadow it.
+    # Elsewhere in tests/ that is dodged by passing argv as a variable, but a
+    # noqa only quiets ruff -- CodeQL still reports it -- so resolve it instead.
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        pytest.skip("git executable not found on PATH")
     try:
         out = subprocess.run(  # noqa: S603
-            ["git", "ls-files", "-z"],  # noqa: S607
+            [git_exe, "ls-files", "-z"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
