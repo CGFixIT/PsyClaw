@@ -6,6 +6,7 @@ verification" with the file:line that closes each, so nobody re-opens them.
 What replaces them is a finding the original review missed -- and it is the
 inversion of what H1 assumed.
 Suggested labels: security, docs, console
+FILED AS: https://github.com/cgfixit/CyClaw/issues/1201
 -->
 
 # Gate hardening: `/query`'s cross-site check is conditional on `auth.enabled`; `/index/status` limiter posture; THREAT_MODEL control rows

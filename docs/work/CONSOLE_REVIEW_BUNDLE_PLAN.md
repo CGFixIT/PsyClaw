@@ -7,6 +7,7 @@
 `cyclaw-issue-index-routes-and-docs.md`, `cyclaw-dep-cve-scan-claude-code.md` — reconciled
 against the code they describe, then implemented.
 **Corrected artifacts:** `docs/work/console-review-bundle/`.
+**Landed as:** PR #1200 (the F3 fix + this record) and issue #1201 (the surviving findings).
 
 ---
 
@@ -196,9 +197,9 @@ and `sec-vuln-scanner` is a user-level synced skill, not a repo skill.
 
 | Item | Where it goes | Status |
 |---|---|---|
-| `/query` cross-site posture with `auth.enabled` false | GitHub issue, lead item | Open — needs a decision |
-| `/index/status` vs the limiter (exempt **or** raise `INDEX_POLL_MS`, never both) | GitHub issue | Open — sequence against PR #1173 |
-| `THREAT_MODEL.md` control rows for both index routes and `/query` | GitHub issue | Open |
+| `/query` cross-site posture with `auth.enabled` false | issue #1201, lead item | Open — needs a decision |
+| `/index/status` vs the limiter (exempt **or** raise `INDEX_POLL_MS`, never both) | issue #1201 | Open — sequence against PR #1173 |
+| `THREAT_MODEL.md` control rows for both index routes and `/query` | issue #1201 | Open |
 | F1's underlying bug | PR #1194 | Open — review posted, no port needed |
 | grype / zizmor / reachability / deliverables | `console-review-bundle/cyclaw-dep-cve-scan-claude-code.md` | Ready to run |
 
