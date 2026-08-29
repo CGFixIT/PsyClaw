@@ -20,7 +20,7 @@
 - [Dropbox Corpus Sync](#dropbox-corpus-sync)
 - [macOS launchd & Keychain](#macos-launchd--keychain-v19)
 - [Agentic Layer](#agentic-layer-v160)
-- [Filesystem & SQL Connectors](#filesystem--sql-connectors-v18)
+- [Filesystem, SQL & Passive Network Connectors](#filesystem-sql--passive-network-connectors-v18)
 - [NeMo Guardrails](#nemo-guardrails-v18)
 - [Agentic Harness Scaffold](#agentic-harness-scaffold-v19)
 - [Coding Harness Console](#coding-harness-console-v19)
@@ -204,7 +204,7 @@ flowchart TD
 
 CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore`) require a **Bearer API key**. Without it they return `HTTP 401` immediately — intentional fail-closed behavior.
 
-> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `GET /index/status`, `GET /auth/setup-status`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated. `POST /index/build` and `POST /auth/bootstrap-password` carry no credential either, but neither is open: each is gated on a loopback socket peer plus a same-origin check and returns 403 off-box — `/index/build` 409 while a build is already running, `/auth/bootstrap-password` 409 once the first admin password is set.
+> **All `/soul/*` endpoints — including `GET /soul` — require a valid `Authorization: Bearer <key>` token.** Only `/health`, `/query`, `GET /index/status`, `GET /auth/setup-status`, `POST /auth/login` (issues the session itself; 503 when `auth.enabled` is false), and the console pages (`GET /`, `/static/*`) are unauthenticated. `POST /index/build` and `POST /auth/bootstrap-password` carry no credential either, but neither is open: each is gated on a loopback socket peer plus a same-origin check and returns 403 off-box — `/index/build` 409 while a build is already running, `/auth/bootstrap-password` 409 once the first admin password is set. `POST /query`, though credential-free by default, additionally carries an **unconditional same-origin check** — a cross-site browser request is rejected 403 `CROSS_SITE_BLOCKED` regardless of `auth.enabled`; requests carrying neither `Origin` nor `Sec-Fetch-Site` (curl, PowerShell, schedulers) are unaffected.
 
 > **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once — but **only for requests arriving from this machine**. The bypass is granted on the socket peer, so a remote caller still needs the real key no matter how the process was launched. Entries in `security.allowed_hosts` do not change that: that list filters request `Host` headers and opens no listening socket. What *would* matter is the bind itself — `gate.py` refuses to start with a non-loopback `api.host` while the flag is `true`, and `config-guard`'s C13 warns on that pair. Note it also does nothing under Docker: NAT rewrites the source address, so the container sees the bridge gateway rather than loopback and the routes stay key-gated (set `CYCLAW_API_KEY` in the container instead).
 
@@ -678,7 +678,7 @@ CyClaw/
 │   ├── real_repo_loop.py       # (v1.9 P10) clone → plan → patch → verify → human decides → commit
 │   ├── unslop_bridge.py        # (v1.9.x) offline slop-detection probe for real_repo_loop; default off
 │   ├── vendor/unslop/          # vendored offline AI-writing-tell scanners (suggest.py); no network calls
-│   ├── executor/               # sandboxed argv-list check runner; soft sandbox, not a kernel boundary
+│   ├── executor/               # sandboxed argv-list check runner; required fail-closed hard sandbox (hard_sandbox.py)
 │   ├── fsconnect/              # (v1.8) local/SMB filesystem connector
 │   │   ├── cli.py
 │   │   ├── client.py           # scoped reads (fs_list/stat/read/grep)
@@ -967,7 +967,7 @@ v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulate
 Scoped **reads** and separately-gated **writes** over a local or SMB file share, sharing one held-handle security core.
 
 - **`pathsafe.py` security core** — POSIX uses `openat` / `O_NOFOLLOW` descent from a held root directory fd. Windows read/list/stat locks the canonical root ancestry against rename, opens once with `CreateFileW`, verifies `GetFinalPathNameByHandleW` containment and root identity, and consumes that same handle; Windows writes remain hard-refused. Denies UNC, NTFS alternate data streams (`file::$DATA`), `\\?\` / `\\.\` device paths, `..` traversal, and symlink / reparse traversal. Segment-aware containment closes **CVE-2025-53110** (sibling-prefix), while held-handle authority prevents name-reopen junction swaps.
-- **Reads** (`fs_list` / `fs_stat` / `fs_read` / `fs_grep` / `fs_glob`) confined to `allowed_roots`, audited, with a 5 MiB read cap and advisory OWASP∪`banned_patterns` content scanning.
+- **Reads** (`fs_list` / `fs_stat` / `fs_read` / `fs_grep` / `fs_glob` / `fs_largest`) confined to `allowed_roots`, audited, with a 5 MiB read cap and advisory OWASP∪`banned_patterns` content scanning.
 - **Writes** (`fs_write` / `fs_append` / `fs_mkdir` / `fs_move`) — fully built but **`writes_enabled: false` by default**; confined to a **separate** `writable_roots` list; gated by a human `reason` + `--confirm` (for destructive ops); atomic (`tmp` + `os.replace`); **content-agnostic** (never calls the LLM — an operator pipes local-LLM/QWEN output in). A code-level `FS_WRITE_HARD_DISABLE` kill switch forces dry-run regardless of config.
 - **Toggleable RAG-corpus indexing** of the share (`index_enabled`, dry-run default) stages eligible files into the corpus and triggers a reindex **subprocess** — enabling a generate → write → index loop without importing the retrieval layer.
 
@@ -1109,7 +1109,10 @@ a security gate, not authorization to add an executor. Full plan and phase ledge
 > disarmed. See [GitHub Agentic Coding Harness](#github-agentic-coding-harness-v19)
 > below for what is actually wired today.
 
-Every gate below the master `agentic.enabled` switch defaults to `false`; while
+Every gate below the master `agentic.enabled` switch that arms a *run*
+defaults to `false` — the three cloud-provider switches (`allow_cloud_providers`,
+`providers.grok.enabled`, `providers.claude.enabled`) ship armed, held
+unreachable by the master switches (see the armed-cloud note below); while
 disabled, nothing under either package is reachable from `agentic.cli`, and no
 `deepagents`/`langchain` optional dependency is imported.
 
@@ -1264,11 +1267,16 @@ into `approve`.
   shell path, a pipe-to-shell. Every hit is CRITICAL and refuses the candidate.
 - **Verification runs as argv-list subprocesses**, never a shell, with `cwd`
   pinned to the clone, a scrubbed environment allowlist
-  (`PATH`, `HOME`, `LANG`, `LC_ALL`, `PYTHONPATH`, `VIRTUAL_ENV`,
-  `PYTHONIOENCODING`) plus forced `NO_PROXY=*` / `PIP_NO_INDEX=1`, and a 120s
-  per-check timeout. **Containment is best-effort software, not a hard boundary** —
-  the env scrub cannot stop a determined test file from opening a raw socket. See
-  `agentic/executor/runner.py`'s own statement of its limits.
+  (`PATH`, `LANG`, `LC_ALL`, `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONIOENCODING`)
+  plus a disposable `HOME`/`USERPROFILE`, forced `NO_PROXY=*` / `PIP_NO_INDEX=1`,
+  and a 120s per-check timeout. **Every non-empty check list runs inside a
+  required, fail-closed hard sandbox** (`hard_sandbox.py`: Windows Job Object with
+  `KILL_ON_JOB_CLOSE`, Darwin `sandbox-exec` denying network and off-cwd writes,
+  Linux `unshare --net`) — a missing binary or failed capability probe raises
+  `HardSandboxUnavailable`, with no silent fallback to unconstrained
+  `subprocess.run`. Residual limits: no microVM, and Windows is a process-tree
+  kill rather than a netns, so sockets keep working there — see
+  `docs/THREAT_MODEL.md`'s executor amendments.
 - **The console sends check-profile *names*, never argv.** `harness/agent_policy.py`
   resolves them against a fixed allow-list (`pytest`, `ruff`, `invariant-guard`,
   `config-guard`); a request body that
