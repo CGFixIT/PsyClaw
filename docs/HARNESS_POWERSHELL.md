@@ -179,11 +179,13 @@ read-only.
 - Loopback-only bind (`127.0.0.1`); the server refuses any non-loopback host.
 - Every state-changing route under `/api/*` — session create/rename/goal,
   `/api/soul`, `/api/model`, `/api/memory*`, `/api/web*`, `/api/chat` +
-  `/api/chat/cancel`, and all six `/api/agent/*` run routes (`run`,
+  `/api/chat/cancel`, `POST /api/keys` (writes credentials into
+  `$CYCLAW_HOME/.env`), and all six `/api/agent/*` run routes (`run`,
   `runs/{id}`, `runs/{id}/decision`, `runs/{id}/push`, `runs/{id}/publish`,
-  `runs/{id}/discard`) — plus the two reads that leak more than a summary,
+  `runs/{id}/discard`) — plus the reads that return more than a summary,
   `GET /api/sessions/{session_id}` (full message content, unlike the
-  title-only list at `GET /api/sessions`) and `GET /api/github/status`,
+  title-only list at `GET /api/sessions`), `GET /api/keys` (which credentials
+  are set, plus a masked tail — never a value), and `GET /api/github/status`,
   require a Bearer `CYCLAW_API_KEY` — the same variable the gateway's
   `/soul` and `/ops/*` endpoints use. **Fail-closed:** an unset key means
   those routes return 401, not "no auth required". Paste the key into the
