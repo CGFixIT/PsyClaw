@@ -544,8 +544,30 @@ def test_console_denies_framing(client):
     """The local control surface must not be embeddable by another page."""
     response = client.get("/")
 
-    assert response.headers["content-security-policy"] == "frame-ancestors 'none'"
+    # Substring, not equality: the console's CSP carries a full policy with a
+    # per-response nonce now, so the exact string differs every request.
+    # tests/test_harness_security_headers.py pins the rest of that policy.
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-frame-options"] == "DENY"
+
+
+def test_static_mount_serves_the_shared_users_panel_script(client):
+    """harness.html asks for /static/auth_admin.js; this app must answer it.
+
+    A runtime check on purpose. The console-contract tests read the markup and
+    the auth-admin contract tests read the script, but neither issues a request,
+    so the app shipped with that tag pointing at a route it never had: the panel
+    404'd and rendered empty. Only a real GET catches that.
+    """
+    response = client.get("/static/auth_admin.js")
+
+    assert response.status_code == 200
+    # Wrong MIME here is not cosmetic: the middleware stamps nosniff, so a
+    # browser hard-blocks the script and the panel breaks exactly as it did
+    # when the route was missing altogether.
+    assert response.headers["content-type"].startswith("text/javascript")
+    assert "CyClawAuthAdmin" in response.text
+    assert "no-store" in response.headers.get("cache-control", "")
 
 
 @pytest.mark.parametrize("path", ("/docs", "/redoc", "/openapi.json"))
