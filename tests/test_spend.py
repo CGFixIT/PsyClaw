@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -549,24 +550,39 @@ def test_record_omits_served_model_when_absent_or_blank(tmp_path: Path) -> None:
 # --- rate-table provenance -----------------------------------------------------
 
 
-def test_priced_as_of_is_the_oldest_verified_date_in_the_table():
-    """PRICED_AS_OF must not run ahead of the stalest rate row.
+def test_every_rate_row_carries_a_verification_date():
+    """A rate row with no verification date is a silent staleness hole.
 
-    rates_are_stale() alarms off this single constant, so bumping it when only
-    some rows were re-verified would silently mask the rest going stale -- the
-    exact failure the constant exists to catch. Pinned against the "verified
-    YYYY-MM-DD" provenance comments beside the rows themselves.
+    PRICED_AS_OF is derived from the OLDEST date in _RATE_VERIFIED, so a row
+    that carries no date does not lower it -- that row can go stale without
+    ever tripping rates_are_stale(). Comparing the key sets (rather than
+    scanning the source for "verified YYYY-MM-DD" prose, which an undated row
+    simply would not match) is what makes an undated row fail here instead of
+    passing quietly.
     """
-    import re
+    undated = sorted(set(spend._RATES) - set(spend._RATE_VERIFIED))
+    orphaned = sorted(set(spend._RATE_VERIFIED) - set(spend._RATES))
+    assert not undated, f"rate rows with no verification date in _RATE_VERIFIED: {undated}"
+    assert not orphaned, f"_RATE_VERIFIED names models absent from _RATES: {orphaned}"
+    for model, verified in spend._RATE_VERIFIED.items():
+        date.fromisoformat(verified)  # raises ValueError on a malformed date
+        assert verified <= date.today().isoformat(), f"{model} verified in the future: {verified}"
 
-    source = Path(spend.__file__).read_text(encoding="utf-8")
-    # Skip the constant's own doc block, which cites the invariant rather than a row.
-    body = source.split("STALE_AFTER_DAYS", 1)[1]
-    verified = sorted(re.findall(r"verified (\d{4}-\d{2}-\d{2})", body))
-    assert verified, "no 'verified YYYY-MM-DD' provenance comments found beside the rates"
-    assert spend.PRICED_AS_OF <= verified[0], (
-        f"PRICED_AS_OF ({spend.PRICED_AS_OF}) is newer than the oldest verified "
-        f"rate row ({verified[0]}) -- the staleness alarm would mask that row"
+
+def test_priced_as_of_stays_derived_from_the_oldest_verified_date():
+    """PRICED_AS_OF must remain computed, not re-hardcoded to a literal.
+
+    rates_are_stale() alarms off this single constant, so a value bumped when
+    only some rows were re-verified would silently mask the rest going stale --
+    the exact failure the constant exists to catch. Deriving it makes that
+    unfalsifiable, so what is worth pinning is the derivation: this fails if
+    someone replaces the min() with a date string again, which is how the drift
+    would come back.
+    """
+    assert spend.PRICED_AS_OF == min(spend._RATE_VERIFIED.values()), (
+        f"PRICED_AS_OF ({spend.PRICED_AS_OF}) is no longer the oldest verified "
+        f"rate row ({min(spend._RATE_VERIFIED.values())}) -- it has been "
+        f"hardcoded away from the derivation and can now mask a stale row"
     )
 
 
