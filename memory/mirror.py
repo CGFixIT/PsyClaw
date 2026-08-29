@@ -17,11 +17,16 @@ def status_dict(cfg: Mapping[str, Any]) -> dict[str, Any]:
         "enabled": enabled,
         "db_path": mem.get("db_path", "data/memory/cyclaw_memory.db"),
         "facts_retrieval_enabled": facts_retrieval_enabled(mem),
-        "episodes_enabled": bool((mem.get("episodes") or {}).get("enabled")),
-        "retrieval_fusion_enabled": bool((mem.get("retrieval_fusion") or {}).get("enabled")),
-        "propose_apply_enabled": bool((mem.get("propose_apply") or {}).get("enabled")),
-        "export_html_enabled": bool((mem.get("export_html") or {}).get("enabled")),
-        "consolidation_enabled": bool((mem.get("consolidation") or {}).get("enabled")),
+        # `is True`, not bool(): every gate these five report on accepts only
+        # the literal True, so a quoted YAML value ("true"/"false" -- both
+        # truthy strings) made this echo disagree with the gate. The memory
+        # block has no validator, so /memory/status is the operator's only
+        # feedback that a quoted value took effect as "off".
+        "episodes_enabled": (mem.get("episodes") or {}).get("enabled") is True,
+        "retrieval_fusion_enabled": (mem.get("retrieval_fusion") or {}).get("enabled") is True,
+        "propose_apply_enabled": (mem.get("propose_apply") or {}).get("enabled") is True,
+        "export_html_enabled": (mem.get("export_html") or {}).get("enabled") is True,
+        "consolidation_enabled": (mem.get("consolidation") or {}).get("enabled") is True,
         "active_facts": 0,
         "episodes": 0,
     }

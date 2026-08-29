@@ -87,10 +87,13 @@ def rag_flags(cfg: Mapping[str, Any] | None) -> dict[str, bool]:
     episodes = block.get("episodes")
     fusion = block.get("retrieval_fusion")
     return {
-        _ENABLED_KEY: bool(block.get(_ENABLED_KEY)),
+        # `is True` throughout, matching _facts_retrieval_flag and the gates all
+        # four mirror. The master key is the worst offender: six independent
+        # gates read it strictly, and this echo was the only loose reader left.
+        _ENABLED_KEY: block.get(_ENABLED_KEY) is True,
         "facts": _facts_retrieval_flag(facts),
-        "episodes": bool(episodes.get(_ENABLED_KEY)) if isinstance(episodes, dict) else False,
-        "retrieval_fusion": bool(fusion.get(_ENABLED_KEY)) if isinstance(fusion, dict) else False,
+        "episodes": episodes.get(_ENABLED_KEY) is True if isinstance(episodes, dict) else False,
+        "retrieval_fusion": fusion.get(_ENABLED_KEY) is True if isinstance(fusion, dict) else False,
         "writable_from_harness": False,
     }
 
