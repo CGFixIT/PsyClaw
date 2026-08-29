@@ -66,9 +66,14 @@ def _facts_retrieval_flag(facts: Any) -> bool:
     """
     if not isinstance(facts, dict):
         return False
+    # `is True`, not bool(): the gate this mirrors accepts only the literal
+    # True, so a quoted YAML value ("true"/"false" -- both truthy strings)
+    # would otherwise make this echo disagree with the gate. Nothing validates
+    # the memory: block, so a quoted value boots silently and this status is
+    # the operator's only signal.
     if _FACTS_RETRIEVAL_KEY in facts:
-        return bool(facts.get(_FACTS_RETRIEVAL_KEY))
-    return bool(facts.get(_ENABLED_KEY))
+        return facts.get(_FACTS_RETRIEVAL_KEY) is True
+    return facts.get(_ENABLED_KEY) is True
 
 
 def rag_flags(cfg: Mapping[str, Any] | None) -> dict[str, bool]:

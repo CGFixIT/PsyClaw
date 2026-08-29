@@ -188,7 +188,11 @@ read-only.
   are set, plus a masked tail — never a value), and `GET /api/github/status`,
   require a Bearer `CYCLAW_API_KEY` — the same variable the gateway's
   `/soul` and `/ops/*` endpoints use. **Fail-closed:** an unset key means
-  those routes return 401, not "no auth required". Paste the key into the
+  those routes return 401, not "no auth required" — with one deliberate
+  exception, `config.yaml`'s `security.api_key_optional` (default `false`),
+  which drops the key requirement from every route above, `/api/keys`
+  included, but **only for a request whose socket peer is loopback**; a LAN
+  client still gets 401. See `harness/README.md` for that bypass in full. Paste the key into the
   console's `key` field, or export it before launching. The read-only
   routes stay open so the console can boot and report that a key is
   needed. The key is held in the browser page only — never `localStorage`,

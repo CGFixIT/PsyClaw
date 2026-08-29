@@ -13,6 +13,7 @@ from harness.config import HarnessConfig
 from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
 from harness.ollama import HarnessChatClient
 from harness.prompts import compose_system_prompt
+from memory.flags import facts_retrieval_enabled
 
 from tests.test_harness import _auth_headers
 
@@ -103,6 +104,38 @@ def test_rag_flags_are_read_only_and_default_off():
     assert flags["enabled"] is False
     assert flags["writable_from_harness"] is False
     assert rag_flags(None)["writable_from_harness"] is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["false", "true", "no", "yes", "", 0, 1, None, False, True],
+)
+def test_rag_flags_facts_agrees_with_the_real_retrieval_gate(value):
+    """The console echo must never disagree with the gate it mirrors.
+
+    rag_flags used bool(), so a quoted YAML value -- `retrieval_enabled:
+    "true"` or `"false"`, both truthy non-empty strings -- made GET /api/memory
+    report fact retrieval ON while memory.flags kept fusion OFF. Nothing
+    validates the memory: block, so such a config boots silently and this
+    status is the operator's only feedback.
+
+    Asserting agreement rather than a fixed value is the point: the helper's
+    whole contract is to mirror facts_retrieval_enabled without importing
+    memory, so the mirror is what must hold.
+    """
+    cfg = {"memory": {"enabled": True, "facts": {"retrieval_enabled": value}}}
+
+    assert rag_flags(cfg)["facts"] is facts_retrieval_enabled(cfg["memory"])
+
+
+def test_rag_flags_facts_still_reads_the_legacy_key():
+    """The legacy-name fallback survives the strict-boolean change."""
+    legacy = {"memory": {"enabled": True, "facts": {"enabled": True}}}
+    assert rag_flags(legacy)["facts"] is True
+    assert rag_flags(legacy)["facts"] is facts_retrieval_enabled(legacy["memory"])
+
+    quoted = {"memory": {"enabled": True, "facts": {"enabled": "true"}}}
+    assert rag_flags(quoted)["facts"] is False
 
 
 def test_prompt_omits_memory_when_empty_or_off():
