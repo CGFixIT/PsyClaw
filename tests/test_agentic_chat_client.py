@@ -433,3 +433,120 @@ def test_invoke_does_not_record_spend_when_model_raises(test_config, monkeypatch
     with pytest.raises(AgenticError):
         client.invoke(system_prompt="s", user_prompt="a clean prompt", config_path=config_path, cfg=cfg)
     assert _spend_rows(cfg) == []
+
+
+# --- bounded retry ------------------------------------------------------------
+
+
+class _FlakyStubModel:
+    """Raises the queued exceptions in order, then answers like _StubModel."""
+
+    def __init__(self, exceptions, content="plan"):
+        self.exceptions = list(exceptions)
+        self.content = content
+        self.calls: list[tuple[list, dict]] = []
+
+    def invoke(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        if self.exceptions:
+            raise self.exceptions.pop(0)
+        return SimpleNamespace(content=self.content, response_metadata=None, usage_metadata=None)
+
+
+class _FakeRateLimitError(Exception):
+    status_code = 429
+
+
+class _FakeServerError(Exception):
+    def __init__(self):
+        super().__init__("boom")
+        self.response = SimpleNamespace(status_code=503)
+
+
+class _FakeAPITimeoutError(Exception):
+    """Name-shaped like openai/anthropic APITimeoutError (which subclass their
+    connection errors) -- must NOT be retried despite looking connection-ish."""
+
+
+class _FakeBadRequestError(Exception):
+    status_code = 400
+
+
+def test_invoke_retries_a_transient_429_then_succeeds(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeRateLimitError()])
+    delays: list[float] = []
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+    monkeypatch.setattr(chat_client_module.time, "sleep", delays.append)
+
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert response.content == "plan"
+    assert len(stub.calls) == 2
+    assert delays == [1.0]  # backoff_base * 2**0, capped at 30
+
+
+def test_invoke_retries_a_5xx_carried_on_the_response_attribute(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeServerError(), _FakeServerError()])
+    delays: list[float] = []
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+    monkeypatch.setattr(chat_client_module.time, "sleep", delays.append)
+
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert response.content == "plan"
+    assert len(stub.calls) == 3  # two retryable failures, then success
+    assert delays == [1.0, 2.0]
+
+
+def test_invoke_never_retries_a_timeout(test_config, monkeypatch):
+    """ops_runner budgets each iteration at ONE planner_timeout_sec; retrying a
+    timed-out call would burn up to 3x that and get the run SIGKILLed at the
+    cap, so timeouts fail fast (same rationale as llm/client.py's local
+    retry_on_timeout=False)."""
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeAPITimeoutError(), _FakeAPITimeoutError()])
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+    monkeypatch.setattr(
+        chat_client_module.time, "sleep",
+        lambda _s: pytest.fail("timeout must not be retried"),
+    )
+
+    client = ChatModelProposerClient(settings=_settings())
+    with pytest.raises(AgenticError) as excinfo:
+        client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert len(stub.calls) == 1
+    assert excinfo.value.details["attempts"] == 1
+    assert excinfo.value.details["error_type"] == "_FakeAPITimeoutError"
+
+
+def test_invoke_never_retries_other_4xx(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeBadRequestError(), _FakeBadRequestError()])
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+
+    client = ChatModelProposerClient(settings=_settings())
+    with pytest.raises(AgenticError):
+        client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert len(stub.calls) == 1
+
+
+def test_invoke_gives_up_after_two_extra_attempts(test_config, monkeypatch):
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeRateLimitError(), _FakeRateLimitError(), _FakeRateLimitError()])
+    delays: list[float] = []
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+    monkeypatch.setattr(chat_client_module.time, "sleep", delays.append)
+
+    client = ChatModelProposerClient(settings=_settings())
+    with pytest.raises(AgenticError) as excinfo:
+        client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert len(stub.calls) == 3
+    assert delays == [1.0, 2.0]
+    assert excinfo.value.details["attempts"] == 3

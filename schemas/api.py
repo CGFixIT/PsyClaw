@@ -80,6 +80,13 @@ class HealthResponse(BaseModel):
     # aborts first and hides the server's truthful 504 GRAPH_TIMEOUT message.
     # Defaulted so existing HealthResponse constructions stay valid.
     graph_timeout_sec: int = 780
+    # Server-side /ops/sync deadline (utils.ops_runner.sync_timeout_sec(), derived
+    # from sync.sync_timeout_sec and post_sync_check). Surfaced for the same reason
+    # as graph_timeout_sec: sync.sync_timeout_sec has no upper bound, so a console
+    # constant cannot cover every valid configuration -- the client bounds its own
+    # fetch ABOVE whatever this server actually allows.
+    # Defaulted so existing HealthResponse constructions stay valid.
+    ops_sync_timeout_sec: int = 3660
     # Installed package version (importlib.metadata; "dev" when not installed).
     # The console footer renders `cyclaw v{version}`; without this field the
     # UI's data.version read is always undefined and the version never shows.

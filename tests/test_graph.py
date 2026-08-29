@@ -1362,9 +1362,9 @@ class TestLocalLlmPromptBudget:
 
     def test_missing_max_context_tokens_uses_documented_default(self):
         # When the key is absent, the budget must fall back to the documented
-        # config default (4000), not a smaller scattered literal — otherwise the
+        # config default (8000), not a smaller scattered literal — otherwise the
         # context block is silently starved and diverges from the no-stall math.
-        assert _DEFAULT_MAX_CONTEXT_TOKENS == 4000
+        assert _DEFAULT_MAX_CONTEXT_TOKENS == 8000
         budget = _context_char_budget({}, soul_preamble="", query="", framing_chars=0)
         assert budget == _DEFAULT_MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN
 

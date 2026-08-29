@@ -896,7 +896,7 @@ class TestNoPromptLevelWorkaround:
         assert local_llm["max_tokens"] == 4096
         assert local_llm["temperature"] == 0.2
         assert local_llm["timeout_sec"] == 720
-        assert shipped["retrieval"]["max_context_tokens"] == 4000
+        assert shipped["retrieval"]["max_context_tokens"] == 8000
 
     def test_openai_compatible_clients_never_send_think(self):
         for path in (

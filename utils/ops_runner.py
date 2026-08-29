@@ -49,7 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 # Default wall-clock for short ops (status/test/agentic/fsconnect/sqlconnect).
 # The full Dropbox sync path uses config sync.sync_timeout_sec instead — see
-# _sync_timeout_sec() — so POST /ops/sync does not kill rclone mid-transfer.
+# sync_timeout_sec() — so POST /ops/sync does not kill rclone mid-transfer.
 _TIMEOUT_SEC = 120
 
 # action whitelists — the ONLY subcommands a caller may reach.
@@ -100,35 +100,61 @@ _REAL_REPO_RUN_OVERHEAD_SEC = 300
 # console cannot tell it from a hang. Capping means a genuinely enormous
 # request fails with a legible AGENTIC_TIMEOUT instead, which is the more
 # honest outcome. Raise it deliberately if a real workload ever needs to.
-_REAL_REPO_RUN_MAX_TIMEOUT_SEC = 3600
+# Public: harness/server.py refuses request shapes whose uncapped budget
+# (real_repo_run_budget_sec below) exceeds this, before any subprocess starts.
+REAL_REPO_RUN_MAX_TIMEOUT_SEC = 3600
 
 
-def _real_repo_run_timeout_sec(max_iterations: int | None, check_count: int) -> int:
-    """Wall-clock budget for one ``real-repo-run``, sized to what it asked for.
+def real_repo_run_budget_sec(max_iterations: int | None, check_count: int) -> int:
+    """UNCAPPED wall-clock budget for one ``real-repo-run`` request shape.
 
-    Mirrors :func:`_sync_timeout_sec`'s shape -- read the authoritative value
+    Mirrors :func:`sync_timeout_sec`'s shape -- read the authoritative value
     from config, fall back safely when it is missing or unusable, add overhead
     -- but is per-call rather than per-action, because this action's cost
     scales with two request fields (``max_iterations`` and how many check
     profiles were selected) rather than being fixed by config alone.
+
+    Public (alongside REAL_REPO_RUN_MAX_TIMEOUT_SEC) so the harness route can
+    refuse a shape whose budget exceeds the cap at request time: past the cap
+    the subprocess is SIGKILLed mid-flight, which leaks the repo clone and a
+    permanently-``running`` record (see the module comment above -- that path
+    is unrecoverable by design, so the only good failure is the early one).
     """
     try:
         cfg = _get_config(str(_CONFIG_PATH))
         deep = ((cfg.get("agentic") or {}).get("deepagent_github") or {})
         planner_sec = int(deep.get("planner_timeout_sec", _REAL_REPO_RUN_FALLBACK_PLANNER_SEC))
-    except (OSError, TypeError, ValueError, KeyError, AttributeError):
+    except Exception:  # noqa: BLE001 - contractually fail-soft; see below
+        # Deliberately broad. An enumerated tuple already proved incomplete
+        # once: yaml.YAMLError derives straight from Exception, so a malformed
+        # (not merely unreadable) config.yaml escaped it. This function and
+        # sync_timeout_sec() both promise "never raises" to callers that must
+        # answer anyway -- including gate.py's UNAUTHENTICATED /health -- so the
+        # promise is implemented rather than approximated.
         planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
     if planner_sec <= 0:
         planner_sec = _REAL_REPO_RUN_FALLBACK_PLANNER_SEC
     iterations = max_iterations if max_iterations and max_iterations > 0 else _REAL_REPO_RUN_DEFAULT_ITERATIONS
     # A rejected iteration pays for both a planner call and a full verification
     # sweep, so both scale with the iteration count.
-    budget = (
+    return (
         iterations * planner_sec
         + iterations * max(1, check_count) * _REAL_REPO_RUN_CHECK_SEC
         + _REAL_REPO_RUN_OVERHEAD_SEC
     )
-    return min(budget, _REAL_REPO_RUN_MAX_TIMEOUT_SEC)
+
+
+def _real_repo_run_timeout_sec(max_iterations: int | None, check_count: int) -> int:
+    """Capped subprocess budget: the request-shape budget, held to the ceiling.
+
+    Whether the min() actually binds depends on the caller. The harness route
+    (POST /api/agent/run) now refuses over-cap shapes up front, so for that path
+    this is provably a no-op. It stays load-bearing for every caller that skips
+    the route -- gate.py's /ops/agentic and direct `python -m agentic.cli` use --
+    where nothing has pre-validated the shape and an unbounded budget would hand
+    subprocess.run a timeout long enough to look like a hang.
+    """
+    return min(real_repo_run_budget_sec(max_iterations, check_count), REAL_REPO_RUN_MAX_TIMEOUT_SEC)
 
 # fsconnect read-only CLI subcommands exposed via /ops/fsconnect.
 _FSCONNECT_ACTIONS = frozenset({"status", "test", "list", "read", "stat", "grep", "glob"})
@@ -207,7 +233,7 @@ def _redact_ops_value(value: Any, cfg: dict) -> Any:
     return value
 
 
-def _sync_timeout_sec() -> int:
+def sync_timeout_sec() -> int:
     """Wall-clock budget for ``sync.cli sync`` launched via the ops shim.
 
     Aligns with ``sync.sync_timeout_sec`` (default 3600) so console-driven
@@ -221,13 +247,18 @@ def _sync_timeout_sec() -> int:
     timeout for the ``rclone check`` — both under the single-instance lock
     (the same lifecycle ``sync.runner._lock_stale_after_sec`` scales to).
     Mirror that doubled budget here or the shim kills a healthy run mid-check.
+
+    Never raises: callers include gate.py's /health, which must answer even
+    when config.yaml is unreadable or malformed. AttributeError is in the
+    caught set (matching :func:`real_repo_run_budget_sec`) because a config
+    file that parses to a non-mapping makes ``cfg.get`` itself fail.
     """
     try:
         cfg = _get_config(str(_CONFIG_PATH))
         block = cfg.get("sync") or {}
         sec = int(block.get("sync_timeout_sec", 3600))
         post_sync_check = bool(block.get("post_sync_check", False))
-    except (OSError, TypeError, ValueError, KeyError):
+    except Exception:  # noqa: BLE001 - contractually fail-soft, same rationale as real_repo_run_budget_sec
         sec, post_sync_check = 3600, False
     if sec <= 0:
         sec = 3600
@@ -324,7 +355,7 @@ def run_sync_op(action: str, *, dry_run: bool = False) -> OpsResult:
 
     # status/test/schedule stay on the short default; only the full transfer
     # needs the config-aligned ceiling (rclone can run for up to an hour).
-    timeout = _sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
+    timeout = sync_timeout_sec() if action == "sync" else _TIMEOUT_SEC
     proc = _run(argv, timeout_sec=timeout)
     ok, label = _SYNC_LABELS.get(proc.returncode, (False, "unknown"))
     result = OpsResult("sync", action, proc.returncode, ok, label, proc.stdout, proc.stderr)

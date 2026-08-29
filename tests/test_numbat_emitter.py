@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,100 @@ def test_forbidden_map_covers_every_event_type() -> None:
     assert "command" not in exec_forbidden
     result_forbidden = ne._EVENT_TYPE_FORBIDDEN_FIELDS["tool.result"]
     assert {"command", "exit_code", "duration_ms", "file_path"} <= result_forbidden
+
+
+# --- size-based rollover ------------------------------------------------------
+
+
+def _rollover_cfg(tmp_path: Path, max_bytes: int) -> tuple[str, Path]:
+    out = tmp_path / "numbat-events.ndjsonl"
+    cfg = {
+        "logging": {"audit_file": str(tmp_path / "audit.jsonl")},
+        "numbat": {
+            "enabled": True,
+            "output_path": str(out),
+            "max_bytes": max_bytes,
+            "source_agent": "unknown",
+            "source_type": "hook",
+        },
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return str(path), out
+
+
+def _ndjson_lines(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def test_rollover_renames_at_max_bytes_and_events_keep_flowing(tmp_path: Path) -> None:
+    """Past max_bytes the stream renames to .1 and starts fresh -- with no
+    event lost across the boundary (each record lands whole in exactly one
+    generation, because the check runs before the write under the lock)."""
+    config_path, out = _rollover_cfg(tmp_path, max_bytes=2000)
+    rolled = out.with_name(out.name + ".1")
+
+    emitted = 0
+    while not rolled.exists() and emitted < 50:
+        emit_numbat_event("command.exec", command="echo hi", config_path=config_path)
+        emitted += 1
+    assert rolled.exists(), "rollover never happened within 50 events"
+
+    emit_numbat_event("command.exec", command="echo after", config_path=config_path)
+    emitted += 1
+
+    fresh, archived = _ndjson_lines(out), _ndjson_lines(rolled)
+    assert fresh, "stream stopped flowing after rollover"
+    assert len(fresh) + len(archived) == emitted, "an event was lost across the rollover"
+    assert out.stat().st_size < rolled.stat().st_size
+
+
+def test_rollover_keeps_a_single_generation(tmp_path: Path) -> None:
+    config_path, out = _rollover_cfg(tmp_path, max_bytes=1200)
+    rolled = out.with_name(out.name + ".1")
+    for _ in range(30):  # enough for several rollovers at 1200 bytes
+        emit_numbat_event("command.exec", command="echo hi", config_path=config_path)
+    assert rolled.exists()
+    generations = [p for p in out.parent.iterdir() if p.name.startswith(out.name) and p != out]
+    assert generations == [rolled], "only the single .1 generation may exist"
+
+
+def test_zero_max_bytes_disables_rollover(tmp_path: Path) -> None:
+    config_path, out = _rollover_cfg(tmp_path, max_bytes=0)
+    for _ in range(20):
+        emit_numbat_event("command.exec", command="echo hi", config_path=config_path)
+    assert out.stat().st_size > 1200  # grew well past any small threshold
+    assert not out.with_name(out.name + ".1").exists()
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX rename-over-open-file semantics; Windows locks an open file, so the "
+           "cross-process rollover this guards against cannot occur there",
+)
+def test_rollover_by_another_process_does_not_orphan_the_cached_handle(tmp_path: Path) -> None:
+    """Regression: a rename underneath a cached handle must force a reopen.
+
+    The handle cache is keyed on the path string, but a rename moves that name
+    off the inode the handle holds. The action plane rolls this same stream over
+    from ops_runner child processes while a long-lived gate.py holds its handle
+    open. Without an inode check the server keeps appending into the .1
+    generation for the rest of its uptime -- and the next rollover deletes that
+    whole backlog, silently ending the mainline plane's projection.
+    """
+    config_path, out = _rollover_cfg(tmp_path, max_bytes=0)
+    rolled = out.with_name(out.name + ".1")
+
+    emit_numbat_event("command.exec", command="echo before", config_path=config_path)
+    assert out.exists()
+
+    # Stand in for another process's rollover: rename the file out from under us.
+    os.replace(out, rolled)
+    emit_numbat_event("command.exec", command="echo after", config_path=config_path)
+
+    assert out.exists(), "live stream must be reopened, not abandoned"
+    fresh = out.read_text(encoding="utf-8")
+    assert "echo after" in fresh, "post-rename events must land in the live file"
+    assert "echo before" in rolled.read_text(encoding="utf-8")

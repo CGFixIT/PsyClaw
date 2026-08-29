@@ -72,9 +72,9 @@ What you ship and run is the constraint:
 | Knob | Shipped / recommended value | Why it exists |
 |---|---|---|
 | Ollama `num_ctx` | **16384** | Prompt + reserved `max_tokens` must fit or Ollama stalls at "0% processing" |
-| RAG budget | `max_context_tokens` 4000 + `max_tokens` 4096 + ~1500 headroom | That 16k floor on the `/query` path |
+| RAG budget | `max_context_tokens` 8000 + `max_tokens` 4096 + ~1500 headroom = 13,596 | The `/query`-path floor inside the 16k window (raised from 4000 on 2026-08-28; `num_ctx` — not this budget — bounds KV memory, so the bigger budget costs prefill time, not a new memory ceiling) |
 | Harness chat | **2048** completion tokens, **8** prior turns | A 4096-token chat budget on top of soul+skills+goal+history stalls this box |
-| Agentic local prompt | **~8,000 chars** (`_MAX_LOOP_CONTEXT_CHARS`) | Not 200k. `max_handoff_chars: 200000` is the **cloud egress** cap |
+| Agentic local prompt | **~8,000 chars** GitHub context (`_MAX_LOOP_CONTEXT_CHARS`) — but a worst-case real-repo-run iteration (plan + read_paths + feedback + instruction) can reach **~39–40k chars ≈ 10k tokens**; see OLLAMA_SETUP.md "The agentic real-repo coding loop needs more headroom" (it sizes `num_ctx` 24576 for that pathway) | Not 200k. `max_handoff_chars: 200000` is the **cloud egress** cap |
 | Plan file | `_MAX_PLAN_CHARS` **6,000**; `planner_max_tokens` **3072** | A plan the size of a diff means the planner misbehaved |
 | Local model | `qwen3.8:27b-mlx`, `reasoning_effort: none` | Thinking-on burns the 16k window before a patch exists |
 

@@ -470,12 +470,20 @@ def test_harness_auth_probes_are_bounded_by_a_timeout():
 
 
 def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
-    """api() must timeout non-chat fetches. Chat keeps inflightChat.signal."""
+    """api() must timeout non-chat fetches. Chat keeps inflightChat.signal.
+    Long-running routes may widen the deadline per call (timeoutMs), but the
+    15000ms default must survive as the fallback so no route is unbounded."""
     html = _HARNESS_HTML.read_text(encoding="utf-8")
-    assert "await fetchWithTimeout(path, opts, 15000)" in html
+    assert "await fetchWithTimeout(path, opts, timeoutMs || 15000)" in html
     assert "const resp = await fetch(path, opts);" not in html
     assert "fetchWithTimeout(path, init || {}, 15000)" in html
     assert "fetchFn: function (path, init) { return fetch(path, init); }" not in html
+    # The agent-run and CLI-backed routes must outlive their server-side
+    # subprocess budgets (utils/ops_runner.py: 3600s cap / 120s _TIMEOUT_SEC),
+    # so the server's typed error envelope wins the race against the client abort.
+    assert "const AGENT_RUN_TIMEOUT_MS = 3630000;" in html
+    assert "const AGENT_CLI_TIMEOUT_MS = 130000;" in html
+    assert "await api('/api/agent/run', 'POST', body, AGENT_RUN_TIMEOUT_MS)" in html
 
 
 def test_console_loads_the_shared_users_panel_from_the_static_mount() -> None:

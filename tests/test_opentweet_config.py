@@ -117,3 +117,13 @@ def test_bad_slot(tmp_path: Path) -> None:
     path = _write_config(tmp_path, {"schedule_slot": "25:00"})
     with pytest.raises(OpenTweetConfigError):
         load_opentweet_config(path)
+
+
+def test_shipped_query_timeout_clears_graph_deadline() -> None:
+    # 790 = api.graph_timeout_sec (780) + 10s: the channel client must lose the
+    # race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a
+    # client abort (same pattern as static/terminal.js's queryDeadlineMs).
+    shipped_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    shipped = yaml.safe_load(shipped_path.read_text(encoding="utf-8"))
+    assert shipped["opentweet"]["query"]["timeout_sec"] == 790
+    assert shipped["opentweet"]["query"]["timeout_sec"] > shipped["api"]["graph_timeout_sec"]
