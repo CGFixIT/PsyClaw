@@ -340,6 +340,50 @@ class TestSameOrigin:
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
+    def test_a_wildcard_allow_list_host_is_accepted(self, manager, user):
+        """Match allowed_hosts the way TrustedHostMiddleware does.
+
+        Starlette honours a leading `*.` domain wildcard, so an operator who
+        allow-lists `*.example.com` is legitimately served at
+        `node.example.com`. A plain `in` test is stricter than the Host filter
+        that already admitted the request, and would 403 that operator's own
+        login. Kept in step with gate.py's copy of the same matcher.
+        """
+        username, password = user
+        cfg = {
+            "api": {"tls": {"enabled": False}, "port": _PORT},
+            "security": {"allowed_hosts": ["*.example.com"]},
+        }
+        client = TestClient(_make_app(manager, cfg=cfg), base_url=f"http://node.example.com:{_PORT}")
+        r = client.post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": f"http://node.example.com:{_PORT}"},
+        )
+        assert r.status_code == 200
+
+    def test_a_bare_star_allow_list_is_still_refused(self, manager, user):
+        """The one deliberate divergence from the middleware's rule.
+
+        A bare `"*"` makes TrustedHostMiddleware skip Host validation
+        entirely. With the Host unvalidated there is nothing for the Origin to
+        be compared against, so the same-origin check must refuse rather than
+        accept a pair that is unvalidated on both sides.
+        """
+        username, password = user
+        cfg = {
+            "api": {"tls": {"enabled": False}, "port": _PORT},
+            "security": {"allowed_hosts": ["*"]},
+        }
+        client = TestClient(_make_app(manager, cfg=cfg), base_url=f"http://anything.test:{_PORT}")
+        r = client.post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": f"http://anything.test:{_PORT}"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
     def test_a_malformed_port_is_rejected_on_a_scheme_default_port_too(self, manager, user):
         """The case the parametrized test above cannot reach, on the deployment
         this module exists for.

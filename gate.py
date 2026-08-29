@@ -1434,11 +1434,34 @@ def _looks_cross_site(request: Request) -> bool:
     same_origin = (
         parsed.hostname is not None
         and parsed.hostname == request.url.hostname
-        and parsed.hostname in _allowed_hosts
+        and _host_matches_allow_list(parsed.hostname)
         and origin_port == request.url.port
         and parsed.scheme == request.url.scheme
     )
     return not same_origin
+
+
+def _host_matches_allow_list(hostname: str) -> bool:
+    """Does ``hostname`` satisfy security.allowed_hosts the way the middleware does?
+
+    Mirrors starlette's TrustedHostMiddleware rule -- an exact match, or a
+    leading ``*.`` domain wildcard matched by suffix. A plain ``in`` test is
+    stricter than the middleware that already admitted the request, so an
+    operator who allow-lists ``*.example.com`` and is served at
+    ``node.example.com`` would have their own console called cross-site.
+
+    One deliberate divergence: a bare ``"*"`` never matches here, even though
+    it makes the middleware skip Host validation altogether. That is exactly
+    why -- with the Host unvalidated there is nothing for an Origin to be
+    compared against, so this check has to refuse rather than accept a pair
+    that is equally unvalidated on both sides.
+    """
+    for pattern in _allowed_hosts:
+        if pattern == "*":
+            continue
+        if hostname == pattern or (pattern.startswith("*.") and hostname.endswith(pattern[1:])):
+            return True
+    return False
 
 
 def _api_key_bypass_allowed(request: Request) -> bool:

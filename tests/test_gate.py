@@ -1480,6 +1480,56 @@ class TestQueryCrossSiteWithAuthOff:
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
+    @pytest.mark.parametrize("patterns, hostname, expected", [
+        (["127.0.0.1", "localhost"], "localhost", True),          # DevSkim: ignore DS162092,DS137138
+        (["*.example.com"], "node.example.com", True),            # the wildcard the middleware honours
+        (["*.example.com"], "deep.node.example.com", True),       # suffix match, same as starlette
+        (["*.example.com"], "example.com", False),                # the bare apex is not a subdomain
+        (["*.example.com"], "evil-example.com", False),           # suffix must start at the dot
+        (["*.example.com"], "example.com.evil.test", False),      # suffix, not substring
+        (["*"], "anything.test", False),                          # deliberate divergence, see below
+        (["localhost"], "other.test", False),                     # DevSkim: ignore DS162092,DS137138
+    ])
+    def test_allow_list_matching_follows_the_host_middleware(self, monkeypatch, patterns, hostname, expected):
+        """Mirror TrustedHostMiddleware's rule, or reject what it admitted.
+
+        Starlette matches `host == pattern or (pattern.startswith("*") and
+        host.endswith(pattern[1:]))`. A plain `in` test is stricter, so an
+        operator allow-listing `*.example.com` and served at
+        `node.example.com` would have their own console called cross-site --
+        on /query unconditionally, since this PR attaches that check by
+        default.
+
+        The bare `"*"` row is the one deliberate divergence: it makes the
+        middleware skip Host validation altogether, so there is no validated
+        Host for an Origin to be compared against and this must refuse.
+        """
+        import gate
+        monkeypatch.setattr(gate, "_allowed_hosts", patterns)
+        assert gate._host_matches_allow_list(hostname) is expected
+
+    def test_a_wildcard_allow_list_host_is_not_cross_site(self, monkeypatch):
+        """The matcher reaches _looks_cross_site, not just its own unit test.
+
+        Driven through _looks_cross_site directly rather than a TestClient:
+        TrustedHostMiddleware holds its own reference to the allow-list from
+        import, so a wildcard patched in here would never get a request past
+        the middleware to reach the check under test.
+        """
+        import gate
+        monkeypatch.setattr(gate, "_allowed_hosts", ["*.example.com"])
+        request = MagicMock(
+            headers={"origin": "http://node.example.com:8787"},
+            url=MagicMock(hostname="node.example.com", port=8787, scheme="http"),
+        )
+        assert gate._looks_cross_site(request) is False
+        # Same allow-list, a host that is genuinely another origin.
+        other = MagicMock(
+            headers={"origin": "http://other.example.com:8787"},
+            url=MagicMock(hostname="node.example.com", port=8787, scheme="http"),
+        )
+        assert gate._looks_cross_site(other) is True
+
     def test_the_allow_list_is_an_independent_condition(self, client, monkeypatch):
         """hostname in _allowed_hosts is checked separately from hostname ==
         request.url.hostname, covering TrustedHostMiddleware's "*" entry (which

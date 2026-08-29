@@ -144,6 +144,30 @@ def register_auth_routes(
     # never a scheme default, so a genuine same-origin request's Origin
     # header always states the port explicitly.
 
+    def _host_matches_allow_list(hostname: str) -> bool:
+        """Does ``hostname`` satisfy allowed_hosts the way the middleware does?
+
+        Mirrors starlette's TrustedHostMiddleware rule -- an exact match, or a
+        leading ``*.`` domain wildcard matched by suffix. A plain ``in`` test is
+        stricter than the Host filter that already admitted the request, so an
+        operator who allow-lists ``*.example.com`` and is served at
+        ``node.example.com`` would have their own console called cross-site.
+
+        A bare ``"*"`` deliberately never matches: it makes the middleware skip
+        Host validation entirely, and an unvalidated Host is nothing for an
+        Origin to be compared against.
+
+        Duplicated from gate.py's function of the same name rather than
+        imported, for the same reason tls_enabled above is duplicated: gate.py
+        imports THIS module, so the dependency cannot run the other way.
+        """
+        for pattern in allowed_hosts:
+            if pattern == "*":
+                continue
+            if hostname == pattern or (pattern.startswith("*.") and hostname.endswith(pattern[1:])):
+                return True
+        return False
+
     def _enforce_same_origin(request: Request) -> None:
         """Reject a browser-initiated cross-site request to a state-changing
         auth route. Mirrors harness/server.py's _enforce_same_origin exactly,
@@ -247,7 +271,7 @@ def register_auth_routes(
         same_origin = (
             parsed.hostname is not None
             and parsed.hostname == request.url.hostname
-            and parsed.hostname in allowed_hosts
+            and _host_matches_allow_list(parsed.hostname)
             and origin_port == request.url.port
             and parsed.scheme == request.url.scheme
         )
