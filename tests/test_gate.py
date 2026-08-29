@@ -1295,6 +1295,11 @@ class TestApiKeyOptionalPeer:
         {"Origin": "http://attacker.test:8080"},
         {"Sec-Fetch-Site": "cross-site"},
         {"Sec-Fetch-Site": "same-site"},
+        # Served at localhost, so 127.0.0.1 is a DIFFERENT web origin by spec
+        # even though both are allow-listed -- the "another device on the LAN"
+        # shape gate_auth.py already rejects for /auth/login. It used to pass
+        # here, because the check asked only whether the host looked loopback.
+        {"Origin": "http://127.0.0.1:8787"},  # DevSkim: ignore DS162092,DS137138 - test loopback host
     ])
     def test_a_cross_site_request_is_refused_the_bypass(self, client, monkeypatch, headers):
         """CORS does not protect these routes, so the bypass must not trust them.
@@ -1313,18 +1318,28 @@ class TestApiKeyOptionalPeer:
         import gate
         monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
         gate.cfg.setdefault("security", {})["api_key_optional"] = True
-        browser = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        # Own loopback bucket: this parametrize grew a case, and 127.0.0.1 is the
+        # per-IP budget test_gate_index_build.py also spends. Any 127.0.0.0/8
+        # address is loopback, so the peer semantics under test are identical.
+        browser = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.7", 4321))  # DevSkim: ignore DS162092,DS137138
         assert browser.post("/soul/reload", headers=headers).status_code == 401
 
-    @pytest.mark.parametrize("headers", [
-        {},
-        {"Sec-Fetch-Site": "same-origin"},
-        {"Sec-Fetch-Site": "none"},
-        {"Origin": "http://127.0.0.1:8787"},
-        {"Origin": "http://localhost:8787"},
+    @pytest.mark.parametrize("base_url, headers", [
+        ("http://localhost", {}),
+        ("http://localhost", {"Sec-Fetch-Site": "same-origin"}),
+        ("http://localhost", {"Sec-Fetch-Site": "none"}),
+        # An Origin case must state the port its base_url actually connected
+        # on. A browser's Origin is scheme+host+PORT and always names the port
+        # it reached, so "Origin: ...:8787" arriving at a portless base_url is
+        # a combination no browser produces -- these two used to pass only
+        # because the same-origin check ignored the port entirely, which is the
+        # same-host-different-port hole the test below now pins shut. Both
+        # loopback spellings are kept: allowed_hosts carries both.
+        ("http://127.0.0.1:8787", {"Origin": "http://127.0.0.1:8787"}),
+        ("http://localhost:8787", {"Origin": "http://localhost:8787"}),
     ])
     def test_same_site_and_header_less_callers_keep_the_bypass(
-        self, client, monkeypatch, headers,
+        self, client, monkeypatch, base_url, headers,
     ):
         """The console itself and non-browser clients must still work.
 
@@ -1335,14 +1350,202 @@ class TestApiKeyOptionalPeer:
         import gate
         monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
         gate.cfg.setdefault("security", {})["api_key_optional"] = True
-        caller = TestClient(gate.app, base_url="http://localhost", client=("127.0.0.1", 4321))
+        caller = TestClient(gate.app, base_url=base_url, client=("127.0.0.1", 4321))
         assert caller.get("/soul", headers=headers).status_code == 200
+
+    def test_same_host_different_port_origin_is_refused_the_bypass(self, client, monkeypatch):
+        """Same host, different port is a DIFFERENT origin, and must not pass.
+
+        The check used to ask only whether the Origin's host was loopback, so
+        any port on 127.0.0.1/localhost counted as same-site -- a page served
+        by any other local service could have ridden the bypass. Comparing
+        against this request's own port is what closes it.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        browser = TestClient(gate.app, base_url="http://localhost:8787", client=("127.0.0.7", 4321))  # DevSkim: ignore DS162092,DS137138
+        assert browser.get("/soul", headers={"Origin": "http://localhost:9999"}).status_code == 401  # DevSkim: ignore DS162092,DS137138 - test loopback host
+
+    def test_a_malformed_origin_port_is_refused_not_a_500(self, client, monkeypatch):
+        """urlparse() accepts "http://localhost:notaport"; .port raises on read.
+
+        A structurally malformed Origin raises at the urlparse() call and is
+        already covered; this is the later, lazier failure -- attacker-supplied
+        on an unauthenticated route, so it must land as a refusal rather than
+        escape as an unhandled 500.
+        """
+        import gate
+        monkeypatch.delenv("CYCLAW_API_KEY", raising=False)
+        gate.cfg.setdefault("security", {})["api_key_optional"] = True
+        browser = TestClient(gate.app, base_url="http://localhost:8787", client=("127.0.0.7", 4321))  # DevSkim: ignore DS162092,DS137138
+        assert browser.get("/soul", headers={"Origin": "http://localhost:notaport"}).status_code == 401  # DevSkim: ignore DS162092,DS137138 - test loopback host
 
     def test_missing_peer_fails_closed(self):
         """An ASGI scope without a client reads as not-loopback. This backs a
         security bypass, so an unknown peer must not receive it."""
         import gate
         assert gate._is_loopback_peer(MagicMock(client=None)) is False
+
+
+class TestQueryCrossSiteWithAuthOff:
+    """/query's cross-site posture on the SHIPPED config (auth.enabled false).
+
+    Deliberately against the real gate.app rather than the mirror app in
+    tests/test_gate_query_auth.py. That file builds its own FastAPI app and
+    wires the dependency itself, so it would keep passing even if gate.py never
+    attached the check at all -- which is exactly the bug this class exists to
+    catch. The check used to be attached only inside `if auth_manager is not
+    None:`, and auth.enabled ships false, so the one configuration CyClaw
+    actually ships had no cross-site check on /query.
+
+    Own peer (127.0.0.6): a 403 here is raised by a route dependency, which
+    runs before /query's in-body rate limiter, so these cost no budget -- but
+    the 200 cases do, and they must not share a bucket with another file.
+    """
+
+    def _client(self, base_url="http://localhost:8787"):  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        import gate
+        return TestClient(gate.app, base_url=base_url, client=("127.0.0.6", 51234))  # DevSkim: ignore DS162092,DS137138
+
+    @pytest.mark.parametrize("headers", [
+        {"Origin": "https://evil.example"},
+        {"Origin": "http://attacker.test:8080"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+    ])
+    def test_a_cross_site_query_is_rejected_with_auth_off(self, client, headers):
+        resp = self._client().post("/query", json={"query": "q"}, headers=headers)
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    @pytest.mark.parametrize("headers", [
+        {},
+        {"Origin": "http://localhost:8787"},  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        {"Sec-Fetch-Site": "same-origin"},
+        {"Sec-Fetch-Site": "none"},
+    ])
+    def test_a_same_origin_or_header_less_query_is_allowed_with_auth_off(self, client, headers):
+        """The console (const API = window.location.origin) and every
+        non-browser caller -- curl, PowerShell, Telegram, the schedulers --
+        must be untouched. The header-less case is the absent-header allowance
+        this change deliberately did not narrow."""
+        assert self._client().post("/query", json={"query": "q"}, headers=headers).status_code == 200
+
+    def test_a_lan_origin_matching_this_request_is_allowed(self, client):
+        """The half of the _looks_cross_site change that WIDENS.
+
+        A console served over LAN used to be judged cross-site purely because
+        its Origin host is not loopback, even though the same host is
+        allow-listed and THREAT_MODEL documents an auth+TLS path to a
+        non-loopback bind. Asserting the allow-list precondition inline so a
+        config edit fails loudly here rather than silently passing.
+        """
+        import gate
+        assert "10.0.0.112" in gate._allowed_hosts  # DevSkim: ignore DS137138 - LAN host from the shipped allow-list
+        lan = "http://10.0.0.112:8787"  # DevSkim: ignore DS137138 - LAN origin, not internet-exposed
+        resp = self._client(base_url=lan).post("/query", json={"query": "q"}, headers={"Origin": lan})
+        assert resp.status_code == 200
+
+    @pytest.mark.parametrize("origin", [
+        "http://localhost:9999",   # DevSkim: ignore DS162092,DS137138 - same host, another port
+        "https://localhost:8787",  # DevSkim: ignore DS162092,DS137138 - same host/port, another scheme
+        "http://localhost",        # DevSkim: ignore DS162092,DS137138 - same host, no port
+        "http://127.0.0.1:8787",   # DevSkim: ignore DS162092,DS137138 - allow-listed, but a DIFFERENT host
+    ])
+    def test_an_origin_that_is_not_this_requests_own_is_rejected(self, client, origin):
+        """One case per conjunct of the converged predicate: port, scheme,
+        missing port, host. The first is the same-site cross-port ride the
+        whole control exists to stop, and it used to get through whenever the
+        browser sent Origin without Sec-Fetch-Site. The last is the "another
+        device on the LAN" shape -- allow-listed is not the same as being this
+        request's own origin.
+        """
+        resp = self._client().post("/query", json={"query": "q"}, headers={"Origin": origin})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    @pytest.mark.parametrize("origin", [
+        "http://[evil",                 # urlparse() itself raises
+        "http://localhost:notaport",    # DevSkim: ignore DS162092,DS137138 - lazy .port raises
+        "http://localhost:99999",       # DevSkim: ignore DS162092,DS137138 - port out of range
+    ])
+    def test_a_malformed_origin_is_a_403_not_a_500(self, client, origin):
+        """The last two are new failure surface: the old check never read
+        .port, so it could not raise on one. .port is a lazy property, and this
+        is attacker-supplied on a route carrying no credential when auth is
+        off, so it must land as a refusal rather than escape as a 500.
+        """
+        resp = self._client().post("/query", json={"query": "q"}, headers={"Origin": origin})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    @pytest.mark.parametrize("patterns, hostname, expected", [
+        (["127.0.0.1", "localhost"], "localhost", True),          # DevSkim: ignore DS162092,DS137138
+        (["*.example.com"], "node.example.com", True),            # the wildcard the middleware honours
+        (["*.example.com"], "deep.node.example.com", True),       # suffix match, same as starlette
+        (["*.example.com"], "example.com", False),                # the bare apex is not a subdomain
+        (["*.example.com"], "evil-example.com", False),           # suffix must start at the dot
+        (["*.example.com"], "example.com.evil.test", False),      # suffix, not substring
+        (["*"], "anything.test", False),                          # deliberate divergence, see below
+        (["localhost"], "other.test", False),                     # DevSkim: ignore DS162092,DS137138
+    ])
+    def test_allow_list_matching_follows_the_host_middleware(self, monkeypatch, patterns, hostname, expected):
+        """Mirror TrustedHostMiddleware's rule, or reject what it admitted.
+
+        Starlette matches `host == pattern or (pattern.startswith("*") and
+        host.endswith(pattern[1:]))`. A plain `in` test is stricter, so an
+        operator allow-listing `*.example.com` and served at
+        `node.example.com` would have their own console called cross-site --
+        on /query unconditionally, since this PR attaches that check by
+        default.
+
+        The bare `"*"` row is the one deliberate divergence: it makes the
+        middleware skip Host validation altogether, so there is no validated
+        Host for an Origin to be compared against and this must refuse.
+        """
+        import gate
+        monkeypatch.setattr(gate, "_allowed_hosts", patterns)
+        assert gate._host_matches_allow_list(hostname) is expected
+
+    def test_a_wildcard_allow_list_host_is_not_cross_site(self, monkeypatch):
+        """The matcher reaches _looks_cross_site, not just its own unit test.
+
+        Driven through _looks_cross_site directly rather than a TestClient:
+        TrustedHostMiddleware holds its own reference to the allow-list from
+        import, so a wildcard patched in here would never get a request past
+        the middleware to reach the check under test.
+        """
+        import gate
+        monkeypatch.setattr(gate, "_allowed_hosts", ["*.example.com"])
+        request = MagicMock(
+            headers={"origin": "http://node.example.com:8787"},
+            url=MagicMock(hostname="node.example.com", port=8787, scheme="http"),
+        )
+        assert gate._looks_cross_site(request) is False
+        # Same allow-list, a host that is genuinely another origin.
+        other = MagicMock(
+            headers={"origin": "http://other.example.com:8787"},
+            url=MagicMock(hostname="node.example.com", port=8787, scheme="http"),
+        )
+        assert gate._looks_cross_site(other) is True
+
+    def test_the_allow_list_is_an_independent_condition(self, client, monkeypatch):
+        """hostname in _allowed_hosts is checked separately from hostname ==
+        request.url.hostname, covering TrustedHostMiddleware's "*" entry (which
+        skips Host validation entirely) and an Origin of "null" (hostname
+        None). Not a 400: the middleware holds its own reference to the list
+        from import, so patching the module global does not reach it -- which
+        is what leaves the request alive for the dependency to judge.
+        """
+        import gate
+        monkeypatch.setattr(gate, "_allowed_hosts", ["example.invalid"])
+        resp = self._client().post(
+            "/query", json={"query": "q"},
+            headers={"Origin": "http://localhost:8787"},  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
 
 class TestProxyHeaderTrust:
@@ -1618,6 +1821,27 @@ class TestLoopbackBindGuard:
         this to True -- that would mean we attached on the disabled default.
         """
         import gate
+        assert gate._request_path_enforcement_active() is False
+
+    def test_the_cross_site_dependency_is_attached_but_does_not_flip_the_probe(self):
+        """Both halves together, because either alone is misleading.
+
+        /query now carries a dependency on the shipped auth-off default, which
+        it did not before -- and the assertion above still reads False. That is
+        correct, not a stale test: the probe matches by NAME
+        (_AUTH_DEPENDENCY_NAME = require_session_or_token), and a cross-site
+        check is not a credential, so it must not open the non-loopback bind
+        route. Asserting the dependency IS present is what keeps the test above
+        honest; without it, that False would also be satisfied by never having
+        wired the check at all.
+        """
+        import gate
+        route = next(
+            r for r in gate.app.routes
+            if getattr(r, "path", None) == "/query" and "POST" in (getattr(r, "methods", None) or set())
+        )
+        assert "_reject_cross_site_query" in gate._dependant_call_names(route.dependant)
+        assert gate._AUTH_DEPENDENCY_NAME not in gate._dependant_call_names(route.dependant)
         assert gate._request_path_enforcement_active() is False
 
     @pytest.mark.parametrize(

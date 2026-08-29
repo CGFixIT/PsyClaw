@@ -17,6 +17,7 @@ import threading
 from unittest.mock import patch
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 import gate
@@ -67,6 +68,29 @@ class TestIndexStatus:
         assert (body["chunks_done"], body["chunks_total"]) == (40, 120)
         assert body["elapsed_sec"] is not None
 
+    def test_status_survives_more_than_the_per_ip_budget(self, idle_client):
+        """Deliberately exempt from the limiter, and this proves it end to end.
+
+        The console polls this every INDEX_POLL_MS (1.5s) for the whole length
+        of a build -- 40 of the 60 requests a single IP gets per minute, on a
+        budget shared with the operator's own /query traffic. Throttling a
+        progress bar to protect the server from the progress bar is the wrong
+        trade when the handler is a lock-guarded dict copy, so the route
+        carries no limiter dependency. Reads RATE_LIMIT_REQUESTS rather than a
+        literal 60 so it tracks config.yaml.
+
+        Own client on an otherwise-unused loopback IP: the limiter is a
+        process-global per-IP bucket, so spending 65 requests on idle_client's
+        shared 127.0.0.1 would starve other tests in a full-suite run.
+        """
+        client = TestClient(
+            gate.app,
+            base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+            client=("127.0.0.8", 51234),  # DevSkim: ignore DS162092,DS137138
+        )
+        codes = {client.get("/index/status").status_code for _ in range(gate.RATE_LIMIT_REQUESTS + 5)}
+        assert codes == {200}
+
 
 class TestIndexBuildGates:
     def test_non_loopback_peer_is_refused(self):
@@ -91,12 +115,23 @@ class TestIndexBuildGates:
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
-    def test_malformed_origin_is_refused_not_a_500(self):
+    @pytest.mark.parametrize("origin", [
+        "http://[evil",               # urlparse() itself raises
+        "http://localhost:notaport",  # DevSkim: ignore DS162092,DS137138 - lazy .port raises
+        "http://localhost:99999",     # DevSkim: ignore DS162092,DS137138 - port out of range
+    ])
+    def test_malformed_origin_is_refused_not_a_500(self, origin):
         """A structurally malformed Origin (an unbalanced IPv6 bracket) makes
         urlparse() itself raise ValueError, not merely a lazy .hostname
         access -- attacker-controlled on this loopback-gated but
         unauthenticated route, so it must fail closed as cross-site rather
         than let the exception escape as an unhandled 500.
+
+        The two port cases are newer surface: the same-origin check now reads
+        .port, a lazy property that raises on a non-numeric or out-of-range
+        value long after urlparse() returned cleanly. A 500 here would also
+        skip the index_build_rejected audit line this route writes on every
+        refusal, so the failure would be silent as well as wrong.
 
         Own TestClient on a distinct loopback IP (127.0.0.0/8, not just
         127.0.0.1 -- see _is_loopback_host's own docstring) rather than
@@ -110,9 +145,30 @@ class TestIndexBuildGates:
             base_url="http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
             client=("127.0.0.2", 51234),  # DevSkim: ignore DS162092,DS137138
         )
-        resp = client.post("/index/build", headers={"Origin": "http://[evil"})
+        resp = client.post("/index/build", headers={"Origin": origin})
         assert resp.status_code == 403
         assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_the_limiter_exemption_reaches_status_only(self):
+        """Scope guard for the /index/status exemption.
+
+        Structural rather than a live 429 on purpose: this file does not patch
+        gate.cfg, so gate._audit resolves the real config.yaml audit path and
+        driving a genuine 429 would append rate_limit_exceeded lines to the
+        repo's own audit.jsonl. /index/build is a state-changing route with a
+        bounded caller set and keeps its limiter; only the read-only progress
+        counter loses one.
+        """
+        routes = {
+            (r.path, m): r
+            for r in gate.app.routes
+            if isinstance(r, APIRoute)
+            for m in (r.methods or set())
+        }
+        build = gate._dependant_call_names(routes[("/index/build", "POST")].dependant)
+        status = gate._dependant_call_names(routes[("/index/status", "GET")].dependant)
+        assert "_enforce_rate_limit" in build
+        assert "_enforce_rate_limit" not in status
 
     def test_second_concurrent_build_is_refused_with_409(self, idle_client):
         """Two builds would write the same ChromaDB collection and the same

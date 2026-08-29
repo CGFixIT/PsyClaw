@@ -144,6 +144,30 @@ def register_auth_routes(
     # never a scheme default, so a genuine same-origin request's Origin
     # header always states the port explicitly.
 
+    def _host_matches_allow_list(hostname: str) -> bool:
+        """Does ``hostname`` satisfy allowed_hosts the way the middleware does?
+
+        Mirrors starlette's TrustedHostMiddleware rule -- an exact match, or a
+        leading ``*.`` domain wildcard matched by suffix. A plain ``in`` test is
+        stricter than the Host filter that already admitted the request, so an
+        operator who allow-lists ``*.example.com`` and is served at
+        ``node.example.com`` would have their own console called cross-site.
+
+        A bare ``"*"`` deliberately never matches: it makes the middleware skip
+        Host validation entirely, and an unvalidated Host is nothing for an
+        Origin to be compared against.
+
+        Duplicated from gate.py's function of the same name rather than
+        imported, for the same reason tls_enabled above is duplicated: gate.py
+        imports THIS module, so the dependency cannot run the other way.
+        """
+        for pattern in allowed_hosts:
+            if pattern == "*":
+                continue
+            if hostname == pattern or (pattern.startswith("*.") and hostname.endswith(pattern[1:])):
+                return True
+        return False
+
     def _enforce_same_origin(request: Request) -> None:
         """Reject a browser-initiated cross-site request to a state-changing
         auth route. Mirrors harness/server.py's _enforce_same_origin exactly,
@@ -193,14 +217,26 @@ def register_auth_routes(
             # are attacker-controlled on an unauthenticated route, so an
             # uncaught ValueError here would turn a malformed cross-origin
             # request into a 500 instead of the 403 this check exists to
-            # return. A malformed port can never equal request.url.port (an
-            # int or None, never unparseable), so treating it as None
-            # (rather than re-raising) still fails the comparison below and
-            # rejects the request -- it just does so as CROSS_ORIGIN_BLOCKED,
-            # not a crash.
+            # return.
             origin_port = parsed.port
         except ValueError:
-            origin_port = None
+            # Refuse here rather than falling back to None. An earlier version
+            # of this comment argued a malformed port "can never equal
+            # request.url.port (an int or None, never unparseable)" -- but None
+            # is exactly what request.url.port reads as whenever the server was
+            # reached on a scheme-default port, which is the TLS deployment
+            # this module exists for. On :443 a None fallback would make
+            # "https://host:notaport" compare EQUAL to the target and pass as
+            # same-origin. Found by the port case gate.py's _looks_cross_site
+            # picked up when it converged on this predicate (issue #1201).
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {},
+                },
+            ) from None
         # The host comparison is against THIS request's own Host header, not
         # against the allow-list. allowed_hosts ships with two distinct LAN
         # machines (10.0.0.111 and 10.0.0.112) alongside the loopback names, so
@@ -235,7 +271,7 @@ def register_auth_routes(
         same_origin = (
             parsed.hostname is not None
             and parsed.hostname == request.url.hostname
-            and parsed.hostname in allowed_hosts
+            and _host_matches_allow_list(parsed.hostname)
             and origin_port == request.url.port
             and parsed.scheme == request.url.scheme
         )

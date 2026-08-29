@@ -48,10 +48,12 @@ def _make_query_app(manager, cfg=None, limiter=None):
     )
     if manager is not None:
         attach_identity_to_query(app, identity)
-        # Mirrors gate.py's real Stage 3 wiring exactly (see the comment
-        # there): closes the CSRF/same-origin gap /query otherwise had
-        # relative to every /auth/* route.
-        attach_identity_to_query(app, _reject_cross_site_query)
+    # Mirrors gate.py's real Stage 3 wiring exactly (see the comment there):
+    # closes the CSRF/same-origin gap /query otherwise had relative to every
+    # /auth/* route. Outside the manager branch, exactly as in gate.py -- a
+    # cross-site check is not a credential, so it applies whether or not auth
+    # is on, and auth-off is the configuration that used to carry no check.
+    attach_identity_to_query(app, _reject_cross_site_query)
     app.state.audit_events = events
     return app
 
@@ -80,6 +82,52 @@ class TestQueryAuthDisabled:
         r = _client(None).post("/query", json={})
         assert r.status_code == 200
         assert r.json()["username"] is None
+
+
+class TestQueryCrossSiteRejectedWithAuthOff:
+    """The shipped default. Every case below used to be untested, because the
+    cross-site check was attached only on the auth-enabled path -- so the one
+    configuration CyClaw actually ships was the one nothing covered.
+
+    A cross-site check is not a credential: with auth off /query still answers
+    without one (TestQueryAuthDisabled above), and that stays true. What
+    changes is that a request a browser LABELS as coming from another site no
+    longer gets in on the shipped config.
+    """
+
+    def test_cross_site_origin_is_rejected(self):
+        r = _client(None).post("/query", json={}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_same_site_cross_port_is_rejected(self):
+        r = _client(None).post("/query", json={}, headers={"sec-fetch-site": "same-site"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_same_host_different_port_origin_is_rejected(self):
+        """The gap the loopback-only Origin test left open until now.
+
+        A browser that sends Origin but not Sec-Fetch-Site used to sail through
+        on any loopback origin, port ignored -- so a page on another port of
+        this same host was judged same-site by the one check whose stated
+        purpose is stopping exactly that ride.
+        """
+        r = _client(None).post("/query", json={}, headers={"origin": "http://localhost:9999"})  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_same_origin_console_still_works(self):
+        """The console posting to its own origin is the ordinary case."""
+        r = _client(None).post("/query", json={}, headers={"origin": _SAME_ORIGIN, "sec-fetch-site": "same-origin"})
+        assert r.status_code == 200
+
+    def test_header_less_caller_still_works(self):
+        """curl, PowerShell, schedulers and Telegram's client send neither
+        header and are not CSRF vectors -- the absent-header allowance is the
+        half of _looks_cross_site this change deliberately did not touch."""
+        r = _client(None).post("/query", json={})
+        assert r.status_code == 200
 
 
 class TestQueryAuthEnabled:
@@ -165,6 +213,21 @@ class TestQueryCrossSiteRejected:
         login = client.post("/auth/login", json={"username": username, "password": password})
         assert login.status_code == 200
         r = client.post("/query", json={}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
+
+    def test_a_cross_site_request_with_no_credential_is_403_not_401(self, manager):
+        """The only test that can catch the attach order being reversed.
+
+        Each attach_identity_to_query call inserts at index 0 of the dependant
+        tree, so the check attached LAST runs FIRST. Wiring the cross-site
+        attach above the require_identity attach would flip identity ahead of
+        it and turn this into a 401 -- and every other case in this class
+        carries a valid credential, so none of them would notice. Rejecting on
+        headers alone, before any credential work, is the same ordering every
+        /auth/* route uses (_enforce_same_origin ahead of the identity dep).
+        """
+        r = _client(manager).post("/query", json={}, headers={"sec-fetch-site": "cross-site"})
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 

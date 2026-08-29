@@ -85,10 +85,10 @@ decision.
 |---|---|---|---|
 | GET | `/` | none | serves `static/terminal.html` |
 | GET | `/static/*` | none | static mount |
-| POST | `/query` | **session or device token when `auth.enabled`** | rate-limited, sanitized; the `audit` role is denied (403 `AUTH_ROLE_DENIED`); 400/401/403/429/503/504/500. Unchanged (no credential) when auth is off |
+| POST | `/query` | **session or device token when `auth.enabled`**; **same-origin always** | rate-limited, sanitized; cross-site rejected (403 `CROSS_SITE_BLOCKED`) regardless of `auth.enabled`, and a request carrying neither `Origin` nor `Sec-Fetch-Site` is allowed; the `audit` role is denied (403 `AUTH_ROLE_DENIED`); 400/401/403/429/503/504/500. Unchanged (no credential) when auth is off |
 | GET | `/health` | none | `degraded` without Ollama is NORMAL |
 | POST | `/index/build` | **loopback peer + same-origin** | rate-limited; audited; starts a background index build; 409 while one is running. Deliberately NOT API-key gated — an unset `CYCLAW_API_KEY` fails closed, which would brick first-run |
-| GET | `/index/status` | none | rate-limited; always 200 + `{state, elapsed_sec, chunks_done, chunks_total, error, index_ready}` |
+| GET | `/index/status` | none | **not** rate-limited (the console polls it every 1.5s for the length of a build — 40 of the 60/min budget; same posture as `/health`); always 200 + `{state, elapsed_sec, chunks_done, chunks_total, error, index_ready}` |
 | GET | `/soul` | **API key** | rate-limited |
 | POST | `/soul/propose` | **API key** | advisory scan, never writes |
 | POST | `/soul/apply` | **API key** | enforced scan + atomic write; requires `reason` |
