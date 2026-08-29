@@ -35,12 +35,19 @@ so it runs in a fresh clone the moment PyYAML is present. Exit codes follow the
 repo convention: `0` contract holds · `2` a FAIL check tripped · `3` env/config
 error (missing/unparseable `config.yaml`, or PyYAML absent).
 
-Add `--strict` to escalate every `WARN` to a failure (use it as a merge gate
-when you want the shipped defaults locked, not just the hard relations):
+Add `--strict` to escalate every `WARN` to a failure:
 
 ```bash
 python3 .claude/skills/config-guard/check_config.py --strict
 ```
+
+> ⚠️ `--strict` **cannot pass on the committed `config.yaml` as shipped** — C9
+> warns on the deliberately-armed posture (`app.mode: hybrid`, grok/claude
+> enabled; see `docs/THREAT_MODEL.md`'s eighth amendment), so the run exits 2.
+> That is the flag working as designed, not a config defect. Wire `--strict`
+> into CI only for a deployment that has re-disarmed those knobs; for the
+> shipped repo the merge gate is the default (non-strict) invocation, which
+> exits 0 with C9 as a WARN.
 
 It checks (severity in brackets):
 
@@ -58,6 +65,7 @@ It checks (severity in brackets):
 | C10 | WARN | `policy.fallback.send_local_context_to_{grok,claude}` stays `false` (no off-box context leak by default) |
 | C11 | WARN | `guardrails.model`/`base_url` track the local LLM (config.yaml says keep in sync) |
 | C12 | INFO | restates the no-stall floor: local `num_ctx` ≥ `max_context_tokens + max_tokens + 1500` |
+| C13 | WARN | `security.api_key_optional` is not `true` while `api.host` is non-loopback (the bypass is peer-gated at runtime, but that pair means a remote caller reaches key-optional routes if the peer check is ever relaxed) |
 
 ### Step 2 — Interpret failures
 

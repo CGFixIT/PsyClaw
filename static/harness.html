@@ -6,7 +6,10 @@
 <meta name="csrf-token" content="__CYCLAW_CSRF_TOKEN__">
 <title>CyClaw Harness</title>
 <!-- No external fonts or CDNs: offline-first, loopback-only. System stacks. -->
-<style>
+<!-- The nonce placeholders below are swapped for a fresh per-response value by
+     harness/server.py's console(); served from gate.py's /static mount instead
+     they stay literal, and that CSP has no nonce source, so nothing runs. -->
+<style nonce="__CYCLAW_CSP_NONCE__">
   :root {
     --bg-primary: #0d0f11;
     --bg-secondary: #13161a;
@@ -231,7 +234,7 @@
   <input id="agentPlanFile" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
 
 <script src="/static/auth_admin.js"></script>
-<script>
+<script nonce="__CYCLAW_CSP_NONCE__">
 'use strict';
 /* Model output and registry data are DATA, never HTML: everything rendered
    through textContent or the table() builder (createElement + textContent). */
@@ -1357,8 +1360,18 @@ async function runSlash(line) {
               }
             },
           });
+          sys('users panel opened — same accounts as the gate console');
+        } else {
+          /* auth_admin.js defines the renderer; if it did not load there is
+             nothing to render, so say that instead of reporting success over
+             an empty pane. */
+          const el = document.getElementById('usersPanelStatus');
+          if (el) {
+            el.textContent = 'users panel unavailable — /static/auth_admin.js did not load';
+            el.hidden = false;
+          }
+          sys('users panel unavailable — /static/auth_admin.js did not load');
         }
-        sys('users panel opened — same accounts as the gate console');
         break;
       }
       case 'clear':

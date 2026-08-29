@@ -20,6 +20,12 @@ app:
   name: "cyclaw"
   env: "local"
   mode: "hybrid"  # "offline" | "hybrid"
+  # Decorative: no code reads app.debug (verified repo-wide grep, 2026-08-28 --
+  # cfg["app"] is only ever read for ["mode"]). It does NOT enable a debug
+  # mode, loosen auth, or change logging: log level is logging.level below.
+  # Annotated rather than deleted so an auditor reading `debug: true` is not
+  # left to conclude the shipped server runs with debug enabled -- same
+  # treatment security.require_env already gets further down this file.
   debug: true
 
 models:
@@ -214,7 +220,10 @@ memory:
   enabled: false                    # master switch
   db_path: "data/memory/cyclaw_memory.db"
   facts:
-    enabled: false
+    # Gates retrieval fusion ONLY -- never persistence, apply, or read (those
+    # are memory.enabled + propose_apply.enabled). Legacy name `enabled` is
+    # still honored with a startup warning; see memory/flags.py.
+    retrieval_enabled: false
     max_content_chars: 8192
     max_active: 10000
   episodes:
@@ -227,7 +236,6 @@ memory:
     enabled: false                  # fuse FTS fact hits into hybrid_search
     max_hits: 3
     rrf_k: 60
-    min_fts_score: 0.0
     source_prefix: "memory:fact:"
   propose_apply:
     enabled: false                  # /memory/propose|apply|reject
@@ -416,7 +424,7 @@ policy:
       - "AKIA[0-9A-Z]{16}"           # AWS access keys
       - "xox[baprs]-[0-9a-zA-Z-]+"  # Slack tokens
       - "ghp_[a-zA-Z0-9]{36}"        # GitHub PATs
-      - "sk-[a-zA-Z0-9]{32,}"        # OpenAI-style keys
+      - "sk-[a-zA-Z0-9]{20,}"        # OpenAI-style keys (matches gate._sanitize_error)
       # Anthropic keys (sk-ant-api03-...) contain hyphens inside the token body,
       # so the OpenAI-style pattern above (no hyphens allowed) never matches them.
       - "sk-ant-[a-zA-Z0-9_-]{20,}"  # Anthropic (Claude) API keys

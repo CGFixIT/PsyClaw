@@ -265,6 +265,88 @@ class TestQueryEndpoint:
         assert resp.json()["retrieval_mode"] == "none"
 
 
+# Dedicated loopback peer: these tests post real requests and must not spend
+# the shared 127.0.0.1 rate-limit budget (see the client fixture docstring).
+@pytest.mark.parametrize("client", [("127.0.0.4", 51234)], indirect=True)  # DevSkim: ignore DS162092,DS137138 - test loopback peer
+class TestCelMonitorRequestPath:
+    """The /query CEL monitor hook must read the graph result's real source key
+    (answer_sources — GraphState has no "sources" key), and must skip the
+    hashing/monitor work entirely when numbat.cel.enabled is not true."""
+
+    def test_monitor_emits_on_real_source_hash(self, client, tmp_path):
+        # Integration over the gate→monitor path with a real source present:
+        # the real monitor_request evaluates a real CEL rule keyed on the exact
+        # expected hash of "test.md:0" (the mock graph's answer_sources entry)
+        # and emits to a tmp Numbat stream only when source_hashes is populated.
+        pytest.importorskip("celpy")
+        import gate
+        from utils.logger import hash_query
+        from utils.numbat_emitter import close_numbat_handles
+
+        test_client, _ = client
+        expected = hash_query("test.md:0")
+        out = tmp_path / "numbat-events.ndjsonl"
+        gate.cfg["numbat"] = {
+            "enabled": True,
+            "output_path": str(out),
+            "cel": {
+                "enabled": True,
+                "rules": [f'size(source_hashes) > 0 && source_hashes[0] == "{expected}"'],
+                "max_rule_ms": 20,
+            },
+        }
+        try:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+            assert resp.status_code == 200
+        finally:
+            close_numbat_handles()
+        records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+        assert len(records) == 1
+        assert records[0]["tool_name"] == "cel_monitor"
+        assert records[0]["approval_reason"] == "cel_rules_matched:0"
+
+    def test_monitor_receives_answer_source_hashes_without_celpy(self, client):
+        # celpy-free complement to test_monitor_emits_on_real_source_hash (which
+        # importorskips celpy and therefore skips in CI): with numbat.cel.enabled
+        # true, the gate must read the graph result's answer_sources key and hand
+        # monitor_request the hash of the mock graph's "test.md:0" entry. The
+        # mock intercepts the call before monitor_request's lazy celpy import,
+        # so this runs without the optional dependency installed.
+        import gate
+        from utils.logger import hash_query
+
+        test_client, _ = client
+        gate.cfg["numbat"] = {"cel": {"enabled": True}}
+        with patch("gate.monitor_request") as mock_monitor:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+        assert resp.status_code == 200
+        mock_monitor.assert_called_once()
+        assert mock_monitor.call_args.kwargs["source_hashes"] == [hash_query("test.md:0")]
+
+    def test_monitor_skipped_when_cel_disabled(self, client):
+        # TEST_CONFIG carries no numbat block, so numbat.cel.enabled is false:
+        # no hash_query and no monitor_request call on the request path.
+        test_client, _ = client
+        with patch("gate.monitor_request") as mock_monitor:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+        assert resp.status_code == 200
+        mock_monitor.assert_not_called()
+
+    @pytest.mark.parametrize("cel_value", [True, "yes", ["rule"], 1])
+    def test_monitor_fail_open_when_cel_is_not_a_dict(self, client, cel_value):
+        # Nested `numbat.cel` must be isinstance(..., dict) inside the fail-open
+        # try: a truthy non-dict (`cel: true` / `cel: "yes"`) used to
+        # AttributeError on .get("enabled") *outside* the try and 500 /query.
+        import gate
+
+        test_client, _ = client
+        gate.cfg["numbat"] = {"cel": cel_value}
+        with patch("gate.monitor_request") as mock_monitor:
+            resp = test_client.post("/query", json={"query": "What is Veeam immutability?"})
+        assert resp.status_code == 200
+        mock_monitor.assert_not_called()
+
+
 class TestValidationErrorNeverEchoesTheSubmittedValue:
     """FastAPI's default RequestValidationError handler puts each error's raw
     submitted value under detail[].input -- harmless for /query's query text,
@@ -948,6 +1030,77 @@ class TestFailedAuthDoesNotBypassRateLimit:
             resp = test_client.get("/soul", headers={"Authorization": "Bearer test-key-123"})
         assert resp.status_code == 200
         assert mock_check.call_count == 1
+
+
+# Dedicated loopback peer (see the client fixture docstring); the patched
+# limiter means these posts never consume real budget, but isolating the peer
+# keeps the audit-throttle map keyed away from other tests' traffic.
+@pytest.mark.parametrize("client", [("127.0.0.5", 51234)], indirect=True)  # DevSkim: ignore DS162092,DS137138 - test loopback peer
+class TestRateLimitAuditThrottle:
+    """A sustained 429 flood must not flood audit.jsonl: rate_limit_exceeded
+    audit lines are throttled to at most one per IP per rate-limit window, so
+    the signal survives without unbounded write volume."""
+
+    @staticmethod
+    def _rate_limit_events(audit_file):
+        from pathlib import Path
+        return [
+            rec for rec in
+            (json.loads(line) for line in Path(audit_file).read_text(encoding="utf-8").splitlines() if line.strip())
+            if rec.get("event") == "rate_limit_exceeded"
+        ]
+
+    def test_repeated_429s_audit_once_per_window(self, client):
+        import gate
+
+        test_client, _ = client
+        gate._rate_limit_audit_last.clear()
+        audit_file = gate.cfg["logging"]["audit_file"]
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            for _ in range(5):
+                resp = test_client.post("/query", json={"query": "flood"})
+                assert resp.status_code == 429
+        assert len(self._rate_limit_events(audit_file)) == 1
+
+    def test_new_window_audits_again(self, client):
+        # The throttle must not lose the signal across windows: once the window
+        # elapses, the next denial from the same IP is audited again.
+        import time as _time
+        import gate
+
+        test_client, _ = client
+        gate._rate_limit_audit_last.clear()
+        audit_file = gate.cfg["logging"]["audit_file"]
+        with patch("gate._check_rate_limit_async", new=AsyncMock(return_value=False)):
+            resp = test_client.post("/query", json={"query": "flood"})
+            assert resp.status_code == 429
+            # Simulate window expiry for the fixture's loopback peer.
+            gate._rate_limit_audit_last["127.0.0.5"] = (  # DevSkim: ignore DS162092,DS137138 - test loopback peer
+                _time.monotonic() - gate.RATE_LIMIT_WINDOW - 1
+            )
+            resp = test_client.post("/query", json={"query": "flood"})
+            assert resp.status_code == 429
+        assert len(self._rate_limit_events(audit_file)) == 2
+
+    def test_throttle_map_hard_caps_by_evicting_oldest(self, client):
+        # Stale-window prune alone does not bound the map: 1025 distinct IPs
+        # inside one window have no stale entries. Evict oldest until cap.
+        import time as _time
+        import gate
+
+        _ = client
+        gate._rate_limit_audit_last.clear()
+        now = _time.monotonic()
+        cap = gate._RATE_LIMIT_AUDIT_CAP
+        # All timestamps within the rate-limit window so stale prune removes
+        # nothing — only the overflow eviction path is exercised. flood-0 is
+        # the oldest (smallest timestamp) and must be evicted.
+        for i in range(cap):
+            gate._rate_limit_audit_last[f"flood-{i}"] = now - (cap - i) / cap
+        assert gate._should_audit_rate_limit("new-ip", now) is True
+        assert len(gate._rate_limit_audit_last) == cap
+        assert "new-ip" in gate._rate_limit_audit_last
+        assert "flood-0" not in gate._rate_limit_audit_last
 
 
 class TestAuditSummaryEndpoint:

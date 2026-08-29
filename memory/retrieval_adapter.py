@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from memory.flags import facts_retrieval_enabled
+
 if TYPE_CHECKING:
     from retrieval.results import SearchResult
 
@@ -29,8 +31,7 @@ def fuse_memory_hits(
     fusion = mem.get("retrieval_fusion") or {}
     if fusion.get("enabled") is not True:
         return list(corpus_hits)
-    facts_cfg = mem.get("facts") or {}
-    if facts_cfg.get("enabled") is not True:
+    if not facts_retrieval_enabled(mem):
         return list(corpus_hits)
 
     max_hits = int(fusion.get("max_hits", 3) or 3)

@@ -7,17 +7,26 @@ loopback only.
 | File | Served by | What it is |
 |---|---|---|
 | `terminal.html` + `terminal.js` | `gate.py` at `GET /` (plus the `/static` mount) on `127.0.0.1:8787` | The CyClaw Terminal — the operator console for `/query` and the authenticated soul/ops/memory endpoints. |
-| `harness.html` | `harness/server.py` on `127.0.0.1:8790` | The coding-harness console (slash-command UI: `/goal`, `/loop`, `/skills`, `/tools`, `/web`, `/agent`, …). |
-| `auth_admin.js` | served only by `gate.py`'s `/static` mount on `127.0.0.1:8787`; referenced by both `terminal.html` and `harness.html` | Shared Users panel (`/auth/users` list/create/role/disable/enable) — one script, no inline script. |
+| `harness.html` | `harness/server.py` at `GET /` (plus the `/static` mount) on `127.0.0.1:8790` | The coding-harness console (slash-command UI: `/goal`, `/loop`, `/skills`, `/tools`, `/web`, `/agent`, …). |
+| `auth_admin.js` | both `/static` mounts — `gate.py` on `127.0.0.1:8787` and `harness/server.py` on `127.0.0.1:8790`; referenced by both `terminal.html` and `harness.html` | Shared Users panel (`/auth/users` list/create/role/disable/enable) — one script, no inline script. |
 
-`gate.py` carries the only `/static` mount in the repo (`gate.py`'s
-`app.mount("/static", ...)`). `harness/server.py` mounts nothing: it reads
-`harness.html` off disk and returns it as an HTML response, and its route table
-is `GET /` plus `/api/*`. So `harness.html`'s `<script src="/static/auth_admin.js">`
-tag resolves only when the markup is served from the gateway — loaded from the
-harness console on `127.0.0.1:8790` that request has no route and the Users
-panel script does not load. Treat the shared Users panel as a gateway-console
-feature until the harness grows a mount of its own.
+Both servers mount this directory (`app.mount("/static", ...)`), so
+`harness.html`'s `<script src="/static/auth_admin.js">` resolves on either
+console and the shared Users panel works on both. The harness route table is
+`GET /` plus `/static/*` plus `/api/*`; it still reads `harness.html` off disk
+once per app instance and returns it as an HTML response rather than serving
+that copy through the mount, because the response is templated (see below).
+
+Two placeholders are substituted into `harness.html` at serve time and are
+always literal in the file on disk: `__CYCLAW_CSRF_TOKEN__` (one value per
+process) and `__CYCLAW_CSP_NONCE__` (a fresh value per response). The harness
+console's CSP names that nonce as the only source for its inline `<style>` and
+`<script>`, so **any inline block added here needs `nonce="__CYCLAW_CSP_NONCE__"`
+or the browser silently refuses to run it**. Served through `gate.py`'s mount
+instead, the raw file keeps both literals — gate's own CSP has no nonce source,
+so its inline script stays blocked there, which is why
+`tests/test_gate.py::test_no_static_page_relies_on_inline_script` exempts
+`harness.html` by name.
 
 ## The console contract
 
