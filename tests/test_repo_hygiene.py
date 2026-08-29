@@ -57,6 +57,12 @@ def _tracked_text_files() -> list[Path]:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         pytest.skip("git unavailable or this is not a git checkout")
+        # Unreachable: pytest.skip() raises. It is spelled out anyway because
+        # CodeQL cannot see that (py/uninitialized-local-variable flagged `out`
+        # as possibly-unbound on this fall-through), and because re-raising is
+        # the safe failure mode -- a refactor that dropped the skip would raise
+        # here rather than reach `out` unbound.
+        raise
     return [
         REPO_ROOT / rel
         for rel in out.split("\0")
