@@ -179,14 +179,21 @@ slash command drives it.
 `config.yaml`'s `security.api_key_optional` (default `false`, shared with
 `gate.py`) can remove the `CYCLAW_API_KEY` requirement from every guarded
 route below — including the agent run/push/publish routes — but **only for a
-request whose socket peer is loopback**. A LAN client gets 401 without a valid
-key regardless of what `security.allowed_hosts` contains: that list validates
-the `Host` header on requests that already arrived and opens no listening
-socket, and a `Host` header is attacker-supplied anyway. The peer check is
-also why this holds under `uvicorn harness.server:app --host 0.0.0.0`, which
-never runs `main()`'s loopback guard. It never touches the `/api/auth/*`
-session system above. See the main README's "API Key Setup" section before
-enabling it.
+request that both has a loopback socket peer and carries no reverse-proxy
+forwarding header** (`X-Forwarded-For`/`-Host`/`-Proto`, `X-Real-IP`,
+`Forwarded`). Both halves are required: a proxy running on this host
+terminates the remote connection and opens its own from loopback, so the peer
+alone would hand the bypass to anyone who can reach the proxy. Header presence
+is the signal; the value is attacker-controlled and is never parsed. A LAN
+client gets 401 without a valid key regardless of what
+`security.allowed_hosts` contains: that list validates the `Host` header on
+requests that already arrived and opens no listening socket, and a `Host`
+header is attacker-supplied anyway. The peer check is also why this holds
+under `uvicorn harness.server:app --host 0.0.0.0`, which never runs `main()`'s
+loopback guard. It never touches the `/api/auth/*` session system above.
+`config.yaml`'s comment on the flag states the residual gap — a proxy that
+strips those headers is indistinguishable from none — so read it, and the main
+README's "API Key Setup" section, before enabling it.
 
 | Method | Path | Notes |
 |---|---|---|
