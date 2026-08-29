@@ -32,6 +32,7 @@ lazy-import this package.
 | `policy.py` | Reason required, size/tag limits, injection scan |
 | `retrieval_adapter.py` | Optional FTS fusion into hybrid search |
 | `mirror.py` | `/memory/status` dict + `GET /query/export/html` builder |
+| `flags.py` | Resolves `memory.facts.retrieval_enabled`; honors the legacy `facts.enabled` name with a one-time warning |
 | `consolidation.py` | Unimplemented stub |
 | `selftest.py` | `python -m memory.selftest` |
 

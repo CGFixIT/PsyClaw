@@ -78,6 +78,11 @@ turn it on, and even then it can GET only hosts you allowlisted.
 /tools goal              # one-tool box
 ```
 
+Also dispatched by the console (see `static/harness.html`): `/session`,
+`/soul`, `/model`, `/connectors` (hidden alias: `/registry`), `/github`,
+`/agent`, `/harness`, `/tokens`, `/status`, `/users`, `/clear` — each maps
+onto the `/api/*` routes in the table above.
+
 ### Goal + loop (local 27b)
 
 ```
@@ -197,7 +202,8 @@ README's "API Key Setup" section, before enabling it.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/` | Console HTML |
+| GET | `/` | Console HTML — templated per request with a CSP nonce (`Content-Security-Policy`, `X-Frame-Options`, `Cache-Control: no-store`) and the per-process CSRF token |
+| GET | `/static/*` | Shared static assets (`auth_admin.js` Users panel) |
 | GET | `/api/status` | Health / config flags |
 | GET | `/api/keys` | Allowlisted credentials: presence + masked tail only, never a value |
 | POST | `/api/keys` | Store credentials in `$CYCLAW_HOME/.env` (mode 600). File-only: reports `restart_required` |

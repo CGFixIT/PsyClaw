@@ -44,7 +44,7 @@ in the same change.
 | `verify-dep` | Reconcile dependency/install profiles, Docker, platform installers, and supply-chain checks. |
 | `cyclaw-run-cyclaw` | Prepare, index, start, and verify the local RAG gateway. |
 | `cyclaw-sandbox-test` | Fresh-main sandbox and mocked API/terminal smoke coverage. |
-| `cyclaw-sandbox` | Full current-main sandbox: REST, terminal, harness, audit, installers, platforms, CI, and browser evidence. |
+| `Cyclaw-Sandbox` | Full current-main sandbox: REST, terminal, harness, audit, installers, platforms, CI, and browser evidence. |
 | `cyclaw-command-status` | Read-only environment and readiness status. |
 | `cyclaw-command-run` | Focused endpoint and local-runtime smoke checks. |
 | `cyclaw-command-audit` | Privacy-safe audit-log analysis. |
