@@ -167,6 +167,8 @@ include = [
 testpaths = ["tests"]
 addopts = "-q --tb=short"
 filterwarnings = [
+    # Starlette TestClient httpx deprecation -- do not delete without reading
+    # docs/analysis/TESTCLIENT_HTTPX_DEPRECATION.md (silently clobbered once, 2026-07-22).
     'ignore:Using `httpx` with `starlette\.testclient` is deprecated; install `httpx2` instead\.',
 ]
 markers = [
