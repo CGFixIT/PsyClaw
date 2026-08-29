@@ -42,6 +42,7 @@ import os
 import platform
 import socket
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -483,6 +484,15 @@ def close_numbat_handles() -> None:
 atexit.register(close_numbat_handles)
 
 
+# A rollover must be exclusive ACROSS processes, not just across threads:
+# _WRITE_LOCK is process-local, but the action plane (agentic / ops_runner
+# children) writes this same path while a long-lived gate.py holds it open.
+# A lock file created O_CREAT|O_EXCL is atomic on POSIX and Windows alike and
+# needs no dependency. If a holder dies mid-rollover the file would disable
+# rollover forever, so one older than this is treated as abandoned.
+_ROLLOVER_LOCK_STALE_SEC = 60.0
+
+
 def _rollover_if_needed(path: Path, max_bytes: int) -> None:
     """Single-generation size rollover: rename to ``<name>.1``, start fresh.
 
@@ -493,17 +503,22 @@ def _rollover_if_needed(path: Path, max_bytes: int) -> None:
     every audit_log and must never raise); on any OSError the stream simply
     keeps appending to the oversized file rather than dropping events.
 
-    The size is re-stat'd per write rather than tracked in a counter on
-    purpose: _WRITE_LOCK is per-process, but the action plane (agentic /
-    ops_runner children) writes this same path from OTHER processes, and only
-    the filesystem sees all of them. Two processes crossing the threshold
-    together can still both rename -- the loser's events land in the .1
-    generation instead of the fresh file. That is benign for a derived
-    forensic stream (audit.jsonl stays authoritative) and is the reason this
-    is a single-generation policy rather than a numbered-rotation one.
+    The size is re-stat'd per write rather than tracked in a counter because
+    _WRITE_LOCK is per-process and only the filesystem sees every writer.
+
+    That per-process lock is NOT enough on its own, and the failure is worse
+    than it looks: with two writers, the second's os.replace does not append to
+    the .1 generation -- it OVERWRITES it. Reproduced by delaying one writer
+    between its size check and its rename: a 500-line archive was replaced by
+    the 14-byte file the first writer had just created, destroying the whole
+    generation. So the rename is taken under an exclusive lock file, and the
+    size and inode are re-checked under it: a writer whose measured file has
+    already been rotated away by someone else stands down instead of clobbering
+    the archive.
     """
     try:
-        if path.stat().st_size < max_bytes:
+        measured = path.stat()
+        if measured.st_size < max_bytes:
             return
     except OSError as exc:
         # Rollover is now effectively off for this path (an unreadable parent, a
@@ -511,23 +526,90 @@ def _rollover_if_needed(path: Path, max_bytes: int) -> None:
         # total silence -- every other fail-soft path in this module logs.
         logger.debug("numbat rollover size check failed (%s); cap not enforced", type(exc).__name__)
         return
-    handle = _NUMBAT_HANDLES.pop(str(path), None)
-    if handle is not None:
-        try:
-            handle.close()
-        except OSError:
-            # Best-effort, same as close_numbat_handles(): the pop() above already
-            # dropped our reference, so the next write reopens the path regardless
-            # of whether this close succeeded. Raising here would break the
-            # never-raise contract for a handle we are discarding anyway.
-            pass
+
+    lock_path = path.with_name(path.name + ".rollover.lock")
+    lock_fd = _acquire_rollover_lock(lock_path)
+    if lock_fd is None:
+        # Another writer is mid-rollover. Skipping is correct, not a loss: this
+        # write lands in whichever generation is live, and the next one re-checks.
+        return
     try:
-        os.replace(path, path.with_name(path.name + ".1"))
+        # Re-check UNDER the lock. If the inode changed, the file we measured has
+        # already been rotated by the other writer and the live file is its fresh
+        # (small) replacement -- renaming that would destroy the archive.
+        try:
+            current = path.stat()
+        except OSError:
+            return
+        if current.st_ino != measured.st_ino or current.st_size < max_bytes:
+            return
+
+        handle = _NUMBAT_HANDLES.pop(str(path), None)
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                # Best-effort, same as close_numbat_handles(): the pop() above already
+                # dropped our reference, so the next write reopens the path regardless
+                # of whether this close succeeded. Raising here would break the
+                # never-raise contract for a handle we are discarding anyway.
+                pass
+        try:
+            os.replace(path, path.with_name(path.name + ".1"))
+        except OSError:
+            # Rename refused (read-only mount, a .1 held open by a reader on Windows,
+            # a vanished parent). Falling through leaves the oversized file in place
+            # and the next write reopens it: the stream keeps flowing, which is the
+            # right trade for a derived forensic log -- audit.jsonl is authoritative.
+            pass
+    finally:
+        _release_rollover_lock(lock_fd, lock_path)
+
+
+def _acquire_rollover_lock(lock_path: Path) -> int | None:
+    """Return an fd for an exclusively-created lock file, or None if held elsewhere.
+
+    Never raises: this sits on the audit_log write path.
+    """
+    try:
+        return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        # Expected whenever another writer holds the lock -- not an error, and
+        # the only branch that continues below to consider reclaiming a stale one.
+        pass
     except OSError:
-        # Rename refused (read-only mount, a .1 held open by a reader on Windows,
-        # a vanished parent). Falling through leaves the oversized file in place
-        # and the next write reopens it: the stream keeps flowing, which is the
-        # right trade for a derived forensic log -- audit.jsonl is authoritative.
+        return None
+    # Held. Reclaim it only if it is old enough that its owner cannot still be
+    # working -- a rollover is two syscalls, so anything this old is abandoned.
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return None
+    if age < _ROLLOVER_LOCK_STALE_SEC:
+        return None
+    try:
+        os.unlink(lock_path)
+        return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        # Lost the reclaim race to another writer; it owns the rollover now.
+        return None
+
+
+def _release_rollover_lock(lock_fd: int, lock_path: Path) -> None:
+    """Close and remove the rollover lock. Never raises."""
+    try:
+        os.close(lock_fd)
+    except OSError:
+        # Losing the fd is survivable and must not propagate: this runs in a
+        # finally on the audit_log write path, where raising would mask the
+        # rollover's own outcome and break the module's never-raise contract.
+        pass
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        # The lock file outliving us only delays the NEXT rollover, and the
+        # stale-age reclaim in _acquire_rollover_lock recovers from exactly
+        # this -- so a failed unlink is self-healing rather than fatal.
         pass
 
 

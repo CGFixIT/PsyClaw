@@ -83,10 +83,15 @@ _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.Cont
 # get the whole run SIGKILLed at the 3600s cap. Worst-case wall clock per
 # call is therefore ~planner_timeout_sec (one full timeout, not retried) or
 # two fast-failing retryable errors + ~3s of backoff on top of the attempt
-# that succeeds. LangChain's own max_retries client parameter was considered
-# and rejected: the underlying SDKs retry timeouts as connection errors,
-# and the provider packages are optional deps this module cannot import to
-# tune -- so classification below is duck-typed on the raised exception.
+# that succeeds -- and that budget only holds because model_adapter builds
+# every chat model with max_retries=0. Leaving the SDK default (2) in place
+# nests its retry cycle inside this loop: up to 3x3 = 9 requests and two
+# levels of backoff for what this comment describes as 3 attempts, which can
+# overrun the per-iteration budget above. The SDK's own retry is not usable
+# as the policy instead, because it retries timeouts as connection errors --
+# exactly what must NOT be retried here. Classification below stays duck-typed
+# on the raised exception because the provider packages are optional deps this
+# module cannot import to inspect.
 _INVOKE_MAX_RETRIES = 2
 _INVOKE_BACKOFF_BASE_SEC = 1.0
 
