@@ -13,6 +13,7 @@ import re
 import threading
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from utils.logger import _anchor, _get_config
@@ -21,6 +22,13 @@ logger = logging.getLogger("cyclaw.spend")
 
 _SPEND_WRITE_LOCK = threading.Lock()
 _DEFAULT_SPEND_FILE = "logs/spend.jsonl"
+# The OLDEST "verified" date across the rate rows below -- deliberately the
+# oldest, not the most recent. rates_are_stale() alarms off this value, so
+# taking the minimum means the alarm tracks the stalest rate in the table.
+# Bumping it when only SOME rows are re-verified would mask the rest going
+# stale, which is the failure this constant exists to catch: raise it only
+# once EVERY row has been re-checked. tests/test_spend.py pins the invariant
+# against the dates in the comments below.
 PRICED_AS_OF = "2026-08-19"
 STALE_AFTER_DAYS = 30
 
@@ -221,6 +229,7 @@ def record_external_usage(
     unpinned alias (e.g. ``claude-sonnet-5``) can be re-pointed upstream, and
     the ledger must show what actually served/billed alongside what was asked.
     """
+    _warn_once_if_stale()
     normalized = _normalize_provider(provider)
     tokens = _tokens_for_provider(normalized, usage)
     record: dict[str, object] = {
@@ -282,6 +291,39 @@ def rates_are_stale(now: datetime | None = None) -> bool:
     else:
         current = now.astimezone(UTC)
     return (current.date() - priced).days > STALE_AFTER_DAYS
+
+
+@lru_cache(maxsize=1)
+def _emit_stale_rate_warning_once() -> None:
+    """One-shot EMISSION latch. Only reached when the table is already stale.
+
+    lru_cache is the latch (a nullary cached call runs its body once), which
+    keeps the state out of a module global and gives tests a public reset:
+    ``_emit_stale_rate_warning_once.cache_clear()``. A thread race can emit one
+    duplicate line, never a missed one.
+    """
+    warn_if_priced_as_of_stale()
+
+
+def _warn_once_if_stale() -> None:
+    """Warn at most once per process that the rate table has gone stale.
+
+    record_external_usage() prices live Grok/Claude calls; before this, a server
+    billing against a >STALE_AFTER_DAYS table emitted no signal at all until an
+    operator separately ran metrics.py. metrics.py still warns on every run --
+    it is an operator-invoked report -- but the server records a line per
+    external call, and a per-call warning there is spam that gets filtered out
+    exactly when it matters.
+
+    The staleness test runs on EVERY call and only the emission is latched.
+    Latching the test instead would freeze the verdict at process start: a
+    server booted before PRICED_AS_OF + STALE_AFTER_DAYS would evaluate "not
+    stale" once and never look again, so the long-running-server case this
+    exists to catch is precisely the one it would miss. rates_are_stale() is a
+    date subtraction, so re-testing per call is free.
+    """
+    if rates_are_stale():
+        _emit_stale_rate_warning_once()
 
 
 def warn_if_priced_as_of_stale(now: datetime | None = None) -> bool:

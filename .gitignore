@@ -114,3 +114,12 @@ docs/memories/CONSOLIDATED.md
 # preferences). settings.json is the shared project config; settings.local.json
 # is operator-specific and must never be committed.
 .claude/settings.local.json
+
+# CyClaw-Sandbox run artifacts. smoke.sh writes its pass/fail report to
+# .claude/sandbox-test.txt in whatever repo it runs from, and
+# run_full_verification.py writes verification_report.json into $CYCLAW_REPO --
+# both are per-run output, not repo content, and a `git add -A` after a
+# verification run will otherwise sweep them into a commit (it did: the file was
+# committed by mistake and removed in this change).
+.claude/sandbox-test.txt
+verification_report.json

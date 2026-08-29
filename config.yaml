@@ -20,6 +20,12 @@ app:
   name: "cyclaw"
   env: "local"
   mode: "hybrid"  # "offline" | "hybrid"
+  # Decorative: no code reads app.debug (verified repo-wide grep, 2026-08-28 --
+  # cfg["app"] is only ever read for ["mode"]). It does NOT enable a debug
+  # mode, loosen auth, or change logging: log level is logging.level below.
+  # Annotated rather than deleted so an auditor reading `debug: true` is not
+  # left to conclude the shipped server runs with debug enabled -- same
+  # treatment security.require_env already gets further down this file.
   debug: true
 
 models:
