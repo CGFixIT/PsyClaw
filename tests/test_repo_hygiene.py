@@ -79,3 +79,61 @@ def test_no_unresolved_conflict_markers_in_tracked_text_files() -> None:
                 offenders.append(f"{rel}:{lineno}: {line[:60]}")
 
     assert not offenders, "unresolved merge conflict markers found:\n" + "\n".join(offenders)
+
+
+# Characters Windows forbids in a path component, plus the reserved device
+# names. A tracked path containing any of these cannot be checked out on a
+# Windows runner at all: `git checkout` aborts with "error: invalid path" and
+# exit 128, so all three Windows legs die before a single test body runs.
+_WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_STEMS = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{n}" for n in range(1, 10)}
+    | {f"lpt{n}" for n in range(1, 10)}
+)
+
+
+def _tracked_paths() -> list[str]:
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        pytest.skip("git executable not found on PATH")
+    out = subprocess.run(  # noqa: S603
+        [git_exe, "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return [rel for rel in out.split("\0") if rel]
+
+
+def test_no_tracked_path_is_uncheckoutable_on_windows() -> None:
+    """A path Windows cannot create must never reach a tracked tree.
+
+    Regression: a test fixture passed sqlite's ":memory:" sentinel as a
+    db_path, but memory.store.connect treats db_path as a filesystem path and
+    creates it -- so a zero-byte file literally named ":memory:" appeared in the
+    repo root and a `git add -A` committed it. Linux and macOS did not care;
+    all three Windows jobs failed identically in `git checkout` with
+    "error: invalid path ':memory:'", ten seconds in, before any test ran.
+
+    Nothing caught it locally, because the whole suite is green on a machine
+    whose filesystem accepts the name. This guard is the missing check: it runs
+    on every platform and fails on the tracked path list alone.
+    """
+    offenders: list[str] = []
+    for rel in _tracked_paths():
+        for component in rel.split("/"):
+            bad = sorted(_WINDOWS_FORBIDDEN_CHARS & set(component))
+            if bad:
+                offenders.append(f"{rel}  (forbidden on Windows: {''.join(bad)})")
+                break
+            # "NUL", "nul.txt" and "NUL.tar.gz" are all reserved; the check is
+            # on the first dot-separated segment, case-insensitively.
+            if component.split(".")[0].lower() in _WINDOWS_RESERVED_STEMS:
+                offenders.append(f"{rel}  (reserved Windows device name)")
+                break
+
+    assert not offenders, (
+        "tracked paths that Windows cannot check out:\n" + "\n".join(offenders)
+    )

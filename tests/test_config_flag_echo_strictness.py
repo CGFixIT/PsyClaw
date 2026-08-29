@@ -55,12 +55,20 @@ def _cfg(block: dict) -> dict:
     return {"memory": block}
 
 
+def _block(tmp_path, **extra: object) -> dict:
+    # A real path under tmp_path, never the sqlite ":memory:" sentinel:
+    # memory.store.connect treats db_path as a filesystem path and CREATES it,
+    # so ":memory:" produces a file literally named ":memory:" in the CWD --
+    # a path Windows cannot check out (`error: invalid path`). Learned the hard
+    # way; tests/test_repo_hygiene.py now guards the repo against it.
+    return {"enabled": True, "db_path": str(tmp_path / "flags.db"), **extra}
+
+
 @pytest.mark.parametrize("value", _SHAPES)
 @pytest.mark.parametrize("section", sorted(_MIRROR_KEYS))
-def test_mirror_status_echo_agrees_with_the_gate(section: str, value: object):
+def test_mirror_status_echo_agrees_with_the_gate(section: str, value: object, tmp_path):
     """GET /memory/status must not claim a capability its gate refuses."""
-    block = {"enabled": True, "db_path": ":memory:", section: {"enabled": value}}
-    out = status_dict(_cfg(block))
+    out = status_dict(_cfg(_block(tmp_path, **{section: {"enabled": value}})))
     assert out[_MIRROR_KEYS[section]] is (value is True), (
         f"/memory/status reported {section}={out[_MIRROR_KEYS[section]]!r} "
         f"for a configured value of {value!r}; every gate on this key accepts "
@@ -69,8 +77,8 @@ def test_mirror_status_echo_agrees_with_the_gate(section: str, value: object):
 
 
 @pytest.mark.parametrize("value", _SHAPES)
-def test_mirror_master_enabled_echo_agrees_with_the_gate(value: object):
-    out = status_dict(_cfg({"enabled": value, "db_path": ":memory:"}))
+def test_mirror_master_enabled_echo_agrees_with_the_gate(value: object, tmp_path):
+    out = status_dict(_cfg({"enabled": value, "db_path": str(tmp_path / "flags.db")}))
     assert out["enabled"] is (value is True)
 
 
