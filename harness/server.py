@@ -94,7 +94,7 @@ from schemas.api import (
 from utils.auth import require_api_key
 from utils.authn import PasswordPolicyError, validate_role
 from utils.authn_manager import BOOTSTRAP_USERNAME
-from utils.errors import AgenticError, AuthBootstrapComplete
+from utils.errors import AgenticError, AuthBootstrapComplete, AuthUserExists
 from utils.logger import _get_config, audit_log, redact_sensitive
 from utils.ops_runner import (
     REAL_REPO_RUN_MAX_TIMEOUT_SEC,
@@ -1806,7 +1806,14 @@ def create_app(
         if account.role == _ROLE_OPERATOR and role == _ROLE_ADMIN:
             raise _auth_http(_HTTP_FORBIDDEN, _PERM_DENIED, _DENIED_MSG)
         manager = _require_harness_auth()
-        created = manager.create_user(req.username, req.password, role)
+        # gate_auth.py's auth_create_user turns AuthUserExists into a 409; this
+        # copy caught nothing, so a duplicate username escaped as an unhandled
+        # 500 (harness/server.py registers only a RequestValidationError
+        # handler). No race needed -- the ordinary second create hit it too.
+        try:
+            created = manager.create_user(req.username, req.password, role)
+        except AuthUserExists as exc:
+            raise _auth_http(_HTTP_CONFLICT, "AUTH_USER_EXISTS", exc.message) from exc
         new_user = manager.get_user(created)
         if new_user is None:
             raise _auth_http(_HTTP_UNAVAILABLE, "AUTH_ERROR", "created user missing")

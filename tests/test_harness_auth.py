@@ -663,6 +663,38 @@ def test_harness_bootstrap_password_from_loopback(tmp_path, monkeypatch, cfg):
     assert r.json()["username"] == "admin"
 
 
+def test_duplicate_create_is_409_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
+    """A duplicate username on the harness console must answer 409, as
+    gate_auth.py's equivalent route already did.
+
+    No race is needed to reach this -- harness_create_user called
+    manager.create_user() bare, and harness/server.py registers only a
+    RequestValidationError handler, so the ordinary AuthUserExists escaped as an
+    unhandled 500 on every repeat create. The two HTTP surfaces disagreed on the
+    same manager error, and nothing asserted either one.
+    """
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
+
+    admin = TestClient(
+        app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000), raise_server_exceptions=False
+    )
+    admin.post("/api/auth/login", json={"username": "admin", "password": "correct horse battery staple"})
+    body = {"username": "bob", "password": "another good password!!", "role": "operator"}
+    assert admin.post("/api/auth/users", json=body, headers=_csrf(admin)).status_code == 200
+
+    again = admin.post("/api/auth/users", json=body, headers=_csrf(admin))
+    assert again.status_code == 409, f"expected 409, got {again.status_code}"
+    assert again.json()["detail"]["code"] == "AUTH_USER_EXISTS"
+
+
 def test_operator_cannot_escalate_via_role_case(tmp_path, monkeypatch, cfg):
     """An operator sending role="Admin" (any case/whitespace variant of the
     literal "admin") must not create an admin account. Regression for the

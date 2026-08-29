@@ -392,10 +392,30 @@ class AuthManager:
             if existing is not None:
                 self._end_read_txn()
                 raise AuthUserExists(f"user already exists: {canonical}", details={"username": canonical})
-            self.conn.execute(
-                self._sql_insert_user, (canonical, record, now, 0, None, 0, None, canonical_role)
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute(
+                    self._sql_insert_user, (canonical, record, now, 0, None, 0, None, canonical_role)
+                )
+                self.conn.commit()
+            except Exception as exc:
+                # The pre-check above and this INSERT are not one atomic step,
+                # and self._lock orders only threads sharing THIS manager --
+                # gateway, harness and the cyclaw-user CLI each hold their own
+                # (see bootstrap_if_empty). A writer that commits in between
+                # turns the PK on username into a unique violation. Collapse it
+                # into the same AuthUserExists the pre-check raises, so a raced
+                # duplicate is indistinguishable from an ordinary one: raw, it
+                # matches no branch in gate_auth's _raise_auth_error ladder and
+                # escapes as a 500, and the CLI exits 1 rather than its
+                # documented 2. Roll back first -- on Postgres (autocommit off)
+                # the failed INSERT poisons this long-lived connection until
+                # something else clears it.
+                self.conn.rollback()
+                if _is_unique_violation(exc):
+                    raise AuthUserExists(
+                        f"user already exists: {canonical}", details={"username": canonical}
+                    ) from exc
+                raise
         return canonical
 
     def _summary_from_row(self, row: object) -> UserSummary:
@@ -803,8 +823,22 @@ class AuthManager:
             token = authn.new_device_token()
             token_hash = authn.hash_token(token)
             now = self._now()
-            self.conn.execute(self._sql_insert_token, (token_hash, canonical, label, now, None, 0))
-            self.conn.commit()
+            try:
+                self.conn.execute(self._sql_insert_token, (token_hash, canonical, label, now, None, 0))
+                self.conn.commit()
+            except Exception as exc:
+                # Same check-then-act window as create_user, against the partial
+                # unique index idx_device_tokens_live_label rather than the users
+                # PK. authn_store.py says why the in-process check cannot stand
+                # alone: the server and the CLI are separate processes on separate
+                # connections to one file.
+                self.conn.rollback()
+                if _is_unique_violation(exc):
+                    raise AuthTokenLabelExists(
+                        f"a live token labelled {label!r} already exists for {canonical}",
+                        details={"username": canonical, "label": label},
+                    ) from exc
+                raise
             return token
 
     def verify_device_token(self, token: str) -> str | None:

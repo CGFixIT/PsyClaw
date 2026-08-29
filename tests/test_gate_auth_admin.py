@@ -119,6 +119,38 @@ class TestAdminMatrix:
         names = {u["username"] for u in listed.json()}
         assert {"root", "bob"} <= names
 
+    def test_duplicate_create_is_409_with_a_typed_code(self, manager):
+        # Characterization: gate_auth already mapped AuthUserExists to 409, but
+        # nothing asserted it -- grep AUTH_USER_EXISTS across tests/ was empty
+        # before this, so the harness copy could (and did) diverge unnoticed.
+        manager.create_user("root", _GOOD, role="admin")
+        client = _client(manager)
+        csrf = _login(client, "root", _GOOD)
+        body = {"username": "bob", "password": _GOOD, "role": "operator"}
+        assert client.post("/auth/users", json=body, headers={"x-cyclaw-csrf": csrf}).status_code == 200
+        again = client.post("/auth/users", json=body, headers={"x-cyclaw-csrf": csrf})
+        assert again.status_code == 409
+        assert again.json()["detail"]["code"] == "AUTH_USER_EXISTS"
+
+    def test_raced_duplicate_create_is_409_not_an_unhandled_500(self, manager):
+        # Blinding the pre-check to "bob" only -- and not to "root" -- is what a
+        # racing writer produces, and leaves the DB constraint as the only
+        # defence. Scoped to one username on purpose: the same statement
+        # resolves the session's own user, so blinding it wholesale 401s the
+        # request before it ever reaches create_user. The raw backend error
+        # matches no branch of _raise_auth_error's ladder and gate.py registers
+        # no RAGError handler, so before the fix this escaped as an unhandled
+        # 500.
+        manager.create_user("root", _GOOD, role="admin")
+        client = _client(manager)
+        csrf = _login(client, "root", _GOOD)
+        body = {"username": "bob", "password": _GOOD, "role": "operator"}
+        assert client.post("/auth/users", json=body, headers={"x-cyclaw-csrf": csrf}).status_code == 200
+        manager._sql_get_user += " AND username <> 'bob'"
+        again = client.post("/auth/users", json=body, headers={"x-cyclaw-csrf": csrf})
+        assert again.status_code == 409
+        assert again.json()["detail"]["code"] == "AUTH_USER_EXISTS"
+
     def test_csrf_missing_on_create_is_403(self, manager):
         manager.create_user("root", _GOOD, role="admin")
         client = _client(manager)

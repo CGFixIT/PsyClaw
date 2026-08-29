@@ -178,6 +178,45 @@ class TestAccounts:
         with pytest.raises(AuthUserExists):
             manager.create_user("Alice", "a different password entirely")
 
+    def test_raced_duplicate_create_is_still_auth_user_exists(self, manager):
+        # The pre-check and the INSERT are not one atomic step, and the lock
+        # guarding them orders only threads sharing this manager -- gateway,
+        # harness and the CLI each hold their own. Neutering the pre-check SELECT
+        # is what a writer committing in that window looks like from in here, and
+        # it leaves the DB constraint as the only remaining defence. Before the
+        # fix this raised the backend's raw error (sqlite3.IntegrityError, or
+        # psycopg's UniqueViolation) instead, which is not an AuthError, so
+        # gate_auth 500'd it and the CLI exited 1 rather than its documented 2.
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager._sql_get_user += " AND 0 = 1"
+        with pytest.raises(AuthUserExists):
+            manager.create_user("alice", "a different password entirely")
+
+    def test_raced_duplicate_create_leaves_the_connection_usable(self, manager):
+        # The rollback() in the handler is what keeps this true on Postgres,
+        # where connect() sets autocommit=False and a failed INSERT leaves the
+        # long-lived connection raising InFailedSqlTransaction until something
+        # else clears it. SQLite has no equivalent sticky state, so this asserts
+        # the contract rather than reproducing the Postgres symptom.
+        manager.create_user("alice", _GOOD_PASSWORD)
+        real_sql = manager._sql_get_user
+        manager._sql_get_user = real_sql + " AND 0 = 1"
+        with pytest.raises(AuthUserExists):
+            manager.create_user("alice", "a different password entirely")
+        manager._sql_get_user = real_sql
+        assert manager.get_user("alice") is not None
+        assert manager.create_user("bob", _GOOD_PASSWORD) == "bob"
+
+    def test_raced_duplicate_token_label_is_still_auth_token_label_exists(self, manager):
+        # create_device_token has the identical check-then-act shape, against
+        # the partial unique index idx_device_tokens_live_label rather than the
+        # users PK.
+        manager.create_user("alice", _GOOD_PASSWORD)
+        manager.create_device_token("alice", "laptop")
+        manager._sql_get_live_token_by_label += " AND 0 = 1"
+        with pytest.raises(AuthTokenLabelExists):
+            manager.create_device_token("alice", "laptop")
+
     def test_duplicate_create_closes_its_read_transaction(self, manager, monkeypatch):
         """create_user()'s existing-user rejection used to raise AuthUserExists
         without closing the implicit transaction its existence-check SELECT
