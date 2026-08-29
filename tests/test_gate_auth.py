@@ -340,6 +340,28 @@ class TestSameOrigin:
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
+    def test_a_malformed_port_is_rejected_on_a_scheme_default_port_too(self, manager, user):
+        """The case the parametrized test above cannot reach, on the deployment
+        this module exists for.
+
+        The malformed-port branch used to fall back to origin_port = None, on
+        the stated reasoning that None "can never equal request.url.port". That
+        holds only while the server is reached on 8787. Serve on 443 -- the TLS
+        deployment auth is for -- and request.url.port is itself None, so the
+        fallback made "https://localhost:notaport" compare EQUAL to the target
+        and pass as same-origin. Refusing outright is what closes it.
+        """
+        username, password = user
+        cfg = _cfg(tls_enabled=True, port=443)
+        client = TestClient(_make_app(manager, cfg=cfg), base_url="https://localhost")  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        r = client.post(
+            "/auth/login",
+            json={"username": username, "password": password},
+            headers={"origin": "https://localhost:notaport"},  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
     def test_origin_without_an_explicit_port_is_rejected(self, manager, user):
         """CyClaw's port (8787) is never a scheme default, so a genuine
         same-origin request's Origin header always states it explicitly --

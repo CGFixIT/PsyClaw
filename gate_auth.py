@@ -193,14 +193,26 @@ def register_auth_routes(
             # are attacker-controlled on an unauthenticated route, so an
             # uncaught ValueError here would turn a malformed cross-origin
             # request into a 500 instead of the 403 this check exists to
-            # return. A malformed port can never equal request.url.port (an
-            # int or None, never unparseable), so treating it as None
-            # (rather than re-raising) still fails the comparison below and
-            # rejects the request -- it just does so as CROSS_ORIGIN_BLOCKED,
-            # not a crash.
+            # return.
             origin_port = parsed.port
         except ValueError:
-            origin_port = None
+            # Refuse here rather than falling back to None. An earlier version
+            # of this comment argued a malformed port "can never equal
+            # request.url.port (an int or None, never unparseable)" -- but None
+            # is exactly what request.url.port reads as whenever the server was
+            # reached on a scheme-default port, which is the TLS deployment
+            # this module exists for. On :443 a None fallback would make
+            # "https://host:notaport" compare EQUAL to the target and pass as
+            # same-origin. Found by the port case gate.py's _looks_cross_site
+            # picked up when it converged on this predicate (issue #1201).
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {},
+                },
+            ) from None
         # The host comparison is against THIS request's own Host header, not
         # against the allow-list. allowed_hosts ships with two distinct LAN
         # machines (10.0.0.111 and 10.0.0.112) alongside the loopback names, so

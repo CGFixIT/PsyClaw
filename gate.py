@@ -269,15 +269,24 @@ async def _forbid_audit_query_async(username: str | None) -> None:
 
 
 def _reject_cross_site_query(request: Request) -> None:
-    """Attached to POST /query only when auth is on (see the Stage 3 wiring
-    below) -- reuses _looks_cross_site, the same check that already protects
-    the /soul api_key_optional bypass. Without this, a same-site (different-
-    port) page could ride the operator's session cookie: SameSite=Strict
-    blocks cross-SITE requests but not same-site cross-PORT ones, and unlike
-    every /auth/* route (which all carry gate_auth.py's own _enforce_same_origin),
+    """Attached to POST /query UNCONDITIONALLY (see the Stage 3 wiring below)
+    -- reuses _looks_cross_site, the same check that already protects the
+    /soul api_key_optional bypass. Without this, a same-site (different-port)
+    page could ride the operator's session cookie: SameSite=Strict blocks
+    cross-SITE requests but not same-site cross-PORT ones, and unlike every
+    /auth/* route (which all carry gate_auth.py's own _enforce_same_origin),
     /query had no CSRF/same-origin check to close that gap. A bearer/device
     token is unaffected either way -- it is never browser-attached, so
     _looks_cross_site's absent-header allowance already passes it through.
+
+    This used to be attached only when auth.enabled was true, which is not the
+    shipped default -- so the shipped /query had no check of its own. It was
+    not reachable even then: QueryRequest is extra='forbid', strict=True, so
+    only application/json parses (no cross-site HTML form can post it), and
+    application/json forces a preflight the CORS allow-list refuses. But that
+    made /query safe by ACCIDENT, as a side effect of its body shape, and the
+    accident ends the day allowed_origins is widened for a demo. /index/build
+    has carried the same check unconditionally all along; this is the parity.
     """
     if _looks_cross_site(request):
         raise HTTPException(
@@ -945,7 +954,18 @@ async def index_build(request: Request) -> dict[str, Any]:
     return _index_status_payload()
 
 
-@app.get("/index/status", dependencies=[Depends(_enforce_rate_limit)])
+# Deliberately NOT rate-limited, and this is the only way to say so: the
+# limiter is a per-route dependency, never global middleware, so "exempt" means
+# declaring no dependency here. The console polls this every INDEX_POLL_MS
+# (1.5s, static/terminal.js) for the whole length of a build, which is 40 of
+# the 60 req/min a single IP gets -- leaving an operator's own queries to
+# finish a build inside the remaining 20. Throttling a progress bar to protect
+# a server from the progress bar is the wrong trade: the handler is a
+# lock-guarded dict copy and one subtraction (_index_status_payload), it
+# returns build state and never corpus content, and GET /health is the
+# standing precedent -- already unauthenticated AND unlimited while doing an
+# entire check_all service fan-out per call.
+@app.get("/index/status")
 async def index_status() -> dict[str, Any]:
     """Progress of the current or most recent index build. Always 200."""
     return _index_status_payload()
@@ -1287,14 +1307,28 @@ require_identity = register_auth_routes(
 )
 if auth_manager is not None:
     attach_identity_to_query(app, require_identity)
-    # attach_identity_to_query is dependency-shape-agnostic despite its name --
-    # it just appends a parameterless dependency to POST /query. Calling it a
-    # second time closes the CSRF/same-origin gap /query had relative to every
-    # /auth/* route (see _reject_cross_site_query's docstring). Each call
-    # inserts at index 0 of the dependant tree, so this second call's check
-    # runs BEFORE require_identity -- the same ordering gate_auth.py's own
-    # routes use (_enforce_same_origin declared ahead of the identity dependency).
-    attach_identity_to_query(app, _reject_cross_site_query)
+# attach_identity_to_query is dependency-shape-agnostic despite its name -- it
+# just appends a parameterless dependency to POST /query. Calling it again with
+# the cross-site check closes the CSRF/same-origin gap /query had relative to
+# every /auth/* route (see _reject_cross_site_query's docstring).
+#
+# OUTSIDE the auth branch above, unlike require_session_or_token: a cross-site
+# check is not a credential, so it has nothing to 503 about when auth is off,
+# and the shipped default (auth.enabled false) is exactly the configuration
+# that was carrying no check at all. It is also safe for the bind guard, where
+# the named closure was not: _request_path_enforcement_active matches by NAME
+# (_AUTH_DEPENDENCY_NAME) and this callable is not that name, so attaching it
+# on the disabled default cannot false-open a LAN bind.
+#
+# Ordering: each call inserts at index 0 of the dependant tree, so keeping this
+# call LAST is what makes the cross-site check run BEFORE require_identity --
+# the same ordering gate_auth.py's own routes use (_enforce_same_origin
+# declared ahead of the identity dependency). Note /query's rate limiter is an
+# inline await in the handler body, not a route dependency, so this check runs
+# ahead of it; that was already true whenever auth was on, and failed-auth is
+# still limited because require_session_or_token charges the limiter itself on
+# its rejection path.
+attach_identity_to_query(app, _reject_cross_site_query)
 
 # Optional memory admin surface (default-off). gate_memory lazy-imports memory.*
 # inside handlers only — same registration-injection shape as ops/auth.
@@ -1343,23 +1377,68 @@ def _looks_cross_site(request: Request) -> bool:
     _enforce_same_origin: curl and PowerShell send neither, and a non-browser
     client is not a CSRF vector. Every browser capable of mounting this attack
     sends at least Origin on a cross-origin POST.
+
+    The Origin arm is gate_auth.py's _enforce_same_origin predicate, expressed
+    as a bool instead of a raise. It used to ask only "is the Origin's host
+    loopback?", which was wrong in BOTH directions. Too lax: it ignored the
+    port outright, so ``Origin: http://127.0.0.1:9999`` passed as same-site --
+    the very same-host-different-port ride _reject_cross_site_query exists to
+    stop, open to any browser that sends Origin without Sec-Fetch-Site. Too
+    strict: it called a LAN-served console cross-site, even though
+    docs/THREAT_MODEL.md documents an auth+TLS path to a non-loopback bind and
+    security.allowed_hosts ships LAN entries for exactly that deployment.
+    Comparing against THIS request's own host/port/scheme answers both, and is
+    the question a same-origin check was always asking.
     """
     site = request.headers.get("sec-fetch-site")
     if site is not None and site not in {"same-origin", "none"}:
         return True
     origin = request.headers.get("origin")
-    if origin is not None:
-        try:
-            hostname = urlparse(origin).hostname
-        except ValueError:
-            # A structurally malformed Origin (e.g. an unbalanced IPv6
-            # bracket: "http://[evil") makes urlparse() itself raise, not
-            # merely a lazy .hostname/.port access -- attacker-controlled on
-            # an unauthenticated route, so this must fail closed as
-            # cross-site rather than let the exception escape as a 500.
-            return True
-        return hostname is None or not _is_loopback_host(hostname)
-    return False
+    if origin is None:
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        # A structurally malformed Origin (e.g. an unbalanced IPv6
+        # bracket: "http://[evil") makes urlparse() itself raise, not
+        # merely a lazy .hostname/.port access -- attacker-controlled on
+        # an unauthenticated route, so this must fail closed as
+        # cross-site rather than let the exception escape as a 500.
+        return True
+    try:
+        # .port is a lazy property, so a well-formed urlparse() result can
+        # still raise here on a non-numeric or out-of-range port string
+        # ("http://localhost:notaport", "http://localhost:99999"). Same
+        # attacker-controlled input, same reason not to let it become a 500.
+        origin_port = parsed.port
+    except ValueError:
+        # Reject outright rather than falling back to None. None is not a
+        # neutral value here -- it is what request.url.port ITSELF reads as
+        # whenever the server was reached on a scheme-default port, so a None
+        # fallback would make "http://host:notaport" compare EQUAL to the
+        # target and pass as same-origin. Verified: it did.
+        return True
+    # Allow-list membership is a second, INDEPENDENT condition, not a
+    # substitute for the host comparison: allowed_hosts ships two distinct LAN
+    # machines, so membership alone would call a page served by one of them
+    # same-origin with a CyClaw running on the other -- the "another device on
+    # the LAN" adversary. It still earns its place, because
+    # TrustedHostMiddleware honours a "*" entry by skipping Host validation
+    # entirely, and an Origin of "null" parses to hostname None.
+    #
+    # _allowed_hosts, the module global TrustedHostMiddleware itself was
+    # constructed from, NOT a fresh cfg read: one source of truth for "which
+    # hosts may reach this server" keeps the Origin arm and the Host filter
+    # from ever disagreeing, and a cfg read would answer from a config the
+    # middleware is not enforcing.
+    same_origin = (
+        parsed.hostname is not None
+        and parsed.hostname == request.url.hostname
+        and parsed.hostname in _allowed_hosts
+        and origin_port == request.url.port
+        and parsed.scheme == request.url.scheme
+    )
+    return not same_origin
 
 
 def _api_key_bypass_allowed(request: Request) -> bool:

@@ -56,10 +56,13 @@ multi-tenant workloads.
 | **Unauthorized soul mutation** | Fail-closed Bearer auth on all `/soul/*`; constant-time key compare | `gate.py` |
 | **DNS-rebinding → state-changing POST** | `TrustedHostMiddleware` Host allow-list (outermost middleware) | `gate.py`, `config.yaml` |
 | **Unauthorized cross-origin reads** | CORS allow-list | `gate.py`, `config.yaml` |
+| **Cross-site POST to `/query`** (CSRF riding a session cookie, or the `api_key_optional` bypass) | `_reject_cross_site_query` (403 `CROSS_SITE_BLOCKED`), attached **unconditionally** — independent of `auth.enabled`, which it was **not** before issue #1201: the shipped default left `/query` with no cross-site check of its own, protected only incidentally by a JSON-only body forcing a CORS preflight. The same-origin predicate requires the `Origin` host, port **and** scheme to equal this request's own, and the host to be in `security.allowed_hosts`. A request carrying neither `Origin` nor `Sec-Fetch-Site` is allowed (curl, PowerShell, Telegram, schedulers — not CSRF vectors) | `gate.py`, `config.yaml` |
+| **Unauthorized index rebuild** (corpus swap / resource burn) | Loopback socket peer **and** same-origin, both unconditional; rate-limited; every refusal audited (`index_build_rejected`); one build at a time (409). Deliberately **not** API-key gated — an unset `CYCLAW_API_KEY` fails closed, which would brick the first-run flow the route exists to unblock | `gate.py` |
+| **Index-progress probe** (`GET /index/status`, unauthenticated by design) | Returns build state only — never corpus content — from a lock-guarded snapshot. Deliberately **exempt** from the per-IP limit: the console polls it every 1.5 s for the length of a build, which would otherwise spend two-thirds of the operator's own budget. Same posture `GET /health` already has | `gate.py`, `static/terminal.js` |
 | **Uncontrolled external model calls** | Triple-gate: `mode=hybrid` **and** the selected provider's `grok.enabled`/`claude.enabled` **and** `user_confirmed_online` | `graph.py`, `config.yaml` |
 | **Uncontrolled evaluation egress** | Standalone CLI refuses unless `CYCLAW_EVAL_LIVE=1` and `ANTHROPIC_API_KEY` are both present; Anthropic origin is exact-pinned; contestant is loopback-only; embedding downloads are forced offline | `tests/judge_eval.py`, `tests/test_judge_eval.py` |
 | **Telemetry / data exfil via tracing** | Telemetry-kill env vars set before any third-party import from one shared mapping (`utils/telemetry_kill.py`), applied at import time by every maintained Python chokepoint — gateway, MCP server, metrics, harness server, the retrieval indexer/vector-store/cache CLIs, the auth/cert CLIs, and the sync/agentic/guardrails/telegram/opentweet packages (invariant-guard G1 pins 15 of these orderings) — AND delivered as literal environment before the interpreter starts at every process boundary: Docker ENV, the shipped launchers, generated launchd plists / Windows tasks / cron lines, verifier and `gh` children (`build_telemetry_safe_env`). An ambient value in the operator's environment is overwritten, not inherited; the declarative-OTel config names are removed outright. These controls silence telemetry readers only — they are not a network kill switch, and intentional policy-gated egress is classified separately (SECURITY.md); HF Hub network calls are additionally cut off via `local_files_only=True` once the embedding model is confirmed cached on disk (the `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` env vars alone do not gate this in-process — huggingface_hub latches that constant at its own import time, which the eligibility probe itself triggers before the env vars are set; `local_files_only` is passed directly to `SentenceTransformer(...)` instead, which gates independently); raw query text never persisted (hashes only) | `utils/telemetry_kill.py`, `gate.py`, `mcp_hybrid_server.py`, `retrieval/vector_store.py`, `retrieval/embeddings.py`, `utils/logger.py` |
-| **DoS (request flood / runaway process)** | Per-IP rate limit (60/min); container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
+| **DoS (request flood / runaway process)** | Per-IP rate limit (60/min) on every route except the two unauthenticated read-only probes `GET /health` and `GET /index/status`; container `mem`/`pids`/`cpus` limits | `utils/ratelimit.py`, `docker-compose.yml` |
 | **Compromised out-of-band subprocess** (rclone/gh) | argv-list only (no `shell=True`); absolute binary paths; Docker builtin seccomp; non-root; `no-new-privileges`; `cap_drop: ALL`; read-only rootfs | `sync/`, `agentic/`, `Dockerfile`, `docker-compose.yml`, `deploy/seccomp/` |
 
 ---
@@ -1000,10 +1003,26 @@ Two controls bound it, and the first is the load-bearing one:
    with nothing behind it. Verified exploitable before the fix: an
    `Origin: https://evil.example` POST to `/soul/reload` returned 200 and ran
    `personality.reload()`. The bypass is now refused for any request whose
-   `Origin` is non-loopback or whose `Sec-Fetch-Site` is not `same-origin`/
-   `none`. Header-less clients (curl, PowerShell) keep the bypass — they are
-   not CSRF vectors — matching `harness/server.py`'s `_enforce_same_origin`,
-   which already covered the harness for this.
+   `Sec-Fetch-Site` is not `same-origin`/`none`, or whose `Origin` is not this
+   request's own origin — host, port **and** scheme each compared against the
+   live request, with the host additionally required to be in
+   `security.allowed_hosts`. Issue #1201 replaced an earlier loopback-only host
+   test that was wrong in both directions: it ignored the port outright, so a
+   page on any other port of the same loopback host counted as same-site, and
+   it refused a LAN-served console even on the auth+TLS bind this document
+   sanctions in §1. Header-less clients (curl, PowerShell) keep the bypass —
+   they are not CSRF vectors — matching `harness/server.py`'s
+   `_enforce_same_origin`, which already covered the harness for this.
+
+   **Reverse-proxy caveat.** Because the scheme is compared against the live
+   connection and `gate.py` runs uvicorn without `proxy_headers`, an operator
+   who terminates TLS in a proxy in front of CyClaw presents browser traffic as
+   `Origin: https://…` against a `request.url.scheme` of `http`, and every
+   same-origin check refuses it. That was already true of every `/auth/*` route
+   and of `/query` with auth on; since #1201 attached `/query`'s check
+   unconditionally, it is now also true on the shipped default. Terminate TLS
+   in CyClaw itself (`api.tls.enabled`, `cyclaw-gen-cert`) rather than in front
+   of it.
 
 3. **Bind-time refusal, defence in depth.** `_require_loopback_bind` refuses a
    non-loopback `api.host` while the flag is true, including via the auth+TLS
