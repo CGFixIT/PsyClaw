@@ -574,6 +574,8 @@ def _acquire_rollover_lock(lock_path: Path) -> int | None:
     try:
         return os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
+        # Expected whenever another writer holds the lock -- not an error, and
+        # the only branch that continues below to consider reclaiming a stale one.
         pass
     except OSError:
         return None
@@ -598,10 +600,16 @@ def _release_rollover_lock(lock_fd: int, lock_path: Path) -> None:
     try:
         os.close(lock_fd)
     except OSError:
+        # Losing the fd is survivable and must not propagate: this runs in a
+        # finally on the audit_log write path, where raising would mask the
+        # rollover's own outcome and break the module's never-raise contract.
         pass
     try:
         os.unlink(lock_path)
     except OSError:
+        # The lock file outliving us only delays the NEXT rollover, and the
+        # stale-age reclaim in _acquire_rollover_lock recovers from exactly
+        # this -- so a failed unlink is self-healing rather than fatal.
         pass
 
 
