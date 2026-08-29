@@ -8,16 +8,24 @@ routes carried none of them -- on the more privileged of the two surfaces, since
 those routes run checks, push branches, and open PRs, while the read-mostly
 gateway on 8787 was fully hardened.
 
-The console page keeps its own, laxer CSP on purpose: ``static/harness.html``
-embeds an inline ``<script>`` (``terminal.html`` does not -- it loads
-``/static/terminal.js``), so gate.py's ``script-src 'self'`` would render the
-harness console blank. The middleware uses ``setdefault``, so the handler's
-explicit header wins and only the JSON API inherits the strict
-``default-src 'none'``.
+The console page keeps its own CSP on purpose, but a STRICTER one than gate.py's,
+not a laxer one: ``static/harness.html`` embeds an inline ``<script>`` and an
+inline ``<style>`` (``terminal.html`` does neither -- it loads
+``/static/terminal.js``), so the handler mints a fresh nonce per response and
+substitutes it into both the header and those two tags. A middleware cannot do
+that -- it stamps one fixed string -- which is why ``setdefault`` still matters:
+the handler's header must win. Everything else, the JSON API and the ``/static``
+assets alike, inherits the strict ``default-src 'none'`` default.
+
+The nonce is per RESPONSE, not per process. One reused across responses is
+replayable by whatever markup an XSS bug injects, which is the whole thing a
+nonce exists to stop, so ``test_console_csp_nonce_is_fresh_per_response`` pins
+the rotation as hard as it pins the policy itself.
 """
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +46,12 @@ REQUIRED_HEADERS = {
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
     "x-permitted-cross-domain-policies": "none",
 }
+
+
+def _nonce_from_csp(csp: str) -> str:
+    """The base64url value out of a `'nonce-...'` source expression, or ''."""
+    match = re.search(r"'nonce-([A-Za-z0-9_-]+)'", csp)
+    return match.group(1) if match else ""
 
 
 def _chat() -> HarnessChatClient:
@@ -61,7 +75,10 @@ def client(cfg, monkeypatch):
     return TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1")
 
 
-@pytest.mark.parametrize("path", ["/", "/api/status", "/api/registry", "/api/sessions"])
+@pytest.mark.parametrize(
+    "path",
+    ["/", "/api/status", "/api/registry", "/api/sessions", "/static/auth_admin.js"],
+)
 def test_every_response_carries_the_hardening_headers(client, path):
     resp = client.get(path)
     assert resp.status_code == 200, f"{path} did not answer 200"
@@ -77,22 +94,57 @@ def test_api_responses_get_a_strict_csp(client):
     assert "base-uri 'none'" in csp
 
 
-def test_console_keeps_its_own_csp_because_harness_html_has_an_inline_script(client):
+def test_console_csp_is_strict_and_nonce_based(client):
     """The GET / handler's explicit CSP must survive the middleware's setdefault.
 
-    If this ever inverts, the console renders blank: static/harness.html carries
-    an inline <script> block, which default-src 'none' forbids.
+    The console is the more privileged surface, so it carries a real policy --
+    not just framing control. Anything weaker here and a future XSS bug on this
+    page has no CSP standing between it and the routes that push branches.
     """
     resp = client.get("/")
     csp = resp.headers.get("content-security-policy", "")
+    assert "default-src 'none'" in csp
     assert "frame-ancestors 'none'" in csp
-    assert "default-src 'none'" not in csp, (
-        "the console page must not inherit the API's default-src 'none' -- "
-        "static/harness.html embeds an inline <script> and would render blank"
-    )
-    # The page's own Cache-Control (it carries a per-process CSRF token) must
-    # likewise survive.
+    assert "base-uri 'none'" in csp
+    assert "form-action 'none'" in csp
+    assert "connect-src 'self'" in csp
+    # 'self' keeps /static/auth_admin.js loadable; the nonce covers the inline
+    # block. Losing either breaks the console rather than failing quietly.
+    assert "script-src 'self' 'nonce-" in csp
+    assert "style-src 'nonce-" in csp
+    # The page's own Cache-Control (it carries a per-process CSRF token and a
+    # single-response nonce) must likewise survive.
     assert "no-store" in resp.headers.get("cache-control", "")
+
+
+def test_console_csp_nonce_matches_the_markup(client):
+    """A nonce only works if the header and the tags carry the same value."""
+    resp = client.get("/")
+    header_nonce = _nonce_from_csp(resp.headers.get("content-security-policy", ""))
+    assert header_nonce, "GET / advertised no nonce in its CSP"
+    assert f'<script nonce="{header_nonce}">' in resp.text
+    assert f'<style nonce="{header_nonce}">' in resp.text
+    assert harness_server._CSP_NONCE_PLACEHOLDER not in resp.text, (
+        "the literal placeholder reached the browser -- substitution did not run"
+    )
+
+
+def test_console_csp_nonce_is_fresh_per_response(client):
+    """Per response, not per process.
+
+    A nonce that outlives one response is replayable by any markup an injection
+    manages to place, which defeats the point of having one at all.
+    """
+    first = _nonce_from_csp(client.get("/").headers.get("content-security-policy", ""))
+    second = _nonce_from_csp(client.get("/").headers.get("content-security-policy", ""))
+    assert first and second
+    assert first != second
+
+
+def test_static_assets_inherit_the_strict_default_csp(client):
+    """The mounted assets set no policy of their own, so they take the API's."""
+    csp = client.get("/static/auth_admin.js").headers.get("content-security-policy", "")
+    assert "default-src 'none'" in csp
 
 
 def test_error_responses_are_hardened_too(client):

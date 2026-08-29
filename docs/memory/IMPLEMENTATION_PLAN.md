@@ -297,16 +297,25 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
   resolved_reason TEXT
 );
 
--- FTS5 content-sync for facts (active facts only via triggers or app-level rebuild)
+-- FTS5 index over active facts. STANDALONE (contentful) table, NOT an
+-- external-content one: it keeps its own copy of the text instead of reading
+-- columns back from `facts`. That choice is load-bearing for the triggers
+-- below, which retract a row with a plain DELETE -- an external-content table
+-- would require the fts5 'delete' command idiom instead, and a plain DELETE
+-- against one silently corrupts the index.
+-- tokenize='porter' stems both sides, so a query for "MacBook Pro" matches a
+-- stored "runs CyClaw on MacBook Pro M5"; it mirrors the stemming in
+-- retrieval/hybrid_search.py.
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
   content,
   category,
   tags,
-  content='facts',
-  content_rowid='id'
+  tokenize = 'porter'
 );
 
--- triggers: keep FTS in sync on insert/update/delete of facts
+-- triggers: keep FTS in sync on insert/update/delete of facts, filtered to
+-- active rows (AFTER INSERT ... WHEN new.active = 1; AFTER UPDATE re-inserts
+-- WHERE new.active = 1; AFTER DELETE is unconditional)
 -- (exact SQL in store.py; selftest verifies round-trip)
 
 CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(active);

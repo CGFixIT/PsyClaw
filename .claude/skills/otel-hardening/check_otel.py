@@ -505,6 +505,8 @@ INVENTORY_ALIASES: dict[str, str] = {
     "sentence-transformers": "sentence-transformers/transformers/torch stack",
     "transformers": "sentence-transformers/transformers/torch stack",
     "torch": "sentence-transformers/transformers/torch stack",
+    # conda-forge name for the same torch (environment.yml pin) -- same row
+    "pytorch": "sentence-transformers/transformers/torch stack",
     "fastembed": "fastembed",
     "gh": "github cli (gh)",
     "rclone": "rclone/dropbox sync",
