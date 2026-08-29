@@ -1131,12 +1131,36 @@ def test_harness_runs_lists_accepted_artifacts_by_mtime(client, tmp_path, monkey
     monkeypatch.setattr(harness_server, "_MAX_RUNS", 1)
     data = client.get("/api/harness/runs").json()
     assert data["count"] == 1
-    assert data["runs"] == [{"run_id": "variant-new", "path": str(newer)}]
+    assert data["runs"] == [{"run_id": "variant-new"}]
 
     monkeypatch.setattr(harness_server, "_MAX_RUNS", 50)
     data = client.get("/api/harness/runs").json()
     assert [r["run_id"] for r in data["runs"]] == ["variant-new", "variant-old"]
-    assert all(set(r) == {"run_id", "path"} for r in data["runs"])
+    # Exact key set, not a subset check: see the leak test below.
+    assert all(set(r) == {"run_id"} for r in data["runs"])
+
+
+def test_harness_runs_does_not_expose_absolute_paths(client, tmp_path, monkeypatch):
+    """This route is unauthenticated, so its payload must stay non-sensitive.
+
+    It used to return the artifact's absolute path, which on a POSIX box embeds
+    the operator's home directory and so their OS username. Nothing consumed it
+    -- the console renders run_id alone -- while the sibling
+    /api/agent/runs/{run_id} is guarded specifically because its record names
+    the clone's absolute location. Named separately from the ordering test so a
+    future edit cannot relax the key-set assertion as incidental detail.
+    """
+    accepted = tmp_path / "runs" / "accepted"
+    accepted.mkdir(parents=True)
+    (accepted / "variant-x.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(harness_server, "_RUNS_DIR", tmp_path / "runs")
+
+    payload = client.get("/api/harness/runs").json()
+
+    assert payload["runs"] == [{"run_id": "variant-x"}]
+    # Whole-payload check, not just the runs list: catches a filesystem path
+    # reintroduced under some other key too.
+    assert str(tmp_path) not in json.dumps(payload)
 
 
 def test_harness_runs_empty_when_no_accepted_dir(client, tmp_path, monkeypatch):

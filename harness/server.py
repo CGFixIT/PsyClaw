@@ -1588,7 +1588,13 @@ def create_app(
             with suppress(OSError):
                 json_files.sort(key=os.path.getmtime, reverse=True)
             for path in json_files[:_MAX_RUNS]:
-                runs.append({"run_id": path.stem, "path": str(path)})
+                # run_id only: the absolute path embeds the operator's home
+                # directory (so their OS username) and nothing ever read it --
+                # the console renders the id alone. The sibling
+                # /api/agent/runs/{run_id} is guarded because its record names
+                # the clone's absolute location; this route is open by design,
+                # so it drops the value instead of gating access to it.
+                runs.append({"run_id": path.stem})
         return {"runs": runs, "count": len(runs)}
 
     def _require_harness_auth():
