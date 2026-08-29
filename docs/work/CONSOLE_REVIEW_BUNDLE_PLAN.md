@@ -30,7 +30,7 @@ modes are ones an offline reviewer will hit again.
 | Issue H1 / H3 | Already implemented and already documented | Closed on verification |
 | Issue H2 | Real, arithmetic overstated | Carried into the corrected issue |
 | Issue — new finding | Missed by the original review | Now the corrected issue's lead item |
-| CVE runbook | False premise; ~75% already automated in CI | Rescoped to the genuine gaps |
+| CVE runbook | False premise; much (not all) already automated in CI | Rescoped to the genuine gaps |
 
 ## What landed as code
 
@@ -174,16 +174,28 @@ transitive reproducibility, run `pip-compile` and commit the result." Its instru
 diff a full resolution against that file and "flag any drift as its own finding" would have
 emitted one large false positive on the first run.
 
-**CI already runs most of the plan on a schedule.** `pip-audit.yml`, `osv-scanner.yml`, and
-`trivy.yml` (filesystem *and* container jobs) cover four of the runbook's five scanner
-steps. `pip-audit.yml`'s `scan-optional` job even auto-derives one requirements file per
-extra from `pyproject.toml` — the thing the runbook asked to do by hand, done better,
-because a new extra is covered the day it lands. Six findings are already risk-accepted with
-written rationale at `pip-audit.yml:165` (four chromadb CVEs, one nltk, one setuptools), so a
-naive re-run reports them as new.
+**CI already runs much of the plan on a schedule** — though a first pass at this write-up
+overstated by how much, and a Codex review on PR #1200 caught it. `pip-audit.yml` and
+`osv-scanner.yml` genuinely cover their steps, and `pip-audit.yml`'s `scan-optional` job
+even auto-derives one requirements file per extra from `pyproject.toml` — the thing the
+runbook asked to do by hand, done better, because a new extra is covered the day it lands.
+Six findings are already risk-accepted with written rationale at `pip-audit.yml:165` (four
+chromadb CVEs, one nltk, one setuptools), so a naive re-run reports them as new.
 
-What is genuinely missing: **grype** as the second image scanner, **zizmor** on the
-workflows, **tiered reachability**, and the **three deliverables**. The corrected runbook
+**The Trivy rows were the overstatement, in four separate ways** (two flagged by the
+review, two found while verifying it):
+- The fs job passes **no `scanners:` input at all** (`trivy.yml:41-53`), and Trivy's
+  filesystem default is `vuln,secret` — so **license scanning is not covered**.
+- The container job builds the checked-out Dockerfile as `cyclaw:ci` and scans that local
+  tag; **nothing scans the published `ghcr.io/cgfixit/cyclaw` artifact**. The only
+  workflow mention of that path is `publish-ghcr.yml:37`'s push target.
+- Both jobs floor at `severity: 'CRITICAL,HIGH,MEDIUM'` (`:48`, `:121`), so **LOW findings
+  have never surfaced**.
+- The container job is **skipped entirely on docs-only PRs** (`:81-95`).
+
+What is genuinely missing, therefore: **`trivy fs --scanners license`**, **`trivy image`
+and `grype` against the published GHCR tag**, **zizmor** on the workflows, **tiered
+reachability**, and the **three deliverables**. The corrected runbook
 scopes to exactly those and tells the operator to reconcile the rest against CI rather than
 rediscover it.
 
