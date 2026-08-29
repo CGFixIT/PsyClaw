@@ -220,15 +220,12 @@ def register_auth_routes(
             # return.
             origin_port = parsed.port
         except ValueError:
-            # Refuse here rather than falling back to None. An earlier version
-            # of this comment argued a malformed port "can never equal
-            # request.url.port (an int or None, never unparseable)" -- but None
-            # is exactly what request.url.port reads as whenever the server was
-            # reached on a scheme-default port, which is the TLS deployment
-            # this module exists for. On :443 a None fallback would make
-            # "https://host:notaport" compare EQUAL to the target and pass as
-            # same-origin. Found by the port case gate.py's _looks_cross_site
-            # picked up when it converged on this predicate (issue #1201).
+            # Refuse outright rather than falling back to None. None is not a
+            # neutral value here -- it is what request.url.port ITSELF reads as
+            # whenever the server was reached on a scheme-default port, which
+            # is the TLS deployment this module exists for. On :443 a None
+            # fallback made "https://host:notaport" compare EQUAL to the target
+            # and pass as same-origin (issue #1201).
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
