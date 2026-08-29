@@ -191,8 +191,14 @@ read-only.
   those routes return 401, not "no auth required" — with one deliberate
   exception, `config.yaml`'s `security.api_key_optional` (default `false`),
   which drops the key requirement from every route above, `/api/keys`
-  included, but **only for a request whose socket peer is loopback**; a LAN
-  client still gets 401. See `harness/README.md` for that bypass in full. Paste the key into the
+  included, but **only for a request that both has a loopback socket peer and
+  carries no reverse-proxy forwarding header** (`X-Forwarded-For`/`-Host`/
+  `-Proto`, `X-Real-IP`, `Forwarded`) — a proxy running on this host
+  terminates the remote connection and opens its own from loopback, so the
+  peer alone would hand the bypass to anyone who can reach the proxy. A LAN
+  client still gets 401, and so does a request arriving through a forwarding
+  proxy. See `config.yaml`'s comment on that flag for the full treatment,
+  residual gap included. Paste the key into the
   console's `key` field, or export it before launching. The read-only
   routes stay open so the console can boot and report that a key is
   needed. The key is held in the browser page only — never `localStorage`,
