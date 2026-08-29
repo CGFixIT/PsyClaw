@@ -38,11 +38,6 @@ _TEXT_SUFFIXES = frozenset(
 
 def _tracked_text_files() -> list[Path]:
     """Tracked files with a text suffix, via git so ignored/untracked junk is excluded."""
-    # Resolved to an absolute path rather than passed as the bare name "git":
-    # a bare name is looked up through PATH, which both ruff (S607) and CodeQL
-    # (py/partial-path-command) flag as running whatever happens to shadow it.
-    # Elsewhere in tests/ that is dodged by passing argv as a variable, but a
-    # noqa only quiets ruff -- CodeQL still reports it -- so resolve it instead.
     git_exe = shutil.which("git")
     if git_exe is None:
         pytest.skip("git executable not found on PATH")
@@ -57,11 +52,6 @@ def _tracked_text_files() -> list[Path]:
         ).stdout
     except (OSError, subprocess.SubprocessError):
         pytest.skip("git unavailable or this is not a git checkout")
-        # Unreachable: pytest.skip() raises. It is spelled out anyway because
-        # CodeQL cannot see that (py/uninitialized-local-variable flagged `out`
-        # as possibly-unbound on this fall-through), and because re-raising is
-        # the safe failure mode -- a refactor that dropped the skip would raise
-        # here rather than reach `out` unbound.
         raise
     return [
         REPO_ROOT / rel
@@ -82,8 +72,6 @@ def test_no_unresolved_conflict_markers_in_tracked_text_files() -> None:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            # A mislabelled binary or an unreadable file is not this guard's
-            # business; the suffix filter above already did the real narrowing.
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
             if line.startswith(_OPEN_MARKER) or line.startswith(_CLOSE_MARKER):
