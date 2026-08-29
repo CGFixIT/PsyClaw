@@ -155,6 +155,16 @@ def test_trash_empty_credits_freed_bytes_to_ledger(tmp_path):
 
 def test_quota_recompute_fail_closed_on_unreadable_root(tmp_path):
     """If the root itself cannot be scanned, usage is indeterminate; writes are refused."""
+    # Same guard, and same reason, as test_fsconnect_macos_real.py's real-EACCES
+    # test: this asserts on a denial produced by real permission bits, and root
+    # does not have any. Without the skip the walk below succeeds, no refusal is
+    # raised, and the failure reads like a broken quota gate rather than an
+    # unrunnable test -- an easy way to misdiagnose a red main in a root
+    # container. The module-level pytestmark already excludes Windows, so
+    # os.geteuid is always present here.
+    if os.geteuid() == 0:
+        pytest.skip("running as root bypasses POSIX permission bits; the root cannot be made unscannable")
+
     wz = tmp_path / "wz"
     wz.mkdir()
     cfg, fs_cfg, cp = _make(tmp_path, [{"path": str(wz), "quota_bytes": 10000}])
