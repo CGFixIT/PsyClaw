@@ -102,6 +102,14 @@ def build_chat_model(
     Local providers never require a key. Cloud providers fail closed on a missing
     one and never place it anywhere it can be logged.
     ``http_client`` is Grok/ChatXAI only (xAI usage capture); ignored otherwise.
+
+    Every model is built with ``max_retries=0``. chat_client._invoke_with_retry
+    is the SINGLE retry policy for this path, and it is budgeted against
+    ops_runner's per-iteration planner_timeout_sec. Leaving the SDK default in
+    place (2 for the OpenAI/xAI/Anthropic clients) would nest that cycle inside
+    the outer loop -- up to 3x3 = 9 requests and two levels of backoff for what
+    the docs and tests describe as 3 attempts -- which can overrun the
+    iteration budget and get the whole run SIGKILLed at the cap.
     """
     if not settings.is_cloud:
         try:
@@ -116,6 +124,7 @@ def build_chat_model(
             base_url=settings.base_url,
             api_key=os.getenv("DEEPAGENT_API_KEY", "not-needed"),
             timeout=settings.timeout_sec,
+            max_retries=0,  # see docstring: chat_client owns the retry policy
         )
 
     key = _require_cloud_key(settings.provider)
@@ -133,6 +142,7 @@ def build_chat_model(
             "model": settings.model,
             "api_key": key,
             "timeout": settings.timeout_sec,
+            "max_retries": 0,  # see docstring: chat_client owns the retry policy
         }
         if http_client is not None:
             kwargs["http_client"] = http_client
@@ -148,7 +158,10 @@ def build_chat_model(
             "optional Deep Agents runtime dependencies are not installed",
             details={"extra": _LOCAL_EXTRA, "provider": settings.provider},
         ) from exc
-    return ChatAnthropic(model=settings.model, api_key=key, timeout=settings.timeout_sec)
+    # max_retries=0: see docstring -- chat_client owns the retry policy.
+    return ChatAnthropic(
+        model=settings.model, api_key=key, timeout=settings.timeout_sec, max_retries=0
+    )
 
 
 __all__ = ["DeepAgentModelSettings", "build_chat_model", "cloud_key_available"]

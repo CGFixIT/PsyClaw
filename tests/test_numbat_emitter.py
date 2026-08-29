@@ -9,11 +9,15 @@ from __future__ import annotations
 import ast
 import json
 import os
+import threading
+import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 import yaml
 
+from utils import numbat_emitter
 from utils.logger import reset_config_cache
 from utils.numbat_emitter import (
     SCHEMA_VERSION,
@@ -406,3 +410,77 @@ def test_rollover_by_another_process_does_not_orphan_the_cached_handle(tmp_path:
     fresh = out.read_text(encoding="utf-8")
     assert "echo after" in fresh, "post-rename events must land in the live file"
     assert "echo before" in rolled.read_text(encoding="utf-8")
+
+
+def test_rollover_does_not_clobber_the_archive_when_another_writer_wins(tmp_path: Path) -> None:
+    """A second writer must not replace the .1 generation with the fresh file.
+
+    _WRITE_LOCK is process-local, but ops_runner children write this same path.
+    Before the rollover lock, a writer that measured the file as oversized and
+    then lost the race would still run os.replace -- moving the WINNER's newly
+    created (tiny) live file over the archive and destroying the generation.
+    Reproduced as 500 archived lines replaced by a 14-byte file.
+    """
+    live = tmp_path / "numbat-events.ndjsonl"
+    live.write_text("ARCHIVE-LINE\n" * 500, encoding="utf-8")
+    archive = live.with_name(live.name + ".1")
+    max_bytes = 100
+
+    original_acquire = numbat_emitter._acquire_rollover_lock
+    gate = threading.Event()
+
+    def stalling_acquire(lock_path):
+        # The loser stat'd the old oversized file, then stalls before the lock --
+        # exactly the window that destroyed the archive.
+        if threading.current_thread().name == "loser":
+            gate.wait(5)
+        return original_acquire(lock_path)
+
+    def winner() -> None:
+        numbat_emitter._rollover_if_needed(live, max_bytes)
+        live.write_text("tiny-new-line\n", encoding="utf-8")
+        gate.set()
+
+    def loser() -> None:
+        numbat_emitter._rollover_if_needed(live, max_bytes)
+
+    with mock.patch.object(numbat_emitter, "_acquire_rollover_lock", stalling_acquire):
+        t_lose = threading.Thread(target=loser, name="loser")
+        t_lose.start()
+        time.sleep(0.05)  # let the loser get past its size check first
+        t_win = threading.Thread(target=winner, name="winner")
+        t_win.start()
+        t_win.join(timeout=10)
+        t_lose.join(timeout=10)
+
+    assert archive.read_text(encoding="utf-8").count("ARCHIVE-LINE") == 500
+    assert live.read_text(encoding="utf-8") == "tiny-new-line\n"
+    assert not live.with_name(live.name + ".rollover.lock").exists()
+
+
+def test_rollover_skips_while_another_writer_holds_the_lock(tmp_path: Path) -> None:
+    """A held lock makes this writer stand down rather than rotate concurrently."""
+    live = tmp_path / "numbat-events.ndjsonl"
+    live.write_text("x" * 500, encoding="utf-8")
+    lock_path = live.with_name(live.name + ".rollover.lock")
+    lock_path.write_text("", encoding="utf-8")  # a live holder
+
+    numbat_emitter._rollover_if_needed(live, 100)
+
+    assert live.exists(), "the live file must not be rotated while the lock is held"
+    assert not live.with_name(live.name + ".1").exists()
+
+
+def test_rollover_reclaims_an_abandoned_lock(tmp_path: Path) -> None:
+    """A lock left behind by a crashed writer must not disable rollover forever."""
+    live = tmp_path / "numbat-events.ndjsonl"
+    live.write_text("x" * 500, encoding="utf-8")
+    lock_path = live.with_name(live.name + ".rollover.lock")
+    lock_path.write_text("", encoding="utf-8")
+    stale = time.time() - (numbat_emitter._ROLLOVER_LOCK_STALE_SEC + 30)
+    os.utime(lock_path, (stale, stale))
+
+    numbat_emitter._rollover_if_needed(live, 100)
+
+    assert live.with_name(live.name + ".1").exists(), "abandoned lock should be reclaimed"
+    assert not lock_path.exists()

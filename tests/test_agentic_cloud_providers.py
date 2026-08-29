@@ -354,3 +354,52 @@ def test_settings_carry_max_handoff_chars_from_config():
     cloud = DeepAgentModelSettings.from_config(deep_cfg, cloud_provider="grok")
     assert local.max_handoff_chars == 12_345
     assert cloud.max_handoff_chars == 12_345
+
+
+class _RecordingChatModel:
+    """Stands in for ChatOpenAI/ChatXAI/ChatAnthropic and captures its kwargs."""
+
+    last_kwargs: dict = {}
+
+    def __init__(self, **kwargs):
+        type(self).last_kwargs = dict(kwargs)
+
+
+@pytest.mark.parametrize(
+    ("provider", "is_cloud", "module_name", "class_name", "env"),
+    [
+        ("ollama", False, "langchain_openai", "ChatOpenAI", None),
+        ("grok", True, "langchain_xai", "ChatXAI", "GROK_API_KEY"),
+        ("claude", True, "langchain_anthropic", "ChatAnthropic", "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_build_chat_model_disables_sdk_retries(
+    provider, is_cloud, module_name, class_name, env, monkeypatch
+):
+    """chat_client's bounded loop must be the ONLY retry policy on this path.
+
+    The provider SDKs default to retrying (2 for the OpenAI/xAI/Anthropic
+    clients). Left in place, that cycle nests inside _invoke_with_retry's three
+    attempts -- up to nine requests and two levels of backoff for what the docs
+    describe as three -- which can overrun ops_runner's per-iteration
+    planner_timeout_sec and get the run SIGKILLed at the cap.
+    """
+    import sys
+    import types
+
+    if env:
+        monkeypatch.setenv(env, "k")
+    _RecordingChatModel.last_kwargs = {}
+    stub = types.ModuleType(module_name)
+    setattr(stub, class_name, _RecordingChatModel)
+    monkeypatch.setitem(sys.modules, module_name, stub)
+
+    settings = DeepAgentModelSettings(
+        provider=provider, base_url="http://localhost:11434/v1", model="m", is_cloud=is_cloud
+    )
+    build_chat_model(settings)
+
+    assert _RecordingChatModel.last_kwargs.get("max_retries") == 0, (
+        f"{class_name} was built without max_retries=0; SDK retries would nest "
+        f"inside chat_client's retry loop"
+    )
