@@ -35,6 +35,8 @@ _ID_KEY = "id"
 _TEXT_KEY = "text"
 _TS_KEY = "ts"
 _ENABLED_KEY = "enabled"
+# facts renamed its switch; the legacy name stays readable (memory/flags.py).
+_FACTS_RETRIEVAL_KEY = "retrieval_enabled"
 _MAX_NOTE_CHARS = 500
 _MAX_NOTES = 20
 _MAX_PROMPT_CHARS = 3000
@@ -55,6 +57,20 @@ class MemoryNotesError(AgenticError):
     """Operator-note validation or persistence failure."""
 
 
+def _facts_retrieval_flag(facts: Any) -> bool:
+    """Mirror memory/flags.facts_retrieval_enabled without importing memory.
+
+    harness/ stays decoupled from the memory package, and this is a read-only
+    echo for the console, so it resolves the same two keys but does not warn --
+    the retrieval path owns that warning.
+    """
+    if not isinstance(facts, dict):
+        return False
+    if _FACTS_RETRIEVAL_KEY in facts:
+        return bool(facts.get(_FACTS_RETRIEVAL_KEY))
+    return bool(facts.get(_ENABLED_KEY))
+
+
 def rag_flags(cfg: Mapping[str, Any] | None) -> dict[str, bool]:
     """Read-only echo of the RAG ``memory:`` block. Never written here."""
     block: Mapping[str, Any] = {}
@@ -67,7 +83,7 @@ def rag_flags(cfg: Mapping[str, Any] | None) -> dict[str, bool]:
     fusion = block.get("retrieval_fusion")
     return {
         _ENABLED_KEY: bool(block.get(_ENABLED_KEY)),
-        "facts": bool(facts.get(_ENABLED_KEY)) if isinstance(facts, dict) else False,
+        "facts": _facts_retrieval_flag(facts),
         "episodes": bool(episodes.get(_ENABLED_KEY)) if isinstance(episodes, dict) else False,
         "retrieval_fusion": bool(fusion.get(_ENABLED_KEY)) if isinstance(fusion, dict) else False,
         "writable_from_harness": False,

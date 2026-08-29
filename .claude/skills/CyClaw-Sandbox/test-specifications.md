@@ -455,7 +455,8 @@ either endpoint; these gate only the harness's own system-prompt composition.
 
 | Test | Method | Endpoint | Expected |
 |------|--------|----------|----------|
-| HC-16 | GET | `/` | 200, serves `static/harness.html`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Frame-Options: DENY` |
+| HC-16 | GET | `/` | 200, serves `static/harness.html`, `X-Frame-Options: DENY`, and a full `Content-Security-Policy`: `default-src 'none'`, `script-src 'self' 'nonce-<n>'`, `style-src 'nonce-<n>'`, `connect-src 'self'`, `base-uri`/`form-action`/`frame-ancestors 'none'`. The nonce is minted per response — it must match the `<style>`/`<script>` tags in the body and differ between two GETs |
+| HC-16b | GET | `/static/auth_admin.js` | 200, `Content-Type: text/javascript`, body defines `CyClawAuthAdmin` (the shared Users panel the console loads) |
 | HC-17 | GET | `/docs`, `/redoc`, `/openapi.json` | 404 (auto-docs disabled -- `docs_url`/`redoc_url`/`openapi_url=None`) |
 | HC-18 | GET | `/api/status` with a non-loopback `Host` header | 400 (`TrustedHostMiddleware` DNS-rebinding defense) |
 

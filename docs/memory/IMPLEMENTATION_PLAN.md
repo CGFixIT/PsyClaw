@@ -297,16 +297,25 @@ CREATE TABLE IF NOT EXISTS memory_proposals (
   resolved_reason TEXT
 );
 
--- FTS5 content-sync for facts (active facts only via triggers or app-level rebuild)
+-- FTS5 index over active facts. STANDALONE (contentful) table, NOT an
+-- external-content one: it keeps its own copy of the text instead of reading
+-- columns back from `facts`. That choice is load-bearing for the triggers
+-- below, which retract a row with a plain DELETE -- an external-content table
+-- would require the fts5 'delete' command idiom instead, and a plain DELETE
+-- against one silently corrupts the index.
+-- tokenize='porter' stems both sides, so a query for "MacBook Pro" matches a
+-- stored "runs CyClaw on MacBook Pro M5"; it mirrors the stemming in
+-- retrieval/hybrid_search.py.
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
   content,
   category,
   tags,
-  content='facts',
-  content_rowid='id'
+  tokenize = 'porter'
 );
 
--- triggers: keep FTS in sync on insert/update/delete of facts
+-- triggers: keep FTS in sync on insert/update/delete of facts, filtered to
+-- active rows (AFTER INSERT ... WHEN new.active = 1; AFTER UPDATE re-inserts
+-- WHERE new.active = 1; AFTER DELETE is unconditional)
 -- (exact SQL in store.py; selftest verifies round-trip)
 
 CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(active);
@@ -324,7 +333,7 @@ memory:
   enabled: false                    # master switch
   db_path: "data/memory/cyclaw_memory.db"
   facts:
-    enabled: false
+    retrieval_enabled: false        # fusion exposure ONLY; not persist/apply/read
     max_content_chars: 8192
     max_active: 10000
   episodes:
@@ -337,7 +346,6 @@ memory:
     enabled: false                  # fuse FTS hits into hybrid_search
     max_hits: 3
     rrf_k: 60                       # match corpus RRF k
-    min_fts_score: 0.0              # bm25-ish; tune in selftest
     source_prefix: "memory:fact:"   # SearchResult.source prefix
   propose_apply:
     enabled: false                  # admin propose/apply routes useful only if true
@@ -700,7 +708,7 @@ Memory is **not** OOB like telegram. It is an optional core feature. Isolation m
 1. Deploy code (defaults off) → behavior identical to today.  
 2. Set `memory.enabled: true` + `episodes.enabled: true` → episodes start staging.  
 3. Set `propose_apply.enabled: true`, set `CYCLAW_API_KEY`, propose/apply facts.  
-4. Optionally enable `retrieval_fusion.enabled: true` after verifying FTS quality.  
+4. Optionally enable `facts.retrieval_enabled: true` + `retrieval_fusion.enabled: true` after verifying FTS quality — both are required to fuse.  
 5. Export HTML only if needed.
 
 ---

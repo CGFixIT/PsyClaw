@@ -544,3 +544,96 @@ def test_record_omits_served_model_when_absent_or_blank(tmp_path: Path) -> None:
     )
     for line in ledger.read_text(encoding="utf-8").splitlines():
         assert "served_model" not in json.loads(line)
+
+
+# --- rate-table provenance -----------------------------------------------------
+
+
+def test_priced_as_of_is_the_oldest_verified_date_in_the_table():
+    """PRICED_AS_OF must not run ahead of the stalest rate row.
+
+    rates_are_stale() alarms off this single constant, so bumping it when only
+    some rows were re-verified would silently mask the rest going stale -- the
+    exact failure the constant exists to catch. Pinned against the "verified
+    YYYY-MM-DD" provenance comments beside the rows themselves.
+    """
+    import re
+
+    source = Path(spend.__file__).read_text(encoding="utf-8")
+    # Skip the constant's own doc block, which cites the invariant rather than a row.
+    body = source.split("STALE_AFTER_DAYS", 1)[1]
+    verified = sorted(re.findall(r"verified (\d{4}-\d{2}-\d{2})", body))
+    assert verified, "no 'verified YYYY-MM-DD' provenance comments found beside the rates"
+    assert spend.PRICED_AS_OF <= verified[0], (
+        f"PRICED_AS_OF ({spend.PRICED_AS_OF}) is newer than the oldest verified "
+        f"rate row ({verified[0]}) -- the staleness alarm would mask that row"
+    )
+
+
+def test_recording_warns_once_when_rates_are_stale(tmp_path, monkeypatch, caplog):
+    """The hot path must signal a stale rate table, and only once per process.
+
+    Before this, a server billing against a >30-day-stale table emitted nothing
+    until an operator separately ran metrics.py.
+    """
+    spend._emit_stale_rate_warning_once.cache_clear()
+    monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: True)
+    ledger = tmp_path / "spend.jsonl"
+
+    with caplog.at_level("WARNING", logger="cyclaw.spend"):
+        for _ in range(3):
+            spend.record_external_usage(
+                provider="grok", model="grok-4.5",
+                usage={"prompt_tokens": 1, "completion_tokens": 1},
+                spend_file=ledger,
+            )
+
+    stale_warnings = [r for r in caplog.records if "priced_as_of" in r.getMessage()]
+    assert len(stale_warnings) == 1, "expected exactly one stale-rate warning across three calls"
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == 3, "recording must still happen"
+
+
+def test_recording_is_silent_when_rates_are_fresh(tmp_path, monkeypatch, caplog):
+    spend._emit_stale_rate_warning_once.cache_clear()
+    monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: False)
+    ledger = tmp_path / "spend.jsonl"
+
+    with caplog.at_level("WARNING", logger="cyclaw.spend"):
+        spend.record_external_usage(
+            provider="grok", model="grok-4.5",
+            usage={"prompt_tokens": 1, "completion_tokens": 1},
+            spend_file=ledger,
+        )
+
+    assert not [r for r in caplog.records if "priced_as_of" in r.getMessage()]
+
+
+def test_staleness_is_re_evaluated_on_every_call_not_frozen_at_first(tmp_path, monkeypatch, caplog):
+    """Regression: the latch must cover the WARNING, not the staleness TEST.
+
+    A server that starts before the table goes stale evaluates "fresh" on its
+    first external call. If that verdict were cached, the process would never
+    warn again -- and a long-running server billing against a stale table is
+    exactly the case this warning exists for. Simulates the table going stale
+    while the process is up.
+    """
+    spend._emit_stale_rate_warning_once.cache_clear()
+    ledger = tmp_path / "spend.jsonl"
+    stale = {"value": False}
+    monkeypatch.setattr(spend, "rates_are_stale", lambda now=None: stale["value"])
+
+    def _record() -> None:
+        spend.record_external_usage(
+            provider="grok", model="grok-4.5",
+            usage={"prompt_tokens": 1, "completion_tokens": 1}, spend_file=ledger,
+        )
+
+    with caplog.at_level("WARNING", logger="cyclaw.spend"):
+        _record()                       # fresh at boot -- must not warn
+        assert not [r for r in caplog.records if "priced_as_of" in r.getMessage()]
+        stale["value"] = True           # the table ages out while the process runs
+        _record()
+        _record()
+
+    warnings = [r for r in caplog.records if "priced_as_of" in r.getMessage()]
+    assert len(warnings) == 1, "must warn once after going stale -- and exactly once"
