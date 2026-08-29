@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import subprocess
 from typing import Any
 from unittest.mock import patch
 
@@ -206,6 +207,25 @@ class TestOpsSync:
         assert detail["error"] == "sanitized"
         assert "secret-path" not in resp.text
         assert [e["event"] for e in audit_events] == ["ops_sync_error"]
+
+    def test_timeout_is_a_typed_504(self, monkeypatch):
+        """A budget-killed CLI is a 504 OPS_TIMEOUT (matching the harness
+        console's AGENTIC_TIMEOUT for the identical failure), never a generic
+        500 -- and the argv inside TimeoutExpired's repr is never echoed."""
+        monkeypatch.setenv("CYCLAW_API_KEY", "test-key-123")
+        client, audit_events = _build_app()
+        boom = subprocess.TimeoutExpired(cmd=["python", "-m", "sync.cli", "sync"], timeout=3660)
+        with patch("gate_ops.run_sync_op", side_effect=boom):
+            resp = client.post(
+                "/ops/sync", json={"action": "sync"},
+                headers={"Authorization": "Bearer test-key-123"},
+            )
+        assert resp.status_code == 504
+        detail = resp.json()["detail"]
+        assert detail["code"] == "OPS_TIMEOUT"
+        assert detail["timeout_sec"] == 3660
+        assert "sync.cli" not in resp.text
+        assert [e["event"] for e in audit_events] == ["ops_sync_timeout"]
 
 
 class TestOpsAgentic:

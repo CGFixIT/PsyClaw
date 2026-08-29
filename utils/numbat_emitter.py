@@ -250,6 +250,22 @@ def _output_path(cfg: dict[str, Any] | None) -> Path:
     return _anchor(str(raw))
 
 
+# The mainline plane projects EVERY audit record into the stream, so without a
+# cap the file grows without bound on a busy instance. 50 MiB, single .1
+# generation -- forensics that need more history archive the .1 themselves.
+DEFAULT_MAX_BYTES = 52428800
+
+
+def _max_bytes(cfg: dict[str, Any] | None) -> int:
+    """numbat.max_bytes: rollover threshold; 0 (or negative/garbage) disables."""
+    block = _numbat_cfg(cfg)
+    try:
+        value = int(block.get("max_bytes", DEFAULT_MAX_BYTES))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_BYTES
+    return value if value > 0 else 0
+
+
 def _source_agent(cfg: dict[str, Any] | None) -> str:
     block = _numbat_cfg(cfg)
     value = str(block.get("source_agent") or DEFAULT_SOURCE_AGENT)
@@ -402,6 +418,27 @@ def build_event(
 _NUMBAT_HANDLES: dict[str, TextIO] = {}
 
 
+def _handle_still_points_at(handle: TextIO, path: Path) -> bool:
+    """True when the cached handle still refers to the file living at ``path``.
+
+    The cache is keyed on the path STRING, but a rename moves the name off the
+    inode the handle holds. Another process rolls this same stream over -- the
+    action plane runs in ops_runner children while a long-lived gate.py holds
+    its handle open -- so after that child's os.replace, an unchecked cached
+    handle keeps appending into the .1 generation, and the NEXT rollover
+    deletes the whole backlog. Verified: without this check the live file stops
+    existing and every later event lands in .1.
+
+    This is the check logging.handlers.WatchedFileHandler makes, for exactly
+    this reason. Fail-soft: any stat error answers "not current", which costs a
+    reopen and never an exception (this module must never raise).
+    """
+    try:
+        return os.fstat(handle.fileno()).st_ino == path.stat().st_ino
+    except OSError:
+        return False
+
+
 def _numbat_handle(path: Path) -> TextIO:
     """Return the cached append-mode handle for path, opening it if needed.
 
@@ -409,10 +446,19 @@ def _numbat_handle(path: Path) -> TextIO:
     """
     key = str(path)
     handle = _NUMBAT_HANDLES.get(key)
+    if handle is not None and not handle.closed and not _handle_still_points_at(handle, path):
+        # Someone rolled the stream over underneath us; drop the stale inode.
+        try:
+            handle.close()
+        except OSError:
+            # Losing the fd is acceptable -- the reopen below is what matters,
+            # and this module's contract forbids raising from the write path.
+            pass
+        _NUMBAT_HANDLES.pop(key, None)
+        handle = None
     if handle is None or handle.closed:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115  # codeql[py/file-not-closed] closed via atexit.register below and close_numbat_handles()
-        atexit.register(handle.close)
+        handle = open(path, "a", encoding="utf-8")  # noqa: SIM115  # codeql[py/file-not-closed] closed via close_numbat_handles() at exit
         _NUMBAT_HANDLES[key] = handle
     return handle
 
@@ -437,10 +483,71 @@ def close_numbat_handles() -> None:
 atexit.register(close_numbat_handles)
 
 
-def write_ndjson(record: dict[str, Any], path: Path) -> None:
-    """Append one JSON line. Caller holds no lock; this function does."""
+def _rollover_if_needed(path: Path, max_bytes: int) -> None:
+    """Single-generation size rollover: rename to ``<name>.1``, start fresh.
+
+    Caller must hold _WRITE_LOCK. The cached handle is closed and dropped
+    BEFORE the rename -- on POSIX an open handle would keep appending to the
+    renamed file, and on Windows renaming an open file fails outright. Every
+    branch is fail-soft (the module's contract: it runs inside gate/graph on
+    every audit_log and must never raise); on any OSError the stream simply
+    keeps appending to the oversized file rather than dropping events.
+
+    The size is re-stat'd per write rather than tracked in a counter on
+    purpose: _WRITE_LOCK is per-process, but the action plane (agentic /
+    ops_runner children) writes this same path from OTHER processes, and only
+    the filesystem sees all of them. Two processes crossing the threshold
+    together can still both rename -- the loser's events land in the .1
+    generation instead of the fresh file. That is benign for a derived
+    forensic stream (audit.jsonl stays authoritative) and is the reason this
+    is a single-generation policy rather than a numbered-rotation one.
+    """
+    try:
+        if path.stat().st_size < max_bytes:
+            return
+    except OSError as exc:
+        # Rollover is now effectively off for this path (an unreadable parent, a
+        # too-long name). Say so once at debug rather than growing unbounded in
+        # total silence -- every other fail-soft path in this module logs.
+        logger.debug("numbat rollover size check failed (%s); cap not enforced", type(exc).__name__)
+        return
+    handle = _NUMBAT_HANDLES.pop(str(path), None)
+    if handle is not None:
+        try:
+            handle.close()
+        except OSError:
+            # Best-effort, same as close_numbat_handles(): the pop() above already
+            # dropped our reference, so the next write reopens the path regardless
+            # of whether this close succeeded. Raising here would break the
+            # never-raise contract for a handle we are discarding anyway.
+            pass
+    try:
+        os.replace(path, path.with_name(path.name + ".1"))
+    except OSError:
+        # Rename refused (read-only mount, a .1 held open by a reader on Windows,
+        # a vanished parent). Falling through leaves the oversized file in place
+        # and the next write reopens it: the stream keeps flowing, which is the
+        # right trade for a derived forensic log -- audit.jsonl is authoritative.
+        pass
+
+
+def write_ndjson(record: dict[str, Any], path: Path, *, max_bytes: int = 0) -> None:
+    """Append one JSON line. Caller holds no lock; this function does.
+
+    ``max_bytes`` > 0 arms the size rollover above, checked before the write
+    so no single append is split across generations.
+
+    It defaults to 0 (uncapped) even though the module ships DEFAULT_MAX_BYTES:
+    config.yaml is the single source of truth for tunables, and only
+    emit_numbat_event() holds the cfg to read numbat.max_bytes from. A caller
+    handed just a path therefore gets the old unbounded behaviour rather than a
+    surprise rename it never configured. The shipped path always passes the
+    configured value -- see the emit_numbat_event() call site.
+    """
     line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
     with _WRITE_LOCK:
+        if max_bytes:
+            _rollover_if_needed(path, max_bytes)
         handle = _numbat_handle(path)
         handle.write(line)
         handle.flush()
@@ -510,7 +617,7 @@ def emit_numbat_event(
             url=url,
             cfg=cfg,
         )
-        write_ndjson(record, _output_path(cfg))
+        write_ndjson(record, _output_path(cfg), max_bytes=_max_bytes(cfg))
     except Exception as exc:  # noqa: BLE001 - forensic projection must never fail the caller
         logger.warning("numbat emit failed for %s: %s", event_type, exc)
 

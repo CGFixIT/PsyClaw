@@ -62,7 +62,18 @@ models:
     # prevented deterministically as long as:
     #   Ollama context length  >=  max_context_tokens + max_tokens + ~1500 headroom
     # RECOMMENDED Ollama context length (via num_ctx): 16384 (16k).
-    # With max_context_tokens=4000 + max_tokens=4096 that is 8096 + headroom -> fits.
+    # With max_context_tokens=8000 + max_tokens=4096 the floor is
+    # 8000 + 4096 + ~1500 = 13,596 -> fits 16384 with ~2.8k tokens to spare.
+    # That nominal floor is NOT the binding constraint -- the character budget
+    # is. graph.py derives it as max_context_tokens * CHARS_PER_TOKEN (3), so
+    # 8000 -> 24,000 chars. What that costs in REAL tokens depends on the text:
+    #   ~3.2-3.6 chars/tok (technical English) -> ~7,000 tok  + 4,096 = ~11.1k
+    #   2.0 chars/tok (digests, base64, minified) -> 12,000 tok + 4,096 = 16,096
+    # The second line is the one to size against: it leaves only ~290 tokens
+    # under a 16,384 window, far less than the ~1500 the nominal formula above
+    # implies. It still fits, and symbol-dense text rarely fills the whole
+    # budget -- but treat 8000 as the ceiling for a 16k window, not a midpoint.
+    # Raising max_context_tokens further REQUIRES raising num_ctx to match.
     max_tokens: 4096
     temperature: 0.2
     # Hard per-attempt HTTP timeout, sized for the largest local model this repo
@@ -127,7 +138,11 @@ models:
     enabled: true
     base_url: "https://api.x.ai/v1"
     model: "grok-4.5"   # current xAI flagship (verified 2026-07-20 against https://docs.x.ai/developers/models). Tradeoff vs the previous default grok-4.3: newer + faster, but ~60%/140% pricier per input/output token ($2.00/$6.00 vs $1.25/$2.50 per Mtok) and a 500k context vs 1M. grok-4.3 still resolves — pin it here instead if cost or the longer window matters more than currency.
-    timeout_sec: 30
+    # 90s covers a full max_tokens (2048) generation at a conservative ~23 tok/s
+    # plus TTFT/queueing; the old 30s required ~68 tok/s sustained and timed out
+    # legitimate long answers. Worst-case wall clock with retries stays
+    # 3 x 90 + backoffs ≈ 275s, well inside api.graph_timeout_sec (780).
+    timeout_sec: 90
     max_tokens: 2048
     temperature: 0.2
     retry:                  # only 5xx/429/timeouts are retried — never 4xx, so no wasted xAI spend on bad requests/auth
@@ -139,7 +154,10 @@ models:
     base_url: "https://api.anthropic.com/v1"
     model: "claude-sonnet-5"   # current Claude 5 family Sonnet alias (verified 2026-07); second external fallback (PR #441). Check https://docs.anthropic.com/en/docs/about-claude/models before enabling — same drift risk as the grok model id above
     anthropic_version: "2023-06-01"
-    timeout_sec: 30
+    # Same sizing rationale as grok.timeout_sec above (Anthropic's own SDK
+    # defaults to 600s; 90s is the bounded-fallback compromise: covers a full
+    # 2048-token answer, keeps 3 retries ≈ 275s inside the 780s graph budget).
+    timeout_sec: 90
     max_tokens: 2048
     retry:
       max_retries: 2        # extra attempts beyond the first; never retries 4xx/auth errors
@@ -172,14 +190,32 @@ retrieval:
   rrf_k: 60                # Authoritative RRF k — read by hybrid_search.py
   # Token budget for the prompt INPUT to the local LLM. graph.py reserves room for
   # the soul preamble + query + framing and gives the rest to retrieved context
-  # (query/soul-aware budget, ~4 chars/token), so the assembled prompt input stays
+  # (query/soul-aware budget, CHARS_PER_TOKEN below), so the assembled prompt input stays
   # within this many tokens. This bounds both the RAG (local_llm) and offline
   # best-effort paths. The no-stall guarantee:
   #   Ollama context length  >=  max_context_tokens + models.local_llm.max_tokens + ~1500
-  # 4000 + max_tokens 4096 + headroom -> recommend Ollama context 16384.
+  # 8000 + max_tokens 4096 + headroom = 13,596 -> fits the recommended Ollama
+  # context 16384 (macos/ollama-mlx.env). Raised from 4000 (2026-08-28): the 16k
+  # window was only ~59% provisioned at the old floor (9,596). num_ctx — not this
+  # budget — bounds KV memory, so the larger prompt costs additional prefill time
+  # only (measure it on the operator machine: scripts/measure_local_llm_throughput.py),
+  # no new memory ceiling.
+  # This is a NOMINAL budget: graph.py converts it to a character budget at
+  # CHARS_PER_TOKEN (3, a worst-case floor -- see that constant's comment), so
+  # 8000 here means 24,000 characters of assembled prompt input. That holds
+  # inside a 16,384 num_ctx even for symbol-dense corpus text that tokenizes
+  # near 2 chars/token (24,000/2 + 4,096 = 16,096). Do NOT raise past 8000
+  # without raising num_ctx, and do NOT raise CHARS_PER_TOKEN to reclaim
+  # characters -- that is the knob that reopens the "0% processing" stall.
+  # KNOWN BOUND: 2 chars/token is where this sizing stops. A corpus that
+  # tokenizes below it -- CJK is the realistic case, ~1-1.5 chars/token on a
+  # byte-level BPE, since each character is 3 UTF-8 bytes -- overruns the
+  # window again (24,000/1.5 + 4,096 = 20,096). The shipped corpus is English
+  # technical documentation; an operator indexing CJK must lower this value or
+  # raise num_ctx, and will see the documented "0% processing" stall if neither.
   # NOTE: the guarantee assumes policy.prompt_filter.enabled stays true (it caps
   # the query at max_input_chars); disabling it lets a huge query exceed the budget.
-  max_context_tokens: 4000
+  max_context_tokens: 8000
 
   # min_score: routing threshold used by route_by_score_node (graph.py).
   # Scores are RRF-fused ranks in [0, 1]; 0.028 is intentionally permissive —
@@ -201,7 +237,8 @@ personality:
   # Bounds prompt inflation so an oversized/edited soul.md can't push the prompt
   # past the Ollama context budget (the in-memory soul is truncated to this
   # on load/apply, with a warning; soul.md on disk is left intact). Keep it well
-  # below retrieval.max_context_tokens*4 so query + context still fit. The
+  # below the derived char budget (retrieval.max_context_tokens * graph.py's
+  # CHARS_PER_TOKEN = 8000 * 3 = 24,000 chars) so query + context still fit. The
   # /soul/apply HTTP boundary (SoulEvolutionRequest) caps input at 8192.
   soul_max_chars: 8000
   interaction_ttl_days: 365
@@ -587,6 +624,14 @@ logging:
 numbat:
   enabled: true
   output_path: "logs/numbat-events.ndjsonl"
+  # Size-based single-generation rollover: at or past this many bytes the
+  # stream is renamed to <output_path>.1 (replacing any previous .1) and a
+  # fresh file starts. The mainline plane projects EVERY audit record here,
+  # so without a cap the file grows without bound on a busy instance. 0
+  # disables. Fail-soft like the rest of the emitter -- a failed rename keeps
+  # appending rather than dropping events. audit.jsonl (the authoritative
+  # stream) is unrelated and never rotated by this.
+  max_bytes: 52428800       # 50 MiB
   source_agent: "unknown"   # "cyclaw" is not a legal Numbat enum
   source_type: "hook"
   # CEL sanitizer backend (issue #1128 Slice B). Monitor-only: rules evaluate
@@ -1085,7 +1130,7 @@ telegram:
   query:
     base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
     api_key_env: "CYCLAW_API_KEY"
-    timeout_sec: 780             # match api.graph_timeout_sec
+    timeout_sec: 790             # api.graph_timeout_sec (780) + 10s margin — client must lose the race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a client abort (same pattern as static/terminal.js)
   media:
     enabled: false               # T4 default-off; accepts only private-chat /save --confirm attachments
     fsconnect_root: ""           # REQUIRED when enabled; exact explicit fsconnect.writable_roots entry
@@ -1115,4 +1160,4 @@ opentweet:
   query:
     base_url: "http://127.0.0.1:8787"  # DevSkim: ignore DS162092,DS137138 - loopback CyClaw only
     api_key_env: "CYCLAW_API_KEY"
-    timeout_sec: 780             # match api.graph_timeout_sec
+    timeout_sec: 790             # api.graph_timeout_sec (780) + 10s margin — client must lose the race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a client abort (same pattern as static/terminal.js)
