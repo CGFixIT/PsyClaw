@@ -38,9 +38,9 @@ tree. Verified against the repo, 2026-08-02:
 
 | Surface | What it installs | Extras? |
 |---|---|---|
-| `pip install -r requirements.txt -c constraints.txt` | Base runtime + torch CPU + the CI test/dev tools. 17 requirement lines. Header declares itself a **legacy compatibility surface**, kept in sync with `pyproject.toml`/`constraints.txt` for the Dockerfile and legacy CI/tools | **None.** Zero extras, by design |
-| `pip install -e ".[<extra>]" -c constraints.txt` | The 12 base deps, plus whichever of the 9 extras are named | **Yes — the only surface that can install one** |
-| `Dockerfile` | Runs `uv pip install --system -r requirements.txt -c constraints.txt`, with a pip fallback (`Dockerfile:39-41`) | **None** — it *is* surface #1, containerized |
+| `pip install -r requirements.txt -c constraints.txt` | Base runtime + torch CPU. 17 requirement lines (test tools live in `requirements-test.txt`, kept out of the Docker image). Header declares itself a **legacy compatibility surface**, kept in sync with `pyproject.toml`/`constraints.txt` for the Dockerfile and legacy CI/tools | **None.** Zero extras, by design |
+| `pip install -e ".[<extra>]" -c constraints.txt` | The 16 base deps, plus whichever of the 9 extras are named | **Yes — the only surface that can install one** |
+| `Dockerfile` | Runs `uv pip install --system -r requirements.txt -c constraints.txt`, with a pip fallback (`Dockerfile:40-43`) | **None** — it *is* surface #1, containerized |
 | `conda env create -f environment.yml` | Base runtime + test/dev tools from conda-forge, plus a 3-package `pip:` tail | **None** |
 
 Two consequences that drive every judgement in this skill:
@@ -103,12 +103,13 @@ python3 .claude/skills/verify-deps/check_env_drift.py     # add --strict to fail
 
 Steps 1 and 2 both stop at the manifest boundary — they compare pin files to
 other pin files. But CyClaw declares load-bearing environment dependencies in
-places no manifest checker reads, and nothing cross-checks those. Four classes:
+places no manifest checker reads, and nothing cross-checks those. Five classes:
 
 - **E1 — tool versions pinned inline in workflow YAML.** `flake8==7.3.0` and
-  `wemake-python-styleguide==1.6.2` gate the lint lane (`lint.yml`);
-  `actionlint-py==1.7.12.24` and `zizmor==1.28.0` gate CI (`ci.yml`); `pip`
-  is pinned at **9 separate sites** across 5 workflow files. None appears in
+  `wemake-python-styleguide==1.6.2` run in the (advisory) lint lane
+  (`lint.yml`); `actionlint-py==1.7.12.24` and `zizmor==1.28.0` gate CI
+  (`ci.yml`); `pip` is pinned at **14 separate sites** across 6 workflow
+  files (the checker prints the live count). None appears in
   any manifest. The failure this catches is not a wrong version — it is the
   *same* tool pinned at two different versions in two jobs, which makes one
   lane's result silently unreproducible against the other's.
@@ -124,6 +125,10 @@ places no manifest checker reads, and nothing cross-checks those. Four classes:
   structurally (by their own `pyvenv.cfg`, not by guessing the directory name).
 - **E4 — the install-surface scope contract** from the table above: asserts
   `requirements.txt` carries no extras-only package.
+- **E5 — the Docker build's dependency-install contract**: asserts the
+  Dockerfile copies the manifests, uses `requirements.txt` + `constraints.txt`
+  on both the uv path and the pip fallback, and never installs
+  `requirements-test.txt` into the image.
 
 Pure stdlib, no network, no install — same constraints as `dep-guard` and
 `extract_pins.py`, so it runs in a fresh clone before pip does. Exits 0 with
@@ -222,7 +227,7 @@ serially.
 Verify Deps: <n> packages checked | <n> currency gaps | <n> flagged CVEs | <n> install-surface failures
 dep-guard: <PASS/FAIL from Step 1>
 requirements.txt drift: <none | list from Step 2>
-Env drift (E1-E4): <n> failure(s), <n> warning(s) — <new names beyond the 2 known, or "known only">
+Env drift (E1-E5): <n> failure(s), <n> warning(s) — <new names beyond the 2 known, or "known only">
 Install surfaces dry-run: local-dev=<PASS/FAIL/unverified> legacy-CI=<...> Dockerfile=<...> conda=<not dry-run-verified, unless actually tested>
 Currency: <table or summary — current / bump-candidate / needs-review / CVE-flagged>
 Verdict: <fixes applied (list) | findings for review (list) | none>
@@ -239,10 +244,12 @@ every run — the report should surface what *changed*.
 bash .claude/skills/verify-deps/verify.sh
 ```
 
-Six checks, pure stdlib, no install needed:
+Ten checks, pure stdlib, no install needed:
 
 1. `extract_pins.py` on the clean tree — exit 0, no `requirements.txt` drift
 2. Mutation: drift `httpx` in a copy of `requirements.txt`, assert the `DRIFT` line
+   (and 2b: the same for a `requirements-test.txt` pin — `pytest` drifted away
+   from `constraints.txt`)
 3. Missing pin files — must fail closed (exit 3)
 4. `check_env_drift.py` on the clean tree — exit 0. Asserts the **exit code, not
    a warning count**: the two known E3 warnings would otherwise make this test
@@ -252,6 +259,12 @@ Six checks, pure stdlib, no install needed:
 6. Mutation E4: an extras-only package leaking into `requirements.txt` — exit 2,
    *preceded* by a negative test that the same package named in a **comment**
    does not trip it (`requirements.txt` discusses extras in prose)
+7. Strict mutation: a `requirements.txt` pin omitted from `constraints.txt` —
+   `--strict` must reject it (exit 2)
+8. The clean tree must also satisfy the strict import/environment checks
+   (`check_env_drift.py --strict` exit 0)
+9. Mutation E5: a Dockerfile that loses the constrained install contract —
+   exit 2 (the E5 self-test)
 
 Both scripts take `--repo-root`, which is what lets the mutations run against a
 `mktemp -d` tree instead of the real repo. Does not re-test `dep-guard`'s own

@@ -1,5 +1,12 @@
 # `agentic/harness_optimizer/` — governed fixture optimizer
 
+> **Retired** (owner decision 2026-07-31): no further development is planned —
+> `agentic/real_repo_loop.py` superseded this surface as the live coding path.
+> Code, tests, and CI remain in the repository unmodified; this is a
+> documentation-only status, not a deletion. See
+> `agentic/deepagent_github/README.md`'s retirement note and
+> `docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+
 Opt-in scaffold under the agentic layer. Ships **disabled**
 (`agentic.harness_optimizer.enabled: false`). It scores fixture-based harness
 runs, proposes candidate artifacts in a jailed workspace, and records

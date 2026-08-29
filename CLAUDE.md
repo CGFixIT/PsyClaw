@@ -34,7 +34,7 @@ and/or Claude, selected per-query via `online_provider`). It binds
    code. Read it before touching anything security-related.
 4. This file and `.claude/rules/PROJECT_RULES.md` — the operating rules.
    `AGENTS.md` is the parallel guidance for other agents; keep them consistent.
-5. Readme.md for holistic view of codebase and purpose of application - changelog.txt for reference of changes over time.
+5. `README.md` for holistic view of codebase and purpose of application — `docs/changelog.txt` for reference of changes over time.
 
 ---
 
@@ -300,6 +300,13 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   then feed pip copies of `requirements.txt`/`constraints.txt` with the
   `torch==`/`--extra-index-url` lines stripped. `ci.yml`'s `macos-latest` leg and
   `macos/install-cyclaw.sh`'s `Darwin` branch both already do this — see §8.
+- **Trap:** moving the torch pin and touching only `requirements.txt`/
+  `constraints.txt`. **Rule:** conda is a fourth install surface —
+  `environment.yml` pins `pytorch=2.13.0=cpu*` (conda-forge names the package
+  `pytorch`, not `torch`, and has no `+cpu` local tag), CI-gated by
+  `python-package-conda.yml` and cross-checked by dep-guard D9. Bump
+  `environment.yml` in the same commit as any torch pin move or the two
+  surfaces silently diverge.
 - **Trap:** running `cyclaw-server`/`cyclaw-index`/`cyclaw-metrics` after only
   `pip install -r requirements.txt`. **Rule:** those are `[project.scripts]`
   console scripts; pip writes the shims only when the **project itself** is
@@ -442,8 +449,9 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   contract. **Rule:** `test_terminal_contract` extracts routes from
   `terminal.html`; new POST endpoints must be added to its `_POST_PATHS`.
 - **Trap:** assuming `mypy --strict --python-version 3.12 .` runs clean, or is
-  a CI gate. **Rule:** it is neither. `ci.yml`/`lint.yml` run `ruff` only —
-  mypy is not wired into any CI workflow. The bare repo-root invocation errors
+  a CI gate. **Rule:** it is neither. Only `lint.yml` runs `ruff`, and that workflow is
+  advisory (`continue-on-error` at job and step level) — `ci.yml` does not run
+  ruff at all, and mypy is not wired into any CI workflow. The bare repo-root invocation errors
   out immediately on `utils/errors.py` ("Source file found twice under
   different module names") because `utils/` has no `__init__.py`; add
   `--explicit-package-bases` to get past discovery, and even then the tree
@@ -532,7 +540,9 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   unions (`str | None`), builtin generics, `TypedDict`/`Protocol`/`Literal` over
   `Any`. `from __future__ import annotations` in new modules.
 - **Lint:** `ruff check --select E,F,I,B,C4,UP,S .` (line-length 120, `E501`
-  ignored, `.claude` excluded) — this IS CI-enforced. **Types:**
+  ignored, `.claude` excluded) — run by `lint.yml`, which is **advisory**
+  (job- and step-level `continue-on-error`): a red Ruff result does not block
+  merge, so run it locally and keep it clean yourself. **Types:**
   `mypy --strict --python-version 3.12 --explicit-package-bases` as a
   best-effort discipline on the lines you write — not CI-enforced, and the
   repo does not pass it clean end-to-end today (see the §4 Testing trap).
@@ -590,7 +600,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   `Verification`/`Risk to monitor` shape identical to `.codex/`'s pre-fix
   instructions — Kimi's machine-side prompt likely mirrors that same spec.
   If so, update `~/.agents/` to point at the template the same way
-  `.codex/Codex_quick_instructions.md` now does, per the "keep the two in
+  `.codex/Codex_instructions.md` now does, per the "keep the two in
   step" rule above.)
 
 ---
@@ -600,7 +610,7 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 A deliverable is done only when its box is fully checked.
 
 **Code change**
-- [ ] `ruff check --select E,F,I,B,C4,UP,S .` clean (CI-enforced)
+- [ ] `ruff check --select E,F,I,B,C4,UP,S .` clean (lint.yml runs it advisory — keep it clean locally)
 - [ ] `mypy --strict --python-version 3.12 --explicit-package-bases` clean on
       the lines you actually wrote (best-effort; not CI-enforced, and the repo
       does not pass it clean end-to-end — see §4 Testing trap)
@@ -665,7 +675,7 @@ proceed on the **smallest reversible** interpretation, and flag it in the PR
 body — do not stall. Use `AskUser` only when the readings diverge on something
 irreversible or a matter of user taste.
 
-**Blocked:** record it in `docs/work/SESSION_NOTES.md` (or `.claude/session-notes/`)
+**Blocked:** record it in `docs/work/SESSION_NOTES.md`
 and escalate — `#cyclaw-dev` for undefined behavior, a private GitHub security
 issue for security concerns, `/CyClaw-Sandbox` for suspected config drift
 (its Python-3.12 runtime gate phase catches this).
@@ -694,6 +704,10 @@ grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
 grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
 pip install -r /tmp/requirements-macos.txt -r requirements-test.txt -c /tmp/constraints-macos.txt --ignore-installed PyYAML
+
+# Install — conda (fourth surface; CI-gated by python-package-conda.yml).
+# conda-forge names the torch package `pytorch` (pinned 2.13.0=cpu*) — see the §4 trap.
+conda env create -f environment.yml
 
 # The cyclaw-* console scripts below need the project itself installed —
 # requirements.txt is a third-party pin list with no self-install line, so
@@ -737,12 +751,14 @@ python3 .claude/skills/injection-redteam/redteam.py
 
 CI target is Python 3.12 on a three-OS matrix (ubuntu + windows + macos); all
 three `test` legs are release gates (a failing Windows result is not masked).
-`continue-on-error` remains only on the `verify-skills` e2e smokes and the
-non-blocking `numbat-rules.yml` job. Coverage sources:
+The blocking gates are the three `test` legs, `invariant-guard`, and
+packaging; advisory (`continue-on-error`) lanes include the `verify-skills`
+e2e smokes, `numbat-rules.yml`, the whole `lint.yml` job, and best-effort
+steps in the nemo-guardrails/pr-review/conda/trivy workflows. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (183 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (209 `test_*.py` files, auto-collected by pytest).
 
 ---
 
@@ -797,7 +813,7 @@ skill, folded in since both need the same CyClaw-specific grounding).
 
 `/fable-protocol` — reasoning-discipline and epistemic-calibration layer (mark
 speculation, verify stale knowledge, security lens on every generated artifact,
-anti-sycophancy, Sonnet 5 vs Opus 4.8 routing). Scoped to the user, not to
+anti-sycophancy, Sonnet 5 vs Opus 5 routing). Scoped to the user, not to
 CyClaw: it is registered both at `.claude/skills/fable-protocol/SKILL.md` in
 this repo and at the user-level `~/.claude/skills/fable-protocol/SKILL.md`, so
 it activates in any repository, not only here. It does not encode CyClaw
