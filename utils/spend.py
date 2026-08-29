@@ -22,14 +22,6 @@ logger = logging.getLogger("cyclaw.spend")
 
 _SPEND_WRITE_LOCK = threading.Lock()
 _DEFAULT_SPEND_FILE = "logs/spend.jsonl"
-# The OLDEST "verified" date across the rate rows below -- deliberately the
-# oldest, not the most recent. rates_are_stale() alarms off this value, so
-# taking the minimum means the alarm tracks the stalest rate in the table.
-# Bumping it when only SOME rows are re-verified would mask the rest going
-# stale, which is the failure this constant exists to catch: raise it only
-# once EVERY row has been re-checked. tests/test_spend.py pins the invariant
-# against the dates in the comments below.
-PRICED_AS_OF = "2026-08-19"
 STALE_AFTER_DAYS = 30
 
 # xAI Chat Completions: 100_000_000 ticks per USD cent → 10_000_000_000 ticks / $1.
@@ -83,6 +75,18 @@ _RATE_VERIFIED: dict[str, str] = {
     "claude-sonnet-5": "2026-08-19",
     "grok-4.3": "2026-08-27",
 }
+
+# The OLDEST verified date above -- deliberately the oldest, not the most
+# recent. rates_are_stale() alarms off this value, so taking the minimum means
+# the alarm tracks the STALEST rate in the table; a date bumped when only some
+# rows were re-checked would mask the rest going stale, which is the failure
+# this constant exists to catch.
+#
+# Computed rather than hardcoded so that invariant cannot drift: re-verifying
+# one row moves this only once it is no longer the oldest, and a row added
+# without a date fails the key-set test in tests/test_spend.py rather than
+# silently leaving PRICED_AS_OF covering fewer rows than it appears to.
+PRICED_AS_OF = min(_RATE_VERIFIED.values())
 
 _TOKEN_KEYS = (
     "input_tokens",

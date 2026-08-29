@@ -569,17 +569,20 @@ def test_every_rate_row_carries_a_verification_date():
         assert verified <= date.today().isoformat(), f"{model} verified in the future: {verified}"
 
 
-def test_priced_as_of_is_the_oldest_verified_date_in_the_table():
-    """PRICED_AS_OF must not run ahead of the stalest rate row.
+def test_priced_as_of_stays_derived_from_the_oldest_verified_date():
+    """PRICED_AS_OF must remain computed, not re-hardcoded to a literal.
 
-    rates_are_stale() alarms off this single constant, so bumping it when only
-    some rows were re-verified would silently mask the rest going stale -- the
-    exact failure the constant exists to catch.
+    rates_are_stale() alarms off this single constant, so a value bumped when
+    only some rows were re-verified would silently mask the rest going stale --
+    the exact failure the constant exists to catch. Deriving it makes that
+    unfalsifiable, so what is worth pinning is the derivation: this fails if
+    someone replaces the min() with a date string again, which is how the drift
+    would come back.
     """
-    oldest = min(spend._RATE_VERIFIED.values())
-    assert spend.PRICED_AS_OF <= oldest, (
-        f"PRICED_AS_OF ({spend.PRICED_AS_OF}) is newer than the oldest verified "
-        f"rate row ({oldest}) -- the staleness alarm would mask that row"
+    assert spend.PRICED_AS_OF == min(spend._RATE_VERIFIED.values()), (
+        f"PRICED_AS_OF ({spend.PRICED_AS_OF}) is no longer the oldest verified "
+        f"rate row ({min(spend._RATE_VERIFIED.values())}) -- it has been "
+        f"hardcoded away from the derivation and can now mask a stale row"
     )
 
 
