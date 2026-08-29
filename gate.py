@@ -1212,6 +1212,21 @@ async def restore_soul(request: Request):
         await _audit({"event": "soul_restore_failed", "error": str(e)})
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def _ops_sync_timeout_sec() -> int:
+    """The server's own /ops/sync budget, for the console to bound its fetch above.
+
+    sync.sync_timeout_sec has no upper bound, so no console-side constant can
+    cover every valid configuration -- the client has to be told. No guard here
+    on purpose: utils.ops_runner.sync_timeout_sec is contractually fail-soft
+    (it falls back to the shipped budget on an unreadable or malformed config),
+    so wrapping it again would only hide a future regression behind a value
+    /health would then report as fact.
+    """
+    from utils.ops_runner import sync_timeout_sec
+
+    return int(sync_timeout_sec())
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health():
     statuses = await asyncio.to_thread(check_all)
@@ -1222,6 +1237,10 @@ async def health():
         graph_ready=compiled_graph is not None,
         mode=cfg["app"]["mode"],
         graph_timeout_sec=cfg.get("api", {}).get("graph_timeout_sec", 780),
+        # Imported lazily: utils.ops_runner is only needed to answer this one
+        # field, and a module-level import here would sit among the heavy
+        # imports the _TELEMETRY_KILL block deliberately precedes.
+        ops_sync_timeout_sec=_ops_sync_timeout_sec(),
         version=_CYCLAW_VERSION,
         # Display-only, so the first-run panel can name the folder to put
         # documents in. The configured value verbatim (relative as written in

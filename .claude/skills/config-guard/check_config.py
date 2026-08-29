@@ -46,6 +46,10 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # Documented graph-timeout margin: graph_timeout_sec >= local_llm.timeout_sec + 30
 # (config.yaml api.graph_timeout_sec comment; covers retrieval + routing + audit).
+# Mirrors graph.py CHARS_PER_TOKEN: the worst-case chars/token floor used to
+# turn retrieval.max_context_tokens into the assembled-prompt character
+# budget. Keep in step with that constant.
+_CHARS_PER_TOKEN = 3
 _TIMEOUT_MARGIN_SEC = 30
 
 # min_score lives on the RRF scale (~top-3-4 rank ≈ 0.028); fused ranks rarely
@@ -149,12 +153,14 @@ def run_checks(cfg: dict[str, Any]) -> None:
     elif not _is_pos_int(soul_cap):
         fail("C5", f"soul_max_chars must be a positive integer, got {soul_cap!r} "
                    "(0 silently drops the soul from every prompt)")
-    elif _is_num(max_ctx) and soul_cap >= max_ctx * 4:
-        fail("C5", f"soul_max_chars ({soul_cap}) must stay below max_context_tokens*4 "
-                   f"({int(max_ctx * 4)}, ~4 chars/token) or the soul crowds out retrieved context")
+    elif _is_num(max_ctx) and soul_cap >= max_ctx * _CHARS_PER_TOKEN:
+        fail("C5", f"soul_max_chars ({soul_cap}) must stay below "
+                   f"max_context_tokens*{_CHARS_PER_TOKEN} ({int(max_ctx * _CHARS_PER_TOKEN)}, the "
+                   "character budget graph.py derives) or the soul crowds out retrieved context")
     else:
-        ok("C5", f"soul_max_chars ({soul_cap}) fits within max_context_tokens*4 "
-                 f"({int(max_ctx * 4) if _is_num(max_ctx) else '?'})")
+        ok("C5", f"soul_max_chars ({soul_cap}) fits within "
+                 f"max_context_tokens*{_CHARS_PER_TOKEN} "
+                 f"({int(max_ctx * _CHARS_PER_TOKEN) if _is_num(max_ctx) else '?'})")
 
     # ── C6 rate-limit knobs are usable ──────────────────────────────────────
     print("C6 api.rate_limit is a positive window")
@@ -240,8 +246,17 @@ def run_checks(cfg: dict[str, Any]) -> None:
     llm_max = _dig(cfg, "models", "local_llm", "max_tokens")
     if _is_num(max_ctx) and _is_num(llm_max):
         floor = int(max_ctx) + int(llm_max) + 1500
+        # The nominal floor assumes the char->token conversion is exact. It is a
+        # worst-case FLOOR of 3 (see _CHARS_PER_TOKEN), so symbol-dense corpus
+        # text that tokenizes near 2 chars/token consumes more real context than
+        # the nominal number implies. Report both, or an operator sizes num_ctx
+        # off the smaller one and reopens the "0% processing" stall this check
+        # exists to prevent.
+        dense = int(max_ctx) * _CHARS_PER_TOKEN // 2 + int(llm_max)
         info("C12", f"set the local model's context length (num_ctx) >= {floor} "
                     f"(max_context_tokens {max_ctx} + max_tokens {llm_max} + ~1500 headroom) to avoid a stall")
+        info("C12", f"symbol-dense worst case needs >= {dense} "
+                    f"({max_ctx}*{_CHARS_PER_TOKEN} chars at ~2 chars/token + max_tokens {llm_max})")
     else:
         info("C12", "max_context_tokens/max_tokens not both numeric — skipping no-stall arithmetic")
 

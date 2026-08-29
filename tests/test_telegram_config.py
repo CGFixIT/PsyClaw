@@ -264,3 +264,13 @@ def test_to_public_dict_has_no_token(tmp_path: Path, monkeypatch: pytest.MonkeyP
     pub = cfg.to_public_dict()
     assert "secret-token-value" not in str(pub)
     assert pub["bot_token_set"] is True
+
+
+def test_shipped_query_timeout_clears_graph_deadline() -> None:
+    # 790 = api.graph_timeout_sec (780) + 10s: the channel client must lose the
+    # race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a
+    # client abort (same pattern as static/terminal.js's queryDeadlineMs).
+    shipped_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    shipped = yaml.safe_load(shipped_path.read_text(encoding="utf-8"))
+    assert shipped["telegram"]["query"]["timeout_sec"] == 790
+    assert shipped["telegram"]["query"]["timeout_sec"] > shipped["api"]["graph_timeout_sec"]

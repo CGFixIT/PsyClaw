@@ -487,3 +487,21 @@ def test_audit_panel_fetch_is_wrapped():
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     body = js.split("async function openAuditPanel()", 1)[1].split("\n}", 1)[0]
     assert "try {" in body and "catch" in body, "openAuditPanel's fetch is unguarded"
+
+
+def test_ops_calls_cover_server_side_budgets():
+    """callOps deadlines must sit above the server-side subprocess budgets
+    (utils/ops_runner.py: 120s _TIMEOUT_SEC; /ops/sync action=sync up to
+    _sync_timeout_sec()*2+60 = 7260s with post_sync_check). The old flat
+    60000 aborted the tab while the CLI kept running and threw away the
+    exit-code envelope."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "const OPS_CLI_TIMEOUT_MS = 130000;" in js
+    assert "callOps(path, body, timeoutMs = OPS_CLI_TIMEOUT_MS)" in js
+    assert "action === 'sync' ? opsSyncDeadlineMs : OPS_CLI_TIMEOUT_MS" in js
+    # sync.sync_timeout_sec has no upper bound, so the sync deadline must come
+    # from the server (/health) rather than a constant that cannot cover every
+    # valid configuration; the literal below is only the pre-/health fallback.
+    assert "let opsSyncDeadlineMs = 7320000;" in js
+    assert "opsSyncDeadlineMs = (data.ops_sync_timeout_sec + 60) * 1000;" in js
+    assert "}, 60000);" not in js, "flat 60s ops ceiling regressed"

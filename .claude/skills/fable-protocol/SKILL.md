@@ -202,7 +202,8 @@ Lineage SafeClaw → PsyClaw → CyClaw. Know cold:
     each gated on mode==hybrid AND <provider>.enabled AND user_confirmed_online.
     FOOTGUN (carried over from the LM Studio era, same failure mode): Ollama's
     context length (`num_ctx`) must clear `max_context_tokens + max_tokens +
-    ~1500` headroom (recommended 10,000–12,288) or RAG stalls at 0% processing.
+    ~1500` headroom (shipped floor 8000+4096+~1500 = 13,596; recommended 16,384
+    via macos/ollama-mlx.env) or RAG stalls at 0% processing.
     Check this first on any "CyClaw hangs" report.
   - Integrity: SHA-256 soul.md drift detection + SQLite shadow DB. In-flight:
     3-layer semantic drift detection — (1) structural diffing, (2) NLI entailment

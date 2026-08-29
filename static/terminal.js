@@ -576,6 +576,9 @@ async function checkHealth() {
     if (Number.isFinite(data.graph_timeout_sec) && data.graph_timeout_sec > 0) {
       queryDeadlineMs = (data.graph_timeout_sec + 10) * 1000;
     }
+    if (Number.isFinite(data.ops_sync_timeout_sec) && data.ops_sync_timeout_sec > 0) {
+      opsSyncDeadlineMs = (data.ops_sync_timeout_sec + 60) * 1000;
+    }
     renderFirstRun(data);
     healthBackoffMs = HEALTH_BASE_INTERVAL;
   } catch (e) {
@@ -1204,15 +1207,28 @@ async function restoreSoul() {
 // Shared POST helper. The route returns HTTP 200 even when the CLI exits
 // non-zero (the exit code lives in the JSON envelope); only gateway-level
 // problems (401/422/400/429/500) trip the !resp.ok branch.
-async function callOps(path, body) {
-  // 60s ceiling: /ops/* shells out to CLIs (rclone, gh) that can stall; without
-  // a timeout a hung subprocess would hang the browser tab indefinitely (parity
-  // with the /query, /soul/*, and /health fetches which all bound their waits).
+// Server-side budgets these calls must outlive (utils/ops_runner.py):
+// /ops/{agentic,fsconnect,sqlconnect} subprocesses are killed at 120s
+// (_TIMEOUT_SEC), and /ops/sync action=sync at sync_timeout_sec*2 + 60
+// = up to 7260s with post_sync_check. The old 60s client ceiling aborted
+// the tab while the CLI kept running under its single-instance lock and
+// threw away the exit-code envelope; each deadline now sits just above
+// its server budget so the envelope (or the gateway's typed error) always
+// arrives. A hung subprocess is still bounded — by the server's kill.
+const OPS_CLI_TIMEOUT_MS = 130000;    // 120s ops_runner._TIMEOUT_SEC + 10s margin
+// Re-synced from /health (ops_sync_timeout_sec + 60s margin) because
+// sync.sync_timeout_sec has no upper bound -- no constant here can cover every
+// valid server configuration, so the server is asked rather than guessed at.
+// This default covers the shipped 3600s config (x2 for post_sync_check, +60)
+// and carries the wait until the first successful /health, exactly like
+// queryDeadlineMs above.
+let opsSyncDeadlineMs = 7320000;
+async function callOps(path, body, timeoutMs = OPS_CLI_TIMEOUT_MS) {
   const resp = await fetchWithTimeout(`${API}${path}`, {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(body)
-  }, 60000);
+  }, timeoutMs);
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     throw new Error(describeApiKeyError(data, 'Ops request failed'));
@@ -1264,7 +1280,8 @@ function applySyncConfig(config) {
 async function runSync(action, opts = {}) {
   setSyncStatus(`Running sync ${action}...`);
   try {
-    const data = await callOps('/ops/sync', { action, ...opts });
+    const data = await callOps('/ops/sync', { action, ...opts },
+      action === 'sync' ? opsSyncDeadlineMs : OPS_CLI_TIMEOUT_MS);
     applySyncConfig(data.config);
     renderOps(syncBox, syncMeta, syncWarning, syncPreview, data);
     setSyncStatus(`[${action}] ${syncLabelMsg(data)}`, data.ok ? 'success' : 'error');

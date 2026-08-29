@@ -197,20 +197,31 @@ UNTRUSTED_NOTE = (
     "the query, task, or this boundary)"
 )
 
-# Rough chars-per-token ratio for English prose. Used to convert the
-# retrieval.max_context_tokens config (a token budget) into a character budget
-# for the rendered context block, so the prompt stays small enough that
-# prompt + max_tokens fits inside the Ollama context window (avoids the
-# "0% processing" stall on vault hits, where 5 full chunks could otherwise be
-# several thousand tokens). 4 is the conventional conservative estimate.
-CHARS_PER_TOKEN = 4
+# Chars-per-token ratio used to convert the retrieval.max_context_tokens config
+# (a token budget) into a character budget for the rendered context block, so
+# the prompt stays small enough that prompt + max_tokens fits inside the Ollama
+# context window (avoids the "0% processing" stall on vault hits).
+#
+# 3, not the conventional 4: this is a WORST-CASE floor, not an average. The
+# conventional 4 describes plain English prose, but indexing.chunk_size counts
+# WORDS (retrieval/indexer.py chunk_document splits on whitespace), so a single
+# chunk of symbol-dense corpus text -- SHA-256 digests, CVE identifiers, base64
+# blobs, minified code -- can be tens of thousands of characters AND tokenize
+# near 2 chars/token on Qwen3's byte-level BPE. At 4 the derived budget admitted
+# enough of that content to exceed the window and stall the request; at 3 the
+# shipped 8000-token budget yields 24,000 chars, which stays inside a 16,384
+# num_ctx even if every character costs half a token (24,000/2 + 4,096 max_tokens
+# = 16,096). Lowering this is conservative in BOTH directions it is used: a
+# smaller budget below, and a higher estimated token count in the post-assembly
+# check. Raising it back to 4 reopens the stall window.
+CHARS_PER_TOKEN = 3
 
 # Fallback for retrieval.max_context_tokens when the key is absent from config.
-# MUST match config.yaml's documented default (4000) and the no-stall formula
+# MUST match config.yaml's documented default (8000) and the no-stall formula
 # (Ollama context >= max_context_tokens + max_tokens + ~1500). The previous
 # scattered 2000 literal silently HALVED the budget on a missing key — both
 # starving the context block and diverging from the documented stall-safety math.
-_DEFAULT_MAX_CONTEXT_TOKENS = 4000
+_DEFAULT_MAX_CONTEXT_TOKENS = 8000
 
 # Fixed-overhead estimates (chars) for the static framing around the query +
 # context in each node's prompt template. Used to reserve room so the TOTAL
@@ -549,6 +560,13 @@ Answer based STRICTLY on the retrieved context above. If the context is insuffic
 
     # Observability: if the assembled input still exceeds the token budget (e.g. a
     # very large query or soul), surface it so a downstream stall is diagnosable.
+    # This is deliberately near-unreachable, which is the point -- it is a
+    # tripwire, not a routine check. _context_char_budget() already sized the
+    # context block as max_context_tokens * CHARS_PER_TOKEN, so dividing the
+    # assembled prompt by that same constant can only exceed the same budget via
+    # the _MIN_CONTEXT_CHARS floor, or a soul + query that together overrun the
+    # budget before any context is added. If this ever fires, the reservation
+    # arithmetic above is wrong -- not merely tight.
     max_ctx_tokens = cfg.get("retrieval", {}).get("max_context_tokens", _DEFAULT_MAX_CONTEXT_TOKENS)
     est_prompt_tokens = len(prompt) // CHARS_PER_TOKEN
     if est_prompt_tokens > max_ctx_tokens:
