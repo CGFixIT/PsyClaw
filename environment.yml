@@ -107,7 +107,7 @@ dependencies:
   # mamba/conda available to test-solve). Left as fastapi's own implicit
   # transitive until someone can confirm the compatible pin with a real solve.
   - numpy=1.26.4
-  - nltk=3.10.0
+  - nltk=3.10.2
   # PyPI package name is tzdata==2026.2 (requirements.txt / pyproject / constraints).
   # conda-forge splits this: `tzdata` is the OS IANA database (2025b / 2026c),
   # `python-tzdata` is the PEP 615 fallback wheel used by zoneinfo on hosts
