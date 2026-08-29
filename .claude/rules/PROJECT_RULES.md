@@ -34,8 +34,8 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 - **Default:** Python 3.12 (`requires-python: >=3.12,<3.13` — numpy 1.26.x has no cp313 wheels)
 - **Typing:** Fully annotated. `from __future__ import annotations` when supporting <3.10.
 - **Linting:** `ruff check` + `ruff format` (line-length 120, py312)
-- **Type Checking:** `mypy --strict --python-version 3.12`
-- **No Secrets:** Environment variables only via `pydantic-settings`. Never hardcode tokens.
+- **Type Checking:** `mypy --strict --python-version 3.12 --explicit-package-bases` on the lines you touch — best-effort, not CI-enforced, and the repo does not pass it clean end-to-end (see `CLAUDE.md` §4)
+- **No Secrets:** Environment variables only (read directly via `os.environ`/`os.getenv`; `pydantic-settings` is only a chromadb transitive, not a CyClaw pattern). Never hardcode tokens.
 - **No Mutations:** Data-modifying scripts must have `--dry-run` defaulting to safe mode.
 - **Async:** Prefer `asyncio.TaskGroup` (3.11+) with `asyncio.gather` fallback.
 - **Safety:** No `shell=True` with user input. Always use `subprocess.run([...], list)`.
@@ -43,13 +43,13 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 ### Database & Configuration
 
 - **Config Source of Truth:** `config.yaml` only. No hardcoded tunables.
-- **Soul File:** Must exist at `data/personality/soul.md` before server start.
+- **Soul File:** Lives at `data/personality/soul.md`; absence self-heals to a default at boot (`PersonalityManager._load_soul`) — treat absence as identity drift to investigate, not a startup blocker. Never add a boot crash for it (`CLAUDE.md` §4).
 - **Database Backend:** SQLite default; Postgres via `CYCLAW_DB_URL` env var or `config.personality.database_url`.
 - **ChromaDB:** Embedded `PersistentClient` only — never HTTP client.
 
 ### Testing
 
-- **Coverage Target:** 80% minimum (measured across the 16 sources in `pyproject.toml`'s `[tool.coverage.run]`: `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`, `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `memory`)
+- **Coverage Target:** 80% minimum (measured across the 17 sources in `pyproject.toml`'s `[tool.coverage.run]`: `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`, `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`)
 - **Test Command:** `GROK_API_KEY=dummy pytest tests/ -q --tb=short`
 - **No Live Services:** All external deps mocked via `tests/conftest.py`
 - **Exit Codes:** Respect exit code conventions (0=success, 2=operation failed, 3=env/config error, 4=write refused)
@@ -61,8 +61,9 @@ Scoped behavioral rules and non-negotiable constraints for Claude Code sessions 
 ### Never Import Into Core Paths
 
 The following modules **must never** import `agentic/`, `sync/`, `guardrails/`,
-`harness/`, `telegram/`, or each other:
+`harness/`, `telegram/`, `opentweet/`, or each other:
 - `gate.py` — FastAPI server entry
+- `gate_ops.py` / `gate_auth.py` / `gate_memory.py` — route modules registered onto gate.py's app
 - `graph.py` — LangGraph security topology
 - `mcp_hybrid_server.py` — MCP server
 
@@ -114,7 +115,7 @@ See `retrieval/hybrid_search.py` for implementation.
 - **CLAUDE.md is authoritative** — update it when architecture, modules, or behavioral rules change.
 - **.claude/ structure** — mirror documented skills/patterns/utilities; keep in sync.
 - **Agentic Governance Docs** — `docs/agentic/AGENTIC_README.md` + `SKILLS_REGISTRY_GOVERNANCE.md` are binding.
-- **Session Notes** — optional but encouraged; live notes go under `.claude/session-notes/` (`docs/SESSION_NOTES.md` is an empty template scaffold, not the active log).
+- **Session Notes** — optional but encouraged; the active log is `docs/work/SESSION_NOTES.md`.
 
 ---
 
@@ -137,7 +138,7 @@ See `retrieval/hybrid_search.py` for implementation.
 - ✋ **Never push to `main` via GitHub MCP when a feature branch and open PR exist** — creates add/add rebase conflicts.
 - ✋ **Never confirm a force-push without the user's explicit sign-off.**
 - ✋ **Never modify `data/personality/soul.md` without a `reason` string.**
-- ✋ **Never import `agentic/`, `sync/`, or out-of-band modules into `gate.py`, `graph.py`, or `mcp_hybrid_server.py`.**
+- ✋ **Never import `agentic/`, `sync/`, or other out-of-band modules into the core six: `gate.py`, `gate_ops.py`, `gate_auth.py`, `gate_memory.py`, `graph.py`, `mcp_hybrid_server.py`.**
 
 ---
 
@@ -161,5 +162,5 @@ See `retrieval/hybrid_search.py` for implementation.
 
 - **Undefined behavior:** Post in `#cyclaw-dev` Slack.
 - **Security concerns:** File a private security issue on GitHub.
-- **Configuration drift:** Run `/sandbox-runtime-verification` and report findings.
+- **Configuration drift:** Run `/CyClaw-Sandbox` and report findings.
 - **Stuck on a blocker:** Call out in `.claude/session-notes/` + Slack before context compaction.
