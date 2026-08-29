@@ -73,6 +73,17 @@ _RATES: dict[str, dict[str, float]] = {
     },
 }
 
+# When each row above was last checked against its vendor pricing page. Kept as
+# data, not only as prose in the comments, so the test can assert EVERY row has
+# a date: a new rate added without one is a silent staleness hole, because
+# PRICED_AS_OF is derived from the oldest date here and an absent row simply
+# would not lower it.
+_RATE_VERIFIED: dict[str, str] = {
+    "grok-4.5": "2026-08-19",
+    "claude-sonnet-5": "2026-08-19",
+    "grok-4.3": "2026-08-27",
+}
+
 _TOKEN_KEYS = (
     "input_tokens",
     "output_tokens",
@@ -293,14 +304,25 @@ def rates_are_stale(now: datetime | None = None) -> bool:
     return (current.date() - priced).days > STALE_AFTER_DAYS
 
 
+# Serializes entry to the latch below; see that function's docstring for why
+# lru_cache on its own does not make the emission single-shot under threads.
+_STALE_WARNING_LOCK = threading.Lock()
+
+
 @lru_cache(maxsize=1)
 def _emit_stale_rate_warning_once() -> None:
     """One-shot EMISSION latch. Only reached when the table is already stale.
 
     lru_cache is the latch (a nullary cached call runs its body once), which
     keeps the state out of a module global and gives tests a public reset:
-    ``_emit_stale_rate_warning_once.cache_clear()``. A thread race can emit one
-    duplicate line, never a missed one.
+    ``_emit_stale_rate_warning_once.cache_clear()``.
+
+    lru_cache alone is NOT enough to make that "once". CPython documents that
+    the wrapped function "can be called more than once if another thread makes
+    an additional call before the initial call has been completed and cached",
+    and FastAPI runs graph invocations on a worker threadpool -- so N threads
+    reaching their first stale-priced call together would each emit. The
+    caller holds _STALE_WARNING_LOCK across this call to close that window.
     """
     warn_if_priced_as_of_stale()
 
@@ -323,7 +345,8 @@ def _warn_once_if_stale() -> None:
     date subtraction, so re-testing per call is free.
     """
     if rates_are_stale():
-        _emit_stale_rate_warning_once()
+        with _STALE_WARNING_LOCK:
+            _emit_stale_rate_warning_once()
 
 
 def warn_if_priced_as_of_stale(now: datetime | None = None) -> bool:
