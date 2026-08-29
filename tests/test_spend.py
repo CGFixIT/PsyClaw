@@ -710,7 +710,7 @@ def test_the_stale_warning_emits_once_under_concurrent_recorders(tmp_path, monke
 
     ledger = tmp_path / "spend.jsonl"
     start = threading.Barrier(_RACE_THREADS)
-    failures: list[BaseException] = []
+    failures: list[Exception] = []
 
     def _record() -> None:
         try:
@@ -719,7 +719,12 @@ def test_the_stale_warning_emits_once_under_concurrent_recorders(tmp_path, monke
                 provider="grok", model="grok-4.5",
                 usage={"prompt_tokens": 1, "completion_tokens": 1}, spend_file=ledger,
             )
-        except BaseException as exc:  # noqa: BLE001 - re-raised in the main thread below
+        except Exception as exc:  # noqa: BLE001 - surfaced in the main thread below
+            # Exception, not BaseException: the only failures worth reporting here
+            # are BrokenBarrierError (a RuntimeError) and anything record_external_usage
+            # raises, both Exception subclasses. Catching BaseException would also
+            # swallow KeyboardInterrupt/SystemExit in a worker thread (CodeQL
+            # py/catch-base-exception).
             failures.append(exc)
 
     with caplog.at_level("WARNING", logger="cyclaw.spend"):
