@@ -1,6 +1,6 @@
 ---
 name: dep-guard
-description: Statically validate CyClaw's dependency-pin invariants across pyproject.toml and constraints.txt — pydantic/pydantic-core lock-step, numpy held < 2, torch pinned +cpu, uvicorn carrying no extra in the constraints file, exact-pin reproducibility, and cross-file version agreement. Use before merging any change to pyproject.toml, constraints.txt, or requirements.txt, when bumping a dependency, or when asked to "check deps" or "audit pins". Pure stdlib — runs in a fresh clone before pip install.
+description: Statically validate CyClaw's dependency-pin invariants across pyproject.toml, constraints.txt, environment.yml, and the CI workflows — pydantic/pydantic-core lock-step, numpy held < 2, torch pinned +cpu, uvicorn carrying no extra in the constraints file, exact-pin reproducibility, and cross-file version agreement. Use before merging any change to pyproject.toml, constraints.txt, or requirements.txt, when bumping a dependency, or when asked to "check deps" or "audit pins". Pure stdlib — runs in a fresh clone before pip install.
 ---
 
 # Dep Guard
@@ -53,6 +53,7 @@ It checks (severity in brackets):
 | D7 | INFO | `chromadb` pin is CVE-2026-45829 risk-accepted, embedded `PersistentClient` only (SECURITY.md) — do not "fix" it |
 | D8 | FAIL/WARN | every CI workflow and install script that hardcodes a torch version agrees with the manifest pin (FAIL); stale doc / `.osv-scanner.toml` references are WARN |
 | D9 | FAIL | `environment.yml` (conda CI lane) pins agree with the pip manifests — `fastapi` exempt (conda-forge's chromadb build pins it; documented in the file itself) |
+| D10 | FAIL | every workflow `--cov=` flag set covers every `[tool.coverage.run] source` entry — the check that catches a coverage source added to pyproject but not to `ci.yml`/the conda lane (or a stale doc count of the sources) |
 
 ### Step 2 — Interpret failures
 
@@ -102,14 +103,17 @@ Verdict: safe to merge / fix required: <one line per FAIL>
 bash .claude/skills/dep-guard/verify.sh
 ```
 
-Runs the checker on the clean tree (must exit 0), then six mutation
+Runs the checker on the clean tree (must exit 0), then eight mutation
 self-tests: numpy floated to 2.x asserts a D2 FAIL (exit 2); a `[standard]`
 extra added to the constraints `uvicorn` asserts a D4 FAIL (exit 2); a
 `pydantic-core` drift asserts a D1 WARN (exit 0) that becomes a failure under
 `--strict` (exit 2); a CI workflow hardcoding a stale torch version asserts a
 D8 FAIL (exit 2); a comment-only `.osv-scanner.toml` torch drift asserts a D8
-WARN (exit 0); and an `environment.yml` pin the manifests moved past asserts a
-D9 FAIL (exit 2). Pure stdlib — no install needed.
+WARN (exit 0); an `environment.yml` pin the manifests moved past asserts a
+D9 FAIL (exit 2); a direct pyproject pin missing from `constraints.txt`
+asserts a D6 FAIL (exit 2); and the Dockerfile's fallback torch pin drifting
+from the manifests asserts a D8 FAIL (exit 2). Pure stdlib — no install
+needed.
 
 ---
 

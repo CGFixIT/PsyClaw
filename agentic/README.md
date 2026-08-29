@@ -30,9 +30,9 @@ It is **never imported** by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`
 | `agentic/writer.py` | GitHub write gate — executable op: draft `pr_create` only |
 | `agentic/real_repo_loop.py` | Live plan → patch → verify → human-decides → commit pipeline |
 | `agentic/real_repo_run_store.py` | Persisted run records under `workspace_root/runs/` |
-| `agentic/executor/` | Sandboxed verification (`pytest` / `ruff` / custom checks) |
+| `agentic/executor/` | Sandboxed verification (`pytest` / `ruff` / custom checks) — required fail-closed hard sandbox (`hard_sandbox.py`: Job Object / Seatbelt / `unshare --net`); no silent `subprocess.run` fallback |
 | `agentic/deepagent_github/` | Real-repo workspace tools + **retired** DeepAgents graph probe |
-| `agentic/harness_optimizer/` | Fixture/harness optimizer + scoped proposer workspace tools |
+| `agentic/harness_optimizer/` | **Retired** (owner decision 2026-07-31) fixture/harness optimizer + scoped proposer workspace tools; code/tests/CI kept |
 | `agentic/fsconnect/` | Scoped filesystem connector (`python -m agentic.fsconnect.cli`) |
 | `agentic/sqlconnect/` | Read-only SQL connector (`python -m agentic.sqlconnect.cli`) |
 | `agentic/netconnect/` | Passive LAN inventory (`python -m agentic.netconnect.cli`) |
@@ -180,7 +180,7 @@ Sibling connectors (also default-off):
 fsconnect:
   enabled: false
   writes_enabled: false
-  allowed_fs_ops: [fs_list, fs_stat, fs_read, fs_grep, fs_glob]
+  allowed_fs_ops: [fs_list, fs_stat, fs_read, fs_grep, fs_glob, fs_largest]
   # writable_roots default to OS share folder; writes need reason + confirm
 
 sqlconnect:
@@ -617,6 +617,7 @@ python -m agentic.fsconnect.cli read  --root ... --path ...
 python -m agentic.fsconnect.cli stat  --root ... --path ...
 python -m agentic.fsconnect.cli grep  --root ... --path ... --pattern ...
 python -m agentic.fsconnect.cli glob  --root ... --pattern '*.md'
+python -m agentic.fsconnect.cli largest --root ... [--min-bytes N]
 # Writes (gated):
 python -m agentic.fsconnect.cli write   --path ... --body-file f --reason ... --confirm
 python -m agentic.fsconnect.cli append  --path ... --body-file f --reason ... --confirm
