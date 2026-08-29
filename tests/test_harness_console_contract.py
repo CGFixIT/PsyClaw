@@ -484,3 +484,37 @@ def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
     assert "const AGENT_RUN_TIMEOUT_MS = 3630000;" in html
     assert "const AGENT_CLI_TIMEOUT_MS = 130000;" in html
     assert "await api('/api/agent/run', 'POST', body, AGENT_RUN_TIMEOUT_MS)" in html
+
+
+def test_console_loads_the_shared_users_panel_from_the_static_mount() -> None:
+    """The markup half of the contract the missing /static mount broke.
+
+    harness.html referenced auth_admin.js while the harness app served no
+    /static route at all, so window.CyClawAuthAdmin stayed undefined and the
+    Users panel rendered empty. tests/test_harness.py issues the matching
+    request; this pins the tag that request exists to satisfy.
+    """
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert '<script src="/static/auth_admin.js"></script>' in html
+
+
+def test_console_inline_blocks_carry_the_csp_nonce_placeholder() -> None:
+    """Both inline blocks must be noncable or the console renders broken.
+
+    harness/server.py's CSP names a nonce and nothing else for style-src, so a
+    <style> or <script> tag that loses its placeholder is silently blocked by
+    the browser -- the page returns 200 and comes up unstyled or inert.
+    """
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert '<style nonce="__CYCLAW_CSP_NONCE__">' in html
+    assert '<script nonce="__CYCLAW_CSP_NONCE__">' in html
+
+
+def test_users_panel_reports_a_missing_renderer_instead_of_success() -> None:
+    """The false-success line that hid the broken panel must stay fixed.
+
+    The success message used to run unconditionally, so an operator whose
+    auth_admin.js failed to load saw 'users panel opened' over an empty pane.
+    """
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert "users panel unavailable — /static/auth_admin.js did not load" in html

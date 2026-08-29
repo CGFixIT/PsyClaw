@@ -98,8 +98,13 @@ GUARDED = [
 # /api/agent/checks joins them: it lists the names of an allow-list this repo
 # hardcodes, spawns nothing, and the console needs it to populate help before a
 # key has been entered.
+# /static/auth_admin.js joins them for the same reason "/" does: the console page
+# is open, and a page that cannot fetch its own scripts is not open in any useful
+# sense. The file is a static asset that ships in the repo -- it states nothing
+# about this install and spends nothing.
 OPEN = [
     "/", "/api/status", "/api/registry", "/api/tools", "/api/skills", "/api/web", "/api/sessions", "/api/harness/runs", "/api/agent/checks",
+    "/static/auth_admin.js",
 ]
 
 

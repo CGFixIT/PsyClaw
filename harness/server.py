@@ -35,6 +35,7 @@ apply_telemetry_kill()
 import hmac
 import ipaddress
 import logging
+import mimetypes
 import os
 import secrets
 import subprocess  # nosec B404 - imported only for TimeoutExpired; no process is spawned here
@@ -53,6 +54,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request as StarletteRequest
@@ -176,6 +178,14 @@ _HARNESS_VERSION = "0.1.0"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_PATH = _REPO_ROOT / "config.yaml"
 _STATIC = _REPO_ROOT / "static"
+# mimetypes seeds itself from the Windows registry, where a third-party install
+# can remap .js to text/plain. _SecurityHeadersMiddleware stamps nosniff on
+# every response, and browsers hard-block a script served with a non-JavaScript
+# type -- so a poisoned registry would silently break the console's Users panel
+# on exactly the platform docs/HARNESS_POWERSHELL.md treats as first-class.
+# Pin the mapping instead of inheriting it. add_type runs init() first, so this
+# overrides the registry rather than racing it.
+mimetypes.add_type("text/javascript", ".js")
 _RUNS_DIR = _REPO_ROOT / "data" / "agentic" / "harness_optimizer" / "runs"
 _HISTORY_TURNS = 20  # prior turns forwarded to the model per chat call
 # /loop on a local 27b (qwen3.8:27b-mlx / Apple Silicon) must not replay the full
@@ -251,6 +261,16 @@ _CSRF_HEADER = "x-cyclaw-csrf"
 # same size Python's own docs use as the "good enough for a security token"
 # example -- comfortably beyond brute-force range for a per-process secret.
 _CSRF_TOKEN_BYTES = 32
+# The CSP nonce placeholder embedded in static/harness.html's <style> and inline
+# <script> tags. Unlike the CSRF token above (one value per process), this one is
+# substituted per REQUEST in console(): a nonce that outlives a single response
+# is replayable by any markup an XSS bug injects until the process restarts,
+# which is precisely what the nonce exists to prevent.
+_CSP_NONCE_PLACEHOLDER = "__CYCLAW_CSP_NONCE__"
+# 16 random bytes (~22 base64url chars) = 128 bits, the minimum CSP Level 3
+# recommends for a nonce. base64url's - and _ are both in CSP's base64-value
+# grammar, so token_urlsafe output needs no escaping in the header.
+_CSP_NONCE_BYTES = 16
 # OpenAI-chat history keys. Named so clip_history + /api/chat do not trip
 # WPS226 on the same two literals.
 _ROLE_KEY = "role"
@@ -486,12 +506,13 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
     #
     # setdefault, not assignment, for one load-bearing reason: the GET /
     # console handler sets its own Content-Security-Policy and must keep it.
-    # static/harness.html embeds an INLINE <script> (unlike terminal.html, which
-    # loads /static/terminal.js), so gate.py's `script-src 'self'` would render
-    # the console blank. The strict default-src 'none' below therefore applies
-    # only to responses that do not set their own policy -- i.e. the JSON API,
-    # where it is exactly right and costs nothing, since a JSON document loads
-    # no subresources.
+    # static/harness.html embeds an INLINE <script> and an inline <style>, so it
+    # needs a policy carrying a nonce -- and a nonce must be minted per response,
+    # which a middleware stamping one fixed string cannot do. The handler mints
+    # it and substitutes the matching value into the markup; this default applies
+    # only to responses that set no policy of their own -- the JSON API, where
+    # default-src 'none' is exactly right and costs nothing (a JSON document
+    # loads no subresources), and the /static assets, which load none either.
     async def dispatch(self, request: StarletteRequest, call_next):  # type: ignore[override]
         response: StarletteResponse = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -503,6 +524,14 @@ class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "Content-Security-Policy",
             "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         )
+        # Same reasoning as the console's own no-store below, applied to the
+        # assets it pulls in: a cached auth_admin.js outlives the deploy that
+        # served it. gate.py:_SecurityHeadersMiddleware does this for the same
+        # prefix; GET / sets its own copy in the handler.
+        if request.url.path.startswith("/static/"):
+            response.headers.setdefault(
+                "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"
+            )
         return response
 
 
@@ -778,18 +807,45 @@ def create_app(
     app.state.generation_gate = generation_gate
     app.state.chat_client = client
 
+    # Mirrors gate.py's mount so harness.html's <script src="/static/auth_admin.js">
+    # resolves on this app too -- without it the shared Users panel 404s and the
+    # console silently renders an empty pane. Mounted AFTER the read above on
+    # purpose: StaticFiles raises a bare RuntimeError when the directory is
+    # missing, and a trimmed checkout must keep reporting the typed
+    # HarnessConfigError instead (tests/test_harness_robustness.py).
+    app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
+
     @app.get("/", response_class=HTMLResponse)
     def console() -> HTMLResponse:
+        # Minted per request, not per process: a nonce reused across responses is
+        # replayable by any markup an XSS bug injects, which defeats the point of
+        # having one. The matching value goes into both the header below and the
+        # page's <style>/<script> tags, so only this response's inline code runs.
+        nonce = secrets.token_urlsafe(_CSP_NONCE_BYTES)
         return HTMLResponse(
-            console_html,
+            console_html.replace(_CSP_NONCE_PLACEHOLDER, nonce),
             headers={
-                "Content-Security-Policy": "frame-ancestors 'none'",
+                # script-src carries 'self' for /static/auth_admin.js as well as
+                # the nonce for the inline block. style-src needs the nonce only:
+                # the page has no stylesheet file, no style="" attribute, and its
+                # two .style.* writes are CSSOM, which style-src does not govern.
+                # Everything else falls back to default-src 'none'; base-uri and
+                # form-action do not fall back, so they stay explicit.
+                "Content-Security-Policy": (
+                    "default-src 'none'; "
+                    f"script-src 'self' 'nonce-{nonce}'; "
+                    f"style-src 'nonce-{nonce}'; "
+                    "connect-src 'self'; "
+                    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+                ),
                 "X-Frame-Options": "DENY",
                 # This page carries the per-process CSRF token in a <meta> tag,
                 # so a cached copy outlives the process that minted it: after a
                 # harness restart the browser replays the stale token and every
                 # guarded POST 403s with CSRF_TOKEN_INVALID until a hard reload.
-                # gate.py already sends exactly this on its own console.
+                # gate.py already sends exactly this on its own console. The
+                # per-request nonce above depends on this too -- a cached page
+                # would carry a nonce no later response's header vouches for.
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             },
         )
@@ -1585,7 +1641,13 @@ def create_app(
             with suppress(OSError):
                 json_files.sort(key=os.path.getmtime, reverse=True)
             for path in json_files[:_MAX_RUNS]:
-                runs.append({"run_id": path.stem, "path": str(path)})
+                # run_id only: the absolute path embeds the operator's home
+                # directory (so their OS username) and nothing ever read it --
+                # the console renders the id alone. The sibling
+                # /api/agent/runs/{run_id} is guarded because its record names
+                # the clone's absolute location; this route is open by design,
+                # so it drops the value instead of gating access to it.
+                runs.append({"run_id": path.stem})
         return {"runs": runs, "count": len(runs)}
 
     def _require_harness_auth():
