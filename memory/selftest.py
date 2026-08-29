@@ -13,7 +13,7 @@ def _cfg(db_path: Path) -> dict:
         "memory": {
             "enabled": True,
             "db_path": str(db_path),
-            "facts": {"enabled": True, "max_content_chars": 8192, "max_active": 10000},
+            "facts": {"retrieval_enabled": True, "max_content_chars": 8192, "max_active": 10000},
             "episodes": {
                 "enabled": True,
                 "store_raw_query": False,
@@ -25,7 +25,6 @@ def _cfg(db_path: Path) -> dict:
                 "enabled": True,
                 "max_hits": 3,
                 "rrf_k": 60,
-                "min_fts_score": 0.0,
                 "source_prefix": "memory:fact:",
             },
             "propose_apply": {"enabled": True},

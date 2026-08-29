@@ -33,7 +33,7 @@ def mem_cfg(tmp_path: Path) -> dict:
         "memory": {
             "enabled": True,
             "db_path": str(tmp_path / "cyclaw_memory.db"),
-            "facts": {"enabled": True, "max_content_chars": 8192, "max_active": 10000},
+            "facts": {"retrieval_enabled": True, "max_content_chars": 8192, "max_active": 10000},
             "episodes": {
                 "enabled": True,
                 "store_raw_query": False,

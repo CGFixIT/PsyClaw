@@ -13,10 +13,20 @@ Every switch in `config.yaml` → `memory:` is **false**. With defaults, behavio
 
 1. `memory.enabled: true` + `episodes.enabled: true` — stage query episodes (hashed query by default).
 2. `propose_apply.enabled: true` + set `CYCLAW_API_KEY` — use `/memory/propose` then `/memory/apply`.
-3. `facts.enabled: true` + `retrieval_fusion.enabled: true` — FTS fact hits fuse into `hybrid_search` as `retrieval_mode="memory"`.
+3. `facts.retrieval_enabled: true` + `retrieval_fusion.enabled: true` — FTS fact hits fuse into `hybrid_search` as `retrieval_mode="memory"`.
 4. `export_html.enabled: true` — `GET /query/export/html` (auth-gated).
 
 `consolidation.enabled` is a **stub** and must stay false in v1.
+
+Step 3 comes after step 2 on purpose: facts are proposed, applied and verified
+**before** they are exposed to retrieval. `facts.retrieval_enabled` gates only
+that last exposure — it is deliberately not a master switch for facts, and
+turning it off does not stop persistence. **No switch gates fact persistence at
+all**: `memory.enabled` + `propose_apply.enabled` is the whole story, so a fact
+that has been applied stays stored and readable via `GET /memory/facts`
+regardless. (This is why the flag was renamed from `facts.enabled`, which read
+as a master switch that never existed. The old name still works and logs a
+one-time warning — see `memory/flags.py`.)
 
 ## Invariants
 
