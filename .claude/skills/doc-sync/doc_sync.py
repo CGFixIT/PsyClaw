@@ -18,6 +18,8 @@ Checks:
                               claims across CLAUDE.md, config.yaml, guardrails, fsconnect
     D5  Route table           gate.py @app routes are all named in CLAUDE.md
     D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json
+    D7  M5 doctrine           docs/m5-48gb-coding-expectations.md cites the shipped
+                               Ollama context budget and timeout values
 
 Exit codes (repo convention):
     0  no drift detected
@@ -119,6 +121,40 @@ def main(argv: list[str] | None = None) -> int:
                      f"CLAUDE.md discusses {key} but the value {val} is not present (possible stale number)")
         else:
             ok("D3", f"{key} = {val} (not cited in CLAUDE.md; nothing to check)")
+
+    # ── D7 M5 hardware doctrine numbers ─────────────────────────────────────
+    print("D7 M5 doctrine numbers -> config.yaml + macos/ollama-mlx.env")
+    m5_doc_path = root / "docs" / "m5-48gb-coding-expectations.md"
+    ollama_env_path = root / "macos" / "ollama-mlx.env"
+    try:
+        m5_doc = m5_doc_path.read_text(encoding="utf-8")
+        ollama_env = ollama_env_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        note("D7", "docs/m5-48gb-coding-expectations.md + macos/ollama-mlx.env",
+             f"could not read M5 doctrine inputs: {exc}")
+    else:
+        context_match = re.search(r"(?m)^OLLAMA_CONTEXT_LENGTH=(\d+)$", ollama_env)
+        if context_match is None:
+            note("D7", "macos/ollama-mlx.env",
+                 "OLLAMA_CONTEXT_LENGTH is absent or not a decimal integer")
+        else:
+            expected = {
+                "models.local_llm.max_tokens": cfg["models"]["local_llm"]["max_tokens"],
+                "models.local_llm.timeout_sec": cfg["models"]["local_llm"]["timeout_sec"],
+                "api.graph_timeout_sec": cfg["api"]["graph_timeout_sec"],
+                "retrieval.max_context_tokens": cfg["retrieval"]["max_context_tokens"],
+                "macos.OLLAMA_CONTEXT_LENGTH": int(context_match.group(1)),
+            }
+            missing = [
+                f"{key}={value}"
+                for key, value in expected.items()
+                if str(value) not in m5_doc
+            ]
+            if missing:
+                note("D7", "config.yaml + macos/ollama-mlx.env",
+                     "M5 doctrine omits shipped value(s): " + ", ".join(missing))
+            else:
+                ok("D7", "M5 doctrine cites all shipped context-budget and timeout values")
 
     # ── D4 Banned-pattern count ─────────────────────────────────────────────
     print("D4 Banned-pattern count")
