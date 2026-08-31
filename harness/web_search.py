@@ -37,6 +37,8 @@ _UTF8 = "utf-8"
 _SCHEMES = frozenset(("http", "https"))
 _MAX_ALLOW = 32
 _MAX_BYTES = 262_144
+_READ_CHUNK_BYTES = 65_536
+_MAX_PORT = 65_535
 _TIMEOUT_SEC = 8.0
 _MAX_QUERY = 200
 _MAX_SNIPPET = 160
@@ -130,6 +132,27 @@ def _host_of(raw: str) -> str:
     return (raw or "").strip().lower().rstrip(".")
 
 
+def _port_of(parsed) -> str:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise WebToolError("URL port is invalid", code="WEB_BAD_URL") from exc
+    if port is None or port == {"http": 80, "https": 443}[parsed.scheme]:
+        return ""
+    return str(port)
+
+
+def _authority(host: str, port: str = "") -> str:
+    """Render a host and optional port as a URL authority."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return f"{host}:{port}" if port else host
+    if ip.version == 6:
+        host = f"[{host}]"
+    return f"{host}:{port}" if port else host
+
+
 def parse_allow_entry(raw: str) -> dict[str, str]:
     """Normalise a host or URL into an allowlist row. No DNS (offline-safe)."""
     text = (raw or "").strip()
@@ -142,6 +165,7 @@ def parse_allow_entry(raw: str) -> dict[str, str]:
         raise WebToolError("only http and https URLs are allowed", code="WEB_BAD_URL")
     if parsed.username or parsed.password:
         raise WebToolError("URLs with userinfo are refused", code="WEB_BAD_URL")
+    port = _port_of(parsed)
     host = _host_of(parsed.hostname or "")
     if not host or host in _BLOCKED_HOSTS or host.endswith(".local"):
         raise WebToolError("that host cannot be allowlisted", code="WEB_SSRF_DENIED")
@@ -154,7 +178,13 @@ def parse_allow_entry(raw: str) -> dict[str, str]:
     path = parsed.path or "/"
     if not path.startswith("/"):
         path = f"/{path}"
-    return {"scheme": parsed.scheme, "host": host, "path": path, "raw": f"{parsed.scheme}://{host}{path}"}
+    return {
+        "scheme": parsed.scheme,
+        "host": host,
+        "port": port,
+        "path": path,
+        "raw": f"{parsed.scheme}://{_authority(host, port)}{path}",
+    }
 
 
 def _load_entries(path: Path) -> list[dict[str, str]]:
@@ -171,6 +201,7 @@ def _load_entries(path: Path) -> list[dict[str, str]]:
             out.append({
                 "scheme": str(row.get("scheme") or "https"),
                 "host": _host_of(str(row.get("host") or "")),
+                "port": str(row.get("port") or ""),
                 "path": str(row.get("path") or "/"),
                 "raw": str(row.get("raw") or ""),
             })
@@ -180,6 +211,14 @@ def _load_entries(path: Path) -> list[dict[str, str]]:
 def _save_entries(path: Path, entries: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, {"entries": entries})
+
+
+def _entry_key(entry: dict[str, str]) -> tuple[str, str, str]:
+    return entry["host"], str(entry.get("port") or ""), entry["path"]
+
+
+def _entry_raw(entry: dict[str, str]) -> str:
+    return entry["raw"] or f"{entry['scheme']}://{_authority(entry['host'], entry.get('port', ''))}{entry['path']}"
 
 
 def url_is_allowed(url: str, entries: list[dict[str, str]]) -> dict[str, str] | None:
@@ -197,6 +236,8 @@ def url_is_allowed(url: str, entries: list[dict[str, str]]) -> dict[str, str] | 
         aliases.add(f"www.{host}")
     for entry in entries:
         if entry["host"] not in aliases:
+            continue
+        if str(entry.get("port") or "") != wanted["port"]:
             continue
         prefix = entry["path"] or "/"
         if prefix == "/":
@@ -275,12 +316,36 @@ def _allowlist_target(match: dict[str, str]) -> str:
     """GET URL from the persisted allowlist row only — no user-URL pieces."""
     scheme = match["scheme"] if match.get("scheme") in _SCHEMES else "https"
     host = match["host"]
+    port = str(match.get("port") or "")
+    if port and (not port.isdecimal() or not 0 < int(port) <= _MAX_PORT):
+        raise WebToolError("allowlist port is invalid", code="WEB_BAD_URL")
     path = match["path"] or "/"
     if not path.startswith("/"):
         path = f"/{path}"
     if any(ch not in _PATH_CHARS for ch in path):
         raise WebToolError("allowlist path is invalid", code="WEB_BAD_URL")
-    return f"{scheme}://{host}{path}"
+    return f"{scheme}://{_authority(host, port)}{path}"
+
+
+def _read_text_response(resp: httpx.Response) -> tuple[bytes, str, int]:
+    """Validate and consume at most the configured number of response bytes."""
+    if resp.status_code >= _HTTP_OK_BELOW:
+        raise WebToolError(
+            f"upstream HTTP {resp.status_code}",
+            code="WEB_FETCH_FAILED",
+            details={"status": resp.status_code},
+        )
+    ctype = resp.headers.get("content-type", "text/plain")
+    is_text = any(ctype.lower().startswith(prefix) for prefix in _TEXT_TYPES)
+    if not is_text and "html" not in ctype.lower():
+        raise WebToolError("content-type is not text; refused", code="WEB_NOT_TEXT")
+    body = bytearray()
+    for chunk in resp.iter_bytes(chunk_size=_READ_CHUNK_BYTES):
+        remaining = _MAX_BYTES - len(body)
+        body.extend(chunk[:remaining])
+        if len(body) >= _MAX_BYTES:
+            break
+    return bytes(body), ctype, resp.status_code
 
 
 class WebTool:
@@ -305,7 +370,7 @@ class WebTool:
         last = _last_path(self._cfg)
         return {
             "enabled": bool(self._cfg.web_enabled),
-            "allowlist": [row["raw"] or f"{row['scheme']}://{row['host']}{row['path']}" for row in entries],
+            "allowlist": [_entry_raw(row) for row in entries],
             "injected": ctx.is_file() and bool(ctx.stat().st_size),
             "has_last": last.is_file(),
             "max_allow": _MAX_ALLOW,
@@ -320,8 +385,8 @@ class WebTool:
         entry = parse_allow_entry(raw)
         path = _allow_path(self._cfg)
         entries = _load_entries(path)
-        key = (entry["host"], entry["path"])
-        if any((row["host"], row["path"]) == key for row in entries):
+        key = _entry_key(entry)
+        if any(_entry_key(row) == key for row in entries):
             return self.status()
         if len(entries) >= _MAX_ALLOW:
             raise WebToolError(f"allowlist cap is {_MAX_ALLOW}", code="WEB_ALLOWLIST_FULL")
@@ -334,7 +399,7 @@ class WebTool:
         path = _allow_path(self._cfg)
         entries = [
             row for row in _load_entries(path)
-            if (row["host"], row["path"]) != (entry["host"], entry["path"])
+            if _entry_key(row) != _entry_key(entry)
         ]
         _save_entries(path, entries)
         return self.status()
@@ -402,23 +467,12 @@ class WebTool:
         target = _allowlist_target(match)
         with self._client() as client:
             try:
-                resp = client.get(target)
+                with client.stream("GET", target) as resp:
+                    body, ctype, status = _read_text_response(resp)
             except httpx.HTTPError:
                 raise WebToolError("fetch failed", code="WEB_FETCH_FAILED") from None
-        if resp.status_code >= _HTTP_OK_BELOW:
-            raise WebToolError(
-                f"upstream HTTP {resp.status_code}",
-                code="WEB_FETCH_FAILED",
-                details={"status": resp.status_code},
-            )
-        ctype = resp.headers.get("content-type", "text/plain")
-        if not any(ctype.lower().startswith(prefix) for prefix in _TEXT_TYPES) and "html" not in ctype.lower():
-            raise WebToolError("content-type is not text; refused", code="WEB_NOT_TEXT")
-        body = resp.content[: _MAX_BYTES + 1]
-        if len(body) > _MAX_BYTES:
-            body = body[:_MAX_BYTES]
-        text = extract_text(body.decode("utf-8", errors="replace"), ctype)
-        return {"url": target, "status": resp.status_code, "content_type": ctype, "text": text, "chars": len(text)}
+        text = extract_text(bytes(body).decode("utf-8", errors="replace"), ctype)
+        return {"url": target, "status": status, "content_type": ctype, "text": text, "chars": len(text)}
 
     def _web_tool_allowlist(self) -> frozenset[str]:
         if not self._cfg.web_enabled:

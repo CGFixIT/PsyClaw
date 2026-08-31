@@ -12,6 +12,8 @@ from harness.config import HarnessConfig
 from harness.ollama import HarnessChatClient
 from harness.server import create_app
 from harness.web_search import (
+    _MAX_BYTES,
+    _allowlist_target,
     WebTool,
     WebToolError,
     assert_public_host,
@@ -73,6 +75,16 @@ def test_parse_allow_entry_accepts_host_and_url():
     assert path["path"] == "/3/library/"
 
 
+def test_allowlist_target_preserves_nondefault_ports_and_ipv6_authorities():
+    port = parse_allow_entry("https://example.com:8443/docs")
+    assert port["raw"] == "https://example.com:8443/docs"
+    assert _allowlist_target(port) == "https://example.com:8443/docs"
+
+    ipv6 = parse_allow_entry("https://[2606:4700:4700::1111]/docs")
+    assert ipv6["raw"] == "https://[2606:4700:4700::1111]/docs"
+    assert _allowlist_target(ipv6) == "https://[2606:4700:4700::1111]/docs"
+
+
 @pytest.mark.parametrize("raw", [
     "http://localhost/secret",
     "https://127.0.0.1/",
@@ -94,6 +106,13 @@ def test_url_is_allowed_matches_host_and_path_prefix():
     assert url_is_allowed("https://www.docs.python.org/3/", entries)
     assert url_is_allowed("https://docs.python.org/", entries) is None
     assert url_is_allowed("https://evil.example/", entries) is None
+
+
+def test_url_is_allowed_matches_the_allowlisted_nondefault_port():
+    entries = [parse_allow_entry("https://docs.python.org:8443/3/")]
+
+    assert url_is_allowed("https://docs.python.org:8443/3/library/os.html", entries)
+    assert url_is_allowed("https://docs.python.org/3/library/os.html", entries) is None
 
 
 def test_assert_public_host_refuses_loopback(monkeypatch):
@@ -152,6 +171,31 @@ def test_fetch_and_search_and_inject(cfg):
     assert source == "Source: https://docs.python.org/"
     tool.forget()
     assert tool.context_text() == ""
+
+
+def test_fetch_stops_reading_at_the_byte_cap(cfg):
+    class CountingStream(httpx.SyncByteStream):
+        def __init__(self) -> None:
+            self.chunks_yielded = 0
+
+        def __iter__(self):
+            for _ in range(5):
+                self.chunks_yielded += 1
+                yield b"x" * 65_536
+
+    stream = CountingStream()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream, headers={"content-type": "text/plain"})
+
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=httpx.MockTransport(handler), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+
+    page = tool.fetch("https://docs.python.org/")
+
+    assert page["chars"] == _MAX_BYTES
+    assert stream.chunks_yielded < 5
 
 
 def test_search_records_last_as_the_matching_hit_not_the_last_iterated_entry(cfg):
