@@ -141,6 +141,8 @@ at fetch (DNS is checked at fetch time).
 Allowing `https://docs.python.org/3/` does **not** allow
 `https://docs.python.org/` or any other host. `/web fetch` against a
 non-allowlisted URL is `WEB_HOST_DENIED`. `/web` off is `409 WEB_DISABLED`.
+An allowlist URL preserves its scheme, host, optional non-default port, and
+path; text responses are streamed and capped at 256 KiB.
 
 Refused on purpose: `localhost`, `127.0.0.1`, RFC1918, link-local,
 `169.254.169.254`, `user:pass@host`, `ftp://`, wildcards, redirects.
