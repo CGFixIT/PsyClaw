@@ -1,42 +1,21 @@
-# ==============================================================================
-# CyClaw Microsoft Defender for DevOps (MSDO) Workflow — v1.4.0 hardened
-# 
-# Changes from previous version:
-#   - Switched to ubuntu-latest (Python-native runner; MSDO action now supports it fully per action docs)
-#   - Removed obsolete dotnet 5.0.x / 6.0.x setup (both EOL long before 2026; unnecessary for Python path; reduces runner attack surface + startup time)
-#   - Updated microsoft/security-devops-action to v1.12.0 (latest as of Nov 2024; supports ubuntu + explicit tools: input)
-#   - Added explicit `tools: bandit` input — focused Python SAST (detects assert, exec/eval, hardcoded passwords/tokens, dangerous imports, etc.)
-#   - Added least-privilege permissions block (contents: read; security-events: write for SARIF upload to Security tab)
-#   - Updated upload-sarif to @v4 (consistency with codeql.yml)
-#   - Replaced outdated beta-era boilerplate comments with precise, CyClaw-specific documentation referencing invariants/CI hardening
-#   - Added workflow_dispatch: for on-demand manual execution
-#   - Grammar/accuracy fixes; removed "ubuntu-latest support coming soon" note (now fully supported)
-# 
-# Value proposition: Executes Bandit via the MSDO engine for Python-specific static security analysis,
-# then uploads SARIF results to the GitHub Security tab (and optionally Microsoft Defender for DevOps
-# dashboard once org integration is configured — see https://learn.microsoft.com/en-us/azure/defender-for-cloud/quickstart-onboard-github ).
-# Complements existing scanners:
-#   - CodeQL (deep interprocedural dataflow, taint tracking)
-#   - DevSkim (secret patterns, best practices)
-#   - Fortify (heavyweight enterprise SAST)
-#   - pip-audit (dependency CVEs with CyClaw-specific ignore + mitigation comments)
-# No changes to core runtime; purely additive CI security gate.
-# 
-# Alignment: Strengthens reproducible CI and §K (Deployment & Validation) / §M (Security Invariants)
-# without touching the 5 topology-enforced invariants (RAG-first retrieve, topology=policy routing,
-# triple-gate grok_fallback, audit convergence, soul governance with human reason + atomic writes).
-# Matches the hardened style of pip-audit.yml (precise CVE/mitigation comments linking to gate.py +
-# retrieval/embeddings.py trust_remote_code=false guards) and ci.yml (pinned actions, least-priv perms).
-# Cross-reference: v1.4.0 main branch updates (ChromaDB pinned in constraints.txt, Python 3.12, CI matrix verification).
-# ==============================================================================
+# Pinned Bandit SAST + SARIF.
+#
+# Replaces microsoft/security-devops-action: that CLI installs Guardian
+# "Latest" then pulls policy NuGet from msdoeu.pkgs.visualstudio.com as an
+# anonymous identity. When the feed 403s, Bandit never runs. CyClaw
+# already pins bandit==1.9.4.
+#
+# Findings do not fail the job (same as MSDO --not-break-on-detections and
+# AGENTS.md "best-effort"). The job fails if Bandit cannot install or write
+# SARIF. No id-token: we do not send results to Defender for Cloud.
 
-name: "Microsoft Defender For DevOps (Bandit + SARIF)"
+name: "Bandit SAST (SARIF)"
 
 'on':
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   schedule:
     - cron: '40 23 * * 0'
   workflow_dispatch:
@@ -48,32 +27,73 @@ name: "Microsoft Defender For DevOps (Bandit + SARIF)"
 permissions:
   contents: read
 
-# Cancel superseded in-progress runs on the same branch to save CI minutes;
-# pushes to main are exempt so main keeps a complete scan history.
 concurrency:
-  group: defender-${{ github.workflow }}-${{ github.ref }}
+  group: bandit-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  MSDO:
+  bandit:
+    name: bandit
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
       contents: read
       security-events: write  # upload SARIF
-
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      with:
-        persist-credentials: false
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
-    - name: Run Microsoft Security DevOps (Bandit for Python)
-      uses: microsoft/security-devops-action@08976cb623803b1b36d7112d4ff9f59eae704de0  # v1.12.0
-      id: msdo
-      with:
-        tools: bandit
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: |
+            constraints.txt
+            .github/workflows/defender-for-devops.yml
 
-    - name: Upload results to Security tab
-      uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28  # v4
-      with:
-        sarif_file: ${{ steps.msdo.outputs.sarifFile }}
+      - name: Install Bandit
+        run: |
+          # bandit[sarif] is required for -f sarif (core wheel has no SARIF extra).
+          # sarif-om / jschema-to-python are not in constraints.txt; pin them here
+          # so the Security-tab upload does not float.
+          pip install -c constraints.txt \
+            "bandit[sarif]" \
+            "sarif-om==1.0.4" \
+            "jschema-to-python==1.2.3"
+          python -c "import bandit; assert bandit.__version__ == '1.9.4', bandit.__version__"
+
+      - name: Run Bandit (advisory findings)
+        run: |
+          # Path set matches AGENTS.md. --exit-zero keeps findings advisory;
+          # test -s still fails the job if Bandit dies before writing SARIF.
+          bandit \
+            -r \
+            gate.py \
+            gate_ops.py \
+            gate_auth.py \
+            gate_memory.py \
+            graph.py \
+            retrieval \
+            utils \
+            llm \
+            sync \
+            agentic \
+            guardrails \
+            harness \
+            telegram \
+            opentweet \
+            memory \
+            -f sarif \
+            -o bandit.sarif \
+            --exit-zero
+          test -s bandit.sarif
+
+      - name: Upload results to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28  # v4
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
