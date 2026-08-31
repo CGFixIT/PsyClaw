@@ -627,9 +627,9 @@ class SqlClient:
         # ident is allow-list-validated + quoted (validate_identifier/quote_identifier)
         # and max_rows is coerced to int; no untrusted text reaches the SQL string.
         if self.sql_cfg.driver == "mssql":
-            sql = f"SELECT TOP {int(self.sql_cfg.max_rows)} * FROM {ident}"  # noqa: S608  # nosec B608
+            sql = f"SELECT TOP {int(self.sql_cfg.max_rows)} * FROM {ident}"  # noqa: S608
         else:
-            sql = f"SELECT * FROM {ident} LIMIT {int(self.sql_cfg.max_rows)}"  # noqa: S608  # nosec B608
+            sql = f"SELECT * FROM {ident} LIMIT {int(self.sql_cfg.max_rows)}"  # noqa: S608
         return {"op": "table_preview", "table": table, **self._execute(sql)}
 
     def run_select(self, sql: str, fmt: Literal["json", "csv"] = "json") -> dict:
@@ -671,7 +671,7 @@ class SqlClient:
             command=f"row_count {table}",
         )
         # ident is allow-list-validated + driver-quoted; no untrusted text reaches SQL.
-        sql = f"SELECT count(*) AS row_count FROM {ident}"  # noqa: S608  # nosec B608
+        sql = f"SELECT count(*) AS row_count FROM {ident}"  # noqa: S608
         return {"op": "row_count", "table": table, **self._execute(sql)}
 
 

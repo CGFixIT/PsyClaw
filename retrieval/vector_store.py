@@ -280,7 +280,7 @@ class _PgVectorWriter(_PgVectorBase):
             ))
         with conn.cursor() as cur:
             cur.executemany(
-                f"INSERT INTO {_PG_TABLE} (source, chunk_id, source_sha256, content, stem_tags, embedding) "  # noqa: S608  # nosec B608
+                f"INSERT INTO {_PG_TABLE} (source, chunk_id, source_sha256, content, stem_tags, embedding) "  # noqa: S608
                 "VALUES (%s, %s, %s, %s, %s, %s)",
                 rows,
             )
@@ -325,7 +325,7 @@ class _PgVectorReader(_PgVectorBase):
         # `<=>` is cosine distance; `1 - distance` reproduces Chroma's cosine score.
         # Same ordering expression in SELECT and ORDER BY so the HNSW index is used.
         rows = conn.execute(
-            f"SELECT content, source, chunk_id, {source_sha256_sql}, stem_tags, "  # noqa: S608  # nosec B608
+            f"SELECT content, source, chunk_id, {source_sha256_sql}, stem_tags, "  # noqa: S608
             f"1 - (embedding <=> %(q)s::vector) AS score FROM {_PG_TABLE} "
             "ORDER BY embedding <=> %(q)s::vector LIMIT %(k)s",
             {"q": _as_list(embedding), "k": k},
