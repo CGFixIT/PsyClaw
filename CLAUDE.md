@@ -449,9 +449,10 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
   contract. **Rule:** `test_terminal_contract` extracts routes from
   `terminal.html`; new POST endpoints must be added to its `_POST_PATHS`.
 - **Trap:** assuming `mypy --strict --python-version 3.12 .` runs clean, or is
-  a CI gate. **Rule:** it is neither. Only `lint.yml` runs `ruff`, and that workflow is
-  advisory (`continue-on-error` at job and step level) — `ci.yml` does not run
-  ruff at all, and mypy is not wired into any CI workflow. The bare repo-root invocation errors
+  a CI gate. **Rule:** it is neither. Only `lint.yml` runs `ruff`: its F/B/S
+  logic, likely-bug, and security classes block merges, while its broader Ruff
+  set and WPS remain advisory. `ci.yml` does not run ruff at all, and mypy is
+  not wired into any CI workflow. The bare repo-root invocation errors
   out immediately on `utils/errors.py` ("Source file found twice under
   different module names") because `utils/` has no `__init__.py`; add
   `--explicit-package-bases` to get past discovery, and even then the tree
@@ -539,10 +540,11 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 - **Python 3.12** (`requires-python >=3.12`). Fully type-annotated; PEP 604
   unions (`str | None`), builtin generics, `TypedDict`/`Protocol`/`Literal` over
   `Any`. `from __future__ import annotations` in new modules.
-- **Lint:** `ruff check --select E,F,I,B,C4,UP,S .` (line-length 120, `E501`
-  ignored, `.claude` excluded) — run by `lint.yml`, which is **advisory**
-  (job- and step-level `continue-on-error`): a red Ruff result does not block
-  merge, so run it locally and keep it clean yourself. **Types:**
+- **Lint:** `lint.yml` blocks on `ruff check --select F,B,S .` (Pyflakes
+  logic errors, likely-bug patterns, and Bandit security checks). Its broader
+  `ruff check --select E,F,I,B,C4,UP,S .` pass remains advisory, as does WPS;
+  line length is 120, `E501` is ignored, and `.claude` is excluded. Keep the
+  full Ruff set clean locally even though only F/B/S block merge. **Types:**
   `mypy --strict --python-version 3.12 --explicit-package-bases` as a
   best-effort discipline on the lines you write — not CI-enforced, and the
   repo does not pass it clean end-to-end today (see the §4 Testing trap).
@@ -610,7 +612,8 @@ mistake a capable-but-unfamiliar agent makes with the rule that prevents it.
 A deliverable is done only when its box is fully checked.
 
 **Code change**
-- [ ] `ruff check --select E,F,I,B,C4,UP,S .` clean (lint.yml runs it advisory — keep it clean locally)
+- [ ] `ruff check --select F,B,S .` clean (CI-blocking in `lint.yml`)
+- [ ] `ruff check --select E,F,I,B,C4,UP,S .` clean (broader Ruff remains advisory — keep it clean locally)
 - [ ] `mypy --strict --python-version 3.12 --explicit-package-bases` clean on
       the lines you actually wrote (best-effort; not CI-enforced, and the repo
       does not pass it clean end-to-end — see §4 Testing trap)
@@ -723,8 +726,9 @@ GROK_API_KEY=dummy pytest tests/test_graph.py -q --tb=short   # single file
 GROK_API_KEY=dummy pytest tests/test_agentic_*.py -q          # agentic only
 GROK_API_KEY=dummy python tests/ci_rag_smoke.py               # real-index RAG smoke
 
-# Lint / types (ruff is CI-enforced; mypy is a best-effort local check only —
-# see the §4 Testing trap for why the bare "mypy ... ." invocation errors out)
+# Lint / types (Ruff F/B/S is CI-enforced; broader Ruff and WPS are advisory;
+# mypy is a best-effort local check only — see the §4 Testing trap for why
+# the bare "mypy ... ." invocation errors out)
 ruff check --select E,F,I,B,C4,UP,S .
 mypy --strict --python-version 3.12 --explicit-package-bases "<touched files>"
 
