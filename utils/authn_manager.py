@@ -187,9 +187,9 @@ class AuthManager:
         # per-file-ignore in pyproject.toml.
         ph = self._ph
         self._sql_count_users = "SELECT COUNT(*) AS n FROM users"
-        self._sql_get_user = f"SELECT * FROM users WHERE username = {ph}"
+        self._sql_get_user = f"SELECT * FROM users WHERE username = {ph}"  # nosec B608
         self._sql_insert_user = (
-            "INSERT INTO users "
+            "INSERT INTO users "  # nosec B608
             "(username, password_hash, created_ts, disabled, last_login_ts, failed_count, locked_until_ts, role) "
             f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
         )
@@ -209,11 +209,11 @@ class AuthManager:
             "(SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0) <= 1)"
         )
         self._sql_set_role = (
-            f"UPDATE users SET role = {ph} WHERE username = {ph} "
+            f"UPDATE users SET role = {ph} WHERE username = {ph} "  # nosec B608
             f"AND ({ph} = 'admin' OR {last_admin_guard})"
         )
-        self._sql_delete_user = f"DELETE FROM users WHERE username = {ph} AND {last_admin_guard}"
-        self._sql_disable_user = f"UPDATE users SET disabled = 1 WHERE username = {ph} AND {last_admin_guard}"
+        self._sql_delete_user = f"DELETE FROM users WHERE username = {ph} AND {last_admin_guard}"  # nosec B608
+        self._sql_disable_user = f"UPDATE users SET disabled = 1 WHERE username = {ph} AND {last_admin_guard}"  # nosec B608
         # Postgres only. Locked in username order before each guarded write so
         # two concurrent statements against *different* admin rows cannot both
         # pass last_admin_guard under READ COMMITTED. SQLite is a no-op: it
@@ -227,8 +227,8 @@ class AuthManager:
         self._sql_count_enabled_admins = (
             "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND disabled = 0"
         )
-        self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"
-        self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"
+        self._sql_set_disabled = f"UPDATE users SET disabled = {ph} WHERE username = {ph}"  # nosec B608
+        self._sql_set_password = f"UPDATE users SET password_hash = {ph} WHERE username = {ph}"  # nosec B608
         # Compare-and-swap for first-password setup: two AuthManager instances
         # (gateway vs harness, or HTTP vs `cyclaw-user passwd`) can both read
         # the pending row. Username-only UPDATE would let the later writer
@@ -236,7 +236,7 @@ class AuthManager:
         # caller just received. Matching the pending hash in WHERE makes the
         # loser a no-op (rowcount 0 -> AuthBootstrapComplete).
         self._sql_claim_bootstrap_password = (
-            f"UPDATE users SET password_hash = {ph} "
+            f"UPDATE users SET password_hash = {ph} "  # nosec B608
             f"WHERE username = {ph} AND password_hash = {ph}"
         )
         # A single conditional UPDATE, not a read-then-write pair: it both
@@ -246,19 +246,19 @@ class AuthManager:
         # to land in. See login()'s own comment for why a bare re-SELECT
         # (the previous approach) still left a narrower but real window.
         self._sql_claim_login = (
-            f"UPDATE users SET last_login_ts = {ph}, failed_count = 0, locked_until_ts = NULL "
+            f"UPDATE users SET last_login_ts = {ph}, failed_count = 0, locked_until_ts = NULL "  # nosec B608
             f"WHERE username = {ph} AND password_hash = {ph} AND disabled = 0 "
             f"AND (locked_until_ts IS NULL OR locked_until_ts <= {ph})"
         )
         self._sql_login_failure = (
-            f"UPDATE users SET failed_count = {ph}, locked_until_ts = {ph} WHERE username = {ph}"
+            f"UPDATE users SET failed_count = {ph}, locked_until_ts = {ph} WHERE username = {ph}"  # nosec B608
         )
         self._sql_reset_lockout = (
-            f"UPDATE users SET failed_count = 0, locked_until_ts = NULL WHERE username = {ph}"
+            f"UPDATE users SET failed_count = 0, locked_until_ts = NULL WHERE username = {ph}"  # nosec B608
         )
         self._sql_list_users = "SELECT * FROM users ORDER BY username"
         self._sql_insert_session = (
-            "INSERT INTO sessions (session_id, username, csrf_token, created_ts, last_seen_ts, expires_ts) "
+            "INSERT INTO sessions (session_id, username, csrf_token, created_ts, last_seen_ts, expires_ts) "  # nosec B608
             f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
         )
         # JOINed against users.disabled as defense-in-depth: a disabled
@@ -268,32 +268,32 @@ class AuthManager:
         # (e.g. a row inserted directly, or a future code path that forgets
         # to call disable_user()). Belt and suspenders, not a replacement.
         self._sql_get_session = (
-            "SELECT s.* FROM sessions s JOIN users u ON s.username = u.username "
+            "SELECT s.* FROM sessions s JOIN users u ON s.username = u.username "  # nosec B608
             f"WHERE s.session_id = {ph} AND u.disabled = 0"
         )
-        self._sql_touch_session = f"UPDATE sessions SET last_seen_ts = {ph} WHERE session_id = {ph}"
-        self._sql_revoke_session = f"UPDATE sessions SET revoked = 1 WHERE session_id = {ph} AND revoked = 0"
+        self._sql_touch_session = f"UPDATE sessions SET last_seen_ts = {ph} WHERE session_id = {ph}"  # nosec B608
+        self._sql_revoke_session = f"UPDATE sessions SET revoked = 1 WHERE session_id = {ph} AND revoked = 0"  # nosec B608
         self._sql_revoke_sessions_for_user = (
-            f"UPDATE sessions SET revoked = 1 WHERE username = {ph} AND revoked = 0"
+            f"UPDATE sessions SET revoked = 1 WHERE username = {ph} AND revoked = 0"  # nosec B608
         )
         self._sql_insert_token = (
-            "INSERT INTO device_tokens (token_hash, username, label, created_ts, last_used_ts, revoked) "
+            "INSERT INTO device_tokens (token_hash, username, label, created_ts, last_used_ts, revoked) "  # nosec B608
             f"VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})"
         )
         self._sql_get_token = (
-            "SELECT t.* FROM device_tokens t JOIN users u ON t.username = u.username "
+            "SELECT t.* FROM device_tokens t JOIN users u ON t.username = u.username "  # nosec B608
             f"WHERE t.token_hash = {ph} AND u.disabled = 0"
         )
-        self._sql_touch_token = f"UPDATE device_tokens SET last_used_ts = {ph} WHERE token_hash = {ph}"
-        self._sql_list_tokens = f"SELECT * FROM device_tokens WHERE username = {ph} ORDER BY created_ts"
+        self._sql_touch_token = f"UPDATE device_tokens SET last_used_ts = {ph} WHERE token_hash = {ph}"  # nosec B608
+        self._sql_list_tokens = f"SELECT * FROM device_tokens WHERE username = {ph} ORDER BY created_ts"  # nosec B608
         self._sql_get_live_token_by_label = (
-            f"SELECT token_hash FROM device_tokens WHERE username = {ph} AND label = {ph} AND revoked = 0"
+            f"SELECT token_hash FROM device_tokens WHERE username = {ph} AND label = {ph} AND revoked = 0"  # nosec B608
         )
         self._sql_revoke_token = (
-            f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND label = {ph} AND revoked = 0"
+            f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND label = {ph} AND revoked = 0"  # nosec B608
         )
         self._sql_revoke_tokens_for_user = (
-            f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND revoked = 0"
+            f"UPDATE device_tokens SET revoked = 1 WHERE username = {ph} AND revoked = 0"  # nosec B608
         )
 
     def _ensure_schema(self) -> None:
@@ -304,7 +304,7 @@ class AuthManager:
             self.conn.execute(index_ddl)
         authn_store.ensure_users_role_column(self.conn, self.backend)
         self.conn.execute(
-            f"UPDATE users SET role = {self._ph} WHERE username = {self._ph} AND role = {self._ph}",
+            f"UPDATE users SET role = {self._ph} WHERE username = {self._ph} AND role = {self._ph}",  # nosec B608
             (authn.validate_role("admin"), BOOTSTRAP_USERNAME, authn.DEFAULT_ROLE),
         )
         self.conn.commit()

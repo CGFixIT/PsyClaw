@@ -41,8 +41,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # tokenizes back to the instruction it spells. Deleting them (rather than
 # replacing with a space) is what rejoins the split word.
 # Covers zero-width space/non-joiner/joiner, the LTR/RTL marks, word joiner,
-# BOM, and soft hyphen.
-_INVISIBLE_CHARS = re.compile(r"[​-‏⁠﻿­]")
+# BOM, and soft hyphen. \u escapes (not a raw string): the same codepoints as
+# the old literal class, but the source stays reviewable. Bandit B613 flags
+# raw bidi in this file as Trojan Source; this pattern *strips* those marks.
+_INVISIBLE_CHARS = re.compile("[\u200b-\u200f\u2060\ufeff\u00ad]")
 
 
 def _normalize_for_match(text: str) -> str:

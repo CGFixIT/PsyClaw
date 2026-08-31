@@ -145,15 +145,15 @@ class PersonalityManager:
         # Build parameterized SQL templates for this backend.
         # sha256 stores a hash of soul file *content*, not of the timestamp — the two are independent columns.
         self._sql_insert_soul = (
-            f"INSERT INTO soul_versions (sha256, content, reason, timestamp)"  # DevSkim: ignore DS197836
+            f"INSERT INTO soul_versions (sha256, content, reason, timestamp)"  # DevSkim: ignore DS197836  # nosec B608
             f" VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph})"
         )
         self._sql_insert_interaction = (
-            f"INSERT INTO interactions (query_hash, outcome, timestamp)"
+            f"INSERT INTO interactions (query_hash, outcome, timestamp)"  # nosec B608
             f" VALUES ({self._ph}, {self._ph}, {self._ph})"
         )
         self._sql_delete_old_interactions = (
-            f"DELETE FROM interactions WHERE timestamp < {self._ph}"
+            f"DELETE FROM interactions WHERE timestamp < {self._ph}"  # nosec B608
         )
         self.conn.execute(personality_db.ddl_soul_versions(self._backend))
         self.conn.execute(personality_db.ddl_interactions(self._backend))

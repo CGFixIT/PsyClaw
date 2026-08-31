@@ -130,7 +130,7 @@ class RateLimiter:
         # already applied to utils/personality.py for the same placeholder pattern.)
         if self._backend == "postgres":
             return (
-                "INSERT INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608
+                "INSERT INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608  # nosec B608
                 f"VALUES ({self._ph}, {self._ph}, {self._ph}) "
                 "ON CONFLICT (ip) DO UPDATE SET "
                 "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep"
