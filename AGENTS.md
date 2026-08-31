@@ -280,7 +280,9 @@ Advisory in CI (`lint.yml` runs Ruff with job- and step-level
 ruff check --select E,F,I,B,C4,UP,S .
 ```
 
-Best-effort, not CI-wired at all (see `CLAUDE.md` §4 for why a bare `mypy .` fails immediately):
+Best-effort locally (see `CLAUDE.md` §4 for why a bare `mypy .` fails immediately).
+CI runs the same Bandit path set via `.github/workflows/defender-for-devops.yml`
+(pin `bandit==1.9.4`, SARIF to the Security tab; findings do not fail the job):
 
 ```bash
 mypy --strict --python-version 3.12 --explicit-package-bases "<touched files>"
