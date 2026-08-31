@@ -210,7 +210,14 @@ class ProposerWorkspaceTools:
         """Read the local surface manifest."""
 
         text = self._read_text(self.workspace.manifest_path, "read_surface_manifest", "surface_manifest.json")
-        return json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            # Do not attach *text*: the manifest can hold operator notes.
+            self._deny("read_surface_manifest", "surface_manifest.json is malformed JSON")
+        return parsed
 
     def read_train_failures(self) -> dict[str, str]:
         """Read visible train artifacts."""
