@@ -48,15 +48,6 @@ from pathlib import Path
 
 _TARGET = Path(__file__).resolve().parent.parent / "utils" / "authn_manager.py"
 
-# Violations the guard accepts on the CURRENT tree, each because a fix already
-# exists on an unmerged branch. These are the two real bugs this guard was
-# built from; both are fixed on claude/authn-unique-violation (PR #1216), which
-# wraps each INSERT in try/except + _is_unique_violation. The entries exist
-# only so this guard can land independently of that PR's merge order -- once
-# #1216 is on main the pairs read as guarded, these names stop matching
-# anything, and the entries must be deleted.
-_ACCEPTED_UNTIL_1216_MERGES = frozenset({"create_user", "create_device_token"})
-
 _CONFLICT_FOLDED = ("ON CONFLICT", "OR IGNORE", "OR REPLACE")
 
 
@@ -172,19 +163,16 @@ def find_unguarded_pairs(source: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_authn_manager_has_no_new_unguarded_select_then_insert():
+def test_authn_manager_has_no_unguarded_select_then_insert():
     """Every SELECT-then-INSERT pair in authn_manager handles the violation.
 
-    Asserts subset-of-accepted rather than equality on purpose: when #1216
-    merges, its try/except makes the two accepted names stop matching and the
-    guard goes quiet instead of failing main -- at which point the accepted
-    set must be emptied.
+    PR #1216 wrapped create_user and create_device_token; the merge-order
+    allowlist is gone. Zero unguarded pairs is the only accepted state.
     """
     offenders = set(find_unguarded_pairs(_TARGET.read_text(encoding="utf-8")))
-    new = offenders - _ACCEPTED_UNTIL_1216_MERGES
-    assert not new, (
+    assert offenders == set(), (
         "unguarded SELECT-then-INSERT pair(s) in utils/authn_manager.py: "
-        f"{sorted(new)} -- the pre-check SELECT means a uniqueness constraint "
+        f"{sorted(offenders)} -- the pre-check SELECT means a uniqueness constraint "
         "exists, so wrap the INSERT in try/except using _is_unique_violation "
         "(see bootstrap_if_empty for the reference shape), or fold the "
         "conflict into the SQL"
@@ -286,17 +274,3 @@ def test_detector_resolves_self_sql_attributes():
     the INSERT text split across an implicitly-concatenated f-string, and the
     pre-check SELECT inline in the `if` test rather than bound to a name."""
     assert find_unguarded_pairs(_ATTRIBUTE_INDIRECTION) == ["create_thing"]
-
-
-def test_the_accepted_set_matches_the_tree_it_was_written_for():
-    """On a tree WITHOUT #1216's fix, the two accepted names are exactly what
-    fires; on a tree WITH it, nothing fires. Either way nothing NEW may fire --
-    that is the guard above. This test documents which state the checkout is in
-    rather than asserting one, so it survives #1216's merge unchanged."""
-    offenders = set(find_unguarded_pairs(_TARGET.read_text(encoding="utf-8")))
-    assert offenders in (set(), _ACCEPTED_UNTIL_1216_MERGES), (
-        f"partial fix detected: {sorted(offenders)} -- create_user and "
-        "create_device_token carry the same race and were fixed together in "
-        "#1216; fixing one without the other reopens the split this guard "
-        "exists to prevent"
-    )
