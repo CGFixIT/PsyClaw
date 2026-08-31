@@ -234,6 +234,36 @@ def test_cron_remove_returns_true_when_tagged_line_present() -> None:
     assert "/usr/bin/keep.sh" in written["content"]
 
 
+def test_cron_remove_unlinks_generated_launcher(tmp_path) -> None:
+    cfg = _make_cfg()
+    scheduler = CronScheduler(cfg)
+    written: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout=existing)
+        written["content"] = kwargs["input"]
+        return _completed()
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        line = scheduler._our_line()
+        existing = "0 1 * * * /usr/bin/keep.sh\n" + line + "\n"
+        launcher = tmp_path / "cyclaw_sync.sh"
+        assert launcher.exists()
+
+        assert scheduler.remove() is True
+        assert not launcher.exists()
+        assert "/usr/bin/keep.sh" in written["content"]
+        assert TASK_TAG not in written["content"]
+
+        # A stale tagged entry with an already-missing launcher still removes cleanly.
+        assert scheduler.remove() is True
+
+
 def test_cron_remove_preserves_unowned_lines_that_contain_task_tag() -> None:
     cfg = _make_cfg()
     unrelated = (
@@ -615,6 +645,19 @@ def test_cron_line_keeps_percent_in_config_path_out_of_crontab(monkeypatch, tmp_
     cmd_field = line.rsplit("#", 1)[0].split(None, 5)[5]
     assert "%" not in cmd_field
     assert "cfg%20dir" in (tmp_path / "cyclaw_sync.sh").read_text(encoding="utf-8")
+
+
+def test_posix_launcher_is_atomic_and_has_set_eu(tmp_path) -> None:
+    from sync.scheduler import _write_posix_launcher
+
+    cfg = _make_cfg()
+    with patch("sync.scheduler.platform.system", return_value="Linux"):
+        launcher = Path(_write_posix_launcher(cfg))
+
+    content = launcher.read_text(encoding="utf-8")
+    assert content.startswith("#!/bin/sh\nset -eu\n")
+    assert content.index(" env ") < content.index("-m sync.cli")
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------
