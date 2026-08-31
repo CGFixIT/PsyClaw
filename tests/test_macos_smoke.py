@@ -14,6 +14,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _MACOS = _REPO_ROOT / ".claude" / "skills" / "CyClaw-Sandbox" / "macos-smoke.sh"
 _WINDOWS = _REPO_ROOT / ".claude" / "skills" / "CyClaw-Sandbox" / "windows-smoke.ps1"
@@ -60,7 +62,15 @@ def test_macos_smoke_exists_and_is_bash() -> None:
 def test_macos_smoke_bash_syntax() -> None:
     bash = shutil.which("bash")
     assert bash, "bash is required to syntax-check macos-smoke.sh"
-    subprocess.run([bash, "-n", str(_MACOS)], check=True)
+    result = subprocess.run(
+        [bash, "-n", str(_MACOS)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode and "access is denied" in (result.stdout + result.stderr).lower():
+        pytest.skip("discovered Bash executable cannot run on this host")
+    assert result.returncode == 0, result.stderr
 
 
 def _code_lines(text: str) -> str:
