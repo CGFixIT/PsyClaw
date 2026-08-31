@@ -273,8 +273,14 @@ powershell -File tests/apipsTest.ps1
 
 ## Lint, Format, And Typecheck Commands
 
-Advisory in CI (`lint.yml` runs Ruff with job- and step-level
-`continue-on-error` — a red result does not block merge; keep it clean locally):
+CI-enforced in `lint.yml` (a finding blocks merge):
+
+```bash
+ruff check --select F,B,S .
+```
+
+Advisory in the same workflow (`continue-on-error`; WPS is also advisory on
+changed Python files). Keep the broader Ruff set clean locally:
 
 ```bash
 ruff check --select E,F,I,B,C4,UP,S .
