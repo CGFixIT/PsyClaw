@@ -358,6 +358,27 @@ def test_read_file_denies_target_over_max_read_bytes(tmp_path: Path) -> None:
         tools.read_file("train_visible/big.md")
 
 
+def test_read_surface_manifest_rejects_malformed_json(tmp_path: Path) -> None:
+    """Corrupt surface_manifest.json must raise AgenticError, not JSONDecodeError."""
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    workspace.manifest_path.write_text("{not-json", encoding="utf-8")
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    with pytest.raises(AgenticError, match="malformed JSON"):
+        tools.read_surface_manifest()
+
+
+def test_read_surface_manifest_rejects_non_object_json(tmp_path: Path) -> None:
+    cfg = _workspace_tools_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    workspace.manifest_path.write_text("[1, 2]", encoding="utf-8")
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    with pytest.raises(AgenticError, match="malformed JSON"):
+        tools.read_surface_manifest()
+
+
 def test_finish_proposal_rejects_blank_content(tmp_path: Path) -> None:
     cfg = _workspace_tools_cfg(tmp_path)
     workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)

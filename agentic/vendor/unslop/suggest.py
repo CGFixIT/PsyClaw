@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -142,8 +141,20 @@ def apply_replacements(suggestions: list[dict], repl_path: str) -> list[str]:
     only a light merge/validation pass; the blocking contract lives in
     check_suggestions.py.
     """
-    data = json.loads(Path(repl_path).read_text())
-    index = {(r["start"], r["end"]): r["replacement"] for r in data.get("replacements", [])}
+    try:
+        data = json.loads(Path(repl_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return ["replacements file is unreadable or not JSON"]
+    if not isinstance(data, dict):
+        return ["replacements file must be a JSON object"]
+    raw = data.get("replacements", [])
+    if not isinstance(raw, list):
+        return ["replacements file 'replacements' must be a list"]
+    index: dict[tuple[object, object], object] = {}
+    for entry in raw:
+        if not isinstance(entry, dict) or "start" not in entry or "end" not in entry:
+            continue
+        index[(entry["start"], entry["end"])] = entry.get("replacement")
     warnings: list[str] = []
     matched: set[tuple[int, int]] = set()
     for s in suggestions:
