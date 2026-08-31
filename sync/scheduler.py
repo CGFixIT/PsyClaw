@@ -209,6 +209,7 @@ def _write_posix_launcher(cfg: RcloneConfig) -> str:
         try:
             os.unlink(tmp_path)
         except OSError:
+            # Cleanup is best-effort; preserve and re-raise the original failure.
             pass
         raise
     # Owner-only exec; 0700 is intentional, not world-writable.
@@ -385,6 +386,7 @@ class CronScheduler:
         try:
             os.unlink(_posix_launcher_path(self.cfg))
         except OSError:
+            # Crontab removal succeeded; stale/missing launcher cleanup must not undo it.
             pass
         return True
 

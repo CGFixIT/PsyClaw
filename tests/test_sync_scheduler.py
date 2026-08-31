@@ -255,13 +255,15 @@ def test_cron_remove_unlinks_generated_launcher(tmp_path) -> None:
         launcher = tmp_path / "cyclaw_sync.sh"
         assert launcher.exists()
 
-        assert scheduler.remove() is True
+        removed = scheduler.remove()
+        assert removed is True
         assert not launcher.exists()
         assert "/usr/bin/keep.sh" in written["content"]
         assert TASK_TAG not in written["content"]
 
         # A stale tagged entry with an already-missing launcher still removes cleanly.
-        assert scheduler.remove() is True
+        missing_launcher_removed = scheduler.remove()
+        assert missing_launcher_removed is True
 
 
 def test_cron_remove_preserves_unowned_lines_that_contain_task_tag() -> None:
