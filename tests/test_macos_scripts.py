@@ -25,6 +25,20 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CANONICAL_HOME_SUFFIX = ".CyClaw"
 _BASH = shutil.which("bash") or "bash"
+try:
+    _BASH_USABLE = subprocess.run(
+        [_BASH, "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    ).returncode == 0
+except (OSError, subprocess.TimeoutExpired):
+    _BASH_USABLE = False
+_BASH_EXECUTION_REQUIRED = pytest.mark.skipif(
+    not _BASH_USABLE,
+    reason="requires a runnable Bash executable",
+)
 
 
 def test_invoke_cyclaw_home_dir_matches_install_cyclaw() -> None:
@@ -370,6 +384,7 @@ def test_setup_cyclaw_keys_warns_when_installed_copy_drifted() -> None:
 # --- setup-cyclaw.sh: single-entry onboarding wrapper (#1053) --------------
 
 
+@_BASH_EXECUTION_REQUIRED
 def test_setup_cyclaw_syntax_is_valid() -> None:
     result = subprocess.run(
         [_BASH, "-n", str(_REPO_ROOT / "macos" / "setup-cyclaw.sh")],
@@ -458,6 +473,7 @@ def test_setup_cyclaw_never_passes_the_api_key_as_argv() -> None:
         assert any(pattern in line for pattern in allowed), f"unexpected use of the key: {line!r}"
 
 
+@_BASH_EXECUTION_REQUIRED
 def test_setup_cyclaw_dry_run_takes_no_action(tmp_path: Path) -> None:
     """--dry-run must plan without cloning, installing, or starting anything."""
     result = subprocess.run(
@@ -483,6 +499,7 @@ def test_setup_cyclaw_dry_run_takes_no_action(tmp_path: Path) -> None:
     assert list(tmp_path.iterdir()) == []
 
 
+@_BASH_EXECUTION_REQUIRED
 def test_setup_cyclaw_help_and_unknown_option() -> None:
     help_result = subprocess.run(
         [_BASH, str(_REPO_ROOT / "macos" / "setup-cyclaw.sh"), "--help"],
