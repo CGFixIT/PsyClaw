@@ -203,10 +203,27 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _parse_json_column(raw: object, *, empty: str, expect: type) -> Any:
+    """Parse a SQLite JSON text column; corrupt bytes return an empty *expect*.
+
+    Facts and proposals store tags / flags / payload as JSON text. A truncated
+    write used to raise JSONDecodeError out of the row mapper and 500 the
+    memory path. Returning [] or {} lets list/get complete with degraded
+    metadata instead. Do not log *raw*: payload_json can hold operator notes.
+    """
+    fallback: Any = [] if expect is list else {}
+    if isinstance(raw, expect):
+        return raw
+    try:
+        parsed = json.loads(empty if raw in (None, "") else raw)  # type: ignore[arg-type]
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Malformed memory JSON column; using empty %s", expect.__name__)
+        return fallback
+    return parsed if isinstance(parsed, expect) else fallback
+
+
 def _row_to_fact(row: sqlite3.Row) -> Fact:
-    tags = json.loads(row["tags_json"] or "[]")
-    if not isinstance(tags, list):
-        tags = []
+    tags = _parse_json_column(row["tags_json"], empty="[]", expect=list)
     return Fact(
         id=int(row["id"]),
         content=row["content"],
@@ -238,8 +255,8 @@ def _row_to_episode(row: sqlite3.Row) -> Episode:
 
 
 def _row_to_proposal(row: sqlite3.Row) -> MemoryProposal:
-    flags = json.loads(row["injection_flags_json"] or "[]")
-    payload = json.loads(row["payload_json"] or "{}")
+    flags = _parse_json_column(row["injection_flags_json"], empty="[]", expect=list)
+    payload = _parse_json_column(row["payload_json"], empty="{}", expect=dict)
     return MemoryProposal(
         id=int(row["id"]),
         action=row["action"],  # type: ignore[arg-type]

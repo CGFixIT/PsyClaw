@@ -15,9 +15,11 @@ from memory.store import (
     create_proposal,
     deactivate_fact,
     get_fact,
+    get_proposal,
     insert_fact,
     list_episodes,
     list_facts,
+    list_proposals,
     prune_episodes,
     reject_proposal,
     search_facts_fts,
@@ -266,3 +268,47 @@ def test_update_fact_partial_fields(mem_cfg):
     assert updated.category == "ops"
     assert updated.tags == ["a"]
     assert updated.confidence == pytest.approx(0.4)
+
+
+def test_corrupt_tags_json_returns_empty_tags(mem_cfg):
+    """A truncated tags_json must not raise out of get_fact / list_facts."""
+    fact = insert_fact(mem_cfg, "User timezone is UTC", tags=["tz"], reason="seed")
+    conn = connect(mem_cfg)
+    try:
+        conn.execute("UPDATE facts SET tags_json = ? WHERE id = ?", ("{not-json", fact.id))
+        conn.commit()
+    finally:
+        conn.close()
+    loaded = get_fact(mem_cfg, fact.id)
+    assert loaded is not None
+    assert loaded.tags == []
+    assert loaded.content == "User timezone is UTC"
+    listed = list_facts(mem_cfg, active_only=True)
+    assert len(listed) == 1
+    assert listed[0].tags == []
+
+
+def test_corrupt_proposal_json_columns_do_not_raise(mem_cfg):
+    """Corrupt proposal JSON columns degrade to empty flags/payload, not 500."""
+    prop = create_proposal(
+        mem_cfg,
+        "add_fact",
+        {"content": "Preferred editor is vim", "category": "prefs", "tags": ["editor"]},
+        reason="operator note",
+    )
+    conn = connect(mem_cfg)
+    try:
+        conn.execute(
+            "UPDATE memory_proposals SET injection_flags_json = ?, payload_json = ? WHERE id = ?",
+            ("[unterminated", "{", prop.id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    loaded = get_proposal(mem_cfg, prop.id)
+    assert loaded is not None
+    assert loaded.injection_flags == []
+    assert loaded.payload == {}
+    assert loaded.reason == "operator note"
+    listed = list_proposals(mem_cfg)
+    assert any(p.id == prop.id and p.payload == {} for p in listed)
