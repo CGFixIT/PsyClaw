@@ -53,6 +53,17 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> Magic
     return m
 
 
+@pytest.fixture(autouse=True)
+def _isolate_posix_launcher(tmp_path, monkeypatch) -> None:
+    # Cron tests emulate POSIX even when the suite runs on Windows. Keep their
+    # generated launcher inside pytest's per-test directory, not the host's
+    # platform-derived default log path.
+    monkeypatch.setattr(
+        "sync.scheduler._posix_launcher_path",
+        lambda _cfg: str(tmp_path / "cyclaw_sync.sh"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # get_scheduler factory
 # ---------------------------------------------------------------------------
@@ -113,9 +124,9 @@ def test_cron_install_appends_exactly_one_tagged_line() -> None:
     assert entry.cron_or_time == "15 3 * * *"
     assert tagged[0].startswith("15 3 * * *")
     assert tagged[0].endswith(f"# {TASK_TAG}")
-    # Command cd's into the repo root, not data/corpus.
-    assert "-m sync.cli sync" in tagged[0]
-    assert os.path.basename(_REPO_ROOT) in tagged[0]
+    # Cron invokes the short launcher; the full sync command lives in it.
+    assert "cyclaw_sync.sh" in tagged[0]
+    assert "-m sync.cli sync" not in tagged[0]
 
 
 def test_cron_install_replaces_prior_tagged_line() -> None:
@@ -221,6 +232,38 @@ def test_cron_remove_returns_true_when_tagged_line_present() -> None:
     assert result is True
     assert TASK_TAG not in written["content"]
     assert "/usr/bin/keep.sh" in written["content"]
+
+
+def test_cron_remove_unlinks_generated_launcher(tmp_path) -> None:
+    cfg = _make_cfg()
+    scheduler = CronScheduler(cfg)
+    written: dict[str, str] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout=existing)
+        written["content"] = kwargs["input"]
+        return _completed()
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        line = scheduler._our_line()
+        existing = "0 1 * * * /usr/bin/keep.sh\n" + line + "\n"
+        launcher = tmp_path / "cyclaw_sync.sh"
+        assert launcher.exists()
+
+        removed = scheduler.remove()
+        assert removed is True
+        assert not launcher.exists()
+        assert "/usr/bin/keep.sh" in written["content"]
+        assert TASK_TAG not in written["content"]
+
+        # A stale tagged entry with an already-missing launcher still removes cleanly.
+        missing_launcher_removed = scheduler.remove()
+        assert missing_launcher_removed is True
 
 
 def test_cron_remove_preserves_unowned_lines_that_contain_task_tag() -> None:
@@ -579,14 +622,13 @@ def test_windows_launcher_doubles_percent_and_quotes(tmp_path) -> None:
     assert content.startswith("@echo off")               # (read_text normalizes CRLF->LF)
 
 
-def test_cron_line_escapes_percent_in_config_path(monkeypatch) -> None:
-    # POSIX twin of the Windows % doubling: crontab(5) turns bare % into a
-    # newline + stdin feed, truncating the scheduled command. The installed
-    # line must backslash-escape every % in the command field.
+def test_cron_line_keeps_percent_in_config_path_out_of_crontab(monkeypatch, tmp_path) -> None:
+    # crontab(5) turns bare % into a newline + stdin feed. The short launcher
+    # keeps config-path percent signs out of the installed crontab line.
     from sync.scheduler import CronScheduler, _cron_escape_command, _sync_command
 
     monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Linux")
-    cfg = _make_cfg()
+    cfg = _make_cfg(log_dir=str(tmp_path))
     cfg._config_path = "/tmp/cfg%20dir/config.yaml"
     cfg.schedule_min = 15
     cfg.schedule_hour = 3
@@ -600,10 +642,24 @@ def test_cron_line_escapes_percent_in_config_path(monkeypatch) -> None:
 
     line = CronScheduler(cfg)._our_line()
     assert line.startswith("15 3 * * * ")
-    assert r"cfg\%20dir" in line
-    # Command field (between schedule and tag) has no unescaped %.
+    assert "cyclaw_sync.sh" in line
+    # Command field (between schedule and tag) has no percent signs.
     cmd_field = line.rsplit("#", 1)[0].split(None, 5)[5]
-    assert "%" not in cmd_field.replace(r"\%", "")
+    assert "%" not in cmd_field
+    assert "cfg%20dir" in (tmp_path / "cyclaw_sync.sh").read_text(encoding="utf-8")
+
+
+def test_posix_launcher_is_atomic_and_has_set_eu(tmp_path) -> None:
+    from sync.scheduler import _write_posix_launcher
+
+    cfg = _make_cfg()
+    with patch("sync.scheduler.platform.system", return_value="Linux"):
+        launcher = Path(_write_posix_launcher(cfg))
+
+    content = launcher.read_text(encoding="utf-8")
+    assert content.startswith("#!/bin/sh\nset -eu\n")
+    assert content.index(" env ") < content.index("-m sync.cli")
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------

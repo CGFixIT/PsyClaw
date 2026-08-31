@@ -308,29 +308,40 @@ def test_windows_cmd_launcher_set_lines(tmp_path):
     assert content.index('set "GH_TELEMETRY=false"') < content.index("python.exe")
 
 
-def test_sync_cron_line_env_prefix(monkeypatch):
+def test_sync_cron_line_uses_short_telemetry_safe_launcher(monkeypatch, tmp_path):
     import sync.scheduler as scheduler
 
     monkeypatch.setattr(scheduler.platform, "system", lambda: "Linux")
+    long_root = str(tmp_path / ("repo-" + "x" * 800))
+    monkeypatch.setattr(scheduler, "_repo_root", lambda cfg: long_root)
 
     class _Cfg:
         _config_path = None
-        log_dir = ""
-        local_path = str(REPO_ROOT)
+        log_dir = str(tmp_path)
+        local_path = long_root
+        schedule_min = 30
+        schedule_hour = 3
 
-    cmd = scheduler._sync_command(_Cfg())
-    assert " env " in f" {cmd} "
+    line = scheduler.CronScheduler(_Cfg())._our_line()
+    launcher = tmp_path / "cyclaw_sync.sh"
+    content = launcher.read_text(encoding="utf-8")
+
+    assert len(line) < 256
+    assert str(launcher) in line
+    if scheduler.os.name != "nt":
+        assert launcher.stat().st_mode & 0o100
+    assert " env " in f" {content} "
     # shlex.quote leaves shell-safe tokens unquoted -- assert the pair itself.
-    assert "GH_TELEMETRY=false" in cmd
-    assert "OTEL_SDK_DISABLED=true" in cmd
-    assert "CHROMA_OTEL_COLLECTION_ENDPOINT=" in cmd
+    assert "GH_TELEMETRY=false" in content
+    assert "OTEL_SDK_DISABLED=true" in content
+    assert "CHROMA_OTEL_COLLECTION_ENDPOINT=" in content
     # Inherited scrubbed names must be REMOVED pre-interpreter: positive
-    # assignments cannot do that, so the prefix carries env -u unsets.
-    assert "-u OTEL_CONFIG_FILE" in cmd
-    assert "-u OTEL_EXPERIMENTAL_CONFIG_FILE" in cmd
-    assert "-u LANGSMITH_API_KEY" in cmd
-    assert cmd.index("-u OTEL_CONFIG_FILE") < cmd.index("GH_TELEMETRY=false")
-    assert cmd.index(" env ") < cmd.index("-m sync.cli"), "env prefix must precede the interpreter"
+    # assignments cannot do that, so the launcher carries env -u unsets.
+    assert "-u OTEL_CONFIG_FILE" in content
+    assert "-u OTEL_EXPERIMENTAL_CONFIG_FILE" in content
+    assert "-u LANGSMITH_API_KEY" in content
+    assert content.index("-u OTEL_CONFIG_FILE") < content.index("GH_TELEMETRY=false")
+    assert content.index(" env ") < content.index("-m sync.cli"), "env prefix must precede the interpreter"
 
 
 def test_sync_windows_bat_set_lines(tmp_path, monkeypatch):
