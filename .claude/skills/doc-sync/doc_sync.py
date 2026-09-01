@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         "api.port": r"8787",
         "retrieval.min_score": r"min_score",
         "retrieval.rrf_k": r"rrf_k|RRF.*\b60\b|k=60",
-        "api.graph_timeout_sec": r"graph_timeout|330",
+        "api.graph_timeout_sec": r"graph_timeout",
         "personality.soul_max_chars": r"soul_max_chars|8000",
     }
     for key, val in facts.items():
