@@ -454,12 +454,19 @@ _keychain_store_value() {
   old_umask="$(umask)"
   umask 077
   tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.kc.XXXXXX")"
+  # Cleartext secret lives in $tmp until `security` reads it below. The
+  # straight-line `rm -f` covers the success path only, and
+  # _keychain_store_file can sit on a Keychain unlock prompt indefinitely --
+  # a Ctrl-C there used to leave the key behind in $TMPDIR forever. Same trap
+  # idiom as _fill_browser; bash runs an EXIT trap on SIGINT too.
+  trap 'rm -f "$tmp"' EXIT
   printf '%s' "$value" > "$tmp"
   chmod 600 "$tmp"
   umask "$old_umask"
   rc=0
   _keychain_store_file "$service" "$tmp" || rc=$?
   rm -f "$tmp"
+  trap - EXIT
   return "$rc"
 }
 
@@ -687,18 +694,31 @@ _warn_if_installed_copy_drifted() {
 }
 
 _copy_key() {
-  local tmp
+  local tmp old_umask
   if ! command -v pbcopy >/dev/null 2>&1; then
     warn "pbcopy not found — skip pasteboard (expected off macOS)"
     return 0
   fi
-  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.clip.XXXXXX")"
+  # umask before mktemp (it governs the file mktemp creates), and restored
+  # afterwards. Both sibling functions -- _env_upsert and
+  # _keychain_store_value -- already save/restore; this one set 077 after
+  # mktemp and never put it back, so every file the script created later
+  # inherited it. Harmless in effect (077 is stricter, not looser) but the
+  # asymmetry is the kind that rots into a real bug.
+  old_umask="$(umask)"
   umask 077
+  tmp="$(mktemp "${TMPDIR:-/tmp}/cyclaw.clip.XXXXXX")"
+  umask "$old_umask"
+  # Cleartext key lives in $tmp until pbcopy reads it below; cover that window
+  # so an interrupted run doesn't leave it behind (same trap idiom as
+  # _fill_browser). pbcopy can block on a contended pasteboard.
+  trap 'rm -f "$tmp"' EXIT
   printf '%s' "$_api_value" > "$tmp"
   chmod 600 "$tmp"
   # stdin, not argv
   pbcopy < "$tmp"
   rm -f "$tmp"
+  trap - EXIT
   step "CYCLAW_API_KEY copied to the pasteboard (not echoed)"
   if [ "$CLIP_TTL" -gt 0 ] 2>/dev/null; then
     (
