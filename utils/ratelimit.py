@@ -160,36 +160,86 @@ class RateLimiter:
                 CREATE TABLE IF NOT EXISTS rate_hits (
                     ip TEXT PRIMARY KEY,
                     timestamps TEXT NOT NULL,
-                    last_sweep DOUBLE PRECISION NOT NULL
+                    last_sweep DOUBLE PRECISION NOT NULL,
+                    window_seconds DOUBLE PRECISION NOT NULL DEFAULT 0
                 )
             """
         return """
             CREATE TABLE IF NOT EXISTS rate_hits (
                 ip TEXT PRIMARY KEY,
                 timestamps TEXT NOT NULL,
-                last_sweep REAL NOT NULL
+                last_sweep REAL NOT NULL,
+                window_seconds REAL NOT NULL DEFAULT 0
             )
         """
+
+    def _ensure_window_seconds_column(self) -> None:
+        """Add ``window_seconds`` to a table created before this schema version.
+
+        A table freshly created by ``_ddl()`` above already has the column; this
+        only matters for an existing ``data/rate_limits.db`` (or Postgres
+        ``rate_hits``) from before it. Neither backend at the pins this repo
+        carries has a portable ``ADD COLUMN IF NOT EXISTS``, so the idiom is:
+        attempt the ALTER, and treat "the column is already there" as success
+        rather than probing ``PRAGMA table_info``/``information_schema.columns``
+        first -- that also makes this race-safe if two processes migrate the
+        same file concurrently on first boot after an upgrade.
+
+        ``DEFAULT 0`` for pre-existing rows is deliberate, not a guess at their
+        original window: 0 makes a legacy row immediately eligible for the next
+        sweep's conditional DELETE (``last_sweep + window_seconds <= now``), so
+        the table converges to the per-row-policy invariant this column exists
+        to provide as fast as the next sweep, rather than carrying an
+        unknowable borrowed value indefinitely. The cost is one-time and
+        bounded: a client already mid-window when the migration runs may see
+        its budget reset early once -- never a security regression (only ever
+        more permissive, and only until that IP's next real hit re-persists a
+        live ``window_seconds``).
+        """
+        column_type = "DOUBLE PRECISION" if self._backend == "postgres" else "REAL"
+        sql = f"ALTER TABLE rate_hits ADD COLUMN window_seconds {column_type} NOT NULL DEFAULT 0"
+        if self._backend == "postgres":
+            import psycopg  # noqa: PLC0415 -- lazy, matches _pg_connection
+
+            try:
+                self._pg_connection().execute(sql)
+            except psycopg.errors.DuplicateColumn:
+                pass
+            return
+        try:
+            with self._sqlite_txn() as conn:
+                conn.execute(sql)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
 
     def _upsert_sql(self) -> str:
         # noqa S608: self._ph is a fixed placeholder char ("?"/"%s"), never user
         # data — values are always bound via parameters. (Mirrors the S608 ignore
         # already applied to utils/personality.py for the same placeholder pattern.)
+        #
+        # window_seconds is written on every upsert, not just at row creation:
+        # the row must always reflect the policy of whichever instance most
+        # recently touched it, so a later config change (a different
+        # window_seconds on restart) takes effect on that IP's very next hit
+        # rather than being stuck with whatever wrote the row first.
         if self._backend == "postgres":
             return (
-                "INSERT INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608
-                f"VALUES ({self._ph}, {self._ph}, {self._ph}) "
+                "INSERT INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
+                f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph}) "
                 "ON CONFLICT (ip) DO UPDATE SET "
-                "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep"
+                "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep, "
+                "window_seconds = EXCLUDED.window_seconds"
             )
         return (
-            "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608
-            f"VALUES ({self._ph}, {self._ph}, {self._ph})"
+            "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
+            f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph})"
         )
 
     def _init_db(self) -> None:
         if self._backend == "postgres":
             self._pg_connection().execute(self._ddl())
+            self._ensure_window_seconds_column()
             return
         # The connection is opened once here (parent dir created by
         # _sqlite_connection) and reused for the object's lifetime; close()
@@ -197,6 +247,7 @@ class RateLimiter:
         # _sqlite_connection's docstring for why that cost mattered.
         with self._sqlite_txn() as conn:
             conn.execute(self._ddl())
+        self._ensure_window_seconds_column()
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -234,7 +285,7 @@ class RateLimiter:
         """
         if not self._backend:
             return
-        params = (client_ip, json.dumps(self._hits[client_ip]), now)
+        params = (client_ip, json.dumps(self._hits[client_ip]), now, self.window_seconds)
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
@@ -254,33 +305,27 @@ class RateLimiter:
         A candidate with no row at all is NOT a survivor: it is already gone,
         so the caller should drop it from memory as usual.
 
-        Known limit -- one policy per backend. ``rate_hits`` stores no window
-        or limiter namespace, so this threshold is whatever THIS instance's
-        ``window_seconds`` says. Two processes sharing a backend with different
-        windows will therefore step on each other. That is not new here: on the
-        write path ``allow()`` already prunes to its own window before
-        persisting, so a short-window writer discards history a long-window
-        process needs regardless of this delete. Making mixed-policy sharing
-        safe needs a schema change (persist the governing window or a
-        namespace per row) and is deliberately out of scope. The shipped
-        configuration is unaffected: agentic/fsconnect/writer.py builds both of
-        its limiters from the same ``window_seconds``.
-
         Caller must hold ``self._lock``.
 
         ``ips`` comes from this instance's in-memory map, which is a snapshot
         taken when the instance was constructed. Several limiters can share one
         backend -- ``agentic/fsconnect/writer.py`` builds a per-root and a
-        global limiter against the same file, and separate processes can point
-        at it too -- so "stale according to my snapshot" is not the same as
-        "stale on disk". Deleting by IP alone let one instance destroy a live
-        window another had just written, which would hand an abuser back the
-        budget the persisted limiter exists to hold.
+        global limiter against the same file, separate processes can point at
+        it too, and a rolling config change can put two DIFFERENT
+        ``window_seconds`` values on the same backend simultaneously -- so
+        "stale according to my snapshot" is not the same as "stale on disk",
+        and "stale according to MY window" is not the same as "stale according
+        to the policy that actually wrote this row".
 
-        The ``last_sweep <= threshold`` guard makes the delete conditional on
-        the persisted row still being expired: ``last_sweep`` holds the time of
-        that row's last write (see ``_persist``), so a row refreshed inside the
-        current window survives someone else's stale sweep.
+        The delete is conditional on ``last_sweep + window_seconds <= now``,
+        using the ROW's OWN persisted ``window_seconds`` (written by
+        ``_persist`` under whichever instance most recently touched it) rather
+        than this sweeping instance's. A row a long-window process just wrote
+        therefore survives a short-window process's sweep even though it is
+        already older than the short window -- it is evaluated against the
+        policy that actually governs it, not the policy of whoever happens to
+        run the next sweep. ``_ensure_window_seconds_column`` covers what a
+        table predating this column does for rows it never wrote.
 
         The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
         stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
@@ -296,20 +341,23 @@ class RateLimiter:
         """
         if not self._backend:
             return set()
-        threshold = now - self.window_seconds
-        rows = [(ip, threshold) for ip in ips]
+        rows = [(ip, now) for ip in ips]
         candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --
             # Connection has execute() but no executemany(), so calling it on
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
-                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep <= %s", rows)
+                cur.executemany(
+                    "DELETE FROM rate_hits WHERE ip = %s AND last_sweep + window_seconds <= %s", rows
+                )
                 cur.execute("SELECT ip FROM rate_hits")
                 remaining = {row[0] for row in cur.fetchall()}
             return candidates & remaining
         with self._sqlite_txn() as conn:
-            conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
+            conn.executemany(
+                "DELETE FROM rate_hits WHERE ip = ? AND last_sweep + window_seconds <= ?", rows
+            )
         # One bounded scan rather than a per-IP probe: this table is kept small
         # by the very eviction running here, and it is the same read
         # _load_from_db already does at construction. Avoids an IN (...) clause,

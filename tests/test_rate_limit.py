@@ -532,7 +532,10 @@ class TestPersistence:
 
         sql, rows = executed[0]
         assert "DELETE FROM rate_hits" in sql
-        assert "last_sweep <" in sql, "the delete must stay conditional on the persisted timestamp"
+        assert "last_sweep + window_seconds <=" in sql, (
+            "the delete must stay conditional on the ROW's own persisted window, "
+            "not the sweeping instance's"
+        )
         assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
 
 
@@ -613,4 +616,111 @@ class TestPersistence:
         rl.allow("10.0.0.3")
         assert "10.0.0.2" not in _persisted_ips(db), (
             "the rolled-back hit was committed by a later request"
+        )
+
+
+    def test_persisted_window_seconds_reflects_the_writing_instance(self, tmp_path):
+        """Each row remembers the window_seconds of whoever last wrote it.
+
+        This is the plumbing the cross-process fix rests on: without it there
+        is nothing on the row for a later sweep to check against.
+        """
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=42, clock=FakeClock(), db_path=str(db))
+        rl.allow("10.0.0.1")
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.1",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (42.0,)
+
+    def test_a_longer_window_row_survives_a_shorter_window_process_sweep(self, tmp_path):
+        """A short-window process must not evict a row still live under the
+        LONGER-window policy that actually wrote it.
+
+        The shape of a rolling config change: two processes point at the same
+        backend with different window_seconds. The old conditional-delete
+        guard checked the persisted row's last_sweep against the SWEEPING
+        instance's own window -- correct for the same-window race it was
+        built for, but a long-window row written more than the short window's
+        span ago (easy: 70s ago is old for a 10s window, nowhere near old for
+        a 600s one) still got deleted, because nothing recorded which policy
+        actually governed that row.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        long_proc = RateLimiter(max_requests=5, window_seconds=600, clock=clock, db_path=str(db))
+        long_proc.allow("10.0.0.9")
+
+        clock.advance(70.0)
+        short_proc = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        short_proc.allow("192.168.1.1")  # triggers short_proc's first sweep
+
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "a shorter-window process's sweep evicted a row still live under "
+            "the longer-window policy that wrote it"
+        )
+        assert "10.0.0.9" in short_proc._hits, (
+            "the row must stay tracked in memory too, or nothing can ever "
+            "nominate it again once it genuinely expires"
+        )
+
+        # It must still be evictable once truly expired under ITS OWN window.
+        clock.t = 1000.0 + 600.0 + 1.0
+        short_proc.allow("192.168.1.2")
+        assert "10.0.0.9" not in _persisted_ips(db), (
+            "a row must still be evicted once its own persisted window has genuinely expired"
+        )
+
+    def test_legacy_table_migrates_without_crashing_and_converges(self, tmp_path):
+        """A rate_hits table from before window_seconds must migrate cleanly.
+
+        Simulates upgrading a live deployment: hand-creates the OLD 3-column
+        schema, seeds a row the way the old code would have, then constructs
+        RateLimiter against it exactly as a real upgraded process would on
+        its next boot.
+        """
+        db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE rate_hits (ip TEXT PRIMARY KEY, timestamps TEXT NOT NULL, "
+            "last_sweep REAL NOT NULL)"
+        )
+        conn.execute("INSERT INTO rate_hits VALUES (?, ?, ?)", ("legacy.ip", "[500.0]", 500.0))
+        conn.commit()
+        conn.close()
+
+        rl = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
+        assert "legacy.ip" in rl._hits, "the pre-existing row must still load"
+
+        conn = sqlite3.connect(str(db))
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(rate_hits)")}
+            assert "window_seconds" in cols
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("legacy.ip",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (0.0,), (
+            "a migrated legacy row must default to window_seconds=0, making it "
+            "immediately eligible for the next sweep rather than carrying an "
+            "unknowable borrowed policy indefinitely"
+        )
+
+        # Idempotent: constructing again against the already-migrated file
+        # must not raise on the column already existing.
+        rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
+        assert "legacy.ip" in rl2._hits
+
+        # window_seconds=0 means the legacy row is immediately sweep-eligible.
+        rl2.allow("some.other.ip")
+        assert "legacy.ip" not in _persisted_ips(db), (
+            "a migrated legacy row (window_seconds=0) must be evicted on the "
+            "first sweep after migration"
         )

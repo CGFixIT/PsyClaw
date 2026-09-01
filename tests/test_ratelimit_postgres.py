@@ -107,3 +107,75 @@ def test_pg_hardening_applied(clean_table):
         assert isinstance(json.loads(row[0]), list)
     finally:
         rl.close()
+
+
+def test_pg_migrates_a_table_created_before_the_window_seconds_column(clean_table):
+    """A pre-existing (old-schema) rate_hits table must migrate, not crash.
+
+    Simulates a Postgres deployment that already ran this limiter before
+    window_seconds was added: creates the OLD 3-column shape directly, seeds
+    one row the way the old code would have, then constructs a RateLimiter
+    against it exactly as a real upgraded process would on its next boot.
+    """
+    import psycopg
+
+    from utils.personality_db import _harden_pg_conninfo
+
+    with psycopg.connect(_harden_pg_conninfo(DSN), autocommit=True) as conn:
+        conn.execute("DROP TABLE IF EXISTS rate_hits")
+        conn.execute(
+            "CREATE TABLE rate_hits (ip TEXT PRIMARY KEY, timestamps TEXT NOT NULL, "
+            "last_sweep DOUBLE PRECISION NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO rate_hits (ip, timestamps, last_sweep) VALUES (%s, %s, %s)",
+            ("legacy.ip", "[500.0]", 500.0),
+        )
+
+    rl = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_url=DSN)
+    try:
+        assert "legacy.ip" in rl._hits, "the pre-existing row must still load"
+        conn = rl._pg_connection()
+        row = conn.execute(
+            "SELECT window_seconds FROM rate_hits WHERE ip = %s", ("legacy.ip",)
+        ).fetchone()
+        assert row == (0.0,), "a migrated legacy row must default to window_seconds=0"
+
+        # Constructing a SECOND limiter against the now-migrated table must not
+        # raise on the column already existing (idempotent migration).
+        rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_url=DSN)
+        rl2.close()
+    finally:
+        rl.close()
+
+
+def test_pg_a_row_survives_a_shorter_window_sweep_from_another_process(clean_table):
+    """A long-window process's row must not be evicted by a short-window one.
+
+    Two RateLimiter instances against the same backend with DIFFERENT
+    window_seconds -- the shape of a rolling config change -- must each
+    respect the OTHER's persisted policy on the shared table, not just their
+    own. The long-window row must survive a sweep from the short-window
+    instance even though it looks stale under the short instance's own
+    window.
+    """
+    clock = {"t": 1000.0}
+
+    long_proc = RateLimiter(max_requests=5, window_seconds=600, clock=lambda: clock["t"], db_url=DSN)
+    try:
+        long_proc.allow("10.0.0.9")
+    finally:
+        long_proc.close()
+
+    clock["t"] += 70.0  # stale under a 10s window, nowhere near stale under 600s
+    short_proc = RateLimiter(max_requests=5, window_seconds=10, clock=lambda: clock["t"], db_url=DSN)
+    try:
+        short_proc.allow("192.168.1.1")  # triggers short_proc's own sweep
+        conn = short_proc._pg_connection()
+        remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
+        assert "10.0.0.9" in remaining, (
+            "a short-window sweep evicted a row still live under the long-window "
+            "policy that actually wrote it"
+        )
+    finally:
+        short_proc.close()
