@@ -125,6 +125,9 @@ dependencies:
       - langgraph==1.2.9
       - rank-bm25==0.2.2
       - websockets==15.0.1
+      # Telemetry-control floor from the pip path (pyproject.toml/constraints.txt).
+      # conda-forge chromadb=1.5.9 only declares onnxruntime>=1.14.1.
+      - onnxruntime==1.29.0
 
 # Optional: Create with mamba for speed
 # mamba env create -f environment.yml
