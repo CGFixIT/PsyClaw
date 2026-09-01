@@ -45,6 +45,22 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Fallback used by _delete_rows for a row whose persisted window_seconds is
+# unknown (not a positive number) -- see that method's docstring. Fixed and
+# deliberately generous rather than derived from any single instance's own
+# window_seconds: a mixed-policy rolling upgrade can have an unmigrated
+# writer with a LONGER real window than whichever upgraded process happens
+# to run the next sweep, and using that sweeper's own (possibly much
+# shorter) window as the fallback reproduces the exact cross-policy eviction
+# bug this module exists to fix, just for the unknown-window case instead of
+# the known-window one (codex review on #1244). Any realistic
+# api.rate_limit window for this per-IP HTTP limiter is seconds to low
+# minutes (the shipped default is 60 requests per 60 seconds); 24 hours
+# comfortably outlasts any plausible configured value while still bounding
+# growth -- a genuinely abandoned unknown-window row still converges, it
+# just isn't assumed dead the instant one sweep's own window has elapsed.
+_UNKNOWN_WINDOW_GRACE_SECONDS = 86400
+
 
 def _is_pg_dsn(value: str | None) -> bool:
     return bool(value) and (value.startswith("postgresql") or value.startswith("postgres"))
@@ -344,25 +360,28 @@ class RateLimiter:
 
         A row's ``window_seconds`` is treated as unknown (not "expired 0
         seconds after its last write") whenever it is not a positive number,
-        falling back to THIS sweeping instance's own ``window_seconds`` for
-        exactly those rows. Two things can put a row in that state, not only
-        the migration default: a rolling upgrade where a pre-migration process
-        is still writing rows with SQLite's ``INSERT OR REPLACE`` (which resets
-        every unlisted column, including one it doesn't know exists, to its
-        DEFAULT on every write, not just the first) or Postgres's INSERT-new-
-        row path, can zero out a row's persisted window on ANY write while an
-        old and a new binary briefly coexist against the same backend, not only
-        at migration time. Without the fallback, the very next sweep from any
-        upgraded instance would read ``last_sweep + 0 <= now`` and evict that
-        row almost immediately, discarding a still-live client's rate-limit
-        budget rather than merely converging a genuinely stale legacy row
-        (codex review on #1244). Using the sweeper's own window for the
-        fallback exactly matches this codebase's pre-per-row-window behavior
-        for that specific ambiguous case -- it does not weaken the fix above
-        for the actual reported bug (two CURRENT-version policies with
-        different, both-positive ``window_seconds`` sharing one backend),
-        which still evaluates every row with a real value against that row's
-        own persisted window.
+        falling back to the fixed ``_UNKNOWN_WINDOW_GRACE_SECONDS`` for
+        exactly those rows -- NOT to this sweeping instance's own
+        ``window_seconds``, which was this method's first attempt at the
+        fallback and turned out to reproduce the very bug this eviction
+        rewrite exists to fix: a short-window sweeper is exactly as wrong a
+        stand-in for an unknown policy as it is for a KNOWN longer one (codex
+        review on #1244, second round). Two things can put a row in the
+        unknown state, not only the migration default: a rolling upgrade
+        where a pre-migration process is still writing rows with SQLite's
+        ``INSERT OR REPLACE`` (which resets every unlisted column, including
+        one it doesn't know exists, to its DEFAULT on every write, not just
+        the first) or Postgres's INSERT-new-row path, can zero out a row's
+        persisted window on ANY write while an old and a new binary briefly
+        coexist against the same backend, not only at migration time. That
+        old writer's real intended window is unknowable -- it might be
+        LONGER than any currently-running upgraded process's own window --
+        so nothing this instance knows about itself is a safe substitute;
+        see ``_UNKNOWN_WINDOW_GRACE_SECONDS`` for why a large fixed constant
+        is. This does not weaken the fix above for the original reported bug
+        (two CURRENT-version policies with different, both-positive
+        ``window_seconds`` sharing one backend), which still evaluates every
+        row with a real value against that row's own persisted window.
 
         Both statements are written out in full rather than built from
         ``self._ph``: an f-string here would be flagged B608/S608 (as
@@ -371,7 +390,7 @@ class RateLimiter:
         """
         if not self._backend:
             return set()
-        rows = [(ip, self.window_seconds, now) for ip in ips]
+        rows = [(ip, _UNKNOWN_WINDOW_GRACE_SECONDS, now) for ip in ips]
         candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --

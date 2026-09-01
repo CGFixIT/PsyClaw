@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from utils.ratelimit import RateLimiter
+from utils.ratelimit import _UNKNOWN_WINDOW_GRACE_SECONDS, RateLimiter
 
 DSN = os.environ.get("CYCLAW_DB_URL")
 pytestmark = pytest.mark.skipif(
@@ -181,18 +181,23 @@ def test_pg_a_row_survives_a_shorter_window_sweep_from_another_process(clean_tab
         short_proc.close()
 
 
-def test_pg_a_zero_window_row_survives_using_the_sweepers_own_window(clean_table):
-    """A row with window_seconds=0 must not be treated as instantly stale.
+def test_pg_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(clean_table):
+    """A row with window_seconds=0 must not be treated as instantly stale
+    under EITHER a naive zero reading OR the sweeping instance's own window.
 
     Mirrors the sqlite-side test of the same name. window_seconds can be 0 on
     a live row (not just a freshly-migrated one) whenever a process unaware of
     the column writes it -- Postgres's own upsert only overwrites the columns
     it lists, so simulate that directly by zeroing an existing row's
     window_seconds while leaving its last_sweep fresh, exactly the state a
-    coexisting pre-migration writer would leave behind. A short-window
-    sweeper whose in-memory snapshot predates that zeroing must not delete it
-    the instant its sweep runs; it must still converge once genuinely stale
-    under the fallback (codex review on #1244).
+    coexisting pre-migration writer would leave behind. A SHORT-window (10s)
+    sweeper whose in-memory snapshot predates that zeroing must not delete a
+    row a LONG-window (600s) writer actually owns using its OWN short window
+    as a stand-in for the unknown real policy (the second-round codex finding
+    on #1244: the first fallback attempt used exactly that stand-in and
+    reproduced the module's original cross-policy bug for the unknown-window
+    case). It must still converge once the fixed grace period genuinely
+    elapses.
     """
     clock = {"t": 1000.0}
 
@@ -219,18 +224,32 @@ def test_pg_a_zero_window_row_survives_using_the_sweepers_own_window(clean_table
         remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
         assert "10.0.0.9" in remaining, (
             "a zero-window row was evicted almost immediately after being "
-            "touched, instead of falling back to the sweeping instance's own "
-            "window for a row with no known policy"
+            "touched, instead of falling back to a fixed grace period for a "
+            "row with no known policy"
         )
 
-        # Still evictable once genuinely stale under the fallback window
-        # (short's own 10s): zeroed last_sweep(1010) + 10 <= now.
+        # The exact scenario the second-round review reported: the old
+        # writer's real window was 600s, so this row must still be alive at
+        # t=1025 (only 15s after the zeroing) even though a naive "use the
+        # sweeper's own 10s window" fallback would have evicted it by t=1020.
         clock["t"] = 1025.0
         short.allow("192.168.1.2")
         remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
+        assert "10.0.0.9" in remaining, (
+            "the sweeping instance's own (shorter) window was used as the "
+            "fallback, reproducing this module's original cross-policy "
+            "eviction bug for the unknown-window case"
+        )
+
+        # Still evictable once genuinely stale under the fixed grace period
+        # (zeroed last_sweep(1010) + _UNKNOWN_WINDOW_GRACE_SECONDS <= now) --
+        # it must not become immortal.
+        clock["t"] = 1010.0 + _UNKNOWN_WINDOW_GRACE_SECONDS + 1.0
+        short.allow("192.168.1.3")
+        remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
         assert "10.0.0.9" not in remaining, (
             "a zero-window row must still converge once stale under the "
-            "sweeper's fallback window -- it must not become immortal"
+            "fixed grace period -- it must not become immortal"
         )
     finally:
         short.close()

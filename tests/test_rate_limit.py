@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import pytest
 
-from utils.ratelimit import RateLimiter
+from utils.ratelimit import _UNKNOWN_WINDOW_GRACE_SECONDS, RateLimiter
 
 # NOTE: `gate` is imported lazily inside the two tests that need it
 # (test_gate_uses_production_limiter / test_429_detail_reflects_configured_limits).
@@ -709,9 +709,10 @@ class TestPersistence:
             conn.close()
         assert row == (0.0,), (
             "a migrated legacy row must default to window_seconds=0 -- see "
-            "test_a_zero_window_row_survives_using_the_sweepers_own_window for "
-            "how the sweep predicate treats that value (not \"expired the "
-            "instant last_sweep was written\")"
+            "test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade "
+            "for how the sweep predicate treats that value (not \"expired the "
+            "instant last_sweep was written\", and not \"expired the instant "
+            "some OTHER sweeper's own window elapsed\" either)"
         )
 
         # Idempotent: constructing again against the already-migrated file
@@ -719,31 +720,37 @@ class TestPersistence:
         rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
         assert "legacy.ip" in rl2._hits
 
-        # This row is 500s old against rl2's 60s window -- stale by a wide
-        # margin even under the fallback (test_a_zero_window_row_survives_
-        # using_the_sweepers_own_window below covers the "recently touched,
-        # not yet stale under the fallback" case this one doesn't reach).
+        # This row is only 500s old -- nowhere near the fixed
+        # _UNKNOWN_WINDOW_GRACE_SECONDS fallback (24h), so it must NOT
+        # converge yet despite being far older than rl2's own 60s window
+        # (test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade
+        # below covers actual convergence once that grace period elapses).
         rl2.allow("some.other.ip")
-        assert "legacy.ip" not in _persisted_ips(db), (
-            "a migrated legacy row must still converge once stale under the "
-            "sweeping instance's own window"
+        assert "legacy.ip" in _persisted_ips(db), (
+            "a migrated legacy row was evicted using the sweeping instance's "
+            "own window instead of the fixed unknown-window grace period"
         )
 
-    def test_a_zero_window_row_survives_using_the_sweepers_own_window(self, tmp_path):
-        """A row with window_seconds=0 must not be treated as instantly stale.
+    def test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(self, tmp_path):
+        """A row with window_seconds=0 must not be treated as instantly stale
+        under EITHER a naive zero reading OR the sweeping instance's own window.
 
         Two things can persist window_seconds=0 for a row that is NOT actually
         brand new: the migration default, and -- during a rolling upgrade --
         a pre-migration process still writing that same row with SQLite's
         ``INSERT OR REPLACE``, which resets every unlisted column (including
         one it has never heard of) to its DEFAULT on every write, not just the
-        first. Simulates the second case directly: a real writer persists the
-        row, a raw-SQL stomp (standing in for the old code's own INSERT OR
-        REPLACE) then re-writes it minus window_seconds, and a short-window
-        sweeper -- whose in-memory snapshot predates the stomp, so its own
-        nomination logic still fires -- must not delete the freshly-stomped
-        row the instant its sweep runs. It must still converge once genuinely
-        stale under the fallback (codex review on #1244).
+        first. Simulates the second case directly: a real writer with a LONG
+        (600s) window persists the row, a raw-SQL stomp (standing in for the
+        old code's own INSERT OR REPLACE) then re-writes it minus
+        window_seconds, and a SHORT-window (10s) sweeper -- whose in-memory
+        snapshot predates the stomp, so its own nomination logic still fires
+        -- must not delete the freshly-stomped row using its OWN short window
+        as a stand-in for the old writer's real, longer one (the second-round
+        codex finding on #1244: the first fallback attempt used exactly that
+        stand-in and reproduced the module's original cross-policy bug for
+        the unknown-window case). It must still converge once the fixed
+        grace period genuinely elapses.
         """
         db = tmp_path / "rl.db"
         clock = FakeClock()
@@ -774,15 +781,28 @@ class TestPersistence:
         short.allow("192.168.1.1")  # triggers short's first sweep
         assert "10.0.0.9" in _persisted_ips(db), (
             "a zero-window row was evicted almost immediately after being "
-            "touched, instead of falling back to the sweeping instance's own "
-            "window for a row with no known policy"
+            "touched, instead of falling back to a fixed grace period for a "
+            "row with no known policy"
         )
 
-        # Still evictable once genuinely stale under the fallback window
-        # (short's own 10s): stomped last_sweep(1010) + 10 <= now.
+        # The exact scenario the second-round review reported: the old
+        # writer's real window was 600s, so this row must still be alive at
+        # t=1025 (only 15s after the stomp) even though a naive "use the
+        # sweeper's own 10s window" fallback would have evicted it by t=1020.
         clock.t = 1025.0
         short.allow("192.168.1.2")
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "the sweeping instance's own (shorter) window was used as the "
+            "fallback, reproducing this module's original cross-policy "
+            "eviction bug for the unknown-window case"
+        )
+
+        # Still evictable once genuinely stale under the fixed grace period
+        # (stomped last_sweep(1010) + _UNKNOWN_WINDOW_GRACE_SECONDS <= now) --
+        # it must not become immortal.
+        clock.t = 1010.0 + _UNKNOWN_WINDOW_GRACE_SECONDS + 1.0
+        short.allow("192.168.1.3")
         assert "10.0.0.9" not in _persisted_ips(db), (
             "a zero-window row must still converge once stale under the "
-            "sweeper's fallback window -- it must not become immortal"
+            "fixed grace period -- it must not become immortal"
         )
