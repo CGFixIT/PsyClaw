@@ -589,6 +589,7 @@ jobs:
           # a normal install, never a broken one.
           cache-dependency-path: |
             requirements.txt
+            requirements-test.txt
             constraints.txt
             pyproject.toml
 
@@ -1165,7 +1166,7 @@ jobs:
         env:
           DEEPAGENTS_FREEZE: deepagents-requirements.txt
         run: |
-          pip install pip-audit
+          pip install pip-audit==2.10.1
           pip freeze | grep -Ei '^(deepagents|langchain|langchain-[a-z0-9-]+|langsmith)==' > "$DEEPAGENTS_FREEZE"
           cat "$DEEPAGENTS_FREEZE"
           pip-audit -r "$DEEPAGENTS_FREEZE"
@@ -1329,6 +1330,7 @@ jobs:
           cache: 'pip'
           cache-dependency-path: |
             requirements.txt
+            requirements-test.txt
             constraints.txt
             pyproject.toml
 
