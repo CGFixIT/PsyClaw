@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -65,6 +66,89 @@ def test_filter_propagates_permission_error(darwin: None) -> None:
 
     with pytest.raises(FsMacOSPermissionError):
         pathsafe._filter_macos_entries(["note.md"], denied)
+
+
+def test_filter_logs_entries_dropped_for_non_permission_errors(
+    darwin: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-EACCES/EPERM stat failure still skips the entry, but audibly.
+
+    _raise_macos_permission re-raises only a Darwin EACCES/EPERM denial;
+    every other OSError fell through to a bare `continue`, so an EIO on a
+    failing external volume produced a listing shorter than the directory
+    with no exception, no log line and no counter -- indistinguishable from
+    a genuinely smaller directory. list_dir feeds corpus staging, so files
+    could silently leave the index.
+    """
+    stats = {
+        "ok.md": SimpleNamespace(st_size=2, st_flags=0),
+        "flaky.md": OSError(errno.EIO, "Input/output error"),
+        "vanished.md": FileNotFoundError(errno.ENOENT, "No such file or directory"),
+    }
+
+    def stat_entry(name: str):
+        value = stats[name]
+        if isinstance(value, OSError):
+            raise value
+        return value
+
+    with caplog.at_level(logging.WARNING, logger=pathsafe.__name__):
+        visible = pathsafe._filter_macos_entries(list(stats), stat_entry)
+
+    # Fail-soft is preserved: the readable entry still comes back.
+    assert [name for name, _st in visible] == ["ok.md"]
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Skipped 2 unreadable directory entries" in m for m in messages), messages
+    joined = " ".join(messages)
+    assert "flaky.md" in joined and "vanished.md" in joined
+
+
+def test_skipped_entry_tracking_is_bounded_not_proportional_to_directory_size(
+    darwin: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wholly-failing volume must not retain state per entry.
+
+    The one-line summary was always bounded -- asserting on the log message
+    cannot tell the two implementations apart. What was unbounded is what the
+    walk RETAINS while running: every (name, OSError) was accumulated until
+    the walk finished, so the explicitly targeted case (a failing external or
+    network volume erroring on most entries) held an exception object per
+    directory entry. This captures what actually reaches the reporter.
+    """
+    names = [f"f{n}.md" for n in range(500)]
+    captured: list[tuple] = []
+
+    def _capture(*args):
+        captured.append(args)
+
+    monkeypatch.setattr(pathsafe, "_report_skipped_entries", _capture)
+
+    def always_fails(_name: str):
+        raise OSError(errno.EIO, "Input/output error")
+
+    assert pathsafe._filter_macos_entries(names, always_fails) == []
+
+    assert len(captured) == 1
+    args = captured[0]
+    # (where, count, sample) -- the retained sample is capped; the rest is a count.
+    assert len(args) == 3, "the reporter must take a count plus a bounded sample"
+    _where, count, sample = args
+    assert count == 500
+    assert len(sample) <= pathsafe._SKIP_LOG_SAMPLE, (
+        f"retained {len(sample)} entries for a 500-entry directory; the walk must "
+        "keep a count and a capped sample, not one object per failure"
+    )
+
+
+def test_filter_logs_nothing_when_every_entry_is_readable(
+    darwin: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No skips means no warning -- the summary must not fire on the happy path."""
+    stats = {"a.md": SimpleNamespace(st_size=2, st_flags=0)}
+    with caplog.at_level(logging.WARNING, logger=pathsafe.__name__):
+        pathsafe._filter_macos_entries(list(stats), stats.__getitem__)
+    assert not caplog.records
 
 
 # _is_macos_volume_path is ground-truth (filesystem-identity) based, not a

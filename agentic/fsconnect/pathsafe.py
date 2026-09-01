@@ -41,6 +41,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import logging
 import os
 import posixpath
 import re
@@ -54,6 +55,13 @@ from pathlib import Path
 from typing import Any
 
 from utils.errors import FsConnectRuntimeError, FsMacOSPermissionError, FsPathError
+
+logger = logging.getLogger(__name__)
+
+# How many skipped entry names to name individually before summarising. A
+# failing volume can error on every entry, so the per-directory summary is one
+# log line regardless of directory size.
+_SKIP_LOG_SAMPLE = 5
 
 _POSIX = os.name != "nt"
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
@@ -523,12 +531,44 @@ def _is_macos_dataless(st: os.stat_result) -> bool:
     return sys.platform == "darwin" and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
 
 
+def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]]) -> None:
+    """Log entries a directory walk dropped because stat() failed.
+
+    _raise_macos_permission re-raises only a Darwin EACCES/EPERM denial. Every
+    other OSError -- ENOENT from a concurrent delete, EIO on a failing external
+    or network volume, ELOOP, ENAMETOOLONG -- falls through to a bare
+    ``continue``. Skipping is deliberate (the walk is fail-soft), but it used
+    to be silent, so a truncated listing was indistinguishable from a
+    genuinely smaller directory. list_dir feeds both the fs_list read op and
+    corpus staging via fsconnect/indexer.py, so a silent drop can quietly
+    remove files from the index.
+
+    Scope of the guarantee: this surfaces the loss on the operator's log
+    stream, and through /ops/fsconnect in the response body -- NOT in
+    audit.jsonl. Whether it reaches logs/cyclaw.log depends on the entrypoint
+    having called utils.logger.setup_logging; the agentic CLI does not, the
+    same as the sibling warning in trash.py. Persisting it durably is a
+    separate change from making it non-silent.
+    """
+    if not count:
+        return
+    rendered = ", ".join(f"{name!r} ({reason})" for name, reason in sample)
+    if count > len(sample):
+        rendered += f", ... and {count - len(sample)} more"
+    logger.warning("Skipped %d unreadable directory entries in %s: %s", count, where, rendered)
+
+
 def _filter_macos_entries(
     names: list[str],
     stat_entry: Callable[[str], os.stat_result],
 ) -> list[tuple[str, os.stat_result]]:
     """Apply the Darwin read/index visibility policy to directory entries."""
     visible: list[tuple[str, os.stat_result]] = []
+    # Count everything, retain only the first few names: a failing volume can
+    # error on every entry, and holding an OSError per entry would make the
+    # bounded one-line diagnostic cost memory proportional to directory size.
+    skipped_count = 0
+    skipped_sample: list[tuple[str, str]] = []
     for name in names:
         if _is_macos_artifact_name(name):
             continue
@@ -536,10 +576,14 @@ def _filter_macos_entries(
             st = stat_entry(name)
         except OSError as exc:
             _raise_macos_permission(f"checking directory entry {name!r}", exc)
+            skipped_count += 1
+            if len(skipped_sample) < _SKIP_LOG_SAMPLE:
+                skipped_sample.append((name, exc.strerror or exc.__class__.__name__))
             continue
         if _is_macos_dataless(st):
             continue
         visible.append((name, st))
+    _report_skipped_entries("the macOS entry filter", skipped_count, skipped_sample)
     return visible
 
 
@@ -967,13 +1011,19 @@ class ScopedRoots:
                 lambda name: os.stat(name, dir_fd=dir_fd, follow_symlinks=False),
             )
             return [self._stat_to_dict(name, st) for name, st in filtered]
+        skipped_count = 0
+        skipped_sample: list[tuple[str, str]] = []
         for name in names:
             try:
                 st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
             except OSError as exc:
                 _raise_macos_permission(f"checking directory entry {name!r}", exc)
+                skipped_count += 1
+                if len(skipped_sample) < _SKIP_LOG_SAMPLE:
+                    skipped_sample.append((name, exc.strerror or exc.__class__.__name__))
                 continue
             entries.append(self._stat_to_dict(name, st))
+        _report_skipped_entries("list_dir", skipped_count, skipped_sample)
         return entries
 
     @staticmethod
