@@ -39,8 +39,8 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -109,8 +109,9 @@ class RateLimiter:
             self._pg_conn = psycopg.connect(_harden_pg_conninfo(self._db_url), autocommit=True)
         return self._pg_conn
 
-    def _sqlite_write(self, sql: str, params: tuple, *, many: bool = False) -> None:
-        """Run one write on the cached sqlite connection, rolling back on error.
+    @contextmanager
+    def _sqlite_txn(self) -> Iterator[sqlite3.Connection]:
+        """Run statements on the cached connection, rolling back on error.
 
         sqlite3's default ``isolation_level=""`` opens a transaction implicitly
         on the first DML statement, so a failed ``commit()`` (SQLITE_BUSY while
@@ -125,10 +126,7 @@ class RateLimiter:
         """
         conn = self._sqlite_connection()
         try:
-            if many:
-                conn.executemany(sql, params)
-            else:
-                conn.execute(sql, params)
+            yield conn
             conn.commit()
         except Exception:
             with suppress(sqlite3.Error):
@@ -197,7 +195,8 @@ class RateLimiter:
         # _sqlite_connection) and reused for the object's lifetime; close()
         # releases it. It is deliberately NOT closed per statement -- see
         # _sqlite_connection's docstring for why that cost mattered.
-        self._sqlite_write(self._ddl(), ())
+        with self._sqlite_txn() as conn:
+            conn.execute(self._ddl())
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -239,7 +238,8 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
-        self._sqlite_write(self._upsert_sql(), params)
+        with self._sqlite_txn() as conn:
+            conn.execute(self._upsert_sql(), params)
 
     def _delete_rows(self, ips: list[str], now: float) -> set[str]:
         """Delete expired rows; return the candidates whose rows SURVIVED.
@@ -296,7 +296,8 @@ class RateLimiter:
                 cur.execute("SELECT ip FROM rate_hits")
                 remaining = {row[0] for row in cur.fetchall()}
             return candidates & remaining
-        self._sqlite_write("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows, many=True)
+        with self._sqlite_txn() as conn:
+            conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
         # One bounded scan rather than a per-IP probe: this table is kept small
         # by the very eviction running here, and it is the same read
         # _load_from_db already does at construction. Avoids an IN (...) clause,
