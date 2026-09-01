@@ -254,6 +254,18 @@ class RateLimiter:
         A candidate with no row at all is NOT a survivor: it is already gone,
         so the caller should drop it from memory as usual.
 
+        Known limit -- one policy per backend. ``rate_hits`` stores no window
+        or limiter namespace, so this threshold is whatever THIS instance's
+        ``window_seconds`` says. Two processes sharing a backend with different
+        windows will therefore step on each other. That is not new here: on the
+        write path ``allow()`` already prunes to its own window before
+        persisting, so a short-window writer discards history a long-window
+        process needs regardless of this delete. Making mixed-policy sharing
+        safe needs a schema change (persist the governing window or a
+        namespace per row) and is deliberately out of scope. The shipped
+        configuration is unaffected: agentic/fsconnect/writer.py builds both of
+        its limiters from the same ``window_seconds``.
+
         Caller must hold ``self._lock``.
 
         ``ips`` comes from this instance's in-memory map, which is a snapshot
