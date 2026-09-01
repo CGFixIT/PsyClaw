@@ -134,7 +134,8 @@ Seed list so the first run has context — reconcile these:
   but shows a value that no longer matches config.
 - **D7 is citation presence, not arithmetic.** It does not prove
   `max_context_tokens + max_tokens + 1500 <= OLLAMA_CONTEXT_LENGTH`. That
-  relationship is C12 (advisory print) and the pytest contract above.
+  relationship is C12 (FAILs when `OLLAMA_CONTEXT_LENGTH` is below the RAG
+  floor); the pytest contract still owns CI-blocking arithmetic.
 - **D4 ignores small numbers** (<6) to avoid matching unrelated "3 patterns"
   phrasing; it targets the documented set size.
 - **Run it after, not before, a rename.** If you rename a skill or route, the
