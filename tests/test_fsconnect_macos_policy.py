@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -65,6 +66,52 @@ def test_filter_propagates_permission_error(darwin: None) -> None:
 
     with pytest.raises(FsMacOSPermissionError):
         pathsafe._filter_macos_entries(["note.md"], denied)
+
+
+def test_filter_logs_entries_dropped_for_non_permission_errors(
+    darwin: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A non-EACCES/EPERM stat failure still skips the entry, but audibly.
+
+    _raise_macos_permission re-raises only a Darwin EACCES/EPERM denial;
+    every other OSError fell through to a bare `continue`, so an EIO on a
+    failing external volume produced a listing shorter than the directory
+    with no exception, no log line and no counter -- indistinguishable from
+    a genuinely smaller directory. list_dir feeds corpus staging, so files
+    could silently leave the index.
+    """
+    stats = {
+        "ok.md": SimpleNamespace(st_size=2, st_flags=0),
+        "flaky.md": OSError(errno.EIO, "Input/output error"),
+        "vanished.md": FileNotFoundError(errno.ENOENT, "No such file or directory"),
+    }
+
+    def stat_entry(name: str):
+        value = stats[name]
+        if isinstance(value, OSError):
+            raise value
+        return value
+
+    with caplog.at_level(logging.WARNING, logger=pathsafe.__name__):
+        visible = pathsafe._filter_macos_entries(list(stats), stat_entry)
+
+    # Fail-soft is preserved: the readable entry still comes back.
+    assert [name for name, _st in visible] == ["ok.md"]
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Skipped 2 unreadable directory entries" in m for m in messages), messages
+    joined = " ".join(messages)
+    assert "flaky.md" in joined and "vanished.md" in joined
+
+
+def test_filter_logs_nothing_when_every_entry_is_readable(
+    darwin: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No skips means no warning -- the summary must not fire on the happy path."""
+    stats = {"a.md": SimpleNamespace(st_size=2, st_flags=0)}
+    with caplog.at_level(logging.WARNING, logger=pathsafe.__name__):
+        pathsafe._filter_macos_entries(list(stats), stats.__getitem__)
+    assert not caplog.records
 
 
 # _is_macos_volume_path is ground-truth (filesystem-identity) based, not a
