@@ -370,24 +370,47 @@ class RateLimiter:
         not ongoing growth. ``_ensure_window_seconds_column`` covers what a
         table predating this column does for rows it never wrote.
 
-        Known residual gap (Postgres only, not fixed here): Postgres's
-        ``ON CONFLICT DO UPDATE`` only overwrites the columns it lists, so an
-        old writer's SET clause (timestamps, last_sweep -- see
-        ``_upsert_sql``) leaves an EXISTING positive ``window_seconds``
-        untouched even though it no longer reflects who is actually
-        governing the row. If an upgraded process creates a row first and an
-        old process later refreshes it, the row's ``window_seconds`` is
-        stale metadata from the FIRST writer, not the CURRENT one -- this
-        method has no way to detect that without a further schema change
-        (e.g. a companion column recording which write last set
-        ``window_seconds``). SQLite does not share this gap: its
-        ``INSERT OR REPLACE`` resets ``window_seconds`` to 0 on ANY write
-        from old code, correctly routing the row through the unknown-window
-        path above instead. Accepted as a scoped limitation for this PR
-        given CyClaw's single-operator threat model and the narrow ordering
-        required (an upgraded process must create the row before an old one
-        touches it, not the more common reverse) -- flagged explicitly
-        rather than silently unaddressed.
+        Known residual gap (both backends, not fixed here): a positive
+        ``window_seconds`` is trusted at face value, but nothing here can
+        tell "fresh, written by whoever is currently governing this row"
+        apart from "stale, left over from an EARLIER writer's touch". Two
+        concrete ways that happens, found across three review rounds:
+
+        - Postgres only: ``ON CONFLICT DO UPDATE`` overwrites only the
+          columns it lists, so an old (pre-migration) writer's SET clause
+          (timestamps, last_sweep -- see ``_upsert_sql``) leaves an EXISTING
+          positive ``window_seconds`` untouched, even though it no longer
+          reflects who is actually governing the row (e.g. an upgraded
+          process creates a row first, an old process later refreshes it).
+          SQLite does not share this specific path: its ``INSERT OR
+          REPLACE`` resets ``window_seconds`` to 0 on ANY write from old
+          code, correctly routing the row through the unknown-window path
+          above instead.
+        - Both backends: ``allow()``'s ``_stamped_ips`` set only guarantees
+          THIS instance's own FIRST touch of an IP persists (closing the
+          "never got to stamp its own policy" gap fixed above). It provides
+          no ongoing guarantee once TWO OR MORE current-version instances
+          with different ``window_seconds`` keep alternating writes to the
+          same row: each instance's own bookkeeping only knows "have I
+          EVER stamped this IP", not "is the row's CURRENT value still
+          mine" -- so once instance A stamps, then instance B overwrites,
+          instance A's own next touch still believes it already stamped
+          and skips persisting again, leaving B's value in place even on
+          A's subsequent (rejected) requests.
+
+        Both are the same underlying problem: correctly telling "this
+        column reflects the CURRENT governing policy" from "this column is
+        stale, left by an earlier writer" needs a freshness signal this
+        schema does not carry (e.g. a companion column recording which
+        write last set ``window_seconds``, checked against ``last_sweep``).
+        Accepted as a scoped limitation for this PR given CyClaw's
+        single-operator threat model and the narrowness of triggering it
+        (requires either an old/new-code coexistence window on Postgres, or
+        two CURRENT-version instances with genuinely different configured
+        windows actively alternating writes to the same IP) -- flagged
+        explicitly, including this docstring's own update after each new
+        review round found a sharper instance of it, rather than silently
+        unaddressed or claimed fully solved.
 
         The delete is otherwise conditional on ``last_sweep + window_seconds
         <= now``, using the ROW's OWN persisted ``window_seconds`` (written
