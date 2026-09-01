@@ -542,6 +542,13 @@ def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]
     genuinely smaller directory. list_dir feeds both the fs_list read op and
     corpus staging via fsconnect/indexer.py, so a silent drop can quietly
     remove files from the index.
+
+    Scope of the guarantee: this surfaces the loss on the operator's log
+    stream, and through /ops/fsconnect in the response body -- NOT in
+    audit.jsonl. Whether it reaches logs/cyclaw.log depends on the entrypoint
+    having called utils.logger.setup_logging; the agentic CLI does not, the
+    same as the sibling warning in trash.py. Persisting it durably is a
+    separate change from making it non-silent.
     """
     if not count:
         return
