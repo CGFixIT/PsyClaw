@@ -1082,44 +1082,69 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
         ok("T13", f"telemetry-capable transitive {name!r} carries a version bound in a manifest")
 
 
-def _check_ort_floor(root: Path) -> None:
-    """Verify the onnxruntime bound actually clears the telemetry-control floor.
+def _find_ort_pin(text: str, sep: str) -> str | None:
+    """Exact onnxruntime pin in one manifest, or None.
 
-    A bound that exists but sits below v1.29.0 is worse than none: the
-    inventory would read as protected while ORT_DISABLE_TELEMETRY governs
-    nothing on macOS/Linux.
+    Handles the three shapes the surfaces use: a bare requirements/constraints
+    line (``onnxruntime==1.29.0``), a conda list item (``  - onnxruntime=...``)
+    and a quoted pyproject dependency (``    "onnxruntime==1.29.0",``). The
+    leading-quote case is why this is one helper rather than three regexes --
+    missing it made the metadata surface read as unpinned.
     """
-    pinned: str | None = None
-    for manifest in ("constraints.txt", "requirements.txt"):
-        path = root / manifest
-        if not path.exists():
-            continue
-        match = re.search(
-            r"^onnxruntime\s*==\s*([0-9][^\s#]*)", path.read_text(encoding="utf-8"), re.MULTILINE
-        )
-        if match:
-            pinned = match.group(1)
-            break
+    pattern = rf"""^\s*(?:-\s*)?["']?onnxruntime\s*{sep}\s*([0-9][^\s#,"']*)"""
+    match = re.search(pattern, text, re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def _ort_floor_verdict(surface: str, pinned: str | None) -> None:
+    """Report one install surface against the ONNX telemetry-control floor."""
+    floor = ".".join(str(part) for part in ORT_TELEMETRY_ENV_FLOOR)
     if pinned is None:
-        info("T13", "onnxruntime is named in a manifest but not with an exact '==' pin -- "
-                    "cannot verify it clears the telemetry-control floor")
+        info("T13", f"{surface}: no onnxruntime floor -- chromadb asks only for >=1.14.1, so this "
+                    f"surface can resolve below {floor} where ORT_DISABLE_TELEMETRY does not yet "
+                    "govern the non-Windows 1DS path")
         return
     try:
+        parts = [int(part) for part in pinned.split(".")[:3]]
         # Pad to three components: a two-part pin like "1.29" would otherwise
         # compare as (1, 29) < (1, 29, 0) and fail a version that clears the floor.
-        parts = [int(part) for part in pinned.split(".")[:3]]
         parsed = tuple(parts + [0] * (3 - len(parts)))
     except ValueError:
-        warn("T13", f"onnxruntime pin {pinned!r} is not a parseable version")
+        warn("T13", f"{surface}: onnxruntime pin {pinned!r} is not a parseable version")
         return
-    floor = ".".join(str(part) for part in ORT_TELEMETRY_ENV_FLOOR)
     if parsed < ORT_TELEMETRY_ENV_FLOOR:
-        fail("T13", f"onnxruntime is pinned {pinned}, below the {floor} floor where "
+        fail("T13", f"{surface}: onnxruntime pinned {pinned}, below the {floor} floor where "
                     "ORT_DISABLE_TELEMETRY starts governing the non-Windows 1DS path -- "
                     "the env half of the ONNX control is inert on macOS/Linux at this pin")
         return
-    ok("T13", f"onnxruntime pinned {pinned} (>= {floor}, where ORT_DISABLE_TELEMETRY "
-              "governs the non-Windows 1DS path)")
+    ok("T13", f"{surface}: onnxruntime pinned {pinned} (>= {floor})")
+
+
+def _check_ort_floor(root: Path) -> None:
+    """Verify the ONNX floor on EACH install surface independently.
+
+    The surfaces have independent resolvers, so a union hides the ones that
+    are not covered. constraints.txt governs only `pip install -r ... -c
+    constraints.txt`; `pip install -e .` and the published wheel read
+    pyproject.toml and never apply a constraints file; and the conda lane
+    (python-package-conda.yml) solves environment.yml and then installs CyClaw
+    with --no-deps, so neither pip manifest governs it at all. Reporting one
+    global OK for all three let a covered surface vouch for an uncovered one.
+    """
+    pip_pin = None
+    for manifest, sep in (("constraints.txt", "=="), ("requirements.txt", "=="), ("pyproject.toml", "==")):
+        path = root / manifest
+        if path.exists():
+            pip_pin = pip_pin or _find_ort_pin(path.read_text(encoding="utf-8"), sep)
+    _ort_floor_verdict("pip surface (pyproject/requirements/constraints)", pip_pin)
+
+    metadata_path = root / "pyproject.toml"
+    metadata_pin = _find_ort_pin(metadata_path.read_text(encoding="utf-8"), "==") if metadata_path.exists() else None
+    _ort_floor_verdict("wheel / `pip install -e .` surface (pyproject.toml metadata)", metadata_pin)
+
+    env_path = root / "environment.yml"
+    conda_pin = _find_ort_pin(env_path.read_text(encoding="utf-8"), "=") if env_path.exists() else None
+    _ort_floor_verdict("conda surface (environment.yml)", conda_pin)
 
 
 def check_onnx_seams(root: Path) -> None:

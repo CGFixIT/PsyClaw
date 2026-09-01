@@ -26,6 +26,17 @@ dependencies = [
     # unreachable in the verifying sandbox -- torch shares no dependency with
     # either package, so the resolution is unaffected).
     "huggingface-hub==1.26.0",
+    # onnxruntime arrives unconditionally via chromadb (which asks only for
+    # >=1.14.1, with no extra marker), so this narrows a dependency that is
+    # already always installed rather than adding an optional one. It is
+    # declared HERE, not only in constraints.txt, because `pip install -e .`
+    # and the published wheel read this file and never apply a constraints
+    # file -- so a constraints-only bound left those surfaces free to resolve
+    # below the floor. The floor is v1.29.0 because ORT_DISABLE_TELEMETRY
+    # (utils/telemetry_kill.py) only governs the non-Windows 1DS telemetry
+    # path from that release onward (PRs #27379/#29872); below it the env half
+    # of the ONNX control is inert on macOS and Linux.
+    "onnxruntime==1.29.0",
     "starlette==1.3.1",
     "rank-bm25==0.2.2",
     "httpx==0.28.1",
