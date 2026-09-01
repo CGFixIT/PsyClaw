@@ -283,3 +283,40 @@ def test_main_maps_a_malformed_logging_block_to_env_exit_not_a_crash(tmp_path, m
                     logger_obj.removeHandler(handler)
                     handler.close()
         logger_mod._logging_initialized = False
+
+
+def test_main_maps_an_invalid_log_path_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own ValueError must map onto the exit-code API.
+
+    logging.log_file containing an embedded NUL byte makes
+    logging.FileHandler raise ValueError -- a third exception type this
+    narrow config-load-and-logging-init call site can raise, beyond the
+    OSError and AttributeError/TypeError already handled. This must not
+    escape main() as an uncaught traceback with exit code 1, which
+    ops_runner's exit-code mapping has no entry for (codex review on
+    #1239, fifth round).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+            "log_file": "bad\x00path",  # embedded NUL -> ValueError
+        },
+        "netconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
