@@ -6,6 +6,7 @@ driven by an injected fake clock; there is no time.sleep and no wall-clock
 dependence.
 """
 
+import sqlite3
 import threading
 import time
 from collections import defaultdict
@@ -42,6 +43,24 @@ class _SlowHits(defaultdict):
             # stale view across the switch, so an unguarded region overcounts.
             time.sleep(0.001)
         return value
+
+
+def _persisted_ips(db_path) -> set[str]:
+    """IPs currently present in the persisted rate_hits table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {row[0] for row in conn.execute("SELECT ip FROM rate_hits")}
+    finally:
+        conn.close()
+
+
+def _row_count(db_path) -> int:
+    """Rows currently in the persisted rate_hits table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute("SELECT COUNT(*) FROM rate_hits").fetchone()[0]
+    finally:
+        conn.close()
 
 
 class FakeClock:
@@ -296,3 +315,302 @@ class TestPersistence:
         assert rl2.allow("9.9.9.9") is True
         assert rl2.allow("9.9.9.9") is True
         assert rl2.allow("9.9.9.9") is False  # max_requests=2 enforced on the fresh window
+
+
+    def test_sweep_evicts_persisted_rows_not_just_memory(self, tmp_path):
+        """Swept IPs are deleted from the backend, so the table stays bounded.
+
+        Eviction used to be memory-only: `_sweep` dropped the entry from
+        `self._hits` while the row stayed in `rate_hits` forever, so the table
+        accumulated one permanent row per distinct client IP and every restart
+        re-read (and JSON-parsed) all of them.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+
+        for n in range(20):
+            rl.allow(f"10.0.0.{n}")
+        assert _row_count(db) == 20, "each IP persists a row while its window is live"
+
+        # Advance past the window and touch one new IP; the sweep evicts the 20
+        # now-idle IPs from memory AND from the table.
+        clock.advance(3.0)
+        rl.allow("192.168.1.1")
+        assert rl.tracked_ips() == 1
+        assert _row_count(db) == 1, "swept IPs must not leave rows behind"
+
+        # A restart therefore loads only the live IP, not every IP ever seen.
+        rl2 = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        assert rl2.tracked_ips() == 1
+
+    def test_sqlite_connection_is_reused_across_requests(self, tmp_path):
+        """The sqlite handle is opened once, not per persisted request.
+
+        Every allowed request used to pay a connect + commit-fsync + close
+        inside the admission lock; the Postgres branch already cached its
+        connection. Asserting the reuse directly (rather than timing it) keeps
+        this deterministic.
+        """
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=100, window_seconds=60, db_path=str(db))
+
+        first = rl._sqlite_connection()
+        for n in range(10):
+            assert rl.allow(f"10.0.0.{n}") is True
+        assert rl._sqlite_connection() is first, "persisting must not reopen the connection"
+
+        # Writes still landed despite the connection never being reopened.
+        assert _row_count(db) == 10
+
+    def test_close_releases_the_sqlite_handle(self, tmp_path):
+        """close() drops the cached sqlite connection (it was Postgres-only)."""
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=60, db_path=str(db))
+        rl.allow("10.0.0.1")
+        assert rl._sqlite_conn is not None
+
+        rl.close()
+        assert rl._sqlite_conn is None
+
+        # Idempotent, and the limiter still works (it reopens on demand).
+        rl.close()
+        assert rl.allow("10.0.0.2") is True
+
+
+    def test_stale_sweep_never_deletes_a_window_another_instance_refreshed(self, tmp_path):
+        """One limiter's stale snapshot must not destroy another's live window.
+
+        Several limiters can share one backend (agentic/fsconnect/writer.py
+        builds a per-root and a global limiter against the same file, and
+        separate processes can point at it too). `_hits` is a snapshot taken at
+        construction, so "stale according to me" is not "stale on disk".
+        Deleting by IP alone handed the budget back to a client the persisted
+        limiter was actively throttling.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        first = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")
+
+        # Quiet past the window, then a second limiter loads the table -- its
+        # snapshot shows 10.0.0.9 as stale.
+        clock.advance(30.0)
+        second = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+
+        # The first limiter records a fresh hit: 10.0.0.9's window is live again.
+        first.allow("10.0.0.9")
+
+        # The second limiter now sweeps off its stale snapshot.
+        second.allow("10.0.0.99")
+
+        persisted = _persisted_ips(db)
+        assert "10.0.0.9" in persisted, (
+            "a stale snapshot deleted a window another instance had just refreshed"
+        )
+        assert "10.0.0.99" in persisted
+
+    def test_row_written_exactly_at_the_window_boundary_is_evicted(self, tmp_path):
+        """The DELETE boundary must match _sweep's, or the row is orphaned.
+
+        _sweep calls a timestamp stale at `now - t >= window_seconds`
+        (inclusive). An exclusive `last_sweep < threshold` in the DELETE
+        disagreed at exactly `now - window_seconds`: the IP was dropped from
+        `_hits` while its row was spared, so nothing could nominate it again
+        and it sat on disk forever -- the unbounded growth this eviction
+        exists to remove. Reachable with integer or injected clocks and
+        interval-aligned calls.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        rl.allow("10.0.0.7")
+
+        # Land exactly on the boundary: last_sweep == now - window_seconds.
+        clock.advance(10.0)
+        rl.allow("10.0.0.8")
+
+        assert "10.0.0.7" not in rl._hits, "sweep treats the boundary as stale (inclusive)"
+        assert _persisted_ips(db) == {"10.0.0.8"}, (
+            "the boundary row was dropped from memory but left on disk, where "
+            "nothing can ever nominate it again"
+        )
+
+    def test_sweep_still_evicts_rows_that_are_stale_on_disk(self, tmp_path):
+        """The last_sweep guard must not defeat eviction for genuinely idle IPs."""
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        for n in range(20):
+            rl.allow(f"10.0.0.{n}")
+        clock.advance(30.0)
+        rl.allow("192.168.1.1")
+        assert _row_count(db) == 1, "rows stale on disk must still be evicted"
+
+    def test_failed_backend_delete_keeps_candidates_for_the_next_sweep(self, tmp_path):
+        """A raising backend must not strand rows with nothing able to retry.
+
+        `_hits` is the only thing that can nominate a row for deletion. Evicting
+        from memory before the backend delete succeeded meant a transient
+        failure (sqlite contention, a Postgres blip, a full disk) left those
+        rows on disk unreachable by any later sweep -- orphaned until restart,
+        the same unbounded growth this eviction exists to remove.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        for n in range(5):
+            rl.allow(f"10.0.0.{n}")
+
+        boom = RuntimeError("backend unavailable")
+
+        def _raise(_ips, _now):
+            raise boom
+
+        rl._delete_rows = _raise  # type: ignore[method-assign]
+        clock.advance(30.0)
+        with pytest.raises(RuntimeError):
+            rl.allow("192.168.1.1")
+
+        # The candidates are still tracked, so a later sweep can retry them.
+        assert {f"10.0.0.{n}" for n in range(5)} <= set(rl._hits), (
+            "a failed backend delete dropped the candidates from memory, "
+            "leaving their rows unreachable by any future sweep"
+        )
+
+        # The raising allow() never recorded its own hit, so the five stranded
+        # rows are all that is on disk at this point.
+        assert _persisted_ips(db) == {f"10.0.0.{n}" for n in range(5)}
+
+        # Once the backend recovers, the retained candidates are swept for real.
+        del rl._delete_rows  # type: ignore[attr-defined]
+        clock.advance(30.0)
+        rl.allow("192.168.1.2")
+        assert _persisted_ips(db) == {"192.168.1.2"}, (
+            "the retry after recovery must actually clear the stranded rows"
+        )
+
+    def test_postgres_batch_delete_goes_through_a_cursor(self, tmp_path):
+        """psycopg 3 puts executemany on the cursor, not the connection.
+
+        Connection has execute() but no executemany(), so calling it there
+        raises AttributeError on the first sweep that finds a stale IP -- and
+        the Postgres tests need a live server, so CI skips them. This stub
+        mirrors psycopg's real surface (cursor-only executemany) so the misuse
+        fails here instead.
+        """
+        executed: list[tuple[str, list]] = []
+
+        class _FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def executemany(self, sql, rows):
+                executed.append((sql, list(rows)))
+
+            def execute(self, sql, params=None):
+                # The survivor probe after the batch delete.
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return []
+
+        class _FakeConnection:
+            # Deliberately no executemany here -- psycopg.Connection has none.
+            def cursor(self):
+                return _FakeCursor()
+
+        rl = RateLimiter(max_requests=5, window_seconds=10, clock=FakeClock(), db_path=str(tmp_path / "x.db"))
+        rl._backend = "postgres"
+        rl._ph = "%s"
+        rl._pg_conn = _FakeConnection()
+
+        rl._delete_rows(["10.0.0.1", "10.0.0.2"], now=100.0)
+
+        sql, rows = executed[0]
+        assert "DELETE FROM rate_hits" in sql
+        assert "last_sweep <" in sql, "the delete must stay conditional on the persisted timestamp"
+        assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
+
+
+    def test_refreshed_row_stays_nominatable_after_a_no_op_delete(self, tmp_path):
+        """A conditional DELETE that matches zero rows must not drop the candidate.
+
+        When another writer refreshes a row after this instance's snapshot, the
+        `last_sweep <= threshold` guard correctly spares it -- but evicting the
+        candidate from `_hits` anyway means that if the refreshing instance
+        exits, nothing here can nominate that row again and it persists until
+        restart.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        first = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")
+
+        clock.advance(30.0)
+        second = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")   # refreshed -> second's DELETE matches zero rows
+        second.allow("10.0.0.99")
+
+        assert "10.0.0.9" in _persisted_ips(db)
+        assert "10.0.0.9" in second._hits, (
+            "the spared row was dropped from memory, so this instance can never "
+            "nominate it again once the refreshing writer exits"
+        )
+
+        # Retained means it can still be evicted once it genuinely expires.
+        clock.advance(60.0)
+        second.allow("10.0.0.98")
+        assert "10.0.0.9" not in _persisted_ips(db)
+
+    def test_failed_commit_rolls_back_the_cached_connection(self, tmp_path):
+        """A failed commit must not leave the cached connection mid-transaction.
+
+        sqlite3 opens a transaction implicitly on the first DML statement, so a
+        raising commit() would otherwise leave this long-lived connection
+        holding a write lock -- and the next successful commit would flush the
+        failed request's hit alongside its own. The per-write connection this
+        replaced got that rollback free from `finally: close()`.
+        """
+
+        # Delegates to a real connection so the wrapper behaves like one.
+        # sqlite3.Connection.commit is read-only, so it cannot be patched in
+        # place -- hence a proxy rather than a monkeypatch.
+        class _FlakyCommit:
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+                self.calls = 0
+                self.fail_next = False
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def commit(self):
+                self.calls += 1
+                if self.fail_next:
+                    raise sqlite3.OperationalError("database is locked")
+                return self._real.commit()
+
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=60, db_path=str(db))
+        rl.allow("10.0.0.1")
+
+        flaky = _FlakyCommit(rl._sqlite_connection())
+        rl._sqlite_conn = flaky  # type: ignore[assignment]
+
+        flaky.fail_next = True
+        with pytest.raises(sqlite3.OperationalError):
+            rl.allow("10.0.0.2")
+        assert not flaky.in_transaction, (
+            "a failed commit left the cached connection inside a write transaction"
+        )
+
+        # The rolled-back hit must not reappear on the next successful write.
+        flaky.fail_next = False
+        rl.allow("10.0.0.3")
+        assert "10.0.0.2" not in _persisted_ips(db), (
+            "the rolled-back hit was committed by a later request"
+        )

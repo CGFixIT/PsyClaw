@@ -39,7 +39,8 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class RateLimiter:
         self._last_sweep = 0.0
         self._lock = threading.Lock()
         self._pg_conn = None  # held Postgres connection (Postgres backend only)
+        self._sqlite_conn: sqlite3.Connection | None = None  # held sqlite connection (sqlite backend only)
 
         # Resolve the persistence backend. Postgres wins over sqlite if both given.
         if _is_pg_dsn(db_url):
@@ -106,6 +108,51 @@ class RateLimiter:
             # multi-statement transaction is needed for a rate-limit cache.
             self._pg_conn = psycopg.connect(_harden_pg_conninfo(self._db_url), autocommit=True)
         return self._pg_conn
+
+    @contextmanager
+    def _sqlite_txn(self) -> Iterator[sqlite3.Connection]:
+        """Run statements on the cached connection, rolling back on error.
+
+        sqlite3's default ``isolation_level=""`` opens a transaction implicitly
+        on the first DML statement, so a failed ``commit()`` (SQLITE_BUSY while
+        another process holds a read transaction, a full disk) leaves this
+        long-lived connection *inside* that transaction. It would keep a write
+        lock other limiter instances cannot get past, and the next successful
+        commit would flush the earlier failed request's hit alongside its own.
+
+        The per-write connection this replaced was closed in a ``finally``,
+        which rolled back implicitly; caching the connection removed that for
+        free, so it is restored explicitly here.
+        """
+        conn = self._sqlite_connection()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            with suppress(sqlite3.Error):
+                conn.rollback()
+            raise
+
+    def _sqlite_connection(self) -> sqlite3.Connection:
+        """Lazily open + cache the single sqlite connection.
+
+        Mirrors ``_pg_connection`` above. Previously every persisted call
+        opened its own connection and closed it again, so each allowed request
+        paid a file open + journal setup + ``commit()`` fsync + close -- all of
+        it inside ``self._lock``, which serializes request admission behind
+        that disk I/O. The window this cost lands in is exactly the one the
+        limiter exists to keep cheap.
+
+        ``check_same_thread=False`` is safe here and required: the gateway
+        serves requests from a thread pool, so ``allow()`` reaches this handle
+        from many threads. Every statement issued against it runs while the
+        caller holds ``self._lock`` (``_init_db``/``_load_from_db`` run
+        single-threaded during construction), so access stays serialized.
+        """
+        if self._sqlite_conn is None:
+            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+            self._sqlite_conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        return self._sqlite_conn
 
     def _ddl(self) -> str:
         if self._backend == "postgres":
@@ -144,18 +191,12 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._ddl())
             return
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        # `with sqlite3.connect(...) as conn:` only manages the transaction
-        # (commit on success / rollback on exception) -- it does NOT close the
-        # connection, so the object would otherwise sit until CPython's
-        # refcounting GC reaps it. Cheap in practice on CPython, but explicit
-        # is safer than relying on interpreter-specific GC timing.
-        conn = sqlite3.connect(self._db_path)
-        try:
+        # The connection is opened once here (parent dir created by
+        # _sqlite_connection) and reused for the object's lifetime; close()
+        # releases it. It is deliberately NOT closed per statement -- see
+        # _sqlite_connection's docstring for why that cost mattered.
+        with self._sqlite_txn() as conn:
             conn.execute(self._ddl())
-            conn.commit()
-        finally:
-            conn.close()
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -164,11 +205,9 @@ class RateLimiter:
             cur = self._pg_connection().execute("SELECT ip, timestamps, last_sweep FROM rate_hits")
             rows = cur.fetchall()
         else:
-            conn = sqlite3.connect(self._db_path)
-            try:
-                rows = conn.execute("SELECT ip, timestamps, last_sweep FROM rate_hits").fetchall()
-            finally:
-                conn.close()
+            rows = self._sqlite_connection().execute(
+                "SELECT ip, timestamps, last_sweep FROM rate_hits"
+            ).fetchall()
         for ip, ts_json, last_sweep in rows:
             try:
                 self._hits[ip] = json.loads(ts_json)
@@ -199,12 +238,86 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
-        conn = sqlite3.connect(self._db_path)
-        try:
+        with self._sqlite_txn() as conn:
             conn.execute(self._upsert_sql(), params)
-            conn.commit()
-        finally:
-            conn.close()
+
+    def _delete_rows(self, ips: list[str], now: float) -> set[str]:
+        """Delete expired rows; return the candidates whose rows SURVIVED.
+
+        A survivor is a candidate another writer refreshed after this instance
+        took its snapshot: the conditional DELETE correctly matches zero rows
+        for it. The caller must keep those in ``_hits``, because ``_hits`` is
+        the only thing that can nominate a row for deletion -- evicting one
+        whose row is still on disk means that if the refreshing instance exits,
+        nothing here can ever nominate it again and it persists until restart.
+
+        A candidate with no row at all is NOT a survivor: it is already gone,
+        so the caller should drop it from memory as usual.
+
+        Known limit -- one policy per backend. ``rate_hits`` stores no window
+        or limiter namespace, so this threshold is whatever THIS instance's
+        ``window_seconds`` says. Two processes sharing a backend with different
+        windows will therefore step on each other. That is not new here: on the
+        write path ``allow()`` already prunes to its own window before
+        persisting, so a short-window writer discards history a long-window
+        process needs regardless of this delete. Making mixed-policy sharing
+        safe needs a schema change (persist the governing window or a
+        namespace per row) and is deliberately out of scope. The shipped
+        configuration is unaffected: agentic/fsconnect/writer.py builds both of
+        its limiters from the same ``window_seconds``.
+
+        Caller must hold ``self._lock``.
+
+        ``ips`` comes from this instance's in-memory map, which is a snapshot
+        taken when the instance was constructed. Several limiters can share one
+        backend -- ``agentic/fsconnect/writer.py`` builds a per-root and a
+        global limiter against the same file, and separate processes can point
+        at it too -- so "stale according to my snapshot" is not the same as
+        "stale on disk". Deleting by IP alone let one instance destroy a live
+        window another had just written, which would hand an abuser back the
+        budget the persisted limiter exists to hold.
+
+        The ``last_sweep <= threshold`` guard makes the delete conditional on
+        the persisted row still being expired: ``last_sweep`` holds the time of
+        that row's last write (see ``_persist``), so a row refreshed inside the
+        current window survives someone else's stale sweep.
+
+        The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
+        stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
+        disagreed at exactly ``now - window_seconds``: ``_sweep`` dropped the IP
+        from ``_hits`` while the DELETE spared the row, so nothing could ever
+        nominate it again and it sat on disk forever -- reintroducing the
+        unbounded growth this eviction exists to remove.
+
+        Both statements are written out in full rather than built from
+        ``self._ph``: an f-string here would be flagged B608/S608 (as
+        ``_upsert_sql`` already is) even though the interpolated text is only a
+        placeholder run. Values are always bound as parameters.
+        """
+        if not self._backend:
+            return set()
+        threshold = now - self.window_seconds
+        rows = [(ip, threshold) for ip in ips]
+        candidates = set(ips)
+        if self._backend == "postgres":
+            # psycopg 3 puts executemany on the CURSOR, not the connection --
+            # Connection has execute() but no executemany(), so calling it on
+            # the connection raises AttributeError on the first sweep.
+            with self._pg_connection().cursor() as cur:
+                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep <= %s", rows)
+                cur.execute("SELECT ip FROM rate_hits")
+                remaining = {row[0] for row in cur.fetchall()}
+            return candidates & remaining
+        with self._sqlite_txn() as conn:
+            conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
+        # One bounded scan rather than a per-IP probe: this table is kept small
+        # by the very eviction running here, and it is the same read
+        # _load_from_db already does at construction. Avoids an IN (...) clause,
+        # which would need interpolated placeholders (B608/S608).
+        remaining = {
+            row[0] for row in self._sqlite_connection().execute("SELECT ip FROM rate_hits")
+        }
+        return candidates & remaining
 
     # --------------------------------------------------------------------- logic
     def _sweep(self, now: float) -> None:
@@ -220,7 +333,32 @@ class RateLimiter:
             ip for ip, hits in self._hits.items()
             if all(now - t >= self.window_seconds for t in hits)
         ]
+        # Evict from the backend as well. Without this the in-memory map is
+        # bounded but the table is not: `rate_hits` kept one row per distinct
+        # client IP forever, and _load_from_db reads every row back (and
+        # JSON-parses each) on construction -- so boot cost and memory grew
+        # monotonically with the number of IPs ever seen. The rows deleted here
+        # are precisely those whose timestamps are all outside the window, so
+        # they carry no live rate-limit state for any process to lose.
+        #
+        # The backend delete runs BEFORE the in-memory eviction, and the memory
+        # eviction only on success. `_hits` is the only thing that can nominate
+        # a row for deletion, so dropping the candidates first meant a raising
+        # backend (sqlite contention, a transient Postgres failure, a full
+        # disk) left those rows on disk with nothing able to retry them --
+        # orphaned until a restart, which is exactly the unbounded growth this
+        # eviction exists to remove. Keeping them in `_hits` when the delete
+        # fails means the next sweep nominates them again.
+        survivors: set[str] = set()
+        if stale:
+            survivors = self._delete_rows(stale, now)
         for ip in stale:
+            if ip in survivors:
+                # Another writer refreshed this row after our snapshot, so the
+                # conditional DELETE spared it. Keep tracking it: dropping it
+                # here would leave the row on disk with nothing able to
+                # nominate it once that writer exits.
+                continue
             del self._hits[ip]
 
     def allow(self, client_ip: str) -> bool:
@@ -270,9 +408,14 @@ class RateLimiter:
             return len(self._hits)
 
     def close(self) -> None:
-        """Close the held Postgres connection, if any (no-op for sqlite/in-memory)."""
+        """Close the held backend connection, if any (no-op for in-memory)."""
         if self._pg_conn is not None:
             try:
                 self._pg_conn.close()
             finally:
                 self._pg_conn = None
+        if self._sqlite_conn is not None:
+            try:
+                self._sqlite_conn.close()
+            finally:
+                self._sqlite_conn = None
