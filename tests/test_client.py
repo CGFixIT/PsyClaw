@@ -198,11 +198,13 @@ class TestClientTimeoutIsolation:
     def test_local_llm_client_disables_ambient_proxy(self, tmp_path):
         client = LocalLLMClient(_write_config(tmp_path))
         assert client._client.trust_env is False
+        assert client._client.follow_redirects is False
         client.close()
 
     def test_grok_client_disables_ambient_proxy(self, tmp_path):
         client = GrokClient(_write_config(tmp_path))
         assert client._client.trust_env is False
+        assert client._client.follow_redirects is False
         client.close()
 
     def test_claude_client_disables_ambient_proxy(self, tmp_path):
@@ -210,6 +212,29 @@ class TestClientTimeoutIsolation:
         assert client._client.trust_env is False
         assert client._client.follow_redirects is False
         client.close()
+
+    def test_probe_openai_models_disables_redirects(self, monkeypatch):
+        captured: dict = {}
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def get(self, *a, **k):
+                raise httpx.ConnectError("no network")
+
+        monkeypatch.setattr("llm.client.httpx.Client", _FakeClient)
+        from llm.client import _probe_openai_models
+
+        assert _probe_openai_models("http://127.0.0.1:9/v1", timeout_sec=1.0) is False  # DevSkim: ignore DS137138
+        assert captured.get("follow_redirects") is False
+        assert captured.get("trust_env") is False
 
     def test_grok_client_uses_isolated_connect_timeout(self, tmp_path):
         client = GrokClient(_write_config(tmp_path))

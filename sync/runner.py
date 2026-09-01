@@ -880,7 +880,6 @@ def _run_sync_locked(
             "dry_run": dry_run,
             "remote": cfg.remote,
             "local_path": cfg.local_path,
-            "include_soul": cfg.include_soul,
         })
 
     # Accumulators hoisted ABOVE the try so the evidence-preserving except
