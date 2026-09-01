@@ -104,6 +104,43 @@ def test_filter_logs_entries_dropped_for_non_permission_errors(
     assert "flaky.md" in joined and "vanished.md" in joined
 
 
+def test_skipped_entry_tracking_is_bounded_not_proportional_to_directory_size(
+    darwin: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wholly-failing volume must not retain state per entry.
+
+    The one-line summary was always bounded -- asserting on the log message
+    cannot tell the two implementations apart. What was unbounded is what the
+    walk RETAINS while running: every (name, OSError) was accumulated until
+    the walk finished, so the explicitly targeted case (a failing external or
+    network volume erroring on most entries) held an exception object per
+    directory entry. This captures what actually reaches the reporter.
+    """
+    names = [f"f{n}.md" for n in range(500)]
+    captured: list[tuple] = []
+
+    def _capture(*args):
+        captured.append(args)
+
+    monkeypatch.setattr(pathsafe, "_report_skipped_entries", _capture)
+
+    def always_fails(_name: str):
+        raise OSError(errno.EIO, "Input/output error")
+
+    assert pathsafe._filter_macos_entries(names, always_fails) == []
+
+    assert len(captured) == 1
+    args = captured[0]
+    # (where, count, sample) -- the retained sample is capped; the rest is a count.
+    assert len(args) == 3, "the reporter must take a count plus a bounded sample"
+    _where, count, sample = args
+    assert count == 500
+    assert len(sample) <= pathsafe._SKIP_LOG_SAMPLE, (
+        f"retained {len(sample)} entries for a 500-entry directory; the walk must "
+        "keep a count and a capped sample, not one object per failure"
+    )
+
+
 def test_filter_logs_nothing_when_every_entry_is_readable(
     darwin: None, caplog: pytest.LogCaptureFixture
 ) -> None:

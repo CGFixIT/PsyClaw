@@ -531,7 +531,7 @@ def _is_macos_dataless(st: os.stat_result) -> bool:
     return sys.platform == "darwin" and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
 
 
-def _report_skipped_entries(where: str, skipped: list[tuple[str, OSError]]) -> None:
+def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]]) -> None:
     """Log entries a directory walk dropped because stat() failed.
 
     _raise_macos_permission re-raises only a Darwin EACCES/EPERM denial. Every
@@ -543,17 +543,12 @@ def _report_skipped_entries(where: str, skipped: list[tuple[str, OSError]]) -> N
     corpus staging via fsconnect/indexer.py, so a silent drop can quietly
     remove files from the index.
     """
-    if not skipped:
+    if not count:
         return
-    sample = ", ".join(
-        f"{name!r} ({exc.strerror or exc.__class__.__name__})"
-        for name, exc in skipped[:_SKIP_LOG_SAMPLE]
-    )
-    if len(skipped) > _SKIP_LOG_SAMPLE:
-        sample += f", ... and {len(skipped) - _SKIP_LOG_SAMPLE} more"
-    logger.warning(
-        "Skipped %d unreadable directory entries in %s: %s", len(skipped), where, sample
-    )
+    rendered = ", ".join(f"{name!r} ({reason})" for name, reason in sample)
+    if count > len(sample):
+        rendered += f", ... and {count - len(sample)} more"
+    logger.warning("Skipped %d unreadable directory entries in %s: %s", count, where, rendered)
 
 
 def _filter_macos_entries(
@@ -562,7 +557,11 @@ def _filter_macos_entries(
 ) -> list[tuple[str, os.stat_result]]:
     """Apply the Darwin read/index visibility policy to directory entries."""
     visible: list[tuple[str, os.stat_result]] = []
-    skipped: list[tuple[str, OSError]] = []
+    # Count everything, retain only the first few names: a failing volume can
+    # error on every entry, and holding an OSError per entry would make the
+    # bounded one-line diagnostic cost memory proportional to directory size.
+    skipped_count = 0
+    skipped_sample: list[tuple[str, str]] = []
     for name in names:
         if _is_macos_artifact_name(name):
             continue
@@ -570,12 +569,14 @@ def _filter_macos_entries(
             st = stat_entry(name)
         except OSError as exc:
             _raise_macos_permission(f"checking directory entry {name!r}", exc)
-            skipped.append((name, exc))
+            skipped_count += 1
+            if len(skipped_sample) < _SKIP_LOG_SAMPLE:
+                skipped_sample.append((name, exc.strerror or exc.__class__.__name__))
             continue
         if _is_macos_dataless(st):
             continue
         visible.append((name, st))
-    _report_skipped_entries("the macOS entry filter", skipped)
+    _report_skipped_entries("the macOS entry filter", skipped_count, skipped_sample)
     return visible
 
 
@@ -1003,16 +1004,19 @@ class ScopedRoots:
                 lambda name: os.stat(name, dir_fd=dir_fd, follow_symlinks=False),
             )
             return [self._stat_to_dict(name, st) for name, st in filtered]
-        skipped: list[tuple[str, OSError]] = []
+        skipped_count = 0
+        skipped_sample: list[tuple[str, str]] = []
         for name in names:
             try:
                 st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
             except OSError as exc:
                 _raise_macos_permission(f"checking directory entry {name!r}", exc)
-                skipped.append((name, exc))
+                skipped_count += 1
+                if len(skipped_sample) < _SKIP_LOG_SAMPLE:
+                    skipped_sample.append((name, exc.strerror or exc.__class__.__name__))
                 continue
             entries.append(self._stat_to_dict(name, st))
-        _report_skipped_entries("list_dir", skipped)
+        _report_skipped_entries("list_dir", skipped_count, skipped_sample)
         return entries
 
     @staticmethod
