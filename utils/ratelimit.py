@@ -72,6 +72,7 @@ class RateLimiter:
         self._last_sweep = 0.0
         self._lock = threading.Lock()
         self._pg_conn = None  # held Postgres connection (Postgres backend only)
+        self._sqlite_conn: sqlite3.Connection | None = None  # held sqlite connection (sqlite backend only)
 
         # Resolve the persistence backend. Postgres wins over sqlite if both given.
         if _is_pg_dsn(db_url):
@@ -106,6 +107,27 @@ class RateLimiter:
             # multi-statement transaction is needed for a rate-limit cache.
             self._pg_conn = psycopg.connect(_harden_pg_conninfo(self._db_url), autocommit=True)
         return self._pg_conn
+
+    def _sqlite_connection(self) -> sqlite3.Connection:
+        """Lazily open + cache the single sqlite connection.
+
+        Mirrors ``_pg_connection`` above. Previously every persisted call
+        opened its own connection and closed it again, so each allowed request
+        paid a file open + journal setup + ``commit()`` fsync + close -- all of
+        it inside ``self._lock``, which serializes request admission behind
+        that disk I/O. The window this cost lands in is exactly the one the
+        limiter exists to keep cheap.
+
+        ``check_same_thread=False`` is safe here and required: the gateway
+        serves requests from a thread pool, so ``allow()`` reaches this handle
+        from many threads. Every statement issued against it runs while the
+        caller holds ``self._lock`` (``_init_db``/``_load_from_db`` run
+        single-threaded during construction), so access stays serialized.
+        """
+        if self._sqlite_conn is None:
+            Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+            self._sqlite_conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        return self._sqlite_conn
 
     def _ddl(self) -> str:
         if self._backend == "postgres":
@@ -144,18 +166,13 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._ddl())
             return
-        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        # `with sqlite3.connect(...) as conn:` only manages the transaction
-        # (commit on success / rollback on exception) -- it does NOT close the
-        # connection, so the object would otherwise sit until CPython's
-        # refcounting GC reaps it. Cheap in practice on CPython, but explicit
-        # is safer than relying on interpreter-specific GC timing.
-        conn = sqlite3.connect(self._db_path)
-        try:
-            conn.execute(self._ddl())
-            conn.commit()
-        finally:
-            conn.close()
+        # The connection is opened once here (parent dir created by
+        # _sqlite_connection) and reused for the object's lifetime; close()
+        # releases it. It is deliberately NOT closed per statement -- see
+        # _sqlite_connection's docstring for why that cost mattered.
+        conn = self._sqlite_connection()
+        conn.execute(self._ddl())
+        conn.commit()
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -164,11 +181,9 @@ class RateLimiter:
             cur = self._pg_connection().execute("SELECT ip, timestamps, last_sweep FROM rate_hits")
             rows = cur.fetchall()
         else:
-            conn = sqlite3.connect(self._db_path)
-            try:
-                rows = conn.execute("SELECT ip, timestamps, last_sweep FROM rate_hits").fetchall()
-            finally:
-                conn.close()
+            rows = self._sqlite_connection().execute(
+                "SELECT ip, timestamps, last_sweep FROM rate_hits"
+            ).fetchall()
         for ip, ts_json, last_sweep in rows:
             try:
                 self._hits[ip] = json.loads(ts_json)
@@ -199,12 +214,25 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
-        conn = sqlite3.connect(self._db_path)
-        try:
-            conn.execute(self._upsert_sql(), params)
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._sqlite_connection()
+        conn.execute(self._upsert_sql(), params)
+        conn.commit()
+
+    def _delete_rows(self, ips: list[str]) -> None:
+        """Delete the given IPs' persisted rows. Caller must hold ``self._lock``."""
+        if not self._backend:
+            return
+        # noqa S608: the interpolated text is only a run of fixed placeholder
+        # chars ("?"/"%s") sized to len(ips) -- the IPs themselves are always
+        # bound as parameters. Same pattern (and same rationale) as _upsert_sql.
+        placeholders = ", ".join([self._ph] * len(ips))
+        sql = f"DELETE FROM rate_hits WHERE ip IN ({placeholders})"  # noqa: S608
+        if self._backend == "postgres":
+            self._pg_connection().execute(sql, tuple(ips))
+            return
+        conn = self._sqlite_connection()
+        conn.execute(sql, tuple(ips))
+        conn.commit()
 
     # --------------------------------------------------------------------- logic
     def _sweep(self, now: float) -> None:
@@ -222,6 +250,15 @@ class RateLimiter:
         ]
         for ip in stale:
             del self._hits[ip]
+        # Evict from the backend as well. Without this the in-memory map is
+        # bounded but the table is not: `rate_hits` kept one row per distinct
+        # client IP forever, and _load_from_db reads every row back (and
+        # JSON-parses each) on construction -- so boot cost and memory grew
+        # monotonically with the number of IPs ever seen. The rows deleted here
+        # are precisely those whose timestamps are all outside the window, so
+        # they carry no live rate-limit state for any process to lose.
+        if stale:
+            self._delete_rows(stale)
 
     def allow(self, client_ip: str) -> bool:
         """Return True if the request is within the limit, else False.
@@ -270,9 +307,14 @@ class RateLimiter:
             return len(self._hits)
 
     def close(self) -> None:
-        """Close the held Postgres connection, if any (no-op for sqlite/in-memory)."""
+        """Close the held backend connection, if any (no-op for in-memory)."""
         if self._pg_conn is not None:
             try:
                 self._pg_conn.close()
             finally:
                 self._pg_conn = None
+        if self._sqlite_conn is not None:
+            try:
+                self._sqlite_conn.close()
+            finally:
+                self._sqlite_conn = None

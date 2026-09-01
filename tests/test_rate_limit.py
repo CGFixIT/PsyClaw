@@ -6,6 +6,7 @@ driven by an injected fake clock; there is no time.sleep and no wall-clock
 dependence.
 """
 
+import sqlite3
 import threading
 import time
 from collections import defaultdict
@@ -42,6 +43,15 @@ class _SlowHits(defaultdict):
             # stale view across the switch, so an unguarded region overcounts.
             time.sleep(0.001)
         return value
+
+
+def _row_count(db_path) -> int:
+    """Rows currently in the persisted rate_hits table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return conn.execute("SELECT COUNT(*) FROM rate_hits").fetchone()[0]
+    finally:
+        conn.close()
 
 
 class FakeClock:
@@ -296,3 +306,64 @@ class TestPersistence:
         assert rl2.allow("9.9.9.9") is True
         assert rl2.allow("9.9.9.9") is True
         assert rl2.allow("9.9.9.9") is False  # max_requests=2 enforced on the fresh window
+
+
+    def test_sweep_evicts_persisted_rows_not_just_memory(self, tmp_path):
+        """Swept IPs are deleted from the backend, so the table stays bounded.
+
+        Eviction used to be memory-only: `_sweep` dropped the entry from
+        `self._hits` while the row stayed in `rate_hits` forever, so the table
+        accumulated one permanent row per distinct client IP and every restart
+        re-read (and JSON-parsed) all of them.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+
+        for n in range(20):
+            rl.allow(f"10.0.0.{n}")
+        assert _row_count(db) == 20, "each IP persists a row while its window is live"
+
+        # Advance past the window and touch one new IP; the sweep evicts the 20
+        # now-idle IPs from memory AND from the table.
+        clock.advance(3.0)
+        rl.allow("192.168.1.1")
+        assert rl.tracked_ips() == 1
+        assert _row_count(db) == 1, "swept IPs must not leave rows behind"
+
+        # A restart therefore loads only the live IP, not every IP ever seen.
+        rl2 = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        assert rl2.tracked_ips() == 1
+
+    def test_sqlite_connection_is_reused_across_requests(self, tmp_path):
+        """The sqlite handle is opened once, not per persisted request.
+
+        Every allowed request used to pay a connect + commit-fsync + close
+        inside the admission lock; the Postgres branch already cached its
+        connection. Asserting the reuse directly (rather than timing it) keeps
+        this deterministic.
+        """
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=100, window_seconds=60, db_path=str(db))
+
+        first = rl._sqlite_connection()
+        for n in range(10):
+            assert rl.allow(f"10.0.0.{n}") is True
+        assert rl._sqlite_connection() is first, "persisting must not reopen the connection"
+
+        # Writes still landed despite the connection never being reopened.
+        assert _row_count(db) == 10
+
+    def test_close_releases_the_sqlite_handle(self, tmp_path):
+        """close() drops the cached sqlite connection (it was Postgres-only)."""
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=60, db_path=str(db))
+        rl.allow("10.0.0.1")
+        assert rl._sqlite_conn is not None
+
+        rl.close()
+        assert rl._sqlite_conn is None
+
+        # Idempotent, and the limiter still works (it reopens on demand).
+        rl.close()
+        assert rl.allow("10.0.0.2") is True
