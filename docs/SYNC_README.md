@@ -347,7 +347,7 @@ events describe what rclone *would* copy, not what changed).
 
 | Event | When | Key fields |
 |---|---|---|
-| `sync_started` | run begins | `direction`, `dry_run`, `remote`, `local_path`, `include_soul` |
+| `sync_started` | run begins | `direction`, `dry_run`, `remote`, `local_path` |
 | `sync_file_added` | per file | `file`, `sha256` |
 | `sync_file_modified` | per file | `file`, `sha256` |
 | `sync_file_deleted` | per file | `file` (no hash — bytes gone) |
