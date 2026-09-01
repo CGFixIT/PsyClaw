@@ -19,7 +19,7 @@ Checks:
     D5  Route table           gate.py @app routes are all named in CLAUDE.md
     D6  Hook claims           doc claims about a "stop hook" are backed by .claude/settings.json
     D7  M5 doctrine           docs/m5-48gb-coding-expectations.md cites the shipped
-                               Ollama context budget and timeout values
+                               local model tag, Ollama context budget, and timeout values
 
 Exit codes (repo convention):
     0  no drift detected
@@ -139,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                  "OLLAMA_CONTEXT_LENGTH is absent or not a decimal integer")
         else:
             expected = {
+                "models.local_llm.model": cfg["models"]["local_llm"]["model"],
                 "models.local_llm.max_tokens": cfg["models"]["local_llm"]["max_tokens"],
                 "models.local_llm.timeout_sec": cfg["models"]["local_llm"]["timeout_sec"],
                 "api.graph_timeout_sec": cfg["api"]["graph_timeout_sec"],
