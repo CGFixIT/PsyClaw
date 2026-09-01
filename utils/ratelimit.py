@@ -66,10 +66,37 @@ class RateLimiter:
         db_path: str | None = None,   # set to "data/rate_limits.db" for sqlite persistence
         db_url: str | None = None,    # set to "postgresql://…" for Postgres persistence
     ) -> None:
+        if window_seconds <= 0:
+            # _delete_rows treats any non-positive window_seconds as "policy
+            # unknown, protect this row indefinitely until rewritten with a
+            # real value" -- a deliberate fix for rows written under a
+            # stale/unmigrated policy during a rolling upgrade (see that
+            # method's docstring). A genuinely misconfigured
+            # window_seconds <= 0 is indistinguishable from that case once
+            # persisted: this instance would then be the one PERSISTING the
+            # non-positive value on every request, and every resulting row
+            # would be permanently exempt from its own sweep -- one
+            # permanently-growing row per distinct client IP, in both
+            # _hits and the backend table (codex review on #1244, seventh
+            # round; reachable in production via unvalidated
+            # api.rate_limit.window_seconds in config.yaml). Reject at
+            # construction instead of accepting a value with no sensible
+            # interpretation anyway ("N requests per zero seconds").
+            msg = f"RateLimiter window_seconds must be positive, got: {window_seconds!r}"
+            raise ValueError(msg)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._clock = clock
         self._hits: dict[str, list[float]] = defaultdict(list)
+        # IPs this INSTANCE has already persisted its own window_seconds for
+        # at least once. Forces the first touch of an IP -- accepted or
+        # rejected -- to persist, even under the reject-without-pruning
+        # optimization in allow() below, so a newly-governing instance always
+        # stamps its own policy onto a row it may have inherited from a
+        # DIFFERENT (e.g. shorter-window) instance's earlier write. Cleared
+        # for an IP in _sweep when that IP is genuinely evicted from _hits,
+        # so this stays bounded the same way _hits is.
+        self._stamped_ips: set[str] = set()
         self._last_sweep = 0.0
         self._lock = threading.Lock()
         self._pg_conn = None  # held Postgres connection (Postgres backend only)
@@ -160,36 +187,94 @@ class RateLimiter:
                 CREATE TABLE IF NOT EXISTS rate_hits (
                     ip TEXT PRIMARY KEY,
                     timestamps TEXT NOT NULL,
-                    last_sweep DOUBLE PRECISION NOT NULL
+                    last_sweep DOUBLE PRECISION NOT NULL,
+                    window_seconds DOUBLE PRECISION NOT NULL DEFAULT 0
                 )
             """
         return """
             CREATE TABLE IF NOT EXISTS rate_hits (
                 ip TEXT PRIMARY KEY,
                 timestamps TEXT NOT NULL,
-                last_sweep REAL NOT NULL
+                last_sweep REAL NOT NULL,
+                window_seconds REAL NOT NULL DEFAULT 0
             )
         """
 
+    def _ensure_window_seconds_column(self) -> None:
+        """Add ``window_seconds`` to a table created before this schema version.
+
+        A table freshly created by ``_ddl()`` above already has the column; this
+        only matters for an existing ``data/rate_limits.db`` (or Postgres
+        ``rate_hits``) from before it. Neither backend at the pins this repo
+        carries has a portable ``ADD COLUMN IF NOT EXISTS``, so the idiom is:
+        attempt the ALTER, and treat "the column is already there" as success
+        rather than probing ``PRAGMA table_info``/``information_schema.columns``
+        first -- that also makes this race-safe if two processes migrate the
+        same file concurrently on first boot after an upgrade.
+
+        ``DEFAULT 0`` for pre-existing rows is deliberate, not a guess at their
+        original window: 0 makes a legacy row immediately eligible for the next
+        sweep's conditional DELETE (``last_sweep + window_seconds <= now``), so
+        the table converges to the per-row-policy invariant this column exists
+        to provide as fast as the next sweep, rather than carrying an
+        unknowable borrowed value indefinitely. The cost is one-time and
+        bounded: a client already mid-window when the migration runs may see
+        its budget reset early once -- never a security regression (only ever
+        more permissive, and only until that IP's next real hit re-persists a
+        live ``window_seconds``).
+        """
+        column_type = "DOUBLE PRECISION" if self._backend == "postgres" else "REAL"
+        sql = f"ALTER TABLE rate_hits ADD COLUMN window_seconds {column_type} NOT NULL DEFAULT 0"
+        if self._backend == "postgres":
+            import psycopg  # noqa: PLC0415 -- lazy, matches _pg_connection
+
+            try:
+                self._pg_connection().execute(sql)
+            except psycopg.errors.DuplicateColumn:
+                # A concurrent process (or an earlier run against this same
+                # backend) already added the column -- the migration is
+                # idempotent, so there is nothing left to do here.
+                pass
+            return
+        try:
+            with self._sqlite_txn() as conn:
+                conn.execute(sql)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
+
     def _upsert_sql(self) -> str:
-        # noqa S608: self._ph is a fixed placeholder char ("?"/"%s"), never user
-        # data — values are always bound via parameters. (Mirrors the S608 ignore
-        # already applied to utils/personality.py for the same placeholder pattern.)
+        # S608 / B608: self._ph is a fixed placeholder char ("?"/"%s"), never
+        # user data — values are always bound via parameters. (Mirrors the
+        # S608 ignore already applied to utils/personality.py for the same
+        # placeholder pattern.) GitHub's code-scanning Bandit pass doesn't
+        # honor ruff's suppression comments, and flags the continuation line
+        # carrying the f-string specifically, not the plain-string line the
+        # ruff suppression sits on -- both inline suppressions below are
+        # needed, one per tool.
+        #
+        # window_seconds is written on every upsert, not just at row creation:
+        # the row must always reflect the policy of whichever instance most
+        # recently touched it, so a later config change (a different
+        # window_seconds on restart) takes effect on that IP's very next hit
+        # rather than being stuck with whatever wrote the row first.
         if self._backend == "postgres":
             return (
-                "INSERT INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608
-                f"VALUES ({self._ph}, {self._ph}, {self._ph}) "
+                "INSERT INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
+                f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph}) "  # nosec B608
                 "ON CONFLICT (ip) DO UPDATE SET "
-                "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep"
+                "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep, "
+                "window_seconds = EXCLUDED.window_seconds"
             )
         return (
-            "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep) "  # noqa: S608
-            f"VALUES ({self._ph}, {self._ph}, {self._ph})"
+            "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
+            f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph})"  # nosec B608
         )
 
     def _init_db(self) -> None:
         if self._backend == "postgres":
             self._pg_connection().execute(self._ddl())
+            self._ensure_window_seconds_column()
             return
         # The connection is opened once here (parent dir created by
         # _sqlite_connection) and reused for the object's lifetime; close()
@@ -197,6 +282,7 @@ class RateLimiter:
         # _sqlite_connection's docstring for why that cost mattered.
         with self._sqlite_txn() as conn:
             conn.execute(self._ddl())
+        self._ensure_window_seconds_column()
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -234,7 +320,7 @@ class RateLimiter:
         """
         if not self._backend:
             return
-        params = (client_ip, json.dumps(self._hits[client_ip]), now)
+        params = (client_ip, json.dumps(self._hits[client_ip]), now, self.window_seconds)
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
@@ -254,33 +340,104 @@ class RateLimiter:
         A candidate with no row at all is NOT a survivor: it is already gone,
         so the caller should drop it from memory as usual.
 
-        Known limit -- one policy per backend. ``rate_hits`` stores no window
-        or limiter namespace, so this threshold is whatever THIS instance's
-        ``window_seconds`` says. Two processes sharing a backend with different
-        windows will therefore step on each other. That is not new here: on the
-        write path ``allow()`` already prunes to its own window before
-        persisting, so a short-window writer discards history a long-window
-        process needs regardless of this delete. Making mixed-policy sharing
-        safe needs a schema change (persist the governing window or a
-        namespace per row) and is deliberately out of scope. The shipped
-        configuration is unaffected: agentic/fsconnect/writer.py builds both of
-        its limiters from the same ``window_seconds``.
-
         Caller must hold ``self._lock``.
 
         ``ips`` comes from this instance's in-memory map, which is a snapshot
         taken when the instance was constructed. Several limiters can share one
         backend -- ``agentic/fsconnect/writer.py`` builds a per-root and a
-        global limiter against the same file, and separate processes can point
-        at it too -- so "stale according to my snapshot" is not the same as
-        "stale on disk". Deleting by IP alone let one instance destroy a live
-        window another had just written, which would hand an abuser back the
-        budget the persisted limiter exists to hold.
+        global limiter against the same file, separate processes can point at
+        it too, and a rolling config change can put two DIFFERENT
+        ``window_seconds`` values on the same backend simultaneously -- so
+        "stale according to my snapshot" is not the same as "stale on disk",
+        and "stale according to MY window" is not the same as "stale according
+        to the policy that actually wrote this row".
 
-        The ``last_sweep <= threshold`` guard makes the delete conditional on
-        the persisted row still being expired: ``last_sweep`` holds the time of
-        that row's last write (see ``_persist``), so a row refreshed inside the
-        current window survives someone else's stale sweep.
+        The delete is conditional on ``last_sweep + window_seconds <= now``,
+        using the ROW's OWN persisted ``window_seconds`` (written by
+        ``_persist`` under whichever instance most recently touched it) rather
+        than this sweeping instance's. A row a long-window process just wrote
+        therefore survives a short-window process's sweep even though it is
+        already older than the short window -- it is evaluated against the
+        policy that actually governs it, not the policy of whoever happens to
+        run the next sweep. ``_ensure_window_seconds_column`` covers what a
+        table predating this column does for rows it never wrote.
+
+        The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
+        stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
+        disagreed at exactly ``now - window_seconds``: ``_sweep`` dropped the IP
+        from ``_hits`` while the DELETE spared the row, so nothing could ever
+        nominate it again and it sat on disk forever -- reintroducing the
+        unbounded growth this eviction exists to remove.
+
+        A row whose ``window_seconds`` is not a positive number is NEVER
+        deleted here -- its policy is unknown, and no time-based guess is
+        safe: a fixed grace period was this method's second attempt (codex
+        review on #1244, second round) and still failed, because a legacy
+        writer's real configured window can be longer than ANY fixed
+        constant this module could reasonably pick (third round) --
+        ``RateLimiter`` imposes no ceiling on ``window_seconds``, so "pick a
+        generous-enough number" is not a sound fix, only a bigger version of
+        the same bug. An unknown-window row instead survives every sweep
+        unconditionally until SOME instance persists a real (positive)
+        ``window_seconds`` for it via ``_persist`` -- at which point it is
+        governed by the per-row logic below like any other row. The cost is
+        bounded, not unbounded: a row only enters the unknown state while an
+        old (pre-migration) writer is actively touching it, and it only
+        stays there for IPs that stop sending requests entirely during that
+        same window -- a one-time, bounded debt from the coexistence period,
+        not ongoing growth. ``_ensure_window_seconds_column`` covers what a
+        table predating this column does for rows it never wrote.
+
+        Known residual gap (both backends, not fixed here): a positive
+        ``window_seconds`` is trusted at face value, but nothing here can
+        tell "fresh, written by whoever is currently governing this row"
+        apart from "stale, left over from an EARLIER writer's touch". Two
+        concrete ways that happens, found across three review rounds:
+
+        - Postgres only: ``ON CONFLICT DO UPDATE`` overwrites only the
+          columns it lists, so an old (pre-migration) writer's SET clause
+          (timestamps, last_sweep -- see ``_upsert_sql``) leaves an EXISTING
+          positive ``window_seconds`` untouched, even though it no longer
+          reflects who is actually governing the row (e.g. an upgraded
+          process creates a row first, an old process later refreshes it).
+          SQLite does not share this specific path: its ``INSERT OR
+          REPLACE`` resets ``window_seconds`` to 0 on ANY write from old
+          code, correctly routing the row through the unknown-window path
+          above instead.
+        - Both backends: ``allow()``'s ``_stamped_ips`` set only guarantees
+          THIS instance's own FIRST touch of an IP persists (closing the
+          "never got to stamp its own policy" gap fixed above). It provides
+          no ongoing guarantee once TWO OR MORE current-version instances
+          with different ``window_seconds`` keep alternating writes to the
+          same row: each instance's own bookkeeping only knows "have I
+          EVER stamped this IP", not "is the row's CURRENT value still
+          mine" -- so once instance A stamps, then instance B overwrites,
+          instance A's own next touch still believes it already stamped
+          and skips persisting again, leaving B's value in place even on
+          A's subsequent (rejected) requests.
+
+        Both are the same underlying problem: correctly telling "this
+        column reflects the CURRENT governing policy" from "this column is
+        stale, left by an earlier writer" needs a freshness signal this
+        schema does not carry (e.g. a companion column recording which
+        write last set ``window_seconds``, checked against ``last_sweep``).
+        Accepted as a scoped limitation for this PR given CyClaw's
+        single-operator threat model and the narrowness of triggering it
+        (requires either an old/new-code coexistence window on Postgres, or
+        two CURRENT-version instances with genuinely different configured
+        windows actively alternating writes to the same IP) -- flagged
+        explicitly, including this docstring's own update after each new
+        review round found a sharper instance of it, rather than silently
+        unaddressed or claimed fully solved.
+
+        The delete is otherwise conditional on ``last_sweep + window_seconds
+        <= now``, using the ROW's OWN persisted ``window_seconds`` (written
+        by ``_persist`` under whichever instance most recently touched it)
+        rather than this sweeping instance's. A row a long-window process
+        just wrote therefore survives a short-window process's sweep even
+        though it is already older than the short window -- it is evaluated
+        against the policy that actually governs it, not the policy of
+        whoever happens to run the next sweep.
 
         The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
         stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
@@ -296,20 +453,27 @@ class RateLimiter:
         """
         if not self._backend:
             return set()
-        threshold = now - self.window_seconds
-        rows = [(ip, threshold) for ip in ips]
+        rows = [(ip, now) for ip in ips]
         candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --
             # Connection has execute() but no executemany(), so calling it on
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
-                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep <= %s", rows)
+                cur.executemany(
+                    "DELETE FROM rate_hits WHERE ip = %s AND window_seconds > 0 "
+                    "AND last_sweep + window_seconds <= %s",
+                    rows,
+                )
                 cur.execute("SELECT ip FROM rate_hits")
                 remaining = {row[0] for row in cur.fetchall()}
             return candidates & remaining
         with self._sqlite_txn() as conn:
-            conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
+            conn.executemany(
+                "DELETE FROM rate_hits WHERE ip = ? AND window_seconds > 0 "
+                "AND last_sweep + window_seconds <= ?",
+                rows,
+            )
         # One bounded scan rather than a per-IP probe: this table is kept small
         # by the very eviction running here, and it is the same read
         # _load_from_db already does at construction. Avoids an IN (...) clause,
@@ -360,6 +524,7 @@ class RateLimiter:
                 # nominate it once that writer exits.
                 continue
             del self._hits[ip]
+            self._stamped_ips.discard(ip)
 
     def allow(self, client_ip: str) -> bool:
         """Return True if the request is within the limit, else False.
@@ -374,18 +539,30 @@ class RateLimiter:
             recent = [t for t in self._hits[client_ip] if now - t < self.window_seconds]
             if len(recent) >= self.max_requests:
                 self._hits[client_ip] = recent
-                # Persist only when expiry pruning actually changed the stored
-                # window. A rejected request appends no timestamp, so when
-                # nothing was pruned the backend already holds exactly this
-                # state — and skipping the redundant upsert removes a per-request
-                # DB write under precisely the hammering/abuse condition the
-                # limiter exists to make cheap.
-                if len(recent) != prior_len:
+                # Persist when expiry pruning actually changed the stored
+                # window, OR this is this INSTANCE's first touch of the IP.
+                # A rejected request appends no timestamp, so when nothing
+                # was pruned AND this instance has already stamped its own
+                # window_seconds for this IP before, the backend already
+                # holds exactly this state -- skipping the redundant upsert
+                # removes a per-request DB write under precisely the
+                # hammering/abuse condition the limiter exists to make
+                # cheap. But the FIRST touch must still persist even when
+                # nothing was pruned: otherwise an instance that inherited a
+                # row written under a DIFFERENT (e.g. shorter) window never
+                # gets to stamp its own policy if its very first request for
+                # that IP happens to be a rejection, leaving the row's
+                # window_seconds stale indefinitely -- exactly the kind of
+                # gap the per-row-window fix exists to close (codex review
+                # on #1244, fifth round).
+                if len(recent) != prior_len or client_ip not in self._stamped_ips:
                     self._persist(client_ip, now)
+                    self._stamped_ips.add(client_ip)
                 return False
             recent.append(now)
             self._hits[client_ip] = recent
             self._persist(client_ip, now)
+            self._stamped_ips.add(client_ip)
             return True
 
     def retry_after_sec(self, client_ip: str) -> float:

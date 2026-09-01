@@ -83,6 +83,22 @@ def test_allows_under_limit():
         assert rl.allow("10.0.0.1") is True, f"request {i + 1} should be allowed"
 
 
+def test_zero_or_negative_window_seconds_is_rejected_at_construction():
+    """A non-positive window_seconds has no sensible interpretation and must
+    not reach _persist(): _delete_rows treats any non-positive value as
+    "policy unknown, protect indefinitely" (a deliberate fix for a rolling-
+    upgrade scenario), which is indistinguishable from a genuinely
+    misconfigured window_seconds <= 0 once persisted -- every resulting row
+    would be permanently exempt from its own sweep, one permanently-growing
+    row per distinct client IP (codex review on #1244, seventh round;
+    api.rate_limit.window_seconds in config.yaml reaches RateLimiter with
+    no validation upstream).
+    """
+    for bad in (0, -1, -0.5):
+        with pytest.raises(ValueError, match="window_seconds must be positive"):
+            RateLimiter(max_requests=5, window_seconds=bad)
+
+
 def test_blocks_over_limit():
     clock = FakeClock()
     rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock)
@@ -532,7 +548,11 @@ class TestPersistence:
 
         sql, rows = executed[0]
         assert "DELETE FROM rate_hits" in sql
-        assert "last_sweep <" in sql, "the delete must stay conditional on the persisted timestamp"
+        assert "window_seconds > 0 AND last_sweep + window_seconds <=" in sql, (
+            "the delete must stay conditional on the ROW's own persisted window "
+            "when it has one (not the sweeping instance's), and must never "
+            "match a row whose window_seconds is unknown (non-positive)"
+        )
         assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
 
 
@@ -613,4 +633,266 @@ class TestPersistence:
         rl.allow("10.0.0.3")
         assert "10.0.0.2" not in _persisted_ips(db), (
             "the rolled-back hit was committed by a later request"
+        )
+
+
+    def test_persisted_window_seconds_reflects_the_writing_instance(self, tmp_path):
+        """Each row remembers the window_seconds of whoever last wrote it.
+
+        This is the plumbing the cross-process fix rests on: without it there
+        is nothing on the row for a later sweep to check against.
+        """
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=42, clock=FakeClock(), db_path=str(db))
+        rl.allow("10.0.0.1")
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.1",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (42.0,)
+
+    def test_a_longer_window_row_survives_a_shorter_window_process_sweep(self, tmp_path):
+        """A short-window process must not evict a row still live under the
+        LONGER-window policy that actually wrote it.
+
+        The shape of a rolling config change: two processes point at the same
+        backend with different window_seconds. The old conditional-delete
+        guard checked the persisted row's last_sweep against the SWEEPING
+        instance's own window -- correct for the same-window race it was
+        built for, but a long-window row written more than the short window's
+        span ago (easy: 70s ago is old for a 10s window, nowhere near old for
+        a 600s one) still got deleted, because nothing recorded which policy
+        actually governed that row.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        long_proc = RateLimiter(max_requests=5, window_seconds=600, clock=clock, db_path=str(db))
+        long_proc.allow("10.0.0.9")
+
+        clock.advance(70.0)
+        short_proc = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        short_proc.allow("192.168.1.1")  # triggers short_proc's first sweep
+
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "a shorter-window process's sweep evicted a row still live under "
+            "the longer-window policy that wrote it"
+        )
+        assert "10.0.0.9" in short_proc._hits, (
+            "the row must stay tracked in memory too, or nothing can ever "
+            "nominate it again once it genuinely expires"
+        )
+
+        # It must still be evictable once truly expired under ITS OWN window.
+        clock.t = 1000.0 + 600.0 + 1.0
+        short_proc.allow("192.168.1.2")
+        assert "10.0.0.9" not in _persisted_ips(db), (
+            "a row must still be evicted once its own persisted window has genuinely expired"
+        )
+
+    def test_legacy_table_migrates_without_crashing_and_converges(self, tmp_path):
+        """A rate_hits table from before window_seconds must migrate cleanly.
+
+        Simulates upgrading a live deployment: hand-creates the OLD 3-column
+        schema, seeds a row the way the old code would have, then constructs
+        RateLimiter against it exactly as a real upgraded process would on
+        its next boot.
+        """
+        db = tmp_path / "legacy.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE rate_hits (ip TEXT PRIMARY KEY, timestamps TEXT NOT NULL, "
+            "last_sweep REAL NOT NULL)"
+        )
+        conn.execute("INSERT INTO rate_hits VALUES (?, ?, ?)", ("legacy.ip", "[500.0]", 500.0))
+        conn.commit()
+        conn.close()
+
+        rl = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
+        assert "legacy.ip" in rl._hits, "the pre-existing row must still load"
+
+        conn = sqlite3.connect(str(db))
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(rate_hits)")}
+            assert "window_seconds" in cols
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("legacy.ip",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (0.0,), (
+            "a migrated legacy row must default to window_seconds=0 -- see "
+            "test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade "
+            "for how the sweep predicate treats that value (never evicted by "
+            "elapsed time alone, only once rewritten with a real value)"
+        )
+
+        # Idempotent: constructing again against the already-migrated file
+        # must not raise on the column already existing.
+        rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
+        assert "legacy.ip" in rl2._hits
+
+        # An unknown-window row is never evicted by elapsed time alone --
+        # not even after a huge jump, and not just because it is "only" 500s
+        # old (test_an_unknown_window_row_survives_a_mixed_policy_rolling_
+        # upgrade below covers actual convergence via a real rewrite).
+        rl2.allow("some.other.ip")
+        assert "legacy.ip" in _persisted_ips(db), (
+            "a migrated legacy row (unknown window_seconds) was evicted by "
+            "elapsed time -- it must survive until rewritten with a real value"
+        )
+
+    def test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(self, tmp_path):
+        """A row with unknown (non-positive) window_seconds must never be
+        evicted by elapsed time alone -- only once rewritten with a real value.
+
+        Two things can persist window_seconds=0 for a row that is NOT actually
+        brand new: the migration default, and -- during a rolling upgrade --
+        a pre-migration process still writing that same row with SQLite's
+        ``INSERT OR REPLACE``, which resets every unlisted column (including
+        one it has never heard of) to its DEFAULT on every write, not just the
+        first. Simulates the second case directly: a real writer with a LONG
+        (600s) window persists the row, a raw-SQL stomp (standing in for the
+        old code's own INSERT OR REPLACE) then re-writes it minus
+        window_seconds, and a SHORT-window (10s) sweeper -- whose in-memory
+        snapshot predates the stomp, so its own nomination logic still fires
+        -- must not delete the freshly-stomped row.
+
+        Two review rounds landed on this method before the final shape: using
+        the sweeping instance's own window as a stand-in reproduced the
+        module's original cross-policy bug for the unknown-window case
+        (round 2); a fixed grace-period stand-in was still wrong because a
+        legacy writer's real window can exceed any fixed constant this module
+        could reasonably pick (round 3). The row must therefore survive
+        indefinitely under elapsed time alone, converging only once an
+        upgraded process actually writes a real window_seconds for it.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        writer = RateLimiter(max_requests=5, window_seconds=600, clock=clock, db_path=str(db))
+        writer.allow("10.0.0.9")  # persists last_sweep=1000, window_seconds=600
+        writer.close()
+
+        short = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        assert short._hits["10.0.0.9"] == [1000.0]  # snapshot taken before the stomp below
+
+        # Simulate a coexisting old-code writer re-touching the row 10s later,
+        # via the same 3-column INSERT OR REPLACE the pre-migration code used
+        # -- window_seconds is not in the column list, so SQLite resets it to
+        # its schema DEFAULT (0) even though this is an UPDATE of a live row,
+        # not a fresh INSERT.
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep) VALUES (?, ?, ?)",
+                ("10.0.0.9", "[1010.0]", 1010.0),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        clock.t = 1015.0  # 15s after short's snapshot -> its own 10s sweep gate opens
+        short.allow("192.168.1.1")  # triggers short's first sweep
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "a zero-window row was evicted almost immediately after being "
+            "touched, instead of surviving unconditionally while its window "
+            "is unknown"
+        )
+
+        # A huge elapsed time must not evict it either -- there is no fixed
+        # grace period to outlast; the row is unconditionally protected while
+        # window_seconds stays non-positive.
+        clock.t = 10_000_000.0
+        short.allow("192.168.1.2")
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "an unknown-window row was evicted by elapsed time alone -- it "
+            "must survive until rewritten with a real value, however long "
+            "that takes"
+        )
+
+        # It converges once an upgraded process actually persists a real
+        # window_seconds for it -- from then on it is governed by the normal
+        # per-row logic like any other row.
+        writer2 = RateLimiter(max_requests=5, window_seconds=5, clock=clock, db_path=str(db))
+        writer2.allow("10.0.0.9")  # persists a real (positive) window_seconds
+        clock.t += 100.0  # well past writer2's own 5s window
+        short.allow("192.168.1.3")
+        assert "10.0.0.9" not in _persisted_ips(db), (
+            "a row must converge promptly once rewritten with a real "
+            "window_seconds -- it must not still be treated as unknown"
+        )
+
+    def test_first_touch_persists_governing_policy_even_when_rejected(self, tmp_path, monkeypatch):
+        """A new instance's FIRST touch of an IP must stamp its own
+        window_seconds even when that touch is a rejection that prunes
+        nothing.
+
+        allow()'s reject branch skips _persist() when pruning changed
+        nothing, to avoid a per-request DB write under sustained hammering
+        of an already-rejected IP. But without also forcing a persist on
+        this instance's FIRST touch, an instance that inherits a row written
+        under a shorter window never gets to stamp its own (longer) policy
+        if its very first request for that IP happens to be a rejection
+        (the common case: the row is already at cap) -- the row stays
+        stamped with the wrong, shorter window indefinitely, so another
+        sweeper can evict it "early" relative to the actual governing
+        instance's real window (codex review on #1244, fifth round).
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        # A short-window (10s) process fills an IP to its cap.
+        short = RateLimiter(max_requests=2, window_seconds=10, clock=clock, db_path=str(db))
+        assert short.allow("10.0.0.5") is True
+        assert short.allow("10.0.0.5") is True
+        assert short.allow("10.0.0.5") is False  # at cap; last persist stamped window_seconds=10
+        short.close()
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.5",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (10.0,)
+
+        # A long-window (600s) process loads this row; its first touch of
+        # this IP is ALSO a rejection -- nothing to prune, since all
+        # existing hits are still "recent" under its own wider window too.
+        long_proc = RateLimiter(max_requests=2, window_seconds=600, clock=clock, db_path=str(db))
+        assert long_proc.allow("10.0.0.5") is False  # still at cap under the wider window
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.5",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (600.0,), (
+            "the long-window process's first touch (a rejection) did not "
+            "stamp its own window_seconds -- the row is still stuck with "
+            "the shorter policy that originally wrote it"
+        )
+
+        # The hot-path optimization must still hold: a SUBSEQUENT rejected
+        # touch of the same IP by the same instance must not persist again.
+        persist_calls = []
+        original_persist = long_proc._persist
+
+        def _counting_persist(client_ip: str, now: float) -> None:
+            persist_calls.append((client_ip, now))
+            original_persist(client_ip, now)
+
+        monkeypatch.setattr(long_proc, "_persist", _counting_persist)
+        assert long_proc.allow("10.0.0.5") is False  # still rejected, nothing pruned
+        assert persist_calls == [], (
+            "a second rejected touch from the same instance re-persisted -- "
+            "the hammering-abuse optimization was lost"
         )
