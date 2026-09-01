@@ -1084,6 +1084,45 @@ _CONDA_SURFACE = "conda (environment.yml)"
 _REQUIRED_PIN_SURFACES = (_PIP_SURFACE, _WHEEL_SURFACE)
 
 
+def _base_dependency_pin(pyproject: Path, name: str) -> str | None:
+    """Exact, UNCONDITIONAL pin for ``name`` in ``project.dependencies``.
+
+    Two things a naive lookup gets wrong, both of which read as coverage the
+    default wheel install does not have:
+
+    * Optional-dependency groups are not installed by a bare ``pip install``,
+      so a pin that lives only in an extra is not wheel coverage.
+    * An environment marker scopes the pin. ``_parse_requirement_names`` stops
+      the version at the ``;`` and discards the rest, so
+      ``onnxruntime==1.29.0; sys_platform == 'win32'`` looked global -- while
+      macOS and Linux, the platforms this floor exists to protect, would get
+      only chromadb's ``>=1.14.1``. Markers are not evaluated here (this
+      checker is deliberately stdlib-only and runs before install); any marker
+      at all disqualifies the pin as unconditional coverage.
+    """
+    try:
+        import tomllib
+
+        with pyproject.open("rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:  # noqa: BLE001 - an unparseable manifest is not a bound
+        return None
+    entries = data.get("project", {}).get("dependencies", [])
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        head, _, marker = entry.partition(";")
+        found = _parse_requirement_names([head]).get(name)
+        if found is None:
+            continue
+        if marker.strip():
+            return None
+        return found
+    return None
+
+
 def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
     """Exact pinned version of ``name`` on each install surface, independently.
 
@@ -1101,10 +1140,11 @@ def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
     wheel_pin: str | None = None
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
-        try:
-            wheel_pin = _load_pyproject_deps(pyproject).get(name)
-        except Exception:  # noqa: BLE001 - an unparseable manifest is not a bound
-            wheel_pin = None
+        # BASE dependencies only. _load_pyproject_deps merges project.dependencies
+        # with every optional-dependencies group, so a pin living only in an extra
+        # (say `guardrails`) read as wheel coverage -- but a default wheel install
+        # selects no extras, leaving chromadb's loose >=1.14.1 authoritative.
+        wheel_pin = _base_dependency_pin(pyproject, name)
 
     conda_pin: str | None = None
     env_path = root / "environment.yml"
