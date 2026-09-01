@@ -447,6 +447,49 @@ class TestPersistence:
         rl.allow("192.168.1.1")
         assert _row_count(db) == 1, "rows stale on disk must still be evicted"
 
+    def test_failed_backend_delete_keeps_candidates_for_the_next_sweep(self, tmp_path):
+        """A raising backend must not strand rows with nothing able to retry.
+
+        `_hits` is the only thing that can nominate a row for deletion. Evicting
+        from memory before the backend delete succeeded meant a transient
+        failure (sqlite contention, a Postgres blip, a full disk) left those
+        rows on disk unreachable by any later sweep -- orphaned until restart,
+        the same unbounded growth this eviction exists to remove.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        for n in range(5):
+            rl.allow(f"10.0.0.{n}")
+
+        boom = RuntimeError("backend unavailable")
+
+        def _raise(_ips, _now):
+            raise boom
+
+        rl._delete_rows = _raise  # type: ignore[method-assign]
+        clock.advance(30.0)
+        with pytest.raises(RuntimeError):
+            rl.allow("192.168.1.1")
+
+        # The candidates are still tracked, so a later sweep can retry them.
+        assert {f"10.0.0.{n}" for n in range(5)} <= set(rl._hits), (
+            "a failed backend delete dropped the candidates from memory, "
+            "leaving their rows unreachable by any future sweep"
+        )
+
+        # The raising allow() never recorded its own hit, so the five stranded
+        # rows are all that is on disk at this point.
+        assert _persisted_ips(db) == {f"10.0.0.{n}" for n in range(5)}
+
+        # Once the backend recovers, the retained candidates are swept for real.
+        del rl._delete_rows  # type: ignore[attr-defined]
+        clock.advance(30.0)
+        rl.allow("192.168.1.2")
+        assert _persisted_ips(db) == {"192.168.1.2"}, (
+            "the retry after recovery must actually clear the stranded rows"
+        )
+
     def test_postgres_batch_delete_goes_through_a_cursor(self, tmp_path):
         """psycopg 3 puts executemany on the cursor, not the connection.
 

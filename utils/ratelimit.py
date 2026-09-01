@@ -278,8 +278,6 @@ class RateLimiter:
             ip for ip, hits in self._hits.items()
             if all(now - t >= self.window_seconds for t in hits)
         ]
-        for ip in stale:
-            del self._hits[ip]
         # Evict from the backend as well. Without this the in-memory map is
         # bounded but the table is not: `rate_hits` kept one row per distinct
         # client IP forever, and _load_from_db reads every row back (and
@@ -287,8 +285,19 @@ class RateLimiter:
         # monotonically with the number of IPs ever seen. The rows deleted here
         # are precisely those whose timestamps are all outside the window, so
         # they carry no live rate-limit state for any process to lose.
+        #
+        # The backend delete runs BEFORE the in-memory eviction, and the memory
+        # eviction only on success. `_hits` is the only thing that can nominate
+        # a row for deletion, so dropping the candidates first meant a raising
+        # backend (sqlite contention, a transient Postgres failure, a full
+        # disk) left those rows on disk with nothing able to retry them --
+        # orphaned until a restart, which is exactly the unbounded growth this
+        # eviction exists to remove. Keeping them in `_hits` when the delete
+        # fails means the next sweep nominates them again.
         if stale:
             self._delete_rows(stale, now)
+        for ip in stale:
+            del self._hits[ip]
 
     def allow(self, client_ip: str) -> bool:
         """Return True if the request is within the limit, else False.
