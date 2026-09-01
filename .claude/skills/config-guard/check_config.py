@@ -26,7 +26,7 @@ Severity:
     FAIL  a documented contract or the threat-model boundary is broken (exit 2).
     WARN  drift from a shipped default that an operator MAY change deliberately
           (exit 0; --strict escalates every WARN to a failure).
-    INFO  advisory arithmetic; never affects the exit code.
+    INFO  extra arithmetic that does not affect the exit code (C12 dense-case note).
 
 Exit codes (repo convention):
     0  contract holds (warnings may be present without --strict)
@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,10 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # budget. Keep in step with that constant.
 _CHARS_PER_TOKEN = 3
 _TIMEOUT_MARGIN_SEC = 30
+# Documented stall floor: Ollama num_ctx >= max_context_tokens + max_tokens + ~1500.
+# Enforced against macos/ollama-mlx.env, not a live `ollama ps`.
+_HEADROOM_TOKENS = 1500
+_ENV_CONTEXT_RE = re.compile(r"(?m)^OLLAMA_CONTEXT_LENGTH=(\d+)$")
 
 # min_score lives on the RRF scale (~top-3-4 rank ≈ 0.028); fused ranks rarely
 # exceed ~0.1. A value above this reads like a cosine/similarity threshold and
@@ -98,7 +103,19 @@ def _dig(cfg: dict[str, Any], *keys: str) -> Any:
     return node
 
 
-def run_checks(cfg: dict[str, Any]) -> None:
+def _load_ollama_context_length(root: Path) -> int | None:
+    env_path = root / "macos" / "ollama-mlx.env"
+    try:
+        text = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _ENV_CONTEXT_RE.search(text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def run_checks(cfg: dict[str, Any], ollama_context_length: int | None = None) -> None:
     # ── C1 min_score is a routable RRF score ────────────────────────────────
     print("C1 retrieval.min_score range")
     min_score = _dig(cfg, "retrieval", "min_score")
@@ -241,24 +258,33 @@ def run_checks(cfg: dict[str, Any]) -> None:
         else:
             ok("C11", "guardrails.model and base_url track the local LLM")
 
-    # ── C12 no-stall arithmetic (advisory) ──────────────────────────────────
-    print("C12 no-stall context arithmetic (advisory)")
+    # ── C12 no-stall arithmetic vs macos/ollama-mlx.env ─────────────────────
+    print("C12 no-stall context arithmetic")
     llm_max = _dig(cfg, "models", "local_llm", "max_tokens")
-    if _is_num(max_ctx) and _is_num(llm_max):
-        floor = int(max_ctx) + int(llm_max) + 1500
+    if not _is_num(max_ctx) or not _is_num(llm_max):
+        fail("C12", f"max_context_tokens ({max_ctx!r}) and local_llm.max_tokens ({llm_max!r}) "
+                    "must both be numbers to prove the Ollama window covers the RAG floor")
+    elif ollama_context_length is None:
+        fail("C12", "macos/ollama-mlx.env must set OLLAMA_CONTEXT_LENGTH=<int> "
+                    "(checked on disk, not via a live ollama ps)")
+    else:
+        floor = int(max_ctx) + int(llm_max) + _HEADROOM_TOKENS
         # The nominal floor assumes the char->token conversion is exact. It is a
         # worst-case FLOOR of 3 (see _CHARS_PER_TOKEN), so symbol-dense corpus
         # text that tokenizes near 2 chars/token consumes more real context than
-        # the nominal number implies. Report both, or an operator sizes num_ctx
-        # off the smaller one and reopens the "0% processing" stall this check
-        # exists to prevent.
+        # the nominal number implies. Report that as INFO; the FAIL gate is the
+        # documented stall formula, not the dense-case estimate.
         dense = int(max_ctx) * _CHARS_PER_TOKEN // 2 + int(llm_max)
-        info("C12", f"set the local model's context length (num_ctx) >= {floor} "
-                    f"(max_context_tokens {max_ctx} + max_tokens {llm_max} + ~1500 headroom) to avoid a stall")
+        if ollama_context_length < floor:
+            fail("C12", f"OLLAMA_CONTEXT_LENGTH ({ollama_context_length}) is below the RAG floor "
+                        f"{floor} (max_context_tokens {max_ctx} + max_tokens {llm_max} + "
+                        f"{_HEADROOM_TOKENS} headroom)")
+        else:
+            ok("C12", f"OLLAMA_CONTEXT_LENGTH ({ollama_context_length}) >= floor {floor} "
+                      f"(max_context_tokens {max_ctx} + max_tokens {llm_max} + "
+                      f"{_HEADROOM_TOKENS} headroom)")
         info("C12", f"symbol-dense worst case needs >= {dense} "
                     f"({max_ctx}*{_CHARS_PER_TOKEN} chars at ~2 chars/token + max_tokens {llm_max})")
-    else:
-        info("C12", "max_context_tokens/max_tokens not both numeric — skipping no-stall arithmetic")
 
     # ── C13 api_key_optional is not silently exposing a LAN bind ────────────
     print("C13 security.api_key_optional vs. the bind address")
@@ -315,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     print("== config-guard: static config.yaml contract ==")
-    run_checks(cfg)
+    run_checks(cfg, _load_ollama_context_length(root))
 
     strict_fail = args.strict and _warns
     print(f"\n{len(_fails)} failure(s), {len(_warns)} warning(s)"

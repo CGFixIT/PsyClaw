@@ -3,6 +3,8 @@
 # Needs PyYAML (nested config parsing); SKIPs cleanly (exit 0) without it so a
 # fresh pre-install container does not fail CI. A checker that cannot fail proves
 # nothing — the mutation test keeps it honest.
+# Mutations copy config.yaml AND macos/ollama-mlx.env because C12 reads the env
+# file. Omitting it would FAIL C12 and poison the C7 WARN=exit-0 case.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,10 +27,17 @@ else
   exit 1
 fi
 
+_copy_guard_inputs() {
+  local dest="$1"
+  mkdir -p "$dest/macos"
+  cp "$repo_root/config.yaml" "$dest/config.yaml"
+  cp "$repo_root/macos/ollama-mlx.env" "$dest/macos/ollama-mlx.env"
+}
+
 # 2a. FAIL-path mutation: break the graph/LLM timeout relation (C2).
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-cp "$repo_root/config.yaml" "$tmp/config.yaml"
+_copy_guard_inputs "$tmp"
 # Value-agnostic on purpose: anchoring this on a literal (it was "330") makes the
 # mutation silently match nothing the moment the shipped timeout is retuned, so the
 # "mutated" config equals the clean one, check_config.py exits 0, and this self-test
@@ -52,7 +61,7 @@ echo "mutation A (C2 timeout relation): PASS (exit 2, C2 reported)"
 #     a failure only under --strict (C7 — the RRF-scale trap).
 tmp2="$(mktemp -d)"
 trap 'rm -rf "$tmp" "$tmp2"' EXIT
-cp "$repo_root/config.yaml" "$tmp2/config.yaml"
+_copy_guard_inputs "$tmp2"
 sed -i.bak 's/min_score: 0.028/min_score: 0.5/' "$tmp2/config.yaml"
 
 if ! python3 "$checker" --repo-root "$tmp2" >/tmp/cfgguard_warn.txt 2>&1; then
@@ -68,5 +77,23 @@ if [ "$rc" -ne 2 ]; then
   exit 1
 fi
 echo "mutation B (C7 RRF-scale trap): PASS (WARN=exit 0, --strict=exit 2)"
+
+# 2c. FAIL-path mutation: Ollama context below the RAG floor (C12).
+tmp3="$(mktemp -d)"
+trap 'rm -rf "$tmp" "$tmp2" "$tmp3"' EXIT
+_copy_guard_inputs "$tmp3"
+sed -i.bak 's/^OLLAMA_CONTEXT_LENGTH=[0-9][0-9]*/OLLAMA_CONTEXT_LENGTH=1/' "$tmp3/macos/ollama-mlx.env"
+grep -qE "^OLLAMA_CONTEXT_LENGTH=1([^0-9]|$)" "$tmp3/macos/ollama-mlx.env" || {
+  echo "mutation C: setup FAILED — OLLAMA_CONTEXT_LENGTH was not rewritten; check the sed pattern" >&2
+  exit 1
+}
+out="$(python3 "$checker" --repo-root "$tmp3" 2>&1)"; rc=$?
+if [ "$rc" -ne 2 ]; then
+  echo "mutation C (C12): FAIL — expected exit 2 on OLLAMA_CONTEXT_LENGTH < RAG floor, got $rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "$out" | grep -q "FAIL  \[C12\]" || { echo "mutation C: C12 violation not reported" >&2; exit 1; }
+echo "mutation C (C12 Ollama context floor): PASS (exit 2, C12 reported)"
 
 echo "== config-guard verify: OK =="
