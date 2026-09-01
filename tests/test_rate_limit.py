@@ -576,9 +576,10 @@ class TestPersistence:
         replaced got that rollback free from `finally: close()`.
         """
 
+        # Delegates to a real connection so the wrapper behaves like one.
+        # sqlite3.Connection.commit is read-only, so it cannot be patched in
+        # place -- hence a proxy rather than a monkeypatch.
         class _FlakyCommit:
-            """Delegates to a real connection; sqlite3's own commit is read-only."""
-
             def __init__(self, real: sqlite3.Connection) -> None:
                 self._real = real
                 self.calls = 0
