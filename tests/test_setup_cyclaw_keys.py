@@ -661,3 +661,48 @@ def test_sigterm_during_prompt_exits_143(fake_security: Path, tmp_path: Path) ->
     env_text = (tmp_path / ".CyClaw" / ".env").read_text(encoding="utf-8")
     assert "TELEGRAM_BOT_TOKEN" not in env_text
     assert "GROK_API_KEY" not in env_text
+
+
+
+def _function_body(source: str, name: str) -> str:
+    """Text of a top-level `name() { ... }` shell function."""
+    start = source.index(f"\n{name}() {{\n")
+    end = source.index("\n}\n", start)
+    return source[start:end]
+
+
+def test_secret_staging_functions_clean_up_on_interrupt() -> None:
+    """Every function that stages a cleartext secret registers an EXIT trap.
+
+    _fill_browser already carried this idiom; _copy_key and
+    _keychain_store_value staged secrets the same way without it.
+    """
+    source = _SCRIPT.read_text(encoding="utf-8")
+    for name in ("_copy_key", "_keychain_store_value", "_fill_browser"):
+        body = _function_body(source, name)
+        assert "mktemp" in body, f"{name} no longer stages a temp file; revisit this contract"
+        assert "trap " in body and "EXIT" in body, (
+            f"{name} stages a cleartext secret in a temp file but registers no EXIT trap, "
+            "so an interrupted run leaves it on disk"
+        )
+
+
+def test_copy_key_restores_the_umask_it_sets() -> None:
+    """_copy_key saves and restores umask like its two sibling functions.
+
+    It previously set `umask 077` (after mktemp, where it could not affect the
+    file mktemp had already created) and never restored it, so the value
+    leaked into every file the script created afterwards.
+    """
+    body = _function_body(_SCRIPT.read_text(encoding="utf-8"), "_copy_key")
+    assert 'old_umask="$(umask)"' in body, "_copy_key must save the prior umask"
+    assert 'umask "$old_umask"' in body, "_copy_key must restore the prior umask"
+    # Compare executable lines only -- the surrounding comments mention both
+    # "umask" and "mktemp", so a raw substring index would match prose.
+    code = "\n".join(
+        line for line in body.splitlines() if not line.lstrip().startswith("#")
+    )
+    # The umask must be set before mktemp, or it governs nothing: mktemp has
+    # already created the file by the time a later `umask 077` runs.
+    assert code.index("umask 077") < code.index("mktemp"), \
+        "umask must be set before mktemp creates the file"
