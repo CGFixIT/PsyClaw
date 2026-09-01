@@ -179,3 +179,58 @@ def test_pg_a_row_survives_a_shorter_window_sweep_from_another_process(clean_tab
         )
     finally:
         short_proc.close()
+
+
+def test_pg_a_zero_window_row_survives_using_the_sweepers_own_window(clean_table):
+    """A row with window_seconds=0 must not be treated as instantly stale.
+
+    Mirrors the sqlite-side test of the same name. window_seconds can be 0 on
+    a live row (not just a freshly-migrated one) whenever a process unaware of
+    the column writes it -- Postgres's own upsert only overwrites the columns
+    it lists, so simulate that directly by zeroing an existing row's
+    window_seconds while leaving its last_sweep fresh, exactly the state a
+    coexisting pre-migration writer would leave behind. A short-window
+    sweeper whose in-memory snapshot predates that zeroing must not delete it
+    the instant its sweep runs; it must still converge once genuinely stale
+    under the fallback (codex review on #1244).
+    """
+    clock = {"t": 1000.0}
+
+    writer = RateLimiter(max_requests=5, window_seconds=600, clock=lambda: clock["t"], db_url=DSN)
+    try:
+        writer.allow("10.0.0.9")  # persists last_sweep=1000, window_seconds=600
+    finally:
+        writer.close()
+
+    short = RateLimiter(max_requests=5, window_seconds=10, clock=lambda: clock["t"], db_url=DSN)
+    assert short._hits["10.0.0.9"] == [1000.0]  # snapshot taken before the zeroing below
+
+    # Simulate a coexisting old-code writer: fresh last_sweep, window_seconds
+    # reset to 0 (the column it doesn't know exists).
+    conn = short._pg_connection()
+    conn.execute(
+        "UPDATE rate_hits SET last_sweep = %s, window_seconds = 0 WHERE ip = %s",
+        (1010.0, "10.0.0.9"),
+    )
+
+    try:
+        clock["t"] = 1015.0  # 15s after short's snapshot -> its own 10s sweep gate opens
+        short.allow("192.168.1.1")  # triggers short's first sweep
+        remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
+        assert "10.0.0.9" in remaining, (
+            "a zero-window row was evicted almost immediately after being "
+            "touched, instead of falling back to the sweeping instance's own "
+            "window for a row with no known policy"
+        )
+
+        # Still evictable once genuinely stale under the fallback window
+        # (short's own 10s): zeroed last_sweep(1010) + 10 <= now.
+        clock["t"] = 1025.0
+        short.allow("192.168.1.2")
+        remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
+        assert "10.0.0.9" not in remaining, (
+            "a zero-window row must still converge once stale under the "
+            "sweeper's fallback window -- it must not become immortal"
+        )
+    finally:
+        short.close()

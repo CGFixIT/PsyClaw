@@ -204,6 +204,9 @@ class RateLimiter:
             try:
                 self._pg_connection().execute(sql)
             except psycopg.errors.DuplicateColumn:
+                # A concurrent process (or an earlier run against this same
+                # backend) already added the column -- the migration is
+                # idempotent, so there is nothing left to do here.
                 pass
             return
         try:
@@ -214,9 +217,14 @@ class RateLimiter:
                 raise
 
     def _upsert_sql(self) -> str:
-        # noqa S608: self._ph is a fixed placeholder char ("?"/"%s"), never user
-        # data — values are always bound via parameters. (Mirrors the S608 ignore
-        # already applied to utils/personality.py for the same placeholder pattern.)
+        # S608 / B608: self._ph is a fixed placeholder char ("?"/"%s"), never
+        # user data — values are always bound via parameters. (Mirrors the
+        # S608 ignore already applied to utils/personality.py for the same
+        # placeholder pattern.) GitHub's code-scanning Bandit pass doesn't
+        # honor ruff's suppression comments, and flags the continuation line
+        # carrying the f-string specifically, not the plain-string line the
+        # ruff suppression sits on -- both inline suppressions below are
+        # needed, one per tool.
         #
         # window_seconds is written on every upsert, not just at row creation:
         # the row must always reflect the policy of whichever instance most
@@ -226,14 +234,14 @@ class RateLimiter:
         if self._backend == "postgres":
             return (
                 "INSERT INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
-                f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph}) "
+                f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph}) "  # nosec B608
                 "ON CONFLICT (ip) DO UPDATE SET "
                 "timestamps = EXCLUDED.timestamps, last_sweep = EXCLUDED.last_sweep, "
                 "window_seconds = EXCLUDED.window_seconds"
             )
         return (
             "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep, window_seconds) "  # noqa: S608
-            f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph})"
+            f"VALUES ({self._ph}, {self._ph}, {self._ph}, {self._ph})"  # nosec B608
         )
 
     def _init_db(self) -> None:
@@ -334,6 +342,28 @@ class RateLimiter:
         nominate it again and it sat on disk forever -- reintroducing the
         unbounded growth this eviction exists to remove.
 
+        A row's ``window_seconds`` is treated as unknown (not "expired 0
+        seconds after its last write") whenever it is not a positive number,
+        falling back to THIS sweeping instance's own ``window_seconds`` for
+        exactly those rows. Two things can put a row in that state, not only
+        the migration default: a rolling upgrade where a pre-migration process
+        is still writing rows with SQLite's ``INSERT OR REPLACE`` (which resets
+        every unlisted column, including one it doesn't know exists, to its
+        DEFAULT on every write, not just the first) or Postgres's INSERT-new-
+        row path, can zero out a row's persisted window on ANY write while an
+        old and a new binary briefly coexist against the same backend, not only
+        at migration time. Without the fallback, the very next sweep from any
+        upgraded instance would read ``last_sweep + 0 <= now`` and evict that
+        row almost immediately, discarding a still-live client's rate-limit
+        budget rather than merely converging a genuinely stale legacy row
+        (codex review on #1244). Using the sweeper's own window for the
+        fallback exactly matches this codebase's pre-per-row-window behavior
+        for that specific ambiguous case -- it does not weaken the fix above
+        for the actual reported bug (two CURRENT-version policies with
+        different, both-positive ``window_seconds`` sharing one backend),
+        which still evaluates every row with a real value against that row's
+        own persisted window.
+
         Both statements are written out in full rather than built from
         ``self._ph``: an f-string here would be flagged B608/S608 (as
         ``_upsert_sql`` already is) even though the interpolated text is only a
@@ -341,7 +371,7 @@ class RateLimiter:
         """
         if not self._backend:
             return set()
-        rows = [(ip, now) for ip in ips]
+        rows = [(ip, self.window_seconds, now) for ip in ips]
         candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --
@@ -349,14 +379,18 @@ class RateLimiter:
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
                 cur.executemany(
-                    "DELETE FROM rate_hits WHERE ip = %s AND last_sweep + window_seconds <= %s", rows
+                    "DELETE FROM rate_hits WHERE ip = %s AND last_sweep + "
+                    "CASE WHEN window_seconds > 0 THEN window_seconds ELSE %s END <= %s",
+                    rows,
                 )
                 cur.execute("SELECT ip FROM rate_hits")
                 remaining = {row[0] for row in cur.fetchall()}
             return candidates & remaining
         with self._sqlite_txn() as conn:
             conn.executemany(
-                "DELETE FROM rate_hits WHERE ip = ? AND last_sweep + window_seconds <= ?", rows
+                "DELETE FROM rate_hits WHERE ip = ? AND last_sweep + "
+                "CASE WHEN window_seconds > 0 THEN window_seconds ELSE ? END <= ?",
+                rows,
             )
         # One bounded scan rather than a per-IP probe: this table is kept small
         # by the very eviction running here, and it is the same read

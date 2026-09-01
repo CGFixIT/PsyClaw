@@ -532,9 +532,9 @@ class TestPersistence:
 
         sql, rows = executed[0]
         assert "DELETE FROM rate_hits" in sql
-        assert "last_sweep + window_seconds <=" in sql, (
-            "the delete must stay conditional on the ROW's own persisted window, "
-            "not the sweeping instance's"
+        assert "last_sweep + CASE WHEN window_seconds > 0 THEN window_seconds ELSE %s END <=" in sql, (
+            "the delete must stay conditional on the ROW's own persisted window "
+            "when it has one, not the sweeping instance's"
         )
         assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
 
@@ -708,9 +708,10 @@ class TestPersistence:
         finally:
             conn.close()
         assert row == (0.0,), (
-            "a migrated legacy row must default to window_seconds=0, making it "
-            "immediately eligible for the next sweep rather than carrying an "
-            "unknowable borrowed policy indefinitely"
+            "a migrated legacy row must default to window_seconds=0 -- see "
+            "test_a_zero_window_row_survives_using_the_sweepers_own_window for "
+            "how the sweep predicate treats that value (not \"expired the "
+            "instant last_sweep was written\")"
         )
 
         # Idempotent: constructing again against the already-migrated file
@@ -718,9 +719,70 @@ class TestPersistence:
         rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
         assert "legacy.ip" in rl2._hits
 
-        # window_seconds=0 means the legacy row is immediately sweep-eligible.
+        # This row is 500s old against rl2's 60s window -- stale by a wide
+        # margin even under the fallback (test_a_zero_window_row_survives_
+        # using_the_sweepers_own_window below covers the "recently touched,
+        # not yet stale under the fallback" case this one doesn't reach).
         rl2.allow("some.other.ip")
         assert "legacy.ip" not in _persisted_ips(db), (
-            "a migrated legacy row (window_seconds=0) must be evicted on the "
-            "first sweep after migration"
+            "a migrated legacy row must still converge once stale under the "
+            "sweeping instance's own window"
+        )
+
+    def test_a_zero_window_row_survives_using_the_sweepers_own_window(self, tmp_path):
+        """A row with window_seconds=0 must not be treated as instantly stale.
+
+        Two things can persist window_seconds=0 for a row that is NOT actually
+        brand new: the migration default, and -- during a rolling upgrade --
+        a pre-migration process still writing that same row with SQLite's
+        ``INSERT OR REPLACE``, which resets every unlisted column (including
+        one it has never heard of) to its DEFAULT on every write, not just the
+        first. Simulates the second case directly: a real writer persists the
+        row, a raw-SQL stomp (standing in for the old code's own INSERT OR
+        REPLACE) then re-writes it minus window_seconds, and a short-window
+        sweeper -- whose in-memory snapshot predates the stomp, so its own
+        nomination logic still fires -- must not delete the freshly-stomped
+        row the instant its sweep runs. It must still converge once genuinely
+        stale under the fallback (codex review on #1244).
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        writer = RateLimiter(max_requests=5, window_seconds=600, clock=clock, db_path=str(db))
+        writer.allow("10.0.0.9")  # persists last_sweep=1000, window_seconds=600
+        writer.close()
+
+        short = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        assert short._hits["10.0.0.9"] == [1000.0]  # snapshot taken before the stomp below
+
+        # Simulate a coexisting old-code writer re-touching the row 10s later,
+        # via the same 3-column INSERT OR REPLACE the pre-migration code used
+        # -- window_seconds is not in the column list, so SQLite resets it to
+        # its schema DEFAULT (0) even though this is an UPDATE of a live row,
+        # not a fresh INSERT.
+        conn = sqlite3.connect(str(db))
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO rate_hits (ip, timestamps, last_sweep) VALUES (?, ?, ?)",
+                ("10.0.0.9", "[1010.0]", 1010.0),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        clock.t = 1015.0  # 15s after short's snapshot -> its own 10s sweep gate opens
+        short.allow("192.168.1.1")  # triggers short's first sweep
+        assert "10.0.0.9" in _persisted_ips(db), (
+            "a zero-window row was evicted almost immediately after being "
+            "touched, instead of falling back to the sweeping instance's own "
+            "window for a row with no known policy"
+        )
+
+        # Still evictable once genuinely stale under the fallback window
+        # (short's own 10s): stomped last_sweep(1010) + 10 <= now.
+        clock.t = 1025.0
+        short.allow("192.168.1.2")
+        assert "10.0.0.9" not in _persisted_ips(db), (
+            "a zero-window row must still converge once stale under the "
+            "sweeper's fallback window -- it must not become immortal"
         )
