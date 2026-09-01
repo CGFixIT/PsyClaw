@@ -1071,73 +1071,71 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
         if name == "onnxruntime":
             _check_ort_floor(root)
             continue
-        pinned = _exact_pin_for(root, name)
-        if pinned is None:
-            info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
-                        "standing review finding (its telemetry contract can change under CyClaw silently)")
-            continue
-        ok("T13", f"telemetry-capable transitive {name!r} pinned {pinned}")
+        _report_transitive_bound(name, _pins_by_surface(root, name))
 
 
-def _exact_pin_for(root: Path, name: str) -> str | None:
-    """Exact pinned version for ``name`` on any manifest surface, else None.
+# Install surfaces with independent resolvers. A pin on one says nothing about
+# the others, so every pin question is asked per surface. REQUIRED surfaces are
+# the ones CyClaw ships and CI exercises; conda is tracked but its gap is a
+# standing acknowledgement rather than a per-run failure.
+_PIP_SURFACE = "pip (requirements/constraints)"
+_WHEEL_SURFACE = "wheel / `pip install -e .` (pyproject.toml metadata)"
+_CONDA_SURFACE = "conda (environment.yml)"
+_REQUIRED_PIN_SURFACES = (_PIP_SURFACE, _WHEEL_SURFACE)
 
-    Membership in a manifest is NOT a bound. The pip parsers already require
-    ``==``, but _parse_environment_yml_names admits any line merely containing
-    an "=", so a conda entry like ``- fastembed>=0.4`` registered as a name
-    with no exact pin -- and a membership test then reported it as bounded
-    while the resolver stayed free to move its telemetry contract. This asks
-    for the specifier instead.
+
+def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
+    """Exact pinned version of ``name`` on each install surface, independently.
+
+    Returning the first match found anywhere is what the ONNX path was split
+    up to avoid: a pin on one surface then vouches for surfaces its resolver
+    never touches. Membership is not a bound either -- the conda parser admits
+    any line containing an "=", so only a version anchored on a digit counts.
     """
+    pip_pin: str | None = None
     for manifest in ("constraints.txt", "requirements.txt"):
         path = root / manifest
-        if path.exists():
-            found = _parse_requirement_names(path.read_text(encoding="utf-8").splitlines()).get(name)
-            if found:
-                return found
+        if path.exists() and pip_pin is None:
+            pip_pin = _parse_requirement_names(path.read_text(encoding="utf-8").splitlines()).get(name)
+
+    wheel_pin: str | None = None
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
         try:
-            found = _load_pyproject_deps(pyproject).get(name)
+            wheel_pin = _load_pyproject_deps(pyproject).get(name)
         except Exception:  # noqa: BLE001 - an unparseable manifest is not a bound
-            found = None
-        if found:
-            return found
+            wheel_pin = None
+
+    conda_pin: str | None = None
     env_path = root / "environment.yml"
     if env_path.exists():
-        # Conda exact pins only: `- name=1.2.3`, version anchored on a digit so
-        # `- name>=0.4` cannot half-match.
         match = re.search(
             rf"^\s*-\s*{re.escape(name)}\s*=\s*([0-9][^\s#]*)",
             env_path.read_text(encoding="utf-8"),
             re.MULTILINE,
         )
-        if match:
-            return match.group(1)
-    return None
+        conda_pin = match.group(1) if match else None
 
-
-def _find_ort_pin(text: str, sep: str) -> str | None:
-    """Exact onnxruntime pin in one manifest, or None.
-
-    Handles the three shapes the surfaces use: a bare requirements/constraints
-    line (``onnxruntime==1.29.0``), a conda list item (``  - onnxruntime=...``)
-    and a quoted pyproject dependency (``    "onnxruntime==1.29.0",``). The
-    leading-quote case is why this is one helper rather than three regexes --
-    missing it made the metadata surface read as unpinned.
-    """
-    pattern = rf"""^\s*(?:-\s*)?["']?onnxruntime\s*{sep}\s*([0-9][^\s#,"']*)"""
-    match = re.search(pattern, text, re.MULTILINE)
-    return match.group(1) if match else None
+    return {_PIP_SURFACE: pip_pin, _WHEEL_SURFACE: wheel_pin, _CONDA_SURFACE: conda_pin}
 
 
 def _ort_floor_verdict(surface: str, pinned: str | None) -> None:
-    """Report one install surface against the ONNX telemetry-control floor."""
+    """Report one install surface against the ONNX telemetry-control floor.
+
+    A missing pin on a REQUIRED surface fails: this floor is a security
+    control, and reporting its removal as info() left the checker silent while
+    both shipped surfaces could resolve below it. The conda gap stays info --
+    it is acknowledged and unbounded upstream, not a regression to catch.
+    """
     floor = ".".join(str(part) for part in ORT_TELEMETRY_ENV_FLOOR)
     if pinned is None:
-        info("T13", f"{surface}: no onnxruntime floor -- chromadb asks only for >=1.14.1, so this "
-                    f"surface can resolve below {floor} where ORT_DISABLE_TELEMETRY does not yet "
-                    "govern the non-Windows 1DS path")
+        message = (f"{surface}: no onnxruntime floor -- chromadb asks only for >=1.14.1, so this "
+                   f"surface can resolve below {floor} where ORT_DISABLE_TELEMETRY does not yet "
+                   "govern the non-Windows 1DS path")
+        if surface in _REQUIRED_PIN_SURFACES:
+            fail("T13", message)
+        else:
+            info("T13", message)
         return
     try:
         parts = [int(part) for part in pinned.split(".")[:3]]
@@ -1156,30 +1154,29 @@ def _ort_floor_verdict(surface: str, pinned: str | None) -> None:
 
 
 def _check_ort_floor(root: Path) -> None:
-    """Verify the ONNX floor on EACH install surface independently.
+    """Verify the ONNX floor on EACH install surface independently."""
+    for surface, pinned in _pins_by_surface(root, "onnxruntime").items():
+        _ort_floor_verdict(surface, pinned)
 
-    The surfaces have independent resolvers, so a union hides the ones that
-    are not covered. constraints.txt governs only `pip install -r ... -c
-    constraints.txt`; `pip install -e .` and the published wheel read
-    pyproject.toml and never apply a constraints file; and the conda lane
-    (python-package-conda.yml) solves environment.yml and then installs CyClaw
-    with --no-deps, so neither pip manifest governs it at all. Reporting one
-    global OK for all three let a covered surface vouch for an uncovered one.
+
+def _report_transitive_bound(name: str, pins: dict[str, str | None]) -> None:
+    """Report a telemetry-capable transitive's bound, per surface.
+
+    A pin on one surface must not read as coverage everywhere: naming the
+    surfaces that remain unbounded is the difference between "pinned" and
+    "pinned where it happens to be looked for".
     """
-    pip_pin = None
-    for manifest, sep in (("constraints.txt", "=="), ("requirements.txt", "=="), ("pyproject.toml", "==")):
-        path = root / manifest
-        if path.exists():
-            pip_pin = pip_pin or _find_ort_pin(path.read_text(encoding="utf-8"), sep)
-    _ort_floor_verdict("pip surface (pyproject/requirements/constraints)", pip_pin)
-
-    metadata_path = root / "pyproject.toml"
-    metadata_pin = _find_ort_pin(metadata_path.read_text(encoding="utf-8"), "==") if metadata_path.exists() else None
-    _ort_floor_verdict("wheel / `pip install -e .` surface (pyproject.toml metadata)", metadata_pin)
-
-    env_path = root / "environment.yml"
-    conda_pin = _find_ort_pin(env_path.read_text(encoding="utf-8"), "=") if env_path.exists() else None
-    _ort_floor_verdict("conda surface (environment.yml)", conda_pin)
+    unbounded = [surface for surface, pinned in pins.items() if pinned is None]
+    if len(unbounded) == len(pins):
+        info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
+                    "standing review finding (its telemetry contract can change under CyClaw silently)")
+        return
+    pinned_desc = ", ".join(f"{s}={v}" for s, v in pins.items() if v is not None)
+    if unbounded:
+        info("T13", f"telemetry-capable transitive {name!r} is pinned on some surfaces only "
+                    f"({pinned_desc}); still unbounded on: {', '.join(unbounded)}")
+        return
+    ok("T13", f"telemetry-capable transitive {name!r} pinned on every surface ({pinned_desc})")
 
 
 def check_onnx_seams(root: Path) -> None:
