@@ -810,3 +810,73 @@ class TestPersistence:
             "a row must converge promptly once rewritten with a real "
             "window_seconds -- it must not still be treated as unknown"
         )
+
+    def test_first_touch_persists_governing_policy_even_when_rejected(self, tmp_path, monkeypatch):
+        """A new instance's FIRST touch of an IP must stamp its own
+        window_seconds even when that touch is a rejection that prunes
+        nothing.
+
+        allow()'s reject branch skips _persist() when pruning changed
+        nothing, to avoid a per-request DB write under sustained hammering
+        of an already-rejected IP. But without also forcing a persist on
+        this instance's FIRST touch, an instance that inherits a row written
+        under a shorter window never gets to stamp its own (longer) policy
+        if its very first request for that IP happens to be a rejection
+        (the common case: the row is already at cap) -- the row stays
+        stamped with the wrong, shorter window indefinitely, so another
+        sweeper can evict it "early" relative to the actual governing
+        instance's real window (codex review on #1244, fifth round).
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+
+        # A short-window (10s) process fills an IP to its cap.
+        short = RateLimiter(max_requests=2, window_seconds=10, clock=clock, db_path=str(db))
+        assert short.allow("10.0.0.5") is True
+        assert short.allow("10.0.0.5") is True
+        assert short.allow("10.0.0.5") is False  # at cap; last persist stamped window_seconds=10
+        short.close()
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.5",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (10.0,)
+
+        # A long-window (600s) process loads this row; its first touch of
+        # this IP is ALSO a rejection -- nothing to prune, since all
+        # existing hits are still "recent" under its own wider window too.
+        long_proc = RateLimiter(max_requests=2, window_seconds=600, clock=clock, db_path=str(db))
+        assert long_proc.allow("10.0.0.5") is False  # still at cap under the wider window
+
+        conn = sqlite3.connect(str(db))
+        try:
+            row = conn.execute(
+                "SELECT window_seconds FROM rate_hits WHERE ip = ?", ("10.0.0.5",)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row == (600.0,), (
+            "the long-window process's first touch (a rejection) did not "
+            "stamp its own window_seconds -- the row is still stuck with "
+            "the shorter policy that originally wrote it"
+        )
+
+        # The hot-path optimization must still hold: a SUBSEQUENT rejected
+        # touch of the same IP by the same instance must not persist again.
+        persist_calls = []
+        original_persist = long_proc._persist
+
+        def _counting_persist(client_ip: str, now: float) -> None:
+            persist_calls.append((client_ip, now))
+            original_persist(client_ip, now)
+
+        monkeypatch.setattr(long_proc, "_persist", _counting_persist)
+        assert long_proc.allow("10.0.0.5") is False  # still rejected, nothing pruned
+        assert persist_calls == [], (
+            "a second rejected touch from the same instance re-persisted -- "
+            "the hammering-abuse optimization was lost"
+        )

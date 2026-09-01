@@ -70,6 +70,15 @@ class RateLimiter:
         self.window_seconds = window_seconds
         self._clock = clock
         self._hits: dict[str, list[float]] = defaultdict(list)
+        # IPs this INSTANCE has already persisted its own window_seconds for
+        # at least once. Forces the first touch of an IP -- accepted or
+        # rejected -- to persist, even under the reject-without-pruning
+        # optimization in allow() below, so a newly-governing instance always
+        # stamps its own policy onto a row it may have inherited from a
+        # DIFFERENT (e.g. shorter-window) instance's earlier write. Cleared
+        # for an IP in _sweep when that IP is genuinely evicted from _hits,
+        # so this stays bounded the same way _hits is.
+        self._stamped_ips: set[str] = set()
         self._last_sweep = 0.0
         self._lock = threading.Lock()
         self._pg_conn = None  # held Postgres connection (Postgres backend only)
@@ -474,6 +483,7 @@ class RateLimiter:
                 # nominate it once that writer exits.
                 continue
             del self._hits[ip]
+            self._stamped_ips.discard(ip)
 
     def allow(self, client_ip: str) -> bool:
         """Return True if the request is within the limit, else False.
@@ -488,18 +498,30 @@ class RateLimiter:
             recent = [t for t in self._hits[client_ip] if now - t < self.window_seconds]
             if len(recent) >= self.max_requests:
                 self._hits[client_ip] = recent
-                # Persist only when expiry pruning actually changed the stored
-                # window. A rejected request appends no timestamp, so when
-                # nothing was pruned the backend already holds exactly this
-                # state — and skipping the redundant upsert removes a per-request
-                # DB write under precisely the hammering/abuse condition the
-                # limiter exists to make cheap.
-                if len(recent) != prior_len:
+                # Persist when expiry pruning actually changed the stored
+                # window, OR this is this INSTANCE's first touch of the IP.
+                # A rejected request appends no timestamp, so when nothing
+                # was pruned AND this instance has already stamped its own
+                # window_seconds for this IP before, the backend already
+                # holds exactly this state -- skipping the redundant upsert
+                # removes a per-request DB write under precisely the
+                # hammering/abuse condition the limiter exists to make
+                # cheap. But the FIRST touch must still persist even when
+                # nothing was pruned: otherwise an instance that inherited a
+                # row written under a DIFFERENT (e.g. shorter) window never
+                # gets to stamp its own policy if its very first request for
+                # that IP happens to be a rejection, leaving the row's
+                # window_seconds stale indefinitely -- exactly the kind of
+                # gap the per-row-window fix exists to close (codex review
+                # on #1244, fifth round).
+                if len(recent) != prior_len or client_ip not in self._stamped_ips:
                     self._persist(client_ip, now)
+                    self._stamped_ips.add(client_ip)
                 return False
             recent.append(now)
             self._hits[client_ip] = recent
             self._persist(client_ip, now)
+            self._stamped_ips.add(client_ip)
             return True
 
     def retry_after_sec(self, client_ip: str) -> float:
