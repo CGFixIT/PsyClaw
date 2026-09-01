@@ -219,19 +219,22 @@ class RateLimiter:
         conn.commit()
 
     def _delete_rows(self, ips: list[str]) -> None:
-        """Delete the given IPs' persisted rows. Caller must hold ``self._lock``."""
+        """Delete the given IPs' persisted rows. Caller must hold ``self._lock``.
+
+        Both statements are written out in full rather than built from
+        ``self._ph``: an f-string here would be flagged B608/S608 (as
+        ``_upsert_sql`` already is) even though the interpolated text is only a
+        placeholder run, and executemany over a one-parameter DELETE needs no
+        interpolation at all. The IPs are always bound as parameters.
+        """
         if not self._backend:
             return
-        # noqa S608: the interpolated text is only a run of fixed placeholder
-        # chars ("?"/"%s") sized to len(ips) -- the IPs themselves are always
-        # bound as parameters. Same pattern (and same rationale) as _upsert_sql.
-        placeholders = ", ".join([self._ph] * len(ips))
-        sql = f"DELETE FROM rate_hits WHERE ip IN ({placeholders})"  # noqa: S608
+        rows = [(ip,) for ip in ips]
         if self._backend == "postgres":
-            self._pg_connection().execute(sql, tuple(ips))
+            self._pg_connection().executemany("DELETE FROM rate_hits WHERE ip = %s", rows)
             return
         conn = self._sqlite_connection()
-        conn.execute(sql, tuple(ips))
+        conn.executemany("DELETE FROM rate_hits WHERE ip = ?", rows)
         conn.commit()
 
     # --------------------------------------------------------------------- logic
