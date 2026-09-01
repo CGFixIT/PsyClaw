@@ -667,8 +667,10 @@ describing its own point in time and is retained as a historical record.
   the merge; the authoritative gate is the `test` job's unit suite + RAG
   smoke. Treat a red verify-skills leg as real work, not noise.
   A **warning** does not even turn the leg red: `C9` (external/online
-  posture), `C7` (RRF-scale `min_score`) and `C12` (context arithmetic) exit
-  0, and config-guard's `--strict` — which promotes warnings to failures — is
+  posture) and `C7` (RRF-scale `min_score`) exit 0. `C12` FAILs when
+  `macos/ollama-mlx.env` `OLLAMA_CONTEXT_LENGTH` is below the RAG floor, which
+  does turn the verify-skills leg red (still `continue-on-error: true`).
+  config-guard's `--strict` — which promotes warnings to failures — is
   used only inside `verify.sh`'s own mutation self-test, never against the
   shipped file. Wiring `--strict` against
   the real config would fail immediately and for the wrong reason: the hybrid

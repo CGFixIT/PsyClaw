@@ -64,7 +64,7 @@ It checks (severity in brackets):
 | C9 | WARN | shipped posture is safe: `app.mode == offline`, `grok`/`claude` disabled |
 | C10 | WARN | `policy.fallback.send_local_context_to_{grok,claude}` stays `false` (no off-box context leak by default) |
 | C11 | WARN | `guardrails.model`/`base_url` track the local LLM (config.yaml says keep in sync) |
-| C12 | INFO | restates the no-stall floor: local `num_ctx` ≥ `max_context_tokens + max_tokens + 1500` |
+| C12 | FAIL | `macos/ollama-mlx.env` `OLLAMA_CONTEXT_LENGTH` ≥ `max_context_tokens + max_tokens + 1500` (on-disk env file, not a live `ollama ps`). Symbol-dense tokenizer estimate stays INFO. |
 | C13 | WARN | `security.api_key_optional` is not `true` while `api.host` is non-loopback (the bypass is peer-gated at runtime, but that pair means a remote caller reaches key-optional routes if the peer check is ever relaxed) |
 
 ### Step 2 — Interpret failures
@@ -117,9 +117,10 @@ bash .claude/skills/config-guard/verify.sh
 Runs the checker on the clean tree (must exit 0), then a mutation self-test:
 mutation A drops `graph_timeout_sec` below `timeout_sec` and asserts a C2 FAIL
 (exit 2); mutation B raises `min_score` to 0.5 and asserts it is a C7 WARN
-(exit 0) by default but a failure under `--strict` (exit 2). The test SKIPs
+(exit 0) by default but a failure under `--strict` (exit 2); mutation C sets
+`OLLAMA_CONTEXT_LENGTH=1` and asserts a C12 FAIL (exit 2). The test SKIPs
 cleanly (exit 0) when PyYAML is absent so a fresh pre-install container does not
-fail CI.
+fail CI. Temp trees copy `macos/ollama-mlx.env` because C12 reads it.
 
 ---
 
