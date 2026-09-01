@@ -254,6 +254,57 @@ _mutate "$a/guardrails/integration.py" '
 text = text.replace("suppress_onnx_telemetry", "zz_onnx_call_removed_zz")'
 _expect "T14 dropped-seam mutation" 2 "FAIL  \[T14\]"
 
+# 22. T13: the ONNX floor pin is lowered below the release where
+#     ORT_DISABLE_TELEMETRY starts governing the non-Windows 1DS path. Both
+#     required surfaces must go red, not just report an info line.
+a="$(_mktree)"
+_mutate "$a/constraints.txt" '
+text = text.replace("onnxruntime==1.29.0", "onnxruntime==1.28.0")'
+_mutate "$a/pyproject.toml" '
+text = text.replace("onnxruntime==1.29.0", "onnxruntime==1.28.0")'
+_expect "T13 ONNX floor lowered mutation" 2 "FAIL  \[T13\].*below the 1.29.0 floor"
+
+# 23. T13: the pins are deleted outright, as a future dependency edit might do.
+#     A missing floor on a REQUIRED surface must fail -- reporting it with
+#     info() left the checker silent while both shipped surfaces could resolve
+#     below the floor.
+a="$(_mktree)"
+_mutate "$a/constraints.txt" '
+import re
+text = re.sub(r"(?m)^onnxruntime==[^\n]*\n", "", text)'
+_mutate "$a/pyproject.toml" '
+import re
+text = re.sub(r"(?m)^\s*\"onnxruntime==[^\n]*\n", "", text)'
+_expect "T13 ONNX pins deleted mutation" 2 "FAIL  \[T13\].*no onnxruntime floor"
+
+# 24. T13: the floor check itself is neutered. Without this scenario a
+#     regression could delete the enforcement while this verifier stayed green
+#     -- the mutations above only prove the check works when it is called.
+#     The replacement must not contain the original body as a substring.
+a="$(_mktree)"
+mkdir -p "$a/.claude/skills/otel-hardening"
+cp "$checker" "$a/.claude/skills/otel-hardening/check_otel.py"
+if ! _mutate "$a/.claude/skills/otel-hardening/check_otel.py" '
+text = text.replace(
+    "    for surface, pinned in _pins_by_surface(root, \"onnxruntime\").items():\n"
+    "        _ort_floor_verdict(surface, pinned)",
+    "    return  # zz_ort_floor_check_removed_zz")'; then
+  # The mutation not applying means the body it targets is already gone or
+  # renamed. Reporting PASS there would be passing for the wrong reason -- the
+  # scenario would be silently guarding nothing.
+  echo "T13 ONNX floor-check removed mutation: FAIL — mutation did not apply; update this scenario" >&2
+  fails=$((fails + 1))
+else
+  out="$(python3 "$a/.claude/skills/otel-hardening/check_otel.py" --repo-root "$a" --as-of "$AS_OF" 2>&1)"
+  if echo "$out" | grep -q "onnxruntime pinned"; then
+    echo "T13 ONNX floor-check removed mutation: FAIL — neutered check still reported a verdict" >&2
+    fails=$((fails + 1))
+  else
+    echo "T13 ONNX floor-check removed mutation: PASS"
+  fi
+fi
+rm -rf "$a"
+
 echo
 if [ "$fails" -eq 0 ]; then
   echo "otel-hardening verify: ALL PASS"

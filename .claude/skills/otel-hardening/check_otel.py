@@ -151,6 +151,12 @@ TRANSITIVE_VENDORS_TO_REPORT = ("huggingface_hub", "onnxruntime", "opentelemetry
 # unbounded vendor can change its telemetry contract under CyClaw silently.
 UNBOUNDED_TELEMETRY_CAPABLE = ("onnxruntime", "fastembed", "transformers")
 
+# ORT_DISABLE_TELEMETRY only governs onnxruntime's non-Windows 1DS path from
+# this release onward (v1.29.0, PRs #27379/#29872). A resolve below it leaves
+# the env half of the ONNX control inert on macOS and Linux, so a bound that
+# merely exists is not enough -- it has to clear this floor.
+ORT_TELEMETRY_ENV_FLOOR = (1, 29, 0)
+
 STALE_AFTER_DAYS = 120
 
 _VERIFIED_DATE_RE = re.compile(r"[Vv]erified\s+(\d{4}-\d{2}-\d{2})")
@@ -234,7 +240,9 @@ INVENTORY: tuple[dict[str, object], ...] = (
         "name": "onnxruntime", "category": 1,
         "controls": {"ORT_DISABLE_TELEMETRY": "1"},
         "url": "https://github.com/microsoft/onnxruntime/blob/main/docs/Privacy.md",
-        "versions": "transitive (chromadb; fastembed under the guardrails extra) -- UNBOUNDED, see T13 warning",
+        "versions": "transitive (chromadb, which asks only for >=1.14.1; fastembed under the "
+                    "guardrails extra) -- bounded at ==1.29.0 in constraints.txt so the env "
+                    "control cannot be resolved below the release that introduced it",
         "enforcement": "env before import (process-lifetime control for the non-Windows 1DS path added in "
                        "v1.29.0, PRs #27379/#29872) + onnxruntime.disable_telemetry_events() at the load "
                        "seams (utils/onnx_telemetry.py) before session construction. Windows is "
@@ -1053,13 +1061,183 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
     else:
         ok("T13", f"all {len(components)} declared components resolve to a classification row")
     for name in UNBOUNDED_TELEMETRY_CAPABLE:
-        # Recorded review findings (issue #1135): acknowledged here and in the
-        # inventory evidence, reported every run so they cannot be forgotten,
-        # but not a per-run failure -- bounding them is a dependency decision,
-        # not a checker fix. A NEW unclassified name still trips the sweep
-        # above.
+        # Recorded review findings (issue #1135): bounding these is a
+        # dependency decision, not a checker fix, so an unbound one is
+        # reported every run rather than failing it. Consulting the manifests
+        # instead of asserting the list is what keeps this honest in both
+        # directions -- a name that gains a bound stops being reported, and
+        # one that loses it starts again. A NEW unclassified name still trips
+        # the sweep above.
+        if name == "onnxruntime":
+            _check_ort_floor(root)
+            continue
+        _report_transitive_bound(name, _pins_by_surface(root, name))
+
+
+# Install surfaces with independent resolvers. A pin on one says nothing about
+# the others, so every pin question is asked per surface. REQUIRED surfaces are
+# the ones CyClaw ships and CI exercises; conda is tracked but its gap is a
+# standing acknowledgement rather than a per-run failure.
+_PIP_SURFACE = "pip (requirements/constraints)"
+_WHEEL_SURFACE = "wheel / `pip install -e .` (pyproject.toml metadata)"
+_CONDA_SURFACE = "conda (environment.yml)"
+_REQUIRED_PIN_SURFACES = (_PIP_SURFACE, _WHEEL_SURFACE)
+
+
+def _unconditional_pin(entries: list[str], name: str) -> str | None:
+    """Exact pin for ``name`` in ``entries``, or None if absent OR marker-scoped.
+
+    The single place that answers "does this entry actually bind the version
+    everywhere we care about?". It exists because the marker hole was fixed for
+    pyproject.toml first and left open on the pip manifests -- constraints and
+    requirements files use requirement-specifier syntax too, so they carry
+    markers just the same. Two copies of this rule meant only one of them got
+    fixed.
+
+    ``_parse_requirement_names`` stops the version at the ``;`` and discards
+    the rest, so ``onnxruntime==1.29.0; sys_platform == 'win32'`` looks global
+    while pip skips it entirely on macOS and Linux -- the platforms the ONNX
+    floor exists to protect. Markers are not evaluated (this checker is
+    deliberately stdlib-only and runs before install); any marker at all
+    disqualifies the pin as unconditional coverage.
+    """
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        head, _, marker = entry.partition(";")
+        found = _parse_requirement_names([head]).get(name)
+        if found is None:
+            continue
+        return None if marker.strip() else found
+    return None
+
+
+def _base_dependency_pin(pyproject: Path, name: str) -> str | None:
+    """Exact, UNCONDITIONAL pin for ``name`` in ``project.dependencies``.
+
+    Two things a naive lookup gets wrong, both of which read as coverage the
+    default wheel install does not have:
+
+    * Optional-dependency groups are not installed by a bare ``pip install``,
+      so a pin that lives only in an extra is not wheel coverage.
+    * An environment marker scopes the pin. ``_parse_requirement_names`` stops
+      the version at the ``;`` and discards the rest, so
+      ``onnxruntime==1.29.0; sys_platform == 'win32'`` looked global -- while
+      macOS and Linux, the platforms this floor exists to protect, would get
+      only chromadb's ``>=1.14.1``. Markers are not evaluated here (this
+      checker is deliberately stdlib-only and runs before install); any marker
+      at all disqualifies the pin as unconditional coverage.
+    """
+    try:
+        import tomllib
+
+        with pyproject.open("rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:  # noqa: BLE001 - an unparseable manifest is not a bound
+        return None
+    entries = data.get("project", {}).get("dependencies", [])
+    if not isinstance(entries, list):
+        return None
+    return _unconditional_pin(entries, name)
+
+
+def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
+    """Exact pinned version of ``name`` on each install surface, independently.
+
+    Returning the first match found anywhere is what the ONNX path was split
+    up to avoid: a pin on one surface then vouches for surfaces its resolver
+    never touches. Membership is not a bound either -- the conda parser admits
+    any line containing an "=", so only a version anchored on a digit counts.
+    """
+    pip_pin: str | None = None
+    for manifest in ("constraints.txt", "requirements.txt"):
+        path = root / manifest
+        if path.exists() and pip_pin is None:
+            # Same rule as the wheel surface: constraints and requirements
+            # files use requirement-specifier syntax, so a marker-scoped pin
+            # here binds nothing on the platforms this floor protects.
+            pip_pin = _unconditional_pin(path.read_text(encoding="utf-8").splitlines(), name)
+
+    wheel_pin: str | None = None
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        # BASE dependencies only. _load_pyproject_deps merges project.dependencies
+        # with every optional-dependencies group, so a pin living only in an extra
+        # (say `guardrails`) read as wheel coverage -- but a default wheel install
+        # selects no extras, leaving chromadb's loose >=1.14.1 authoritative.
+        wheel_pin = _base_dependency_pin(pyproject, name)
+
+    conda_pin: str | None = None
+    env_path = root / "environment.yml"
+    if env_path.exists():
+        match = re.search(
+            rf"^\s*-\s*{re.escape(name)}\s*=\s*([0-9][^\s#]*)",
+            env_path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        conda_pin = match.group(1) if match else None
+
+    return {_PIP_SURFACE: pip_pin, _WHEEL_SURFACE: wheel_pin, _CONDA_SURFACE: conda_pin}
+
+
+def _ort_floor_verdict(surface: str, pinned: str | None) -> None:
+    """Report one install surface against the ONNX telemetry-control floor.
+
+    A missing pin on a REQUIRED surface fails: this floor is a security
+    control, and reporting its removal as info() left the checker silent while
+    both shipped surfaces could resolve below it. The conda gap stays info --
+    it is acknowledged and unbounded upstream, not a regression to catch.
+    """
+    floor = ".".join(str(part) for part in ORT_TELEMETRY_ENV_FLOOR)
+    if pinned is None:
+        message = (f"{surface}: no onnxruntime floor -- chromadb asks only for >=1.14.1, so this "
+                   f"surface can resolve below {floor} where ORT_DISABLE_TELEMETRY does not yet "
+                   "govern the non-Windows 1DS path")
+        if surface in _REQUIRED_PIN_SURFACES:
+            fail("T13", message)
+        else:
+            info("T13", message)
+        return
+    try:
+        parts = [int(part) for part in pinned.split(".")[:3]]
+        # Pad to three components: a two-part pin like "1.29" would otherwise
+        # compare as (1, 29) < (1, 29, 0) and fail a version that clears the floor.
+        parsed = tuple(parts + [0] * (3 - len(parts)))
+    except ValueError:
+        warn("T13", f"{surface}: onnxruntime pin {pinned!r} is not a parseable version")
+        return
+    if parsed < ORT_TELEMETRY_ENV_FLOOR:
+        fail("T13", f"{surface}: onnxruntime pinned {pinned}, below the {floor} floor where "
+                    "ORT_DISABLE_TELEMETRY starts governing the non-Windows 1DS path -- "
+                    "the env half of the ONNX control is inert on macOS/Linux at this pin")
+        return
+    ok("T13", f"{surface}: onnxruntime pinned {pinned} (>= {floor})")
+
+
+def _check_ort_floor(root: Path) -> None:
+    """Verify the ONNX floor on EACH install surface independently."""
+    for surface, pinned in _pins_by_surface(root, "onnxruntime").items():
+        _ort_floor_verdict(surface, pinned)
+
+
+def _report_transitive_bound(name: str, pins: dict[str, str | None]) -> None:
+    """Report a telemetry-capable transitive's bound, per surface.
+
+    A pin on one surface must not read as coverage everywhere: naming the
+    surfaces that remain unbounded is the difference between "pinned" and
+    "pinned where it happens to be looked for".
+    """
+    unbounded = [surface for surface, pinned in pins.items() if pinned is None]
+    if len(unbounded) == len(pins):
         info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
                     "standing review finding (its telemetry contract can change under CyClaw silently)")
+        return
+    pinned_desc = ", ".join(f"{s}={v}" for s, v in pins.items() if v is not None)
+    if unbounded:
+        info("T13", f"telemetry-capable transitive {name!r} is pinned on some surfaces only "
+                    f"({pinned_desc}); still unbounded on: {', '.join(unbounded)}")
+        return
+    ok("T13", f"telemetry-capable transitive {name!r} pinned on every surface ({pinned_desc})")
 
 
 def check_onnx_seams(root: Path) -> None:
