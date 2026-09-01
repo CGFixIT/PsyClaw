@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
+import utils.logger as logger_mod
 from agentic.netconnect import cli
 from agentic.netconnect.selftest import run_self_test
-from utils.logger import reset_config_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
 
 
 def _cfg(tmp_path: Path, block: dict) -> str:
@@ -54,7 +55,7 @@ def test_status_surfaces_unknown_config_keys(tmp_path, capsys):
 
     # And a clean config stays silent on stderr. _cfg reuses the same path and
     # _get_config caches by path, so drop the cache before the reload.
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     clean = _cfg(tmp_path, {"enabled": False})
     assert cli.main(["--config", clean, "status"]) == 0
     assert "unknown netconnect keys" not in capsys.readouterr().err
@@ -176,3 +177,146 @@ def test_windows_interface_ip_is_scope_filtered(tmp_path, capsys, monkeypatch):
     audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert "192.168.1.50" not in audit_text
     assert "192.168.1.1" not in audit_text
+
+
+def test_main_wires_logging_before_dispatch(tmp_path, monkeypatch):
+    """main() must call setup_logging before dispatch, not leave it uncalled.
+
+    Before this fix, this entrypoint never called setup_logging: its own
+    loggers reached only Python's stderr last-resort handler regardless of
+    config.yaml's logging.log_file. Does not re-test setup_logging's own
+    mechanics (covered by test_logger.py) -- only that THIS entrypoint calls
+    it, with the loaded config, before the subcommand runs.
+    """
+    log_path = tmp_path / "cyclaw.log"
+    block = {"enabled": False}
+    doc = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+                        "log_file": str(log_path), "capture_third_party": True, "third_party_level": "INFO"},
+            "netconnect": block}
+    cfg_p = tmp_path / "config.yaml"
+    cfg_p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    cfg_path = str(cfg_p)
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    real_root = logging.getLogger()
+    before = list(real_root.handlers)
+    try:
+        assert cli.main(["--config", cfg_path, "status"]) == 0
+
+        logging.getLogger("agentic.netconnect.wiring_regression_test").warning("netconnect-cli-wiring-marker")
+        for handler in real_root.handlers:
+            handler.flush()
+        assert log_path.exists(), "main() did not call setup_logging with the loaded config"
+        assert "netconnect-cli-wiring-marker" in log_path.read_text(encoding="utf-8")
+    finally:
+        for handler in list(real_root.handlers):
+            if handler not in before:
+                real_root.removeHandler(handler)
+                handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_a_broken_log_file_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own OSError must map onto the exit-code API.
+
+    Before this fix, main() called setup_logging(_get_config(args.config))
+    OUTSIDE the dispatch try -- a misconfigured logging.log_file (here: it
+    names a directory, so opening it as a file raises IsADirectoryError)
+    escaped straight out of main() as an uncaught traceback with exit code
+    1, which ops_runner's exit-code mapping has no entry for, so it reported
+    "unknown" instead of the environment/config problem this actually is
+    (codex review on #1239).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+            "log_file": str(tmp_path),  # a directory, not a file
+        },
+        "netconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_a_malformed_logging_block_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own AttributeError/TypeError must map onto the exit-code API.
+
+    A malformed logging: block (here: a bool instead of a mapping) makes
+    setup_logging's log_cfg.get(...) raise AttributeError before any handler
+    is attached -- this must not escape main() as an uncaught traceback with
+    exit code 1, which ops_runner's exit-code mapping has no entry for
+    (codex review on #1239, fourth round).
+    """
+    doc = {
+        "logging": True,  # malformed: not a mapping
+        "netconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_an_invalid_log_path_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own ValueError must map onto the exit-code API.
+
+    logging.log_file containing an embedded NUL byte makes
+    logging.FileHandler raise ValueError -- a third exception type this
+    narrow config-load-and-logging-init call site can raise, beyond the
+    OSError and AttributeError/TypeError already handled. This must not
+    escape main() as an uncaught traceback with exit code 1, which
+    ops_runner's exit-code mapping has no entry for (codex review on
+    #1239, fifth round).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+            "log_file": "bad\x00path",  # embedded NUL -> ValueError
+        },
+        "netconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False

@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 import yaml
 
+import utils.logger as logger_mod
 from agentic.sqlconnect import cli
 from agentic.sqlconnect.selftest import run_self_test
-from utils.logger import reset_config_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
 
 
 def _cfg(tmp_path: Path, block: dict) -> str:
@@ -129,12 +130,18 @@ def test_selftest_bad_config(tmp_path):
 
 # ── exit codes are an API ────────────────────────────────────────────────────
 
-def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
+def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(tmp_path, monkeypatch):
     """Dispatch-point handler, matching agentic/cli.py::main (#824).
 
     utils/ops_runner.py's _SQLCONNECT_LABELS maps 0/2/3 and reports everything
     else as "unknown". Narrow on purpose: a genuine bug still raises rather than
     being flattened into a tidy exit 2.
+
+    Uses an explicit --config (scratch, tmp_path-scoped): main() now loads
+    config unconditionally before dispatch (to wire setup_logging), and the
+    bare default "config.yaml" resolves against the real repo root regardless
+    of cwd -- omitting --config here would load and log against the actual
+    checkout instead of a throwaway file.
     """
     from utils.errors import (
         SqlConnectConfigError,
@@ -142,14 +149,158 @@ def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
         SqlDriverNotInstalledError,
     )
 
+    cp = _cfg(tmp_path, {"enabled": False})
     for exc, want in [
         (SqlConnectConfigError("bad cfg"), cli.EXIT_ENV),
         (SqlDriverNotInstalledError("no driver"), cli.EXIT_ENV),
         (SqlConnectRuntimeError("failed"), cli.EXIT_FAIL),
     ]:
         monkeypatch.setattr(cli, "cmd_status", lambda _a, _e=exc: (_ for _ in ()).throw(_e))
-        assert cli.main(["status"]) == want
+        assert cli.main(["--config", cp, "status"]) == want
 
     monkeypatch.setattr(cli, "cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
     with pytest.raises(RuntimeError, match="a real bug"):
-        cli.main(["status"])
+        cli.main(["--config", cp, "status"])
+
+
+def test_main_wires_logging_before_dispatch(tmp_path, monkeypatch):
+    """main() must call setup_logging before dispatch, not leave it uncalled.
+
+    Before this fix, this entrypoint never called setup_logging: its own
+    loggers reached only Python's stderr last-resort handler regardless of
+    config.yaml's logging.log_file. Does not re-test setup_logging's own
+    mechanics (covered by test_logger.py) -- only that THIS entrypoint calls
+    it, with the loaded config, before the subcommand runs.
+    """
+    log_path = tmp_path / "cyclaw.log"
+    block = {"enabled": False}
+    doc = {"logging": {"audit_file": str(tmp_path / "a.jsonl"), "audit_fields": {},
+                        "log_file": str(log_path), "capture_third_party": True, "third_party_level": "INFO"},
+            "sqlconnect": block}
+    cfg_p = tmp_path / "config.yaml"
+    cfg_p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    cfg_path = str(cfg_p)
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    real_root = logging.getLogger()
+    before = list(real_root.handlers)
+    try:
+        assert cli.main(["--config", cfg_path, "status"]) == 0
+
+        logging.getLogger("agentic.sqlconnect.wiring_regression_test").warning("sqlconnect-cli-wiring-marker")
+        for handler in real_root.handlers:
+            handler.flush()
+        assert log_path.exists(), "main() did not call setup_logging with the loaded config"
+        assert "sqlconnect-cli-wiring-marker" in log_path.read_text(encoding="utf-8")
+    finally:
+        for handler in list(real_root.handlers):
+            if handler not in before:
+                real_root.removeHandler(handler)
+                handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_a_broken_log_file_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own OSError must map onto the exit-code API.
+
+    Before this fix, main() called setup_logging(_get_config(args.config))
+    OUTSIDE the dispatch try -- a misconfigured logging.log_file (here: it
+    names a directory, so opening it as a file raises IsADirectoryError)
+    escaped straight out of main() as an uncaught traceback with exit code
+    1, which ops_runner's exit-code mapping has no entry for, so it reported
+    "unknown" instead of the environment/config problem this actually is
+    (codex review on #1239).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "a.jsonl"), "audit_fields": {},
+            "log_file": str(tmp_path),  # a directory, not a file
+        },
+        "sqlconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_a_malformed_logging_block_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own AttributeError/TypeError must map onto the exit-code API.
+
+    A malformed logging: block (here: a bool instead of a mapping) makes
+    setup_logging's log_cfg.get(...) raise AttributeError before any handler
+    is attached -- this must not escape main() as an uncaught traceback with
+    exit code 1, which ops_runner's exit-code mapping has no entry for
+    (codex review on #1239, fourth round).
+    """
+    doc = {
+        "logging": True,  # malformed: not a mapping
+        "sqlconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
+
+
+def test_main_maps_an_invalid_log_path_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own ValueError must map onto the exit-code API.
+
+    logging.log_file containing an embedded NUL byte makes
+    logging.FileHandler raise ValueError -- a third exception type this
+    narrow config-load-and-logging-init call site can raise, beyond the
+    OSError and AttributeError/TypeError already handled. This must not
+    escape main() as an uncaught traceback with exit code 1, which
+    ops_runner's exit-code mapping has no entry for (codex review on
+    #1239, fifth round).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "a.jsonl"), "audit_fields": {},
+            "log_file": "bad\x00path",  # embedded NUL -> ValueError
+        },
+        "sqlconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False

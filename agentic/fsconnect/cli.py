@@ -49,7 +49,7 @@ from utils.errors import (
     FsConnectError,
     FsWriteRefused,
 )
-from utils.logger import _get_config
+from utils.logger import _get_config, setup_logging
 from utils.telemetry_kill import scheduler_env_overlay
 
 if TYPE_CHECKING:
@@ -651,6 +651,36 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Every agentic.* logger (this module's own included) has propagated
+    # only to stderr's last-resort handler until this call: none of these
+    # entrypoints ran setup_logging, so nothing durable ever saw them,
+    # regardless of config.yaml's logging.log_file. setup_logging attaches
+    # the shared file handler that captures every non-cyclaw.* logger too
+    # (utils/logger.py's _capture_third_party) -- this call is what makes
+    # that reach agentic.* records, one process at a time.
+    try:
+        setup_logging(_get_config(args.config))
+    except Exception as exc:  # noqa: BLE001 -- narrow scope: config load + logging
+        # init only, before any real work. A misconfigured logging.log_file
+        # (a directory, an unwritable volume, an embedded NUL -> ValueError)
+        # or an unreadable config.yaml itself raises OSError; a malformed
+        # logging: block (e.g. `logging: true`, or a non-string
+        # logging.level) raises AttributeError/TypeError -- each round of
+        # review found one more exception type this narrow, well-understood
+        # call site can raise for a malformed config (codex review on #1239,
+        # rounds three through five), so catch broadly here rather than
+        # keep enumerating: anything raised by loading config.yaml or
+        # initializing logging from it is an environment/config problem by
+        # construction, never "a genuine bug in the business logic" the
+        # narrow-catch convention elsewhere in this function protects
+        # against. Must not crash with an uncaught traceback and exit 1:
+        # ops_runner's exit-code mapping has no entry for that, so it
+        # reports "unknown" instead of the environment/config problem this
+        # actually is. This sits outside the dispatch try below on purpose:
+        # logging isn't set up yet, so args.func hasn't run and there is
+        # nothing else to unwind.
+        _err(f"Config error: failed to initialize logging: {exc}")
+        return EXIT_ENV
     try:
         return int(args.func(args))
     except FsWriteRefused as exc:
