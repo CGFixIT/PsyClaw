@@ -1084,6 +1084,34 @@ _CONDA_SURFACE = "conda (environment.yml)"
 _REQUIRED_PIN_SURFACES = (_PIP_SURFACE, _WHEEL_SURFACE)
 
 
+def _unconditional_pin(entries: list[str], name: str) -> str | None:
+    """Exact pin for ``name`` in ``entries``, or None if absent OR marker-scoped.
+
+    The single place that answers "does this entry actually bind the version
+    everywhere we care about?". It exists because the marker hole was fixed for
+    pyproject.toml first and left open on the pip manifests -- constraints and
+    requirements files use requirement-specifier syntax too, so they carry
+    markers just the same. Two copies of this rule meant only one of them got
+    fixed.
+
+    ``_parse_requirement_names`` stops the version at the ``;`` and discards
+    the rest, so ``onnxruntime==1.29.0; sys_platform == 'win32'`` looks global
+    while pip skips it entirely on macOS and Linux -- the platforms the ONNX
+    floor exists to protect. Markers are not evaluated (this checker is
+    deliberately stdlib-only and runs before install); any marker at all
+    disqualifies the pin as unconditional coverage.
+    """
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        head, _, marker = entry.partition(";")
+        found = _parse_requirement_names([head]).get(name)
+        if found is None:
+            continue
+        return None if marker.strip() else found
+    return None
+
+
 def _base_dependency_pin(pyproject: Path, name: str) -> str | None:
     """Exact, UNCONDITIONAL pin for ``name`` in ``project.dependencies``.
 
@@ -1110,17 +1138,7 @@ def _base_dependency_pin(pyproject: Path, name: str) -> str | None:
     entries = data.get("project", {}).get("dependencies", [])
     if not isinstance(entries, list):
         return None
-    for entry in entries:
-        if not isinstance(entry, str):
-            continue
-        head, _, marker = entry.partition(";")
-        found = _parse_requirement_names([head]).get(name)
-        if found is None:
-            continue
-        if marker.strip():
-            return None
-        return found
-    return None
+    return _unconditional_pin(entries, name)
 
 
 def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
@@ -1135,7 +1153,10 @@ def _pins_by_surface(root: Path, name: str) -> dict[str, str | None]:
     for manifest in ("constraints.txt", "requirements.txt"):
         path = root / manifest
         if path.exists() and pip_pin is None:
-            pip_pin = _parse_requirement_names(path.read_text(encoding="utf-8").splitlines()).get(name)
+            # Same rule as the wheel surface: constraints and requirements
+            # files use requirement-specifier syntax, so a marker-scoped pin
+            # here binds nothing on the platforms this floor protects.
+            pip_pin = _unconditional_pin(path.read_text(encoding="utf-8").splitlines(), name)
 
     wheel_pin: str | None = None
     pyproject = root / "pyproject.toml"
