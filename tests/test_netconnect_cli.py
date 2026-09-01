@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
+import utils.logger as logger_mod
 from agentic.netconnect import cli
 from agentic.netconnect.selftest import run_self_test
 from utils.logger import reset_config_cache
@@ -176,3 +178,40 @@ def test_windows_interface_ip_is_scope_filtered(tmp_path, capsys, monkeypatch):
     audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert "192.168.1.50" not in audit_text
     assert "192.168.1.1" not in audit_text
+
+
+def test_main_wires_logging_before_dispatch(tmp_path, monkeypatch):
+    """main() must call setup_logging before dispatch, not leave it uncalled.
+
+    Before this fix, this entrypoint never called setup_logging: its own
+    loggers reached only Python's stderr last-resort handler regardless of
+    config.yaml's logging.log_file. Does not re-test setup_logging's own
+    mechanics (covered by test_logger.py) -- only that THIS entrypoint calls
+    it, with the loaded config, before the subcommand runs.
+    """
+    log_path = tmp_path / "cyclaw.log"
+    block = {"enabled": False}
+    doc = {"logging": {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+                        "log_file": str(log_path), "capture_third_party": True, "third_party_level": "INFO"},
+            "netconnect": block}
+    cfg_p = tmp_path / "config.yaml"
+    cfg_p.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    cfg_path = str(cfg_p)
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    real_root = logging.getLogger()
+    before = list(real_root.handlers)
+    try:
+        assert cli.main(["--config", cfg_path, "status"]) == 0
+
+        logging.getLogger("agentic.netconnect.wiring_regression_test").warning("netconnect-cli-wiring-marker")
+        for handler in real_root.handlers:
+            handler.flush()
+        assert log_path.exists(), "main() did not call setup_logging with the loaded config"
+        assert "netconnect-cli-wiring-marker" in log_path.read_text(encoding="utf-8")
+    finally:
+        for handler in list(real_root.handlers):
+            if handler not in before:
+                real_root.removeHandler(handler)
+                handler.close()
+        logger_mod._logging_initialized = False

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 
 import pytest
 import yaml
 
+import utils.logger as logger_mod
 from agentic import cli
 from utils.errors import AgenticConfigError, AgenticError, AgenticWriteRefused
 from utils.logger import reset_config_cache
@@ -211,3 +213,47 @@ def test_main_does_not_mask_an_untyped_bug(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "cmd_status", bug)
     with pytest.raises(RuntimeError, match="a real bug"):
         cli.main(["--config", _write_config(tmp_path, enabled=True), "status"])
+
+
+def test_main_wires_logging_before_dispatch(tmp_path, monkeypatch):
+    """main() must call setup_logging before dispatch, not leave it uncalled.
+
+    Before this fix, agentic.cli never called setup_logging: every agentic.*
+    logger reached only Python's stderr last-resort handler regardless of
+    config.yaml's logging.log_file. Does not re-test setup_logging's own
+    mechanics (covered by test_logger.py) -- only that THIS entrypoint calls
+    it, with the loaded config, before the subcommand runs.
+    """
+    log_path = tmp_path / "cyclaw.log"
+    registry_path = f"data/agentic/_pytest_cli_{uuid.uuid4().hex}.json"
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+            "log_file": str(log_path), "capture_third_party": True, "third_party_level": "INFO",
+        },
+        "policy": {"prompt_filter": {"banned_patterns": ["ignore previous instructions"]}, "privacy": {}},
+        "agentic": {
+            "enabled": False, "repo": "CGFixIT/CyClaw", "mode": "read",
+            "writes_enabled": False, "gh_min_version": "2.40.0", "registry_path": registry_path,
+        },
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    real_root = logging.getLogger()
+    before = list(real_root.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == 0
+
+        logging.getLogger("agentic.wiring_regression_test").warning("agentic-cli-wiring-marker")
+        for handler in real_root.handlers:
+            handler.flush()
+        assert log_path.exists(), "main() did not call setup_logging with the loaded config"
+        assert "agentic-cli-wiring-marker" in log_path.read_text(encoding="utf-8")
+    finally:
+        for handler in list(real_root.handlers):
+            if handler not in before:
+                real_root.removeHandler(handler)
+                handler.close()
+        logger_mod._logging_initialized = False

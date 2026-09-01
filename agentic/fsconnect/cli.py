@@ -49,7 +49,7 @@ from utils.errors import (
     FsConnectError,
     FsWriteRefused,
 )
-from utils.logger import _get_config
+from utils.logger import _get_config, setup_logging
 from utils.telemetry_kill import scheduler_env_overlay
 
 if TYPE_CHECKING:
@@ -651,6 +651,14 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Every agentic.* logger (this module's own included) has propagated
+    # only to stderr's last-resort handler until this call: none of these
+    # entrypoints ran setup_logging, so nothing durable ever saw them,
+    # regardless of config.yaml's logging.log_file. setup_logging attaches
+    # the shared file handler that captures every non-cyclaw.* logger too
+    # (utils/logger.py's _capture_third_party) -- this call is what makes
+    # that reach agentic.* records, one process at a time.
+    setup_logging(_get_config(args.config))
     try:
         return int(args.func(args))
     except FsWriteRefused as exc:
