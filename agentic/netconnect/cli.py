@@ -140,15 +140,18 @@ def main(argv: list[str] | None = None) -> int:
     # that reach agentic.* records, one process at a time.
     try:
         setup_logging(_get_config(args.config))
-    except OSError as exc:
+    except (OSError, AttributeError, TypeError) as exc:
         # A misconfigured logging.log_file (names a directory, an unwritable
-        # volume, ...) -- or an unreadable config.yaml itself -- must not
-        # crash with an uncaught traceback and exit 1: ops_runner's exit-code
-        # mapping has no entry for that, so it reports "unknown" instead of
-        # the environment/config problem this actually is (codex review on
-        # #1239). This sits outside the dispatch try below on purpose:
-        # logging isn't set up yet, so args.func hasn't run and there is
-        # nothing else to unwind.
+        # volume, ...) or an unreadable config.yaml itself raises OSError; a
+        # malformed logging: block (e.g. `logging: true`, or a non-string
+        # logging.level) raises AttributeError/TypeError from setup_logging's
+        # own log_cfg.get(...)/.upper() calls -- neither must crash with an
+        # uncaught traceback and exit 1: ops_runner's exit-code mapping has
+        # no entry for that, so it reports "unknown" instead of the
+        # environment/config problem this actually is (codex review on
+        # #1239, third and fourth rounds). This sits outside the dispatch
+        # try below on purpose: logging isn't set up yet, so args.func
+        # hasn't run and there is nothing else to unwind.
         _err(f"Config error: failed to initialize logging: {exc}")
         return EXIT_ENV
     try:
