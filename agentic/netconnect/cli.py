@@ -138,7 +138,19 @@ def main(argv: list[str] | None = None) -> int:
     # the shared file handler that captures every non-cyclaw.* logger too
     # (utils/logger.py's _capture_third_party) -- this call is what makes
     # that reach agentic.* records, one process at a time.
-    setup_logging(_get_config(args.config))
+    try:
+        setup_logging(_get_config(args.config))
+    except OSError as exc:
+        # A misconfigured logging.log_file (names a directory, an unwritable
+        # volume, ...) -- or an unreadable config.yaml itself -- must not
+        # crash with an uncaught traceback and exit 1: ops_runner's exit-code
+        # mapping has no entry for that, so it reports "unknown" instead of
+        # the environment/config problem this actually is (codex review on
+        # #1239). This sits outside the dispatch try below on purpose:
+        # logging isn't set up yet, so args.func hasn't run and there is
+        # nothing else to unwind.
+        _err(f"Config error: failed to initialize logging: {exc}")
+        return EXIT_ENV
     try:
         return int(args.func(args))
     except NetConnectConfigError as exc:

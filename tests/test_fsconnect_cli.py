@@ -311,3 +311,41 @@ def test_main_wires_logging_before_dispatch(tmp_path, monkeypatch):
                 real_root.removeHandler(handler)
                 handler.close()
         logger_mod._logging_initialized = False
+
+
+def test_main_maps_a_broken_log_file_to_env_exit_not_a_crash(tmp_path, monkeypatch):
+    """setup_logging's own OSError must map onto the exit-code API.
+
+    Before this fix, main() called setup_logging(_get_config(args.config))
+    OUTSIDE the dispatch try -- a misconfigured logging.log_file (here: it
+    names a directory, so opening it as a file raises IsADirectoryError)
+    escaped straight out of main() as an uncaught traceback with exit code
+    1, which ops_runner's exit-code mapping has no entry for, so it reported
+    "unknown" instead of the environment/config problem this actually is
+    (codex review on #1239).
+    """
+    doc = {
+        "logging": {
+            "audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {},
+            "log_file": str(tmp_path),  # a directory, not a file
+        },
+        "policy": {"prompt_filter": {"banned_patterns": ["ignore previous instructions"]}, "privacy": {}},
+        "fsconnect": {"enabled": False},
+    }
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+
+    monkeypatch.setattr(logger_mod, "_logging_initialized", False)
+    cyclaw_logger = logging.getLogger("cyclaw")
+    agentic_logger = logging.getLogger("agentic")
+    before_cyclaw = list(cyclaw_logger.handlers)
+    before_agentic = list(agentic_logger.handlers)
+    try:
+        assert cli.main(["--config", str(cfg_path), "status"]) == cli.EXIT_ENV
+    finally:
+        for logger_obj, before in ((cyclaw_logger, before_cyclaw), (agentic_logger, before_agentic)):
+            for handler in list(logger_obj.handlers):
+                if handler not in before:
+                    logger_obj.removeHandler(handler)
+                    handler.close()
+        logger_mod._logging_initialized = False
