@@ -1045,10 +1045,6 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
         if path.exists():
             components |= set(_parse_requirement_names(path.read_text(encoding="utf-8").splitlines()))
     components |= _parse_environment_yml_names(root / "environment.yml")
-    # Snapshot before the external-executable names join: only a manifest can
-    # bind a Python package's version, so that is what the bound check below
-    # may consult.
-    manifest_bound = set(components)
     components |= set(KNOWN_EXTERNAL_COMPONENTS)
     components.discard("cyclaw")
     unclassified = sorted(
@@ -1072,14 +1068,53 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
         # directions -- a name that gains a bound stops being reported, and
         # one that loses it starts again. A NEW unclassified name still trips
         # the sweep above.
-        if name not in manifest_bound:
-            info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
-                        "standing review finding (its telemetry contract can change under CyClaw silently)")
-            continue
         if name == "onnxruntime":
             _check_ort_floor(root)
             continue
-        ok("T13", f"telemetry-capable transitive {name!r} carries a version bound in a manifest")
+        pinned = _exact_pin_for(root, name)
+        if pinned is None:
+            info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
+                        "standing review finding (its telemetry contract can change under CyClaw silently)")
+            continue
+        ok("T13", f"telemetry-capable transitive {name!r} pinned {pinned}")
+
+
+def _exact_pin_for(root: Path, name: str) -> str | None:
+    """Exact pinned version for ``name`` on any manifest surface, else None.
+
+    Membership in a manifest is NOT a bound. The pip parsers already require
+    ``==``, but _parse_environment_yml_names admits any line merely containing
+    an "=", so a conda entry like ``- fastembed>=0.4`` registered as a name
+    with no exact pin -- and a membership test then reported it as bounded
+    while the resolver stayed free to move its telemetry contract. This asks
+    for the specifier instead.
+    """
+    for manifest in ("constraints.txt", "requirements.txt"):
+        path = root / manifest
+        if path.exists():
+            found = _parse_requirement_names(path.read_text(encoding="utf-8").splitlines()).get(name)
+            if found:
+                return found
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            found = _load_pyproject_deps(pyproject).get(name)
+        except Exception:  # noqa: BLE001 - an unparseable manifest is not a bound
+            found = None
+        if found:
+            return found
+    env_path = root / "environment.yml"
+    if env_path.exists():
+        # Conda exact pins only: `- name=1.2.3`, version anchored on a digit so
+        # `- name>=0.4` cannot half-match.
+        match = re.search(
+            rf"^\s*-\s*{re.escape(name)}\s*=\s*([0-9][^\s#]*)",
+            env_path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        if match:
+            return match.group(1)
+    return None
 
 
 def _find_ort_pin(text: str, sep: str) -> str | None:

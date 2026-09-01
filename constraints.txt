@@ -53,10 +53,20 @@ sentence-transformers==5.6.0
 # ORT_DISABLE_TELEMETRY (utils/telemetry_kill.py) only governs the non-Windows
 # 1DS path from onnxruntime v1.29.0 onward (PRs #27379/#29872), so any resolve
 # below that floor silently leaves the env half of the defence inert on macOS
-# and Linux -- the primary and CI targets. Pinned in constraints.txt only, NOT
-# pyproject/requirements: utils/onnx_telemetry.py treats onnxruntime as
-# optional and absent-safe, so it must stay a ceiling on what the resolver
-# picks rather than become a declared install target.
+# and Linux -- the primary and CI targets.
+#
+# Pinned HERE **and** in pyproject.toml, deliberately. An earlier revision of
+# this comment argued for constraints-only on the grounds that onnxruntime is
+# "optional"; that was wrong and is corrected here so it cannot mislead anyone
+# into removing the metadata pin. utils/onnx_telemetry.py is written to
+# tolerate the package's ABSENCE, but the package itself is installed
+# unconditionally -- chromadb==1.5.9 requires onnxruntime>=1.14.1 with no extra
+# marker. So the floor narrows an already-mandatory dependency rather than
+# making an optional one mandatory. It has to be in pyproject.toml as well
+# because `pip install -e .` and the published wheel read that file and never
+# apply a constraints file; a constraints-only bound left those surfaces free
+# to resolve below the floor. Keep the two in step -- dep-guard D6 cross-checks
+# them, and otel-hardening T13 now validates each install surface separately.
 onnxruntime==1.29.0
 # Direct imports (retrieval/embeddings.py; gate.py/harness/server.py), promoted
 # from implicit sentence-transformers/fastapi transitives to explicit pins --
