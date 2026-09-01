@@ -121,36 +121,53 @@ def setup_logging(cfg: dict | None = None) -> None:
     console.setFormatter(fmt)
     root.addHandler(console)
 
+    # agentic.* (and the other out-of-band packages' loggers) are first-party
+    # CyClaw code -- I6 only forbids the core six *importing* them, it says
+    # nothing about their log records being "third-party". Give "agentic" its
+    # own level and console handler here, unconditionally and before the
+    # log_file branch below:
+    #   - setLevel must win over whatever _capture_third_party sets on the
+    #     REAL root logger further down -- a logger's own explicit level
+    #     always overrides an inherited one, so setting it here first means
+    #     "agentic" is never silently gated to the third-party floor just
+    #     because it has no ancestor level of its own.
+    #   - addHandler(console) preserves stderr visibility. Before this call
+    #     ran at all, agentic.* relied on Python's lastResort fallback
+    #     (stderr) because no handler existed anywhere in its ancestor chain
+    #     -- but attaching a handler to ANY ancestor of a logger (this one,
+    #     or -- via capture_third_party below -- the real root) silences
+    #     lastResort for it too. Tools that shell out to an agentic CLI and
+    #     capture its stderr (e.g. /ops/fsconnect relaying pathsafe's
+    #     incomplete-listing warning in its response body) depend on that
+    #     stream staying populated (codex review on #1239).
+    agentic_logger = logging.getLogger("agentic")
+    agentic_logger.setLevel(level)
+    agentic_logger.addHandler(console)
+
     if log_file:
         anchored_log_file = _anchor(log_file)
         anchored_log_file.parent.mkdir(parents=True, exist_ok=True)
         # _capture_third_party attaches a FileHandler to the REAL root, and its
-        # filter deliberately passes cyclaw.* through at any level -- so when it
-        # attaches, that single handler already writes BOTH cyclaw and
-        # third-party records to this path. A second FileHandler on the "cyclaw"
-        # logger would then write every CyClaw line twice (once here, once at
-        # root via propagation) and hold two fds on one file. Only own the file
-        # directly when third-party capture is switched off and nothing else will.
+        # filter deliberately passes cyclaw.* through at any level and agentic.*
+        # through at WARNING+ (see _ThirdPartyFloor) -- so when it attaches,
+        # that single handler already writes cyclaw, agentic (at WARNING and
+        # above), and third-party records to this path. A second FileHandler on
+        # the "cyclaw" logger would then write every CyClaw line twice (once
+        # here, once at root via propagation) and hold two fds on one file.
+        # Only own the file directly when third-party capture is switched off
+        # and nothing else will.
         if not _capture_third_party(log_cfg, anchored_log_file, fmt):
             fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
             fh.setFormatter(fmt)
             root.addHandler(fh)
-            # agentic.* (and the other out-of-band packages' loggers) are
-            # first-party CyClaw code -- I6 only forbids the core six *importing*
-            # them, it says nothing about their log records being "third-party".
-            # With capture_third_party off, the real root logger has no handler
-            # of its own (see above), so agentic.* records -- which never
-            # propagate through the "cyclaw" logger, only through their own
-            # "agentic" ancestor -- would otherwise go nowhere durable even
-            # though an operator turning this switch off is asking to silence
-            # noisy externals (chromadb/httpx/uvicorn/langgraph), not CyClaw's
-            # own out-of-band subsystems. Reuse the same handler rather than
-            # opening a second fd on the same path. setLevel mirrors the
-            # "cyclaw" logger above -- without it "agentic" stays at its
-            # inherited default (WARNING), silently dropping INFO/DEBUG
-            # agentic.* records even when logging.level asks for them.
-            agentic_logger = logging.getLogger("agentic")
-            agentic_logger.setLevel(level)
+            # With capture_third_party off, the real root logger has no
+            # handler of its own (see above), so agentic.* records -- which
+            # never propagate through the "cyclaw" logger, only through their
+            # own "agentic" ancestor -- would otherwise go nowhere durable
+            # even though an operator turning this switch off is asking to
+            # silence noisy externals (chromadb/httpx/uvicorn/langgraph), not
+            # CyClaw's own out-of-band subsystems. Reuse the same handler
+            # rather than opening a second fd on the same path.
             agentic_logger.addHandler(fh)
 
     _logging_initialized = True
@@ -164,7 +181,8 @@ _THIRD_PARTY_DEFAULT_LEVEL = "INFO"
 
 
 class _ThirdPartyFloor(logging.Filter):
-    """Let ``cyclaw.*`` through at any level; hold everything else at a floor.
+    """Let ``cyclaw.*`` through at any level, ``agentic.*`` through at WARNING
+    and above; hold everything else at a floor.
 
     This exists for a security reason, not a noise one. ``logging.level`` is now
     DEBUG so CyClaw's own modules are fully traced, but attaching that same
@@ -173,6 +191,19 @@ class _ThirdPartyFloor(logging.Filter):
     Grok/Claude/Ollama call -- into a file on disk. CyClaw's own DEBUG lines
     were audited for this: the four in graph.py log chunk counts and budget
     arithmetic, never query text, prompts, or answers.
+
+    ``agentic.*`` gets a narrower exemption than ``cyclaw.*``: WARNING and
+    above only, not a full DEBUG passthrough. It is first-party CyClaw code
+    (I6 only forbids the core six *importing* it, not its logging being
+    treated as third-party) -- setup_logging's own ``agentic_logger.setLevel``
+    call would otherwise be defeated at exactly the operators who most need
+    it: someone who raises ``third_party_level`` above WARNING to quiet noisy
+    externals would also silence agentic's own warnings and errors, since a
+    logger's effective level only gates whether a record is CREATED, not
+    whether this filter later lets it through a shared handler. Unlike the
+    four graph.py DEBUG lines above, agentic's DEBUG-level output has not been
+    audited line-by-line for secrets, so it still respects the configured
+    floor rather than bypassing it outright (codex review on #1239).
     """
 
     def __init__(self, floor: int) -> None:
@@ -181,6 +212,10 @@ class _ThirdPartyFloor(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         if record.name == "cyclaw" or record.name.startswith("cyclaw."):
+            return True
+        if record.levelno >= logging.WARNING and (
+            record.name == "agentic" or record.name.startswith("agentic.")
+        ):
             return True
         return record.levelno >= self.floor
 

@@ -364,3 +364,138 @@ class TestThirdPartyLogCapture:
                         handler.close()
             logger._logging_initialized = False
         assert text.count("agentic-offline-marker") == 1
+
+    def test_agentic_still_reaches_stderr_once_a_file_handler_is_attached(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """Attaching a durable handler anywhere in agentic's ancestor chain
+        must not silence its stderr visibility.
+
+        Before this fix, setup_logging attached a FileHandler to "agentic"
+        (capture_third_party off) or to the real root (capture_third_party
+        on) but never a StreamHandler of its own -- and attaching ANY handler
+        anywhere in a logger's ancestor chain stops Python from falling back
+        to lastResort (stderr), which is what agentic.* relied on before
+        setup_logging ever ran in these entrypoints at all. Tools that shell
+        out to an agentic CLI and capture its stderr (e.g. /ops/fsconnect
+        relaying pathsafe's incomplete-listing warning in its response body)
+        depend on that stream staying populated (codex review on #1239).
+        """
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+        cyclaw_logger = logging.getLogger("cyclaw")
+        agentic_logger = logging.getLogger("agentic")
+        real_root = logging.getLogger()
+        before_root = list(real_root.handlers)
+        before_cyclaw = list(cyclaw_logger.handlers)
+        before_agentic = list(agentic_logger.handlers)
+        try:
+            logger.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": True,
+                "third_party_level": "INFO",
+            }})
+            capsys.readouterr()  # discard setup noise, if any
+            logging.getLogger("agentic.fsconnect.pathsafe").warning("agentic-stderr-marker")
+            err = capsys.readouterr().err
+        finally:
+            for logger_obj, before in (
+                (real_root, before_root),
+                (cyclaw_logger, before_cyclaw),
+                (agentic_logger, before_agentic),
+            ):
+                for handler in list(logger_obj.handlers):
+                    if handler not in before:
+                        logger_obj.removeHandler(handler)
+                        handler.close()
+            logger._logging_initialized = False
+        assert "agentic-stderr-marker" in err
+
+    def test_agentic_warnings_survive_a_raised_third_party_level(
+        self, tmp_path, monkeypatch,
+    ):
+        """A raised third_party_level must not silence agentic.* warnings.
+
+        capture_third_party stays on, but the operator has raised
+        third_party_level above WARNING to quiet noisy externals (chromadb,
+        httpx). Before this fix, "agentic" had no explicit level of its own,
+        so it inherited the real root's raised level and the WARNING record
+        was never even created -- and even fixing that alone is not enough,
+        because _ThirdPartyFloor's filter would still hold a WARNING record
+        back at a floor above WARNING. Both the logger's own level and the
+        filter need the agentic exemption for this to actually work.
+        """
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+        cyclaw_logger = logging.getLogger("cyclaw")
+        agentic_logger = logging.getLogger("agentic")
+        real_root = logging.getLogger()
+        before_root = list(real_root.handlers)
+        before_cyclaw = list(cyclaw_logger.handlers)
+        before_agentic = list(agentic_logger.handlers)
+        try:
+            logger.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": True,
+                "third_party_level": "ERROR",
+            }})
+            logging.getLogger("agentic.fsconnect.trash").warning("agentic-raised-floor-marker")
+            for handler in real_root.handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8")
+        finally:
+            for logger_obj, before in (
+                (real_root, before_root),
+                (cyclaw_logger, before_cyclaw),
+                (agentic_logger, before_agentic),
+            ):
+                for handler in list(logger_obj.handlers):
+                    if handler not in before:
+                        logger_obj.removeHandler(handler)
+                        handler.close()
+            logger._logging_initialized = False
+        assert "agentic-raised-floor-marker" in text
+
+    def test_agentic_sub_warning_records_still_respect_a_raised_floor(
+        self, tmp_path, monkeypatch,
+    ):
+        """The agentic exemption is WARNING+ only, not a blanket passthrough.
+
+        Unlike cyclaw.*, agentic's DEBUG/INFO output has not been audited
+        line-by-line for secrets (see _ThirdPartyFloor's docstring), so a
+        sub-WARNING agentic record must still be held back by a raised
+        third_party_level exactly like a genuine third-party one would be.
+        """
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+        cyclaw_logger = logging.getLogger("cyclaw")
+        agentic_logger = logging.getLogger("agentic")
+        real_root = logging.getLogger()
+        before_root = list(real_root.handlers)
+        before_cyclaw = list(cyclaw_logger.handlers)
+        before_agentic = list(agentic_logger.handlers)
+        try:
+            logger.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": True,
+                "third_party_level": "ERROR",
+            }})
+            logging.getLogger("agentic.fsconnect.trash").info("agentic-info-below-floor-marker")
+            for handler in real_root.handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        finally:
+            for logger_obj, before in (
+                (real_root, before_root),
+                (cyclaw_logger, before_cyclaw),
+                (agentic_logger, before_agentic),
+            ):
+                for handler in list(logger_obj.handlers):
+                    if handler not in before:
+                        logger_obj.removeHandler(handler)
+                        handler.close()
+            logger._logging_initialized = False
+        assert "agentic-info-below-floor-marker" not in text
