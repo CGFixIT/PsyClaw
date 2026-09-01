@@ -40,6 +40,7 @@ import threading
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,32 @@ class RateLimiter:
             self._pg_conn = psycopg.connect(_harden_pg_conninfo(self._db_url), autocommit=True)
         return self._pg_conn
 
+    def _sqlite_write(self, sql: str, params: tuple, *, many: bool = False) -> None:
+        """Run one write on the cached sqlite connection, rolling back on error.
+
+        sqlite3's default ``isolation_level=""`` opens a transaction implicitly
+        on the first DML statement, so a failed ``commit()`` (SQLITE_BUSY while
+        another process holds a read transaction, a full disk) leaves this
+        long-lived connection *inside* that transaction. It would keep a write
+        lock other limiter instances cannot get past, and the next successful
+        commit would flush the earlier failed request's hit alongside its own.
+
+        The per-write connection this replaced was closed in a ``finally``,
+        which rolled back implicitly; caching the connection removed that for
+        free, so it is restored explicitly here.
+        """
+        conn = self._sqlite_connection()
+        try:
+            if many:
+                conn.executemany(sql, params)
+            else:
+                conn.execute(sql, params)
+            conn.commit()
+        except Exception:
+            with suppress(sqlite3.Error):
+                conn.rollback()
+            raise
+
     def _sqlite_connection(self) -> sqlite3.Connection:
         """Lazily open + cache the single sqlite connection.
 
@@ -170,9 +197,7 @@ class RateLimiter:
         # _sqlite_connection) and reused for the object's lifetime; close()
         # releases it. It is deliberately NOT closed per statement -- see
         # _sqlite_connection's docstring for why that cost mattered.
-        conn = self._sqlite_connection()
-        conn.execute(self._ddl())
-        conn.commit()
+        self._sqlite_write(self._ddl(), ())
 
     def _load_from_db(self) -> None:
         if not self._backend:
@@ -214,12 +239,20 @@ class RateLimiter:
         if self._backend == "postgres":
             self._pg_connection().execute(self._upsert_sql(), params)
             return
-        conn = self._sqlite_connection()
-        conn.execute(self._upsert_sql(), params)
-        conn.commit()
+        self._sqlite_write(self._upsert_sql(), params)
 
-    def _delete_rows(self, ips: list[str], now: float) -> None:
-        """Delete persisted rows for IPs that are still expired in the BACKEND.
+    def _delete_rows(self, ips: list[str], now: float) -> set[str]:
+        """Delete expired rows; return the candidates whose rows SURVIVED.
+
+        A survivor is a candidate another writer refreshed after this instance
+        took its snapshot: the conditional DELETE correctly matches zero rows
+        for it. The caller must keep those in ``_hits``, because ``_hits`` is
+        the only thing that can nominate a row for deletion -- evicting one
+        whose row is still on disk means that if the refreshing instance exits,
+        nothing here can ever nominate it again and it persists until restart.
+
+        A candidate with no row at all is NOT a survivor: it is already gone,
+        so the caller should drop it from memory as usual.
 
         Caller must hold ``self._lock``.
 
@@ -250,19 +283,28 @@ class RateLimiter:
         placeholder run. Values are always bound as parameters.
         """
         if not self._backend:
-            return
+            return set()
         threshold = now - self.window_seconds
         rows = [(ip, threshold) for ip in ips]
+        candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --
             # Connection has execute() but no executemany(), so calling it on
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
                 cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep <= %s", rows)
-            return
-        conn = self._sqlite_connection()
-        conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
-        conn.commit()
+                cur.execute("SELECT ip FROM rate_hits")
+                remaining = {row[0] for row in cur.fetchall()}
+            return candidates & remaining
+        self._sqlite_write("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows, many=True)
+        # One bounded scan rather than a per-IP probe: this table is kept small
+        # by the very eviction running here, and it is the same read
+        # _load_from_db already does at construction. Avoids an IN (...) clause,
+        # which would need interpolated placeholders (B608/S608).
+        remaining = {
+            row[0] for row in self._sqlite_connection().execute("SELECT ip FROM rate_hits")
+        }
+        return candidates & remaining
 
     # --------------------------------------------------------------------- logic
     def _sweep(self, now: float) -> None:
@@ -294,9 +336,16 @@ class RateLimiter:
         # orphaned until a restart, which is exactly the unbounded growth this
         # eviction exists to remove. Keeping them in `_hits` when the delete
         # fails means the next sweep nominates them again.
+        survivors: set[str] = set()
         if stale:
-            self._delete_rows(stale, now)
+            survivors = self._delete_rows(stale, now)
         for ip in stale:
+            if ip in survivors:
+                # Another writer refreshed this row after our snapshot, so the
+                # conditional DELETE spared it. Keep tracking it: dropping it
+                # here would leave the row on disk with nothing able to
+                # nominate it once that writer exits.
+                continue
             del self._hits[ip]
 
     def allow(self, client_ip: str) -> bool:

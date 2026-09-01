@@ -511,6 +511,13 @@ class TestPersistence:
             def executemany(self, sql, rows):
                 executed.append((sql, list(rows)))
 
+            def execute(self, sql, params=None):
+                # The survivor probe after the batch delete.
+                executed.append((sql, params))
+
+            def fetchall(self):
+                return []
+
         class _FakeConnection:
             # Deliberately no executemany here -- psycopg.Connection has none.
             def cursor(self):
@@ -523,8 +530,86 @@ class TestPersistence:
 
         rl._delete_rows(["10.0.0.1", "10.0.0.2"], now=100.0)
 
-        assert len(executed) == 1, "batch delete must issue exactly one statement"
         sql, rows = executed[0]
         assert "DELETE FROM rate_hits" in sql
         assert "last_sweep <" in sql, "the delete must stay conditional on the persisted timestamp"
         assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
+
+
+    def test_refreshed_row_stays_nominatable_after_a_no_op_delete(self, tmp_path):
+        """A conditional DELETE that matches zero rows must not drop the candidate.
+
+        When another writer refreshes a row after this instance's snapshot, the
+        `last_sweep <= threshold` guard correctly spares it -- but evicting the
+        candidate from `_hits` anyway means that if the refreshing instance
+        exits, nothing here can nominate that row again and it persists until
+        restart.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        first = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")
+
+        clock.advance(30.0)
+        second = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")   # refreshed -> second's DELETE matches zero rows
+        second.allow("10.0.0.99")
+
+        assert "10.0.0.9" in _persisted_ips(db)
+        assert "10.0.0.9" in second._hits, (
+            "the spared row was dropped from memory, so this instance can never "
+            "nominate it again once the refreshing writer exits"
+        )
+
+        # Retained means it can still be evicted once it genuinely expires.
+        clock.advance(60.0)
+        second.allow("10.0.0.98")
+        assert "10.0.0.9" not in _persisted_ips(db)
+
+    def test_failed_commit_rolls_back_the_cached_connection(self, tmp_path):
+        """A failed commit must not leave the cached connection mid-transaction.
+
+        sqlite3 opens a transaction implicitly on the first DML statement, so a
+        raising commit() would otherwise leave this long-lived connection
+        holding a write lock -- and the next successful commit would flush the
+        failed request's hit alongside its own. The per-write connection this
+        replaced got that rollback free from `finally: close()`.
+        """
+
+        class _FlakyCommit:
+            """Delegates to a real connection; sqlite3's own commit is read-only."""
+
+            def __init__(self, real: sqlite3.Connection) -> None:
+                self._real = real
+                self.calls = 0
+                self.fail_next = False
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def commit(self):
+                self.calls += 1
+                if self.fail_next:
+                    raise sqlite3.OperationalError("database is locked")
+                return self._real.commit()
+
+        db = tmp_path / "rl.db"
+        rl = RateLimiter(max_requests=5, window_seconds=60, db_path=str(db))
+        rl.allow("10.0.0.1")
+
+        flaky = _FlakyCommit(rl._sqlite_connection())
+        rl._sqlite_conn = flaky  # type: ignore[assignment]
+
+        flaky.fail_next = True
+        with pytest.raises(sqlite3.OperationalError):
+            rl.allow("10.0.0.2")
+        assert not flaky.in_transaction, (
+            "a failed commit left the cached connection inside a write transaction"
+        )
+
+        # The rolled-back hit must not reappear on the next successful write.
+        flaky.fail_next = False
+        rl.allow("10.0.0.3")
+        assert "10.0.0.2" not in _persisted_ips(db), (
+            "the rolled-back hit was committed by a later request"
+        )
