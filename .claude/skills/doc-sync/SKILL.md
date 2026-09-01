@@ -40,6 +40,7 @@ them wrongly. Exit `0` no drift · `2` drift found · `3` env error.
 | D4 | `banned_patterns` length | The "`<n>` patterns" claim is consistent across CLAUDE.md, config.yaml, guardrails, fsconnect |
 | D5 | `gate.py`/`gate_ops.py`/`gate_auth.py`/`gate_memory.py` `@app` routes | Every API route is named in CLAUDE.md, and `setup-guide.md`'s REST section matches (both directions: undocumented and phantom routes) |
 | D6 | `.claude/settings.json` hooks | A "stop hook" claim is either backed by a wired Stop hook or accurately attributed to the session runtime |
+| D7 | `config.yaml` + `macos/ollama-mlx.env` | `docs/m5-48gb-coding-expectations.md` cites the shipped local model tag, `max_tokens`, timeouts, `max_context_tokens`, and `OLLAMA_CONTEXT_LENGTH`. Citation only; the no-stall inequality lives in config-guard C12 and `tests/test_m5_ollama_runtime_contract.py` |
 
 ### Step 2 — Reconcile each mechanical drift item
 
@@ -120,7 +121,7 @@ Seed list so the first run has context — reconcile these:
   but-absent behavior is a user decision — flag it, don't "make it true" by
   editing config or code under the guise of a doc sync.
 - **Never edit `config.yaml` values, graph edges, or code to silence a drift
-  line.** D3/D4/D5 drift is fixed in the doc, not the source.
+  line.** D3/D4/D5/D7 drift is fixed in the doc, not the source.
 - Wiring a hook (to resolve D6 by making the claim true) is a `settings.json`
   change — confirm with the user first.
 
@@ -131,6 +132,9 @@ Seed list so the first run has context — reconcile these:
 - **D3 only flags a WRONG cited number, not an undocumented one.** Not every
   tunable must be in CLAUDE.md; the check fires only when the doc discusses a key
   but shows a value that no longer matches config.
+- **D7 is citation presence, not arithmetic.** It does not prove
+  `max_context_tokens + max_tokens + 1500 <= OLLAMA_CONTEXT_LENGTH`. That
+  relationship is C12 (advisory print) and the pytest contract above.
 - **D4 ignores small numbers** (<6) to avoid matching unrelated "3 patterns"
   phrasing; it targets the documented set size.
 - **Run it after, not before, a rename.** If you rename a skill or route, the
