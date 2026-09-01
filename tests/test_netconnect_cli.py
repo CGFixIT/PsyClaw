@@ -13,14 +13,13 @@ import yaml
 import utils.logger as logger_mod
 from agentic.netconnect import cli
 from agentic.netconnect.selftest import run_self_test
-from utils.logger import reset_config_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
 
 
 def _cfg(tmp_path: Path, block: dict) -> str:
@@ -56,7 +55,7 @@ def test_status_surfaces_unknown_config_keys(tmp_path, capsys):
 
     # And a clean config stays silent on stderr. _cfg reuses the same path and
     # _get_config caches by path, so drop the cache before the reload.
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     clean = _cfg(tmp_path, {"enabled": False})
     assert cli.main(["--config", clean, "status"]) == 0
     assert "unknown netconnect keys" not in capsys.readouterr().err

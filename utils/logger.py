@@ -135,6 +135,23 @@ def setup_logging(cfg: dict | None = None) -> None:
             fh = logging.FileHandler(anchored_log_file, encoding="utf-8")
             fh.setFormatter(fmt)
             root.addHandler(fh)
+            # agentic.* (and the other out-of-band packages' loggers) are
+            # first-party CyClaw code -- I6 only forbids the core six *importing*
+            # them, it says nothing about their log records being "third-party".
+            # With capture_third_party off, the real root logger has no handler
+            # of its own (see above), so agentic.* records -- which never
+            # propagate through the "cyclaw" logger, only through their own
+            # "agentic" ancestor -- would otherwise go nowhere durable even
+            # though an operator turning this switch off is asking to silence
+            # noisy externals (chromadb/httpx/uvicorn/langgraph), not CyClaw's
+            # own out-of-band subsystems. Reuse the same handler rather than
+            # opening a second fd on the same path. setLevel mirrors the
+            # "cyclaw" logger above -- without it "agentic" stays at its
+            # inherited default (WARNING), silently dropping INFO/DEBUG
+            # agentic.* records even when logging.level asks for them.
+            agentic_logger = logging.getLogger("agentic")
+            agentic_logger.setLevel(level)
+            agentic_logger.addHandler(fh)
 
     _logging_initialized = True
 

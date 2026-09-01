@@ -12,7 +12,6 @@ import yaml
 import utils.logger as logger_mod
 from agentic import cli
 from utils.errors import AgenticConfigError, AgenticError, AgenticWriteRefused
-from utils.logger import reset_config_cache
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,9 +38,9 @@ def _write_config(tmp_path: Path, *, enabled: bool) -> str:
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     for path in (REPO_ROOT / "data" / "agentic").glob("_pytest_cli_*.json*"):
         path.unlink(missing_ok=True)
 

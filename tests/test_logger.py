@@ -318,3 +318,49 @@ class TestThirdPartyLogCapture:
                         handler.close()
             logger._logging_initialized = False
         assert text.count("offline-marker") == 1
+
+    def test_agentic_still_reaches_the_file_when_third_party_capture_is_off(
+        self, tmp_path, monkeypatch,
+    ):
+        """agentic.* is first-party CyClaw code, not a third-party library.
+
+        Before this fix, turning capture_third_party off left setup_logging
+        owning a FileHandler on only the "cyclaw" logger -- agentic.* records
+        (agentic.fsconnect.pathsafe, agentic.fsconnect.trash, etc.) propagate
+        through their own "agentic" ancestor instead, which had no handler on
+        this branch, so they reached only Python's stderr last-resort handler
+        even though the operator only meant to silence noisy externals like
+        chromadb/httpx, not CyClaw's own out-of-band subsystems (codex review
+        on #1239).
+        """
+
+        log_path = tmp_path / "cyclaw.log"
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+        cyclaw_logger = logging.getLogger("cyclaw")
+        agentic_logger = logging.getLogger("agentic")
+        real_root = logging.getLogger()
+        before_root = list(real_root.handlers)
+        before_cyclaw = list(cyclaw_logger.handlers)
+        before_agentic = list(agentic_logger.handlers)
+        try:
+            logger.setup_logging({"logging": {
+                "level": "DEBUG",
+                "log_file": str(log_path),
+                "capture_third_party": False,
+            }})
+            logging.getLogger("agentic.fsconnect.pathsafe").warning("agentic-offline-marker")
+            for handler in agentic_logger.handlers:
+                handler.flush()
+            text = log_path.read_text(encoding="utf-8")
+        finally:
+            for logger_obj, before in (
+                (real_root, before_root),
+                (cyclaw_logger, before_cyclaw),
+                (agentic_logger, before_agentic),
+            ):
+                for handler in list(logger_obj.handlers):
+                    if handler not in before:
+                        logger_obj.removeHandler(handler)
+                        handler.close()
+            logger._logging_initialized = False
+        assert text.count("agentic-offline-marker") == 1

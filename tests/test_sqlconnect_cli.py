@@ -11,14 +11,13 @@ import yaml
 import utils.logger as logger_mod
 from agentic.sqlconnect import cli
 from agentic.sqlconnect.selftest import run_self_test
-from utils.logger import reset_config_cache
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
 
 
 def _cfg(tmp_path: Path, block: dict) -> str:

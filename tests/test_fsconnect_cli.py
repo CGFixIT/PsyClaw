@@ -13,16 +13,15 @@ import yaml
 import utils.logger as logger_mod
 from agentic.fsconnect import cli
 from agentic.fsconnect import osutil
-from utils.logger import reset_config_cache
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX fixtures")
 
 
 @pytest.fixture(autouse=True)
 def _reset():
-    reset_config_cache()
+    logger_mod.reset_config_cache()
     yield
-    reset_config_cache()
+    logger_mod.reset_config_cache()
 
 
 def _cfg(tmp_path: Path, fsblock: dict) -> str:
