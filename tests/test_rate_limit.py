@@ -45,6 +45,15 @@ class _SlowHits(defaultdict):
         return value
 
 
+def _persisted_ips(db_path) -> set[str]:
+    """IPs currently present in the persisted rate_hits table."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        return {row[0] for row in conn.execute("SELECT ip FROM rate_hits")}
+    finally:
+        conn.close()
+
+
 def _row_count(db_path) -> int:
     """Rows currently in the persisted rate_hits table."""
     conn = sqlite3.connect(str(db_path))
@@ -367,3 +376,86 @@ class TestPersistence:
         # Idempotent, and the limiter still works (it reopens on demand).
         rl.close()
         assert rl.allow("10.0.0.2") is True
+
+
+    def test_stale_sweep_never_deletes_a_window_another_instance_refreshed(self, tmp_path):
+        """One limiter's stale snapshot must not destroy another's live window.
+
+        Several limiters can share one backend (agentic/fsconnect/writer.py
+        builds a per-root and a global limiter against the same file, and
+        separate processes can point at it too). `_hits` is a snapshot taken at
+        construction, so "stale according to me" is not "stale on disk".
+        Deleting by IP alone handed the budget back to a client the persisted
+        limiter was actively throttling.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        first = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        first.allow("10.0.0.9")
+
+        # Quiet past the window, then a second limiter loads the table -- its
+        # snapshot shows 10.0.0.9 as stale.
+        clock.advance(30.0)
+        second = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+
+        # The first limiter records a fresh hit: 10.0.0.9's window is live again.
+        first.allow("10.0.0.9")
+
+        # The second limiter now sweeps off its stale snapshot.
+        second.allow("10.0.0.99")
+
+        persisted = _persisted_ips(db)
+        assert "10.0.0.9" in persisted, (
+            "a stale snapshot deleted a window another instance had just refreshed"
+        )
+        assert "10.0.0.99" in persisted
+
+    def test_sweep_still_evicts_rows_that_are_stale_on_disk(self, tmp_path):
+        """The last_sweep guard must not defeat eviction for genuinely idle IPs."""
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock, db_path=str(db))
+        for n in range(20):
+            rl.allow(f"10.0.0.{n}")
+        clock.advance(30.0)
+        rl.allow("192.168.1.1")
+        assert _row_count(db) == 1, "rows stale on disk must still be evicted"
+
+    def test_postgres_batch_delete_goes_through_a_cursor(self, tmp_path):
+        """psycopg 3 puts executemany on the cursor, not the connection.
+
+        Connection has execute() but no executemany(), so calling it there
+        raises AttributeError on the first sweep that finds a stale IP -- and
+        the Postgres tests need a live server, so CI skips them. This stub
+        mirrors psycopg's real surface (cursor-only executemany) so the misuse
+        fails here instead.
+        """
+        executed: list[tuple[str, list]] = []
+
+        class _FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def executemany(self, sql, rows):
+                executed.append((sql, list(rows)))
+
+        class _FakeConnection:
+            # Deliberately no executemany here -- psycopg.Connection has none.
+            def cursor(self):
+                return _FakeCursor()
+
+        rl = RateLimiter(max_requests=5, window_seconds=10, clock=FakeClock(), db_path=str(tmp_path / "x.db"))
+        rl._backend = "postgres"
+        rl._ph = "%s"
+        rl._pg_conn = _FakeConnection()
+
+        rl._delete_rows(["10.0.0.1", "10.0.0.2"], now=100.0)
+
+        assert len(executed) == 1, "batch delete must issue exactly one statement"
+        sql, rows = executed[0]
+        assert "DELETE FROM rate_hits" in sql
+        assert "last_sweep <" in sql, "the delete must stay conditional on the persisted timestamp"
+        assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]

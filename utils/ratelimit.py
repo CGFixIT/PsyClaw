@@ -218,23 +218,43 @@ class RateLimiter:
         conn.execute(self._upsert_sql(), params)
         conn.commit()
 
-    def _delete_rows(self, ips: list[str]) -> None:
-        """Delete the given IPs' persisted rows. Caller must hold ``self._lock``.
+    def _delete_rows(self, ips: list[str], now: float) -> None:
+        """Delete persisted rows for IPs that are still expired in the BACKEND.
+
+        Caller must hold ``self._lock``.
+
+        ``ips`` comes from this instance's in-memory map, which is a snapshot
+        taken when the instance was constructed. Several limiters can share one
+        backend -- ``agentic/fsconnect/writer.py`` builds a per-root and a
+        global limiter against the same file, and separate processes can point
+        at it too -- so "stale according to my snapshot" is not the same as
+        "stale on disk". Deleting by IP alone let one instance destroy a live
+        window another had just written, which would hand an abuser back the
+        budget the persisted limiter exists to hold.
+
+        The ``last_sweep < threshold`` guard makes the delete conditional on
+        the persisted row still being expired: ``last_sweep`` holds the time of
+        that row's last write (see ``_persist``), so a row refreshed inside the
+        current window survives someone else's stale sweep.
 
         Both statements are written out in full rather than built from
         ``self._ph``: an f-string here would be flagged B608/S608 (as
         ``_upsert_sql`` already is) even though the interpolated text is only a
-        placeholder run, and executemany over a one-parameter DELETE needs no
-        interpolation at all. The IPs are always bound as parameters.
+        placeholder run. Values are always bound as parameters.
         """
         if not self._backend:
             return
-        rows = [(ip,) for ip in ips]
+        threshold = now - self.window_seconds
+        rows = [(ip, threshold) for ip in ips]
         if self._backend == "postgres":
-            self._pg_connection().executemany("DELETE FROM rate_hits WHERE ip = %s", rows)
+            # psycopg 3 puts executemany on the CURSOR, not the connection --
+            # Connection has execute() but no executemany(), so calling it on
+            # the connection raises AttributeError on the first sweep.
+            with self._pg_connection().cursor() as cur:
+                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep < %s", rows)
             return
         conn = self._sqlite_connection()
-        conn.executemany("DELETE FROM rate_hits WHERE ip = ?", rows)
+        conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep < ?", rows)
         conn.commit()
 
     # --------------------------------------------------------------------- logic
@@ -261,7 +281,7 @@ class RateLimiter:
         # are precisely those whose timestamps are all outside the window, so
         # they carry no live rate-limit state for any process to lose.
         if stale:
-            self._delete_rows(stale)
+            self._delete_rows(stale, now)
 
     def allow(self, client_ip: str) -> bool:
         """Return True if the request is within the limit, else False.
