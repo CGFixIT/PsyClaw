@@ -410,6 +410,32 @@ class TestPersistence:
         )
         assert "10.0.0.99" in persisted
 
+    def test_row_written_exactly_at_the_window_boundary_is_evicted(self, tmp_path):
+        """The DELETE boundary must match _sweep's, or the row is orphaned.
+
+        _sweep calls a timestamp stale at `now - t >= window_seconds`
+        (inclusive). An exclusive `last_sweep < threshold` in the DELETE
+        disagreed at exactly `now - window_seconds`: the IP was dropped from
+        `_hits` while its row was spared, so nothing could nominate it again
+        and it sat on disk forever -- the unbounded growth this eviction
+        exists to remove. Reachable with integer or injected clocks and
+        interval-aligned calls.
+        """
+        db = tmp_path / "rl.db"
+        clock = FakeClock()
+        rl = RateLimiter(max_requests=5, window_seconds=10, clock=clock, db_path=str(db))
+        rl.allow("10.0.0.7")
+
+        # Land exactly on the boundary: last_sweep == now - window_seconds.
+        clock.advance(10.0)
+        rl.allow("10.0.0.8")
+
+        assert "10.0.0.7" not in rl._hits, "sweep treats the boundary as stale (inclusive)"
+        assert _persisted_ips(db) == {"10.0.0.8"}, (
+            "the boundary row was dropped from memory but left on disk, where "
+            "nothing can ever nominate it again"
+        )
+
     def test_sweep_still_evicts_rows_that_are_stale_on_disk(self, tmp_path):
         """The last_sweep guard must not defeat eviction for genuinely idle IPs."""
         db = tmp_path / "rl.db"

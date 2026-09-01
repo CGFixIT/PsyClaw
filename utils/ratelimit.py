@@ -232,10 +232,17 @@ class RateLimiter:
         window another had just written, which would hand an abuser back the
         budget the persisted limiter exists to hold.
 
-        The ``last_sweep < threshold`` guard makes the delete conditional on
+        The ``last_sweep <= threshold`` guard makes the delete conditional on
         the persisted row still being expired: ``last_sweep`` holds the time of
         that row's last write (see ``_persist``), so a row refreshed inside the
         current window survives someone else's stale sweep.
+
+        The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
+        stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
+        disagreed at exactly ``now - window_seconds``: ``_sweep`` dropped the IP
+        from ``_hits`` while the DELETE spared the row, so nothing could ever
+        nominate it again and it sat on disk forever -- reintroducing the
+        unbounded growth this eviction exists to remove.
 
         Both statements are written out in full rather than built from
         ``self._ph``: an f-string here would be flagged B608/S608 (as
@@ -251,10 +258,10 @@ class RateLimiter:
             # Connection has execute() but no executemany(), so calling it on
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
-                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep < %s", rows)
+                cur.executemany("DELETE FROM rate_hits WHERE ip = %s AND last_sweep <= %s", rows)
             return
         conn = self._sqlite_connection()
-        conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep < ?", rows)
+        conn.executemany("DELETE FROM rate_hits WHERE ip = ? AND last_sweep <= ?", rows)
         conn.commit()
 
     # --------------------------------------------------------------------- logic
