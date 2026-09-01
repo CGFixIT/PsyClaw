@@ -47,6 +47,17 @@ langgraph==1.2.9
 langchain-core==1.5.0
 chromadb==1.5.9  # CVE-2026-45829 (Critical pre-auth RCE; risk accepted ONLY for local/offline air-gapped PersistentClient embedded mode). See SECURITY.md + pip-audit.
 sentence-transformers==5.6.0
+# Transitive of chromadb (which asks only for onnxruntime>=1.14.1) and of
+# fastembed under the guardrails extra. Bounded here rather than left to the
+# resolver because CyClaw's ONNX telemetry control is version-gated:
+# ORT_DISABLE_TELEMETRY (utils/telemetry_kill.py) only governs the non-Windows
+# 1DS path from onnxruntime v1.29.0 onward (PRs #27379/#29872), so any resolve
+# below that floor silently leaves the env half of the defence inert on macOS
+# and Linux -- the primary and CI targets. Pinned in constraints.txt only, NOT
+# pyproject/requirements: utils/onnx_telemetry.py treats onnxruntime as
+# optional and absent-safe, so it must stay a ceiling on what the resolver
+# picks rather than become a declared install target.
+onnxruntime==1.29.0
 # Direct imports (retrieval/embeddings.py; gate.py/harness/server.py), promoted
 # from implicit sentence-transformers/fastapi transitives to explicit pins --
 # see pyproject.toml [project.dependencies] for why.

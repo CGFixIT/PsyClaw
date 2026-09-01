@@ -151,6 +151,12 @@ TRANSITIVE_VENDORS_TO_REPORT = ("huggingface_hub", "onnxruntime", "opentelemetry
 # unbounded vendor can change its telemetry contract under CyClaw silently.
 UNBOUNDED_TELEMETRY_CAPABLE = ("onnxruntime", "fastembed", "transformers")
 
+# ORT_DISABLE_TELEMETRY only governs onnxruntime's non-Windows 1DS path from
+# this release onward (v1.29.0, PRs #27379/#29872). A resolve below it leaves
+# the env half of the ONNX control inert on macOS and Linux, so a bound that
+# merely exists is not enough -- it has to clear this floor.
+ORT_TELEMETRY_ENV_FLOOR = (1, 29, 0)
+
 STALE_AFTER_DAYS = 120
 
 _VERIFIED_DATE_RE = re.compile(r"[Vv]erified\s+(\d{4}-\d{2}-\d{2})")
@@ -234,7 +240,9 @@ INVENTORY: tuple[dict[str, object], ...] = (
         "name": "onnxruntime", "category": 1,
         "controls": {"ORT_DISABLE_TELEMETRY": "1"},
         "url": "https://github.com/microsoft/onnxruntime/blob/main/docs/Privacy.md",
-        "versions": "transitive (chromadb; fastembed under the guardrails extra) -- UNBOUNDED, see T13 warning",
+        "versions": "transitive (chromadb, which asks only for >=1.14.1; fastembed under the "
+                    "guardrails extra) -- bounded at ==1.29.0 in constraints.txt so the env "
+                    "control cannot be resolved below the release that introduced it",
         "enforcement": "env before import (process-lifetime control for the non-Windows 1DS path added in "
                        "v1.29.0, PRs #27379/#29872) + onnxruntime.disable_telemetry_events() at the load "
                        "seams (utils/onnx_telemetry.py) before session construction. Windows is "
@@ -1037,6 +1045,10 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
         if path.exists():
             components |= set(_parse_requirement_names(path.read_text(encoding="utf-8").splitlines()))
     components |= _parse_environment_yml_names(root / "environment.yml")
+    # Snapshot before the external-executable names join: only a manifest can
+    # bind a Python package's version, so that is what the bound check below
+    # may consult.
+    manifest_bound = set(components)
     components |= set(KNOWN_EXTERNAL_COMPONENTS)
     components.discard("cyclaw")
     unclassified = sorted(
@@ -1053,13 +1065,61 @@ def check_classification_inventory(root: Path, strict: bool) -> None:
     else:
         ok("T13", f"all {len(components)} declared components resolve to a classification row")
     for name in UNBOUNDED_TELEMETRY_CAPABLE:
-        # Recorded review findings (issue #1135): acknowledged here and in the
-        # inventory evidence, reported every run so they cannot be forgotten,
-        # but not a per-run failure -- bounding them is a dependency decision,
-        # not a checker fix. A NEW unclassified name still trips the sweep
-        # above.
-        info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
-                    "standing review finding (its telemetry contract can change under CyClaw silently)")
+        # Recorded review findings (issue #1135): bounding these is a
+        # dependency decision, not a checker fix, so an unbound one is
+        # reported every run rather than failing it. Consulting the manifests
+        # instead of asserting the list is what keeps this honest in both
+        # directions -- a name that gains a bound stops being reported, and
+        # one that loses it starts again. A NEW unclassified name still trips
+        # the sweep above.
+        if name not in manifest_bound:
+            info("T13", f"telemetry-capable transitive {name!r} has no version bound in any manifest -- "
+                        "standing review finding (its telemetry contract can change under CyClaw silently)")
+            continue
+        if name == "onnxruntime":
+            _check_ort_floor(root)
+            continue
+        ok("T13", f"telemetry-capable transitive {name!r} carries a version bound in a manifest")
+
+
+def _check_ort_floor(root: Path) -> None:
+    """Verify the onnxruntime bound actually clears the telemetry-control floor.
+
+    A bound that exists but sits below v1.29.0 is worse than none: the
+    inventory would read as protected while ORT_DISABLE_TELEMETRY governs
+    nothing on macOS/Linux.
+    """
+    pinned: str | None = None
+    for manifest in ("constraints.txt", "requirements.txt"):
+        path = root / manifest
+        if not path.exists():
+            continue
+        match = re.search(
+            r"^onnxruntime\s*==\s*([0-9][^\s#]*)", path.read_text(encoding="utf-8"), re.MULTILINE
+        )
+        if match:
+            pinned = match.group(1)
+            break
+    if pinned is None:
+        info("T13", "onnxruntime is named in a manifest but not with an exact '==' pin -- "
+                    "cannot verify it clears the telemetry-control floor")
+        return
+    try:
+        # Pad to three components: a two-part pin like "1.29" would otherwise
+        # compare as (1, 29) < (1, 29, 0) and fail a version that clears the floor.
+        parts = [int(part) for part in pinned.split(".")[:3]]
+        parsed = tuple(parts + [0] * (3 - len(parts)))
+    except ValueError:
+        warn("T13", f"onnxruntime pin {pinned!r} is not a parseable version")
+        return
+    floor = ".".join(str(part) for part in ORT_TELEMETRY_ENV_FLOOR)
+    if parsed < ORT_TELEMETRY_ENV_FLOOR:
+        fail("T13", f"onnxruntime is pinned {pinned}, below the {floor} floor where "
+                    "ORT_DISABLE_TELEMETRY starts governing the non-Windows 1DS path -- "
+                    "the env half of the ONNX control is inert on macOS/Linux at this pin")
+        return
+    ok("T13", f"onnxruntime pinned {pinned} (>= {floor}, where ORT_DISABLE_TELEMETRY "
+              "governs the non-Windows 1DS path)")
 
 
 def check_onnx_seams(root: Path) -> None:
