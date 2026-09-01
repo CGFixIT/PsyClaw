@@ -45,22 +45,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Fallback used by _delete_rows for a row whose persisted window_seconds is
-# unknown (not a positive number) -- see that method's docstring. Fixed and
-# deliberately generous rather than derived from any single instance's own
-# window_seconds: a mixed-policy rolling upgrade can have an unmigrated
-# writer with a LONGER real window than whichever upgraded process happens
-# to run the next sweep, and using that sweeper's own (possibly much
-# shorter) window as the fallback reproduces the exact cross-policy eviction
-# bug this module exists to fix, just for the unknown-window case instead of
-# the known-window one (codex review on #1244). Any realistic
-# api.rate_limit window for this per-IP HTTP limiter is seconds to low
-# minutes (the shipped default is 60 requests per 60 seconds); 24 hours
-# comfortably outlasts any plausible configured value while still bounding
-# growth -- a genuinely abandoned unknown-window row still converges, it
-# just isn't assumed dead the instant one sweep's own window has elapsed.
-_UNKNOWN_WINDOW_GRACE_SECONDS = 86400
-
 
 def _is_pg_dsn(value: str | None) -> bool:
     return bool(value) and (value.startswith("postgresql") or value.startswith("postgres"))
@@ -358,30 +342,59 @@ class RateLimiter:
         nominate it again and it sat on disk forever -- reintroducing the
         unbounded growth this eviction exists to remove.
 
-        A row's ``window_seconds`` is treated as unknown (not "expired 0
-        seconds after its last write") whenever it is not a positive number,
-        falling back to the fixed ``_UNKNOWN_WINDOW_GRACE_SECONDS`` for
-        exactly those rows -- NOT to this sweeping instance's own
-        ``window_seconds``, which was this method's first attempt at the
-        fallback and turned out to reproduce the very bug this eviction
-        rewrite exists to fix: a short-window sweeper is exactly as wrong a
-        stand-in for an unknown policy as it is for a KNOWN longer one (codex
-        review on #1244, second round). Two things can put a row in the
-        unknown state, not only the migration default: a rolling upgrade
-        where a pre-migration process is still writing rows with SQLite's
-        ``INSERT OR REPLACE`` (which resets every unlisted column, including
-        one it doesn't know exists, to its DEFAULT on every write, not just
-        the first) or Postgres's INSERT-new-row path, can zero out a row's
-        persisted window on ANY write while an old and a new binary briefly
-        coexist against the same backend, not only at migration time. That
-        old writer's real intended window is unknowable -- it might be
-        LONGER than any currently-running upgraded process's own window --
-        so nothing this instance knows about itself is a safe substitute;
-        see ``_UNKNOWN_WINDOW_GRACE_SECONDS`` for why a large fixed constant
-        is. This does not weaken the fix above for the original reported bug
-        (two CURRENT-version policies with different, both-positive
-        ``window_seconds`` sharing one backend), which still evaluates every
-        row with a real value against that row's own persisted window.
+        A row whose ``window_seconds`` is not a positive number is NEVER
+        deleted here -- its policy is unknown, and no time-based guess is
+        safe: a fixed grace period was this method's second attempt (codex
+        review on #1244, second round) and still failed, because a legacy
+        writer's real configured window can be longer than ANY fixed
+        constant this module could reasonably pick (third round) --
+        ``RateLimiter`` imposes no ceiling on ``window_seconds``, so "pick a
+        generous-enough number" is not a sound fix, only a bigger version of
+        the same bug. An unknown-window row instead survives every sweep
+        unconditionally until SOME instance persists a real (positive)
+        ``window_seconds`` for it via ``_persist`` -- at which point it is
+        governed by the per-row logic below like any other row. The cost is
+        bounded, not unbounded: a row only enters the unknown state while an
+        old (pre-migration) writer is actively touching it, and it only
+        stays there for IPs that stop sending requests entirely during that
+        same window -- a one-time, bounded debt from the coexistence period,
+        not ongoing growth. ``_ensure_window_seconds_column`` covers what a
+        table predating this column does for rows it never wrote.
+
+        Known residual gap (Postgres only, not fixed here): Postgres's
+        ``ON CONFLICT DO UPDATE`` only overwrites the columns it lists, so an
+        old writer's SET clause (timestamps, last_sweep -- see
+        ``_upsert_sql``) leaves an EXISTING positive ``window_seconds``
+        untouched even though it no longer reflects who is actually
+        governing the row. If an upgraded process creates a row first and an
+        old process later refreshes it, the row's ``window_seconds`` is
+        stale metadata from the FIRST writer, not the CURRENT one -- this
+        method has no way to detect that without a further schema change
+        (e.g. a companion column recording which write last set
+        ``window_seconds``). SQLite does not share this gap: its
+        ``INSERT OR REPLACE`` resets ``window_seconds`` to 0 on ANY write
+        from old code, correctly routing the row through the unknown-window
+        path above instead. Accepted as a scoped limitation for this PR
+        given CyClaw's single-operator threat model and the narrow ordering
+        required (an upgraded process must create the row before an old one
+        touches it, not the more common reverse) -- flagged explicitly
+        rather than silently unaddressed.
+
+        The delete is otherwise conditional on ``last_sweep + window_seconds
+        <= now``, using the ROW's OWN persisted ``window_seconds`` (written
+        by ``_persist`` under whichever instance most recently touched it)
+        rather than this sweeping instance's. A row a long-window process
+        just wrote therefore survives a short-window process's sweep even
+        though it is already older than the short window -- it is evaluated
+        against the policy that actually governs it, not the policy of
+        whoever happens to run the next sweep.
+
+        The boundary is INCLUSIVE to match ``_sweep``, which calls a timestamp
+        stale at ``now - t >= window_seconds``. With an exclusive ``<`` the two
+        disagreed at exactly ``now - window_seconds``: ``_sweep`` dropped the IP
+        from ``_hits`` while the DELETE spared the row, so nothing could ever
+        nominate it again and it sat on disk forever -- reintroducing the
+        unbounded growth this eviction exists to remove.
 
         Both statements are written out in full rather than built from
         ``self._ph``: an f-string here would be flagged B608/S608 (as
@@ -390,7 +403,7 @@ class RateLimiter:
         """
         if not self._backend:
             return set()
-        rows = [(ip, _UNKNOWN_WINDOW_GRACE_SECONDS, now) for ip in ips]
+        rows = [(ip, now) for ip in ips]
         candidates = set(ips)
         if self._backend == "postgres":
             # psycopg 3 puts executemany on the CURSOR, not the connection --
@@ -398,8 +411,8 @@ class RateLimiter:
             # the connection raises AttributeError on the first sweep.
             with self._pg_connection().cursor() as cur:
                 cur.executemany(
-                    "DELETE FROM rate_hits WHERE ip = %s AND last_sweep + "
-                    "CASE WHEN window_seconds > 0 THEN window_seconds ELSE %s END <= %s",
+                    "DELETE FROM rate_hits WHERE ip = %s AND window_seconds > 0 "
+                    "AND last_sweep + window_seconds <= %s",
                     rows,
                 )
                 cur.execute("SELECT ip FROM rate_hits")
@@ -407,8 +420,8 @@ class RateLimiter:
             return candidates & remaining
         with self._sqlite_txn() as conn:
             conn.executemany(
-                "DELETE FROM rate_hits WHERE ip = ? AND last_sweep + "
-                "CASE WHEN window_seconds > 0 THEN window_seconds ELSE ? END <= ?",
+                "DELETE FROM rate_hits WHERE ip = ? AND window_seconds > 0 "
+                "AND last_sweep + window_seconds <= ?",
                 rows,
             )
         # One bounded scan rather than a per-IP probe: this table is kept small

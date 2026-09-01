@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from utils.ratelimit import _UNKNOWN_WINDOW_GRACE_SECONDS, RateLimiter
+from utils.ratelimit import RateLimiter
 
 DSN = os.environ.get("CYCLAW_DB_URL")
 pytestmark = pytest.mark.skipif(
@@ -182,8 +182,8 @@ def test_pg_a_row_survives_a_shorter_window_sweep_from_another_process(clean_tab
 
 
 def test_pg_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(clean_table):
-    """A row with window_seconds=0 must not be treated as instantly stale
-    under EITHER a naive zero reading OR the sweeping instance's own window.
+    """A row with unknown (non-positive) window_seconds must never be evicted
+    by elapsed time alone -- only once rewritten with a real value.
 
     Mirrors the sqlite-side test of the same name. window_seconds can be 0 on
     a live row (not just a freshly-migrated one) whenever a process unaware of
@@ -192,12 +192,13 @@ def test_pg_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(clean_
     window_seconds while leaving its last_sweep fresh, exactly the state a
     coexisting pre-migration writer would leave behind. A SHORT-window (10s)
     sweeper whose in-memory snapshot predates that zeroing must not delete a
-    row a LONG-window (600s) writer actually owns using its OWN short window
-    as a stand-in for the unknown real policy (the second-round codex finding
-    on #1244: the first fallback attempt used exactly that stand-in and
-    reproduced the module's original cross-policy bug for the unknown-window
-    case). It must still converge once the fixed grace period genuinely
-    elapses.
+    row a LONG-window (600s) writer actually owns, at any elapsed time --
+    two review rounds landed on this method before the final shape: the
+    sweeper's own window as a fallback reproduced the module's original
+    cross-policy bug (round 2), and a fixed grace-period fallback was still
+    wrong because a legacy writer's real window can exceed any fixed
+    constant this module could reasonably pick (round 3). It converges only
+    once an upgraded process actually writes a real window_seconds for it.
     """
     clock = {"t": 1000.0}
 
@@ -224,32 +225,35 @@ def test_pg_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(clean_
         remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
         assert "10.0.0.9" in remaining, (
             "a zero-window row was evicted almost immediately after being "
-            "touched, instead of falling back to a fixed grace period for a "
-            "row with no known policy"
+            "touched, instead of surviving unconditionally while its window "
+            "is unknown"
         )
 
-        # The exact scenario the second-round review reported: the old
-        # writer's real window was 600s, so this row must still be alive at
-        # t=1025 (only 15s after the zeroing) even though a naive "use the
-        # sweeper's own 10s window" fallback would have evicted it by t=1020.
-        clock["t"] = 1025.0
+        # A huge elapsed time must not evict it either -- there is no fixed
+        # grace period to outlast; the row is unconditionally protected while
+        # window_seconds stays non-positive.
+        clock["t"] = 10_000_000.0
         short.allow("192.168.1.2")
         remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
         assert "10.0.0.9" in remaining, (
-            "the sweeping instance's own (shorter) window was used as the "
-            "fallback, reproducing this module's original cross-policy "
-            "eviction bug for the unknown-window case"
+            "an unknown-window row was evicted by elapsed time alone -- it "
+            "must survive until rewritten with a real value, however long "
+            "that takes"
         )
 
-        # Still evictable once genuinely stale under the fixed grace period
-        # (zeroed last_sweep(1010) + _UNKNOWN_WINDOW_GRACE_SECONDS <= now) --
-        # it must not become immortal.
-        clock["t"] = 1010.0 + _UNKNOWN_WINDOW_GRACE_SECONDS + 1.0
+        # It converges once an upgraded process actually persists a real
+        # window_seconds for it.
+        writer2 = RateLimiter(max_requests=5, window_seconds=5, clock=lambda: clock["t"], db_url=DSN)
+        try:
+            writer2.allow("10.0.0.9")  # persists a real (positive) window_seconds
+        finally:
+            writer2.close()
+        clock["t"] += 100.0  # well past writer2's own 5s window
         short.allow("192.168.1.3")
         remaining = {row[0] for row in conn.execute("SELECT ip FROM rate_hits").fetchall()}
         assert "10.0.0.9" not in remaining, (
-            "a zero-window row must still converge once stale under the "
-            "fixed grace period -- it must not become immortal"
+            "a row must converge promptly once rewritten with a real "
+            "window_seconds -- it must not still be treated as unknown"
         )
     finally:
         short.close()

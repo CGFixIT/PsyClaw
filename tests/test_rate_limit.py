@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import pytest
 
-from utils.ratelimit import _UNKNOWN_WINDOW_GRACE_SECONDS, RateLimiter
+from utils.ratelimit import RateLimiter
 
 # NOTE: `gate` is imported lazily inside the two tests that need it
 # (test_gate_uses_production_limiter / test_429_detail_reflects_configured_limits).
@@ -532,9 +532,10 @@ class TestPersistence:
 
         sql, rows = executed[0]
         assert "DELETE FROM rate_hits" in sql
-        assert "last_sweep + CASE WHEN window_seconds > 0 THEN window_seconds ELSE %s END <=" in sql, (
+        assert "window_seconds > 0 AND last_sweep + window_seconds <=" in sql, (
             "the delete must stay conditional on the ROW's own persisted window "
-            "when it has one, not the sweeping instance's"
+            "when it has one (not the sweeping instance's), and must never "
+            "match a row whose window_seconds is unknown (non-positive)"
         )
         assert [r[0] for r in rows] == ["10.0.0.1", "10.0.0.2"]
 
@@ -710,9 +711,8 @@ class TestPersistence:
         assert row == (0.0,), (
             "a migrated legacy row must default to window_seconds=0 -- see "
             "test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade "
-            "for how the sweep predicate treats that value (not \"expired the "
-            "instant last_sweep was written\", and not \"expired the instant "
-            "some OTHER sweeper's own window elapsed\" either)"
+            "for how the sweep predicate treats that value (never evicted by "
+            "elapsed time alone, only once rewritten with a real value)"
         )
 
         # Idempotent: constructing again against the already-migrated file
@@ -720,20 +720,19 @@ class TestPersistence:
         rl2 = RateLimiter(max_requests=5, window_seconds=60, clock=lambda: 1000.0, db_path=str(db))
         assert "legacy.ip" in rl2._hits
 
-        # This row is only 500s old -- nowhere near the fixed
-        # _UNKNOWN_WINDOW_GRACE_SECONDS fallback (24h), so it must NOT
-        # converge yet despite being far older than rl2's own 60s window
-        # (test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade
-        # below covers actual convergence once that grace period elapses).
+        # An unknown-window row is never evicted by elapsed time alone --
+        # not even after a huge jump, and not just because it is "only" 500s
+        # old (test_an_unknown_window_row_survives_a_mixed_policy_rolling_
+        # upgrade below covers actual convergence via a real rewrite).
         rl2.allow("some.other.ip")
         assert "legacy.ip" in _persisted_ips(db), (
-            "a migrated legacy row was evicted using the sweeping instance's "
-            "own window instead of the fixed unknown-window grace period"
+            "a migrated legacy row (unknown window_seconds) was evicted by "
+            "elapsed time -- it must survive until rewritten with a real value"
         )
 
     def test_an_unknown_window_row_survives_a_mixed_policy_rolling_upgrade(self, tmp_path):
-        """A row with window_seconds=0 must not be treated as instantly stale
-        under EITHER a naive zero reading OR the sweeping instance's own window.
+        """A row with unknown (non-positive) window_seconds must never be
+        evicted by elapsed time alone -- only once rewritten with a real value.
 
         Two things can persist window_seconds=0 for a row that is NOT actually
         brand new: the migration default, and -- during a rolling upgrade --
@@ -745,12 +744,16 @@ class TestPersistence:
         old code's own INSERT OR REPLACE) then re-writes it minus
         window_seconds, and a SHORT-window (10s) sweeper -- whose in-memory
         snapshot predates the stomp, so its own nomination logic still fires
-        -- must not delete the freshly-stomped row using its OWN short window
-        as a stand-in for the old writer's real, longer one (the second-round
-        codex finding on #1244: the first fallback attempt used exactly that
-        stand-in and reproduced the module's original cross-policy bug for
-        the unknown-window case). It must still converge once the fixed
-        grace period genuinely elapses.
+        -- must not delete the freshly-stomped row.
+
+        Two review rounds landed on this method before the final shape: using
+        the sweeping instance's own window as a stand-in reproduced the
+        module's original cross-policy bug for the unknown-window case
+        (round 2); a fixed grace-period stand-in was still wrong because a
+        legacy writer's real window can exceed any fixed constant this module
+        could reasonably pick (round 3). The row must therefore survive
+        indefinitely under elapsed time alone, converging only once an
+        upgraded process actually writes a real window_seconds for it.
         """
         db = tmp_path / "rl.db"
         clock = FakeClock()
@@ -781,28 +784,29 @@ class TestPersistence:
         short.allow("192.168.1.1")  # triggers short's first sweep
         assert "10.0.0.9" in _persisted_ips(db), (
             "a zero-window row was evicted almost immediately after being "
-            "touched, instead of falling back to a fixed grace period for a "
-            "row with no known policy"
+            "touched, instead of surviving unconditionally while its window "
+            "is unknown"
         )
 
-        # The exact scenario the second-round review reported: the old
-        # writer's real window was 600s, so this row must still be alive at
-        # t=1025 (only 15s after the stomp) even though a naive "use the
-        # sweeper's own 10s window" fallback would have evicted it by t=1020.
-        clock.t = 1025.0
+        # A huge elapsed time must not evict it either -- there is no fixed
+        # grace period to outlast; the row is unconditionally protected while
+        # window_seconds stays non-positive.
+        clock.t = 10_000_000.0
         short.allow("192.168.1.2")
         assert "10.0.0.9" in _persisted_ips(db), (
-            "the sweeping instance's own (shorter) window was used as the "
-            "fallback, reproducing this module's original cross-policy "
-            "eviction bug for the unknown-window case"
+            "an unknown-window row was evicted by elapsed time alone -- it "
+            "must survive until rewritten with a real value, however long "
+            "that takes"
         )
 
-        # Still evictable once genuinely stale under the fixed grace period
-        # (stomped last_sweep(1010) + _UNKNOWN_WINDOW_GRACE_SECONDS <= now) --
-        # it must not become immortal.
-        clock.t = 1010.0 + _UNKNOWN_WINDOW_GRACE_SECONDS + 1.0
+        # It converges once an upgraded process actually persists a real
+        # window_seconds for it -- from then on it is governed by the normal
+        # per-row logic like any other row.
+        writer2 = RateLimiter(max_requests=5, window_seconds=5, clock=clock, db_path=str(db))
+        writer2.allow("10.0.0.9")  # persists a real (positive) window_seconds
+        clock.t += 100.0  # well past writer2's own 5s window
         short.allow("192.168.1.3")
         assert "10.0.0.9" not in _persisted_ips(db), (
-            "a zero-window row must still converge once stale under the "
-            "fixed grace period -- it must not become immortal"
+            "a row must converge promptly once rewritten with a real "
+            "window_seconds -- it must not still be treated as unknown"
         )
