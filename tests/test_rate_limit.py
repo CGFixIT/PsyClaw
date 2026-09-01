@@ -83,6 +83,22 @@ def test_allows_under_limit():
         assert rl.allow("10.0.0.1") is True, f"request {i + 1} should be allowed"
 
 
+def test_zero_or_negative_window_seconds_is_rejected_at_construction():
+    """A non-positive window_seconds has no sensible interpretation and must
+    not reach _persist(): _delete_rows treats any non-positive value as
+    "policy unknown, protect indefinitely" (a deliberate fix for a rolling-
+    upgrade scenario), which is indistinguishable from a genuinely
+    misconfigured window_seconds <= 0 once persisted -- every resulting row
+    would be permanently exempt from its own sweep, one permanently-growing
+    row per distinct client IP (codex review on #1244, seventh round;
+    api.rate_limit.window_seconds in config.yaml reaches RateLimiter with
+    no validation upstream).
+    """
+    for bad in (0, -1, -0.5):
+        with pytest.raises(ValueError, match="window_seconds must be positive"):
+            RateLimiter(max_requests=5, window_seconds=bad)
+
+
 def test_blocks_over_limit():
     clock = FakeClock()
     rl = RateLimiter(max_requests=5, window_seconds=2, clock=clock)

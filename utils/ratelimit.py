@@ -66,6 +66,24 @@ class RateLimiter:
         db_path: str | None = None,   # set to "data/rate_limits.db" for sqlite persistence
         db_url: str | None = None,    # set to "postgresql://…" for Postgres persistence
     ) -> None:
+        if window_seconds <= 0:
+            # _delete_rows treats any non-positive window_seconds as "policy
+            # unknown, protect this row indefinitely until rewritten with a
+            # real value" -- a deliberate fix for rows written under a
+            # stale/unmigrated policy during a rolling upgrade (see that
+            # method's docstring). A genuinely misconfigured
+            # window_seconds <= 0 is indistinguishable from that case once
+            # persisted: this instance would then be the one PERSISTING the
+            # non-positive value on every request, and every resulting row
+            # would be permanently exempt from its own sweep -- one
+            # permanently-growing row per distinct client IP, in both
+            # _hits and the backend table (codex review on #1244, seventh
+            # round; reachable in production via unvalidated
+            # api.rate_limit.window_seconds in config.yaml). Reject at
+            # construction instead of accepting a value with no sensible
+            # interpretation anyway ("N requests per zero seconds").
+            msg = f"RateLimiter window_seconds must be positive, got: {window_seconds!r}"
+            raise ValueError(msg)
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._clock = clock
