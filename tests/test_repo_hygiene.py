@@ -9,6 +9,7 @@ here.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -136,4 +137,35 @@ def test_no_tracked_path_is_uncheckoutable_on_windows() -> None:
 
     assert not offenders, (
         "tracked paths that Windows cannot check out:\n" + "\n".join(offenders)
+    )
+
+
+_README_TEST_COUNT = re.compile(r"\((\d+)\s+`test_\*\.py` files")
+
+
+def test_tests_readme_test_file_count_matches_tree() -> None:
+    """tests/README.md suite-count integer must match find tests -name 'test_*.py'.
+
+    Regression: the lede was bumped 181→183, then 194→209 on #1214, then left
+    stale again after later test files (including tests/nemo_runtime/) landed.
+    `ls tests/test_*.py` misses nested files that pytest testpaths=["tests"]
+    still collects. Count recursively; put new guards in this file so the
+    integer does not move just because the pin exists.
+    """
+    readme = (REPO_ROOT / "tests" / "README.md").read_text(encoding="utf-8")
+    match = _README_TEST_COUNT.search(readme)
+    assert match, (
+        "tests/README.md must state '(N `test_*.py` files' in the lede so the "
+        "count can be pinned"
+    )
+    claimed = int(match.group(1))
+    actual = sum(
+        1
+        for path in (REPO_ROOT / "tests").rglob("test_*.py")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    assert claimed == actual, (
+        f"tests/README.md claims {claimed} test_*.py files; "
+        f"find tests -name 'test_*.py' is {actual}. "
+        f"Count recursively (including tests/nemo_runtime/), not ls tests/test_*.py."
     )
