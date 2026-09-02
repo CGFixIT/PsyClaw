@@ -50,7 +50,7 @@ def ok(check: str, detail: str) -> None:
 def _d7_labels_for_key(key: str) -> list[str]:
     # Regex fragments that name this key in the M5 doctrine.
     if key == "macos.OLLAMA_CONTEXT_LENGTH":
-        return [r"OLLAMA_CONTEXT_LENGTH"]
+        return [r"OLLAMA_CONTEXT_LENGTH", r"num_ctx"]
     if key == "models.local_llm.model":
         return [r"model", r"local_llm", r"qwen"]
     segment = re.escape(key.rsplit(".", 1)[-1])
