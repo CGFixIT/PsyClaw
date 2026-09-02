@@ -406,9 +406,57 @@ def test_cross_site_fetch_metadata_is_rejected(client):
     assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
 
-@pytest.mark.parametrize("origin", ["http://127.0.0.1:8790", "http://localhost:8790", "http://[::1]:8790"])
+@pytest.mark.parametrize("origin", ["http://127.0.0.1", "http://localhost", "http://[::1]"])
 def test_loopback_origin_is_allowed(client, origin):
+    """Hostname aliases on the SAME scheme+port as this request.
+
+    The client fixture is ``http://127.0.0.1`` (implicit :80). A browser on
+    that URL omits the default port, so these Origins match. Explicit :8790
+    is a different origin -- see test_loopback_origin_wrong_port_is_rejected.
+    """
     resp = client.post("/api/soul", json={"enabled": True}, headers={**_full_auth(client), "Origin": origin})
+    assert resp.status_code == 200
+
+
+def test_loopback_origin_wrong_port_is_rejected(client):
+    """Same loopback host, different port, is not this console (issue #1205)."""
+    resp = client.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={**_full_auth(client), "Origin": "http://127.0.0.1:8790"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+def test_loopback_origin_https_is_rejected_on_http(client):
+    resp = client.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={**_full_auth(client), "Origin": "https://127.0.0.1"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+@pytest.mark.parametrize("origin", ["http://127.0.0.1:notaport", "http://127.0.0.1:99999"])
+def test_malformed_origin_port_is_rejected_not_a_500(client, origin):
+    resp = client.post(
+        "/api/soul", json={"enabled": True}, headers={**_full_auth(client), "Origin": origin}
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+def test_explicit_matching_port_is_allowed(cfg, monkeypatch):
+    """Production uvicorn on :8790 stamps Origin with that port; it must pass."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1:8790")
+    resp = c.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={**_full_auth(c), "Origin": "http://127.0.0.1:8790"},
+    )
     assert resp.status_code == 200
 
 
