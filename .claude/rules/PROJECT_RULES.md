@@ -116,7 +116,7 @@ See `retrieval/hybrid_search.py` for implementation.
 - **.claude/ structure** — mirror documented skills/patterns/utilities; keep in sync.
 - **Agentic Governance Docs** — `docs/agentic/AGENTIC_README.md` + `SKILLS_REGISTRY_GOVERNANCE.md` are binding.
 - **Session Notes** — optional but encouraged; the active log is `docs/work/SESSION_NOTES.md`.
-- **Owner PII stays out of committed files** — `.claude/skills/`, `.claude/rules/`, `CLAUDE.md`, and `docs/` are GitHub-public. No legal name, date of birth, email, home location, or personal URLs in any of them, even in an agent-facing prompt file (learned 2026-09-02 on PR #1272: the owner stripped a handle/email/sites block from `fable-5.1-cc`). Identity belongs only in the user-level `~/.claude/skills/` copy.
+- **Owner PII stays out of committed files** — `.claude/skills/`, `.claude/rules/`, `CLAUDE.md`, and `docs/` are GitHub-public. The owner's *chosen* public attribution is fine and already in tracked docs: GitHub handle `cgfixit`, the byline name he signs guides with, and `cgfixit.com` links. Everything else is out: date of birth, email addresses, home location, phone, private accounts, or any personal detail beyond that byline, even in an agent-facing prompt file (learned 2026-09-02 on PR #1272, where the owner stripped a handle/email/location/sites block from `fable-5.1-cc`). Personal identity belongs only in the user-level `~/.claude/skills/` copy.
 
 ---
 
