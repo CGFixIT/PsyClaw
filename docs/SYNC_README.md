@@ -256,9 +256,9 @@ uses `sync.schedule_weekday`, `"monthly"` uses `sync.schedule_day`).
 
 | Platform | Backend | Mechanism | Tag / identity |
 |---|---|---|---|
-| Linux / macOS / WSL | `cron` (default) | `crontab` — one line `MIN HOUR * * * <cmd> # CYCLAW_DROPBOX_SYNC` (via `crontab -l` / `crontab -`, never `crontab -e`). Daily only — `schedule_frequency` is not consumed by this backend. | comment `CYCLAW_DROPBOX_SYNC` |
+| Linux / macOS / WSL | `cron` (default) | `crontab` via `crontab -l` / `crontab -` (never `crontab -e`). Maps `daily` to `MIN HOUR * * *`, `weekly` to `MIN HOUR * * WEEKDAY`, and `monthly` to `MIN HOUR DAY * *`. | comment `CYCLAW_DROPBOX_SYNC` |
 | macOS only | `launchd` (opt-in: `scheduler_backend: "launchd"`) | Generates `~/Library/LaunchAgents/com.cgfixit.cyclaw.sync.plist` via `plistlib` from real, resolved install paths — no `REPLACE_*` placeholders to hand-edit. Supports `daily`/`weekly`/`monthly` via `StartCalendarInterval`. **`install()` never calls `launchctl load`/`bootstrap`** — it prints the exact `launchctl bootstrap gui/<uid> <path>` command; loading a persistent background agent is always an explicit operator step. `remove()` best-effort `launchctl bootout`s before deleting the file. No secret/token is embedded (the sync job needs none — rclone owns its own OAuth state under `~/.config/rclone`). | `Label` `com.cgfixit.cyclaw.sync` |
-| Windows | (only option) | `schtasks /Create /SC DAILY /ST HH:MM /RL LIMITED /F`. Daily only. | task name `CyClaw Dropbox Sync` |
+| Windows | (only option) | `schtasks /Create` with `/SC DAILY`, `/SC WEEKLY /D <weekday>`, or `/SC MONTHLY /D <day>`, plus `/ST HH:MM /RL LIMITED /F`. | task name `CyClaw Dropbox Sync` |
 
 `cron`/`schtasks` scheduled commands `cd` into the repo root (so `config.yaml`
 resolves) and run `python -m sync.cli sync`, propagating `--config` when the

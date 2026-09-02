@@ -169,8 +169,7 @@ class RcloneConfig:
     # sync/scheduler.py's get_scheduler().
     scheduler_backend: str = DEFAULT_SCHEDULER_BACKEND
     # How often the job fires. "weekly" uses schedule_weekday; "monthly" uses
-    # schedule_day. Ignored by CronScheduler/WindowsTaskScheduler today (both
-    # remain daily-only); consumed by LaunchdScheduler's StartCalendarInterval.
+    # schedule_day. All three scheduler backends consume the same fields.
     schedule_frequency: str = DEFAULT_SCHEDULE_FREQUENCY
     schedule_weekday: int = DEFAULT_SCHEDULE_WEEKDAY  # 0-7 (0/7 = Sunday); "weekly" only
     schedule_day: int = DEFAULT_SCHEDULE_DAY  # 1-31; "monthly" only
