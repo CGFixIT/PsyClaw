@@ -30,6 +30,25 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _logged_phrase_fields(phrase: object) -> dict[str, Any]:
+    """JSONL fields for one finding's span.
+
+    Banned-phrase keys are short dictionary entries and stay as ``phrase``.
+    Structural regexes copy operator prose into ``match.group()``; those spans
+    are hashed so metrics JSONL is actually redacted (issue #1275 P1.3).
+    ``BANNED_PHRASES`` is imported here, not at module import: the disabled
+    probe must not load ``agentic.vendor.unslop``.
+    """
+    if not isinstance(phrase, str) or not phrase:
+        return {}
+    from agentic.vendor.unslop.banned_phrase_scan import BANNED_PHRASES
+
+    key = phrase.casefold()
+    if key in BANNED_PHRASES:
+        return {"phrase": key}
+    return {"phrase_sha256": _sha256(phrase), "phrase_chars": len(phrase)}
+
+
 def _unslop_enabled(cfg: dict[str, Any]) -> bool:
     """True only when ``unslop.enabled`` is the literal boolean ``True``."""
     return (cfg.get("unslop") or {}).get("enabled", False) is True
@@ -114,10 +133,10 @@ def _run_scan(
         if phrase is None:
             phrase = s.get("span")
         finding: dict[str, Any] = {
-            "phrase": phrase,
             "category": s.get("category", "unknown"),
             "severity": s.get("severity", "soft"),
         }
+        finding.update(_logged_phrase_fields(phrase))
         start = span.get("start")
         if isinstance(start, int):
             line, column = _line_col_from_offset(text, start)
