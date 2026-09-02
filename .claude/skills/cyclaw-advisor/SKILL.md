@@ -83,10 +83,13 @@ constants):
   email or IP address is collected in this schema. A data-mapping exercise now
   needs this store alongside the personality DB and the two log streams above.
   Ships `auth.enabled: false`; nothing is collected until an operator turns it
-  on, and Stage 3 (enforcing a credential on `/query`) has not landed, so
-  today this store can exist populated while `/query` itself stays
-  unauthenticated — note that gap explicitly if asked to assess the current
-  auth posture, don't assume enabling accounts already gates query access.
+  on. Stage 3 (a credential on `/query`) HAS landed: `require_session_or_token`
+  attaches to `POST /query` when `auth.enabled` is the literal `true` (session
+  cookie or device token, no CSRF on `/query`), so enabling accounts now also
+  gates query access. The shipped default still leaves `/query` credential-free
+  — but since 2026-08 it rejects cross-site browser requests (403
+  `CROSS_SITE_BLOCKED`) regardless of `auth.enabled`. State which posture (auth
+  on vs. shipped default) an assessment assumes rather than mixing them.
 - **Optional memory subsystem (`memory/`, `gate_memory.py`, `docs/memory/`) is
   a new personal-data surface when enabled.** Ships fully default-off
   (`memory.enabled` and every sub-switch false). When on: (1) **episodes**
@@ -107,6 +110,28 @@ constants):
   `false`), does not forward retrieved local context off-box unless
   explicitly enabled — relevant to any cross-border-transfer or
   sub-processor analysis if online fallback is enabled for a deployment.
+- **The derived Numbat stream mirrors every audit record and now rolls over.**
+  `utils/numbat_emitter.py` projects each already-redacted audit record into
+  `logs/numbat-events.ndjsonl` (`numbat:` ships enabled) and, since 2026-08,
+  rotates/truncates that stream at `numbat.max_bytes` (50 MiB shipped) —
+  `logs/audit.jsonl` stays the authoritative, unrotated record. A retention or
+  DSR-erasure analysis must treat the two streams asymmetrically: the derived
+  stream self-prunes, the audit log does not.
+- **The spend ledger and audit stream record the vendor-served model string**
+  for external calls (`utils/spend.py`, `logs/spend.jsonl` — tokens and
+  provider metadata, no query text). Include it in data-mapping when online
+  fallback is enabled; it is operational metadata, not user content.
+- **Memory flag names changed 2026-08:** `memory.facts.enabled` is the legacy
+  spelling of `memory.facts.retrieval_enabled` (honored with a one-time
+  warning; `memory/flags.py` resolves it), and every flag echo in
+  `/memory/status` is now a strict boolean — a YAML string like `"false"` no
+  longer reports a gate as on. Cite the new key names in reviews.
+- **`agentic/netconnect/` (passive LAN inventory) is a privacy-relevant
+  surface even though it ships `enabled: false`:** it reads the local host and
+  the OS's existing neighbor cache only, within explicit RFC1918/loopback
+  CIDRs, and sends no probes or packets. When a deployment enables it, the
+  inventory it writes (LAN hostnames/MACs/IPs) is personal data under GDPR in
+  many contexts — bring it into data-mapping alongside the stores above.
 - When a proposed change would weaken any of the above (log raw text, skip
   redaction, forward context off-box by default, mutate soul without a
   reason string), name the specific invariant or control it weakens, not

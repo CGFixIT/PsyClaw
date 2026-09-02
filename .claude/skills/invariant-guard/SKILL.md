@@ -32,7 +32,7 @@ Stdlib-only static analysis — safe in a fresh container before any `pip
 install`. Exit codes follow the repo convention: `0` all pass · `2` invariant
 violated · `3` env/config error (wrong root, unparseable core file).
 
-It verifies 35 assertions across:
+It verifies 47 assertions across:
 
 | ID | Invariant | What is actually checked |
 |---|---|---|
@@ -134,3 +134,7 @@ fail proves nothing — the mutation test keeps it honest.
 - **Don't run it from inside a subdirectory** with `--repo-root` unset in
   unusual layouts; it auto-detects root from its own path, and exits 3 if
   `gate.py` isn't found there.
+- **`agentic/netconnect/` needs no `OUT_OF_BAND_PKGS` entry.** It lives under
+  `agentic/`, so the existing `agentic` prefix already covers it for I6 — a
+  core-file `import agentic.netconnect` (or the reverse direction) is caught
+  today. Only a NEW top-level out-of-band package warrants growing the tuple.

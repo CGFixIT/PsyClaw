@@ -47,7 +47,7 @@ drift (cite the enforcer, don't just trust this document); `(derive)` means
 read it from the running code/tree at verification time, never copy it from
 here. **Code, `config.yaml`, and the tests currently on disk always win over
 this document.** Surface inventory below was last reconciled against main
-@ `572227e` / `a4ca399` (2026-08-28) -- if it disagrees with what you see on
+@ `de10c71` (2026-09-02) -- if it disagrees with what you see on
 a fresh checkout, trust the checkout and treat the disagreement as this
 document's own next drift-fix.
 
@@ -136,10 +136,10 @@ regression on its own, independent of this skill.
 
 | Surface | File(s) | What to verify | Pinned by |
 |---|---|---|---|
-| Gate core routes | `gate.py` | `/`, `/health`, `/query`, `/soul*`, `/audit/summary`, `/index/build`, `/index/status` | `gate_runtime_check.py` |
+| Gate core routes | `gate.py` | `/`, `/health`, `/query`, `/soul*`, `/audit/summary`, `/index/build`, `/index/status`; `POST /query` rejects cross-site browser requests (403 `CROSS_SITE_BLOCKED`, from `Origin`/`Sec-Fetch-Site`) **regardless of `auth.enabled`** -- a request carrying neither header is allowed; `GET /index/status` is unauthenticated and **not** rate-limited (the console polls it every 1.5s, same posture as `/health`) | `gate_runtime_check.py` |
 | Ops routes | `gate_ops.py` | `POST /ops/{sync,agentic,fsconnect,sqlconnect}`; every `action` field is a closed `Literal` (`schemas/api.py`) -- an unrecognized value is a **422**, not a handler-level 400 | `test_terminal_consoles.py` |
-| Auth routes | `gate_auth.py` | 13 paths (`/auth/setup-status`, `/login`, `/logout`, `/whoami`, `/users` GET+POST, `/password`, `/users/{u}/password`, `/users/{u}/role`, `/users/{u}/disable`, `/users/{u}/enable`, `/users/{u}` DELETE, `/audit/summary`); every route exists and answers **503** (not 404) when `auth.enabled` is false (the shipped default); identity attaches to `POST /query` only when an `AuthManager` exists; `audit` role is forbidden from `/query`; account lockout answers **423** | `test_auth_admin_contract.py`, `tests/test_due_diligence_invariants.py` |
-| Memory routes | `gate_memory.py` | `/memory/status` is always 200 (probeable when the subsystem is off); `/memory/{facts,episodes,proposals,propose,apply,reject}` and `/query/export/html` are **404** when their toggle is off (all ship false) | `test_memory_isolation.py`-style isolation + live probe |
+| Auth routes | `gate_auth.py` | 13 paths (`/auth/setup-status`, `/login`, `/logout`, `/whoami`, `/users` GET+POST, `/password`, `/users/{u}/password`, `/users/{u}/role`, `/users/{u}/disable`, `/users/{u}/enable`, `/users/{u}` DELETE, `/audit/summary`); every route exists and answers **503** (not 404) when `auth.enabled` is false (the shipped default); identity attaches to `POST /query` only when an `AuthManager` exists; `audit` role is forbidden from `/query`; account lockout answers **423**; a raced duplicate username or device-token label is a typed conflict (`AuthUserExists`/`AuthTokenLabelExists` -> **409**, mirrored by the harness create-user route, which previously 500'd) | `test_auth_admin_contract.py`, `tests/test_due_diligence_invariants.py` |
+| Memory routes | `gate_memory.py` | `/memory/status` is always 200 (probeable when the subsystem is off); `/memory/{facts,episodes,proposals,propose,apply,reject}` and `/query/export/html` are **404** when their toggle is off (all ship false); flag resolution goes through `memory/flags.py` -- the fact-retrieval switch is `memory.facts.retrieval_enabled` (legacy `memory.facts.enabled` honored with a one-time warning), the status payload reports `facts_retrieval_enabled`, and every flag echo is a strict boolean (`is True` -- a YAML `"false"` string reports off) | `test_memory_isolation.py`-style isolation + live probe |
 | Terminal console | `static/terminal.html` + `static/terminal.js` (CSP forces `script-src 'self'`, so the console's JS logic lives in the sibling file -- read both together) | 5 toolbar panels (Soul/Sync/Agentic/FS/SQL); the confirm dialog's generic `handleConfirm(confirmed, entryId, onlineProvider)`; the four slash commands `/users /admin /audit /help` (everything else is a toolbar button or a RAG query, not a command) | `tests/test_terminal_contract.py` (reads `terminal.html + terminal.js` combined; pins the 5 POST-only paths) |
 | Harness console | `harness/server.py` + `static/harness.html` | Guard order rate-limit -> same-origin -> API key -> CSRF (`guarded` dependency list); ~29 guarded + ~11 unguarded routes (derive the exact split from `app.routes` -- don't hardcode it, this skill has been burned by a stale count here before); the `COMMANDS` array (derive the full palette from the array itself, currently ~19 distinct commands incl. two rows both dispatching to `/agent`) plus the hidden `registry` alias of `/connectors` (`case 'connectors': case 'registry':`) | `test_harness_contract.py`, `test_harness_console_contract.py`, `test_harness_tools_contract.py` |
 | Harness ToolBroker gate | `utils/tool_broker.py`, wired into `harness/server.py` | Named-capability gate (issue #1134) in front of `/loop` turns and `POST /api/agent/run`; `assert_allowed(...)` raises `ToolDenied` -> 403. No route was added by this gate -- it's a control layered on two existing ones | `test_guardrails_tool_broker.py`, `test_tool_broker_adversarial.py` |
@@ -271,9 +271,10 @@ without the key, 429 under rate-limit exhaustion, and carries the security
 headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
 `Permissions-Policy`, `Content-Security-Policy`); `/auth/*` returns 503 (not
 404) while `auth.enabled` is false; all four terminal slash commands
-respond; `/index/build`/`/index/status` are loopback+same-origin gated, NOT
+respond; `POST /query` rejects cross-site requests (403 `CROSS_SITE_BLOCKED`)
+even with auth off; `/index/build` is loopback+same-origin gated, NOT
 key-gated (deliberate -- an unset key must not brick a first-run index
-build). Enabling auth in a scratch config additionally exercises: bootstrap
+build), while `/index/status` is open and un-rate-limited (poll target). Enabling auth in a scratch config additionally exercises: bootstrap
 from loopback only, session cookie + CSRF on `/query`, RBAC (`audit` role
 403s on `/query`), and TLS via `cyclaw-gen-cert` (session cookie gains
 `secure` once `api.tls.enabled: true`).
@@ -309,16 +310,20 @@ untrusted-origin strings).
 ### 7. Out-of-band subsystems
 
 - **Spend** (`utils/spend.py`, `logs/spend.jsonl`): append-only; each real
-  external generate appends one record; `cyclaw-metrics` splits spend by
-  source (`query` vs `agentic`) and prints a vendor-cost comparison; a
-  price staleness warning surfaces (non-fatal) once the pricing table's own
-  `PRICED_AS_OF` date is old enough -- read the actual threshold from
-  `utils/spend.py`, don't hardcode it here.
+  external generate appends one record, including the vendor-served model
+  string (which also reaches the audit record); `cyclaw-metrics` splits
+  spend by source (`query` vs `agentic`) and prints a vendor-cost
+  comparison; a price staleness warning surfaces (non-fatal) on the
+  recording path once the pricing table's own `PRICED_AS_OF` date is old
+  enough -- read the actual threshold from `utils/spend.py`, don't hardcode
+  it here.
 - **Numbat** (`utils/numbat_emitter.py`, ships `enabled: true`): activity
   appends NDJSON lines to `logs/numbat-events.ndjsonl`; fail-soft (make the
   emitter raise -- e.g. read-only logs dir in a scratch copy -- and confirm
   the request still succeeds); the documented skip-set event types never
-  double-emit through the mainline projection.
+  double-emit through the mainline projection; the stream rolls over at
+  `numbat.max_bytes` (50 MiB shipped -- read the value from `config.yaml`)
+  while `logs/audit.jsonl` stays authoritative and unrotated.
 - **Sequence detection** (`utils/sequence_detect.py`, forensic-only): CLI
   or `cyclaw-metrics`-joined surface lists its rule set; craft synthetic
   audit+spend fixtures and confirm a suspicious pattern is flagged and a
@@ -330,7 +335,10 @@ untrusted-origin strings).
   proposals}` and `/memory/{propose,apply,reject}` 404 while their toggles
   are off; enabling in a scratch config exercises propose -> apply ->
   queryable facts, and an injection payload in a proposal triggers the
-  documented block event.
+  documented block event. Use the current flag spelling
+  (`memory.facts.retrieval_enabled`, resolved via `memory/flags.py`) in
+  scratch configs; echoes are strict booleans, so a quoted `"true"` stays
+  off.
 - **Telegram** (`telegram/`, ships `enabled: false`): CLI disabled-state
   report; a mocked-Bot-API integration (stub `getMe`/`sendMessage`/
   `getUpdates`) drives `poll_once`/`send_notify`; the `/online on <grok|

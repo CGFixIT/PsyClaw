@@ -109,6 +109,9 @@ these values silence vendor telemetry readers; they do not close sockets.
    empty) · 4 local-only observability/storage · 5 absent/no mechanism found
    (evidence + date for the negative finding). Categories 3–5 never get
    controls invented for them.
+   Worked example: `agentic/netconnect/` (passive LAN inventory, 2026-08) is
+   category 4 — stdlib-only, so T13's dependency discovery never sees it; a
+   first-party connector like this needs its row added by hand.
 
 ## Guardrails (restating the invariants this skill touches)
 
