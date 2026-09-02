@@ -469,6 +469,14 @@ def test_harness_auth_probes_are_bounded_by_a_timeout():
     assert "await fetch('/api/auth/setup-status')" not in html, "setup-status probe lost its timeout"
 
 
+def test_harness_logout_control_posts_process_csrf():
+    """Harness session cookie has no UI end without this button; logout uses
+    the page CSRF (auth_sess), not the unused login-body session CSRF."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert 'id="hAuthLogout"' in html
+    assert "fetchWithTimeout('/api/auth/logout'" in html
+
+
 def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
     """api() must timeout non-chat fetches. Chat keeps inflightChat.signal.
     Long-running routes may widen the deadline per call (timeoutMs), but the
