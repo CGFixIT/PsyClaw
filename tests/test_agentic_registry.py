@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -477,6 +478,33 @@ def test_registry_lock_reclaims_dead_owner(tmp_path: Path):
     assert new_token["pid"] == os.getpid()
     _release_registry_lock(lock)
     assert not lock.exists()
+
+
+def test_registry_lock_serializes_stale_reclaim(tmp_path: Path, monkeypatch):
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    token = {"pid": 999999, "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+    real_rmtree = shutil.rmtree
+    second_attempted = False
+
+    def _interleaved_rmtree(path):
+        nonlocal second_attempted
+        second_attempted = True
+        with pytest.raises(SkillRegistryError, match="another skills-registry apply"):
+            _acquire_registry_lock(lock)
+        assert lock.exists(), "a competing reclaimer must not delete this lock"
+        real_rmtree(path)
+
+    monkeypatch.setattr("agentic.registry.shutil.rmtree", _interleaved_rmtree)
+    _acquire_registry_lock(lock)
+
+    assert second_attempted is True
+    assert _is_lock_owner(lock) is True
+    assert not lock.with_name(lock.name + ".reclaim.d").exists()
+    _release_registry_lock(lock)
 
 
 def test_registry_lock_refuses_live_owner(tmp_path: Path):
