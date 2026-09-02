@@ -284,17 +284,44 @@ def _usage_for_spend(provider: str, message: object) -> object | None:
     return _usage_from_ai_message(provider, message)
 
 
-def _record_proposer_spend(provider: str, model: str, message: object, cfg: dict | None) -> None:
+def _record_proposer_spend(
+    provider: str, model: str, message: object, cfg: dict | None,
+    *, usage: object | None = None, outcome: str | None = None,
+) -> None:
     try:
         record_external_usage(
             provider=provider,
             model=model,
-            usage=_usage_for_spend(provider, message),
+            usage=usage if usage is not None else _usage_for_spend(provider, message),
             source="agentic",
             spend_file=_spend_file_from_cfg(cfg),
+            outcome=outcome,
         )
     except Exception as exc:
         logger.debug("spend record failed: %s", type(exc).__name__)
+
+
+def _record_billed_failure(provider: str, model: str, cfg: dict | None) -> None:
+    """Ledger a call the vendor billed even though the SDK raised afterwards.
+
+    The response hook stores vendor usage only on a 2xx, so a captured value
+    at the moment ``model.invoke`` raises means the request reached the model
+    and was billed (the SDK then failed past the wire -- a deserialization or
+    validation error). The same "billed is billed" contract llm/client.py
+    keeps for a 200 with an unparseable body (issue #1013) applies here; the
+    old code discarded that usage at the contextvar reset and the ledger
+    under-reported the day. Timeouts, 429s and 5xx never carry a captured
+    value (the hook returns before reading on non-2xx), so nothing is written
+    for them -- an all-None row for a call that was probably never billed would
+    only pollute metrics.py's usage_missing counter. Clearing the value
+    afterwards keeps a later successful attempt from inheriting or
+    double-counting it.
+    """
+    captured = _HTTP_USAGE.get()
+    if not isinstance(captured, dict):
+        return
+    _HTTP_USAGE.set(None)
+    _record_proposer_spend(provider, model, None, cfg, usage=captured, outcome="failed_after_billing")
 
 
 @dataclass(frozen=True)
@@ -378,6 +405,7 @@ class ChatModelProposerClient:
                     ai_message = model.invoke(messages, **invoke_kwargs)
                     break
                 except Exception as exc:
+                    _record_billed_failure(provider, self.settings.model, cfg)
                     if attempts <= _INVOKE_MAX_RETRIES and _invoke_error_is_retryable(exc):
                         # Same "type only, never the message" discipline as the
                         # terminal failure below.

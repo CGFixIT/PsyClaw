@@ -236,6 +236,7 @@ def record_external_usage(
     query_hash: str | None = None,
     route_path: list[str] | None = None,
     served_model: str | None = None,
+    outcome: str | None = None,
 ) -> None:
     """Append one JSON line. Write failures log WARNING and do not raise.
 
@@ -243,6 +244,9 @@ def record_external_usage(
     vendor-resolved id echoed back in the response. Both are kept because an
     unpinned alias (e.g. ``claude-sonnet-5``) can be re-pointed upstream, and
     the ledger must show what actually served/billed alongside what was asked.
+    ``outcome`` marks a row whose call was billed but did not produce an answer
+    (today only the agentic proposer's ``failed_after_billing``); absent on the
+    ordinary success rows so readers that never learned it see no shape change.
     """
     _warn_once_if_stale()
     normalized = _normalize_provider(provider)
@@ -265,6 +269,8 @@ def record_external_usage(
     # response carried no usable model id, so old readers see no shape change.
     if isinstance(served_model, str) and served_model.strip():
         record["served_model"] = served_model
+    if isinstance(outcome, str) and outcome.strip():
+        record["outcome"] = outcome
     line = json.dumps(record) + "\n"
     path = _resolve_spend_path(spend_file)
     try:

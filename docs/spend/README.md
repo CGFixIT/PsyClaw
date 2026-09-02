@@ -47,6 +47,7 @@ threading lock so concurrent calls cannot interleave a partial line.
 | `source` | One of `query`, `agentic`, `eval`; anything else normalizes to `unknown` |
 | `query_hash` | Optional. The same unsalted SHA-256 content hash the audit log uses, accepted only as 64 lowercase hex characters |
 | `route_path` | Optional. Up to 16 graph hops, each matching `^[a-z][a-z0-9_]{0,63}$` |
+| `outcome` | Optional. `failed_after_billing` on the row the agentic proposer writes when Grok returned a billed 2xx and the SDK raised afterwards (usage captured from the wire, so the tokens are real); absent on every ordinary row |
 
 ### What is never recorded
 
