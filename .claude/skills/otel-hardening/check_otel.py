@@ -420,6 +420,18 @@ INVENTORY: tuple[dict[str, object], ...] = (
         "evidence": "build_endpoint() in utils/numbat_emitter.py; file sink only",
     },
     {
+        "name": "netconnect passive LAN inventory", "category": 4, "controls": {},
+        "url": "docs/THREAT_MODEL.md",
+        "versions": "agentic/netconnect/ (stdlib-only, no new dependency)",
+        "enforcement": "reads the local host + the OS's EXISTING neighbor cache only, inside explicit "
+                       "RFC1918/loopback allowed_cidrs; allowed_net_ops ships (self, arp) -- no ping, port "
+                       "probe, subnet sweep, or packet send exists in the code. Ships enabled: false and "
+                       "refuses to run with an empty allowed_cidrs",
+        "scope": "out-of-band python -m agentic.netconnect.cli only (I6: never imported by core)",
+        "reviewed": "2026-09-02",
+        "evidence": "scope.py CIDR gate + client.py neighbor-cache read; zero socket sends in the package",
+    },
+    {
         "name": "falco rules", "category": 4, "controls": {},
         "url": "docs/plans/NUMBAT_AND_ALWAYS_ON_ROADMAP.md",
         "versions": "detection-only, default-off deploy asset",
@@ -518,6 +530,7 @@ INVENTORY_ALIASES: dict[str, str] = {
     "ollama": "ollama daemon",
     "openssl": "core web/runtime libs",
     "cel-python": "numbat projection (+ cel-python)",
+    "netconnect": "netconnect passive LAN inventory",
     # bulk category-5 members
     "fastapi": "core web/runtime libs", "starlette": "core web/runtime libs",
     "uvicorn": "core web/runtime libs", "httpx": "core web/runtime libs",

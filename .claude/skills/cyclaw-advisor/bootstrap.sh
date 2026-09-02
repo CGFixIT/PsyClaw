@@ -1,4 +1,4 @@
-#/usr/bin/env bash
+#!/usr/bin/env bash
 # bootstrap.sh — cyclaw-advisor skill harness.
 # Sets up the compliance advisor environment, verifies latest main branch state,
 # and prepares reference files for privacy/DPA/DSR/breach workflows.
