@@ -482,17 +482,17 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
     macOS/Linux launcher (shell) is not -- a fixed model backend can still
     reply with either line ending regardless of which one launched it.
 
-    Raises :class:`AgenticError` if the same path appears in two different
-    blocks: a planner has no legitimate reason to propose two different
-    bodies for one file in a single response, and silently keeping whichever
-    block a dict comprehension happened to see last would hide the other
-    from both ``inspect_candidate_text`` and ``write_file`` entirely. The
-    caller treats this the same as an individual ``write_file`` failure --
-    rejecting the whole iteration via the existing ``file_write_failed``
-    gate, not a new one.
+    Raises :class:`AgenticError` if the same destination appears in two
+    different blocks, including case/trailing-dot aliases that collide on
+    Windows or macOS: a planner has no legitimate reason to propose two
+    different bodies for one file in a single response, and silently keeping
+    or overwriting one would hide the other from review. The caller treats
+    this the same as an individual ``write_file`` failure -- rejecting the
+    whole iteration via the existing ``file_write_failed`` gate, not a new one.
     """
     normalized = text.replace("\r\n", "\n")
     blocks: dict[str, str] = {}
+    destinations: dict[str, str] = {}
     for match in _FILE_BLOCK_RE.finditer(normalized):
         raw = match.group("path").strip()
         # Canonicalize HERE, once, so every consumer downstream compares the
@@ -510,11 +510,13 @@ def _parse_file_blocks(text: str) -> dict[str, str]:
         # keeping the raw string in that case preserves the refusal instead of
         # laundering "/etc/passwd" into "etc/passwd".
         path = canonical_repo_path(raw) or raw
-        if path in blocks:
+        destination = _fs_equiv_path(path)
+        if destination in destinations:
             raise AgenticError(
                 "planner response proposed the same file path in two different blocks",
-                details={"path": path},
+                details={"path": path, "first_path": destinations[destination]},
             )
+        destinations[destination] = path
         blocks[path] = match.group("body")
     return blocks
 
