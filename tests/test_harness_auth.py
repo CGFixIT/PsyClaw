@@ -406,16 +406,37 @@ def test_cross_site_fetch_metadata_is_rejected(client):
     assert resp.json()["detail"]["code"] == "CROSS_SITE_BLOCKED"
 
 
-@pytest.mark.parametrize("origin", ["http://127.0.0.1", "http://localhost", "http://[::1]"])
-def test_loopback_origin_is_allowed(client, origin):
-    """Hostname aliases on the SAME scheme+port as this request.
+def test_exact_loopback_origin_is_allowed(client):
+    """Origin naming this request's own scheme+host+port passes.
 
-    The client fixture is ``http://127.0.0.1`` (implicit :80). A browser on
-    that URL omits the default port, so these Origins match. Explicit :8790
-    is a different origin -- see test_loopback_origin_wrong_port_is_rejected.
+    The client fixture is ``http://127.0.0.1`` (implicit :80). localhost and
+    [::1] are different browser origins and must not pass -- see
+    test_loopback_alias_origin_is_rejected.
     """
-    resp = client.post("/api/soul", json={"enabled": True}, headers={**_full_auth(client), "Origin": origin})
+    resp = client.post(
+        "/api/soul", json={"enabled": True},
+        headers={**_full_auth(client), "Origin": "http://127.0.0.1"},
+    )
     assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        "http://[::1]",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+    ],
+)
+def test_loopback_alias_origin_is_rejected(client, origin):
+    """A different loopback alias is cross-origin to the browser even though
+    both names are in _LOOPBACK_HOSTS. Mirrors gate_auth hostname equality.
+    """
+    resp = client.post(
+        "/api/soul", json={"enabled": True},
+        headers={**_full_auth(client), "Origin": origin},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
 
 
 def test_loopback_origin_wrong_port_is_rejected(client):
@@ -456,6 +477,49 @@ def test_explicit_matching_port_is_allowed(cfg, monkeypatch):
         "/api/soul",
         json={"enabled": True},
         headers={**_full_auth(c), "Origin": "http://127.0.0.1:8790"},
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:8790",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        "http://[::1]:8790",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+    ],
+)
+def test_loopback_alias_on_matching_port_is_rejected(cfg, monkeypatch, origin):
+    """Same port as production, different loopback alias -- still cross-origin."""
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    c = TestClient(harness_server.create_app(cfg, _chat()), base_url="http://127.0.0.1:8790")
+    resp = c.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={**_full_auth(c), "Origin": origin},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+def test_localhost_origin_is_allowed_when_request_host_is_localhost(cfg, monkeypatch):
+    """Same-name Host+Origin must pass -- the console fetch() is relative, so
+    an operator who opened localhost is this case, not the reject case.
+    Starlette TestClient cannot take ``http://[::1]:8790`` as base_url (it
+    splits the IPv6 literal on the first colon), so [::1] is pinned only as
+    a rejected Origin against a 127.0.0.1 Host above.
+    """
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    c = TestClient(
+        harness_server.create_app(cfg, _chat()),
+        base_url="http://localhost:8790",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+    )
+    resp = c.post(
+        "/api/soul",
+        json={"enabled": True},
+        headers={
+            **_full_auth(c),
+            "Origin": "http://localhost:8790",  # DevSkim: ignore DS162092,DS137138 - test loopback host
+        },
     )
     assert resp.status_code == 200
 
