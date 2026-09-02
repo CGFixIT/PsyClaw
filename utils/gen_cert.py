@@ -19,6 +19,7 @@ from utils.telemetry_kill import apply_telemetry_kill
 apply_telemetry_kill()
 
 import argparse  # noqa: E402
+import os  # noqa: E402
 import shutil  # noqa: E402
 import socket  # noqa: E402
 import stat  # noqa: E402
@@ -71,7 +72,14 @@ def _lan_ipv4() -> str | None:
     return ip
 
 
-def subject_alt_names(hostname: str) -> str:
+def _san_extra_ok(entry: str) -> bool:
+    """Refuse values that would split or inject the openssl -addext SAN list."""
+    if not entry or any(ch in entry for ch in (",", "\n", "\r", "\x00")):
+        return False
+    return entry.startswith("DNS:") or entry.startswith("IP:")
+
+
+def subject_alt_names(hostname: str, extra: list[str] | None = None) -> str:
     parts = [
         f"DNS:{hostname}",
         "DNS:localhost",
@@ -81,6 +89,8 @@ def subject_alt_names(hostname: str) -> str:
     lan = _lan_ipv4()
     if lan and lan not in {"127.0.0.1"}:
         parts.append(f"IP:{lan}")
+    if extra:
+        parts.extend(extra)
     return ",".join(parts)
 
 
@@ -95,6 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keyfile", default=_DEFAULT_KEY)
     parser.add_argument("--hostname", default=socket.gethostname())
     parser.add_argument("--days", type=int, default=825)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing cert/key pair (otherwise refuse)",
+    )
+    parser.add_argument(
+        "--san",
+        action="append",
+        default=[],
+        metavar="ENTRY",
+        help="extra SAN entry, e.g. IP:10.0.0.5 or DNS:box.local (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     openssl = find_openssl()
@@ -108,12 +130,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.days <= 0:
         print("--days must be a positive integer", file=sys.stderr)
         return EXIT_ENV
+    for entry in args.san:
+        if not _san_extra_ok(entry):
+            print(
+                f"invalid --san {entry!r}: must be DNS:... or IP:... with no commas",
+                file=sys.stderr,
+            )
+            return EXIT_ENV
 
     certfile = _anchor(args.certfile)
     keyfile = _anchor(args.keyfile)
+    if not args.force and (certfile.exists() or keyfile.exists()):
+        print(
+            f"refusing to overwrite {certfile} / {keyfile} (pass --force to replace)",
+            file=sys.stderr,
+        )
+        return EXIT_ENV
     certfile.parent.mkdir(parents=True, exist_ok=True)
     keyfile.parent.mkdir(parents=True, exist_ok=True)
-    san = subject_alt_names(args.hostname)
+    san = subject_alt_names(args.hostname, extra=args.san)
     cmd = [
         str(openssl),
         "req",
@@ -133,6 +168,13 @@ def main(argv: list[str] | None = None) -> int:
         "-addext",
         f"subjectAltName={san}",
     ]
+    # Restrict the openssl-created key to owner-only on POSIX. Windows umask
+    # is a no-op; chmod below remains best-effort against NTFS ACLs.
+    previous_umask: int | None = None
+    try:
+        previous_umask = os.umask(0o077)
+    except (AttributeError, OSError):
+        previous_umask = None
     try:
         completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
             cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
@@ -143,6 +185,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"failed to run openssl: {exc}", file=sys.stderr)
         return EXIT_FAIL
+    finally:
+        if previous_umask is not None:
+            os.umask(previous_umask)
     if completed.returncode != 0:
         err = (completed.stderr or completed.stdout or "").strip()
         print(err or "openssl req failed", file=sys.stderr)
