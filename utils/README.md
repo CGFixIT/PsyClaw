@@ -20,7 +20,7 @@ modules"; this file groups them by concern.
 | `authn_manager.py` | `AuthManager` gluing `authn.py` + `authn_store.py`; no HTTP awareness. |
 | `authn_cli.py` | `cyclaw-user` console script — local-only user/token admin. |
 | `gen_cert.py` | `cyclaw-gen-cert` console script — wraps `openssl req -x509` to write a self-signed TLS cert with hostname/LAN SAN (Stage 4 of `docs/AUTHENTICATION_DESIGN.md`); no new runtime dependency. |
-| `telemetry_kill.py` | Canonical telemetry-kill env mapping. Stdlib-only; must be applied **before** heavy imports (`invariant-guard` G1). |
+| `telemetry_kill.py` | Canonical telemetry-kill env mapping. Stdlib-only; must be applied **before** heavy imports (`invariant-guard` G1). `verify_telemetry_contract()` runs at `gate.py` boot: hash-pins the three kill maps (SHA-256 `CONTRACT_DIGEST`, independent of this file's prose) and AST-verifies every ChromaDB `PersistentClient` call in `retrieval/vector_store.py` passes `Settings(anonymized_telemetry=False)` — fails closed (raises) on drift in either. |
 | `onnx_telemetry.py` | `suppress_onnx_telemetry()` — post-import ONNX Runtime API suppression at the two load seams; the env half (`ORT_DISABLE_TELEMETRY=1`) rides the kill map. |
 | `guardrail_bridge.py` | Inversion shim: the only module through which `graph.py` reaches `guardrails/` (I6). Returns `None` for a disabled rail. |
 | `tool_broker.py` | Tool name-gate. Caller-supplied allowlist; empty is deny. No `rails=` parameter. Harness imports this instead of `guardrails/` (I6). |
