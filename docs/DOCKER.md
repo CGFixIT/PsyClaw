@@ -36,9 +36,9 @@ of layers:
 - `.env`, keys, `*.pem`
 - tests, docs, `.git`, `.github`
 
-The image is the **gate + graph + retrieval runtime** only. Soul personality file
-that ships in git may be present; treat production `soul.md` as operator-owned and
-bind-mount if you customize it.
+The image is the **gate + graph + retrieval runtime** only. `data/` (corpus,
+soul.md, agentic registry) is not baked into layers; compose bind-mounts `./data`
+at runtime. Treat production `soul.md` as operator-owned.
 
 ## Security posture (must preserve)
 

@@ -120,6 +120,60 @@ def test_verify_telemetry_contract_rejects_a_wrong_pin(monkeypatch):
         tk.verify_telemetry_contract()
 
 
+_GOOD_CHROMA_CLIENT = (
+    "chromadb.PersistentClient(path=p, settings=Settings(anonymized_telemetry=False))\n"
+)
+
+
+def test_chroma_settings_hits_count_every_persistent_client() -> None:
+    from utils.telemetry_kill import _chroma_client_settings_hits
+
+    two = _GOOD_CHROMA_CLIENT + "PersistentClient(path=p, settings=Settings(anonymized_telemetry=False))\n"
+    assert _chroma_client_settings_hits(two) == (2, 2)
+
+    third_bare = two + "chromadb.PersistentClient(path=p)\n"
+    assert _chroma_client_settings_hits(third_bare) == (2, 3)
+
+
+def test_chroma_settings_hits_require_settings_call_not_factory() -> None:
+    from utils.telemetry_kill import _chroma_client_settings_hits
+
+    factory = "chromadb.PersistentClient(path=p, settings=SomeFactory(anonymized_telemetry=False))\n"
+    assert _chroma_client_settings_hits(factory) == (0, 1)
+
+    attr_settings = (
+        "chromadb.PersistentClient(path=p, "
+        "settings=chromadb.config.Settings(anonymized_telemetry=False))\n"
+    )
+    assert _chroma_client_settings_hits(attr_settings) == (1, 1)
+
+
+def test_verify_chroma_requires_hits_equal_total(monkeypatch) -> None:
+    import utils.telemetry_kill as tk
+
+    monkeypatch.setattr(tk, "_chroma_client_settings_hits", lambda src: (2, 3))
+    with pytest.raises(RuntimeError, match=r"found 2/3"):
+        tk._verify_chroma_anonymized_flag()
+
+    monkeypatch.setattr(tk, "_chroma_client_settings_hits", lambda src: (0, 0))
+    with pytest.raises(RuntimeError, match=r"found 0/0"):
+        tk._verify_chroma_anonymized_flag()
+
+
+def test_live_vector_store_persistent_clients_all_disable_posthog() -> None:
+    from pathlib import Path
+
+    from utils.telemetry_kill import _chroma_client_settings_hits, _verify_chroma_anonymized_flag
+
+    src = (Path(__file__).resolve().parent.parent / "retrieval" / "vector_store.py").read_text(
+        encoding="utf-8"
+    )
+    hits, total = _chroma_client_settings_hits(src)
+    assert total >= 2
+    assert hits == total
+    _verify_chroma_anonymized_flag()
+
+
 def test_build_telemetry_safe_env_pure_and_exact():
     """The child-env builder: copies, overlays, scrubs; never mutates base or
     exposes a mutable canonical global."""

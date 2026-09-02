@@ -233,4 +233,9 @@ n="$(_mkdockertree)"
 sed -i.bak 's#^  IMAGE_NAME: .*#  IMAGE_NAME: ghcr.io/someone-else/cyclaw#' "$n/.github/workflows/publish-ghcr.yml"
 _expect_docker_fail "$n" "E6 registry name split" "pushes ghcr.io/someone-else/cyclaw but docker-compose.yml pulls"
 
+# 18. E6: nested data/personality/ must not count as covering data/ (issue #1275).
+o="$(_mkdockertree)"
+sed -i.bak 's#^data/$#data/personality/#' "$o/.dockerignore"
+_expect_docker_fail "$o" "E6 nested data ignore" "no longer excludes runtime state"
+
 echo "== verify-deps verify: OK =="
