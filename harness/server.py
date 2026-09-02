@@ -2047,6 +2047,20 @@ def __getattr__(name: str) -> object:  # noqa: WPS413 - see the comment below
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _is_port_in_use(host: str, port: int) -> bool:
+    """Return True if a TCP listener already holds ``host:port``.
+
+    Local copy of gate.py's probe (do not import gate — I6). Used so a busy
+    harness port prints a clear message and returns exit 0; launchd KeepAlive
+    ``{SuccessfulExit: false}`` must not crash-loop on OSError from uvicorn.
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
 def main() -> None:
     """``python -m harness.server`` / ``cyclaw-harness`` entry point."""
     import uvicorn
@@ -2066,6 +2080,12 @@ def main() -> None:
         # same bounds config.py applies to the stored port; without this the env
         # override accepts 0 (ephemeral bind — console link breaks) or >65535
         sys.exit(f"CYCLAW_HARNESS_PORT out of range ({_MIN_USER_PORT}-{_MAX_PORT}): {port_env}")
+    if _is_port_in_use(host, port):
+        print(
+            f"\nCyClaw harness may already be running on {host}:{port}.\n"
+            "Close the other instance, or wait for the port to release, then try again."
+        )
+        return
     app = create_app(cfg)
     uvicorn.run(app, host=host, port=port)  # DevSkim: ignore DS162092 - loopback-only binding by design
 

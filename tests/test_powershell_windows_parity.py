@@ -132,6 +132,18 @@ def test_invoke_loads_persisted_api_key_from_dotenv() -> None:
     assert load_idx < text.index(warn)
 
 
+def test_invoke_validates_port_before_console_url() -> None:
+    """Port range must match harness _MIN_USER_PORT/_MAX_PORT before URL print."""
+    text = (_PS / "Invoke-CyClaw.ps1").read_text(encoding="utf-8")
+    assert re.search(
+        r"\$Port\s+-lt\s+1024\s+-or\s+\$Port\s+-gt\s+65535",
+        text,
+    )
+    range_idx = text.index("$Port -lt 1024")
+    url_idx = text.index("http://127.0.0.1:$Port")
+    assert range_idx < url_idx
+
+
 def test_installer_requires_explicit_flag_to_replace_existing_repo() -> None:
     """A stale %USERPROFILE%\\.CyClaw\\repo must not be silently Remove-Item'd."""
     text = (_PS / "Install-CyClaw.ps1").read_text(encoding="utf-8")

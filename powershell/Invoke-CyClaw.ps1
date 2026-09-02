@@ -32,6 +32,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Match harness/server.py _MIN_USER_PORT/_MAX_PORT so a privileged or out-of-range
+# override fails before we print a working-looking console URL.
+if ($Port -lt 1024 -or $Port -gt 65535) {
+    throw "Port must be between 1024 and 65535 (got $Port)"
+}
+
 $Home_ = if ($env:CYCLAW_HOME) { $env:CYCLAW_HOME } else { Join-Path $env:USERPROFILE ".CyClaw" }
 if ($Repo -eq "") {
     $Repo = if ($env:CYCLAW_REPO) { $env:CYCLAW_REPO } else { Join-Path $Home_ "repo" }

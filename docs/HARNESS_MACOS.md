@@ -65,12 +65,13 @@ they cannot outlive `cyclaw`:
   `~/Library/LaunchAgents` plist. Silent when no
   `~/.CyClaw/repo/config.yaml` exists; non-fatal on any error (a missing or
   unconfigured `sync:` block just prints a warning).
-- the seven generated LaunchAgent labels, if still loaded or still on disk
-  at `~/Library/LaunchAgents/com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash,gate,harness,keys-rotate,opentweet}.plist`
+- the eight generated LaunchAgent labels, if still loaded or still on disk
+  at `~/Library/LaunchAgents/com.cgfixit.cyclaw.{telegram-poll,telegram-health,fsconnect-trash,gate,harness,keys-rotate,opentweet,sync}.plist`
   (`launchctl bootout` on Darwin even when the plist is already gone, then
   delete the file). Bootout of a never-generated label is a silent no-op.
-  Sync's optional launchd job is **not** in that list — `sync.cli unschedule`
-  owns it. Other, non-CyClaw labels are left alone.
+  Sync is also in that list as a fallback when `sync.cli unschedule` cannot
+  run (missing python/config); `sync.cli unschedule` remains the primary
+  owner. Other, non-CyClaw labels are left alone.
 
 Neither step blocks the rest of uninstall. See `docs/SYNC_README.md`'s
 "Scheduling" section for the sync job.
