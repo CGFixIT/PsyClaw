@@ -30,12 +30,22 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from llm.client import LocalLLMClient, ResolvedLocalBackend
+from llm.client import (
+    LocalLLMClient,
+    ResolvedLocalBackend,
+    reset_local_backend_cache,
+    resolve_local_backend,
+)
 from utils.errors import LLMServiceError
 
 
 class _OllamaLikeHandler(BaseHTTPRequestHandler):
-    """Minimal OpenAI-compatible ``/chat/completions`` responder, scripted per-server."""
+    """Minimal OpenAI-compatible ``/chat/completions``+``/models`` responder,
+    scripted per-server. ``do_GET`` answers the discovery probe
+    ``llm.client._probe_openai_models`` sends as GET ``{base}/models`` when
+    ``models.local_llm.fallback`` is enabled -- a real 2xx/connection-refused
+    round trip, not a monkeypatched return value.
+    """
 
     def log_message(self, fmt: str, *args: object) -> None:  # silence test-run noise
         pass
@@ -59,14 +69,26 @@ class _OllamaLikeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_GET(self) -> None:  # noqa: N802
+        self.server.get_paths.append(self.path)  # type: ignore[attr-defined]
+        status = self.server.get_status  # type: ignore[attr-defined]
+        data = b"{}"
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
 
 class _MockOllamaServer(HTTPServer):
-    """Adds a response script + a received-request-bodies log to assert on."""
+    """Adds a response script + received-request logs to assert on."""
 
-    def __init__(self, script: list[tuple[int, dict]]):
+    def __init__(self, script: list[tuple[int, dict]], *, get_status: int = 200):
         super().__init__(("127.0.0.1", 0), _OllamaLikeHandler)
         self.script = list(script)
         self.received: list[dict] = []
+        self.get_status = get_status
+        self.get_paths: list[str] = []
 
 
 @pytest.fixture
@@ -164,6 +186,103 @@ class TestLocalLLMClientAgainstRealHTTPServer:
         with pytest.raises(LLMServiceError):
             client.generate("hello")
         client.close()
+
+
+def _refused_port() -> int:
+    """Reserve then immediately release an ephemeral port -- guaranteed nothing
+    listens there when a caller connects, same trick
+    test_connection_refused_maps_to_llm_service_error uses above."""
+    probe = HTTPServer(("127.0.0.1", 0), _OllamaLikeHandler)
+    port = probe.server_address[1]
+    probe.server_close()
+    return port
+
+
+class TestResolveLocalBackendFailoverAgainstRealHTTPServer:
+    """``resolve_local_backend``'s primary/fallback selection, exercised over
+    real sockets rather than a monkeypatched ``_probe_openai_models``.
+
+    tests/test_client.py already exhaustively covers the SELECTION LOGIC
+    (which backend wins, caching, degraded-state, audit_log) by monkeypatching
+    ``_probe_openai_models`` directly -- so every one of those assertions is
+    only as good as that mock matching real HTTP semantics. This class proves
+    the actual wire behavior once: a real GET {base}/models round trip over a
+    real loopback socket (2xx from a live server, connection-refused from a
+    dead one) drives the same selection correctly end to end.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_local_backend_cache(self):
+        reset_local_backend_cache()
+        yield
+        reset_local_backend_cache()
+
+    def test_resolve_fails_over_to_a_live_fallback_when_primary_is_refused(self, mock_ollama, monkeypatch):
+        # A successful failover makes resolve_local_backend call audit_log with
+        # no config_path/cfg override, which would otherwise read this repo's
+        # real config.yaml and append a real line to logs/audit.jsonl and
+        # logs/numbat-events.ndjsonl -- same no-op pattern test_client.py
+        # already uses for this exact code path.
+        monkeypatch.setattr("utils.logger.audit_log", lambda *a, **k: None)
+        dead_primary_port = _refused_port()
+        fallback_url, fallback_server = mock_ollama([])
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": f"http://127.0.0.1:{dead_primary_port}/v1",
+            "model": "qwen3.8:27b-mlx",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": fallback_url,
+                "model": "lmstudio-model",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "fallback"
+        assert resolved.provider == "lmstudio"
+        assert resolved.base_url == fallback_url
+        assert resolved.model == "lmstudio-model"
+        assert resolved.degraded is False
+        assert fallback_server.get_paths == ["/v1/models"]
+
+    def test_resolve_prefers_a_reachable_primary_and_never_probes_the_fallback(self, mock_ollama):
+        primary_url, primary_server = mock_ollama([])
+        fallback_url, fallback_server = mock_ollama([])
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": primary_url,
+            "model": "qwen3.8:27b-mlx",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": fallback_url,
+                "model": "lmstudio-model",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        assert resolved.base_url == primary_url
+        assert primary_server.get_paths == ["/v1/models"]
+        # A reachable primary must short-circuit before the fallback is ever touched.
+        assert fallback_server.get_paths == []
+
+    def test_resolve_stays_on_a_degraded_primary_when_both_are_refused(self):
+        dead_primary_port = _refused_port()
+        dead_fallback_port = _refused_port()
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": f"http://127.0.0.1:{dead_primary_port}/v1",
+            "model": "qwen3.8:27b-mlx",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": f"http://127.0.0.1:{dead_fallback_port}/v1",
+                "model": "lmstudio-model",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        assert resolved.degraded is True
 
 
 class TestBackendSwapLockingRegression:
