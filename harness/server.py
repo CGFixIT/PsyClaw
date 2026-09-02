@@ -293,6 +293,15 @@ def _llm_settings() -> dict:
     return models.get("local_llm", {}) if isinstance(models, dict) else {}
 
 
+def _deepagent_github_settings() -> dict:
+    """Read-only view of the repo config's ``agentic.deepagent_github`` block."""
+    parsed = _get_config(str(_CONFIG_PATH))
+    if not isinstance(parsed, dict):
+        return {}
+    agentic_cfg = parsed.get("agentic", {})
+    return agentic_cfg.get("deepagent_github", {}) if isinstance(agentic_cfg, dict) else {}
+
+
 def _rate_limit_settings() -> dict:
     """Read-only view of the repo config's ``api.rate_limit`` block.
 
@@ -399,6 +408,62 @@ def _resolve_backend() -> ResolvedLocalBackend:
             source="primary",
         )
     return resolve_local_backend(llm)
+
+
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _canonical_backend_key(url: str) -> tuple[str, str, int | None, str] | None:
+    """Comparison key for a base_url that treats loopback aliases (127.0.0.1 /
+    localhost / ::1 -- this module's own _LOOPBACK_HOSTS, above) as the same
+    host and resolves an implicit default port (e.g. "http://localhost/v1",
+    no explicit port) to the same value as its explicit spelling
+    ("http://127.0.0.1:80/v1") -- urlparse's own .port is None for the
+    former and 80 for the latter, even though both name the same socket.
+    Returns None for an unparseable URL.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        host = "127.0.0.1"
+    port = parsed.port
+    if port is None:
+        port = _SCHEME_DEFAULT_PORTS.get(scheme)
+    return (scheme, host, port, parsed.path.rstrip("/"))
+
+
+def _agent_run_shares_chat_backend() -> bool:
+    """True when real-repo-run's local planner and /api/chat currently target
+    the same backend -- i.e. sharing generation_gate protects one real
+    resource, rather than needlessly blocking an unrelated one.
+
+    real-repo-run's LocalProposerClient is built straight from
+    agentic.deepagent_github.base_url (agentic/cli.py's cmd_real_repo_run),
+    a config key independent of models.local_llm.fallback. When fallback is
+    enabled and the primary is down, /api/chat correctly moves to the live
+    fallback (via _resolve_backend, above) while deepagent_github.base_url
+    still points at the (down) primary -- comparing against the LIVE
+    resolved chat backend, not just the static primary config, is what
+    catches that divergence.
+
+    Compares canonicalized (scheme, host, port, path) rather than raw
+    strings: "localhost" and "127.0.0.1" are both valid loopback spellings
+    for the same instance, and a plain string compare would wrongly treat
+    them as different backends -- skipping the shared gate and letting a
+    chat turn and an agent run contend for the same Ollama stream again.
+    """
+    deepagent_base = str(_deepagent_github_settings().get("base_url") or "").strip()
+    if not deepagent_base:
+        return True  # nothing configured -- can't rule out a shared backend, stay cautious
+    chat_key = _canonical_backend_key(_resolve_backend().base_url)
+    deepagent_key = _canonical_backend_key(deepagent_base)
+    if chat_key is None or deepagent_key is None:
+        return True  # unparseable -- can't rule out a shared backend, stay cautious
+    return chat_key == deepagent_key
 
 
 def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
@@ -577,6 +642,13 @@ def create_app(
     loop_inflight: dict[str, float] = {}
     loop_inflight_lock = threading.Lock()
     generation_gate = GenerationGate()
+    # Separate from generation_gate: two concurrent real-repo-run subprocesses
+    # always target the same agentic.deepagent_github.base_url (unlike a chat
+    # turn, which can diverge onto a live fallback -- see
+    # _agent_run_shares_chat_backend), so double-submission of an agent run
+    # must be excluded unconditionally, independent of whatever /api/chat is
+    # currently doing.
+    agent_run_gate = GenerationGate()
 
     def _retry_after_http(limiter: RateLimiter, client_ip: str, code: str, label: str) -> HTTPException:
         wait = max(1, ceil(limiter.retry_after_sec(client_ip)))
@@ -805,6 +877,7 @@ def create_app(
     console_html = console_source.replace(_CSRF_PLACEHOLDER, csrf_token)
     app.state.csrf_token = csrf_token
     app.state.generation_gate = generation_gate
+    app.state.agent_run_gate = agent_run_gate
     app.state.chat_client = client
 
     # Mirrors gate.py's mount so harness.html's <script src="/static/auth_admin.js">
@@ -1495,23 +1568,59 @@ def create_app(
             )
         except ToolDenied as exc:
             raise _err(_HTTP_FORBIDDEN, exc) from exc
-        return _agentic_call(
-            "real-repo-run",
-            lambda: run_agentic_op(
-                "real-repo-run",
-                instruction=req.instruction,
-                checks=checks,
-                branch=req.branch,
-                commit_message=req.commit_message,
-                reason=req.reason,
-                confirm=req.confirm,
-                max_iterations=req.max_iterations,
-                plan=req.plan,
-                read_files=req.read_files,
-                pr=req.pr,
-                issue=req.issue,
-            ),
-        )
+        # Two concurrent real-repo-run subprocesses always target the same
+        # agentic.deepagent_github.base_url, so a double-click/retried POST
+        # spawning two of them (each paying for its own LLM calls) must be
+        # excluded unconditionally -- independent of whatever /api/chat is
+        # doing.
+        if not agent_run_gate.claim():
+            raise _err(
+                _HTTP_CONFLICT,
+                AgenticError(
+                    "another agent run is already in progress",
+                    code="AGENT_RUN_BUSY",
+                ),
+            )
+        try:
+            # Additionally exclude a concurrent chat turn, but only when it
+            # would actually contend for the same backend: real-repo-run's
+            # planner is built straight from agentic.deepagent_github.base_url
+            # (independent of models.local_llm.fallback), so when fallback is
+            # active and /api/chat has moved to a live fallback backend, the
+            # two are not contending for anything and must not block each
+            # other -- see _agent_run_shares_chat_backend's docstring.
+            shares_backend = _agent_run_shares_chat_backend()
+            if shares_backend and not generation_gate.claim():
+                raise _err(
+                    _HTTP_CONFLICT,
+                    AgenticError(
+                        "a local model chat turn is already running",
+                        code="AGENT_RUN_BUSY",
+                    ),
+                )
+            try:
+                return _agentic_call(
+                    "real-repo-run",
+                    lambda: run_agentic_op(
+                        "real-repo-run",
+                        instruction=req.instruction,
+                        checks=checks,
+                        branch=req.branch,
+                        commit_message=req.commit_message,
+                        reason=req.reason,
+                        confirm=req.confirm,
+                        max_iterations=req.max_iterations,
+                        plan=req.plan,
+                        read_files=req.read_files,
+                        pr=req.pr,
+                        issue=req.issue,
+                    ),
+                )
+            finally:
+                if shares_backend:
+                    generation_gate.release()
+        finally:
+            agent_run_gate.release()
 
     @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
     def agent_run_status(run_id: str) -> dict:
