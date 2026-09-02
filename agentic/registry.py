@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 from datetime import UTC, datetime
@@ -121,6 +122,54 @@ def _is_lock_owner(lock_dir: Path) -> bool:
     return token.get("pid") == os.getpid()
 
 
+def _reclaim_guard_path(lock_dir: Path) -> Path:
+    return lock_dir.with_name(lock_dir.name + ".reclaim.d")
+
+
+def _reclaim_registry_lock(lock_dir: Path) -> bool:
+    """Reclaim one stale lock without deleting a concurrent winner's lock."""
+    reclaim_guard = _reclaim_guard_path(lock_dir)
+    try:
+        reclaim_guard.mkdir()
+    except FileExistsError:
+        return False
+
+    try:
+        try:
+            age = time.time() - lock_dir.stat().st_mtime
+        except FileNotFoundError:
+            # The prior owner released between our failed acquire and guard win.
+            age = 0.0
+            lock_was_present = False
+        except OSError:
+            return False
+        else:
+            lock_was_present = True
+
+        if lock_was_present:
+            if not _can_reclaim_lock(lock_dir, age):
+                return False
+            shutil.rmtree(lock_dir)
+
+        try:
+            lock_dir.mkdir()
+        except FileExistsError:
+            # A normal acquirer won after the stale directory was removed. Its
+            # fresh lock must remain intact.
+            return False
+        _write_lock_token(lock_dir)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            reclaim_guard.rmdir()
+        except OSError:
+            # A leftover guard fails closed. The error hint below tells the
+            # operator how to recover it after confirming no apply is running.
+            pass
+
+
 def _acquire_registry_lock(lock_dir: Path) -> None:
     """Acquire a cross-process write lock, or raise ``SkillRegistryError``.
 
@@ -138,27 +187,16 @@ def _acquire_registry_lock(lock_dir: Path) -> None:
     except FileExistsError:
         # Lock is already held; fall through to the stale-age check below.
         pass
-    try:
-        age = time.time() - lock_dir.stat().st_mtime
-    except OSError:
-        age = 0.0
-    if _can_reclaim_lock(lock_dir, age):
-        try:
-            # Remove the whole directory (token + empty dir) and recreate it.
-            import shutil
-
-            shutil.rmtree(lock_dir, ignore_errors=True)
-            lock_dir.mkdir()
-            _write_lock_token(lock_dir)
-            return
-        except OSError:
-            # Another process won the reclaim race; fall through and refuse below.
-            pass
+    if _reclaim_registry_lock(lock_dir):
+        return
     raise SkillRegistryError(
         "another skills-registry apply is in progress",
         details={
             "lock_dir": str(lock_dir),
-            "hint": "Retry shortly, or remove the lock dir if it is stale.",
+            "hint": (
+                "Retry shortly, or remove the lock and adjacent reclaim guard "
+                "after confirming no registry apply is running."
+            ),
         },
     )
 
