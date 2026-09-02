@@ -37,88 +37,37 @@
 
 CyClaw is a personal RAG (Retrieval-Augmented Generation) backend that:
 
-1. **Answers questions exclusively from your local Markdown corpus** — no internet by default
-2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline
-3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification
-4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level
-5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration
-6. **Ships optional, out-of-band operator layers** for Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, now also drivable from the browser terminal via governed **Sync** and **Agentic** consoles
-7. **Extends the agentic layer to local data** (v1.8+) with opt-in **filesystem** (`agentic/fsconnect/`), read-only **SQL** (`agentic/sqlconnect/`), and passive **LAN inventory** (`agentic/netconnect/`) connectors -- all disabled by default and out-of-band
-8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails` and degrades to offline heuristic rails — defense-in-depth only, never a routing authority. When `guardrails.enabled` is the literal `true`, `utils/guardrail_bridge.py` wires visible `guardrail_input` / `guardrail_output` nodes; see [`guardrails/README.md`](guardrails/README.md)
-9. **Scaffolds an optional LangChain Deep Agents / governed harness-optimizer layer** (v1.9, `agentic/deepagent_github/` + `agentic/harness_optimizer/`) — opt-in, disabled by default, and out-of-band like every other agentic feature above; phases 0-9 are implemented and tested — phases 0-5 (config, workspace tools, mock scoring/acceptance gate) plus phases 6-9 (real subagent wiring, fixture-based GitHub coding evaluator, governed propose/apply), which landed in PR #515 (2026-07-13). **Superseded by item 11 below:** P10 has since landed a real draft-PR write path and a sandboxed verification executor — the write path's own flag was armed on 2026-08-07, leaving `agentic.enabled` as the master switch that still ships `false`
-10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, `/goal` + human-gated `/loop`, wired `/skills` and `/tools` diagrams, and allowlist-only `/web` (off by default). Home layout under `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux). Same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md)
-11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions; a diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off — `agentic.enabled: false` is the master switch, and since the operator enablement of 2026-08-07 it (plus per-call reason/confirm) is what holds the draft-PR step, plus `allow_git_write_tools: false` for push
-12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`, `docs/AUTHENTICATION_DESIGN.md`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, and the `cyclaw-user` console script for account/token management. First-boot HTTP is `GET /auth/setup-status` (unauthenticated, rate-limited) and loopback-only `POST /auth/bootstrap-password` (403 off-box, 409 once set). Beyond login/logout/whoami, `gate_auth.py` also carries a role-based admin surface (§12 "Roles" — three roles, `admin`/`operator`/`audit`, with the last enabled `admin` protected from disable/delete/role-change): `/auth/users` list/create, `/auth/password` self-service, `/auth/users/{username}/password|role|disable|enable`, `DELETE /auth/users/{username}`, and `/auth/audit/summary`. Every `/auth/*` route exists regardless of `auth.enabled` and returns 503 (not 404) when it's off, so route presence never discloses whether the feature is enabled. **When `auth.enabled` is true, `POST /query` and the console require a session or named device token.** The shipped default leaves `/query` open.
-13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`, package [`memory/README.md`](memory/README.md), plan in [`docs/memory/README.md`](docs/memory/README.md)) — SQLite+FTS5-backed, with propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5) and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. Not `docs/memories/` (sandbox notes)
-14. **Ships an optional Telegram channel** (v1.9, `telegram/`, shipped `enabled: false`) — an out-of-band phone remote. Shipped YAML is `mode: "chat"` (allowlisted long-poll); `mode: "notify"` remains the T1 outbound-only option. Operator advice is still T1-first before leaving a poller up. Inbound text only ever reaches the RAG pipeline through loopback `POST /query` — never a direct call into `graph.py`. T3 hybrid-confirm (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online` — one-shot, via the exact private-chat command `/online on <grok|claude>` — and T4 media staging (`media.enabled`, default off) writes only through the existing `agentic/fsconnect` path. See [`docs/channels/TELEGRAM_DESIGN.md`](docs/channels/TELEGRAM_DESIGN.md)
-15. **Adds an offline slop-detection probe for the agentic coding loop** (v1.9.x, `agentic/unslop_bridge.py` + vendored scanners under `agentic/vendor/unslop/`) — scans `real_repo_loop.py`'s model responses and proposed prose files (`.md`/`.rst`/`.txt`) for AI-writing tells (filler openers, listicle rhythm, moralizing codas), logging redacted findings (SHA-256 doc hash + counts, never raw text) to `logs/unslop.jsonl` and surfacing a nudge back into the loop. `unslop.enabled` ships `false`; the vendored scanner runs fully offline with no network calls, and — like every consumer already inside `agentic/` — it never crosses the I6 boundary into `gate.py`/`graph.py`/`mcp_hybrid_server.py`
-16. **Projects the audit trail into a Numbat forensic stream** (`utils/numbat_emitter.py`, `numbat:` block — the one optional subsystem that ships **`enabled: true`**) — a derived NDJSON stream at `logs/numbat-events.ndjsonl` that the pinned **Numbat 0.2.0** CLI can score for patterns like `secrets.read_private_key` and `exfil.curl_post_file`. Two producer planes write it: the out-of-band **action** plane (executor, `ops_runner`, `real_repo_loop`, fsconnect, sqlconnect emit directly) and the **mainline** plane (`utils/logger.audit_log` projects every audit record). `audit.jsonl` stays authoritative and the privacy contract is inherited, not re-implemented — records are projected *after* SHA-256 query hashing and recursive PII redaction, so raw query text reaches neither stream — though every event does carry hostname/username/uid endpoint metadata, which makes the stream a second *sensitive local log*, not a privacy improvement (file sink only, no HTTP; disable with `numbat.enabled: false`). The projection is fail-soft end to end and runs at the terminal `audit_logger` node (I4), after the answer is computed, so it can never turn a good response into a 500. See [`docs/security-philosophy/numbat_secondary_evaluator.md`](docs/security-philosophy/numbat_secondary_evaluator.md)
-17. **Ships an optional OpenTweet X channel** (`opentweet/`, shipped `enabled: false`) — an out-of-band weekly poster. Generation only happens through loopback `POST /query` with `user_confirmed_online: false`; the default write is an OpenTweet **draft** (`scheduled_date` is opt-in). Schedulers (`python -m opentweet.cli schedule-plist` on Darwin, `schedule-task` on Windows) generate and never load/register, and they never send `publish_now`. Same I6 isolation as Telegram: `gate.py` / `graph.py` / MCP never import the package. See [`docs/channels/OPENTWEET_DESIGN.md`](docs/channels/OPENTWEET_DESIGN.md) and [`opentweet/README.md`](opentweet/README.md)
-
-18. **Tracks what the paid providers cost** (`utils/spend.py`, `logs/spend.jsonl` via `logging.spend_file`) — every billed Grok/Claude call appends one JSON line recording the token counts, the provider/model, and a `source` tag separating the `/query` plane from the agentic plane. **Tokens are the ground truth; dollars are derived at read time**, so correcting a stale vendor rate re-prices the whole history instead of leaving wrong numbers on disk. The ledger is deliberately a separate stream from `audit.jsonl` (it never routes through `audit_log`), it never persists query text, prompts, message content, or credentials, and it is not a policy point — nothing on the `/query` path reads it. `cyclaw-metrics` prints today/last-7-day windows, flags rate staleness, and compares CyClaw's rate table against xAI's own `cost_in_usd_ticks` so a wrong rate surfaces instead of accumulating. `utils/sequence_detect.py` joins it back to the audit trail on the shared `query_hash` for offline forensics. See [`docs/spend/README.md`](docs/spend/README.md)
+1. **Answers questions exclusively from your local Markdown corpus** — no internet by default.
+2. **Enforces every safety invariant via LangGraph topology** — not prompts, not config flags, not discipline.
+3. **Maintains a persistent soul/personality layer** (`soul.md`) with SHA-256 drift detection, atomic evolution writes, and user-gated modification.
+4. **Falls back to an external LLM only with explicit user confirmation** in hybrid mode — Grok (xAI) or Claude (Anthropic), selected per-query, each independently triple-gated at config, env, and per-query level.
+5. **Exposes both a FastAPI HTTP gateway and an MCP server** for Claude Desktop / Copilot Studio integration.
+6. **Ships optional, out-of-band operator layers** — Dropbox corpus sync (`sync/`) and agentic GitHub context / governed local workflows (`agentic/`, `.claude/`) — never imported into the request path, drivable from the browser terminal via the governed **Sync** and **Agentic** consoles.
+7. **Extends the agentic layer to local data** (v1.8+) with opt-in **filesystem** (`agentic/fsconnect/`), read-only **SQL** (`agentic/sqlconnect/`), and passive **LAN inventory** (`agentic/netconnect/`) connectors — all disabled by default and out-of-band.
+8. **Adds an optional NeMo Guardrails content-safety layer** (v1.8, `guardrails/`) that soft-imports `nemoguardrails`, degrades to offline heuristic rails, and is defense-in-depth only — never a routing authority. When `guardrails.enabled` is the literal `true`, `utils/guardrail_bridge.py` wires the visible `guardrail_input` / `guardrail_output` nodes. See [`guardrails/README.md`](guardrails/README.md).
+9. **Scaffolds a governed harness-optimizer / Deep Agents layer** (v1.9, `agentic/harness_optimizer/` + `agentic/deepagent_github/`) — opt-in, disabled by default, out-of-band; phases 0–9 implemented and tested (PR #515, 2026-07-13). **Superseded by item 11:** the live coding pipeline is now `real_repo_loop.py`, whose draft-PR write path was armed on 2026-08-07 behind the `agentic.enabled` master switch that still ships `false`.
+10. **Ships a local coding-harness console** (v1.9, `harness/` + `powershell/` / `macos/`) — a grok-build-style slash-command console on `127.0.0.1:8790` chatting with the local model over the OpenAI-compatible endpoint, with per-session token tallies, `/goal` + human-gated `/loop`, `/skills` and `/tools` wiring diagrams, and allowlist-only `/web` (off by default). Home is `%USERPROFILE%\.CyClaw` (Windows) or `~/.CyClaw` (macOS/Linux); same I6 isolation as every other out-of-band layer. See [`harness/README.md`](harness/README.md).
+11. **Adds a real-repo GitHub agentic coding harness** (v1.9, `agentic/real_repo_loop.py` + `agentic/executor/`) — clone → plan → patch → verify → **human decides** → commit, with pushing a `claude/*` branch and opening a *draft* PR as two further separate decisions. A diff-scope gate refuses candidates that rewrite the tests judging them, verification runs as sandboxed argv-list subprocesses, and the layer ships off: `agentic.enabled: false` is the master switch (plus per-call reason/confirm) and `allow_git_write_tools: false` holds push.
+12. **Adds an optional per-user authentication layer** (`gate_auth.py` + `utils/authn*`) — scrypt password hashes, session cookie + CSRF for browsers, bearer device tokens for programmatic clients, three roles (`admin`/`operator`/`audit`), and the `cyclaw-user` console script. Every `/auth/*` route exists regardless of `auth.enabled` and returns 503 (not 404) when it is off, so route presence never discloses the feature state. **When `auth.enabled` is true, `POST /query` and the console require a session or named device token.** The shipped default leaves `/query` open. See [Per-User Authentication](#per-user-authentication-v19).
+13. **Adds an optional facts + episodes memory store** (`gate_memory.py` + `memory/`) — SQLite+FTS5, propose/apply governance (a non-empty human `reason` plus an injection scan on apply, parallel to soul's I5), and an optional retrieval-fusion hook. Every `memory:` switch ships `false`; mutating routes require the same Bearer `CYCLAW_API_KEY` as the other admin endpoints. See [`memory/README.md`](memory/README.md) and the plan in [`docs/memory/README.md`](docs/memory/README.md) — not `docs/memories/`, the sandbox notes.
+14. **Ships an optional Telegram channel** (v1.9, `telegram/`, shipped `enabled: false`) — an out-of-band phone remote: outbound notify (`mode: "notify"`) or allowlisted long-poll chat (the shipped `mode: "chat"`; T1-first is still the advised enable order). Inbound text only ever reaches the RAG pipeline through loopback `POST /query`. T3 hybrid-confirm (`allow_hybrid_confirm`, default off) is the only way chat text can set `user_confirmed_online` — one-shot, via the exact private-chat command `/online on <grok|claude>` — and T4 media staging (`media.enabled`, default off) writes only through the existing `agentic/fsconnect` path. See [`docs/channels/TELEGRAM_DESIGN.md`](docs/channels/TELEGRAM_DESIGN.md).
+15. **Adds an offline slop-detection probe for the agentic coding loop** (v1.9.x, `agentic/unslop_bridge.py` + vendored scanners under `agentic/vendor/unslop/`) — scans `real_repo_loop.py`'s model responses and proposed prose files (`.md`/`.rst`/`.txt`) for AI-writing tells, logs redacted findings (SHA-256 doc hash + counts, never raw text) to `logs/unslop.jsonl`, and surfaces a nudge back into the loop. `unslop.enabled` ships `false`; the scanner runs fully offline with no network calls and never crosses the I6 boundary.
+16. **Projects the audit trail into a Numbat forensic stream** (`utils/numbat_emitter.py`, `numbat:` block — the one optional subsystem that ships **`enabled: true`**) — a derived NDJSON stream at `logs/numbat-events.ndjsonl` that the pinned **Numbat 0.2.0** CLI can score for patterns like `secrets.read_private_key` and `exfil.curl_post_file`, fed by the out-of-band **action** plane and the **mainline** plane (`utils/logger.audit_log` projects every audit record). `audit.jsonl` stays authoritative; records are projected *after* SHA-256 query hashing and PII redaction, so raw query text reaches neither stream — but every event carries hostname/username/uid metadata, which makes the stream a second *sensitive local log*, not a privacy improvement (file sink only, no HTTP; disable with `numbat.enabled: false`). Fail-soft end to end, at the terminal `audit_logger` node, so it can never turn a good response into a 500. See [`docs/security-philosophy/numbat_secondary_evaluator.md`](docs/security-philosophy/numbat_secondary_evaluator.md).
+17. **Ships an optional OpenTweet X channel** (`opentweet/`, shipped `enabled: false`) — an out-of-band weekly poster; generation only through loopback `POST /query` with `user_confirmed_online: false`, default write an OpenTweet **draft**, schedulers that generate and never load. See [OpenTweet Channel](#opentweet-channel).
+18. **Tracks what the paid providers cost** (`utils/spend.py`, `logs/spend.jsonl` via `logging.spend_file`) — every billed Grok/Claude call appends token counts, provider/model, and a `source` tag separating the `/query` plane from the agentic plane. **Tokens are the ground truth; dollars are derived at read time.** A separate stream from `audit.jsonl` that never persists query text, prompts, or credentials, and is not a policy point; `cyclaw-metrics` prints spend windows, flags rate staleness, and compares CyClaw's rate table against xAI's own `cost_in_usd_ticks` so a wrong rate surfaces instead of accumulating. See [`docs/spend/README.md`](docs/spend/README.md).
 
 ---
 
 ## Architecture
 
-```
-User Query (HTTP POST /query or MCP tool call)
-         │
-         ▼
-    ┌─────────────────────────────────────────────────────┐
-    │  gate.py  (FastAPI, 127.0.0.1:8787)                 │
-    │  • Rate limit (60 req/min per IP — RUNS FIRST)      │
-    │  • Injection filter (sanitizer.py, config-driven)   │
-    │  • Soul init (PersonalityManager closure)           │
-    │  • Telemetry kill block (before any SDK import;     │
-    │    shared — MCP + indexer apply the same block)     │
-    └──────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-    ┌─────────────────────────────────────────────────────┐
-    │  graph.py  (LangGraph 12-node State Machine)        │
-    │                                                     │
-    │  [ENTRY]                                            │
-    │     ↓                                               │
-    │  1. retrieve  (Chroma + BM25 + RRF fusion)          │
-    │     ↓                                               │
-    │  2. route_by_score  (top_score >= 0.028 RRF?)       │
-    │     ├─ YES ──→ 3. guardrail_input (offline rail;    │
-    │     │           opt-in, pass-through when disabled) │
-    │     │           blocked ──→ 12. audit_logger        │
-    │     │           passed  ──→ 4. local_llm            │
-    │     │                        (Ollama :11434)        │
-    │     └─ NO  ──→ 5. user_gate (needs_confirm=true)    │
-    │                    ├─ not yet answered ──→          │
-    │                    │     12. audit_logger           │
-    │                    ├─ confirmed + hybrid ──→        │
-    │                    │      6. pre_action_hook_grok   │
-    │                    │      7. grok_fallback OR       │
-    │                    │      8. pre_action_hook_claude │
-    │                    │      9. claude_fallback        │
-    │                    └─ declined / offline ──→        │
-    │                       3. guardrail_input (again)    │
-    │                           blocked ──→ 12. audit_logger│
-    │                           passed  ──→               │
-    │                           10. offline_best_effort   │
-    │     ↓ (all four answer nodes converge)              │
-    │  11. guardrail_output (offline output rail; opt-in; │
-    │     grounding check applies to local_llm answer only)│
-    │     ↓                                               │
-    │  12. audit_logger (SHA-256 + PII redact → jsonl)    │
-    │     ↓                                               │
-    │  [END]                                              │
-    └─────────────────────────────────────────────────────┘
-                       │
-                       ▼
-    ┌─────────────────────────────────────────────────────┐
-    │  HybridRetriever  (retrieval/hybrid_search.py)      │
-    │  • ChromaDB  (semantic, all-MiniLM-L6-v2, 384d)    │
-    │  • BM25Okapi (keyword, Porter stemming)             │
-    │  • RRF fusion (k=60, equal 1.0/1.0 weighting)      │
-    │  • Per-chunk provenance metadata in every result    │
-    └─────────────────────────────────────────────────────┘
-```
+`gate.py` (FastAPI on `127.0.0.1:8787`) runs the `TrustedHostMiddleware` Host
+allowlist, then the per-IP rate limiter (**60 req/min — it runs first, before
+the injection filter**), then the config-driven injection filter, then soul
+init, and hands a `GraphState` to the 12-node LangGraph state machine in
+`graph.py`. Routing is graph edges only — `retrieve` is the unconditional
+entry, and every path converges on `audit_logger` before END. The numbered
+plain-text version of this flow is [`CLAUDE.md`](CLAUDE.md) §2 "The Map"; the
+invariants it encodes are in [`INVARIANTS.md`](INVARIANTS.md).
 
 ### LangGraph Topology (rendered)
 
@@ -198,6 +147,14 @@ flowchart TD
     style L fill:#1a1a3a,color:#ffffff
 ```
 
+
+What the diagram compresses: `HybridRetriever` (`retrieval/hybrid_search.py`)
+fuses ChromaDB (semantic, `all-MiniLM-L6-v2`, 384-dim cosine, CPU-only
+embeddings) with BM25Okapi (keyword, Porter stemming) by RRF (`k=60`, equal
+weighting) and carries per-chunk provenance metadata in every result. The
+telemetry kill block runs before any SDK import, and the MCP server and the
+indexer apply the same block.
+
 ---
 
 ## API Key Setup (Soul Mutations)
@@ -208,105 +165,55 @@ CyClaw's soul mutation endpoints (`/soul/propose`, `/soul/apply`, `/soul/reload`
 
 > **Opting out entirely:** `config.yaml`'s `security.api_key_optional` (default `false`) removes the `CYCLAW_API_KEY` requirement from every route above **and** the harness console's guarded routes (agent run/push/publish included), for both apps at once — but **only for requests arriving from this machine**. The bypass is granted on the socket peer, so a remote caller still needs the real key no matter how the process was launched. Entries in `security.allowed_hosts` do not change that: that list filters request `Host` headers and opens no listening socket. What *would* matter is the bind itself — `gate.py` refuses to start with a non-loopback `api.host` while the flag is `true`, and `config-guard`'s C13 warns on that pair. Note it also does nothing under Docker: NAT rewrites the source address, so the container sees the bridge gateway rather than loopback and the routes stay key-gated (set `CYCLAW_API_KEY` in the container instead).
 
-### macOS — zsh (the default shell) or bash
+### macOS / Linux — zsh or bash
 
-Set for the current Terminal tab. Generate a real value instead of typing one —
-`openssl` ships with macOS:
+Set it for the current shell. Generate a real value instead of typing one —
+`openssl` ships with macOS and every Linux distribution:
 
 ```bash
 export CYCLAW_API_KEY="$(openssl rand -hex 20)"
-echo "$CYCLAW_API_KEY"       
+echo "$CYCLAW_API_KEY"
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Persist it. macOS has defaulted to **zsh** since Catalina, so that means
-`~/.zshrc` unless you switched — check with `echo $SHELL` first:
+Persist it in your shell profile. macOS has defaulted to **zsh** since
+Catalina, so that means `~/.zshrc` unless you switched — check with
+`echo $SHELL`. On bash, append it to the first existing login file in this
+order: `~/.bash_profile`, `~/.bash_login`, `~/.profile`; create
+`~/.bash_profile` only when none exists, because macOS bash login shells do not
+read `~/.bashrc` (Linux bash does).
 
 ```bash
-echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.zshrc
+echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.zshrc   # or the bash file above
 source ~/.zshrc
-echo "$CYCLAW_API_KEY"        
-uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
-
-On bash, append it to the first existing login file in this order:
-`~/.bash_profile`, `~/.bash_login`, `~/.profile`. Create `~/.bash_profile` only
-when none exists; macOS bash login shells do not read `~/.bashrc`.
 
 Full macOS walkthrough — including launching the harness console beside the
 gateway and exercising every REST endpoint with `curl` — is in
 [`setup-guide.md`](setup-guide.md#macos-apple-silicon).
 
-### Linux — bash / zsh
-
-Set for the current session:
-
-```bash
-export CYCLAW_API_KEY="your-strong-local-secret"
-uvicorn gate:app --host 127.0.0.1 --port 8787
-```
-
-Persist in your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.profile`):
-
-```bash
-echo 'export CYCLAW_API_KEY="your-strong-local-secret"' >> ~/.bashrc
-source ~/.bashrc
-uvicorn gate:app --host 127.0.0.1 --port 8787
-```
-
-### Windows — PowerShell
+### Windows — PowerShell / cmd.exe
 
 *(Windows is the fallback path; CyClaw is developed and verified on macOS
 first. Everything below still works and is CI-covered on `windows-latest`.)*
 
-Set for the current session only (cleared on terminal close):
-
 ```powershell
-$env:CYCLAW_API_KEY = "your-strong-local-secret"
+$env:CYCLAW_API_KEY = "your-strong-local-secret"      # current session only
 uvicorn gate:app --host 127.0.0.1 --port 8787
 ```
 
-Persist API key across sessions (writes to the current user's environment permanently):
+Persist it for the current user (writes the user environment permanently);
+verify with `echo $env:CYCLAW_API_KEY` before launching:
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable(
-    "CYCLAW_API_KEY",
-    "your-strong-local-secret",
-    [System.EnvironmentVariableTarget]::User
-)
-uvicorn gate:app --host 127.0.0.1 --port 8787
+[System.Environment]::SetEnvironmentVariable("CYCLAW_API_KEY", "your-strong-local-secret", [System.EnvironmentVariableTarget]::User)
 ```
 
-Verify it is set before launching:
-
-```powershell
-echo $env:CYCLAW_API_KEY
-```
-
-### Windows — Command Prompt (cmd.exe)
-
-```cmd
-set CYCLAW_API_KEY=your-strong-local-secret
-uvicorn gate:app --host 127.0.0.1 --port 8787
-```
-
-Persist permanently (takes effect in new sessions):
-
-```cmd
-setx CYCLAW_API_KEY "your-strong-local-secret"
-```
-
-### Windows Server 2022 — System-wide (all users, requires admin)
-
-```powershell
-[System.Environment]::SetEnvironmentVariable(
-    "CYCLAW_API_KEY",
-    "your-strong-local-secret",
-    [System.EnvironmentVariableTarget]::Machine
-)
-```
-
-Or via GUI: **System Properties → Advanced → Environment Variables → System variables → New**.
+Windows Server, system-wide (all users, requires admin): the same call with
+`[System.EnvironmentVariableTarget]::Machine`, or **System Properties →
+Advanced → Environment Variables → System variables → New**. From cmd.exe:
+`set CYCLAW_API_KEY=your-strong-local-secret` for the session and
+`setx CYCLAW_API_KEY "your-strong-local-secret"` to persist.
 
 ### All platforms — `.env` file (already in `.gitignore`)
 
@@ -391,12 +298,12 @@ discloses whether the feature is on.
 ### Turning it on
 
 1. Set `auth.enabled: true` in `config.yaml` and restart `gate.py`. The store is
-   SQLite at `auth.db_path` (`data/auth/cyclaw_auth.db`); point
-   `CYCLAW_AUTH_DB_URL` — its **own** env var, deliberately not the personality
-   subsystem's `CYCLAW_DB_URL` — at a `postgresql://` DSN for Postgres.
+   SQLite at `auth.db_path` (`data/auth/cyclaw_auth.db`); `CYCLAW_AUTH_DB_URL` —
+   its **own** env var, deliberately not the personality subsystem's
+   `CYCLAW_DB_URL` — switches it to a `postgresql://` DSN.
 2. Set the first admin password. The bootstrap account is username **`admin`**,
-   created with no password. Open the terminal console on loopback and use the
-   first-boot box, or post directly:
+   created with no password. Use the terminal console's first-boot box on
+   loopback, or post directly:
 
    ```bash
    curl -s -X POST http://127.0.0.1:8787/auth/bootstrap-password \
@@ -405,26 +312,24 @@ discloses whether the feature is on.
    ```
 
    That route is **loopback-peer + same-origin only** — 403 from off-box, 409
-   once a password is already set, 503 when `auth.enabled` is false. It carries
-   no credential on purpose: on a genuine first run there is nothing to present
+   once a password is set, 503 when `auth.enabled` is false — and carries no
+   credential on purpose: on a genuine first run there is nothing to present
    yet. `GET /auth/setup-status` (unauthenticated, rate-limited) reports
    `{enabled, needs_password, username}` so a console can tell first-boot from
    logged-out.
 3. Add the accounts operators actually use with the local-only `cyclaw-user`
-   console script (no HTTP route reaches it):
+   console script (no HTTP route reaches it). Subcommands: `add`, `list`,
+   `role`, `disable`, `enable`, `passwd`, `token create|list|revoke`; new
+   accounts default to `operator`:
 
    ```bash
    cyclaw-user add alice --role operator     # prompts for the password
-   cyclaw-user list
    cyclaw-user token create alice laptop     # prints the token ONCE
    ```
 
-   Subcommands: `add`, `list`, `role`, `disable`, `enable`, `passwd`, and
-   `token create|list|revoke`. New accounts default to `operator`.
+### Roles, sessions, lockout
 
-### Roles
-
-Three roles, checked server-side on every request — `admin`, `operator`, `audit`:
+Three roles, checked server-side on every request:
 
 | Capability | `admin` | `operator` | `audit` |
 |---|---|---|---|
@@ -436,30 +341,24 @@ Three roles, checked server-side on every request — `admin`, `operator`, `audi
 | Change own password (`POST /auth/password`) | yes | yes | yes |
 | `GET /auth/audit/summary` | yes | no | yes |
 
-The **last enabled `admin` is protected**: disable, delete, and role-change all
-refuse it, so an operator cannot lock the deployment out of its own admin
-surface. `GET /auth/audit/summary` is the reduced, session-gated audit view —
-it is not the API-key-gated `GET /audit/summary`.
+The **last enabled `admin` is protected** — disable, delete, and role-change
+all refuse it, so an operator cannot lock the deployment out of its own admin
+surface. `GET /auth/audit/summary` is the reduced, session-gated audit view, not
+the API-key-gated `GET /audit/summary`.
 
-### Sessions, tokens, and lockout
-
-- **Browsers** get a `cyclaw_session` cookie plus a CSRF token; every mutating
-  `/auth/*` route requires that token in the `X-CyClaw-CSRF` header. `POST
-  /query` is deliberately exempt from CSRF — it takes a session *or* a bearer
-  device token and mutates no auth state.
-- **Programmatic clients** send a named device token as
-  `Authorization: Bearer <token>`. A token is displayed once at creation and
-  stored only as a hash; revoke by label with `cyclaw-user token revoke`.
-- **Session lifetime** is governed by two independent limits in
-  `config.yaml`'s `auth.session` block, and a session dies at whichever is
-  reached first: `idle_timeout_sec: 43200` (12 h, a rolling window that resets
-  on every valid use) and `absolute_timeout_sec: 604800` (7 d, which never
-  resets).
-- **Failed logins** back off per account: the first **5** consecutive failures
-  are free, then the delay doubles from 2 s up to a **900 s (15 min) ceiling**.
-  It is a ceiling, not a permanent lock — no admin action is needed to recover.
-- **Passwords** are hashed with scrypt (`utils/authn.py`). No password,
-  session id, CSRF token, or device token is ever written to `audit.jsonl`.
+Browsers get a `cyclaw_session` cookie plus a CSRF token that every mutating
+`/auth/*` route requires in the `X-CyClaw-CSRF` header; `POST /query` is
+deliberately CSRF-exempt because it takes a session *or* a bearer device token
+and mutates no auth state. Programmatic clients send a named device token as
+`Authorization: Bearer <token>` — displayed once, stored only as a hash,
+revoked by label. A session dies at whichever of `auth.session`'s two limits
+comes first: `idle_timeout_sec: 43200` (12 h, rolling) or
+`absolute_timeout_sec: 604800` (7 d, never resets). Failed logins back off per
+account — the first **5** consecutive failures are free, then the delay doubles
+from 2 s to a **900 s ceiling**; no admin action is needed to recover.
+Passwords are scrypt-hashed (`utils/authn.py`), and no password, session id,
+CSRF token, or device token is ever written to `audit.jsonl`. Design and
+rationale: [`docs/AUTHENTICATION_DESIGN.md`](docs/AUTHENTICATION_DESIGN.md).
 
 ### Serving it beyond loopback
 
@@ -492,17 +391,15 @@ CyClaw's stated scope is single-operator and loopback-bound.
 | **macOS** (primary) | 14 Sonoma+ | **Apple Silicon only.** An Intel Mac cannot install this repo's pinned torch at all — no `x86_64` wheel is published at that pin |
 | Windows / Linux (fallback) | — | Both fully supported and CI-covered; they share the `+cpu` torch path below |
 
-**Optional local-backend failover.** Ollama is the primary local backend; CyClaw
-can also fail over to LM Studio (or any other OpenAI-compatible loopback
-server) if Ollama isn't reachable. It's off by default — set
-`models.local_llm.fallback.enabled: true` in `config.yaml` and fill in your LM
-Studio model id (`fallback.model`; LM Studio ids don't carry the Ollama-style
-`name:tag` colon, so don't just reuse `qwen3.8:27b-mlx`). When enabled, a short
-probe (`fallback.probe_timeout_sec`, default 1.5s) tries Ollama first and
-LM Studio second, both `LocalLLMClient` and `/health` share the same choice,
-and it re-checks automatically if neither backend was reachable the first
-time. See `llm/client.py`'s `resolve_local_backend` for the full resolution
-order.
+
+**Optional local-backend failover.** Ollama is the primary local backend;
+CyClaw can also fail over to LM Studio (or any OpenAI-compatible loopback
+server) when Ollama isn't reachable. Off by default — set
+`models.local_llm.fallback.enabled: true` and fill in `fallback.model` with
+the LM Studio id (no Ollama-style `name:tag` colon). A short probe
+(`fallback.probe_timeout_sec`, default 1.5s) tries Ollama first and LM Studio
+second, `LocalLLMClient` and `/health` share the choice, and it re-probes if
+neither answered the first time (`llm/client.py`'s `resolve_local_backend`).
 
 ### Docker (optional runtime image)
 
@@ -520,8 +417,8 @@ Native install (below) remains the primary path for Apple Silicon and for the co
 
 ### Install — macOS (Apple Silicon)
 
-macOS is the primary supported platform, and it needs a **different torch step**
-than Windows/Linux: the `+cpu` local-version wheel does not exist for macOS, and
+macOS is the primary platform and needs a **different torch step** than
+Windows/Linux: the `+cpu` local-version wheel does not exist for macOS, and
 both manifests hardcode that pin, so the generic block fails twice on a Mac.
 
 ```bash
@@ -529,15 +426,11 @@ git clone https://github.com/CGFixIT/CyClaw
 cd CyClaw
 python3.12 -m venv .venv
 source .venv/bin/activate
-```
 # 1) torch FIRST, and PLAIN — no +cpu suffix, no --index-url override.
 #    Apple Silicon has one arm64 wheel; there is no CPU/CUDA build to pick between.
-```bash
 pip install "torch==2.13.0"
-```
 # 2) Everything else, from copies of both manifests with the torch and
-#    PyTorch-index lines stripped out. Same thing CI's macos-latest leg runs.
-```bash
+#    PyTorch-index lines stripped out — the same thing CI's macos-latest leg runs.
 grep -v -e '^torch==' -e '^--extra-index-url https://download.pytorch.org' \
     requirements.txt > /tmp/requirements-macos.txt
 grep -v '^torch==' constraints.txt > /tmp/constraints-macos.txt
@@ -545,22 +438,14 @@ pip install -r /tmp/requirements-macos.txt -c /tmp/constraints-macos.txt \
     --ignore-installed PyYAML
 ```
 
-Just cloned on Apple Silicon? `bash ./macos/setup-cyclaw.sh` is the single
-operator-facing entry point: it offers to clone if you skipped that step,
-asks its few choices (start now? open the consoles? autofill the generated
-key?) once up front, then runs the one-shot path below and, if asked,
-starts both servers. `bash ./macos/setup-from-clone.sh` is what it calls:
-installer + Keychain keys (Telegram / Claude / Grok / GitHub) + Ollama check
-+ retrieval index + both servers. Both chain the existing `macos/` scripts
-rather than reimplementing them. Flags and privacy notes:
-[`macos/README.md`](macos/README.md#one-command-apple-silicon).
-
-Prefer the installer only? `bash ./macos/install-cyclaw.sh` branches on
-`uname -s` and handles the torch difference for you — it prepares the
-**harness console**, and the installed `cyclaw` command also boots the RAG
-gateway on `:8787`, which stays degraded (503 on `/query`) until you do the
-Ollama / index / API-key steps yourself — the installer skips all three. The
-tradeoffs are tabulated in
+Prefer a script? `bash ./macos/setup-cyclaw.sh` is the single operator-facing
+entry point (offers to clone, asks its few choices once, then runs
+`macos/setup-from-clone.sh`: installer + Keychain keys + Ollama check +
+retrieval index + both servers). `bash ./macos/install-cyclaw.sh` is the
+installer alone — it handles the torch difference but skips the Ollama / index /
+API-key steps, so the gateway stays degraded (503 on `/query`) until you do
+them. Flags, privacy notes, and tradeoffs:
+[`macos/README.md`](macos/README.md#one-command-apple-silicon) and
 [`setup-guide.md`](setup-guide.md#option-a--the-installer-script-handles-the-torch-difference-for-you).
 
 ### Install — Windows / Linux (fallback)
@@ -569,17 +454,11 @@ tradeoffs are tabulated in
 git clone https://github.com/CGFixIT/CyClaw
 cd CyClaw
 python3.12 -m venv .venv
-source .venv/bin/activate        
-```
-# 1) Install CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
-```bash
+source .venv/bin/activate
+# 1) CPU-only torch first (CVE-2025-32434 fixed in 2.6.0; 2.13.0 is within the patched range)
 pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
-```
-
-# 2) Install the rest, pinned to the verified transitive tree.
-#    --ignore-installed PyYAML avoids a resolver conflict with a system-level
-#    PyYAML some platforms preinstall outside pip's own tracking.
-```bash
+# 2) The rest, pinned to the verified transitive tree. --ignore-installed PyYAML
+#    avoids a resolver conflict with a system PyYAML some platforms preinstall.
 pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
 ```
 
@@ -622,23 +501,18 @@ python -m harness.server                             # → http://127.0.0.1:8790
 **The `cyclaw-*` short names need a self-install.** `cyclaw-server`,
 `cyclaw-harness`, `cyclaw-index`, `cyclaw-mcp`, `cyclaw-metrics`,
 `cyclaw-clear-cache`, `cyclaw-user`, and `cyclaw-gen-cert` are
-`[project.scripts]` console scripts, and pip writes
-those shims only when the CyClaw *project itself* is installed. The install
-steps above install `requirements.txt` — a third-party pin list with no
-self-install line — so those names are `command not found` after them. Add
-`pip install -e . -c constraints.txt` if you want them; otherwise use the
-`python -m …` forms, which always work and are what both shipped launchers use.
+`[project.scripts]` shims that pip writes only when the project itself is
+installed; `requirements.txt` has no self-install line, so add
+`pip install -e . -c constraints.txt` if you want them. The `python -m …` forms
+always work and are what both shipped launchers use.
 
 Override the harness port with `CYCLAW_HARNESS_PORT=8795 python -m
 harness.server`, not a CLI flag; it refuses to bind a non-loopback address.
-
-`uvicorn harness.server:app` also works, via a lazy module-level `app`
-(`harness/server.py` builds it on first attribute access rather than at import,
-so merely importing the module never touches `~/.CyClaw`). Prefer the `-m` form
-anyway: the uvicorn form bypasses the bind-address guard, so `--host 0.0.0.0`
-opens a public socket that `python -m harness.server` would have refused.
-`TrustedHostMiddleware` still rejects any non-loopback `Host` header either
-way, so the containment holds — but one layer fewer.
+`uvicorn harness.server:app` also works (the module-level `app` is built
+lazily, so importing never touches `~/.CyClaw`), but prefer `-m`: the uvicorn
+form bypasses the bind-address guard, so `--host 0.0.0.0` opens a public socket
+that `python -m harness.server` would have refused — `TrustedHostMiddleware`
+still rejects non-loopback `Host` headers, but that is one layer fewer.
 
 Open `/` for the terminal UI and `/health` for readiness. The terminal exposes five operator consoles — **Soul**, **Sync**, **Agentic**, **Filesystem**, and **SQL** — the latter four calling `POST /ops/sync`, `/ops/agentic`, `/ops/fsconnect`, and `/ops/sqlconnect` (API-key gated, rate-limited, audited).
 
@@ -809,30 +683,26 @@ for brevity.
 
 ## Dropbox Corpus Sync
 
-CyClaw includes an **optional, out-of-band** Dropbox sync layer that mirrors a Dropbox corpus into `data/corpus/` without touching `gate.py`, `graph.py`, or the MCP request path.
-
-**Key capabilities**
-- `rclone`-backed pull sync with safety fuses (`max_delete`, `max_transfer`)
-- crash-safe single-instance locking — an OS-backed lock (`fcntl.flock` / `msvcrt.locking`) prevents a scheduled run and a manual run from racing, and releases automatically even if the process dies
-- audit logging for changed corpus files
-- optional scheduler integration for Linux, macOS, and Windows — cron / Windows Task Scheduler by default, plus an opt-in Darwin-only launchd backend (`sync.scheduler_backend: "launchd"`, `schedule_frequency` daily/weekly/monthly) that generates the plist and prints the `launchctl bootstrap` command, never loading it itself
-- optional reindex trigger when corpus changes
-
-**Core commands**
+An **optional, out-of-band** `rclone`-backed pull sync mirrors a Dropbox corpus
+into `data/corpus/` without touching `gate.py`, `graph.py`, or the MCP request
+path. It carries safety fuses (`max_delete`, `max_transfer`), an OS-backed
+single-instance lock (`fcntl.flock` / `msvcrt.locking`) that keeps a scheduled
+run and a manual run from racing and releases even if the process dies, audit
+logging of changed corpus files, an optional reindex trigger, and scheduler glue
+for cron / Windows Task Scheduler plus an opt-in Darwin-only launchd backend
+(`sync.scheduler_backend: "launchd"`, `schedule_frequency` daily/weekly/monthly)
+that generates the plist and prints the `launchctl bootstrap` command — never
+loading it itself.
 
 ```bash
-python -m sync.cli setup          # first-run bootstrap
-python -m sync.cli test
-python -m sync.cli sync --dry-run
-python -m sync.cli sync
-python -m sync.cli status
-python -m sync.cli schedule
-python -m sync.cli unschedule
+python -m sync.cli setup          # first-run bootstrap; then: test | sync --dry-run | sync | status | schedule | unschedule
 ```
 
-The same actions are available from the **Sync Console** panel in the terminal UI via `POST /ops/sync` (loopback-only, API-key gated, audited).
-
-See [`docs/! How-To-Guides/Dropbox_Sync_Guide.md`](docs/%21%20How-To-Guides/Dropbox_Sync_Guide.md) for full setup and scheduling details, and [`docs/SYNC_README.md`](docs/SYNC_README.md) for module internals (lock lifecycle, exit codes, error taxonomy).
+The **Sync Console** panel drives the same actions via `POST /ops/sync`
+(loopback-only, API-key gated, audited). Full setup and scheduling:
+[`docs/! How-To-Guides/Dropbox_Sync_Guide.md`](docs/%21%20How-To-Guides/Dropbox_Sync_Guide.md);
+module internals (lock lifecycle, exit codes, error taxonomy):
+[`docs/SYNC_README.md`](docs/SYNC_README.md).
 
 ---
 
@@ -844,32 +714,27 @@ real resolved install paths and prints the exact `launchctl bootstrap` command
 — **none of them ever loads the agent itself**. Loading a background job is
 always a separate, explicit operator action.
 
-**Key capabilities**
 - **Secrets never land in a plist.** Token-bearing jobs chain
-  `macos/cyclaw-keychain-env.sh`, which fetches the secret from the macOS
-  Keychain at process start, exports it, and `exec`s the real command — failing
-  closed (nothing launched) if the item is missing or empty. Store secrets
-  first with `macos/cyclaw-keychain-set.sh`: an interactive no-echo prompt
-  driven by `security` itself, so the secret never appears in any process's
-  argv, and the item is trust-pinned with `-T /usr/bin/security`
-- **Scheduled jobs** — Dropbox sync (opt-in launchd backend, see
-  [Dropbox Corpus Sync](#dropbox-corpus-sync)), Telegram poll/health
-  (`python -m telegram.cli poll-plist` / `health-plist`), fsconnect
-  trash emptying (`python -m agentic.fsconnect.cli trash-empty-plist`),
-  and OpenTweet (`python -m opentweet.cli schedule-plist`)
-- **Supervised services** (highest risk, extra-gated) —
-  `macos/generate_service_plist.py` writes a KeepAlive LaunchAgent for
-  `gate.py` or the harness console. Because that turns a loopback server into
-  an always-on, auto-restarting listener that survives reboot, it refuses to
-  write anything without `--confirm` **and** a non-empty `--reason` — the same
-  reason-required idiom soul mutations use. Restart-on-crash only
-  (`KeepAlive: {SuccessfulExit: false}`); a clean `launchctl stop` stays stopped
+  `macos/cyclaw-keychain-env.sh`, which fetches the secret from the Keychain at
+  process start, exports it, and `exec`s the real command — failing closed
+  (nothing launched) if the item is missing or empty. Store secrets first with
+  `macos/cyclaw-keychain-set.sh`, a no-echo prompt driven by `security` itself
+  so the secret never appears in any argv; the item is trust-pinned with
+  `-T /usr/bin/security`.
+- **Scheduled jobs** — Dropbox sync (see [Dropbox Corpus Sync](#dropbox-corpus-sync)),
+  Telegram poll/health, fsconnect trash emptying, and OpenTweet — each a
+  generate-only `*-plist` subcommand (commands below).
+- **Supervised services** (highest risk) — `macos/generate_service_plist.py`
+  writes a KeepAlive LaunchAgent for `gate.py` or the harness console. Because
+  that turns a loopback server into an always-on listener that survives reboot,
+  it refuses to write without `--confirm` **and** a non-empty `--reason` (the
+  reason-required idiom soul mutations use). Restart-on-crash only; a clean
+  `launchctl stop` stays stopped.
 - **Uninstall symmetry** — `macos/uninstall-cyclaw.sh` unschedules any
   registered sync job and boots out + removes landed CyClaw LaunchAgents by
   label (`telegram-poll`, `telegram-health`, `fsconnect-trash`, `gate`,
-  `harness`, `keys-rotate`, `opentweet`), so no background job outlives
-  the install. Sync's optional launchd job is owned by `sync.cli unschedule`,
-  not that label loop.
+  `harness`, `keys-rotate`, `opentweet`), so no background job outlives the
+  install. Sync's own launchd job is owned by `sync.cli unschedule`.
 
 **Core commands**
 
@@ -894,26 +759,19 @@ phase ledger: [`docs/work/MACOS_LAUNCHD_INTEGRATION_PLAN.md`](docs/work/MACOS_LA
 
 CyClaw now includes a **concise, governed agentic layer** for local operator workflows. It is **opt-in, disabled by default, and fully out-of-band**: it is never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`. The coding console (`harness/`) is a **sibling** package, not a subpackage; `data/agentic/skills_registry.json` is a governed store that ships empty (the harness reads it, `apply-skill` writes it). Package guide: [`agentic/README.md`](agentic/README.md).
 
-### What it adds
+What it adds: read-only GitHub context through the `gh` CLI (invoked as an
+argv list, never via a shell; no GitHub token is stored or forwarded by
+CyClaw), a governed local skills registry with explicit human gating, and the
+operator workflows under `.claude/` ([`.claude/README.md`](.claude/README.md)).
+All agentic reads, refusals, and registry changes are audit logged.
 
-- **Read-only GitHub context** through the `gh` CLI
-- **Governed local skills registry** with explicit human gating
-- **Project workflows and operator helpers** under `.claude/`
-- **Reusable local patterns** for memory, commands, tools, hooks, and utility prompts
-
-### Security posture
-
-- reads only in normal operation
-- no GitHub token is stored or forwarded by CyClaw
-- `gh` is invoked as an argv list, not via shell execution
-- the GitHub write path (`gh pr create --draft`) is IMPLEMENTED and its
-  code-level gate `EXECUTION_ENABLED` ships `True` (operator-signed
-  2026-08-07). The layer master switch `agentic.enabled` still ships `false`,
-  so a default checkout cannot open a PR — that switch, plus a per-call
-  `reason` and `confirm`, is what refuses now. Procedure and the
-  `CYCLAW_AGENTIC_WRITE_DISABLE` rollback:
-  `docs/agentic/GITHUB_WRITE_ENABLEMENT.md`
-- all agentic reads, refusals, and registry changes are audit logged
+The GitHub write path (`gh pr create --draft`) is implemented and its
+code-level gate `EXECUTION_ENABLED` ships `True` (operator-signed 2026-08-07),
+as do `mode: "write"` and `writes_enabled`. The layer master switch
+`agentic.enabled` still ships `false`, so a default checkout cannot open a PR —
+that switch, plus a per-call `reason` and `confirm`, is what refuses. Procedure
+and the `CYCLAW_AGENTIC_WRITE_DISABLE` rollback:
+[`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
 
 ### Enable it
 
@@ -939,22 +797,11 @@ python -m agentic.cli propose-skill --name deploy --desc "..." --body-file s.md 
 python -m agentic.cli apply-skill --name deploy --desc "..." --body-file s.md --reason "add deploy runbook" --confirm
 ```
 
-The **Agentic Console** panel drives these from the terminal UI via `POST /ops/agentic`; skill-Apply is refused under shipped defaults by `agentic.enabled: false` (the CLI no-ops while it is off) — the `mode=write` + `writes_enabled` gates now ship open (2026-08-07), and a per-call `reason` + `--confirm` remain mandatory.
 
-**Key areas in agentic folders**
-- `skills/` — reusable project skills / workflows
-- `commands/` — shortcut command entry points
-- `patterns/` — repeatable operating patterns
-- `tools/` — tool wrappers and helper definitions
-- `utility-prompts/` — reusable operator prompts
-- `memory/` — memory-oriented helpers / artifacts
-- `hooks/` and `rules/` — local guardrails and automation boundaries
-
-**Examples from the current repo**
-- run / smoke-test workflows for CyClaw
-- architecture, tests, logging, and speed refactor loops
-- wrap-up / session-end workflows
-- memory orchestration support patterns
+The **Agentic Console** panel drives these from the terminal UI via
+`POST /ops/agentic`; skill-Apply is refused under shipped defaults by
+`agentic.enabled: false` (the CLI no-ops while it is off), and a per-call
+`reason` + `--confirm` remain mandatory once it is on.
 
 ---
 
@@ -964,12 +811,28 @@ v1.8 extends the agentic layer beyond GitHub to **local data**, for the regulate
 
 ### `agentic/fsconnect/` — local / SMB filesystem connector
 
-Scoped **reads** and separately-gated **writes** over a local or SMB file share, sharing one held-handle security core.
+Scoped **reads** and separately-gated **writes** over a local or SMB share,
+sharing one held-handle security core (`pathsafe.py`): POSIX descends with
+`openat` / `O_NOFOLLOW` from a held root fd; Windows read/list/stat locks the
+canonical root ancestry against rename, opens once with `CreateFileW`, verifies
+`GetFinalPathNameByHandleW` containment, and consumes that same handle —
+Windows writes remain hard-refused. UNC, NTFS alternate data streams
+(`file::$DATA`), `\\?\` / `\\.\` device paths, `..` traversal, and symlink /
+reparse traversal are denied; segment-aware containment closes
+**CVE-2025-53110** (sibling-prefix), and held-handle authority prevents
+name-reopen junction swaps.
 
-- **`pathsafe.py` security core** — POSIX uses `openat` / `O_NOFOLLOW` descent from a held root directory fd. Windows read/list/stat locks the canonical root ancestry against rename, opens once with `CreateFileW`, verifies `GetFinalPathNameByHandleW` containment and root identity, and consumes that same handle; Windows writes remain hard-refused. Denies UNC, NTFS alternate data streams (`file::$DATA`), `\\?\` / `\\.\` device paths, `..` traversal, and symlink / reparse traversal. Segment-aware containment closes **CVE-2025-53110** (sibling-prefix), while held-handle authority prevents name-reopen junction swaps.
-- **Reads** (`fs_list` / `fs_stat` / `fs_read` / `fs_grep` / `fs_glob` / `fs_largest`) confined to `allowed_roots`, audited, with a 5 MiB read cap and advisory OWASP∪`banned_patterns` content scanning.
-- **Writes** (`fs_write` / `fs_append` / `fs_mkdir` / `fs_move`) — fully built but **`writes_enabled: false` by default**; confined to a **separate** `writable_roots` list; gated by a human `reason` + `--confirm` (for destructive ops); atomic (`tmp` + `os.replace`); **content-agnostic** (never calls the LLM — an operator pipes local-LLM/QWEN output in). A code-level `FS_WRITE_HARD_DISABLE` kill switch forces dry-run regardless of config.
-- **Toggleable RAG-corpus indexing** of the share (`index_enabled`, dry-run default) stages eligible files into the corpus and triggers a reindex **subprocess** — enabling a generate → write → index loop without importing the retrieval layer.
+- **Reads** (`fs_list` / `fs_stat` / `fs_read` / `fs_grep` / `fs_glob` /
+  `fs_largest`) are confined to `allowed_roots`, audited, capped at 5 MiB, and
+  content-scanned (OWASP ∪ `banned_patterns`, advisory).
+- **Writes** (`fs_write` / `fs_append` / `fs_mkdir` / `fs_move`) ship
+  **`writes_enabled: false`**; confined to a **separate** `writable_roots` list;
+  gated by a human `reason` (+ `--confirm` for destructive ops); atomic
+  (`tmp` + `os.replace`); content-agnostic (never calls the LLM). A code-level
+  `FS_WRITE_HARD_DISABLE` kill switch forces dry-run regardless of config.
+- **Toggleable RAG-corpus indexing** of the share (`index_enabled`, dry-run
+  default) stages eligible files into the corpus and triggers a reindex
+  **subprocess** — a generate → write → index loop without importing retrieval.
 
 ```bash
 python -m agentic.fsconnect.cli status
@@ -997,7 +860,17 @@ fsconnect:
 
 ### `agentic/sqlconnect/` — read-only SQL connector (v0.1 scaffold)
 
-A disabled-by-default scaffold for read-only on-prem SQL (Postgres / MSSQL). Read-only is enforced three ways: a **SELECT/WITH-only query guard** (rejects DDL/DML, stacked statements, and comment-hidden keywords by scanning a quote-stripped copy), a **session-level read-only** transaction, and a hard `allow_write: false`. The DSN is read from an **environment variable only** (`CYCLAW_SQL_DSN`), never hardcoded; drivers (`psycopg` / `pyodbc`) are imported lazily. The quote-stripping scan (layer 1) is a single left-to-right pass that gives `'...'`, `"..."`, `[...]`, and Postgres `$tag$...$tag$` quoting the same precedence the database itself gives them — an earlier regex-alternation version could be fooled by a quote character nested inside a different quoting form (e.g. `$$'$$`) into treating a stacked `DROP` as part of one `SELECT`; layers 2 and 3 were never affected.
+Read-only on-prem SQL (Postgres / MSSQL), enforced three ways: a
+**SELECT/WITH-only query guard** (rejects DDL/DML, stacked statements, and
+comment-hidden keywords by scanning a quote-stripped copy), a **session-level
+read-only** transaction, and a hard `allow_write: false`. The DSN comes from an
+**environment variable only** (`CYCLAW_SQL_DSN`); drivers (`psycopg` / `pyodbc`)
+import lazily. The quote-stripping scan is a single left-to-right pass that
+gives `'...'`, `"..."`, `[...]`, and Postgres `$tag$...$tag$` quoting the same
+precedence the database does — an earlier regex-alternation version could be
+fooled by a quote nested inside a different quoting form (e.g. `$$'$$`) into
+treating a stacked `DROP` as part of one `SELECT`; the other two layers were
+never affected.
 
 ```bash
 python -m agentic.sqlconnect.cli status
@@ -1016,13 +889,13 @@ sqlconnect:
   allow_write: false             # reserved; v0.1 cannot write regardless
 ```
 
-### `agentic/netconnect/` -- passive LAN inventory (v0.1 scaffold)
+### `agentic/netconnect/` — passive LAN inventory (v0.1 scaffold)
 
-This disabled-by-default connector reports best-effort local host metadata and
-reads the operating system's existing ARP/neighbor cache. It performs no ping,
-port probe, subnet sweep, packet send, scheduling, or request-path integration.
-Every returned IPv4 address is filtered through operator-supplied CIDRs that
-must be subnets of RFC1918 or loopback space.
+Reports best-effort local host metadata and reads the OS's existing
+ARP/neighbor cache. No ping, port probe, subnet sweep, packet send,
+scheduling, or request-path integration; every returned IPv4 address is
+filtered through operator-supplied CIDRs that must be subnets of RFC1918 or
+loopback space.
 
 ```bash
 python -m agentic.netconnect.cli status
@@ -1046,59 +919,39 @@ netconnect:
 
 An **opt-in** content-safety layer in `guardrails/` ([package README](guardrails/README.md)). Absence of the `guardrails:` block, or `enabled: false` (the shipped default), is a pure no-op. When enabled, `utils/guardrail_bridge.py` wires two visible `graph.py` nodes — `guardrail_input` (after `route_by_score`) and `guardrail_output` (after generation; grounding check on the **`local_llm` path only**) — still **defense-in-depth only, never a routing authority**: the graph's own edges decide where a blocked query goes. `gate.py` / `graph.py` / `mcp_hybrid_server.py` never import `guardrails` directly (I6). Status table: [`docs/NeMo/README.md`](docs/NeMo/README.md).
 
-- **`nemoguardrails` is an optional dependency.** The layer **soft-imports** it and, when it is absent, degrades to **offline heuristic rails** that need no second LLM call:
-  - **input** — light prompt-injection marker scan + soul/identity-mutation intent detection (the content-layer arm of the Soul-Governance invariant);
-  - **output** — token-overlap **grounding** check against the retrieved context, flagging likely-ungrounded (hallucinated) answers below `hallucination_threshold`.
-- When `nemoguardrails` **is** installed, the same Python checks back the live NeMo actions (via the Colang flows in `guardrails/config/rails.co`), so the offline heuristics and live rails never drift.
-- Decisions are recorded to a **separate** metrics stream (`logs/guardrails.jsonl`) that stores **only SHA-256 hashes** — never raw text — mirroring the audit log's privacy posture.
+`nemoguardrails` is an **optional dependency**: the layer soft-imports it and,
+when absent, degrades to offline heuristic rails that need no second LLM call —
+an **input** rail (prompt-injection marker scan + soul/identity-mutation intent
+detection, the content-layer arm of the Soul-Governance invariant) and an
+**output** rail (token-overlap **grounding** check against the retrieved
+context, flagging likely-hallucinated answers below `hallucination_threshold`).
+When `nemoguardrails` **is** installed, the same Python checks back the live
+NeMo actions via the Colang flows in `guardrails/config/rails.co`, so offline
+heuristics and live rails never drift. Decisions go to a **separate** metrics
+stream (`logs/guardrails.jsonl`) that stores only SHA-256 hashes.
 
 ```bash
-python -m guardrails.cli status                         # config + nemoguardrails availability
-python -m guardrails.cli check "your query here"        # run offline rails (no LLM/NeMo needed)
-python -m guardrails.cli metrics                         # summarize the guardrail stream
-python -m guardrails.cli test                            # pre-flight self-test
+python -m guardrails.cli status | check "your query here" | metrics | test
 ```
 
-```yaml
-guardrails:
-  enabled: false                 # opt-in; also gates the graph.py guardrail_input node
-  engine: "openai"               # Ollama OpenAI-compatible endpoint
-  model: "qwen3.8:27b-mlx"            # keep in sync with models.local_llm.model
-  hallucination_threshold: 0.18  # token-overlap floor for the grounding rail
-  metrics_path: "logs/guardrails.jsonl"   # separate from logs/audit.jsonl (hashes only)
-```
-
-> Package map: [`guardrails/README.md`](guardrails/README.md). Canonical status:
-> [`docs/NeMo/README.md`](docs/NeMo/README.md). Phased history:
-> `docs/NeMo/later_development_guideline.md`, `docs/NeMo/phase2_implementation_plan.md`.
+Config keys (`guardrails.enabled`, `engine`, `model`, `hallucination_threshold`,
+`metrics_path`) and their shipped values live in `config.yaml`; the status
+table, phased history, and rail semantics are in
+[`docs/NeMo/README.md`](docs/NeMo/README.md).
 
 ---
 
 ## Agentic Harness Scaffold (v1.9)
 
-A governed, **opt-in, disabled-by-default, and out-of-band** scaffold for two related
-future capabilities — never imported by `gate.py`, `graph.py`, or `mcp_hybrid_server.py`,
-same isolation guarantee as every other agentic feature above:
-
-- **`agentic/harness_optimizer/`** — a better-harness-style optimizer that would evaluate
-  candidate improvements to allowed harness surfaces against visible train cases and
-  hidden holdout cases, deterministic scoring, and a hard acceptance gate (no score
-  regression, no unallowed surface changed, no visible-case hardcoding, no critical
-  governance finding).
-- **`agentic/deepagent_github/`** — an optional LangChain Deep Agents-backed local GitHub
-  coding harness using Ollama and scoped CyClaw tool wrappers, lazily importing
-  `deepagents` only when explicitly enabled.
-
-**Status:** phases 0-9 are implemented. Phases 0-5 (config validation, the
-proposer workspace + its audited, symlink-hardened tool boundary, mock
-scoring/acceptance gate, the lazy `deepagent_github` builder seam) are covered by
-`tests/test_agentic_harness_optimizer.py` and `tests/test_agentic_harness_phase345.py`.
-Phases 6-9 (real Deep Agents subagent wiring, a fixture-based GitHub coding
-evaluator, and governed propose/apply with human-confirmed acceptance) landed in
-PR #515 (merged 2026-07-13), are covered by `tests/test_agentic_harness_phase679.py`,
-and are documented in `docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md` — phase 9 is
-a security gate, not authorization to add an executor. Full plan and phase ledger:
-`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`.
+A governed, **opt-in, disabled-by-default, out-of-band** scaffold for two
+related capabilities — `agentic/harness_optimizer/` (a better-harness-style
+optimizer with train/holdout scoring and a hard acceptance gate) and
+`agentic/deepagent_github/` (a LangChain Deep Agents-backed local GitHub coding
+harness, lazily importing `deepagents` only when enabled). Phases 0–9 are
+implemented and tested (`tests/test_agentic_harness_*.py`; phases 6–9 landed in
+PR #515, 2026-07-13, documented in
+`docs/work/DEEP_AGENT_HARNESS_PHASES_6_9.md`; full plan and phase ledger in
+`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`).
 
 > **Superseded 2026-08-01.** Phase 9's security gate was subsequently satisfied and
 > P10 landed, so "not authorization to add an executor" no longer describes the
@@ -1110,25 +963,12 @@ a security gate, not authorization to add an executor. Full plan and phase ledge
 > below for what is actually wired today.
 
 Every gate below the master `agentic.enabled` switch that arms a *run*
-defaults to `false` — the three cloud-provider switches (`allow_cloud_providers`,
-`providers.grok.enabled`, `providers.claude.enabled`) ship armed, held
-unreachable by the master switches (see the armed-cloud note below); while
-disabled, nothing under either package is reachable from `agentic.cli`, and no
-`deepagents`/`langchain` optional dependency is imported.
-
-```yaml
-agentic:
-  deepagent_github:
-    enabled: false
-    allow_deepagents_dependency: false    # extras must be installed explicitly
-    allow_filesystem_write_tools: false
-    allow_shell_execution: false
-    allow_github_writes: false            # writer.py remains the write-policy boundary
-  harness_optimizer:
-    enabled: false
-    require_human_confirm_for_accept: true
-    allow_local_model_judge: false
-```
+(`deepagent_github.enabled`, `allow_deepagents_dependency`,
+`allow_filesystem_write_tools`, `allow_shell_execution`, `allow_github_writes`,
+`harness_optimizer.enabled`) ships `false` in `config.yaml`; the three
+cloud-provider switches ship armed but unreachable behind those masters (see the
+next-but-one section). While disabled, nothing under either package is reachable
+from `agentic.cli`, and no `deepagents`/`langchain` optional dependency is imported.
 
 ---
 
@@ -1145,37 +985,24 @@ path** — same routes, same slash commands, same security posture everywhere.
 Only the install/launch glue is platform-coupled, which is why there are two
 sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 
-- **Launch:** `python -m harness.server` serves a slash-command console at
+- **Launch:** `python -m harness.server` serves the console at
   `http://127.0.0.1:8790` (`static/harness.html`); loopback-only bind,
   non-loopback hosts refused. `gate.py` keeps `:8787`. (`cyclaw-harness` is the
-  same entry point, but only exists after `pip install -e .` — see
-  [Quick Start](#quick-start).)
-- **Install (Windows):** `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
-  sets up `%USERPROFILE%\.CyClaw` (config, sessions, seeded skills catalog),
-  a venv, a `cyclaw.cmd` PATH shim, and a `cyclaw` profile function.
-- **Install (macOS / Linux):** `bash ./macos/setup-cyclaw.sh` is the single
-  entry point (clone if needed + the one-shot below + optional start/browser/
-  autofill, asked once up front). `bash ./macos/setup-from-clone.sh` is the
-  one-shot after `git clone` it calls (keys + Ollama + index + both servers).
-  Or `bash ./macos/install-cyclaw.sh` sets up the
-  same `~/.CyClaw` layout, a venv, a `cyclaw` shim, and a PATH entry plus a
-  `cyclaw()` function in your rc file (`~/.zshrc` on zsh; macOS bash preserves
-  the first existing login file among `.bash_profile`, `.bash_login`, and
-  `.profile`, creating `.bash_profile` only when none exists; Linux retains its
-  `.bash_profile`/`.bashrc` selection). Targets bash
-  (including macOS's stock 3.2) and zsh; BSD userland assumed, no Homebrew
-  dependency, no GNU-only flags. It branches on `uname -s` to install the
-  correct **plain** torch build on macOS — the one step a hand-install most
-  often gets wrong. Uninstall: `bash ./macos/uninstall-cyclaw.sh`
-  (add `--remove-home` to delete `~/.CyClaw` too, `--remove-fsconnect` to
-  prompt-delete `~/CyClaw-FS`); it also unschedules any registered Dropbox
-  sync job and boots out + removes landed CyClaw LaunchAgents by label
-  (telegram-poll/health, fsconnect-trash, gate, harness, keys-rotate,
-  opentweet), so no background job outlives the install.
+  same entry point after `pip install -e .` — see [Quick Start](#quick-start).)
+- **Install:** Windows —
+  `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
+  (home, venv, `cyclaw.cmd` PATH shim, profile function). macOS / Linux —
+  `bash ./macos/setup-cyclaw.sh` (single entry point) or
+  `bash ./macos/install-cyclaw.sh` (installer alone; branches on `uname -s` to
+  install the correct **plain** torch on macOS, the step a hand-install most
+  often gets wrong; bash 3.2 and zsh, BSD userland, no Homebrew dependency).
+  Uninstall with `bash ./macos/uninstall-cyclaw.sh` (`--remove-home`,
+  `--remove-fsconnect`); it also removes every landed CyClaw LaunchAgent (see
+  [macOS launchd & Keychain](#macos-launchd--keychain-v19)).
 - **Chat:** talks to the local model through the OpenAI-compatible `/v1`
-  endpoint from `config.yaml`'s `models.local_llm.base_url` (Ollama by
-  default) — no keys, no login, offline. Every reply shows prompt/completion
-  token counts; sessions persist as human-inspectable JSON with atomic writes.
+  endpoint from `config.yaml`'s `models.local_llm.base_url` — no keys, no
+  login, offline. Every reply shows token counts; sessions persist as
+  human-inspectable JSON with atomic writes.
 - **Reuse, not duplication:** GitHub actions go through the same
   `utils.ops_runner` subprocess shim as `/ops/agentic` (read mode by default);
   `/skills` and `/tools` are **wiring diagrams** (what this console actually
@@ -1191,15 +1018,14 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
   governed soul appended read-only when enabled, plus optional `/goal` and
   `/web inject` extracts.
 
+
 Full setup, slash-command reference, home layout, and security posture:
-[`harness/README.md`](harness/README.md) (usage examples),
-[`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md) (Windows) and
-[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md) (macOS/Linux). The macOS doc
-covers only what genuinely differs — install glue, the torch build, git
-credential helpers (`git-credential-osxkeychain` rather than Windows
-Credential Manager), and the note that `pathsafe.ScopedRoots`' POSIX
-`openat`/`O_NOFOLLOW` containment is the *stronger* branch, so macOS is not on
-a weaker path than Windows here.
+[`harness/README.md`](harness/README.md),
+[`docs/HARNESS_POWERSHELL.md`](docs/HARNESS_POWERSHELL.md) (Windows), and
+[`docs/HARNESS_MACOS.md`](docs/HARNESS_MACOS.md) (macOS/Linux — only what
+genuinely differs: install glue, the torch build, `git-credential-osxkeychain`,
+and the note that `pathsafe.ScopedRoots`' POSIX `openat`/`O_NOFOLLOW`
+containment is the *stronger* branch).
 
 ---
 
@@ -1224,92 +1050,74 @@ waiting on the master switches" below).
 
 ### How a run works
 
-0. **`real-repo-run-plan`** (optional, two-stage) asks a model for an implementation
-   plan and prints it. It clones nothing, writes nothing, and commits nothing. You
-   read the plan, edit it, and feed it back with `--plan-file` — so one model plans,
-   a **human approves**, and another model codes against the approved text. The plan
-   is injection-scanned on load, truncated at 6,000 chars, and its SHA-256 is
-   recorded on the run so the record says which plan was in force.
-1. **`real-repo-run`** clones the configured repo into a jailed workspace, asks the
-   planner for whole-file replacements, writes them, and runs the selected
-   verification checks. It **stops before committing** and reports
-   `status: pending_decision`. A run that never passes reports `exhausted`.
-2. **`real-repo-run-decide --decision approve`** is what actually commits (locally).
-   `reject` discards. Neither pushes.
+0. **`real-repo-run-plan`** (optional, two-stage) asks a model for a plan and
+   prints it — clones, writes, and commits nothing. You read and edit the plan
+   and feed it back with `--plan-file`, so one model plans, a **human
+   approves**, and another model codes against the approved text. The plan is
+   injection-scanned on load, truncated at 6,000 chars, and its SHA-256 is
+   recorded on the run.
+1. **`real-repo-run`** clones the configured repo into a jailed workspace, asks
+   the planner for whole-file replacements, writes them, runs the selected
+   checks, and **stops before committing** (`status: pending_decision`; a run
+   that never passes reports `exhausted`).
+2. **`real-repo-run-decide --decision approve`** commits locally; `reject`
+   discards. Neither pushes.
 3. **`real-repo-run-push`** puts the `claude/*` branch on origin.
 4. **`real-repo-run-publish`** opens a **draft** PR (`gh pr create --draft`).
-5. **`real-repo-run-discard`** reclaims a decided (or orphaned) run's clone. It is not
-   the only step that frees disk: `real-repo-run-decide --decision reject` deletes the
-   clone immediately, and so does a run that never passes (`exhausted`). Only an
-   approved run keeps its clone on purpose, since push and publish still need it.
+5. **`real-repo-run-discard`** reclaims a decided or orphaned run's clone
+   (`reject` and `exhausted` free theirs immediately; only an approved run keeps
+   its clone, since push and publish still need it).
 
-Each escalation is its own command and its own decision, deliberately not folded
-into `approve`.
+Each escalation is its own command and its own decision, deliberately not
+folded into `approve`.
 
 ### Security posture
 
 - **Diff-scope gate.** A candidate that writes into any of `config.yaml`'s
-  `agentic.deepagent_github.protected_write_paths` — shipped as `tests/`,
-  `conftest.py`, `.github/`, `.git/`, `pyproject.toml`, `setup.cfg`,
-  `pytest.ini`, `.ruff.toml`, `ruff.toml`, `tox.ini`, `noxfile.py`,
-  `.claude/`, `.codex/`, `config.yaml`, and `CLAUDE.md` — is refused
-  outright — those are the files that judge the
-  candidate's own acceptance, and rewriting them is the classic reward-hacking
-  failure mode of a make-the-checks-pass loop. Also budget-capped
-  (`max_write_budget_bytes`, 100000 bytes per iteration).
-- **Two scanners, two questions, on the same bytes.** Proposed file content is run
-  through an injection scan (*is this trying to talk to a model?*) **and** a
-  code-shape scan (*is this code trying to exfiltrate a key?* —
-  `inspect_code_shape`, `agentic.deepagent_github.scan_code_shape`, ships `true`).
-  The second exists because a working SSH-key exfiltration payload contains no
-  injection phrase at all: it matches on *combinations* — a secret path plus a
-  network egress call, a decode plus a dynamic exec, a socket plus an fd-dup or a
-  shell path, a pipe-to-shell. Every hit is CRITICAL and refuses the candidate.
-- **Verification runs as argv-list subprocesses**, never a shell, with `cwd`
-  pinned to the clone, a scrubbed environment allowlist
-  (`PATH`, `LANG`, `LC_ALL`, `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONIOENCODING`)
-  plus a disposable `HOME`/`USERPROFILE`, forced `NO_PROXY=*` / `PIP_NO_INDEX=1`,
-  and a 120s per-check timeout. **Every non-empty check list runs inside a
-  required, fail-closed hard sandbox** (`hard_sandbox.py`: Windows Job Object with
-  `KILL_ON_JOB_CLOSE`, Darwin `sandbox-exec` denying network and off-cwd writes,
-  Linux `unshare --net`) — a missing binary or failed capability probe raises
-  `HardSandboxUnavailable`, with no silent fallback to unconstrained
-  `subprocess.run`. Residual limits: no microVM, and Windows is a process-tree
-  kill rather than a netns, so sockets keep working there — see
-  `docs/THREAT_MODEL.md`'s executor amendments.
-- **The console sends check-profile *names*, never argv.** `harness/agent_policy.py`
-  resolves them against a fixed allow-list (`pytest`, `ruff`, `invariant-guard`,
-  `config-guard`); a request body that
-  could carry an argv would make an authenticated route a remote shell.
-- **`push_branch` passes no credential.** Its four-name env allowlist deliberately
-  excludes `GH_TOKEN`/`GITHUB_TOKEN`, because that environment is shared with the
-  executor that runs model-proposed check commands. It authenticates only via a
-  HOME-resident credential helper (`gh auth setup-git`).
-- Branch names are forced into the PR-template vendor namespaces (`claude/`, `codex/`,
-  `grok/`, `kimi/`, `CyClaw/`, `cyclaw/`, `agent/`, plus any `CYCLAW_AGENT_BRANCH_PREFIX`
-  override — `utils/agent_identity.py`); `run_id` is validated as
-  32-char lowercase hex before it can become an argv element.
-- **Optional offline slop-detection nudge.** When `unslop.enabled` is `true`,
-  each step's model response and any proposed prose files are scanned by the
-  vendored offline scanner (`agentic/unslop_bridge.py`) for AI-writing tells;
-  a hit becomes feedback appended to the next planning prompt, not a gate —
-  it never blocks or refuses a candidate. Ships `false`; see item 15 above.
+  `agentic.deepagent_github.protected_write_paths` (the tests, CI, lint, and
+  config files that judge the candidate's own acceptance — the classic
+  reward-hacking failure of a make-the-checks-pass loop) is refused outright,
+  and writes are budget-capped (`max_write_budget_bytes`).
+- **Two scanners, two questions, on the same bytes.** Proposed content gets an
+  injection scan (*is this trying to talk to a model?*) **and** a code-shape
+  scan (`inspect_code_shape`; `scan_code_shape` ships `true`) that matches
+  *combinations* — a secret path plus network egress, a decode plus dynamic
+  exec, a socket plus fd-dup or a shell path, a pipe-to-shell — because a
+  working key-exfiltration payload contains no injection phrase at all. Every
+  hit is CRITICAL and refuses the candidate.
+- **Verification runs as argv-list subprocesses**, never a shell: `cwd` pinned
+  to the clone, a scrubbed env allowlist (`PATH`, `LANG`, `LC_ALL`,
+  `PYTHONPATH`, `VIRTUAL_ENV`, `PYTHONIOENCODING`) plus a disposable
+  `HOME`/`USERPROFILE`, forced `NO_PROXY=*` / `PIP_NO_INDEX=1`, and a 120s
+  per-check timeout. **Every non-empty check list runs inside a required,
+  fail-closed hard sandbox** (`hard_sandbox.py`: Windows Job Object with
+  `KILL_ON_JOB_CLOSE`, Darwin `sandbox-exec` denying network and off-cwd
+  writes, Linux `unshare --net`) — a missing binary or failed capability probe
+  raises `HardSandboxUnavailable`, with no silent fallback. Residual limits (no
+  microVM; Windows is a process-tree kill, so sockets keep working there) are
+  in `docs/THREAT_MODEL.md`'s executor amendments.
+- **The console sends check-profile *names*, never argv** —
+  `harness/agent_policy.py` resolves them against a fixed allow-list (`pytest`,
+  `ruff`, `invariant-guard`, `config-guard`); a body that could carry argv would
+  make an authenticated route a remote shell.
+- **`push_branch` passes no credential.** Its env allowlist deliberately
+  excludes `GH_TOKEN`/`GITHUB_TOKEN` because that environment is shared with
+  the executor; it authenticates only via a HOME-resident credential helper
+  (`gh auth setup-git`). Branch names are forced into the PR-template vendor
+  namespaces (`utils/agent_identity.py`) and `run_id` is validated as 32-char
+  lowercase hex before it can become an argv element.
+- **Optional offline slop-detection nudge** (`unslop.enabled`, ships `false`):
+  hits become feedback appended to the next planning prompt, never a gate.
 
 ### Enable it
 
-The block below is what `config.yaml` actually ships. The three switches that
-gate whether a run happens at all — `agentic.enabled`,
-`deepagent_github.enabled`, `allow_git_write_tools` — ship `false`, so nothing
-here runs or writes until an operator turns them on, and nothing here arms the
-draft-PR step.
-
-The three cloud switches ship **`true`**, armed alongside `models.grok` /
-`models.claude` on 2026-08-07 (see `docs/THREAT_MODEL.md`'s eighth amendment).
-That is not the whole gate: reaching a cloud provider still needs
-`agentic.enabled`, `deepagent_github.enabled`, the provider's API-key env var,
-and a per-run `--confirm-online`. With the master switches `false`, an armed
-provider is unreachable — but read this block as "already armed, waiting on the
-master switches," not as "off."
+The block below is what `config.yaml` ships. The three switches that gate
+whether a run happens at all — `agentic.enabled`, `deepagent_github.enabled`,
+`allow_git_write_tools` — ship `false`; the three cloud switches ship **`true`**,
+armed alongside `models.grok` / `models.claude` on 2026-08-07
+(`docs/THREAT_MODEL.md`'s eighth amendment). Read it as "already armed, waiting
+on the master switches," not as "off": reaching a cloud provider still needs
+the two masters, the provider's API-key env var, and a per-run `--confirm-online`.
 
 ```yaml
 agentic:
@@ -1329,15 +1137,12 @@ agentic:
 ```
 
 Setting a provider `enabled: true` while `allow_cloud_providers` is `false` is a
-config error, not a silent no-op — so these three move together.
-
-Opening a PR requires `agentic.mode: "write"` and `writes_enabled: true` (both
-now ship open), `agentic/writer.py`'s `EXECUTION_ENABLED` (ships `True` since
-the signed enablement of 2026-08-07), **and** `agentic.enabled: true` — the
-master switch that still ships `false` and is what actually refuses on a
-default checkout — plus a per-call `reason` and `confirm`. The filed checklist,
-the arming procedure, and the `CYCLAW_AGENTIC_WRITE_DISABLE` rollback are all
-in [`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
+config error, not a silent no-op — the three move together. Opening a PR needs
+`agentic.mode: "write"`, `writes_enabled: true`, and `agentic/writer.py`'s
+`EXECUTION_ENABLED` (all ship open) **and** `agentic.enabled: true` plus a
+per-call `reason` and `confirm`; the arming checklist and the
+`CYCLAW_AGENTIC_WRITE_DISABLE` rollback are in
+[`docs/agentic/GITHUB_WRITE_ENABLEMENT.md`](docs/agentic/GITHUB_WRITE_ENABLEMENT.md).
 
 ### Commands
 
@@ -1364,66 +1169,49 @@ Exit codes are an API: `0` ok · `2` failed · `3` env/config · `4` write refus
 `real-repo-run` exits `0` whether or not a candidate was accepted — the record's
 `status` field carries that.
 
+
 ### From the harness console
 
-Seven routes on `127.0.0.1:8790`. `GET /api/agent/checks` is open (it lists a
-hardcoded allow-list and spawns nothing); the other six require a Bearer
-`CYCLAW_API_KEY` plus an `Origin`/`Sec-Fetch-Site` cross-site check:
-`POST /api/agent/run`, `GET /api/agent/runs/{id}`, and
-`POST /api/agent/runs/{id}/{decision,push,publish,discard}`.
-`POST /api/agent/run` is deliberately synchronous — the run record is written only
-when the run ends, and the `run_id` first exists in that response. Its wall-clock
-budget is **derived from what the request asked for**, not a flat constant:
-`iterations × planner_timeout + iterations × checks × 120s + 300s` overhead, capped
-at 3600s. A flat budget was a real bug — `subprocess.run(timeout=)` sends an
-uncatchable SIGKILL, so a request whose own planner budget exceeded it left a
-leaked clone and a permanently `running` record that no later status call could
-resolve. Console equivalents are `/agent run|confirm|status|approve|reject|push|publish|discard`.
+Seven routes on `127.0.0.1:8790`. `GET /api/agent/checks` is open (a hardcoded
+allow-list, spawns nothing); the other six — `POST /api/agent/run`,
+`GET /api/agent/runs/{id}`, `POST /api/agent/runs/{id}/{decision,push,publish,discard}`
+— require a Bearer `CYCLAW_API_KEY` plus an `Origin`/`Sec-Fetch-Site`
+cross-site check. `POST /api/agent/run` is deliberately synchronous (the run
+record and its `run_id` first exist in the response), and its wall-clock budget
+is derived from the request — `iterations × planner_timeout + iterations ×
+checks × 120s + 300s`, capped at 3600s — because a flat budget was a real bug:
+`subprocess.run(timeout=)` sends an uncatchable SIGKILL, so a request whose own
+planner budget exceeded it left a leaked clone and a permanently `running`
+record. Console equivalents: `/agent run|confirm|status|approve|reject|push|publish|discard`.
 
 ### Optional cloud planner (Grok / Claude)
 
-The loop is local-only by default, and **the local path (no `--provider` flag)
-needs nothing beyond the base install** — `LocalProposerClient` is a plain `httpx`
-call, and nothing on that code path (`real_repo_loop.py`, `repo_workspace.py`,
-`executor/runner.py`) imports `deepagents` or `langchain`. If you just want to try
-the harness against your own Ollama model, `pip install -e .` is enough; skip the
-rest of this section.
-
+The loop is local-only by default, and the local path (no `--provider` flag)
+needs nothing beyond the base install — `LocalProposerClient` is a plain
+`httpx` call and nothing on that path imports `deepagents` or `langchain`.
 `--provider grok|claude --confirm-online` drives the loop with a cloud model
-instead, behind a **six-condition chain**: `agentic.enabled` →
+behind a **six-condition chain**: `agentic.enabled` →
 `deepagent_github.enabled` → `allow_cloud_providers` → `providers.<name>.enabled`
-→ the provider's API key env var (`GROK_API_KEY` / `ANTHROPIC_API_KEY`, key presence
-only, never a network probe) → per-run `--confirm-online`. Every outbound prompt is
-injection-scanned, redacted, hashed, and audited as egress before it leaves the
-process.
+→ the provider's API-key env var (`GROK_API_KEY` / `ANTHROPIC_API_KEY`, presence
+only, never a network probe) → per-run `--confirm-online`. Every outbound prompt
+is injection-scanned, redacted, hashed, and audited as egress before it leaves
+the process.
 
 Cloud SDKs are **opt-in extras, deliberately absent from the default install,
-`requirements.txt`, and the Docker image** — installing them is a separate,
-explicit step, matched to which provider(s) you actually want:
+`requirements.txt`, and the Docker image**:
 
 ```bash
-# Claude only
-pip install -e ".[agentic-deepagents]"                        -c constraints.txt
-
-# Grok only — lighter: just langchain-xai, no deepagents/langchain pulled in
-pip install -e ".[agentic-deepagents-cloud]"                   -c constraints.txt
-
-# Both providers, one command
-pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.txt
+pip install -e ".[agentic-deepagents]"                          -c constraints.txt   # Claude only
+pip install -e ".[agentic-deepagents-cloud]"                    -c constraints.txt   # Grok only — just langchain-xai
+pip install -e ".[agentic-deepagents,agentic-deepagents-cloud]" -c constraints.txt   # both
 ```
 
-(Want Postgres/pgvector and NeMo Guardrails too, not just the cloud providers?
-`pip install -e ".[all]"` in [Quick Start](#quick-start) installs every optional
-extra in one command.)
-
-Only one of the two cloud extras is excluded from `full` (what CI and
-`full`-installed dev boxes get): `full` already pulls `agentic-deepagents` (the
-Claude/deepagents SDKs), but deliberately not `agentic-deepagents-cloud`, so a
-machine that never touches Grok never carries `langchain-xai`. `[all]` is the
-only extra that installs both. The published Docker image installs `requirements.txt` only
-(base deps, no extras at all), so running this feature — local *or* cloud — in a
-container means installing on top: add `pip install -e .` for local mode, or one
-of the three commands above for cloud, after the image's own install step.
+`full` (what CI and dev boxes get) pulls `agentic-deepagents` but deliberately
+not `agentic-deepagents-cloud`, so a machine that never touches Grok never
+carries `langchain-xai`; `[all]` is the only extra that installs both. The
+published Docker image installs `requirements.txt` only, so running this
+feature in a container means installing on top (`pip install -e .` for local
+mode, or one of the commands above for cloud).
 
 ---
 
@@ -1436,26 +1224,21 @@ allowlisted two-way chat — without touching `gate.py`, `graph.py`, or the MCP
 request path (invariant I6). Inbound chat text only ever reaches the RAG
 pipeline via loopback `POST /query`, never a direct call into `graph.py`.
 
-**Key capabilities**
-- outbound notify (`mode: "notify"`) and long-poll two-way chat
-  (`mode: "chat"`) via the Telegram Bot API — shipped YAML is `mode: "chat"`
-  with `enabled: false`; long-poll only, no public webhook listener beside
-  the loopback server. T1-first is still the recommended enable order.
-- hard chat allowlist — `allowed_chat_ids` is required non-empty when enabled;
-  the bot token comes only from the env var named by `bot_token_env`
-  (`TELEGRAM_BOT_TOKEN`), never from YAML
-- T3 hybrid-confirm consent (`allow_hybrid_confirm: false` by default) — the
-  exact private-chat command `/online on <grok|claude>` is the only way chat
-  text can set `user_confirmed_online`, for one next message only
-  (`hybrid_confirm_ttl_sec`, hard-capped at 300s); core's triple gate remains
-  the final authority
-- T4 media staging (`media.enabled: false` by default) — private-chat
-  attachments captioned `/save --confirm <reason>` stage only through the
-  existing `agentic/fsconnect` write path
-- macOS launchd glue — `poll-plist` / `health-plist` generate (never load)
-  LaunchAgents whose secrets are injected at process start by the Keychain
-  wrapper (see [macOS launchd & Keychain](#macos-launchd--keychain-v19)) —
-  the token is never written into the plist
+Outbound notify (`mode: "notify"`) or long-poll two-way chat (`mode: "chat"`,
+the shipped YAML, still `enabled: false`; long-poll only, no public webhook
+listener beside the loopback server; T1-first remains the recommended enable
+order). `allowed_chat_ids` is required non-empty when enabled, and the bot
+token comes only from the env var named by `bot_token_env`
+(`TELEGRAM_BOT_TOKEN`), never from YAML. T3 hybrid-confirm consent
+(`allow_hybrid_confirm: false` by default): the exact private-chat command
+`/online on <grok|claude>` is the only way chat text can set
+`user_confirmed_online`, for one next message only (`hybrid_confirm_ttl_sec`,
+hard-capped at 300s) — core's triple gate remains the final authority. T4 media
+staging (`media.enabled: false`) accepts private-chat attachments captioned
+`/save --confirm <reason>` only through the existing `agentic/fsconnect` write
+path. The `poll-plist` / `health-plist` generators never load, and their
+secrets are injected at process start by the Keychain wrapper (see
+[macOS launchd & Keychain](#macos-launchd--keychain-v19)).
 
 **Core commands**
 
@@ -1529,6 +1312,7 @@ are in [`macos/README.md`](macos/README.md) and
 > **Docker / GHCR:** published runtime image `ghcr.io/cgfixit/cyclaw` (tag-triggered). Operator guide, pull/run commands, Falco opt-in notes, and explicit non-goals (no microVM): [`docs/DOCKER.md`](docs/DOCKER.md). Host publish remains `127.0.0.1` only.
 
 > **Scope:** CyClaw is a single-operator, loopback-bound local server. The full threat model — what the sandbox does and does **not** cover (no microVM by design) and why — is documented in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md). The underlying design philosophy (telemetry kill, offline-first posture) lives in [`docs/security-philosophy/`](docs/security-philosophy/).
+
 ---
 
 *Envisioned and initially created then vibe coded further (via AI) by [Chris Grady](https://cgfixit.com) · [cgfixit.com/linkedin](https://cgfixit.com/linkedin)*
