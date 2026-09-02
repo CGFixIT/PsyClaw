@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 TASK_TAG = "CYCLAW_DROPBOX_SYNC"
 WINDOWS_TASK_NAME = "CyClaw Dropbox Sync"
 LAUNCHD_LABEL = "com.cgfixit.cyclaw.sync"
+_WINDOWS_WEEKDAYS = ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")
 
 
 def _is_managed_cron_line(line: str) -> bool:
@@ -257,22 +258,25 @@ def _write_windows_launcher(cfg: RcloneConfig) -> str:
     return bat_path
 
 
-def _frequency_drift_note(cfg: RcloneConfig, backend: str) -> str:
-    """Operator-facing note when a configured non-daily frequency is not honored.
+def _cron_expression(cfg: RcloneConfig) -> str:
+    """Map the shared daily/weekly/monthly config onto five cron fields."""
+    frequency = getattr(cfg, "schedule_frequency", "daily")
+    if frequency == "weekly":
+        return f"{cfg.schedule_min} {cfg.schedule_hour} * * {getattr(cfg, 'schedule_weekday', 0)}"
+    if frequency == "monthly":
+        return f"{cfg.schedule_min} {cfg.schedule_hour} {getattr(cfg, 'schedule_day', 1)} * *"
+    return f"{cfg.schedule_min} {cfg.schedule_hour} * * *"
 
-    Only LaunchdScheduler maps weekly/monthly into the installed job; the cron
-    line and the schtasks registration both hardcode a daily run (documented on
-    the schedule_frequency field in sync/config.py). Without this note,
-    cmd_schedule/cmd_status print the CONFIGURED frequency as if it were live
-    while the installed job actually fires daily.
-    """
-    if getattr(cfg, "schedule_frequency", "daily") == "daily":
-        return ""
-    return (
-        f"sync.schedule_frequency is {cfg.schedule_frequency!r}, but the {backend} backend installs a "
-        "DAILY job at the configured time -- weekly/monthly is honored only by "
-        "sync.scheduler_backend: launchd (macOS)."
-    )
+
+def _windows_schedule_args(cfg: RcloneConfig) -> list[str]:
+    """Map the shared frequency config onto schtasks /SC and /D arguments."""
+    frequency = getattr(cfg, "schedule_frequency", "daily")
+    if frequency == "weekly":
+        weekday = _WINDOWS_WEEKDAYS[getattr(cfg, "schedule_weekday", 0) % 7]
+        return ["/SC", "WEEKLY", "/D", weekday]
+    if frequency == "monthly":
+        return ["/SC", "MONTHLY", "/D", str(getattr(cfg, "schedule_day", 1))]
+    return ["/SC", "DAILY"]
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +360,7 @@ class CronScheduler:
         :func:`_sync_command`.
         """
         cmd = _cron_escape_command(shlex.quote(_write_posix_launcher(self.cfg)))
-        return f"{self.cfg.schedule_min} {self.cfg.schedule_hour} * * * {cmd} # {TASK_TAG}"
+        return f"{_cron_expression(self.cfg)} {cmd} # {TASK_TAG}"
 
     def install(self) -> ScheduleEntry:
         """Add or replace the CyClaw cron entry (idempotent)."""
@@ -370,9 +374,8 @@ class CronScheduler:
         return ScheduleEntry(
             platform_name=platform.system().lower(),
             command=shlex.quote(_posix_launcher_path(self.cfg)),
-            cron_or_time=f"{self.cfg.schedule_min} {self.cfg.schedule_hour} * * *",
+            cron_or_time=_cron_expression(self.cfg),
             raw=line,
-            note=_frequency_drift_note(self.cfg, "cron"),
         )
 
     def remove(self) -> bool:
@@ -403,7 +406,6 @@ class CronScheduler:
                         command=parts[5].rsplit("#", 1)[0].strip(),
                         cron_or_time=cron_expr,
                         raw=ln,
-                        note=_frequency_drift_note(self.cfg, "cron"),
                     )
         return None
 
@@ -699,8 +701,7 @@ class WindowsTaskScheduler:
             WINDOWS_TASK_NAME,
             "/TR",
             launcher,
-            "/SC",
-            "DAILY",
+            *_windows_schedule_args(self.cfg),
             "/ST",
             time_str,
             "/F",  # force overwrite of an existing task with the same name
@@ -723,7 +724,6 @@ class WindowsTaskScheduler:
             command=launcher,
             cron_or_time=time_str,
             raw=proc.stdout.strip(),
-            note=_frequency_drift_note(self.cfg, "schtasks"),
         )
 
     def remove(self) -> bool:
@@ -768,7 +768,6 @@ class WindowsTaskScheduler:
             command=_sync_command(self.cfg),
             cron_or_time=f"{self.cfg.schedule_hour:02d}:{self.cfg.schedule_min:02d}",
             raw=proc.stdout.strip(),
-            note=_frequency_drift_note(self.cfg, "schtasks"),
         )
 
 

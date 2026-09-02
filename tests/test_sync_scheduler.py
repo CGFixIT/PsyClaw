@@ -701,7 +701,7 @@ def test_cron_write_timeout_raises_typed_scheduler_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Frequency drift: cron/schtasks install daily regardless of schedule_frequency
+# Frequency parity across cron and Windows Task Scheduler
 # ---------------------------------------------------------------------------
 
 
@@ -722,16 +722,22 @@ def _cron_install(cfg: RcloneConfig) -> tuple[ScheduleEntry, dict[str, str]]:
         return CronScheduler(cfg).install(), written
 
 
-def test_cron_install_warns_when_non_daily_frequency_is_installed_daily() -> None:
-    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=3)
+@pytest.mark.parametrize(
+    ("overrides", "expression"),
+    [
+        ({}, "0 2 * * *"),
+        ({"schedule_frequency": "weekly", "schedule_weekday": 3}, "0 2 * * 3"),
+        ({"schedule_frequency": "monthly", "schedule_day": 15}, "0 2 15 * *"),
+    ],
+)
+def test_cron_install_honors_schedule_frequency(overrides, expression) -> None:
+    cfg = _make_cfg(**overrides)
     entry, written = _cron_install(cfg)
 
-    # The installed line is still daily (unchanged behavior) ...
     tagged = [ln for ln in written["content"].splitlines() if TASK_TAG in ln]
-    assert tagged[0].startswith("0 2 * * *")
-    # ... but the operator is told the configured frequency is not what runs.
-    assert "weekly" in entry.note
-    assert "DAILY" in entry.note
+    assert tagged[0].startswith(expression)
+    assert entry.cron_or_time == expression
+    assert entry.note == ""
 
 
 def test_cron_install_daily_frequency_carries_no_drift_note() -> None:
@@ -739,9 +745,9 @@ def test_cron_install_daily_frequency_carries_no_drift_note() -> None:
     assert entry.note == ""
 
 
-def test_cron_status_carries_frequency_drift_note() -> None:
+def test_cron_status_reports_installed_monthly_expression() -> None:
     cfg = _make_cfg(schedule_frequency="monthly", schedule_day=15)
-    existing = f"0 2 * * * some-cmd # {TASK_TAG}\n"
+    existing = f"0 2 15 * * some-cmd # {TASK_TAG}\n"
     with (
         patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
         patch("sync.scheduler.subprocess.run", return_value=_completed(stdout=existing)),
@@ -749,12 +755,27 @@ def test_cron_status_carries_frequency_drift_note() -> None:
     ):
         entry = CronScheduler(cfg).status()
     assert entry is not None
-    assert "monthly" in entry.note
-    assert "DAILY" in entry.note
+    assert entry.cron_or_time == "0 2 15 * *"
+    assert entry.note == ""
 
 
-def test_windows_install_warns_when_non_daily_frequency_is_installed_daily(tmp_path: Path) -> None:
-    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=1, log_dir=str(tmp_path / "logs"))
+@pytest.mark.parametrize(
+    ("frequency", "field", "expected_sc", "expected_day"),
+    [
+        ("daily", {}, "DAILY", None),
+        ("weekly", {"schedule_weekday": 1}, "WEEKLY", "MON"),
+        ("weekly", {"schedule_weekday": 7}, "WEEKLY", "SUN"),
+        ("monthly", {"schedule_day": 15}, "MONTHLY", "15"),
+    ],
+)
+def test_windows_install_honors_schedule_frequency(
+    tmp_path: Path, frequency, field, expected_sc, expected_day,
+) -> None:
+    cfg = _make_cfg(
+        schedule_frequency=frequency,
+        log_dir=str(tmp_path / "logs"),
+        **field,
+    )
     captured: dict[str, object] = {}
 
     def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
@@ -769,6 +790,9 @@ def test_windows_install_warns_when_non_daily_frequency_is_installed_daily(tmp_p
         entry = WindowsTaskScheduler(cfg).install()
 
     argv = captured["argv"]
-    assert argv[argv.index("/SC") + 1] == "DAILY"  # installed cadence unchanged
-    assert "weekly" in entry.note
-    assert "DAILY" in entry.note
+    assert argv[argv.index("/SC") + 1] == expected_sc
+    if expected_day is None:
+        assert "/D" not in argv
+    else:
+        assert argv[argv.index("/D") + 1] == expected_day
+    assert entry.note == ""
