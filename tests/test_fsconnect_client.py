@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -53,6 +54,33 @@ def test_fs_list(env):
         res = c.fs_list("")
     names = {e["name"] for e in res["entries"]}
     assert {"hello.txt", "sub", "danger.txt", "blob.bin"} <= names
+    events = [json.loads(line) for line in _audit.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not any(e.get("event") == "fsconnect_skipped_stat" for e in events)
+
+
+def test_fs_list_audits_skipped_stat_names_not_contents(env, monkeypatch):
+    """Fail-soft stat drops must land in audit.jsonl as names only (#1275 P2.5)."""
+    cfg, fs_cfg, cp, _share, audit = env
+    real_stat = pathsafe.os.stat
+
+    def _stat(name, *args, **kwargs):
+        if name == "hello.txt":
+            raise OSError(errno.EIO, "Input/output error")
+        return real_stat(name, *args, **kwargs)
+
+    monkeypatch.setattr(pathsafe.os, "stat", _stat)
+    with FsClient(cfg, fs_cfg, config_path=cp) as c:
+        res = c.fs_list("")
+    listed = {e["name"] for e in res["entries"]}
+    assert "hello.txt" not in listed
+    blob = audit.read_text(encoding="utf-8")
+    events = [json.loads(line) for line in blob.splitlines() if line.strip()]
+    skips = [e for e in events if e.get("event") == "fsconnect_skipped_stat"]
+    assert skips, blob
+    assert skips[0]["count"] >= 1
+    assert "hello.txt" in skips[0]["sample_names"]
+    assert "hello world" not in blob
+    assert "Input/output error" not in blob
 
 
 def test_darwin_read_walks_skip_apple_metadata_and_dataless(monkeypatch, env):

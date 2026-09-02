@@ -84,6 +84,7 @@ class FsClient:
             allow_unc=fs_cfg.allow_unc_roots,
             allow_macos_volume_roots=fs_cfg.allow_macos_volume_roots,
         )
+        self._roots._skipped_stat_sink = self._audit_skipped_stat
         self._patterns = build_injection_patterns(cfg) if fs_cfg.scan_content else []
 
     # --- lifecycle --------------------------------------------------------
@@ -109,6 +110,22 @@ class FsClient:
 
     def _scan(self, text: str) -> list[str]:
         return scan_injection_patterns(text, self._patterns)
+
+    def _audit_skipped_stat(self, where: str, count: int, names: list[str]) -> None:
+        """Durable record of fail-soft directory drops (issue #1275 P2.5).
+
+        Goes to audit_log only -- not ``_audit``, which also emits a Numbat
+        ``file.read`` for every fs_list/fs_read/fs_stat call.
+        """
+        audit_log(
+            {
+                "event": "fsconnect_skipped_stat",
+                "where": where,
+                "count": count,
+                "sample_names": names,
+            },
+            self.config_path,
+        )
 
     def _audit(self, event: dict) -> None:
         audit_log(event, self.config_path)
