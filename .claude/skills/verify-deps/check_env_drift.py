@@ -364,9 +364,10 @@ def check_docker_install_contract() -> None:
 # fetch the previous release beside newer source.
 #
 # The runtime-state directories .dockerignore keeps out of image layers and
-# docker-compose.yml must therefore mount back in. "data" covers the
-# data/personality and data/agentic exclusions; ".emb_cache" is the named
-# volume behind models.embeddings.cache_dir.
+# docker-compose.yml must therefore mount back in. "data" must be ignored as
+# the directory itself (`data` or `data/`). A nested path such as
+# `data/personality/` does not cover `data/corpus/` and must not green this
+# check. ".emb_cache" is the named volume behind models.embeddings.cache_dir.
 _RUNTIME_STATE_DIRS = ("logs", "checkpoints", "index", "data", ".emb_cache")
 # The build stage COPYs exactly these before installing (E5's first fragment).
 _COPIED_MANIFESTS = ("pyproject.toml", "constraints.txt", "requirements.txt")
@@ -396,8 +397,11 @@ def check_docker_surface_coherence() -> None:
             fail("E6", f".dockerignore excludes {excluded}, which the Dockerfile COPYs before installing")
         else:
             ok("E6", ".dockerignore keeps the three COPYed manifests in the build context")
-        not_ignored = [d for d in _RUNTIME_STATE_DIRS
-                       if not any(p.strip("/") == d or p.strip("/").startswith(d + "/") for p in patterns)]
+        not_ignored = [
+            d
+            for d in _RUNTIME_STATE_DIRS
+            if not any(p.strip("/") == d for p in patterns)
+        ]
         if not_ignored:
             fail("E6", f".dockerignore no longer excludes runtime state {not_ignored} -- index, personality, "
                        f"and agentic state must never enter image layers")
