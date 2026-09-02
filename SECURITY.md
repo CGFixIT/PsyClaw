@@ -31,6 +31,7 @@ These are tracked, deliberate exceptions — re-reviewed at every release and en
   - CVE-2026-45831: SimpleRBACAuthorizationProvider evaluates permissions without verifying tenant/database/collection scope.
   - CVE-2026-45833: authenticated code injection via embedding-function config for a caller with `UPDATE_COLLECTION` (post-auth sibling of 45829).
 - **Why accepted:** CyClaw never runs the Chroma server. It uses the **embedded `PersistentClient`** exclusively (path from `config.yaml`), in-process, with `anonymized_telemetry=False` and no `trust_remote_code`. There is no Chroma network listener, no SimpleRBAC, and no `/api/v2` to attack; the vulnerable code paths are unreachable in this deployment. pip-audit on main first reported 45830/45831/45833 on 2026-08-25; they share the already-accepted 45829 HTTP-server surface.
+- **Telemetry at this pin:** chromadb 1.5.9's PostHog product-telemetry path is **dead code** (the `posthog` extra is no longer a dependency; `Settings(anonymized_telemetry=False)` is belt-and-suspenders). The live kill for Chroma's *separate* OTel exporter path is `CHROMA_OTEL_GRANULARITY=none` in `utils/telemetry_kill.py`. A chromadb bump that reintroduces a live PostHog SDK is an explicit re-review trigger, not "the flag is still false so we are fine."
 - **Guardrails:** any future change introducing `chromadb.HttpClient` or a standalone Chroma server MUST be treated as a security regression and re-open this assessment.
 - **Review date:** next chromadb release or 2026-10-01, whichever comes first.
 
