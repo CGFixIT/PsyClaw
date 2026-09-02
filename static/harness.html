@@ -248,6 +248,7 @@ const MAX_AGENT_PLAN_BYTES = 25000;
    utils.repo_paths.canonical_repo_relative_path (keep in sync via console contract tests). */
 const MAX_AGENT_READ_FILES = 8;
 const MAX_AGENT_READ_FILE_LEN = 1024;
+const MAX_AGENT_ITERATIONS = 10;
 /* Session goal + human-gated loop. Caps match harness.schemas._MAX_GOAL_LEN
    and the locked /loop budget (default 3, hard max 5). */
 function isSafeRepoRelativePath(raw) {
@@ -707,6 +708,7 @@ const COMMANDS = [
   ['/connectors', 'connector catalog'],
   ['/github', 'agentic GitHub status'],
   ['/agent run|plan|read|checks|confirm|cancel', 'stage and start a real-repo coding run'],
+  ['/agent iterations|pr|issue <n>|clear', 'set or clear staged numeric options'],
   ['/agent status|approve|reject <id>', 'inspect or decide a pending run'],
   ['/harness', 'harness optimizer runs'],
   ['/tokens', 'token tally'],
@@ -773,6 +775,9 @@ function showPendingAgentRun() {
     ['plan', pendingAgentRun.plan ? 'loaded (' + pendingAgentRun.plan.length + ' chars)' : 'none'],
     ['read files', pendingAgentRun.read_files.join(', ') || 'none'],
     ['checks', pendingAgentRun.checks.join(', ')],
+    ['iterations', pendingAgentRun.max_iterations === undefined ? 'server default' : String(pendingAgentRun.max_iterations)],
+    ['PR', pendingAgentRun.pr === undefined ? 'none' : String(pendingAgentRun.pr)],
+    ['issue', pendingAgentRun.issue === undefined ? 'none' : String(pendingAgentRun.issue)],
   ], ['field', 'value']));
 }
 
@@ -1163,7 +1168,26 @@ async function runSlash(line) {
             read_files: [],
           };
           showPendingAgentRun();
-          sys('nothing has run yet. Optionally use /agent plan, /agent read, or /agent checks <profile ...>; then authorize with:  /agent confirm <why you are doing this>');
+          sys('nothing has run yet. Optionally use /agent plan, /agent read, /agent checks, /agent iterations, /agent pr, or /agent issue; then authorize with:  /agent confirm <why you are doing this>');
+        } else if (sub === 'iterations' || sub === 'pr' || sub === 'issue') {
+          if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
+          const raw = rest[1] || '';
+          const value = Number(raw);
+          const max = sub === 'iterations' ? MAX_AGENT_ITERATIONS : Number.MAX_SAFE_INTEGER;
+          if (rest.length !== 2 || (raw !== 'clear' &&
+              (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(value) || value > max))) {
+            sys('usage: /agent ' + sub + ' <positive integer>|clear (maximum ' + max + ')');
+            break;
+          }
+          const field = sub === 'iterations' ? 'max_iterations' : sub;
+          if (raw === 'clear') {
+            delete pendingAgentRun[field];
+          } else {
+            pendingAgentRun[field] = value;
+            if (sub === 'pr') delete pendingAgentRun.issue;
+            if (sub === 'issue') delete pendingAgentRun.pr;
+          }
+          showPendingAgentRun();
         } else if (sub === 'plan') {
           if (!pendingAgentRun) { sys('nothing staged — start with /agent run'); break; }
           if (rest[1] === 'clear' && rest.length === 2) {
@@ -1266,6 +1290,9 @@ async function runSlash(line) {
             ['/agent read <repo-relative-path>', 'declare an existing file for the staged coder context'],
             ['/agent read clear', 'clear declared read paths'],
             ['/agent checks [profile ...]', 'list or choose allow-listed verification profiles'],
+            ['/agent iterations <n>|clear', 'set 1..10 iterations or restore the server default'],
+            ['/agent pr <n>|clear', 'set a positive PR number (clears issue) or unset it'],
+            ['/agent issue <n>|clear', 'set a positive issue number (clears PR) or unset it'],
             ['/agent confirm <reason>', 'authorize and start the staged run'],
             ['/agent cancel', 'discard the staged run'],
             ['/agent status <run id>', 'read a run record'],
