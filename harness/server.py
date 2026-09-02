@@ -410,6 +410,23 @@ def _resolve_backend() -> ResolvedLocalBackend:
     return resolve_local_backend(llm)
 
 
+def _canonical_backend_key(url: str) -> tuple[str, str, int | None, str] | None:
+    """Comparison key for a base_url that treats loopback aliases (127.0.0.1 /
+    localhost / ::1 -- this module's own _LOOPBACK_HOSTS, above) as the same
+    host, so two configs naming the identical Ollama instance by different
+    spellings aren't mistaken for different backends. Returns None for an
+    unparseable URL.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        host = "127.0.0.1"
+    return (parsed.scheme.lower(), host, parsed.port, parsed.path.rstrip("/"))
+
+
 def _agent_run_shares_chat_backend() -> bool:
     """True when real-repo-run's local planner and /api/chat currently target
     the same backend -- i.e. sharing generation_gate protects one real
@@ -423,11 +440,21 @@ def _agent_run_shares_chat_backend() -> bool:
     still points at the (down) primary -- comparing against the LIVE
     resolved chat backend, not just the static primary config, is what
     catches that divergence.
+
+    Compares canonicalized (scheme, host, port, path) rather than raw
+    strings: "localhost" and "127.0.0.1" are both valid loopback spellings
+    for the same instance, and a plain string compare would wrongly treat
+    them as different backends -- skipping the shared gate and letting a
+    chat turn and an agent run contend for the same Ollama stream again.
     """
-    deepagent_base = str(_deepagent_github_settings().get("base_url") or "").strip().rstrip("/")
+    deepagent_base = str(_deepagent_github_settings().get("base_url") or "").strip()
     if not deepagent_base:
         return True  # nothing configured -- can't rule out a shared backend, stay cautious
-    return _resolve_backend().base_url == deepagent_base
+    chat_key = _canonical_backend_key(_resolve_backend().base_url)
+    deepagent_key = _canonical_backend_key(deepagent_base)
+    if chat_key is None or deepagent_key is None:
+        return True  # unparseable -- can't rule out a shared backend, stay cautious
+    return chat_key == deepagent_key
 
 
 def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:

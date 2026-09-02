@@ -965,6 +965,36 @@ def test_agent_run_still_blocks_a_concurrent_agent_run_when_deepagent_backend_di
         llm_client.reset_local_backend_cache()
 
 
+def test_agent_run_still_shares_the_gate_when_backends_are_loopback_aliases(cfg, monkeypatch, calls):
+    """Chat resolves to "localhost:11434" while agentic.deepagent_github
+    .base_url (unmocked -- shipped default) uses "127.0.0.1:11434" -- the
+    same instance, spelled differently. A plain string compare would treat
+    these as different backends and skip generation_gate, letting a live
+    chat turn and an agent run contend for the same Ollama stream again."""
+    import llm.client as llm_client
+
+    llm_cfg = {
+        "base_url": "http://localhost:11434/v1",
+        "model": "qwen3.8:27b-mlx",
+        "provider": "ollama",
+    }
+    monkeypatch.setattr(harness_server, "_llm_settings", lambda: llm_cfg)
+    llm_client.reset_local_backend_cache()
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    try:
+        assert app.state.generation_gate.claim() is True  # simulate a live chat turn
+        try:
+            resp = client.post(_RUN, json=_VALID_BODY)
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "AGENT_RUN_BUSY"
+            assert calls == []
+        finally:
+            app.state.generation_gate.release()
+    finally:
+        llm_client.reset_local_backend_cache()
+
+
 # --- request-shape budget guard ----------------------------------------------
 
 
