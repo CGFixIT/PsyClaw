@@ -492,6 +492,82 @@ def test_windows_status_subprocess_exception_logs_warning(caplog) -> None:
     assert "schtasks crashed" in caplog.text
 
 
+def _schtasks_list_v(schedule_type: str | None = "Daily") -> str:
+    # Mirrors schtasks /Query /FO LIST /V field layout (Schedule Type needs /V).
+    lines = [
+        "HostName:                             HOST",
+        f"TaskName:                             \\{WINDOWS_TASK_NAME}",
+        "Next Run Time:                        9/3/2026 2:00:00 AM",
+        "Status:                               Ready",
+        "Task To Run:                          C:\\logs\\cyclaw_sync.bat",
+    ]
+    if schedule_type is not None:
+        lines.append(f"Schedule Type:                        {schedule_type}")
+    lines.append("Start Time:                           2:00:00 AM")
+    return "\n".join(lines) + "\n"
+
+
+def test_windows_status_matching_cadence_has_empty_note() -> None:
+    cfg = _make_cfg(schedule_frequency="daily")
+    captured: dict[str, object] = {}
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        captured["argv"] = argv
+        return _completed(stdout=_schtasks_list_v("Daily"))
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        entry = WindowsTaskScheduler(cfg).status()
+
+    assert entry is not None
+    assert entry.note == ""
+    assert entry.cron_or_time == "02:00"
+    argv = captured["argv"]
+    assert isinstance(argv, list)
+    assert "/V" in argv
+    assert argv[argv.index("/FO") + 1] == "LIST"
+
+
+def test_windows_status_daily_live_vs_weekly_config_sets_drift_note() -> None:
+    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=1)
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(stdout=_schtasks_list_v("Daily")),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        entry = WindowsTaskScheduler(cfg).status()
+
+    assert entry is not None
+    assert entry.note
+    assert "daily" in entry.note.lower()
+    assert "weekly" in entry.note.lower()
+    assert "python -m sync.cli schedule" in entry.note
+
+
+def test_windows_status_missing_schedule_type_no_false_warning() -> None:
+    cfg = _make_cfg(schedule_frequency="weekly", schedule_weekday=3)
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(stdout=_schtasks_list_v(None)),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        entry = WindowsTaskScheduler(cfg).status()
+
+    assert entry is not None
+    assert entry.note == ""
+
+
 def test_windows_missing_schtasks_raises(tmp_path: Path) -> None:
     cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
     with patch("sync.scheduler.shutil.which", return_value=None):
