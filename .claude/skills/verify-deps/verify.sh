@@ -80,16 +80,16 @@ echo "missing pin files: PASS (exit 3)"
 # --- check_env_drift.py: the non-manifest drift surfaces --------------------
 drift="$here/check_env_drift.py"
 
-# 4. Clean tree: no FAILures. Warnings are expected and allowed (huggingface_hub
-#    and starlette are known-undeclared hard transitives), so this asserts the
-#    exit code, not a warning count that would rot on the next transitive.
+# 4. Clean tree: no FAILures. Asserts the exit code, not a warning count: a
+#    clean tree reports zero E3 warnings today, but a future transitive that
+#    goes undeclared should surface as a warning to read, not fail this test.
 out="$(python3 "$drift" --repo-root "$repo_root" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ]; then
   echo "env drift clean tree: FAIL — expected exit 0, got $rc" >&2
   echo "$out" >&2
   exit 1
 fi
-echo "env drift clean tree: PASS (exit 0, no E1/E2/E4 failures)"
+echo "env drift clean tree: PASS (exit 0, no E1/E2/E4/E5/E6 failures)"
 
 # 5. Mutation E1: the same tool pinned at two versions in two workflow files.
 #    This is the drift class nothing else in the repo can see.
@@ -160,5 +160,77 @@ if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "FAIL  \[E5\]"; then
   exit 1
 fi
 echo "environment mutation (E5 Docker contract): PASS (exit 2)"
+
+# --- The Docker surface beyond the Dockerfile (E5 torch lock-step + E6) ------
+# A pin-manifest tree plus the four Docker-surface files, so E5/E6 run against
+# the real shipped shapes. Each mutation below edits one file the way a real
+# PR would and must produce exit 2 plus the named check's line.
+_mkdockertree() {
+  local d; d="$(_mktree)"
+  mkdir -p "$d/.github/workflows"
+  cp "$repo_root/Dockerfile" "$repo_root/docker-compose.yml" "$repo_root/.dockerignore" "$d/"
+  cp "$repo_root/.github/workflows/publish-ghcr.yml" "$d/.github/workflows/"
+  echo "$d"
+}
+_expect_docker_fail() {
+  # $1 tree  $2 label  $3 grep pattern the failure line must carry
+  local out rc
+  out="$(python3 "$drift" --repo-root "$1" 2>&1)"; rc=$?
+  rm -rf "$1"
+  if [ "$rc" -ne 2 ] || ! echo "$out" | grep -q "$3"; then
+    echo "environment mutation ($2): FAIL - expected exit 2 + '$3', got rc=$rc" >&2
+    echo "$out" >&2
+    exit 1
+  fi
+  echo "environment mutation ($2): PASS (exit 2)"
+}
+
+# 10. Negative control: the shipped Docker surface, copied whole, is clean.
+g="$(_mkdockertree)"
+out="$(python3 "$drift" --repo-root "$g" 2>&1)"; rc=$?
+rm -rf "$g"
+if [ "$rc" -ne 0 ] || ! echo "$out" | grep -q "ok    \[E6\] publish-ghcr.yml pushes the image"; then
+  echo "docker surface clean copy: FAIL - expected exit 0 + E6 ok lines, got rc=$rc" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "docker surface clean copy: PASS (exit 0)"
+
+# 11. E5: the fallback torch pre-install lags constraints.txt -- the exact miss
+#     the Dockerfile's own comment records (2.12.1 -> 2.13.0).
+h="$(_mkdockertree)"
+sed -i.bak 's/torch==[^ ]* --index-url/torch==0.0.0+cpu --index-url/' "$h/Dockerfile"
+_expect_docker_fail "$h" "E5 torch lock-step" "keep the two in lock-step"
+
+# 12. E6: .dockerignore swallows a manifest the build stage COPYs.
+i="$(_mkdockertree)"
+printf 'constraints.txt\n' >> "$i/.dockerignore"
+_expect_docker_fail "$i" "E6 ignored manifest" "which the Dockerfile COPYs"
+
+# 13. E6: .dockerignore stops excluding the index -- private vectors would bake
+#     into a published image.
+j="$(_mkdockertree)"
+sed -i.bak '/^index\/$/d' "$j/.dockerignore"
+_expect_docker_fail "$j" "E6 runtime state baked in" "no longer excludes runtime state"
+
+# 14. E6: the host publish leaves loopback.
+k="$(_mkdockertree)"
+sed -i.bak 's/"127\.0\.0\.1:/"0.0.0.0:/' "$k/docker-compose.yml"
+_expect_docker_fail "$k" "E6 non-loopback publish" "host exposure must stay"
+
+# 15. E6: compose drops the ./index mount (503 INDEX_NOT_FOUND, healthcheck green).
+l="$(_mkdockertree)"
+sed -i.bak '/^[[:space:]]*- \.\/index:/d' "$l/docker-compose.yml"
+_expect_docker_fail "$l" "E6 unmounted runtime state" "mounts nothing at /app/{index}"
+
+# 16. E6: a version bump that skips the compose default tag.
+m="$(_mkdockertree)"
+sed -i.bak 's/:-[0-9][^}]*}/:-0.0.0}/' "$m/docker-compose.yml"
+_expect_docker_fail "$m" "E6 stale image tag" "default CYCLAW_IMAGE_TAG is 0.0.0"
+
+# 17. E6: the publish workflow pushes an image compose never pulls.
+n="$(_mkdockertree)"
+sed -i.bak 's#^  IMAGE_NAME: .*#  IMAGE_NAME: ghcr.io/someone-else/cyclaw#' "$n/.github/workflows/publish-ghcr.yml"
+_expect_docker_fail "$n" "E6 registry name split" "pushes ghcr.io/someone-else/cyclaw but docker-compose.yml pulls"
 
 echo "== verify-deps verify: OK =="

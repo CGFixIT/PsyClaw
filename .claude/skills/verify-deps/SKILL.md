@@ -1,6 +1,6 @@
 ---
 name: verify-deps
-description: Verify CyClaw's four install surfaces (pyproject.toml+uv, requirements.txt+pip, Dockerfile, environment.yml) actually agree AND are current against upstream PyPI — and that the environment dependencies declared OUTSIDE the pin manifests (workflow-pinned tool versions, the Python version's four independent declarations, third-party imports declared in no manifest) have not drifted. dep-guard checks internal pin agreement (static, no network); this adds requirements.txt (which dep-guard never reads), the install-surface scope contract (which surface may carry extras — constraints.txt is a version ceiling, not an install list), the non-manifest drift surfaces, a real dry-run of each surface's install command, and a PyPI currency sweep with CVE awareness. Reports findings; never auto-bumps a runtime pin (Medium-High risk, CLAUDE.md §7) without explicit approval. Use when asked to verify/audit dependencies, check if deps are up to date, check whether a merge introduced dependency drift, or before a dependency-heavy release.
+description: Verify CyClaw's four install surfaces (pyproject.toml+uv, requirements.txt+pip, the Docker surface — Dockerfile + docker-compose.yml + .dockerignore + publish-ghcr.yml — and environment.yml) actually agree AND are current against upstream PyPI — and that the environment dependencies declared OUTSIDE the pin manifests (workflow-pinned tool versions, the Python version's four independent declarations, third-party imports declared in no manifest, the Docker fallback torch pin vs constraints.txt, compose/.dockerignore/publish-workflow coherence with the Dockerfile) have not drifted. dep-guard checks internal pin agreement (static, no network); this adds requirements.txt (which dep-guard never reads), the install-surface scope contract (which surface may carry extras — constraints.txt is a version ceiling, not an install list), the non-manifest drift surfaces, a real dry-run of each surface's install command, and a PyPI currency sweep with CVE awareness. Reports findings; never auto-bumps a runtime pin (Medium-High risk, CLAUDE.md §7) without explicit approval. Use when asked to verify/audit dependencies, check if deps are up to date, check whether a merge introduced dependency drift, or before a dependency-heavy release.
 ---
 
 # Verify Deps
@@ -39,8 +39,8 @@ tree. Verified against the repo, 2026-08-02:
 | Surface | What it installs | Extras? |
 |---|---|---|
 | `pip install -r requirements.txt -c constraints.txt` | Base runtime + torch CPU. 17 requirement lines (test tools live in `requirements-test.txt`, kept out of the Docker image). Header declares itself a **legacy compatibility surface**, kept in sync with `pyproject.toml`/`constraints.txt` for the Dockerfile and legacy CI/tools | **None.** Zero extras, by design |
-| `pip install -e ".[<extra>]" -c constraints.txt` | The 16 base deps, plus whichever of the 9 extras are named | **Yes — the only surface that can install one** |
-| `Dockerfile` | Runs `uv pip install --system -r requirements.txt -c constraints.txt`, with a pip fallback (`Dockerfile:40-43`) | **None** — it *is* surface #1, containerized |
+| `pip install -e ".[<extra>]" -c constraints.txt` | The 17 base deps, plus whichever of the 11 extras are named | **Yes — the only surface that can install one** |
+| `Dockerfile` (+ `docker-compose.yml`, `.dockerignore`, `.github/workflows/publish-ghcr.yml`) | Runs `uv pip install --system -r requirements.txt -c constraints.txt`, with a pip fallback (`Dockerfile:40-43`). Compose runs the image (loopback publish, runtime-state mounts), `.dockerignore` shapes the build context, `publish-ghcr.yml` ships the image compose pulls — E5/E6 pin the four files to each other | **None** — it *is* surface #1, containerized |
 | `conda env create -f environment.yml` | Base runtime + test/dev tools from conda-forge, plus a 3-package `pip:` tail | **None** |
 
 Two consequences that drive every judgement in this skill:
@@ -103,7 +103,7 @@ python3 .claude/skills/verify-deps/check_env_drift.py     # add --strict to fail
 
 Steps 1 and 2 both stop at the manifest boundary — they compare pin files to
 other pin files. But CyClaw declares load-bearing environment dependencies in
-places no manifest checker reads, and nothing cross-checks those. Five classes:
+places no manifest checker reads, and nothing cross-checks those. Six classes:
 
 - **E1 — tool versions pinned inline in workflow YAML.** `flake8==7.3.0` and
   `wemake-python-styleguide==1.6.2` run in the (advisory) lint lane
@@ -127,8 +127,23 @@ places no manifest checker reads, and nothing cross-checks those. Five classes:
   `requirements.txt` carries no extras-only package.
 - **E5 — the Docker build's dependency-install contract**: asserts the
   Dockerfile copies the manifests, uses `requirements.txt` + `constraints.txt`
-  on both the uv path and the pip fallback, and never installs
-  `requirements-test.txt` into the image.
+  on both the uv path and the pip fallback, never installs
+  `requirements-test.txt` into the image, and pre-installs the **same**
+  `torch==` the `constraints.txt` pin names — the Dockerfile's own comment
+  records the miss (constraints moved `2.12.1 -> 2.13.0`, the fallback line
+  did not, and the fallback installed the old wheel then failed the
+  constrained resolve). A "some `torch==` is present" check passed that tree.
+- **E6 — the rest of the Docker surface**: `docker-compose.yml`,
+  `.dockerignore`, and `.github/workflows/publish-ghcr.yml` must agree with
+  the Dockerfile and each other. `.dockerignore` keeps the three COPYed
+  manifests in the build context and keeps every runtime-state directory
+  (`logs/`, `checkpoints/`, `index/`, `data/`, `.emb_cache/`) out of image
+  layers; compose mounts each of those back in, publishes only on
+  `127.0.0.1`, and agrees with `EXPOSE`/`CMD --port` on the container port;
+  compose's default `CYCLAW_IMAGE_TAG` equals `pyproject.toml`'s `version`;
+  `publish-ghcr.yml` builds `./Dockerfile` and pushes the `IMAGE_NAME` compose
+  pulls. Each file is info-skipped when absent (the Docker surface may be the
+  Dockerfile alone), never silently passed when present and incoherent.
 
 Pure stdlib, no network, no install — same constraints as `dep-guard` and
 `extract_pins.py`, so it runs in a fresh clone before pip does. Exits 0 with
@@ -174,6 +189,9 @@ uv pip install --dry-run -r requirements.txt -c constraints.txt
 #    match the container's real invocation:
 uv pip install --dry-run --system -r requirements.txt -c constraints.txt
 deactivate && rm -rf /tmp/verify-deps-venv
+# 4. The compose half of the Docker surface renders (needs the docker CLI;
+#    report "not verified" rather than skipping silently when it is absent):
+docker compose config --quiet
 ```
 
 Read the failure class if any command errors:
@@ -227,14 +245,14 @@ serially.
 Verify Deps: <n> packages checked | <n> currency gaps | <n> flagged CVEs | <n> install-surface failures
 dep-guard: <PASS/FAIL from Step 1>
 requirements.txt drift: <none | list from Step 2>
-Env drift (E1-E5): <n> failure(s), <n> warning(s) — <new names beyond the 2 known, or "known only">
+Env drift (E1-E6): <n> failure(s), <n> warning(s) — <every E3 name reported, or "none">
 Install surfaces dry-run: local-dev=<PASS/FAIL/unverified> legacy-CI=<...> Dockerfile=<...> conda=<not dry-run-verified, unless actually tested>
 Currency: <table or summary — current / bump-candidate / needs-review / CVE-flagged>
 Verdict: <fixes applied (list) | findings for review (list) | none>
 ```
 
-Say "known only" for E3 rather than restating `huggingface_hub`/`starlette`
-every run — the report should surface what *changed*.
+A clean tree reports zero E3 warnings, so every E3 name the run prints is a
+new finding — list each one; never summarize them away as "known".
 
 ---
 
@@ -244,7 +262,7 @@ every run — the report should surface what *changed*.
 bash .claude/skills/verify-deps/verify.sh
 ```
 
-Ten checks, pure stdlib, no install needed:
+Seventeen checks, pure stdlib, no install needed:
 
 1. `extract_pins.py` on the clean tree — exit 0, no `requirements.txt` drift
 2. Mutation: drift `httpx` in a copy of `requirements.txt`, assert the `DRIFT` line
@@ -252,8 +270,8 @@ Ten checks, pure stdlib, no install needed:
    from `constraints.txt`)
 3. Missing pin files — must fail closed (exit 3)
 4. `check_env_drift.py` on the clean tree — exit 0. Asserts the **exit code, not
-   a warning count**: the two known E3 warnings would otherwise make this test
-   fail the day a transitive changes, which is not what it is guarding
+   a warning count**: a clean tree reports zero E3 warnings today, and a future
+   undeclared transitive should surface as a warning to read, not fail this test
 5. Mutation E1: the same tool pinned at two versions in two workflow files —
    exit 2. This is the drift class nothing else in the repo can see
 6. Mutation E4: an extras-only package leaking into `requirements.txt` — exit 2,
@@ -265,6 +283,21 @@ Ten checks, pure stdlib, no install needed:
    (`check_env_drift.py --strict` exit 0)
 9. Mutation E5: a Dockerfile that loses the constrained install contract —
    exit 2 (the E5 self-test)
+10. Negative control: the shipped Docker surface (`Dockerfile`,
+    `docker-compose.yml`, `.dockerignore`, `publish-ghcr.yml`) copied whole
+    beside the pin manifests — exit 0 with the E6 ok lines
+11. Mutation E5: the fallback `torch==` pre-install lags `constraints.txt` —
+    exit 2 (the lock-step the Dockerfile comment asks for)
+12. Mutation E6: `.dockerignore` swallows a COPYed manifest — exit 2
+13. Mutation E6: `.dockerignore` stops excluding `index/` — exit 2 (private
+    vectors would bake into a published image)
+14. Mutation E6: the compose publish leaves `127.0.0.1` — exit 2
+15. Mutation E6: compose drops the `./index` mount — exit 2 (503
+    `INDEX_NOT_FOUND` with a green healthcheck)
+16. Mutation E6: compose's default `CYCLAW_IMAGE_TAG` no longer matches
+    `pyproject.toml`'s `version` — exit 2
+17. Mutation E6: `publish-ghcr.yml`'s `IMAGE_NAME` is not the image compose
+    pulls — exit 2
 
 Both scripts take `--repo-root`, which is what lets the mutations run against a
 `mktemp -d` tree instead of the real repo. Does not re-test `dep-guard`'s own
@@ -330,17 +363,26 @@ delegates Step 1 to it rather than duplicating it).
   (LangChain/LangGraph in particular) fix in a version already below what
   CyClaw pins; reporting those as open findings would be noise.
 - **E3's import→distribution mapping is PEP 503 normalization, not a lookup
-  table** — `_DIST_ALIAS` in `check_env_drift.py` holds only the three names
+  table** — `_DIST_ALIAS` in `check_env_drift.py` holds only the four names
   that differ by more than punctuation (`yaml`→`pyyaml`,
-  `dateutil`→`python-dateutil`, `dotenv`→`python-dotenv`). Every
+  `dateutil`→`python-dateutil`, `dotenv`→`python-dotenv`,
+  `celpy`→`cel-python`). Every
   underscore/hyphen case (`langchain_xai`, `rank_bm25`, `huggingface_hub`, …)
   is handled by treating `_` and `-` as equivalent, per PEP 503. Adding those
   to the table instead would work today and silently rot on the next
   `langchain_*` import — resist it.
 - **E3 skips virtualenvs structurally, by their own `pyvenv.cfg`** — not by
-  name. The venv in this tree is `.venv312`, so a hardcoded `.venv/` skip
-  missed it entirely and the first run reported ~200 site-packages modules as
-  undeclared. Any name-based skip list has the same bug waiting in it.
+  name. The venv in this tree was `.venv312` when the check was written, so a
+  hardcoded `.venv/` skip missed it entirely and the first run reported ~200
+  site-packages modules as undeclared. Any name-based skip list has the same
+  bug waiting in it.
+- **E6 reads YAML with regexes on purpose.** `docker-compose.yml` and
+  `publish-ghcr.yml` are scanned for the specific lines the contract names
+  (`image:`, port publishes, `:/app/<dir>` mounts, `IMAGE_NAME:`, `file:`)
+  rather than parsed, so the checker stays stdlib-only and pre-install like
+  the rest of this skill. A restructured compose file that moves those lines
+  into anchors/extension fields would need the regexes revisited — the
+  failure mode is a false FAIL, never a silent pass.
 - **`extract_pins.py` imports `dep-guard/check_deps.py` directly** (sibling
   skill, `sys.path` insert) rather than re-parsing pin files — if
   `dep-guard`'s parsing helpers change their names/signature, this script
