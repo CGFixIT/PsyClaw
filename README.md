@@ -9,11 +9,12 @@
 
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [What It Does](#what-it-does)
 - [Architecture](#architecture)
 - [API Key Setup (Soul Mutations)](#api-key-setup-soul-mutations)
 - [Per-User Authentication](#per-user-authentication-v19)
-- [Quick Start](#quick-start)
+- [Installation](#installation)
 - [Docker / GHCR](docs/DOCKER.md)
 - [Full Setup Guide](setup-guide.md)
 - [Project Structure](#project-structure)
@@ -30,6 +31,37 @@
 - [Security Model](#security-model)
 - [Remaining Work](docs/plans/remaining_work.md) 
 - [Archive & Roadmap](docs/ARCHIVE_AND_ROADMAP.md) 
+
+---
+
+## Quick Start
+
+The fastest path to a running RAG server — macOS/Linux shown; only the torch
+pin and the activation command differ on Windows (see
+[Installation](#installation) for the full per-platform split):
+
+```bash
+git clone https://github.com/CGFixIT/CyClaw && cd CyClaw
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt -r requirements-test.txt -c constraints.txt --ignore-installed PyYAML
+ollama pull qwen3.8:27b-mlx                      # Ollama must already be running on :11434
+export CYCLAW_API_KEY="$(openssl rand -hex 20)"  # needed for the /soul/* endpoints
+python -m retrieval.indexer                      # builds the retrieval index, once
+uvicorn gate:app --host 127.0.0.1 --port 8787    # → http://127.0.0.1:8787
+```
+
+Confirm it's alive: `curl http://127.0.0.1:8787/health`.
+
+**On macOS (Apple Silicon, the primary platform):** the `+cpu` torch wheel
+above doesn't exist there — use plain `torch==2.13.0` and strip the `torch`/
+`--extra-index-url` lines from both manifests first, or just run
+`bash ./macos/setup-cyclaw.sh`, which handles the torch difference, Ollama,
+the index, and both servers for you.
+
+**Full step-by-step guide** — exact per-platform commands, Docker, the
+coding-harness console, and every REST endpoint with a copy-pasteable `curl`:
+[`setup-guide.md`](setup-guide.md).
 
 ---
 
@@ -379,7 +411,7 @@ hostname), `--days` (default `825`). Read
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before exposing the port —
 CyClaw's stated scope is single-operator and loopback-bound.
 
-## Quick Start
+## Installation
 
 ### Prerequisites
 
@@ -988,7 +1020,7 @@ sibling script trees (`powershell/`, `macos/`) rather than one abstraction.
 - **Launch:** `python -m harness.server` serves the console at
   `http://127.0.0.1:8790` (`static/harness.html`); loopback-only bind,
   non-loopback hosts refused. `gate.py` keeps `:8787`. (`cyclaw-harness` is the
-  same entry point after `pip install -e .` — see [Quick Start](#quick-start).)
+  same entry point after `pip install -e .` — see [Installation](#installation).)
 - **Install:** Windows —
   `powershell -ExecutionPolicy Bypass -File .\powershell\Install-CyClaw.ps1`
   (home, venv, `cyclaw.cmd` PATH shim, profile function). macOS / Linux —
