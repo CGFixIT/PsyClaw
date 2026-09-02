@@ -107,6 +107,31 @@ def _temporary_output_path(target: Path) -> Path:
     return Path(raw_path)
 
 
+def _remove_temporary_output(path: Path | None) -> None:
+    """Best-effort cleanup that reports a leftover private temporary file."""
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        print(f"warning: could not remove temporary certificate output: {exc}", file=sys.stderr)
+
+
+def _backup_existing_output(target: Path) -> Path | None:
+    """Copy an existing output aside so a failed pair install can be rolled back."""
+    if not target.exists():
+        return None
+    backup = _temporary_output_path(target)
+    try:
+        shutil.copy2(target, backup)
+    except OSError:
+        _remove_temporary_output(backup)
+        raise
+    return backup
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cyclaw-gen-cert")
     parser.add_argument("--certfile", default=_DEFAULT_CERT)
@@ -156,8 +181,15 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ENV
     certfile.parent.mkdir(parents=True, exist_ok=True)
     keyfile.parent.mkdir(parents=True, exist_ok=True)
-    temp_certfile = _temporary_output_path(certfile)
-    temp_keyfile = _temporary_output_path(keyfile)
+    temp_certfile: Path | None = None
+    temp_keyfile: Path | None = None
+    try:
+        temp_certfile = _temporary_output_path(certfile)
+        temp_keyfile = _temporary_output_path(keyfile)
+    except OSError as exc:
+        _remove_temporary_output(temp_certfile)
+        print(f"failed to prepare certificate outputs: {exc}", file=sys.stderr)
+        return EXIT_FAIL
     san = subject_alt_names(args.hostname, extra=args.san)
     cmd = [
         str(openssl),
@@ -203,22 +235,35 @@ def main(argv: list[str] | None = None) -> int:
             err = (completed.stderr or completed.stdout or "").strip()
             print(err or "openssl req failed", file=sys.stderr)
             return EXIT_FAIL
+        previous_certfile: Path | None = None
+        previous_keyfile: Path | None = None
+        cert_installed = False
         try:
+            previous_certfile = _backup_existing_output(certfile)
+            previous_keyfile = _backup_existing_output(keyfile)
             os.replace(temp_certfile, certfile)
+            cert_installed = True
             os.replace(temp_keyfile, keyfile)
         except OSError as exc:
+            if cert_installed:
+                try:
+                    if previous_certfile is None:
+                        certfile.unlink()
+                    else:
+                        os.replace(previous_certfile, certfile)
+                except OSError as rollback_exc:
+                    print(
+                        f"failed to restore previous certificate after install failure: {rollback_exc}",
+                        file=sys.stderr,
+                    )
             print(f"failed to install certificate pair: {exc}", file=sys.stderr)
             return EXIT_FAIL
+        finally:
+            _remove_temporary_output(previous_certfile)
+            _remove_temporary_output(previous_keyfile)
     finally:
-        for temp_output in (temp_certfile, temp_keyfile):
-            try:
-                temp_output.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                # The initial generation result is already reported; leave a
-                # private, same-directory temporary file rather than mask it.
-                pass
+        _remove_temporary_output(temp_certfile)
+        _remove_temporary_output(temp_keyfile)
     try:
         keyfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError:

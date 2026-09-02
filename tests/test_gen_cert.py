@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import utils.gen_cert as gen_cert
 from utils.gen_cert import EXIT_ENV, EXIT_FAIL, EXIT_OK, main, subject_alt_names
 
 
@@ -76,6 +77,61 @@ def test_failed_openssl_cleans_partial_outputs_and_allows_a_retry(monkeypatch, t
     assert main(["--certfile", str(cert), "--keyfile", str(key)]) == EXIT_OK
     assert cert.read_text(encoding="utf-8") == "new-cert"
     assert key.read_text(encoding="utf-8") == "new-key"
+
+
+def test_second_temporary_output_failure_cleans_first_output(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+    original = gen_cert._temporary_output_path
+    calls = {"count": 0}
+
+    def _fail_second_allocation(target):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise OSError("no writable temporary path")
+        return original(target)
+
+    monkeypatch.setattr("utils.gen_cert._temporary_output_path", _fail_second_allocation)
+    rc = main([
+        "--certfile", str(tmp_path / "c.pem"),
+        "--keyfile", str(tmp_path / "k.pem"),
+    ])
+    assert rc == EXIT_FAIL
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_failed_key_install_restores_the_previous_certificate_pair(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+    cert = tmp_path / "c.pem"
+    key = tmp_path / "k.pem"
+    cert.write_text("old-cert", encoding="utf-8")
+    key.write_text("old-key", encoding="utf-8")
+    staged: dict[str, Path] = {}
+
+    def _successful_run(cmd, **_kwargs):
+        staged["cert"] = Path(cmd[cmd.index("-out") + 1])
+        staged["key"] = Path(cmd[cmd.index("-keyout") + 1])
+        staged["cert"].write_text("new-cert", encoding="utf-8")
+        staged["key"].write_text("new-key", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _successful_run)
+    real_replace = gen_cert.os.replace
+
+    def _fail_key_install(source, destination):
+        if Path(source) == staged.get("key") and Path(destination) == key:
+            raise OSError("key file is locked")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("utils.gen_cert.os.replace", _fail_key_install)
+    rc = main([
+        "--certfile", str(cert),
+        "--keyfile", str(key),
+        "--force",
+    ])
+    assert rc == EXIT_FAIL
+    assert cert.read_text(encoding="utf-8") == "old-cert"
+    assert key.read_text(encoding="utf-8") == "old-key"
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_existing_pair_is_refused_without_force(tmp_path, monkeypatch, capsys):
