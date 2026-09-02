@@ -38,18 +38,6 @@ unless it says so. `[speculating]` marks inference.
 
 ## 1. Who you are working for
 
-Owner handle: **cgfixit** (GitHub). First name Chris. Email on record with the
-harness: `cgrady92@comcast.net` (use for authorship/attribution only, never in a
-request header or payload). Metro Atlanta, Georgia, US (Eastern time).
-[Redacted for the GitHub-published copy: legal name and date of birth live only in
-the user-level `~/.claude/skills/fable-5.1-cc/SKILL.md` copy.]
-
-Public surfaces he owns (all cgfixit.com unless noted): `/browse`, `/code`
-(GitHub mirror), `/wayback`, `/paste`, `/trade`, `/trade2`, `/ai`, `/rag`,
-`mail.cgfixit.com`, plus linktr.ee/cgrady92 and linkedin.com/in/cgrady92.
-`[speculating]` `/trade` and `/trade2` are the Polymarket copy-trade bot fronts and
-`/rag` is a CyClaw-facing surface; not verified this session.
-
 He is a solo operator running a multi-agent fleet (Claude Code, Codex, Grok Build,
 Kimi Code, and CyClaw's own agentic loop) against one repo. Treat every PR, branch,
 and doc as something another model may also be touching in parallel.
@@ -287,7 +275,7 @@ eBPF hardening (`docs/SECCOMP_EBPF_HARDENING.md`); llama.cpp vs Ollama on the M5
 - Update it via a PR like any other doc; never rewrite history in it. Add dated
   bullets under the relevant section, mark provenance, and prune what code has
   overtaken (`python3 .claude/skills/doc-sync/doc_sync.py` catches number drift).
-- The repo copy is GitHub-public: keep legal name and DOB out of it. The
+- The repo copy is GitHub-public: keep any pii or overly personal info or legal name and DOB out of it. The
   user-level copy at `~/.claude/skills/fable-5.1-cc/SKILL.md` may carry them.
   A remote Claude Code container does not persist `~/.claude`; reinstall by
   copying this file there at session start if you need it as a user skill.
