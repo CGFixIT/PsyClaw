@@ -161,28 +161,33 @@ class TestAPIKeyAuth:
 
     @pytest.fixture
     def client_with_auth(self, tmp_path):
-        """Create a test client with API key enforcement enabled."""
-        os.environ["CYCLAW_API_KEY"] = "test-secret-key-12345"
-        try:
-            from unittest.mock import patch as _patch
-            with _patch.dict(os.environ, {"CYCLAW_API_KEY": "test-secret-key-12345"}):
-                from gate import require_api_key
-                from fastapi.testclient import TestClient
-                from fastapi import FastAPI, Depends, HTTPException
+        """Create a test client with API key enforcement enabled.
 
-                test_app = FastAPI()
+        patch.dict alone scopes the key to this fixture and restores whatever
+        the process had before. The raw ``os.environ[...] =`` assignment plus
+        ``finally: os.environ.pop(...)`` this used to carry set the same value
+        and then deleted the variable unconditionally on teardown -- so on any
+        host or CI leg that legitimately exports CYCLAW_API_KEY (ci.yml's smoke
+        jobs do), every later test in the process saw the key vanish and
+        gate.py's fail-closed path took over, making results order-dependent.
+        """
+        from unittest.mock import patch as _patch
+        with _patch.dict(os.environ, {"CYCLAW_API_KEY": "test-secret-key-12345"}):
+            from gate import require_api_key
+            from fastapi.testclient import TestClient
+            from fastapi import FastAPI, Depends, HTTPException
 
-                @test_app.get("/open")
-                def open_endpoint():
-                    return {"status": "ok"}
+            test_app = FastAPI()
 
-                @test_app.post("/protected", dependencies=[Depends(require_api_key)])
-                def protected_endpoint():
-                    return {"status": "ok"}
+            @test_app.get("/open")
+            def open_endpoint():
+                return {"status": "ok"}
 
-                yield TestClient(test_app)
-        finally:
-            os.environ.pop("CYCLAW_API_KEY", None)
+            @test_app.post("/protected", dependencies=[Depends(require_api_key)])
+            def protected_endpoint():
+                return {"status": "ok"}
+
+            yield TestClient(test_app)
 
     def test_unprotected_endpoint_no_key(self, client_with_auth):
         resp = client_with_auth.get("/open")
