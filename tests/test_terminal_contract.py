@@ -308,6 +308,23 @@ def test_confirm_prompt_query_is_stored_per_entry():
     assert "Confirmation expired" in js
 
 
+def test_propose_soul_refuses_empty_reason():
+    """Empty soul reason must not be replaced with a canned I5 string."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    fn = js.split("async function proposeSoulEvolution()", 1)
+    assert len(fn) == 2, "proposeSoulEvolution missing"
+    body = fn[1].split("async function applySoulEvolution()", 1)[0]
+    assert "|| 'user-requested'" not in body
+    assert "A reason is required." in body
+    assert "/soul/propose" in body
+    before_fetch, _after = body.split("`${API}/soul/propose`", 1)
+    assert "if (!reason)" in before_fetch
+    reason_guard = before_fetch.split("if (!reason)", 1)[1].split("return;", 1)[0]
+    assert "pendingSoulProposal = null" in reason_guard
+    assert "proposalBox.style.display = 'none'" in reason_guard
+    assert "return;" in before_fetch
+
+
 def test_query_does_not_send_api_key_as_bearer():
     """Once auth.enabled is on, Authorization on /query is a device token.
     The typed CYCLAW_API_KEY must stay on /soul/* and /ops/* only."""

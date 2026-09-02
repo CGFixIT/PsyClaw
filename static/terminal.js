@@ -1125,9 +1125,15 @@ async function reloadSoul() {
 
 async function proposeSoulEvolution() {
   const newSoul = soulEditor.value.trim();
-  const reason = soulReason.value.trim() || 'user-requested';
+  const reason = soulReason.value.trim();
   if (!newSoul) {
     setSoulStatus('Soul text is empty.', 'error');
+    return;
+  }
+  if (!reason) {
+    pendingSoulProposal = null;
+    proposalBox.style.display = 'none';
+    setSoulStatus('A reason is required.', 'error');
     return;
   }
 
