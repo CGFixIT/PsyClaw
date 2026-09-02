@@ -381,7 +381,11 @@ def test_console_documents_skills_slash_command():
 
 def test_console_documents_web_slash_command():
     html = _HARNESS_HTML.read_text(encoding="utf-8")
-    assert "['/web [on|off|allow|fetch|search]'" in html
+    listing = re.search(r"\['/web \[([^\]]+)\]'", html)
+    assert listing is not None
+    assert {"on", "off", "allow", "deny", "fetch", "search", "inject", "forget"} <= set(
+        listing.group(1).split("|")
+    )
     assert "case 'web':" in html
     assert "api('/api/web')" in html
     assert "function renderWebStatus(" in html
@@ -389,6 +393,10 @@ def test_console_documents_web_slash_command():
     end = html.index("case 'github':", start)
     body = html[start:end]
     assert "/api/agent/" not in body
+    assert "['/web on|off'" in body
+    for verb in ("allow", "deny", "fetch", "search", "inject", "forget"):
+        assert f"['/web {verb}" in body
+        assert f"api('/api/web/{verb}'" in body
     assert "api('/api/web/fetch'" in body
     assert "api('/api/web/search'" in body
     assert "api('/api/web/allow'" in body
