@@ -4,7 +4,7 @@ Committed fixture repository for the `GitHubCodingRunner` tests
 (`agentic/harness_optimizer/runners/github_coding_runner.py`). It stands in
 for a real GitHub coding target so runner evaluations stay no-network and
 deterministic (phase 7 of
-`docs/agentic/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`).
+`docs/work/GITHUB_DEEP_AGENT_HARNESS_OPTIMIZER_PLAN.md`).
 
 ## Files
 
