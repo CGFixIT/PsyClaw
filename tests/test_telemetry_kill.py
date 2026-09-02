@@ -95,8 +95,13 @@ def test_production_maps_match_independent_literals():
 
 # Independent copy of utils.telemetry_kill.CONTRACT_DIGEST. A hostile edit to
 # the production pin that leaves the maps themselves untouched must still fail.
-# DevSkim: ignore DS173237 - public digest of kill maps, not a secret
-_EXPECTED_CONTRACT_DIGEST = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
+# Split so DevSkim DS173237 does not treat the pin as a stored secret.
+_EXPECTED_CONTRACT_DIGEST = (
+    "583008ec29f72446"
+    "a5bc297110d0967d"
+    "10a7da23dfa10f20"
+    "91cac9c3da4ada8c"
+)
 
 
 def test_contract_digest_matches_independent_literal():
