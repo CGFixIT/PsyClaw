@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -75,15 +76,17 @@ _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.Cont
 
 # Bounded retry for the single model.invoke() below -- classification mirrors
 # llm/client.py's _post_with_retry rules: transport/connection failures and
-# HTTP 429/5xx are retried (2 extra attempts, 1s then 2s backoff),
+# HTTP 429/5xx are retried (2 extra attempts, bounded provider Retry-After
+# when present, otherwise 1s then 2s exponential backoff),
 # every other 4xx fails fast. Unlike the cloud clients in llm/client.py, a
 # TIMEOUT is deliberately NOT retried: utils/ops_runner budgets each loop
 # iteration at one planner_timeout_sec (720s shipped), so retrying a
 # timed-out call could burn up to 3x that inside a budget sized for 1x and
 # get the whole run SIGKILLed at the 3600s cap. Worst-case wall clock per
 # call is therefore ~planner_timeout_sec (one full timeout, not retried) or
-# two fast-failing retryable errors + ~3s of backoff on top of the attempt
-# that succeeds -- and that budget only holds because model_adapter builds
+# two fast-failing retryable errors plus at most 60s of bounded provider
+# backoff on top of the attempt that succeeds -- and that budget only holds
+# because model_adapter builds
 # every chat model with max_retries=0. Leaving the SDK default (2) in place
 # nests its retry cycle inside this loop: up to 3x3 = 9 requests and two
 # levels of backoff for what this comment describes as 3 attempts, which can
@@ -94,6 +97,7 @@ _HTTP_USAGE: contextvars.ContextVar[dict[str, object] | None] = contextvars.Cont
 # module cannot import to inspect.
 _INVOKE_MAX_RETRIES = 2
 _INVOKE_BACKOFF_BASE_SEC = 1.0
+_INVOKE_BACKOFF_MAX_SEC = 30.0
 
 
 def _invoke_error_status_code(exc: Exception) -> int | None:
@@ -131,6 +135,23 @@ def _invoke_error_is_retryable(exc: Exception) -> bool:
     if status is not None:
         return status == 429 or status >= 500
     return "Connection" in name or isinstance(exc, ConnectionError)
+
+
+def _invoke_retry_after_delay(exc: Exception) -> float | None:
+    """Return a bounded numeric Retry-After delay carried by an SDK error."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except ValueError:
+        return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return min(seconds, _INVOKE_BACKOFF_MAX_SEC)
 
 
 @dataclass(frozen=True)
@@ -364,7 +385,13 @@ class ChatModelProposerClient:
                             "cloud proposer attempt %d/%d failed retryably (%s); backing off",
                             attempts, _INVOKE_MAX_RETRIES + 1, type(exc).__name__,
                         )
-                        time.sleep(_INVOKE_BACKOFF_BASE_SEC * (2 ** (attempts - 1)))
+                        delay = _invoke_retry_after_delay(exc)
+                        if delay is None:
+                            delay = min(
+                                _INVOKE_BACKOFF_BASE_SEC * (2 ** (attempts - 1)),
+                                _INVOKE_BACKOFF_MAX_SEC,
+                            )
+                        time.sleep(delay)
                         continue
                     # The concrete exception type depends on which SDK is active
                     # (openai/xai/anthropic clients, none importable here to enumerate) --

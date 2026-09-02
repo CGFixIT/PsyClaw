@@ -456,6 +456,11 @@ class _FlakyStubModel:
 class _FakeRateLimitError(Exception):
     status_code = 429
 
+    def __init__(self, retry_after=None):
+        super().__init__("rate limited")
+        headers = {} if retry_after is None else {"retry-after": retry_after}
+        self.response = SimpleNamespace(status_code=429, headers=headers)
+
 
 class _FakeServerError(Exception):
     def __init__(self):
@@ -485,6 +490,31 @@ def test_invoke_retries_a_transient_429_then_succeeds(test_config, monkeypatch):
     assert response.content == "plan"
     assert len(stub.calls) == 2
     assert delays == [1.0]  # backoff_base * 2**0, capped at 30
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "expected"),
+    [
+        ("7", 7.0),
+        ("99", 30.0),
+        ("invalid", 1.0),
+        ("-1", 1.0),
+        ("nan", 1.0),
+        (None, 1.0),
+    ],
+)
+def test_invoke_honors_bounded_retry_after(test_config, monkeypatch, retry_after, expected):
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeRateLimitError(retry_after)])
+    delays: list[float] = []
+    monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
+    monkeypatch.setattr(chat_client_module.time, "sleep", delays.append)
+
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+
+    assert response.content == "plan"
+    assert delays == [expected]
 
 
 def test_invoke_retries_a_5xx_carried_on_the_response_attribute(test_config, monkeypatch):

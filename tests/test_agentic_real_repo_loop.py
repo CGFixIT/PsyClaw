@@ -1032,6 +1032,24 @@ def test_parse_file_blocks_rejects_a_duplicate_path():
         _parse_file_blocks(dup)
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("Target.py", "target.py"),
+        ("report.txt", "report.txt. "),
+        ("src/visible.py", "src/visible\u200b.py"),
+    ],
+)
+def test_parse_file_blocks_rejects_filesystem_equivalent_paths(first, second):
+    proposal = (
+        f"=== FILE {first} ===\nfirst\n=== END FILE ===\n"
+        f"=== FILE {second} ===\nsecond\n=== END FILE ===\n"
+    )
+
+    with pytest.raises(AgenticError, match="same file path"):
+        _parse_file_blocks(proposal)
+
+
 def test_loop_writes_a_file_from_a_crlf_planner_response(tmp_path, monkeypatch):
     crlf_block = "=== FILE target.txt ===\r\nexpected marker\r\n=== END FILE ===\r\nfix"
     with _cloned_tools(tmp_path, monkeypatch) as tools:
