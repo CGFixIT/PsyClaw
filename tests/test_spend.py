@@ -130,6 +130,17 @@ def test_record_missing_usage_sets_usage_missing(tmp_path: Path) -> None:
     assert record["source"] == "query"
 
 
+def test_record_outcome_is_additive_and_absent_by_default(tmp_path: Path) -> None:
+    ledger = tmp_path / "spend.jsonl"
+    spend.record_external_usage(provider="grok", model="grok-4.5", usage=None, spend_file=ledger)
+    spend.record_external_usage(
+        provider="grok", model="grok-4.5", usage=None, spend_file=ledger, outcome="failed_after_billing",
+    )
+    plain, marked = (json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines())
+    assert "outcome" not in plain
+    assert marked["outcome"] == "failed_after_billing"
+
+
 def test_record_partial_usage_sets_usage_missing(tmp_path: Path) -> None:
     ledger = tmp_path / "spend.jsonl"
     spend.record_external_usage(

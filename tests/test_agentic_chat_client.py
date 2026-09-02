@@ -425,7 +425,10 @@ def test_invoke_spend_failure_does_not_change_content(test_config, monkeypatch):
     assert _spend_rows(cfg) == []
 
 
-def test_invoke_does_not_record_spend_when_model_raises(test_config, monkeypatch):
+def test_invoke_does_not_record_spend_when_model_raises_with_nothing_captured(test_config, monkeypatch):
+    # No 2xx ever reached the response hook (timeout / connect failure / 4xx /
+    # 5xx all look like this), so there is nothing the vendor could have
+    # billed that we can see -- no row, rather than a manufactured all-None one.
     cfg, config_path = test_config
     stub = _StubModel(raise_exc=RuntimeError("no 200"))
     monkeypatch.setattr(chat_client_module, "build_chat_model", lambda settings, **kwargs: stub)
@@ -433,6 +436,32 @@ def test_invoke_does_not_record_spend_when_model_raises(test_config, monkeypatch
     with pytest.raises(AgenticError):
         client.invoke(system_prompt="s", user_prompt="a clean prompt", config_path=config_path, cfg=cfg)
     assert _spend_rows(cfg) == []
+
+
+def test_invoke_records_captured_usage_when_the_sdk_raises_after_a_billed_2xx(test_config, monkeypatch):
+    # The hook stores usage only on a 2xx, so a captured value at raise time
+    # means xAI billed the call before the SDK fell over past the wire.
+    cfg, config_path = test_config
+    stub = _StubModel(raise_exc=RuntimeError("deserialization failed after 200"))
+
+    def _build(settings, **kwargs):
+        _HTTP_USAGE.set({"prompt_tokens": 7, "completion_tokens": 3, "cost_in_usd_ticks": 99})
+        return stub
+
+    monkeypatch.setattr(chat_client_module, "build_chat_model", _build)
+    client = ChatModelProposerClient(settings=_settings())
+    with pytest.raises(AgenticError):
+        client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    rows = _spend_rows(cfg)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["outcome"] == "failed_after_billing"
+    assert row["vendor_cost_ticks"] == 99
+    assert row["input_tokens"] == 7
+    assert row["output_tokens"] == 3
+    assert row["usage_missing"] is False
+    assert row["source"] == "agentic"
+    assert {"query", "prompt", "content", "messages", "api_key"}.isdisjoint(row)
 
 
 # --- bounded retry ------------------------------------------------------------
@@ -490,6 +519,34 @@ def test_invoke_retries_a_transient_429_then_succeeds(test_config, monkeypatch):
     assert response.content == "plan"
     assert len(stub.calls) == 2
     assert delays == [1.0]  # backoff_base * 2**0, capped at 30
+    # The 429 carried no captured usage, so only the successful attempt ledgers.
+    rows = _spend_rows(cfg)
+    assert len(rows) == 1
+    assert "outcome" not in rows[0]
+
+
+def test_invoke_clears_captured_usage_so_a_retry_cannot_double_count_it(test_config, monkeypatch):
+    # Attempt 1: a 2xx the hook captured, then a retryable raise. Attempt 2
+    # succeeds but (as in this stub) captures nothing new. The ledger must show
+    # attempt 1's real usage once, marked failed, and attempt 2 as usage_missing
+    # -- never attempt 1's ticks re-attributed to the successful call.
+    cfg, config_path = test_config
+    stub = _FlakyStubModel([_FakeRateLimitError()])
+
+    def _build(settings, **kwargs):
+        _HTTP_USAGE.set({"prompt_tokens": 7, "completion_tokens": 3, "cost_in_usd_ticks": 99})
+        return stub
+
+    monkeypatch.setattr(chat_client_module, "build_chat_model", _build)
+    monkeypatch.setattr(chat_client_module.time, "sleep", lambda _s: None)
+    client = ChatModelProposerClient(settings=_settings())
+    response = client.invoke(system_prompt="s", user_prompt="u", config_path=config_path, cfg=cfg)
+    assert response.content == "plan"
+    rows = _spend_rows(cfg)
+    assert [r.get("outcome") for r in rows] == ["failed_after_billing", None]
+    assert rows[0]["vendor_cost_ticks"] == 99
+    assert rows[1]["usage_missing"] is True
+    assert "vendor_cost_ticks" not in rows[1] or rows[1]["vendor_cost_ticks"] is None
 
 
 @pytest.mark.parametrize(
