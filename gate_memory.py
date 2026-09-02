@@ -208,4 +208,10 @@ def register_memory_routes(
 
         body = await asyncio.to_thread(export_html, cfg)
         await audit({"event": "memory_export_html"})
-        return HTMLResponse(content=body, media_type="text/html; charset=utf-8")
+        # Same string as gate.py / and /static: this page is operator memory, not
+        # a public cacheable document.
+        return HTMLResponse(
+            content=body,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+        )

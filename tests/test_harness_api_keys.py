@@ -194,6 +194,7 @@ def test_status_reports_presence_without_the_value(client, home, monkeypatch):
     env_keys.write_keys({"GROK_API_KEY": _SECRET})
     resp = client.get("/api/keys", headers=_full_auth(client))
     assert resp.status_code == 200
+    assert "no-store" in resp.headers.get("cache-control", "")
     assert _SECRET not in resp.text
     row = next(k for k in resp.json()["keys"] if k["name"] == "GROK_API_KEY")
     assert row["configured"] is True
