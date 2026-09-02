@@ -252,14 +252,15 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "pendingAgentRun = stagedRun" in commands
 
 
-def test_agent_staging_runtime():
+@pytest.mark.parametrize("scenario", ["staging", "github"])
+def test_agent_console_runtime(scenario):
     # Execute the shipped JavaScript with Node's standard library; no browser,
     # service, npm package, or separate JS test framework is needed.
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is unavailable for the console runtime contract")
     result = subprocess.run(
-        [node, str(Path(__file__).with_name("harness_agent_console.cjs")), "staging"],
+        [node, str(Path(__file__).with_name("harness_agent_console.cjs")), scenario],
         capture_output=True, text=True, timeout=15, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

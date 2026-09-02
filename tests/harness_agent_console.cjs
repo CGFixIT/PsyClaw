@@ -119,7 +119,20 @@ async function staging() {
   assert.equal(invalid.calls.length, 0);
 }
 
-const scenarios = {staging};
+async function github() {
+  const b = browser(() => ({status: 200, body: {
+    ok: false, label: 'github-status', exit_code: 4, stdout: '',
+    stderr: 'GITHUB_AUTH_FAILED: authenticate gh before using this repository', parsed: null,
+  }}));
+  await b.context.runSlash('/github');
+  assert.deepEqual(b.calls, [{url: '/api/github/status', method: 'GET', body: undefined}]);
+  const output = b.messages.join('\n');
+  assert.match(output, /ok=false/);
+  assert.match(output, /GITHUB_AUTH_FAILED: authenticate gh/);
+  assert.doesNotMatch(output, /GitHub ready|tree attached|context injected|write access granted/i);
+}
+
+const scenarios = {staging, github};
 const scenario = process.argv[2];
 assert.ok(Object.hasOwn(scenarios, scenario), 'unknown runtime scenario');
 scenarios[scenario]().then(() => console.log(scenario + ': passed')).catch(error => {
