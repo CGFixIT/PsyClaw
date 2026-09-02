@@ -420,7 +420,10 @@ def register_auth_routes(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
                     _CODE_KEY: "AUTH_LOOPBACK_ONLY",
-                    _MESSAGE_KEY: "first password must be set from this machine",
+                    _MESSAGE_KEY: (
+                        "first password must be set from this machine "
+                        "without reverse-proxy forwarding headers"
+                    ),
                     _DETAILS_KEY: {},
                 },
             )

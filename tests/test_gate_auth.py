@@ -142,6 +142,7 @@ class TestBootstrapPassword:
         )
         assert r.status_code == 403
         assert r.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+        assert "forwarding headers" in r.json()["detail"]["message"]
         assert manager.needs_password_setup() is True
 
     def test_non_loopback_is_forbidden(self, manager):

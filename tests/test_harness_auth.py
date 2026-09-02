@@ -791,6 +791,7 @@ def test_harness_bootstrap_password_rejects_proxied_loopback(tmp_path, monkeypat
     )
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+    assert "forwarding headers" in denied.json()["detail"]["message"]
     ok = loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
     assert ok.status_code == 200
 
