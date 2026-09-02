@@ -111,6 +111,7 @@ def test_status_and_propose_apply(memory_app):
     html = client.get("/query/export/html", headers=headers)
     assert html.status_code == 200
     assert "text/html" in html.headers["content-type"]
+    assert "no-store" in html.headers.get("cache-control", "")
 
 
 def test_disabled_master_404_on_facts(tmp_path, api_key):

@@ -1205,7 +1205,7 @@ def create_app(
         return {_MODEL_KEY: _current_model()}
 
     @app.get("/api/keys", dependencies=guarded)
-    def api_keys_status() -> dict:
+    def api_keys_status(response: Response) -> dict:
         """Presence + masked tail for every allowlisted credential.
 
         Guarded rather than open even though it returns no secret: the set of
@@ -1213,6 +1213,9 @@ def create_app(
         from an unauthenticated local caller, and this route has no bootstrap
         role (the console's own key field does not depend on it).
         """
+        # Same string as the console HTML: a cached GET would replay which
+        # providers are configured after a key is deleted from disk.
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return {
             "keys": env_keys.read_status(),
             "env_file": str(env_keys.env_file_path()),
