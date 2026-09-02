@@ -133,6 +133,18 @@ def _reclaim_registry_lock(lock_dir: Path) -> bool:
         reclaim_guard.mkdir()
     except FileExistsError:
         return False
+    except OSError as exc:
+        # FileExistsError is "another reclaimer won". Disk-full / EACCES here
+        # is not contention -- returning False would lie as "another apply is
+        # in progress" (issue #1275 P2.4). Fail closed as a typed registry error.
+        raise SkillRegistryError(
+            "could not create skills-registry reclaim guard",
+            details={
+                "lock_dir": str(lock_dir),
+                "guard": str(reclaim_guard),
+                "errno": getattr(exc, "errno", None),
+            },
+        ) from exc
 
     try:
         try:

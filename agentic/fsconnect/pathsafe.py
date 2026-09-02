@@ -531,7 +531,13 @@ def _is_macos_dataless(st: os.stat_result) -> bool:
     return sys.platform == "darwin" and bool(getattr(st, "st_flags", 0) & _SF_DATALESS)
 
 
-def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]]) -> None:
+def _report_skipped_entries(
+    where: str,
+    count: int,
+    sample: list[tuple[str, str]],
+    *,
+    sink: Callable[[str, int, list[str]], None] | None = None,
+) -> None:
     """Log entries a directory walk dropped because stat() failed.
 
     _raise_macos_permission re-raises only a Darwin EACCES/EPERM denial. Every
@@ -543,12 +549,10 @@ def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]
     corpus staging via fsconnect/indexer.py, so a silent drop can quietly
     remove files from the index.
 
-    Scope of the guarantee: this surfaces the loss on the operator's log
-    stream, and through /ops/fsconnect in the response body -- NOT in
-    audit.jsonl. Whether it reaches logs/cyclaw.log depends on the entrypoint
-    having called utils.logger.setup_logging; the agentic CLI does not, the
-    same as the sibling warning in trash.py. Persisting it durably is a
-    separate change from making it non-silent.
+    The warning always fires. When a shipped caller (FsClient / indexer)
+    installs ``ScopedRoots._skipped_stat_sink``, one audit.jsonl event is
+    also written with count + sample *names* only -- no file contents, no
+    strerror (issue #1275 P2.5). pathsafe itself stays stdlib-only.
     """
     if not count:
         return
@@ -556,11 +560,15 @@ def _report_skipped_entries(where: str, count: int, sample: list[tuple[str, str]
     if count > len(sample):
         rendered += f", ... and {count - len(sample)} more"
     logger.warning("Skipped %d unreadable directory entries in %s: %s", count, where, rendered)
+    if sink is not None:
+        sink(where, count, [name for name, _reason in sample])
 
 
 def _filter_macos_entries(
     names: list[str],
     stat_entry: Callable[[str], os.stat_result],
+    *,
+    sink: Callable[[str, int, list[str]], None] | None = None,
 ) -> list[tuple[str, os.stat_result]]:
     """Apply the Darwin read/index visibility policy to directory entries."""
     visible: list[tuple[str, os.stat_result]] = []
@@ -583,7 +591,9 @@ def _filter_macos_entries(
         if _is_macos_dataless(st):
             continue
         visible.append((name, st))
-    _report_skipped_entries("the macOS entry filter", skipped_count, skipped_sample)
+    _report_skipped_entries(
+        "the macOS entry filter", skipped_count, skipped_sample, sink=sink
+    )
     return visible
 
 
@@ -670,6 +680,9 @@ class ScopedRoots:
         self.allow_macos_volume_roots = allow_macos_volume_roots
         self.strict_roots = strict_roots
         self._on_fallback = on_fallback
+        # Optional durable sink (client/indexer audit_log). Stays None here so
+        # this module never imports utils.logger (stdlib-only security core).
+        self._skipped_stat_sink: Callable[[str, int, list[str]], None] | None = None
         self._roots: list[SafeRoot] = []
         try:
             self._open_roots(root_strs, create=create)
@@ -1009,6 +1022,7 @@ class ScopedRoots:
             filtered = _filter_macos_entries(
                 names,
                 lambda name: os.stat(name, dir_fd=dir_fd, follow_symlinks=False),
+                sink=self._skipped_stat_sink,
             )
             return [self._stat_to_dict(name, st) for name, st in filtered]
         skipped_count = 0
@@ -1023,7 +1037,9 @@ class ScopedRoots:
                     skipped_sample.append((name, exc.strerror or exc.__class__.__name__))
                 continue
             entries.append(self._stat_to_dict(name, st))
-        _report_skipped_entries("list_dir", skipped_count, skipped_sample)
+        _report_skipped_entries(
+            "list_dir", skipped_count, skipped_sample, sink=self._skipped_stat_sink
+        )
         return entries
 
     @staticmethod
