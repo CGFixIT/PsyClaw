@@ -296,9 +296,10 @@ def test_fsconnect_trash_launchagent_is_disabled_and_secret_free() -> None:
 def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
     """Uninstall must name every generated CyClaw LaunchAgent label.
 
-    Sync is handled by sync.cli unschedule; these seven are not. Bootout of
-    an unloaded label is a no-op, and uninstall must not leave a KeepAlive
-    or crash-restart job behind if the operator generated one.
+    Sync is primarily owned by sync.cli unschedule; the bootout list also
+    includes com.cgfixit.cyclaw.sync as a fallback when that path cannot run.
+    Bootout of an unloaded label is a no-op, and uninstall must not leave a
+    KeepAlive or crash-restart job behind if the operator generated one.
     """
     labels = (
         "com.cgfixit.cyclaw.telegram-poll",
@@ -308,6 +309,7 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
         "com.cgfixit.cyclaw.harness",
         "com.cgfixit.cyclaw.keys-rotate",
         "com.cgfixit.cyclaw.opentweet",
+        "com.cgfixit.cyclaw.sync",
     )
     text = (_REPO_ROOT / "macos" / "uninstall-cyclaw.sh").read_text(encoding="utf-8")
     assert "unschedule_landed_launchagents" in text
@@ -319,12 +321,13 @@ def test_uninstaller_bootouts_landed_launchagent_labels() -> None:
 
     # Docs must not still claim "three landed" agents or that gate/harness
     # survive uninstall (#922 landed with #912). The brace list and the
-    # "seven generated" phrasing must match the live uninstall loop.
+    # "eight generated" phrasing must match the live uninstall loop.
     harness_doc = (_REPO_ROOT / "docs" / "HARNESS_MACOS.md").read_text(encoding="utf-8")
     assert "three landed generated LaunchAgents" not in harness_doc
     assert "future gate/harness agent, are left alone" not in harness_doc
     assert "five generated LaunchAgent labels" not in harness_doc
-    assert "seven generated LaunchAgent labels" in harness_doc
+    assert "seven generated LaunchAgent labels" not in harness_doc
+    assert "eight generated LaunchAgent labels" in harness_doc
     for label in labels:
         short = label.removeprefix("com.cgfixit.cyclaw.")
         assert short in harness_doc

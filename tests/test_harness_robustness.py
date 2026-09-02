@@ -134,6 +134,17 @@ def test_main_defaults_to_stored_port(cfg, _uvicorn_recorder, monkeypatch):
     assert _uvicorn_recorder == [{"host": "127.0.0.1", "port": cfg.port}]
 
 
+def test_main_exits_cleanly_when_port_in_use(_uvicorn_recorder, monkeypatch, capsys):
+    """Busy port must return (exit 0), not raise — KeepAlive {SuccessfulExit: false}
+    would otherwise crash-loop the supervised harness agent."""
+    monkeypatch.setenv("CYCLAW_HARNESS_PORT", "8791")
+    monkeypatch.setattr(harness_server, "_is_port_in_use", lambda host, port: True)
+    main()
+    assert _uvicorn_recorder == []
+    out = capsys.readouterr().out
+    assert "127.0.0.1:8791" in out
+
+
 # -- malformed usage from an OpenAI-compatible proxy -----------------------------
 
 

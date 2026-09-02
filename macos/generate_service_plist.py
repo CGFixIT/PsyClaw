@@ -52,14 +52,11 @@ launchd semantics chosen deliberately conservative:
     bootstrap_hint. Loading a persistent, auto-restarting listener is
     always a separate, explicit operator action.
 
-Known limitation (documented, not silently papered over): if the target
-port is already held by an independently-started instance, gate.py exits
-cleanly (0) via its own pre-flight port check and will NOT be retried by
-KeepAlive (by design -- see above, this is not a bug); harness/server.py
-has no equivalent pre-check, so a port conflict there raises inside
-uvicorn.run() and DOES crash-loop, throttled by --throttle-sec, until the
-port frees. Stop any manually-started instance of a service before loading
-its supervised agent.
+If the target port is already held by an independently-started instance,
+both gate.py and harness/server.py exit cleanly (0) via a pre-flight port
+check and will NOT be retried by KeepAlive (SuccessfulExit: false). Stop
+any manually-started instance of a service before loading its supervised
+agent so you are not left talking to the other process.
 """
 
 from __future__ import annotations
