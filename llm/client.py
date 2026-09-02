@@ -421,7 +421,12 @@ def _provider_label(provider: str) -> str:
 
 def is_loopback_url(url: str) -> bool:
     """Whether ``url`` resolves to one of the supported loopback hostnames."""
-    host = (urlparse(url).hostname or "").lower()
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        # Keep malformed operator configuration on the existing fail-soft
+        # health/error path instead of raising while selecting probe policy.
+        return False
     return host in _LOOPBACK_HOSTS
 
 

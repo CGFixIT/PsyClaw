@@ -111,6 +111,9 @@ class TestPing:
     def test_nonloopback_health_timeout_preserves_existing_budget(self):
         assert health._health_probe_timeout("http://host/v1") == health._HEALTH_PROBE_TIMEOUT_SEC
 
+    def test_malformed_health_url_stays_on_existing_fail_soft_path(self):
+        assert health._health_probe_timeout("http://[") == health._HEALTH_PROBE_TIMEOUT_SEC
+
     def test_ping_healthy(self, monkeypatch):
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         status = health._ping(_HOST_MODELS, "ollama")
