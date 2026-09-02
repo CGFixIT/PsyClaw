@@ -825,6 +825,15 @@ it activates in any repository, not only here. It does not encode CyClaw
 architecture and carries no authority over the six invariants in §3 — those
 still govern. See the skill file for the full protocol.
 
+`/fable-5.1-cc` — the companion **knowledge** layer to `/fable-protocol`'s
+discipline layer: Fable 5.1's handoff of what it knew about the owner as it
+relates to his coding projects (learning contract, the build-vs-ship pattern,
+portfolio, CyClaw facts to know cold, settled decisions, model routing, where a
+smaller model must compensate). Same dual registration
+(`.claude/skills/fable-5.1-cc/SKILL.md` + `~/.claude/skills/fable-5.1-cc/`);
+the repo copy redacts personal identity. Read at session start in any of his
+repos. Like `/fable-protocol`, it carries no authority over §3's invariants.
+
 ---
 
 ## 10. Session Protocol
