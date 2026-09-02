@@ -238,4 +238,10 @@ o="$(_mkdockertree)"
 sed -i.bak 's#^data/$#data/personality/#' "$o/.dockerignore"
 _expect_docker_fail "$o" "E6 nested data ignore" "no longer excludes runtime state"
 
+# 19. E6: dropping CMD --port must fail even when EXPOSE and compose still agree
+#     (uvicorn defaults to 8000; Codex #1264 discussion_r3911574232 / #1275 P3.8).
+p="$(_mkdockertree)"
+sed -i.bak 's/, "--port", "8787"//' "$p/Dockerfile"
+_expect_docker_fail "$p" "E6 missing CMD --port" "missing CMD --port"
+
 echo "== verify-deps verify: OK =="
