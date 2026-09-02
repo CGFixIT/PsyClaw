@@ -89,6 +89,14 @@ def _anchor(path_str: str) -> Path:
     return path if path.is_absolute() else _REPO_ROOT / path
 
 
+def _keyfile_location_is_safe(keyfile: Path) -> bool:
+    """Allow repo-local private keys only in the ignored TLS output directory."""
+    repo_root = _REPO_ROOT.resolve()
+    resolved_keyfile = keyfile.resolve()
+    tls_output_dir = (repo_root / "data" / "tls").resolve()
+    return not resolved_keyfile.is_relative_to(repo_root) or resolved_keyfile.is_relative_to(tls_output_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cyclaw-gen-cert")
     parser.add_argument("--certfile", default=_DEFAULT_CERT)
@@ -111,6 +119,12 @@ def main(argv: list[str] | None = None) -> int:
 
     certfile = _anchor(args.certfile)
     keyfile = _anchor(args.keyfile)
+    if not _keyfile_location_is_safe(keyfile):
+        print(
+            "refusing repository-local --keyfile outside data/tls; use an absolute path outside the repo",
+            file=sys.stderr,
+        )
+        return EXIT_ENV
     certfile.parent.mkdir(parents=True, exist_ok=True)
     keyfile.parent.mkdir(parents=True, exist_ok=True)
     san = subject_alt_names(args.hostname)
