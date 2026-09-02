@@ -995,6 +995,40 @@ def test_agent_run_still_shares_the_gate_when_backends_are_loopback_aliases(cfg,
         llm_client.reset_local_backend_cache()
 
 
+def test_agent_run_still_shares_the_gate_when_default_ports_are_implicit(cfg, monkeypatch, calls):
+    """Chat resolves to "http://localhost/v1" (no explicit port -- HTTP's
+    implicit default is 80) while agentic.deepagent_github.base_url spells
+    the same socket explicitly as "http://127.0.0.1:80/v1". urlparse's own
+    .port is None for the former and 80 for the latter even though both name
+    the same socket; a raw port compare would treat them as different
+    backends and skip generation_gate."""
+    import llm.client as llm_client
+
+    llm_cfg = {
+        "base_url": "http://localhost/v1",
+        "model": "qwen3.8:27b-mlx",
+        "provider": "ollama",
+    }
+    monkeypatch.setattr(harness_server, "_llm_settings", lambda: llm_cfg)
+    monkeypatch.setattr(
+        harness_server, "_deepagent_github_settings", lambda: {"base_url": "http://127.0.0.1:80/v1"}
+    )
+    llm_client.reset_local_backend_cache()
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    try:
+        assert app.state.generation_gate.claim() is True  # simulate a live chat turn
+        try:
+            resp = client.post(_RUN, json=_VALID_BODY)
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "AGENT_RUN_BUSY"
+            assert calls == []
+        finally:
+            app.state.generation_gate.release()
+    finally:
+        llm_client.reset_local_backend_cache()
+
+
 # --- request-shape budget guard ----------------------------------------------
 
 

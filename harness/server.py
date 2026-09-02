@@ -410,21 +410,30 @@ def _resolve_backend() -> ResolvedLocalBackend:
     return resolve_local_backend(llm)
 
 
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def _canonical_backend_key(url: str) -> tuple[str, str, int | None, str] | None:
     """Comparison key for a base_url that treats loopback aliases (127.0.0.1 /
     localhost / ::1 -- this module's own _LOOPBACK_HOSTS, above) as the same
-    host, so two configs naming the identical Ollama instance by different
-    spellings aren't mistaken for different backends. Returns None for an
-    unparseable URL.
+    host and resolves an implicit default port (e.g. "http://localhost/v1",
+    no explicit port) to the same value as its explicit spelling
+    ("http://127.0.0.1:80/v1") -- urlparse's own .port is None for the
+    former and 80 for the latter, even though both name the same socket.
+    Returns None for an unparseable URL.
     """
     try:
         parsed = urlparse(url)
     except ValueError:
         return None
+    scheme = parsed.scheme.lower()
     host = (parsed.hostname or "").lower()
     if host in _LOOPBACK_HOSTS:
         host = "127.0.0.1"
-    return (parsed.scheme.lower(), host, parsed.port, parsed.path.rstrip("/"))
+    port = parsed.port
+    if port is None:
+        port = _SCHEME_DEFAULT_PORTS.get(scheme)
+    return (scheme, host, port, parsed.path.rstrip("/"))
 
 
 def _agent_run_shares_chat_backend() -> bool:
