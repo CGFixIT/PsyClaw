@@ -1874,11 +1874,12 @@ def create_app(
         request: Request, response: Response, req: AuthSetPasswordRequest
     ) -> dict:
         manager = _require_harness_auth()
-        if not _is_loopback_peer(request):
+        if not _is_loopback_peer(request) or _looks_proxied(request):
             raise _auth_http(
                 _HTTP_FORBIDDEN,
                 "AUTH_LOOPBACK_ONLY",
-                "first password must be set from this machine",
+                "first password must be set from this machine "
+                "without reverse-proxy forwarding headers",
             )
         try:
             login_result = manager.bootstrap_set_password(req.password)

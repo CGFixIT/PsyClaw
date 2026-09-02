@@ -292,8 +292,9 @@ auth on and that pending hash still in place, the UI shows a **Set admin
 password** panel instead of login. `GET /auth/setup-status` (and
 `/api/auth/setup-status` on the harness) reports `{needs_password, username}`
 with no hashes. `POST /auth/bootstrap-password` accepts the new password
-**only from a loopback peer** (`127.0.0.1` / `::1`), then mints a session.
-A non-loopback caller gets 403. Once a real hash is stored the POST returns
+**only from a loopback peer** (`127.0.0.1` / `::1`) with no reverse-proxy
+forwarding headers, then mints a session. A non-loopback or proxied caller
+gets 403. Once a real hash is stored the POST returns
 409. The bind guard also refuses a LAN bind while `needs_password_setup()`
 is true, so enabling auth+TLS does not open that POST to the LAN.
 

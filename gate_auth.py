@@ -62,6 +62,15 @@ _HTTP_CONFLICT = 409
 _HTTP_LOCKED = 423
 _HTTP_SERVICE_UNAVAILABLE = 503
 _LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1", "localhost"})
+# Presence-only, same set as gate.py / harness.server -- a proxy on this host
+# makes every remote caller a loopback peer.
+_FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "forwarded",
+)
 
 # Cookie/header names are a single source in this module; gate_auth owns the
 # whole /auth/* surface so nothing else needs to agree on these strings today.
@@ -385,6 +394,9 @@ def register_auth_routes(
         except ValueError:
             return False
 
+    def _looks_proxied(request: Request) -> bool:
+        return any(header in request.headers for header in _FORWARDING_HEADERS)
+
     @app.get("/auth/setup-status", dependencies=[Depends(enforce_rate_limit)])
     async def auth_setup_status() -> AuthSetupStatusResponse:
         manager = _require_enabled()
@@ -403,12 +415,15 @@ def register_auth_routes(
         request: Request, response: Response, req: AuthSetPasswordRequest
     ) -> AuthLoginResponse:
         manager = _require_enabled()
-        if not _client_is_loopback(request):
+        if not _client_is_loopback(request) or _looks_proxied(request):
             raise HTTPException(
                 status_code=_HTTP_FORBIDDEN,
                 detail={
                     _CODE_KEY: "AUTH_LOOPBACK_ONLY",
-                    _MESSAGE_KEY: "first password must be set from this machine",
+                    _MESSAGE_KEY: (
+                        "first password must be set from this machine "
+                        "without reverse-proxy forwarding headers"
+                    ),
                     _DETAILS_KEY: {},
                 },
             )

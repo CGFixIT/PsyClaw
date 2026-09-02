@@ -497,7 +497,7 @@ device token (the console login form, or `cyclaw-user token create`).
 | Route | Method | What it does |
 |---|---|---|
 | `/auth/setup-status` | GET | unauthenticated, rate-limited; `{enabled, needs_password, username}` while the bootstrap admin still has no password; 503 when `auth.enabled` is false |
-| `/auth/bootstrap-password` | POST | first admin password; loopback peer + same-origin only; 403 off-box; 409 once set; 503 when auth off |
+| `/auth/bootstrap-password` | POST | first admin password; loopback peer + same-origin only, no reverse-proxy forwarding headers; 403 off-box or when proxied; 409 once set; 503 when auth off |
 | `/auth/login` | POST | `{"username", "password"}` → sets an `HttpOnly` session cookie and returns a CSRF token |
 | `/auth/logout` | POST | requires the session cookie **and** the CSRF token in an `X-CyClaw-CSRF` header; revokes the session |
 | `/auth/whoami` | GET | returns the current username, via either the session cookie or an `Authorization: Bearer <device-token>` header |
