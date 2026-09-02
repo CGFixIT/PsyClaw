@@ -469,6 +469,45 @@ def test_harness_auth_probes_are_bounded_by_a_timeout():
     assert "await fetch('/api/auth/setup-status')" not in html, "setup-status probe lost its timeout"
 
 
+def test_harness_logout_control_posts_process_csrf():
+    """Harness session cookie has no UI end without this button; logout uses
+    the page CSRF (auth_sess), not the unused login-body session CSRF."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    assert 'id="hAuthLogout"' in html
+    assert "fetchWithTimeout('/api/auth/logout'" in html
+
+
+def test_harness_logout_keeps_the_last_known_ui_until_refresh_succeeds():
+    """The post-logout auth probe may fail while the harness is restarting.
+    Its catch preserves the last UI, so the logout handler must not clear all
+    controls before that probe determines the session's actual state."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    logout_handler = html.split("if (hAuthLogout) {", 1)[1].split("const hAuthSetupBtn", 1)[0]
+    assert "await refreshHarnessAuth();" in logout_handler
+    assert "window.__cyclawRole = null;" not in logout_handler
+    assert "setHarnessLogoutVisible(false);" not in logout_handler
+
+
+def test_harness_confirmed_unauthenticated_state_clears_cached_identity():
+    """A successful whoami probe that reaches the login state must not leave
+    the previous user or role visible; the refresh catch remains the only path
+    that deliberately preserves the last-known UI."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    refresh_handler = html.split("async function refreshHarnessAuth()", 1)[1].split("if (hAuthLogin)", 1)[0]
+    assert "window.__cyclawRole = null;" in refresh_handler
+    assert "if (who) who.textContent = '';" in refresh_handler
+
+
+def test_harness_logout_reports_rejected_responses_without_clearing_controls():
+    """A stale CSRF or rate-limit response should remain actionable instead
+    of silently repainting the same authenticated session after refresh."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    logout_handler = html.split("if (hAuthLogout) {", 1)[1].split("const hAuthSetupBtn", 1)[0]
+    assert "if (!response.ok)" in logout_handler
+    assert "logout rejected (" in logout_handler
+    assert logout_handler.index("if (!response.ok)") < logout_handler.index("await refreshHarnessAuth();")
+
+
 def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
     """api() must timeout non-chat fetches. Chat keeps inflightChat.signal.
     Long-running routes may widen the deadline per call (timeoutMs), but the
