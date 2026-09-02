@@ -562,6 +562,9 @@ async function api(path, method, body, timeoutMs) {
     if (typed && typed.code === 'UNAUTHORIZED' && typed.details && typed.details.reason === 'key_not_configured') {
       msg += '\nThe harness server was started without CYCLAW_API_KEY in its environment. Set it in the shell that launches the harness and restart; typing it here only works when the server already has the same key configured.';
     }
+    if (code === 'CROSS_ORIGIN_BLOCKED' || code === 'CROSS_SITE_BLOCKED') {
+      msg += '\nBookmark and fetch the same host, scheme, and port. localhost and 127.0.0.1 are different browser origins. Open http://127.0.0.1:8790/ (use your configured harness port), not file://.';
+    }
     const err = new Error(msg);
     err.code = code;
     err.details = typed && typed.details ? typed.details : {};

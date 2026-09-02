@@ -183,6 +183,12 @@ arbitrary name would make this an environment-injection primitive.
 
 ## Operator API (loopback)
 
+For `403 CROSS_ORIGIN_BLOCKED` or `403 CROSS_SITE_BLOCKED`, bookmark and fetch
+the same host, scheme, and port. `localhost` and `127.0.0.1` are different browser
+origins. Open `http://127.0.0.1:8790/` (or the configured harness port), not a
+`file://` copy of the console. The console reports the refusal and does not
+automatically switch hosts.
+
 Guarded routes require the same Bearer `CYCLAW_API_KEY` as other admin
 surfaces (`utils.auth.require_api_key`). The separate `/api/auth/*` block
 below is different: it is the harness's own per-user login (Stage 6 of

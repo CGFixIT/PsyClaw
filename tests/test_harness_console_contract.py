@@ -393,6 +393,20 @@ def test_console_documents_skills_slash_command():
     assert "unknown skill:" in body
 
 
+def test_origin_refusals_explain_operator_remediation():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    body = html.split("async function api(", 1)[1].split("function fetchWithTimeout(", 1)[0]
+    branch = body.split("if (code === 'CROSS_ORIGIN_BLOCKED' || code === 'CROSS_SITE_BLOCKED')", 1)[1]
+    remediation = branch.split("\n    }", 1)[0]
+    for text in (
+        "Bookmark and fetch the same host", "scheme, and port",
+        "localhost and 127.0.0.1 are different browser origins",
+        "http://127.0.0.1:8790/", "not file://",
+    ):
+        assert text in remediation
+    assert "throw err;" in branch
+
+
 def test_console_documents_web_slash_command():
     html = _HARNESS_HTML.read_text(encoding="utf-8")
     listing = re.search(r"\['/web \[([^\]]+)\]'", html)
