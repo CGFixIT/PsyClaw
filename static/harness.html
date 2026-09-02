@@ -1672,10 +1672,6 @@ if (hAuthLogout) {
     try {
       await fetchWithTimeout('/api/auth/logout', { method: 'POST', headers: headers }, 15000);
     } catch (e) { /* best-effort; refresh below paints whatever session remains */ }
-    window.__cyclawRole = null;
-    const who = document.getElementById('hAuthWho');
-    if (who) who.textContent = '';
-    setHarnessLogoutVisible(false);
     await refreshHarnessAuth();
   });
 }

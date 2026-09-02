@@ -477,6 +477,17 @@ def test_harness_logout_control_posts_process_csrf():
     assert "fetchWithTimeout('/api/auth/logout'" in html
 
 
+def test_harness_logout_keeps_the_last_known_ui_until_refresh_succeeds():
+    """The post-logout auth probe may fail while the harness is restarting.
+    Its catch preserves the last UI, so the logout handler must not clear all
+    controls before that probe determines the session's actual state."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    logout_handler = html.split("if (hAuthLogout) {", 1)[1].split("const hAuthSetupBtn", 1)[0]
+    assert "await refreshHarnessAuth();" in logout_handler
+    assert "window.__cyclawRole = null;" not in logout_handler
+    assert "setHarnessLogoutVisible(false);" not in logout_handler
+
+
 def test_harness_api_helper_is_bounded_except_inflight_chat() -> None:
     """api() must timeout non-chat fetches. Chat keeps inflightChat.signal.
     Long-running routes may widen the deadline per call (timeoutMs), but the
