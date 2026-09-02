@@ -50,6 +50,55 @@ def test_generated_index_is_not_baked_into_the_image_and_is_writable_at_runtime(
     assert all(f"./{root}:/app/{root}:rw" in volumes for root in index_roots)
 
 
+def _dockerignore_covers_path(ignored: set[str], rel: str) -> bool:
+    """True when an ignore pattern is a directory prefix of *rel*.
+
+    `data/` covers `data/corpus`. Nested `data/personality/` does not.
+    """
+    rel_norm = rel.replace("\\", "/").strip("/")
+    parts = Path(rel_norm).parts
+    prefixes = []
+    for i in range(len(parts)):
+        prefix = "/".join(parts[: i + 1])
+        prefixes.append(prefix)
+        prefixes.append(prefix + "/")
+    return any(p in ignored for p in prefixes)
+
+
+def test_operator_corpus_is_not_baked_into_the_image():
+    """config.yaml corpus.path must be dockerignored as a directory prefix.
+
+    data/personality/ and data/agentic/ do not cover data/corpus/. The ignore
+    must be `data/` (or at least `data/corpus/`). Compose already bind-mounts
+    ./data, so excluding the whole tree does not drop runtime state.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    cfg = yaml.safe_load((repo_root / "config.yaml").read_text(encoding="utf-8"))
+    corpus_path = str(cfg["corpus"]["path"]).replace("\\", "/").strip("/")
+    ignored = {
+        line.strip()
+        for line in (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    volumes = yaml.safe_load(
+        (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+    )["services"]["cyclaw"]["volumes"]
+
+    assert _dockerignore_covers_path(ignored, corpus_path), (
+        f".dockerignore must exclude {corpus_path} via data/ or data/corpus/, "
+        f"not only nested siblings; patterns={sorted(ignored)}"
+    )
+    assert "./data:/app/data:rw" in volumes
+
+
+def test_dockerignore_directory_prefix_rejects_nested_siblings() -> None:
+    """data/personality/ must not count as covering data/corpus (issue #1275)."""
+    nested_only = {"data/personality/", "data/agentic/", "index/"}
+    assert not _dockerignore_covers_path(nested_only, "data/corpus")
+    assert _dockerignore_covers_path({"data/"}, "data/corpus")
+    assert _dockerignore_covers_path({"data/corpus/"}, "data/corpus")
+
+
 def test_git_does_not_track_python_bytecode() -> None:
     """GitHub 'Add files via upload' bypasses .gitignore; CI must catch .pyc."""
     git_bin = shutil.which("git")

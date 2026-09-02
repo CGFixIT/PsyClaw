@@ -32,16 +32,14 @@ env/
 
 # Local runtime state — provided via bind mounts at runtime, not baked in.
 # `index/` is the config.yaml hybrid-retrieval root (ChromaDB + BM25).
-# `data/personality/` holds soul.md + the personality/interaction-history DB
-# (config.yaml personality.db_path); `data/agentic/` holds the skills registry
-# + harness-optimizer run history. All three can carry private, corpus- or
-# interaction-derived state; never copy any of them into image layers.
-# docker-compose.yml bind-mounts ./index and ./data at runtime.
+# `data/` is the whole operator tree: corpus (`data/corpus/`), soul.md + the
+# personality DB (`data/personality/`), and the skills registry (`data/agentic/`).
+# Nested ignores such as data/personality/ do not cover data/corpus/; ignore
+# the directory itself. docker-compose.yml bind-mounts ./index and ./data.
 logs/
 checkpoints/
 index/
-data/personality/
-data/agentic/
+data/
 
 # Tests & docs are not needed in the runtime image
 tests/

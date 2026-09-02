@@ -262,7 +262,7 @@ new finding — list each one; never summarize them away as "known".
 bash .claude/skills/verify-deps/verify.sh
 ```
 
-Seventeen checks, pure stdlib, no install needed:
+Eighteen checks, pure stdlib, no install needed:
 
 1. `extract_pins.py` on the clean tree — exit 0, no `requirements.txt` drift
 2. Mutation: drift `httpx` in a copy of `requirements.txt`, assert the `DRIFT` line
@@ -298,6 +298,8 @@ Seventeen checks, pure stdlib, no install needed:
     `pyproject.toml`'s `version` — exit 2
 17. Mutation E6: `publish-ghcr.yml`'s `IMAGE_NAME` is not the image compose
     pulls — exit 2
+18. Mutation E6: `.dockerignore` replaces `data/` with nested `data/personality/`
+    — exit 2 (`startswith("data/")` on a subpath must not green the `data` tree)
 
 Both scripts take `--repo-root`, which is what lets the mutations run against a
 `mktemp -d` tree instead of the real repo. Does not re-test `dep-guard`'s own
