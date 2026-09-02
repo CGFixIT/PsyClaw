@@ -30,6 +30,14 @@ jobs:
         with:
           # Match requires-python / CI matrix (pyproject.toml: >=3.12).
           python-version: "3.12"
+          # Deliberately no pip cache here (unlike numbat-rules.yml's
+          # identical-looking addition): zizmor's cache-poisoning audit
+          # flags caching on this release:published-triggered, PyPI-publishing
+          # workflow as a runtime-artifact-poisoning risk -- a cache written
+          # by an earlier, less-trusted run could be restored into a later
+          # trusted publish run. ci.yml's zizmor step hard-fails the build on
+          # any high-severity finding; see
+          # https://docs.zizmor.sh/audits/#cache-poisoning.
 
       - name: Build release distributions
         run: |
