@@ -141,6 +141,26 @@ def fake_gh_on_path(tmp_path, monkeypatch):
     check_gh_version.cache_clear()
 
 
+def _git(git_bin: str, *argv: str, cwd: str | None = None) -> None:
+    """Run git without inherited GIT_DIR/GIT_WORK_TREE; put stderr on failure.
+
+    CI git 2.55 `clone --bare` of this fixture exited 128 with stdout/stderr
+    swallowed (capture_output + -q), so pytest only showed the exit code.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
+    proc = subprocess.run(
+        [git_bin, *argv],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise AssertionError(f"git {' '.join(argv)} exited {proc.returncode}: {detail}")
+
+
 @pytest.fixture()
 def real_bare_repo(tmp_path):
     """A real `git init --bare` repository with one real commit, cloneable for real."""
@@ -149,16 +169,16 @@ def real_bare_repo(tmp_path):
     scratch = tmp_path / "scratch-origin"
     scratch.mkdir()
     (scratch / "README.md").write_text("smoke fixture\n", encoding="utf-8")
-
-    def run(*argv: str) -> None:
-        subprocess.run(argv, cwd=str(scratch), check=True, capture_output=True, text=True)
-
-    run(git_bin, "init", "-q")
-    run(git_bin, "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "add", "-A")
-    run(git_bin, "-c", "user.email=fixture@example.com", "-c", "user.name=Fixture", "commit", "-q", "-m", "initial")
-
+    ident = ("-c", "user.email=fixture@example.com", "-c", "user.name=Fixture")
+    _git(git_bin, "init", "-q", "-b", "main", cwd=str(scratch))
+    _git(git_bin, *ident, "add", "-A", cwd=str(scratch))
+    _git(git_bin, *ident, "commit", "-q", "-m", "initial", cwd=str(scratch))
     bare = tmp_path / "origin.git"
-    subprocess.run([git_bin, "clone", "-q", "--bare", str(scratch), str(bare)], check=True, capture_output=True)
+    # Push into a fresh bare repo instead of `clone --bare` of a local path.
+    # File-protocol clone is what exited 128 on ubuntu-latest / git 2.55.
+    _git(git_bin, "init", "--bare", "-q", "-b", "main", str(bare))
+    _git(git_bin, "remote", "add", "origin", str(bare), cwd=str(scratch))
+    _git(git_bin, "push", "-q", "origin", "HEAD:main", cwd=str(scratch))
     return bare
 
 
