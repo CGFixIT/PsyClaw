@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from utils.gen_cert import EXIT_ENV, main, subject_alt_names
+import subprocess
+from pathlib import Path
+
+from utils.gen_cert import EXIT_ENV, EXIT_FAIL, main, subject_alt_names
 
 
 def test_san_includes_hostname_and_loopback():
@@ -23,3 +26,19 @@ def test_nonpositive_days_is_env_error(tmp_path):
         "--keyfile", str(tmp_path / "k.pem"),
         "--days", "0",
     ]) == EXIT_ENV
+
+
+def test_openssl_timeout_is_reported(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+
+    def _raise_timeout(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _raise_timeout)
+
+    rc = main([
+        "--certfile", str(tmp_path / "c.pem"),
+        "--keyfile", str(tmp_path / "k.pem"),
+    ])
+    assert rc == EXIT_FAIL
+    assert "timed out" in capsys.readouterr().err
