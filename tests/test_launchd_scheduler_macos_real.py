@@ -25,7 +25,10 @@ draws for agentic/fsconnect/pathsafe.py.
 
 from __future__ import annotations
 
+import os
 import plistlib
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -106,3 +109,58 @@ def test_remove_on_a_never_installed_plist_is_a_no_op(tmp_path: Path) -> None:
     with patch("sync.scheduler.Path.home", return_value=tmp_path):
         removed = LaunchdScheduler(cfg).remove()
     assert removed is False
+
+
+def test_launchd_lifecycle_bootstrap_status_and_remove_report_real_state(tmp_path: Path) -> None:
+    """The tests above only prove the real launchctl binary is invoked and a
+    nonzero/failed result is tolerated -- status() maps EVERY nonzero
+    ``launchctl print`` exit to "not loaded", so a malformed argv (wrong
+    subcommand, domain, uid, or label) would read exactly the same as
+    "nothing is loaded" and none of those tests would catch it.
+
+    This test bootstraps the real generated plist for real (bypassing
+    install()'s own deliberate "never auto-enroll" choice, only for this one
+    test), confirms status() reports the genuinely-loaded state, then
+    confirms remove() performs a real successful unload -- not just a
+    tolerated failure -- and deletes the plist. The bootstrapped agent has
+    RunAtLoad: False and a fixed StartCalendarInterval (see _make_cfg), so it
+    never actually executes sync.cli; the finally block unconditionally
+    boots it out even if an assertion above raises, so no test LaunchAgent
+    is ever left registered on the real runner.
+    """
+    launchctl = shutil.which("launchctl")
+    assert launchctl, "launchctl must be on PATH on a real macOS runner"
+    uid = os.getuid()
+    cfg = _make_cfg()
+    with patch("sync.scheduler.Path.home", return_value=tmp_path):
+        scheduler = LaunchdScheduler(cfg)
+        entry = scheduler.install()
+        plist_path = Path(entry.raw)
+        try:
+            bootstrap = subprocess.run(  # noqa: S603 -- fixed system binary, pytest-owned plist path
+                [launchctl, "bootstrap", f"gui/{uid}", str(plist_path)],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            assert bootstrap.returncode == 0, f"bootstrap failed: {bootstrap.stderr}"
+
+            status_entry = scheduler.status()
+            assert status_entry is not None
+            assert status_entry.note == "loaded"
+
+            removed = scheduler.remove()
+            assert removed is True
+            assert not plist_path.exists()
+
+            # remove()'s own bootout must have actually succeeded against a
+            # genuinely loaded service -- confirm nothing is left registered,
+            # not just that the plist file is gone.
+            probe = subprocess.run(  # noqa: S603
+                [launchctl, "print", f"gui/{uid}/{LAUNCHD_LABEL}"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            assert probe.returncode != 0
+        finally:
+            subprocess.run(  # noqa: S603
+                [launchctl, "bootout", f"gui/{uid}", str(plist_path)],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
