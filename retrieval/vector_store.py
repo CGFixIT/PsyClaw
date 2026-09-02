@@ -116,6 +116,7 @@ class _ChromaWriter:
         # later lazy import.
         suppress_onnx_telemetry()
         Path(self._chroma_path).mkdir(parents=True, exist_ok=True)
+        # Pin checked at gate boot by utils.telemetry_kill.verify_telemetry_contract.
         client = chromadb.PersistentClient(
             path=self._chroma_path, settings=Settings(anonymized_telemetry=False)
         )

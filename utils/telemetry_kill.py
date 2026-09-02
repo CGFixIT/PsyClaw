@@ -75,8 +75,12 @@ from a *minimal* environment (which inherit nothing), use
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import json
 import os
 from collections.abc import Mapping, MutableMapping
+from pathlib import Path
 
 # Names and values are contractual: tests/test_telemetry_kill.py asserts each
 # one against an independent expected map, and treats a failure as P0 (live
@@ -259,6 +263,79 @@ _OTEL_DECLARATIVE_CONFIG = (
 # The full removed-outright set, public so tests and the otel-hardening checker
 # can assert it without reaching for the two private tuples above.
 SCRUBBED_ENV_KEYS: tuple[str, ...] = (*_TRACING_CREDENTIALS, *_OTEL_DECLARATIVE_CONFIG)
+
+# SHA-256 of the canonical JSON of TELEMETRY_KILL + UPDATE_CHECK_OPT_OUT +
+# sorted SCRUBBED_ENV_KEYS. Independent of this file's prose, so a hostile
+# edit to a kill *value* fails at gateway boot, not only when CI runs the
+# checker (issue #1255). tests/test_telemetry_kill.py holds a second copy.
+# Recompute after a deliberate map change:
+#   python -c "from utils.telemetry_kill import contract_sha256; print(contract_sha256())"
+CONTRACT_SHA256 = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
+
+
+def contract_payload() -> bytes:
+    """Canonical encoding of the three kill maps. Sorted keys, no whitespace."""
+    return json.dumps(
+        {
+            "kill": TELEMETRY_KILL,
+            "update": UPDATE_CHECK_OPT_OUT,
+            "scrubbed": sorted(SCRUBBED_ENV_KEYS),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def contract_sha256() -> str:
+    return hashlib.sha256(contract_payload()).hexdigest()
+
+
+def _is_anonymized_false(node: ast.AST) -> bool:
+    """True when *node* is Settings(anonymized_telemetry=False)."""
+    if not isinstance(node, ast.Call):
+        return False
+    for kw in node.keywords:
+        if kw.arg == "anonymized_telemetry" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
+            return True
+    return False
+
+
+def _verify_chroma_anonymized_flag() -> None:
+    """Both PersistentClient sites in vector_store.py must disable PostHog."""
+    path = Path(__file__).resolve().parent.parent / "retrieval" / "vector_store.py"
+    src = path.read_text(encoding="utf-8")
+    hits = 0
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        is_client = (isinstance(func, ast.Attribute) and func.attr == "PersistentClient") or (
+            isinstance(func, ast.Name) and func.id == "PersistentClient"
+        )
+        if not is_client:
+            continue
+        for kw in node.keywords:
+            if kw.arg == "settings" and _is_anonymized_false(kw.value):
+                hits += 1
+    if hits < 2:
+        raise RuntimeError(
+            "retrieval/vector_store.py must construct PersistentClient with "
+            f"Settings(anonymized_telemetry=False) at both sites; found {hits}"
+        )
+
+
+def verify_telemetry_contract() -> None:
+    """Fail closed if the kill maps or Chroma Settings sites drifted.
+
+    Called from gate.py at import, next to the env-value table. Stdlib-only
+    (ast / hashlib / json / pathlib) so it stays legal inside this module.
+    """
+    digest = contract_sha256()
+    if digest != CONTRACT_SHA256:
+        raise RuntimeError(
+            f"telemetry kill contract hash mismatch: got {digest}, expected {CONTRACT_SHA256}"
+        )
+    _verify_chroma_anonymized_flag()
 
 
 def _enforce(env: MutableMapping[str, str]) -> None:
