@@ -412,6 +412,19 @@ def _resolve_backend() -> ResolvedLocalBackend:
 _SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
+def _canonical_port(port: int | None, scheme: str) -> int | None:
+    """Treat a missing port as the scheme default (80/443).
+
+    urlparse and Starlette both leave ``.port`` as None when the URL omits it,
+    so ``http://127.0.0.1`` and ``http://127.0.0.1:80`` name the same socket.
+    Comparing the raw None against 80 would reject a genuine same-origin
+    browser on a scheme-default port. Non-default ports (8790) stay as-is.
+    """
+    if port is None:
+        return _SCHEME_DEFAULT_PORTS.get(scheme)
+    return port
+
+
 def _canonical_backend_key(url: str) -> tuple[str, str, int | None, str] | None:
     """Comparison key for a base_url that treats loopback aliases (127.0.0.1 /
     localhost / ::1 -- this module's own _LOOPBACK_HOSTS, above) as the same
@@ -705,6 +718,14 @@ def create_app(
         verifier send neither, and a non-browser client is not a CSRF vector. Every
         browser that can mount this attack sends at least Origin on a cross-origin
         POST.
+
+        Hostname-only used to be enough because the harness never leaves
+        loopback. It is not: Origin is scheme+host+port (issue #1201 / #1252).
+        A page at ``http://127.0.0.1:9999`` or ``https://127.0.0.1:8790`` must
+        not pass as this console. Port/scheme are taken from THIS request's
+        live URL, not from config, matching gate_auth.py. Loopback aliases
+        (127.0.0.1 / localhost / ::1) stay interchangeable -- the harness has
+        no LAN allow-list to confuse with same-origin.
         """
         site = request.headers.get("sec-fetch-site")
         if site is not None and site not in ("same-origin", "none"):
@@ -717,25 +738,47 @@ def create_app(
                 },
             )
         origin = request.headers.get("origin")
-        if origin is not None:
-            try:
-                # A structurally malformed Origin (e.g. an unbalanced IPv6
-                # bracket: "http://[evil") makes urlparse() itself raise --
-                # attacker-controlled on an unauthenticated route, so this
-                # must fail closed (treated as a non-loopback host, below)
-                # rather than let the exception escape as a 500.
-                origin_hostname = urlparse(origin).hostname
-            except ValueError:
-                origin_hostname = None
-            if origin_hostname not in _LOOPBACK_HOSTS:
-                raise HTTPException(
-                    status_code=_HTTP_FORBIDDEN,
-                    detail={
-                        _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
-                        _MESSAGE_KEY: "Cross-origin request rejected",
-                        _DETAILS_KEY: {"origin_host": origin_hostname},
-                    },
-                )
+        if origin is None:
+            return
+        try:
+            # A structurally malformed Origin (e.g. an unbalanced IPv6
+            # bracket: "http://[evil") makes urlparse() itself raise --
+            # attacker-controlled on an unauthenticated route, so this
+            # must fail closed rather than let the exception escape as a 500.
+            parsed = urlparse(origin)
+        except ValueError:
+            parsed = None
+        origin_hostname = parsed.hostname if parsed is not None else None
+        try:
+            origin_port = parsed.port if parsed is not None else None
+        except ValueError:
+            # Non-numeric / out-of-range port: urlparse succeeds, .port raises.
+            # None is not a fallback -- on :443/.scheme-default it would equal
+            # request.url.port (issue #1201).
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {"origin_host": origin_hostname},
+                },
+            ) from None
+        same_origin = (
+            origin_hostname in _LOOPBACK_HOSTS
+            and parsed is not None
+            and parsed.scheme == request.url.scheme
+            and _canonical_port(origin_port, parsed.scheme)
+            == _canonical_port(request.url.port, request.url.scheme)
+        )
+        if not same_origin:
+            raise HTTPException(
+                status_code=_HTTP_FORBIDDEN,
+                detail={
+                    _CODE_KEY: "CROSS_ORIGIN_BLOCKED",
+                    _MESSAGE_KEY: "Cross-origin request rejected",
+                    _DETAILS_KEY: {"origin_host": origin_hostname},
+                },
+            )
 
     # Per-instance, like rate_limiter above: a module-level singleton would leak
     # across separately-configured create_app() calls in tests, and a fixed
