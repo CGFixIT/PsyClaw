@@ -1280,14 +1280,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Discover skills with verify/smoke scripts
+      - name: Discover skills and dependency profiles
         id: discover
         run: |
-          SKILLS=$(find .claude/skills -maxdepth 1 -mindepth 1 -type d | while read -r d; do
+          SKILLS=$(find .claude/skills -maxdepth 1 -mindepth 1 -type d | sort | while read -r d; do
             if [ -f "$d/verify.sh" ] || [ -f "$d/smoke.sh" ]; then
-              basename "$d"
+              skill=$(basename "$d")
+              case "$skill" in
+                CyClaw-Sandbox|index-doctor) profile=heavy ;;
+                config-guard|doc-sync|injection-redteam) profile=yaml ;;
+                *) profile=stdlib ;;
+              esac
+              jq -cn --arg skill "$skill" --arg profile "$profile" \
+                '{skill: $skill, profile: $profile}'
             fi
-          done | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          done | jq -sc '.')
           echo "skills=$SKILLS" >> "$GITHUB_OUTPUT"
           if [ "$SKILLS" = "[]" ]; then
             echo "has_skills=false" >> "$GITHUB_OUTPUT"
@@ -1315,9 +1322,10 @@ jobs:
     needs: discover-skills
     # Skip cleanly when no skill ships a verify/smoke script (empty matrix).
     if: needs.discover-skills.outputs.has_skills == 'true'
-    # These skill scripts are full app-runtime e2e smokes (they build the index
-    # and launch the uvicorn server), not lightweight self-tests. They are run
-    # with the full environment below, but kept NON-BLOCKING (continue-on-error):
+    # The scripts have explicit dependency profiles. Only CyClaw-Sandbox and
+    # index-doctor need the full retrieval/runtime stack; config-guard, doc-sync,
+    # and injection-redteam need PyYAML; the remaining verifiers are stdlib/shell.
+    # The matrix remains NON-BLOCKING (continue-on-error):
     # the authoritative pass/fail gate is the `test` job's unit suite + RAG smoke.
     # This surfaces runtime regressions as a visible signal without gating merges
     # on environment-heavy e2e that can be flaky on shared runners.
@@ -1325,14 +1333,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        skill: ${{ fromJson(needs.discover-skills.outputs.skills) }}
+        include: ${{ fromJson(needs.discover-skills.outputs.skills) }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Setup Python 3.12
+      - name: Setup Python 3.12 (stdlib profile)
+        if: matrix.profile == 'stdlib'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Setup Python 3.12 (cached dependency profiles)
+        if: matrix.profile != 'stdlib'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'
@@ -1344,9 +1359,9 @@ jobs:
             pyproject.toml
 
       - name: Cache torch CPU wheel
-        # Same cache the `test` job uses (identical key): without it every leg of
-        # this skill matrix re-downloaded the ~2 GB torch wheel from the PyTorch
-        # index on every run — N legs × 2 GB of avoidable network per push.
+        if: matrix.profile == 'heavy'
+        # Same cache the `test` job uses (identical key): without it both heavy
+        # skill legs re-download the ~2 GB torch wheel from the PyTorch index.
         id: torch-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -1356,7 +1371,7 @@ jobs:
             torch-cpu-2.13.0-${{ runner.os }}-
 
       - name: Download torch wheel (cache miss only)
-        if: steps.torch-wheel-cache.outputs.cache-hit != 'true'
+        if: matrix.profile == 'heavy' && steps.torch-wheel-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           pip download "torch==2.13.0+cpu" \
@@ -1364,6 +1379,7 @@ jobs:
             --no-deps -d .torch-wheels
 
       - name: Install deps (torch CPU + project)
+        if: matrix.profile == 'heavy'
         shell: bash
         run: |
           python -m pip install --upgrade "pip==26.1.2"
@@ -1372,7 +1388,15 @@ jobs:
           # Some skill scripts invoke `python3.12` explicitly; ensure it resolves.
           command -v python3.12 >/dev/null 2>&1 || sudo ln -sf "$(command -v python)" /usr/local/bin/python3.12
 
+      - name: Install PyYAML only
+        if: matrix.profile == 'yaml'
+        shell: bash
+        run: |
+          python -m pip install --upgrade "pip==26.1.2"
+          pip install -c constraints.txt pyyaml
+
       - name: Cache embeddings model (sentence-transformers)
+        if: matrix.profile == 'heavy'
         # See ci.yml's identical step in the `test` job for the full rationale:
         # the CyClaw-Sandbox skill's verify.sh calls `python -m retrieval.indexer`,
         # which fetches models.embeddings.model (~90MB) from HuggingFace on a cold
@@ -1401,6 +1425,7 @@ jobs:
           # CYCLAW_API_KEY needed for GET /soul smoke check (now auth-gated).
           # This is a non-secret CI smoke value — loopback-only, ephemeral.
           echo 'CYCLAW_API_KEY=smoke-test-key-ci' >> "$GITHUB_ENV"
+          echo "Skill dependency profile: ${{ matrix.profile }}"
 
       - name: Run verify.sh if present
         if: hashFiles(format('.claude/skills/{0}/verify.sh', matrix.skill)) != ''
