@@ -501,11 +501,25 @@ def register_auth_routes(
         return {"ok": True}
 
     @app.get("/auth/whoami", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
-    async def auth_whoami(username: str = Depends(require_session_or_token)) -> AuthWhoamiResponse:
+    async def auth_whoami(
+        username: str = Depends(require_session_or_token),
+        cyclaw_session: str | None = Cookie(default=None),
+    ) -> AuthWhoamiResponse:
         manager = _require_enabled()
         user = manager.get_user(username)
         role = user.role if user is not None else authn.DEFAULT_ROLE
-        return AuthWhoamiResponse(username=username, role=role)
+        # Rotate only for a cookie that already authenticated as this user.
+        # Device-token whoami must not mint a CSRF -- there is no browser to
+        # hold it, and rotating would invalidate a concurrent console tab
+        # that shares the account. The plaintext cannot be re-read from the
+        # row (hash only), so a reload without this rotate leaves logout and
+        # Users writes 403 while the UI still says logged in.
+        csrf_token: str | None = None
+        if cyclaw_session:
+            session_info = await asyncio.to_thread(manager.validate_session, cyclaw_session)
+            if session_info is not None and session_info.username == username:
+                csrf_token = await asyncio.to_thread(manager.rotate_csrf, cyclaw_session)
+        return AuthWhoamiResponse(username=username, role=role, csrf_token=csrf_token)
 
     def _record_from_user(user: UserSummary) -> AuthUserRecord:
         return AuthUserRecord(

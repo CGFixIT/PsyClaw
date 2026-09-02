@@ -120,6 +120,10 @@ async function refreshAuthUi() {
       hideAuthBoxes();
       if (authSessionBox) authSessionBox.hidden = false;
       authRole = data.role || null;
+      // whoami rotates cookie-session CSRF and returns the new plaintext.
+      // Without this assignment a reload keeps the session cookie (looks
+      // logged in) but csrfToken stays null, so logout and Users writes 403.
+      csrfToken = data.csrf_token || null;
       if (authStatus) authStatus.textContent = (data.username || '') + (authRole ? ' · ' + authRole : '');
       applyRoleChrome();
       return;

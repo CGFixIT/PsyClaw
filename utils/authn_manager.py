@@ -272,6 +272,15 @@ class AuthManager:
             f"WHERE s.session_id = {ph} AND u.disabled = 0"
         )
         self._sql_touch_session = f"UPDATE sessions SET last_seen_ts = {ph} WHERE session_id = {ph}"
+        # Cookie-session whoami rotates CSRF because the plaintext is issued
+        # once at login and never stored (row holds hash_token only). A reload
+        # drops the JS copy; without this UPDATE the tab looks logged in but
+        # every CSRF-gated write 403s. last_seen_ts slides with the rotate so
+        # idle expiry does not race a just-refreshed tab.
+        self._sql_rotate_csrf = (
+            f"UPDATE sessions SET csrf_token = {ph}, last_seen_ts = {ph} "
+            f"WHERE session_id = {ph} AND revoked = 0"
+        )
         self._sql_revoke_session = f"UPDATE sessions SET revoked = 1 WHERE session_id = {ph} AND revoked = 0"
         self._sql_revoke_sessions_for_user = (
             f"UPDATE sessions SET revoked = 1 WHERE username = {ph} AND revoked = 0"
@@ -786,6 +795,34 @@ class AuthManager:
             self.conn.execute(self._sql_touch_session, (now, session_id_hash))
             self.conn.commit()
             return SessionInfo(session_id=session_id, username=row["username"], csrf_token=row["csrf_token"])
+
+    def rotate_csrf(self, session_id: str) -> str | None:
+        """Mint a new CSRF plaintext for a live session; store only the hash.
+
+        Returns None for an unknown, revoked, or expired session -- the same
+        fail-closed shape as validate_session, so a caller that just confirmed
+        the cookie can treat None as "do not put a token in the response"
+        rather than a distinct error.
+        """
+        if not isinstance(session_id, str) or not session_id:
+            return None
+        session_id_hash = authn.hash_token(session_id)
+        now = self._now()
+        new_csrf = authn.new_csrf_token()
+        with self._lock:
+            row = self.conn.execute(self._sql_get_session, (session_id_hash,)).fetchone()
+            if row is None or row["revoked"]:
+                self._end_read_txn()
+                return None
+            if now >= row["expires_ts"] or now >= row["last_seen_ts"] + self.idle_timeout_sec:
+                self.conn.execute(self._sql_revoke_session, (session_id_hash,))
+                self.conn.commit()
+                return None
+            self.conn.execute(
+                self._sql_rotate_csrf, (authn.hash_token(new_csrf), now, session_id_hash)
+            )
+            self.conn.commit()
+            return new_csrf
 
     def logout(self, session_id: str) -> bool:
         """Revoke a session. Returns False for an unknown/already-revoked id

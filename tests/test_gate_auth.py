@@ -540,6 +540,26 @@ class TestWhoami:
         r = client.get("/auth/whoami")
         assert r.status_code == 200
         assert r.json()["username"] == username
+        assert r.json()["csrf_token"]
+
+    def test_whoami_rotates_csrf_so_a_reload_can_logout(self, manager, user):
+        """Login plaintext is issued once; the DB stores only the hash. After
+        a reload the console has the cookie but not the JS token. whoami must
+        mint a new one so logout/Users writes work without clearing cookies."""
+        username, password = user
+        client = _client(manager)
+        login_csrf = client.post(
+            "/auth/login", json={"username": username, "password": password}
+        ).json()["csrf_token"]
+        whoami = client.get("/auth/whoami")
+        assert whoami.status_code == 200
+        new_csrf = whoami.json()["csrf_token"]
+        assert new_csrf
+        assert new_csrf != login_csrf
+        stale = client.post("/auth/logout", headers={"x-cyclaw-csrf": login_csrf})
+        assert stale.status_code == 403
+        ok = client.post("/auth/logout", headers={"x-cyclaw-csrf": new_csrf})
+        assert ok.status_code == 200
 
     def test_via_bearer_token(self, manager, user):
         username, _ = user
@@ -547,6 +567,7 @@ class TestWhoami:
         r = _client(manager).get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 200
         assert r.json()["username"] == username
+        assert r.json().get("csrf_token") is None
 
     def test_no_credentials_is_401(self, manager):
         r = _client(manager).get("/auth/whoami")
@@ -569,7 +590,9 @@ class TestWhoami:
         assert r.status_code == 401
 
     def test_whoami_does_not_require_csrf(self, manager, user):
-        """GET is not state-changing -- CSRF must never gate a read path."""
+        """CSRF must never GATE whoami. A cookie session may rotate the token
+        in the response so a reloaded tab can mutate; that is a side effect,
+        not an input requirement."""
         username, password = user
         client = _client(manager)
         client.post("/auth/login", json={"username": username, "password": password})
