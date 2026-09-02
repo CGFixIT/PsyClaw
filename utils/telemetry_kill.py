@@ -269,8 +269,9 @@ SCRUBBED_ENV_KEYS: tuple[str, ...] = (*_TRACING_CREDENTIALS, *_OTEL_DECLARATIVE_
 # edit to a kill *value* fails at gateway boot, not only when CI runs the
 # checker (issue #1255). tests/test_telemetry_kill.py holds a second copy.
 # Recompute after a deliberate map change:
-#   python -c "from utils.telemetry_kill import contract_sha256; print(contract_sha256())"
-CONTRACT_SHA256 = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
+#   python -c "from utils.telemetry_kill import contract_digest; print(contract_digest())"
+# DevSkim: ignore DS173237 - public digest of kill maps, not a secret
+CONTRACT_DIGEST = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
 
 
 def contract_payload() -> bytes:
@@ -286,7 +287,7 @@ def contract_payload() -> bytes:
     ).encode("utf-8")
 
 
-def contract_sha256() -> str:
+def contract_digest() -> str:
     return hashlib.sha256(contract_payload()).hexdigest()
 
 
@@ -330,10 +331,10 @@ def verify_telemetry_contract() -> None:
     Called from gate.py at import, next to the env-value table. Stdlib-only
     (ast / hashlib / json / pathlib) so it stays legal inside this module.
     """
-    digest = contract_sha256()
-    if digest != CONTRACT_SHA256:
+    digest = contract_digest()
+    if digest != CONTRACT_DIGEST:
         raise RuntimeError(
-            f"telemetry kill contract hash mismatch: got {digest}, expected {CONTRACT_SHA256}"
+            f"telemetry kill contract hash mismatch: got {digest}, expected {CONTRACT_DIGEST}"
         )
     _verify_chroma_anonymized_flag()
 

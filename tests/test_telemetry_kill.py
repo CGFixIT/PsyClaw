@@ -93,23 +93,24 @@ def test_production_maps_match_independent_literals():
     assert set(SCRUBBED_ENV_KEYS) == _EXPECTED_SCRUBBED
 
 
-# Independent copy of utils.telemetry_kill.CONTRACT_SHA256. A hostile edit to
+# Independent copy of utils.telemetry_kill.CONTRACT_DIGEST. A hostile edit to
 # the production pin that leaves the maps themselves untouched must still fail.
-_EXPECTED_CONTRACT_SHA256 = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
+# DevSkim: ignore DS173237 - public digest of kill maps, not a secret
+_EXPECTED_CONTRACT_DIGEST = "583008ec29f72446a5bc297110d0967d10a7da23dfa10f2091cac9c3da4ada8c"
 
 
-def test_contract_sha256_matches_independent_literal():
-    from utils.telemetry_kill import CONTRACT_SHA256, contract_sha256, verify_telemetry_contract
+def test_contract_digest_matches_independent_literal():
+    from utils.telemetry_kill import CONTRACT_DIGEST, contract_digest, verify_telemetry_contract
 
-    assert CONTRACT_SHA256 == _EXPECTED_CONTRACT_SHA256
-    assert contract_sha256() == _EXPECTED_CONTRACT_SHA256
+    assert CONTRACT_DIGEST == _EXPECTED_CONTRACT_DIGEST
+    assert contract_digest() == _EXPECTED_CONTRACT_DIGEST
     verify_telemetry_contract()
 
 
 def test_verify_telemetry_contract_rejects_a_wrong_pin(monkeypatch):
     import utils.telemetry_kill as tk
 
-    monkeypatch.setattr(tk, "CONTRACT_SHA256", "0" * 64)
+    monkeypatch.setattr(tk, "CONTRACT_DIGEST", "0" * 64)
     with pytest.raises(RuntimeError, match="contract hash mismatch"):
         tk.verify_telemetry_contract()
 
