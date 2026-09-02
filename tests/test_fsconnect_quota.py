@@ -8,12 +8,15 @@ ledger with on-disk reality.
 
 from __future__ import annotations
 
+import errno
+import json
 import os
 import sys
 
 import pytest
 import yaml
 
+from agentic.fsconnect import pathsafe
 from agentic.fsconnect import quota
 from agentic.fsconnect.config import load_fsconnect_config
 from agentic.fsconnect.writer import FsWriter
@@ -177,3 +180,33 @@ def test_quota_recompute_fail_closed_on_unreadable_root(tmp_path):
             assert ei.value.details["failed_gate"] == "quota"
         finally:
             wz.chmod(0o755)
+
+
+def test_writer_list_dir_audits_skipped_stat_names_not_contents(tmp_path, monkeypatch):
+    """FsWriter must bind the skipped-stat sink so purge/list drops reach audit.jsonl."""
+    wz = tmp_path / "wz"
+    wz.mkdir()
+    (wz / "keep.txt").write_text("safe", encoding="utf-8")
+    (wz / "bad.txt").write_text("payload-secret", encoding="utf-8")
+    cfg, fs_cfg, cp = _make(tmp_path, [str(wz)])
+    audit = tmp_path / "audit.jsonl"
+    real_stat = pathsafe.os.stat
+
+    def _stat(name, *args, **kwargs):
+        if name == "bad.txt":
+            raise OSError(errno.EIO, "Input/output error")
+        return real_stat(name, *args, **kwargs)
+
+    monkeypatch.setattr(pathsafe.os, "stat", _stat)
+    with FsWriter(cfg, fs_cfg, config_path=cp) as w:
+        listed = {e["name"] for e in w._roots.list_dir("")}
+    assert "bad.txt" not in listed
+    assert "keep.txt" in listed
+    blob = audit.read_text(encoding="utf-8")
+    events = [json.loads(line) for line in blob.splitlines() if line.strip()]
+    skips = [e for e in events if e.get("event") == "fsconnect_skipped_stat"]
+    assert skips, blob
+    assert skips[0]["count"] >= 1
+    assert "bad.txt" in skips[0]["sample_names"]
+    assert "payload-secret" not in blob
+    assert "Input/output error" not in blob

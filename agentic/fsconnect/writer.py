@@ -119,6 +119,7 @@ class FsWriter:
             strict_roots=fs_cfg.strict_roots,
             on_fallback=self._audit_root_fallback,
         )
+        self._roots._skipped_stat_sink = self._audit_skipped_stat
         self._patterns = build_injection_patterns(cfg) if fs_cfg.scan_content else []
 
     def close(self) -> None:
@@ -139,6 +140,18 @@ class FsWriter:
              "fallback_root": fallback,
              "rule_applied": "root-prepare fell back to ~/CyClaw-FS (strict_roots is false); "
                              "investigate config drift"},
+            self.config_path,
+        )
+
+    def _audit_skipped_stat(self, where: str, count: int, names: list[str]) -> None:
+        """Durable record of fail-soft directory drops (same shape as FsClient)."""
+        audit_log(
+            {
+                "event": "fsconnect_skipped_stat",
+                "where": where,
+                "count": count,
+                "sample_names": names,
+            },
             self.config_path,
         )
 

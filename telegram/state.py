@@ -195,11 +195,8 @@ def load_offset(path: Path | None = None) -> int | None:
     p = path if path is not None else default_offset_path()
     try:
         raw = p.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
         return None
