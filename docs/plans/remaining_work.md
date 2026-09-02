@@ -1,11 +1,13 @@
 # Remaining work
 
-Live checklist as of **2026-09-02**, `origin/main` `0f8fffa8`.
+Live checklist as of **2026-09-02**, verified against `origin/main` `b3309c5d`.
 
 Code and `config.yaml` win. Re-list GitHub issues before acting.
 History of closed 2026-08-02 items lives in
 [`docs/zWork/remaining_work_STALE.md`](../zWork/remaining_work_STALE.md)
-(do not treat that file as the open list). Design history:
+(do not treat that file's old statuses or suggested order as current). It is
+retained because its contemporaneous refutation and containment rationale is
+not duplicated in full elsewhere. Design history:
 [`docs/ARCHIVE_AND_ROADMAP.md`](../ARCHIVE_AND_ROADMAP.md).
 NeMo current-state matrix: [`docs/NeMo/README.md`](../NeMo/README.md).
 Operator parking-lot / product ideas live in [`deploy/planning/todo.txt`](../../deploy/planning/todo.txt)
@@ -58,7 +60,9 @@ Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://g
 
 ## Open GitHub issues (re-list before acting)
 
-Exactly four OPEN issues on `cgfixit/CyClaw` as of this rewrite.
+Exactly four OPEN issues on `cgfixit/CyClaw` as of this verification. The table
+records each issue's closure gate; consult the issue body for optional,
+non-blocking cleanup that is not part of that gate.
 
 | # | Title | What is actually left |
 |---|---|---|
