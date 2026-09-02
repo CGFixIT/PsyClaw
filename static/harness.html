@@ -1637,6 +1637,8 @@ async function refreshHarnessAuth() {
     }
     if (hAuthSetup) hAuthSetup.hidden = true;
     if (hAuthLoginBox) hAuthLoginBox.hidden = false;
+    window.__cyclawRole = null;
+    if (who) who.textContent = '';
     setHarnessLogoutVisible(false);
   } catch (e) { /* keep last UI */ }
 }
@@ -1670,7 +1672,12 @@ if (hAuthLogout) {
     const headers = { 'Content-Type': 'application/json' };
     if (CSRF_TOKEN) headers['X-CyClaw-CSRF'] = CSRF_TOKEN;
     try {
-      await fetchWithTimeout('/api/auth/logout', { method: 'POST', headers: headers }, 15000);
+      const response = await fetchWithTimeout('/api/auth/logout', { method: 'POST', headers: headers }, 15000);
+      if (!response.ok) {
+        const who = document.getElementById('hAuthWho');
+        if (who) who.textContent = 'logout rejected (' + response.status + ')';
+        return;
+      }
     } catch (e) { /* best-effort; refresh below paints whatever session remains */ }
     await refreshHarnessAuth();
   });
