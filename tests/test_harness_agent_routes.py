@@ -840,6 +840,41 @@ def test_agent_run_happy_path_still_calls_shim(client, calls):
     assert calls and calls[0][0] == "real-repo-run"
 
 
+# --- generation gate (shared with /api/chat: no double-submit, no contention
+# for Ollama's single stream) -------------------------------------------------
+
+
+def test_agent_run_busy_when_generation_already_held(client, calls):
+    assert client.app.state.generation_gate.claim() is True
+    try:
+        resp = client.post(_RUN, json=_VALID_BODY)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "AGENT_RUN_BUSY"
+        assert calls == []  # the shim -- and therefore the subprocess -- never ran
+    finally:
+        client.app.state.generation_gate.release()
+
+
+def test_agent_run_releases_generation_gate_on_success(client, calls):
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 200
+    assert client.app.state.generation_gate.claim() is True
+    client.app.state.generation_gate.release()
+
+
+def test_agent_run_releases_generation_gate_on_shim_error(cfg, monkeypatch):
+    def _raise(_action: str, **_kwargs):
+        raise OpsError("boom")
+
+    monkeypatch.setattr(harness_server, "run_agentic_op", _raise)
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 400
+    assert app.state.generation_gate.claim() is True
+    app.state.generation_gate.release()
+
+
 # --- request-shape budget guard ----------------------------------------------
 
 

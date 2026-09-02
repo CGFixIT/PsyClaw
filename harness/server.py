@@ -1495,23 +1495,42 @@ def create_app(
             )
         except ToolDenied as exc:
             raise _err(_HTTP_FORBIDDEN, exc) from exc
-        return _agentic_call(
-            "real-repo-run",
-            lambda: run_agentic_op(
+        # real-repo-run's planner defaults to the same local Ollama model
+        # /api/chat serves (agentic/real_repo_loop.py's LocalProposerClient),
+        # so sharing generation_gate with chat here does two things at once:
+        # it stops a double-click/retried POST from spawning two concurrent
+        # real-repo-run subprocesses (each paying for its own LLM calls), and
+        # it stops a run from contending with a chat turn over Ollama's single
+        # stream -- the exact "looks like a hang" failure GenerationGate's own
+        # docstring describes, just from a second source.
+        if not generation_gate.claim():
+            raise _err(
+                _HTTP_CONFLICT,
+                AgenticError(
+                    "a local model generation is already running (chat turn or agent run)",
+                    code="AGENT_RUN_BUSY",
+                ),
+            )
+        try:
+            return _agentic_call(
                 "real-repo-run",
-                instruction=req.instruction,
-                checks=checks,
-                branch=req.branch,
-                commit_message=req.commit_message,
-                reason=req.reason,
-                confirm=req.confirm,
-                max_iterations=req.max_iterations,
-                plan=req.plan,
-                read_files=req.read_files,
-                pr=req.pr,
-                issue=req.issue,
-            ),
-        )
+                lambda: run_agentic_op(
+                    "real-repo-run",
+                    instruction=req.instruction,
+                    checks=checks,
+                    branch=req.branch,
+                    commit_message=req.commit_message,
+                    reason=req.reason,
+                    confirm=req.confirm,
+                    max_iterations=req.max_iterations,
+                    plan=req.plan,
+                    read_files=req.read_files,
+                    pr=req.pr,
+                    issue=req.issue,
+                ),
+            )
+        finally:
+            generation_gate.release()
 
     @app.get("/api/agent/runs/{run_id}", dependencies=guarded)
     def agent_run_status(run_id: str) -> dict:
