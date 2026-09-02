@@ -16,6 +16,8 @@ Runs entirely offline against the app factory (no server, no LLM, no Ollama).
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -222,7 +224,7 @@ def test_pending_agent_diff_is_shown_before_approval():
 def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     # Console must stage reviewed plan/read/checks, cap reads, and keep the
     # staged run when confirm fails (422) instead of wiping operator state.
-    from harness.schemas import _MAX_PLAN_CHARS, _MAX_READ_FILES
+    from harness.schemas import _MAX_ITERATIONS_CEILING, _MAX_PLAN_CHARS, _MAX_READ_FILES
 
     html = _HARNESS_HTML.read_text(encoding="utf-8")
     helper_start = html.index("function showPendingAgentRun()")
@@ -232,6 +234,7 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "agentPlanInput.addEventListener('change'" in helper
     assert f"const MAX_AGENT_PLAN_CHARS = {_MAX_PLAN_CHARS};" in html
     assert f"const MAX_AGENT_READ_FILES = {_MAX_READ_FILES};" in html
+    assert f"const MAX_AGENT_ITERATIONS = {_MAX_ITERATIONS_CEILING};" in html
     assert "function isSafeRepoRelativePath(" in html
     assert "function canonicalRepoRelativePath(" in html
     assert "pendingAgentRun.plan = plan" in helper
@@ -247,6 +250,20 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "Object.assign({}, stagedRun, { reason: why, confirm: true })" in commands
     assert "confirm failed — staged run kept" in commands
     assert "pendingAgentRun = stagedRun" in commands
+
+
+@pytest.mark.parametrize("scenario", ["staging", "github", "refusals", "review"])
+def test_agent_console_runtime(scenario):
+    # Execute the shipped JavaScript with Node's standard library; no browser,
+    # service, npm package, or separate JS test framework is needed.
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable for the console runtime contract")
+    result = subprocess.run(
+        [node, str(Path(__file__).with_name("harness_agent_console.cjs")), scenario],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
