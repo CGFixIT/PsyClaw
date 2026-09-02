@@ -277,10 +277,16 @@ class AuthManager:
         # drops the JS copy; without this UPDATE the tab looks logged in but
         # every CSRF-gated write 403s. last_seen_ts slides with the rotate so
         # idle expiry does not race a just-refreshed tab.
-        self._sql_rotate_csrf = (
-            f"UPDATE sessions SET csrf_token = {ph}, last_seen_ts = {ph} "
-            f"WHERE session_id = {ph} AND revoked = 0"
-        )
+        if self.backend == "postgres":
+            self._sql_rotate_csrf = (
+                "UPDATE sessions SET csrf_token = %s, last_seen_ts = %s "
+                "WHERE session_id = %s AND revoked = 0"
+            )
+        else:
+            self._sql_rotate_csrf = (
+                "UPDATE sessions SET csrf_token = ?, last_seen_ts = ? "
+                "WHERE session_id = ? AND revoked = 0"
+            )
         self._sql_revoke_session = f"UPDATE sessions SET revoked = 1 WHERE session_id = {ph} AND revoked = 0"
         self._sql_revoke_sessions_for_user = (
             f"UPDATE sessions SET revoked = 1 WHERE username = {ph} AND revoked = 0"
