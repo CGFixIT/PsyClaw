@@ -204,6 +204,14 @@ def test_health_polling_is_visibility_aware():
     assert "if (healthVisible)" in after, "scheduleHealthCheck must guard on healthVisible"
 
 
+def test_whoami_success_stores_rotated_csrf():
+    """A reload keeps cyclaw_session but drops the JS csrfToken. refreshAuthUi
+    must assign whoami's csrf_token or logout/Users writes 403 while logged in."""
+    js = _TERMINAL_JS.read_text(encoding="utf-8")
+    assert "csrfToken = data.csrf_token || null" in js
+    assert "fetchWithTimeout(`${API}/auth/whoami`, { cache: 'no-store' }, 5000)" in js
+
+
 def test_login_form_controls_exist():
     html = _console_source()
     for marker in (

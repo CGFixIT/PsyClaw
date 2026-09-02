@@ -337,6 +337,21 @@ class TestLogin:
         assert result.csrf_token
         assert result.session_id != result.csrf_token
 
+    def test_rotate_csrf_replaces_the_stored_hash(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        result = manager.login("alice", _GOOD_PASSWORD)
+        rotated = manager.rotate_csrf(result.session_id)
+        assert rotated
+        assert rotated != result.csrf_token
+        info = manager.validate_session(result.session_id)
+        assert info is not None
+        assert info.csrf_token == hash_token(rotated)
+        assert info.csrf_token != hash_token(result.csrf_token)
+
+    def test_rotate_csrf_unknown_session_is_none(self, manager):
+        assert manager.rotate_csrf("not-a-real-session") is None
+        assert manager.rotate_csrf("") is None
+
     def test_wrong_password_raises_login_failed(self, manager):
         manager.create_user("alice", _GOOD_PASSWORD)
         with pytest.raises(AuthLoginFailed):
