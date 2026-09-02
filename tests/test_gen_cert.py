@@ -52,6 +52,32 @@ def test_openssl_timeout_is_reported(monkeypatch, tmp_path, capsys):
     assert "timed out" in capsys.readouterr().err
 
 
+def test_failed_openssl_cleans_partial_outputs_and_allows_a_retry(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+    cert = tmp_path / "c.pem"
+    key = tmp_path / "k.pem"
+
+    def _partial_failure(cmd, **_kwargs):
+        Path(cmd[cmd.index("-out") + 1]).write_text("partial-cert", encoding="utf-8")
+        return SimpleNamespace(returncode=1, stdout="", stderr="openssl failed")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _partial_failure)
+    assert main(["--certfile", str(cert), "--keyfile", str(key)]) == EXIT_FAIL
+    assert not cert.exists()
+    assert not key.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+    def _successful_retry(cmd, **_kwargs):
+        Path(cmd[cmd.index("-out") + 1]).write_text("new-cert", encoding="utf-8")
+        Path(cmd[cmd.index("-keyout") + 1]).write_text("new-key", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _successful_retry)
+    assert main(["--certfile", str(cert), "--keyfile", str(key)]) == EXIT_OK
+    assert cert.read_text(encoding="utf-8") == "new-cert"
+    assert key.read_text(encoding="utf-8") == "new-key"
+
+
 def test_existing_pair_is_refused_without_force(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
     cert = tmp_path / "c.pem"

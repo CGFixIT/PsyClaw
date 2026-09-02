@@ -25,6 +25,7 @@ import socket  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
+import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 EXIT_OK = 0
@@ -99,6 +100,13 @@ def _anchor(path_str: str) -> Path:
     return path if path.is_absolute() else _REPO_ROOT / path
 
 
+def _temporary_output_path(target: Path) -> Path:
+    """Reserve a private same-directory path for an OpenSSL output file."""
+    fd, raw_path = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    return Path(raw_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cyclaw-gen-cert")
     parser.add_argument("--certfile", default=_DEFAULT_CERT)
@@ -148,6 +156,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ENV
     certfile.parent.mkdir(parents=True, exist_ok=True)
     keyfile.parent.mkdir(parents=True, exist_ok=True)
+    temp_certfile = _temporary_output_path(certfile)
+    temp_keyfile = _temporary_output_path(keyfile)
     san = subject_alt_names(args.hostname, extra=args.san)
     cmd = [
         str(openssl),
@@ -160,9 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         str(args.days),
         "-nodes",
         "-keyout",
-        str(keyfile),
+        str(temp_keyfile),
         "-out",
-        str(certfile),
+        str(temp_certfile),
         "-subj",
         f"/CN={args.hostname}",
         "-addext",
@@ -176,22 +186,39 @@ def main(argv: list[str] | None = None) -> int:
     except (AttributeError, OSError):
         previous_umask = None
     try:
-        completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
-            cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        print(f"openssl req timed out after {_OPENSSL_TIMEOUT_SEC}s: {exc}", file=sys.stderr)
-        return EXIT_FAIL
-    except OSError as exc:
-        print(f"failed to run openssl: {exc}", file=sys.stderr)
-        return EXIT_FAIL
+        try:
+            completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
+                cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as exc:
+            print(f"openssl req timed out after {_OPENSSL_TIMEOUT_SEC}s: {exc}", file=sys.stderr)
+            return EXIT_FAIL
+        except OSError as exc:
+            print(f"failed to run openssl: {exc}", file=sys.stderr)
+            return EXIT_FAIL
+        finally:
+            if previous_umask is not None:
+                os.umask(previous_umask)
+        if completed.returncode != 0:
+            err = (completed.stderr or completed.stdout or "").strip()
+            print(err or "openssl req failed", file=sys.stderr)
+            return EXIT_FAIL
+        try:
+            os.replace(temp_certfile, certfile)
+            os.replace(temp_keyfile, keyfile)
+        except OSError as exc:
+            print(f"failed to install certificate pair: {exc}", file=sys.stderr)
+            return EXIT_FAIL
     finally:
-        if previous_umask is not None:
-            os.umask(previous_umask)
-    if completed.returncode != 0:
-        err = (completed.stderr or completed.stdout or "").strip()
-        print(err or "openssl req failed", file=sys.stderr)
-        return EXIT_FAIL
+        for temp_output in (temp_certfile, temp_keyfile):
+            try:
+                temp_output.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # The initial generation result is already reported; leave a
+                # private, same-directory temporary file rather than mask it.
+                pass
     try:
         keyfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
