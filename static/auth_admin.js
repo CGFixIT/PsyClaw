@@ -38,6 +38,24 @@
       return h;
     }
 
+    async function failureMessage(label, resp) {
+      const fallback = label + " failed (" + resp.status + ")";
+      let data;
+      try {
+        data = await resp.json();
+      } catch (_) {
+        return fallback;
+      }
+      const detail = data && data.detail;
+      if (!detail || Array.isArray(detail) || typeof detail !== "object") return fallback;
+      // Only the public summary fields belong on screen. Other response
+      // fields, including validation inputs, can contain credentials.
+      const code = typeof detail.code === "string" ? detail.code : "";
+      const message = typeof detail.message === "string" ? detail.message : "";
+      const summary = [code, message].filter(Boolean).join(": ");
+      return summary ? fallback + ": " + summary : fallback;
+    }
+
     // Every privileged mutation below can be REFUSED: 401/403 on an expired
     // session, 403 on a CSRF mismatch, 429 under the rate limit, 503 with auth
     // off. Before this they were bare `.then(reload)` -- no status check, no
@@ -51,9 +69,9 @@
     function mutate(label, url, init) {
       onStatus(); // clear any previous error at the start of a new mutation
       return fetchFn(url, init)
-        .then(function (resp) {
+        .then(async function (resp) {
           const failed = !resp.ok;
-          if (failed) onStatus(label + " failed (" + resp.status + ")");
+          if (failed) onStatus(await failureMessage(label, resp));
           // A refused mutation must keep its message on screen: reload() only
           // repaints the (unchanged) list, and its own success path used to
           // call onStatus() unconditionally -- clearing the error this same
@@ -137,10 +155,10 @@
           password: passIn.value,
           role: roleIn.value,
         }),
-      }).then(function (resp) {
+      }).then(async function (resp) {
         passIn.value = "";
         const failed = !resp.ok;
-        if (failed) onStatus("create failed " + resp.status);
+        if (failed) onStatus(await failureMessage("create", resp));
         return reload(failed); // keep refresh failures in this handler's promise chain
       }).catch(function (err) {
         // The one path createUser still lacked: an unreachable gateway rejects
