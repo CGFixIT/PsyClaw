@@ -875,6 +875,96 @@ def test_agent_run_releases_generation_gate_on_shim_error(cfg, monkeypatch):
     app.state.generation_gate.release()
 
 
+def test_agent_run_releases_agent_run_gate_on_success(client, calls):
+    resp = client.post(_RUN, json=_VALID_BODY)
+    assert resp.status_code == 200
+    assert client.app.state.agent_run_gate.claim() is True
+    client.app.state.agent_run_gate.release()
+
+
+def test_agent_run_blocked_by_another_in_flight_agent_run(client, calls):
+    assert client.app.state.agent_run_gate.claim() is True
+    try:
+        resp = client.post(_RUN, json=_VALID_BODY)
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "AGENT_RUN_BUSY"
+        assert calls == []
+    finally:
+        client.app.state.agent_run_gate.release()
+
+
+# --- Codex review (PR #1247): agent_run_gate vs generation_gate must not be
+# conflated -- real-repo-run's planner is pinned to agentic.deepagent_github
+# .base_url, independent of models.local_llm.fallback, so when fallback is
+# active the two can diverge. ------------------------------------------------
+
+
+def _fallback_llm_cfg() -> dict:
+    return {
+        "base_url": "http://127.0.0.1:11434/v1",  # same as the shipped deepagent_github.base_url
+        "model": "qwen3.8:27b-mlx",
+        "provider": "ollama",
+        "fallback": {
+            "enabled": True,
+            "provider": "lmstudio",
+            "base_url": "http://127.0.0.1:1234/v1",
+            "model": "my-lmstudio-model",
+        },
+    }
+
+
+def test_agent_run_does_not_block_chat_when_deepagent_backend_differs(cfg, monkeypatch, calls):
+    """/api/chat has failed over to a live LM Studio backend while
+    agentic.deepagent_github.base_url (unmocked -- reads the shipped
+    config.yaml default, same address as the now-down primary) stays pinned
+    to the down primary. The two are not contending for anything, so a live
+    chat turn must not block a new agent run."""
+    import llm.client as llm_client
+
+    monkeypatch.setattr(harness_server, "_llm_settings", _fallback_llm_cfg)
+    # primary (:11434, == deepagent_github.base_url) is down; fallback (:1234) is up.
+    monkeypatch.setattr(llm_client, "_probe_openai_models", lambda base_url, **kw: ":1234" in base_url)
+    llm_client.reset_local_backend_cache()
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    try:
+        assert app.state.generation_gate.claim() is True  # simulate a live chat turn
+        try:
+            resp = client.post(_RUN, json=_VALID_BODY)
+            assert resp.status_code == 200
+            assert calls and calls[0][0] == "real-repo-run"
+        finally:
+            app.state.generation_gate.release()
+    finally:
+        llm_client.reset_local_backend_cache()
+
+
+def test_agent_run_still_blocks_a_concurrent_agent_run_when_deepagent_backend_differs(cfg, monkeypatch, calls):
+    """agent_run_gate's exclusion must hold regardless of chat-backend
+    divergence: two concurrent real-repo-run subprocesses always target the
+    same agentic.deepagent_github.base_url, so they always genuinely
+    contend with each other -- unlike generation_gate, this must never be
+    skipped."""
+    import llm.client as llm_client
+
+    monkeypatch.setattr(harness_server, "_llm_settings", _fallback_llm_cfg)
+    monkeypatch.setattr(llm_client, "_probe_openai_models", lambda base_url, **kw: ":1234" in base_url)
+    llm_client.reset_local_backend_cache()
+    app = harness_server.create_app(cfg, _chat())
+    client = TestClient(app, base_url="http://127.0.0.1", headers=_auth_headers(app))
+    try:
+        assert app.state.agent_run_gate.claim() is True  # simulate an in-flight agent run
+        try:
+            resp = client.post(_RUN, json=_VALID_BODY)
+            assert resp.status_code == 409
+            assert resp.json()["detail"]["code"] == "AGENT_RUN_BUSY"
+            assert calls == []
+        finally:
+            app.state.agent_run_gate.release()
+    finally:
+        llm_client.reset_local_backend_cache()
+
+
 # --- request-shape budget guard ----------------------------------------------
 
 
