@@ -119,7 +119,7 @@ def test_skipped_entry_tracking_is_bounded_not_proportional_to_directory_size(
     names = [f"f{n}.md" for n in range(500)]
     captured: list[tuple] = []
 
-    def _capture(*args):
+    def _capture(*args, **kwargs):
         captured.append(args)
 
     monkeypatch.setattr(pathsafe, "_report_skipped_entries", _capture)
@@ -139,6 +139,28 @@ def test_skipped_entry_tracking_is_bounded_not_proportional_to_directory_size(
         f"retained {len(sample)} entries for a 500-entry directory; the walk must "
         "keep a count and a capped sample, not one object per failure"
     )
+
+
+def test_report_skipped_entries_sink_gets_names_not_reasons() -> None:
+    """Audit sink must receive sample names only -- no strerror, no contents."""
+    seen: list[tuple[str, int, list[str]]] = []
+
+    def _sink(where: str, count: int, names: list[str]) -> None:
+        seen.append((where, count, names))
+
+    pathsafe._report_skipped_entries(
+        "list_dir",
+        2,
+        [("secret.md", "Input/output error"), ("other.bin", "EIO")],
+        sink=_sink,
+    )
+    assert seen == [("list_dir", 2, ["secret.md", "other.bin"])]
+
+
+def test_report_skipped_entries_does_not_call_sink_when_count_is_zero() -> None:
+    seen: list[object] = []
+    pathsafe._report_skipped_entries("list_dir", 0, [], sink=lambda *a: seen.append(a))
+    assert seen == []
 
 
 def test_filter_logs_nothing_when_every_entry_is_readable(
