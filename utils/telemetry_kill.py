@@ -296,9 +296,18 @@ def contract_digest() -> str:
     return hashlib.sha256(contract_payload()).hexdigest()
 
 
+def _is_named_call(node: ast.AST, name: str) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == name) or (
+        isinstance(func, ast.Attribute) and func.attr == name
+    )
+
+
 def _is_anonymized_false(node: ast.AST) -> bool:
     """True when *node* is Settings(anonymized_telemetry=False)."""
-    if not isinstance(node, ast.Call):
+    if not _is_named_call(node, "Settings"):
         return False
     for kw in node.keywords:
         if kw.arg == "anonymized_telemetry" and isinstance(kw.value, ast.Constant) and kw.value.value is False:
@@ -306,27 +315,30 @@ def _is_anonymized_false(node: ast.AST) -> bool:
     return False
 
 
-def _verify_chroma_anonymized_flag() -> None:
-    """Both PersistentClient sites in vector_store.py must disable PostHog."""
-    path = Path(__file__).resolve().parent.parent / "retrieval" / "vector_store.py"
-    src = path.read_text(encoding="utf-8")
+def _chroma_client_settings_hits(src: str) -> tuple[int, int]:
+    """Return (hits, total) PersistentClient calls with Settings(anonymized_telemetry=False)."""
     hits = 0
+    total = 0
     for node in ast.walk(ast.parse(src)):
-        if not isinstance(node, ast.Call):
+        if not _is_named_call(node, "PersistentClient"):
             continue
-        func = node.func
-        is_client = (isinstance(func, ast.Attribute) and func.attr == "PersistentClient") or (
-            isinstance(func, ast.Name) and func.id == "PersistentClient"
-        )
-        if not is_client:
-            continue
+        total += 1
         for kw in node.keywords:
             if kw.arg == "settings" and _is_anonymized_false(kw.value):
                 hits += 1
-    if hits < 2:
+                break
+    return hits, total
+
+
+def _verify_chroma_anonymized_flag() -> None:
+    """Every PersistentClient in vector_store.py must disable PostHog."""
+    path = Path(__file__).resolve().parent.parent / "retrieval" / "vector_store.py"
+    src = path.read_text(encoding="utf-8")
+    hits, total = _chroma_client_settings_hits(src)
+    if total == 0 or hits != total:
         raise RuntimeError(
-            "retrieval/vector_store.py must construct PersistentClient with "
-            f"Settings(anonymized_telemetry=False) at both sites; found {hits}"
+            "retrieval/vector_store.py must construct every PersistentClient with "
+            f"Settings(anonymized_telemetry=False); found {hits}/{total}"
         )
 
 
