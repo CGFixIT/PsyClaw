@@ -1065,14 +1065,11 @@ guardrails:
     - check_soul_mutation
   output_rails:                  # mirror guardrails/config/config.yml -> rails.output.flows
     - check_grounding
-    - check_soul_leak           # NOT YET **FULLY** IMPLEMENTED -- accepted candidate only. PR #751
-                                # shipped the guardrail_output node grounding-only (local_llm
-                                # path); the soul-leak half stays unbuilt pending a new
-                                # primitive (not scan_injection reuse) and a false-positive
-                                # sweep (docs/NeMo/phase4b_soul_leak.md). Listing it here
-                                # does NOT activate it: the offline floor
-                                # (guardrails/integration.py check_output) only enforces
-                                # check_grounding and silently skips this name.
+    - check_soul_leak           # Phase 4b: enforced by the offline check_output
+                                # floor when guardrails.enabled is true. It uses dedicated
+                                # detect_soul_leak, not scan_injection. The graph invokes
+                                # that floor only for local_llm answers; external and
+                                # offline-best-effort legs remain intentionally out of scope.
   topical_rails:                 # soul/personality-boundary topical flows (rails.co)
     - stay_in_local_knowledge
     - no_unauthed_external_advice
