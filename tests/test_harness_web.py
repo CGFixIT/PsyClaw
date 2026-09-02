@@ -274,6 +274,28 @@ def test_routes_default_off_and_open_status(cfg):
     assert denied.json()["detail"]["code"] == "WEB_DISABLED"
 
 
+@pytest.mark.parametrize("path,body", [
+    ("/api/web/fetch", {"url": "https://docs.python.org/3/"}),
+    ("/api/web/search", {"query": "allowlist"}),
+])
+def test_web_request_consumes_one_normal_limiter_token(cfg, monkeypatch, path, body):
+    monkeypatch.setattr(
+        "harness.server._rate_limit_settings",
+        lambda: {"max_requests": 2, "window_seconds": 300},
+    )
+    cfg.web_enabled = True
+    web = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    # Configure directly so setup does not consume the two-request allowance.
+    web.allow("https://docs.python.org/")
+    client = _client(cfg, web)
+
+    assert client.post(path, json=body).status_code == 200
+    assert client.post(path, json=body).status_code == 200
+    refused = client.post(path, json=body)
+    assert refused.status_code == 429
+    assert refused.json()["detail"]["code"] == "RATE_LIMIT"
+
+
 def test_routes_allow_on_fetch_search(cfg):
     web = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
     client = _client(cfg, web)
