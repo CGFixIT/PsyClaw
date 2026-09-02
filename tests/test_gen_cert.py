@@ -7,18 +7,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import utils.gen_cert as gen_cert
-from utils.gen_cert import EXIT_ENV, EXIT_FAIL, EXIT_OK, main, subject_alt_names
 
 
 def test_san_includes_hostname_and_loopback():
-    san = subject_alt_names("cyclaw-box")
+    san = gen_cert.subject_alt_names("cyclaw-box")
     assert "DNS:cyclaw-box" in san
     assert "DNS:localhost" in san
     assert "IP:127.0.0.1" in san
 
 
 def test_san_appends_extra_entries():
-    san = subject_alt_names("cyclaw-box", extra=["IP:10.0.0.5", "DNS:box.local"])
+    san = gen_cert.subject_alt_names("cyclaw-box", extra=["IP:10.0.0.5", "DNS:box.local"])
     assert san.endswith("IP:10.0.0.5,DNS:box.local") or (
         "IP:10.0.0.5" in san and "DNS:box.local" in san
     )
@@ -26,15 +25,15 @@ def test_san_appends_extra_entries():
 
 def test_missing_openssl_is_env_error(monkeypatch):
     monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: None)
-    assert main(["--certfile", "x.pem", "--keyfile", "y.pem"]) == EXIT_ENV
+    assert gen_cert.main(["--certfile", "x.pem", "--keyfile", "y.pem"]) == gen_cert.EXIT_ENV
 
 
 def test_nonpositive_days_is_env_error(tmp_path):
-    assert main([
+    assert gen_cert.main([
         "--certfile", str(tmp_path / "c.pem"),
         "--keyfile", str(tmp_path / "k.pem"),
         "--days", "0",
-    ]) == EXIT_ENV
+    ]) == gen_cert.EXIT_ENV
 
 
 def test_openssl_timeout_is_reported(monkeypatch, tmp_path, capsys):
@@ -45,11 +44,11 @@ def test_openssl_timeout_is_reported(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr("utils.gen_cert.subprocess.run", _raise_timeout)
 
-    rc = main([
+    rc = gen_cert.main([
         "--certfile", str(tmp_path / "c.pem"),
         "--keyfile", str(tmp_path / "k.pem"),
     ])
-    assert rc == EXIT_FAIL
+    assert rc == gen_cert.EXIT_FAIL
     assert "timed out" in capsys.readouterr().err
 
 
@@ -63,7 +62,7 @@ def test_failed_openssl_cleans_partial_outputs_and_allows_a_retry(monkeypatch, t
         return SimpleNamespace(returncode=1, stdout="", stderr="openssl failed")
 
     monkeypatch.setattr("utils.gen_cert.subprocess.run", _partial_failure)
-    assert main(["--certfile", str(cert), "--keyfile", str(key)]) == EXIT_FAIL
+    assert gen_cert.main(["--certfile", str(cert), "--keyfile", str(key)]) == gen_cert.EXIT_FAIL
     assert not cert.exists()
     assert not key.exists()
     assert not list(tmp_path.glob("*.tmp"))
@@ -74,7 +73,7 @@ def test_failed_openssl_cleans_partial_outputs_and_allows_a_retry(monkeypatch, t
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("utils.gen_cert.subprocess.run", _successful_retry)
-    assert main(["--certfile", str(cert), "--keyfile", str(key)]) == EXIT_OK
+    assert gen_cert.main(["--certfile", str(cert), "--keyfile", str(key)]) == gen_cert.EXIT_OK
     assert cert.read_text(encoding="utf-8") == "new-cert"
     assert key.read_text(encoding="utf-8") == "new-key"
 
@@ -91,11 +90,11 @@ def test_second_temporary_output_failure_cleans_first_output(monkeypatch, tmp_pa
         return original(target)
 
     monkeypatch.setattr("utils.gen_cert._temporary_output_path", _fail_second_allocation)
-    rc = main([
+    rc = gen_cert.main([
         "--certfile", str(tmp_path / "c.pem"),
         "--keyfile", str(tmp_path / "k.pem"),
     ])
-    assert rc == EXIT_FAIL
+    assert rc == gen_cert.EXIT_FAIL
     assert not list(tmp_path.glob("*.tmp"))
 
 
@@ -123,12 +122,12 @@ def test_failed_key_install_restores_the_previous_certificate_pair(monkeypatch, 
         return real_replace(source, destination)
 
     monkeypatch.setattr("utils.gen_cert.os.replace", _fail_key_install)
-    rc = main([
+    rc = gen_cert.main([
         "--certfile", str(cert),
         "--keyfile", str(key),
         "--force",
     ])
-    assert rc == EXIT_FAIL
+    assert rc == gen_cert.EXIT_FAIL
     assert cert.read_text(encoding="utf-8") == "old-cert"
     assert key.read_text(encoding="utf-8") == "old-key"
     assert not list(tmp_path.glob("*.tmp"))
@@ -147,8 +146,8 @@ def test_existing_pair_is_refused_without_force(tmp_path, monkeypatch, capsys):
         raise AssertionError("openssl must not run when the pair already exists")
 
     monkeypatch.setattr("utils.gen_cert.subprocess.run", _should_not_run)
-    rc = main(["--certfile", str(cert), "--keyfile", str(key)])
-    assert rc == EXIT_ENV
+    rc = gen_cert.main(["--certfile", str(cert), "--keyfile", str(key)])
+    assert rc == gen_cert.EXIT_ENV
     assert called["n"] == 0
     assert "refusing to overwrite" in capsys.readouterr().err
     assert cert.read_text(encoding="utf-8") == "old-cert"
@@ -156,12 +155,12 @@ def test_existing_pair_is_refused_without_force(tmp_path, monkeypatch, capsys):
 
 def test_comma_in_san_is_env_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
-    rc = main([
+    rc = gen_cert.main([
         "--certfile", str(tmp_path / "c.pem"),
         "--keyfile", str(tmp_path / "k.pem"),
         "--san", "IP:10.0.0.5,DNS:evil",
     ])
-    assert rc == EXIT_ENV
+    assert rc == gen_cert.EXIT_ENV
     assert "invalid --san" in capsys.readouterr().err
 
 
@@ -180,13 +179,13 @@ def test_force_overwrites_and_forwards_extra_san(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("utils.gen_cert.subprocess.run", _fake_run)
-    rc = main([
+    rc = gen_cert.main([
         "--certfile", str(cert),
         "--keyfile", str(key),
         "--force",
         "--san", "IP:10.0.0.5",
     ])
-    assert rc == EXIT_OK
+    assert rc == gen_cert.EXIT_OK
     assert "subjectAltName=" in " ".join(seen["cmd"])
     assert "IP:10.0.0.5" in " ".join(seen["cmd"])
     assert cert.read_text(encoding="utf-8") == "new-cert"
