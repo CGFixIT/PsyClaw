@@ -19,11 +19,13 @@ from utils.telemetry_kill import apply_telemetry_kill
 apply_telemetry_kill()
 
 import argparse  # noqa: E402
+import os  # noqa: E402
 import shutil  # noqa: E402
 import socket  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
+import tempfile  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 EXIT_OK = 0
@@ -71,7 +73,14 @@ def _lan_ipv4() -> str | None:
     return ip
 
 
-def subject_alt_names(hostname: str) -> str:
+def _san_extra_ok(entry: str) -> bool:
+    """Refuse values that would split or inject the openssl -addext SAN list."""
+    if not entry or any(ch in entry for ch in (",", "\n", "\r", "\x00")):
+        return False
+    return entry.startswith("DNS:") or entry.startswith("IP:")
+
+
+def subject_alt_names(hostname: str, extra: list[str] | None = None) -> str:
     parts = [
         f"DNS:{hostname}",
         "DNS:localhost",
@@ -81,6 +90,8 @@ def subject_alt_names(hostname: str) -> str:
     lan = _lan_ipv4()
     if lan and lan not in {"127.0.0.1"}:
         parts.append(f"IP:{lan}")
+    if extra:
+        parts.extend(extra)
     return ",".join(parts)
 
 
@@ -97,12 +108,56 @@ def _keyfile_location_is_safe(keyfile: Path) -> bool:
     return not resolved_keyfile.is_relative_to(repo_root) or resolved_keyfile.is_relative_to(tls_output_dir)
 
 
+def _temporary_output_path(target: Path) -> Path:
+    """Reserve a private same-directory path for an OpenSSL output file."""
+    fd, raw_path = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    return Path(raw_path)
+
+
+def _remove_temporary_output(path: Path | None) -> None:
+    """Best-effort cleanup that reports a leftover private temporary file."""
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        print(f"warning: could not remove temporary certificate output: {exc}", file=sys.stderr)
+
+
+def _backup_existing_output(target: Path) -> Path | None:
+    """Copy an existing output aside so a failed pair install can be rolled back."""
+    if not target.exists():
+        return None
+    backup = _temporary_output_path(target)
+    try:
+        shutil.copy2(target, backup)
+    except OSError:
+        _remove_temporary_output(backup)
+        raise
+    return backup
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cyclaw-gen-cert")
     parser.add_argument("--certfile", default=_DEFAULT_CERT)
     parser.add_argument("--keyfile", default=_DEFAULT_KEY)
     parser.add_argument("--hostname", default=socket.gethostname())
     parser.add_argument("--days", type=int, default=825)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing cert/key pair (otherwise refuse)",
+    )
+    parser.add_argument(
+        "--san",
+        action="append",
+        default=[],
+        metavar="ENTRY",
+        help="extra SAN entry, e.g. IP:10.0.0.5 or DNS:box.local (repeatable)",
+    )
     args = parser.parse_args(argv)
 
     openssl = find_openssl()
@@ -116,6 +171,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.days <= 0:
         print("--days must be a positive integer", file=sys.stderr)
         return EXIT_ENV
+    for entry in args.san:
+        if not _san_extra_ok(entry):
+            print(
+                f"invalid --san {entry!r}: must be DNS:... or IP:... with no commas",
+                file=sys.stderr,
+            )
+            return EXIT_ENV
 
     certfile = _anchor(args.certfile)
     keyfile = _anchor(args.keyfile)
@@ -125,9 +187,24 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_ENV
+    if not args.force and (certfile.exists() or keyfile.exists()):
+        print(
+            f"refusing to overwrite {certfile} / {keyfile} (pass --force to replace)",
+            file=sys.stderr,
+        )
+        return EXIT_ENV
     certfile.parent.mkdir(parents=True, exist_ok=True)
     keyfile.parent.mkdir(parents=True, exist_ok=True)
-    san = subject_alt_names(args.hostname)
+    temp_certfile: Path | None = None
+    temp_keyfile: Path | None = None
+    try:
+        temp_certfile = _temporary_output_path(certfile)
+        temp_keyfile = _temporary_output_path(keyfile)
+    except OSError as exc:
+        _remove_temporary_output(temp_certfile)
+        print(f"failed to prepare certificate outputs: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    san = subject_alt_names(args.hostname, extra=args.san)
     cmd = [
         str(openssl),
         "req",
@@ -139,28 +216,68 @@ def main(argv: list[str] | None = None) -> int:
         str(args.days),
         "-nodes",
         "-keyout",
-        str(keyfile),
+        str(temp_keyfile),
         "-out",
-        str(certfile),
+        str(temp_certfile),
         "-subj",
         f"/CN={args.hostname}",
         "-addext",
         f"subjectAltName={san}",
     ]
+    # Restrict the openssl-created key to owner-only on POSIX. Windows umask
+    # is a no-op; chmod below remains best-effort against NTFS ACLs.
+    previous_umask: int | None = None
     try:
-        completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
-            cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        print(f"openssl req timed out after {_OPENSSL_TIMEOUT_SEC}s: {exc}", file=sys.stderr)
-        return EXIT_FAIL
-    except OSError as exc:
-        print(f"failed to run openssl: {exc}", file=sys.stderr)
-        return EXIT_FAIL
-    if completed.returncode != 0:
-        err = (completed.stderr or completed.stdout or "").strip()
-        print(err or "openssl req failed", file=sys.stderr)
-        return EXIT_FAIL
+        previous_umask = os.umask(0o077)
+    except (AttributeError, OSError):
+        previous_umask = None
+    try:
+        try:
+            completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
+                cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as exc:
+            print(f"openssl req timed out after {_OPENSSL_TIMEOUT_SEC}s: {exc}", file=sys.stderr)
+            return EXIT_FAIL
+        except OSError as exc:
+            print(f"failed to run openssl: {exc}", file=sys.stderr)
+            return EXIT_FAIL
+        finally:
+            if previous_umask is not None:
+                os.umask(previous_umask)
+        if completed.returncode != 0:
+            err = (completed.stderr or completed.stdout or "").strip()
+            print(err or "openssl req failed", file=sys.stderr)
+            return EXIT_FAIL
+        previous_certfile: Path | None = None
+        previous_keyfile: Path | None = None
+        cert_installed = False
+        try:
+            previous_certfile = _backup_existing_output(certfile)
+            previous_keyfile = _backup_existing_output(keyfile)
+            os.replace(temp_certfile, certfile)
+            cert_installed = True
+            os.replace(temp_keyfile, keyfile)
+        except OSError as exc:
+            if cert_installed:
+                try:
+                    if previous_certfile is None:
+                        certfile.unlink()
+                    else:
+                        os.replace(previous_certfile, certfile)
+                except OSError as rollback_exc:
+                    print(
+                        f"failed to restore previous certificate after install failure: {rollback_exc}",
+                        file=sys.stderr,
+                    )
+            print(f"failed to install certificate pair: {exc}", file=sys.stderr)
+            return EXIT_FAIL
+        finally:
+            _remove_temporary_output(previous_certfile)
+            _remove_temporary_output(previous_keyfile)
+    finally:
+        _remove_temporary_output(temp_certfile)
+        _remove_temporary_output(temp_keyfile)
     try:
         keyfile.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
