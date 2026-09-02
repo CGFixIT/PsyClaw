@@ -63,6 +63,27 @@ class TestBuildUnslopProbeEnabled:
         assert record["surface"] == "response_prose"
         assert record["path"] is None
         assert any(f.get("phrase") == "treasure trove" for f in record["findings"])
+        assert all("phrase_sha256" not in f for f in record["findings"] if f.get("phrase") == "treasure trove")
+
+    def test_structural_span_is_hashed_not_copied_into_jsonl(self, tmp_path):
+        """Structural regexes copy operator prose into match.group(); JSONL
+        must store a hash, not the span. Banned-phrase keys stay as phrase.
+        """
+        metrics = tmp_path / "unslop.jsonl"
+        probe = build_unslop_probe({"unslop": {"enabled": True, "metrics_path": str(metrics)}})
+        span = "the real problem is"
+        result = probe("The real problem is that we shipped late.", {}, 1)
+        assert "nudge" in result
+        lines = metrics.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        structural = [f for f in record["findings"] if "phrase_sha256" in f]
+        assert structural
+        assert all("phrase" not in f for f in structural)
+        assert all(isinstance(f.get("phrase_chars"), int) and f["phrase_chars"] > 0 for f in structural)
+        blob = metrics.read_text(encoding="utf-8").casefold()
+        assert span not in blob
+        assert "that we shipped late" not in blob
 
     def test_no_nudge_for_clean_prose(self, tmp_path):
         metrics = tmp_path / "unslop.jsonl"
