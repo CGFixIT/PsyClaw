@@ -1878,7 +1878,8 @@ def create_app(
             raise _auth_http(
                 _HTTP_FORBIDDEN,
                 "AUTH_LOOPBACK_ONLY",
-                "first password must be set from this machine",
+                "first password must be set from this machine "
+                "without reverse-proxy forwarding headers",
             )
         try:
             login_result = manager.bootstrap_set_password(req.password)
