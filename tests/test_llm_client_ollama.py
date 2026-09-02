@@ -217,7 +217,13 @@ class TestResolveLocalBackendFailoverAgainstRealHTTPServer:
         yield
         reset_local_backend_cache()
 
-    def test_resolve_fails_over_to_a_live_fallback_when_primary_is_refused(self, mock_ollama):
+    def test_resolve_fails_over_to_a_live_fallback_when_primary_is_refused(self, mock_ollama, monkeypatch):
+        # A successful failover makes resolve_local_backend call audit_log with
+        # no config_path/cfg override, which would otherwise read this repo's
+        # real config.yaml and append a real line to logs/audit.jsonl and
+        # logs/numbat-events.ndjsonl -- same no-op pattern test_client.py
+        # already uses for this exact code path.
+        monkeypatch.setattr("utils.logger.audit_log", lambda *a, **k: None)
         dead_primary_port = _refused_port()
         fallback_url, fallback_server = mock_ollama([])
         llm_cfg = {
