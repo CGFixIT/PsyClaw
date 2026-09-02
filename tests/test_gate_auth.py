@@ -131,6 +131,19 @@ class TestBootstrapPassword:
         again = client.post("/auth/bootstrap-password", json={"password": _GOOD_PASSWORD})
         assert again.status_code == 409
 
+    def test_loopback_proxied_is_forbidden(self, manager):
+        manager.bootstrap_if_empty()
+        app = _make_app(manager)
+        client = TestClient(app, base_url=_base_url(), client=("127.0.0.1", 50000))
+        r = client.post(
+            "/auth/bootstrap-password",
+            json={"password": _GOOD_PASSWORD},
+            headers={"X-Forwarded-For": "8.8.8.8"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+        assert manager.needs_password_setup() is True
+
     def test_non_loopback_is_forbidden(self, manager):
         manager.bootstrap_if_empty()
         app = _make_app(manager)

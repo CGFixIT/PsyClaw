@@ -775,6 +775,26 @@ def test_harness_bootstrap_password_from_loopback(tmp_path, monkeypatch, cfg):
     assert r.json()["username"] == "admin"
 
 
+def test_harness_bootstrap_password_rejects_proxied_loopback(tmp_path, monkeypatch, cfg):
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    app = harness_server.create_app(cfg, _chat())
+    loop = TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+    denied = loop.post(
+        "/api/auth/bootstrap-password",
+        json={"password": "correct horse battery staple"},
+        headers={"X-Forwarded-For": "8.8.8.8"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+    ok = loop.post("/api/auth/bootstrap-password", json={"password": "correct horse battery staple"})
+    assert ok.status_code == 200
+
+
 def test_duplicate_create_is_409_not_an_unhandled_500(tmp_path, monkeypatch, cfg):
     """A duplicate username on the harness console must answer 409, as
     gate_auth.py's equivalent route already did.

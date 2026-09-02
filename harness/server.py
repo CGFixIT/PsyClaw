@@ -1874,7 +1874,7 @@ def create_app(
         request: Request, response: Response, req: AuthSetPasswordRequest
     ) -> dict:
         manager = _require_harness_auth()
-        if not _is_loopback_peer(request):
+        if not _is_loopback_peer(request) or _looks_proxied(request):
             raise _auth_http(
                 _HTTP_FORBIDDEN,
                 "AUTH_LOOPBACK_ONLY",
