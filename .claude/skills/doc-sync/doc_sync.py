@@ -46,6 +46,34 @@ def ok(check: str, detail: str) -> None:
     print(f"  ok    [{check}] {detail}")
 
 
+def _d7_labels_for_key(key: str) -> list[str]:
+    # Regex fragments that name this key in the M5 doctrine.
+    if key == "macos.OLLAMA_CONTEXT_LENGTH":
+        return [r"OLLAMA_CONTEXT_LENGTH"]
+    if key == "models.local_llm.model":
+        return [r"model", r"local_llm", r"qwen"]
+    segment = re.escape(key.rsplit(".", 1)[-1])
+    if key == "api.graph_timeout_sec":
+        return [segment, r"graph\s+timeout"]
+    if key == "models.local_llm.timeout_sec":
+        return [segment, r"timeout"]
+    return [segment]
+
+
+def _d7_value_key_adjacent(doc: str, key: str, value: object) -> bool:
+    # Value must sit on a line that names the key (or on the next line).
+    val = re.escape(str(value))
+    val_pat = rf"(?<!\d){val}(?!\d)"
+    label_pat = "(?:" + "|".join(_d7_labels_for_key(key)) + ")"
+    same = re.compile(
+        rf"(?im)^.*(?:{label_pat}).*{val_pat}.*$|^.*{val_pat}.*(?:{label_pat}).*$"
+    )
+    if same.search(doc):
+        return True
+    nxt = re.compile(rf"(?im)^.*(?:{label_pat}).*\n[^\n]*{val_pat}")
+    return nxt.search(doc) is not None
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--repo-root", type=Path, default=None)
@@ -149,11 +177,12 @@ def main(argv: list[str] | None = None) -> int:
             missing = [
                 f"{key}={value}"
                 for key, value in expected.items()
-                if str(value) not in m5_doc
+                if not _d7_value_key_adjacent(m5_doc, key, value)
             ]
             if missing:
                 note("D7", "config.yaml + macos/ollama-mlx.env",
-                     "M5 doctrine omits shipped value(s): " + ", ".join(missing))
+                     "M5 doctrine omits shipped value(s) next to their keys: "
+                     + ", ".join(missing))
             else:
                 ok("D7", "M5 doctrine cites all shipped context-budget and timeout values")
 
