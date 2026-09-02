@@ -13,7 +13,10 @@
 #       manifest -- the class dep-guard structurally cannot see, because it
 #       reads manifests and never reads imports
 #   E4  the install-surface SCOPE contract (which surface may carry extras)
-#   E5  the Docker build's dependency-install contract
+#   E5  the Docker build's dependency-install contract, including the
+#       fallback torch pre-install held in lock-step with constraints.txt
+#   E6  the rest of the Docker surface -- docker-compose.yml, .dockerignore,
+#       and publish-ghcr.yml -- agreeing with the Dockerfile and each other
 #
 # Pure stdlib, no network, no install required -- same constraints dep-guard
 # and extract_pins.py hold, so this runs in a fresh clone before pip does.
@@ -21,6 +24,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import re
 import sys
 from pathlib import Path
@@ -187,7 +191,7 @@ _DIST_ALIAS = {
     "celpy": "cel-python",
 }
 # Only first-party runtime source is in scope. Skipping by name alone is
-# fragile -- the venv in this tree is ".venv312", not ".venv" -- so the rule is
+# fragile -- the venv in this tree was once ".venv312", not ".venv" -- so the rule is
 # structural: any hidden directory, any build output, and any directory that
 # IS a virtualenv (identified by its own pyvenv.cfg, whatever it is named).
 _SKIP_DIRS = ("tests/", "docs/", "build/", "dist/", "site-packages/")
@@ -313,7 +317,7 @@ def check_docker_install_contract() -> None:
     }
     missing = [label for label, fragment in required.items() if fragment not in text]
     cpu_torch = re.search(
-        r"pip\s+install\s+--no-cache-dir\s+torch==\S+\s+--index-url\s+"
+        r"pip\s+install\s+--no-cache-dir\s+torch==(\S+)\s+--index-url\s+"
         r"https://download\.pytorch\.org/whl/cpu",
         text,
     )
@@ -321,11 +325,150 @@ def check_docker_install_contract() -> None:
         missing.append("installs fallback CPU torch from the PyTorch CPU index")
     if missing:
         fail("E5", "Dockerfile dependency contract missing: " + "; ".join(missing))
-    elif re.search(r"requirements-test\.txt", text):
+        return
+    if re.search(r"requirements-test\.txt", text):
         fail("E5", "Dockerfile must not copy or install requirements-test.txt -- "
                    "the production image stays test-tool-free")
+        return
+    ok("E5", "Docker copies manifests and uses requirements.txt + constraints.txt in both install paths")
+
+    # The fallback's explicit torch pre-install and constraints.txt's torch pin
+    # must move together. The Dockerfile's own comment records the miss this
+    # guards: constraints moved 2.12.1 -> 2.13.0, the fallback line stayed
+    # behind, and the fallback path installed the old wheel and then failed
+    # the constrained resolve. A check that only asks "is there some
+    # torch==" is exactly the check that passed that tree.
+    constraints = REPO / "constraints.txt"
+    if not constraints.is_file():
+        info("E5", "no constraints.txt beside the Dockerfile; torch lock-step not checked")
+        return
+    pin = re.search(r"(?m)^torch==(\S+)", constraints.read_text(encoding="utf-8"))
+    if not pin:
+        fail("E5", "constraints.txt carries no torch== pin to hold the Dockerfile fallback to")
+    elif pin.group(1) != cpu_torch.group(1):
+        fail("E5", f"Dockerfile fallback pre-installs torch=={cpu_torch.group(1)} but constraints.txt "
+                   f"pins torch=={pin.group(1)} -- keep the two in lock-step on every torch bump")
     else:
-        ok("E5", "Docker copies manifests and uses requirements.txt + constraints.txt in both install paths")
+        ok("E5", f"Dockerfile fallback torch=={pin.group(1)} matches the constraints.txt pin")
+
+
+# --- E6: the rest of the Docker surface must agree with the Dockerfile --------
+# The Dockerfile is the install; docker-compose.yml is how the image runs,
+# .dockerignore is what the build may see, and publish-ghcr.yml is how the
+# image reaches the registry the compose file pulls from. Each is edited on
+# its own and nothing cross-checks them. The failures this catches are quiet
+# ones: a runtime-state directory dropped from .dockerignore bakes private
+# corpus vectors into a published image; a mount dropped from compose leaves
+# /query with no index under the read-only root fs (503, healthcheck green);
+# a version bump that skips the compose default makes `docker compose pull`
+# fetch the previous release beside newer source.
+#
+# The runtime-state directories .dockerignore keeps out of image layers and
+# docker-compose.yml must therefore mount back in. "data" covers the
+# data/personality and data/agentic exclusions; ".emb_cache" is the named
+# volume behind models.embeddings.cache_dir.
+_RUNTIME_STATE_DIRS = ("logs", "checkpoints", "index", "data", ".emb_cache")
+# The build stage COPYs exactly these before installing (E5's first fragment).
+_COPIED_MANIFESTS = ("pyproject.toml", "constraints.txt", "requirements.txt")
+
+
+def _ignore_patterns(dockerignore: Path) -> list[str]:
+    lines = (ln.strip() for ln in dockerignore.read_text(encoding="utf-8").splitlines())
+    return [ln for ln in lines if ln and not ln.startswith(("#", "!"))]
+
+
+def check_docker_surface_coherence() -> None:
+    print("E6 docker-compose.yml, .dockerignore, and publish-ghcr.yml agree with the Dockerfile")
+    dockerfile = REPO / "Dockerfile"
+    compose = REPO / "docker-compose.yml"
+    dockerignore = REPO / ".dockerignore"
+    publish = WORKFLOWS / "publish-ghcr.yml"
+    if not (compose.is_file() or dockerignore.is_file() or publish.is_file()):
+        info("E6", "no docker-compose.yml, .dockerignore, or publish-ghcr.yml -- the Docker surface is the "
+                   "Dockerfile alone")
+        return
+    docker_text = dockerfile.read_text(encoding="utf-8") if dockerfile.is_file() else ""
+
+    if dockerignore.is_file():
+        patterns = _ignore_patterns(dockerignore)
+        excluded = [m for m in _COPIED_MANIFESTS if any(fnmatch.fnmatch(m, p.strip("/")) for p in patterns)]
+        if excluded:
+            fail("E6", f".dockerignore excludes {excluded}, which the Dockerfile COPYs before installing")
+        else:
+            ok("E6", ".dockerignore keeps the three COPYed manifests in the build context")
+        not_ignored = [d for d in _RUNTIME_STATE_DIRS
+                       if not any(p.strip("/") == d or p.strip("/").startswith(d + "/") for p in patterns)]
+        if not_ignored:
+            fail("E6", f".dockerignore no longer excludes runtime state {not_ignored} -- index, personality, "
+                       f"and agentic state must never enter image layers")
+        else:
+            ok("E6", f".dockerignore excludes every runtime-state directory {list(_RUNTIME_STATE_DIRS)}")
+    else:
+        info("E6", "no .dockerignore; build-context checks skipped")
+
+    image = None
+    if compose.is_file():
+        compose_text = compose.read_text(encoding="utf-8")
+        # Host exposure stays loopback: the container binds 0.0.0.0 so
+        # docker-proxy can reach uvicorn, and the loopback invariant lives at
+        # this host boundary (Dockerfile CMD comment, docs/THREAT_MODEL.md).
+        publishes = re.findall(r'(?m)^\s*-\s*"?((?:[\d.]+:)?)(\d+):(\d+)"?\s*$', compose_text)
+        if not publishes:
+            fail("E6", "docker-compose.yml publishes no port -- the loopback publish is how the host reaches uvicorn")
+        for host, host_port, _ in publishes:
+            if host != "127.0.0.1:":
+                fail("E6", f"docker-compose.yml publishes {host or '0.0.0.0:'}{host_port} -- host exposure must stay "
+                           f"127.0.0.1 (loopback invariant)")
+        expose = re.search(r"(?m)^EXPOSE\s+(\d+)", docker_text)
+        cmd_port = re.search(r'"--port",\s*"(\d+)"', docker_text)
+        ports = {
+            "Dockerfile EXPOSE": expose.group(1) if expose else None,
+            "Dockerfile CMD --port": cmd_port.group(1) if cmd_port else None,
+        } | {f"compose publish[{i}]": container for i, (_, _, container) in enumerate(publishes)}
+        distinct = {v for v in ports.values() if v}
+        if len(distinct) > 1:
+            fail("E6", f"container port disagrees across the Docker surface: {ports}")
+        elif distinct and publishes and all(h == "127.0.0.1:" for h, _, _ in publishes):
+            ok("E6", f"loopback publish; container port {next(iter(distinct))} agrees across EXPOSE, CMD, and compose")
+
+        unmounted = [d for d in _RUNTIME_STATE_DIRS
+                     if not re.search(rf"(?m):/app/{re.escape(d)}(?::|\s|$)", compose_text)]
+        if unmounted:
+            fail("E6", f"docker-compose.yml mounts nothing at /app/{{{', '.join(unmounted)}}} -- .dockerignore "
+                       f"keeps these out of the image, so an unmounted one is simply absent at runtime")
+        else:
+            ok("E6", "docker-compose.yml mounts every runtime-state directory .dockerignore excludes")
+
+        image = re.search(r"(?m)^\s*image:\s*(\S+?):\$\{CYCLAW_IMAGE_TAG:-([^}]+)\}", compose_text)
+        pyproject = REPO / "pyproject.toml"
+        version = (re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject.read_text(encoding="utf-8"))
+                   if pyproject.is_file() else None)
+        if not image:
+            fail("E6", "docker-compose.yml image: is not the documented `<name>:${CYCLAW_IMAGE_TAG:-<default>}` "
+                       "form (docs/DOCKER.md)")
+        elif version and image.group(2) != version.group(1):
+            fail("E6", f"docker-compose.yml default CYCLAW_IMAGE_TAG is {image.group(2)} but pyproject.toml "
+                       f"version is {version.group(1)} -- `docker compose pull` would fetch the previous release")
+        elif version:
+            ok("E6", f"docker-compose.yml default CYCLAW_IMAGE_TAG {image.group(2)} matches pyproject.toml")
+    else:
+        info("E6", "no docker-compose.yml; runtime-mount, port, and image-tag checks skipped")
+
+    if publish.is_file():
+        ptext = publish.read_text(encoding="utf-8")
+        build_file = re.search(r"(?m)^\s*file:\s*(\S+)", ptext)
+        if build_file and build_file.group(1).lstrip("./") != "Dockerfile":
+            fail("E6", f"publish-ghcr.yml builds {build_file.group(1)}, not the repo Dockerfile E5 verifies")
+        image_name = re.search(r"(?m)^\s*IMAGE_NAME:\s*(\S+)", ptext)
+        if not image_name:
+            warn("E6", "publish-ghcr.yml declares no IMAGE_NAME; cannot tie it to docker-compose.yml's image")
+        elif image and image_name.group(1) != image.group(1):
+            fail("E6", f"publish-ghcr.yml pushes {image_name.group(1)} but docker-compose.yml pulls "
+                       f"{image.group(1)} -- the published image would never be the one compose runs")
+        elif image:
+            ok("E6", f"publish-ghcr.yml pushes the image docker-compose.yml pulls ({image_name.group(1)})")
+    else:
+        info("E6", "no publish-ghcr.yml; registry-name check skipped")
 
 
 def main() -> int:
@@ -335,6 +478,7 @@ def main() -> int:
     check_undeclared_imports()
     check_install_surface_scope()
     check_docker_install_contract()
+    check_docker_surface_coherence()
     print()
     print(f"{len(failures)} failure(s), {len(warnings)} warning(s)")
     if "--strict" in sys.argv and warnings and not failures:

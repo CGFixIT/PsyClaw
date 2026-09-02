@@ -81,7 +81,7 @@ add a node with a path to `END` that skips it. Every query — including the
 `user_gate` pause — must emit an audit event.
 
 **Proven by:** `TestAuditConvergence.test_every_path_emits_an_audit_event` (property
-sweep over all four terminal path configurations) and
+sweep over all five terminal path configurations) and
 `test_audit_logger_edges_to_end_only`. Also invariant-guard I4.
 
 ---

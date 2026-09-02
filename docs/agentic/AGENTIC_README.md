@@ -250,7 +250,7 @@ invariant-touching work.
   uncapped diary that then gets stuffed back into the 16k window.
 
 Paging (optional): write a short schema (`goal`, I6 constraints, files,
-`last_error`, `next_edit`) to the run workspace or `docs/SESSION_NOTES.md`
+`last_error`, `next_edit`) to the run workspace or `docs/work/SESSION_NOTES.md`
 **before** compacting chat. Do not invent a fourth memory store. Do not send
 that file to a cloud planner without `--confirm-online`.
 

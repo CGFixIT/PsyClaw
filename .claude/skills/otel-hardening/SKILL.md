@@ -73,7 +73,7 @@ these values silence vendor telemetry readers; they do not close sockets.
    bash .claude/skills/otel-hardening/verify.sh
    ```
 
-   21 scenarios; every rule has a mutation that must flip it, and each
+   22 scenarios; every rule has a mutation that must flip it, and each
    mutation asserts it actually changed the file (two historical silent-no-op
    sed bugs are why).
 

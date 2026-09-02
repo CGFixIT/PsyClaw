@@ -25,7 +25,7 @@ COPY pyproject.toml constraints.txt requirements.txt ./
 # uv's project commands like `uv sync` do) -- verified via dry-run, 2026-07,
 # `uv pip install -r pyproject.toml` fails outright with "no version of
 # torch==2.13.0+cpu". This build stage also hasn't COPYed the actual source yet
-# (line 16 copies manifests only), so `-e .` couldn't build the cyclaw wheel
+# (line 20 copies manifests only), so `-e .` couldn't build the cyclaw wheel
 # here regardless. requirements.txt's own --extra-index-url line resolves the
 # CPU wheel correctly for both the uv and pip paths below.
 # Fallback to plain pip pre-installs the CPU torch wheel explicitly (mirrors

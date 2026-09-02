@@ -748,6 +748,7 @@ python3 .claude/skills/invariant-guard/check_invariants.py
 python3 .claude/skills/config-guard/check_config.py     # add --strict to lock shipped defaults
 python3 .claude/skills/dep-guard/check_deps.py          # pure stdlib; runs pre-install
 python3 .claude/skills/verify-deps/extract_pins.py      # requirements.txt cross-check; add --json
+python3 .claude/skills/verify-deps/check_env_drift.py   # non-manifest drift E1-E6 incl. the Docker surface; add --strict
 python3 .claude/skills/doc-sync/doc_sync.py
 python3 .claude/skills/index-doctor/doctor.py --rebuild
 python3 .claude/skills/injection-redteam/redteam.py
@@ -762,7 +763,7 @@ steps in the nemo-guardrails/pr-review/conda/trivy workflows. Coverage sources:
 `gate`, `gate_ops`, `gate_auth`, `gate_memory`, `graph`, `mcp_hybrid_server`, `metrics`, `llm`, `retrieval`,
 `utils`, `sync`, `agentic`, `guardrails`, `harness`, `telegram`, `opentweet`, `memory`. `tests/conftest.py` mocks
 all external deps — no live services required. The full test-file list is
-discoverable in `tests/` (209 `test_*.py` files, auto-collected by pytest).
+discoverable in `tests/` (217 `test_*.py` files, auto-collected by pytest).
 
 ---
 
@@ -779,11 +780,11 @@ the local sandbox, **check GitHub main before declaring it absent** (via
 | `/invariant-guard` | check | Static-assert the six invariants + guards against a diff | Yes (stdlib) |
 | `/config-guard` | check | Static-validate config.yaml's relational/value/threat-model contract (graph_timeout>llm_timeout, chunk_overlap<chunk_size, RRF-scale min_score, loopback host, safe posture, `api_key_optional` vs. the bind address) | Needs PyYAML |
 | `/dep-guard` | check | Static-validate dependency-pin invariants across pyproject + constraints + environment.yml (pydantic lock-step, numpy<2, torch +cpu, uvicorn no-extras, cross-file agreement) | Yes (stdlib) |
-| `/verify-deps` | check | Extends dep-guard: adds the requirements.txt cross-check dep-guard skips, a dry-run of each install surface's actual command, and a PyPI currency + CVE sweep. Reports only — never auto-bumps a runtime pin | extract_pins.py yes (stdlib); currency sweep needs network |
+| `/verify-deps` | check | Extends dep-guard: adds the requirements.txt cross-check dep-guard skips, the non-manifest drift checks E1–E6 (workflow tool pins, Python version, undeclared imports, install-surface scope, the Dockerfile install contract incl. its torch pin vs constraints.txt, and docker-compose.yml/.dockerignore/publish-ghcr.yml coherence with the Dockerfile), a dry-run of each install surface's actual command, and a PyPI currency + CVE sweep. Reports only — never auto-bumps a runtime pin | extract_pins.py + check_env_drift.py yes (stdlib); currency sweep needs network |
 | `/injection-redteam` | loop | Adversarial probe corpus vs the sanitizer; close bypasses | Needs venv |
 | `/index-doctor` | check | Rebuild + validate ChromaDB/BM25/RRF; probe retrieval health | Needs venv |
 | `/doc-sync` | check | Detect code↔docs drift; reconcile the docs | Needs PyYAML |
-| `/otel-hardening` | check + task | Validate the full telemetry-kill contract: an independent name→value oracle over both canonical maps + the scrub set, staleness (`--as-of`), pin drift, reference-`.env` format/values, Docker/launcher/generator delivery, programmatic-bypass sweep, ONNX seams, and a category-1–5 egress classification of every dependency/executable/connector/launcher (strict mode fails on an unclassified one); then the live vendor-doc sweep. 21-scenario mutation self-test in `verify.sh` | Yes (stdlib) for the static half; live sweep needs network |
+| `/otel-hardening` | check + task | Validate the full telemetry-kill contract: an independent name→value oracle over both canonical maps + the scrub set, staleness (`--as-of`), pin drift, reference-`.env` format/values, Docker/launcher/generator delivery, programmatic-bypass sweep, ONNX seams, and a category-1–5 egress classification of every dependency/executable/connector/launcher (strict mode fails on an unclassified one); then the live vendor-doc sweep. 22-scenario mutation self-test in `verify.sh` | Yes (stdlib) for the static half; live sweep needs network |
 
 ### Operational & workflow skills
 
