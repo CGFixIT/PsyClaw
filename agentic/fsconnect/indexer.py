@@ -53,6 +53,20 @@ class FsIndexer:
         self.index_root = fs_cfg.index_root
         self._patterns = build_injection_patterns(cfg) if fs_cfg.scan_content else []
 
+    def _bind_skipped_stat_sink(self, roots: ScopedRoots) -> None:
+        def _sink(where: str, count: int, names: list[str]) -> None:
+            audit_log(
+                {
+                    "event": "fsconnect_skipped_stat",
+                    "where": where,
+                    "count": count,
+                    "sample_names": names,
+                },
+                self.config_path,
+            )
+
+        roots._skipped_stat_sink = _sink
+
     def _scan(self, data: bytes) -> int:
         if not self._patterns:
             return 0
@@ -140,6 +154,7 @@ class FsIndexer:
             allow_unc=self.fs_cfg.allow_unc_roots,
             allow_macos_volume_roots=self.fs_cfg.allow_macos_volume_roots,
         ) as roots:
+            self._bind_skipped_stat_sink(roots)
             self._walk(roots, "", manifest)
         eligible = [m for m in manifest if "skipped" not in m]
         audit_log({"event": "fsconnect_index_scan", "index_root": self.index_root,
@@ -231,6 +246,7 @@ class FsIndexer:
             allow_unc=self.fs_cfg.allow_unc_roots,
             allow_macos_volume_roots=self.fs_cfg.allow_macos_volume_roots,
         ) as roots:
+            self._bind_skipped_stat_sink(roots)
             # Single pass: _walk reads each CHANGED file once and hands the bytes
             # straight to _stage (bounded memory -- one file held at a time).
             self._walk(roots, "", manifest, on_file=_stage, cached_entry_for=probe)
