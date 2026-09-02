@@ -1131,6 +1131,8 @@ async function proposeSoulEvolution() {
     return;
   }
   if (!reason) {
+    pendingSoulProposal = null;
+    proposalBox.style.display = 'none';
     setSoulStatus('A reason is required.', 'error');
     return;
   }

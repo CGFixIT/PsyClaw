@@ -319,6 +319,9 @@ def test_propose_soul_refuses_empty_reason():
     assert "/soul/propose" in body
     before_fetch, _after = body.split("`${API}/soul/propose`", 1)
     assert "if (!reason)" in before_fetch
+    reason_guard = before_fetch.split("if (!reason)", 1)[1].split("return;", 1)[0]
+    assert "pendingSoulProposal = null" in reason_guard
+    assert "proposalBox.style.display = 'none'" in reason_guard
     assert "return;" in before_fetch
 
 
