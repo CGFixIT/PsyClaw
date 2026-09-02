@@ -502,6 +502,7 @@ def register_auth_routes(
 
     @app.get("/auth/whoami", dependencies=[Depends(enforce_rate_limit), Depends(_enforce_same_origin)])
     async def auth_whoami(
+        response: Response,
         username: str = Depends(require_session_or_token),
         cyclaw_session: str | None = Cookie(default=None),
     ) -> AuthWhoamiResponse:
@@ -519,6 +520,10 @@ def register_auth_routes(
             session_info = await asyncio.to_thread(manager.validate_session, cyclaw_session)
             if session_info is not None and session_info.username == username:
                 csrf_token = await asyncio.to_thread(manager.rotate_csrf, cyclaw_session)
+        # whoami now returns a CSRF secret. The gate middleware only marks
+        # / and /static/* no-store; a cached GET would replay a token the
+        # server already rotated away (same lockout this rotate exists to close).
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         return AuthWhoamiResponse(username=username, role=role, csrf_token=csrf_token)
 
     def _record_from_user(user: UserSummary) -> AuthUserRecord:

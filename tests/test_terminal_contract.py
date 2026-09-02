@@ -209,6 +209,7 @@ def test_whoami_success_stores_rotated_csrf():
     must assign whoami's csrf_token or logout/Users writes 403 while logged in."""
     js = _TERMINAL_JS.read_text(encoding="utf-8")
     assert "csrfToken = data.csrf_token || null" in js
+    assert "fetchWithTimeout(`${API}/auth/whoami`, { cache: 'no-store' }, 5000)" in js
 
 
 def test_login_form_controls_exist():

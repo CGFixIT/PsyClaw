@@ -541,6 +541,7 @@ class TestWhoami:
         assert r.status_code == 200
         assert r.json()["username"] == username
         assert r.json()["csrf_token"]
+        assert "no-store" in r.headers.get("cache-control", "").lower()
 
     def test_whoami_rotates_csrf_so_a_reload_can_logout(self, manager, user):
         """Login plaintext is issued once; the DB stores only the hash. After
@@ -568,6 +569,7 @@ class TestWhoami:
         assert r.status_code == 200
         assert r.json()["username"] == username
         assert r.json().get("csrf_token") is None
+        assert "no-store" in r.headers.get("cache-control", "").lower()
 
     def test_no_credentials_is_401(self, manager):
         r = _client(manager).get("/auth/whoami")

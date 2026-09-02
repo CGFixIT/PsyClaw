@@ -107,7 +107,7 @@ function hideAuthBoxes() {
 
 async function refreshAuthUi() {
   try {
-    const resp = await fetchWithTimeout(`${API}/auth/whoami`, {}, 5000);
+    const resp = await fetchWithTimeout(`${API}/auth/whoami`, { cache: 'no-store' }, 5000);
     if (resp.status === 503) {
       hideAuthBoxes();
       csrfToken = null;
