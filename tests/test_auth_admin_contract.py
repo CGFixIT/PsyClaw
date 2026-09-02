@@ -12,9 +12,8 @@ because the failure they guard against is invisible to any server-side test.
 
 from pathlib import Path
 
-import gate
-
-_AUTH_ADMIN_JS = Path(gate.__file__).resolve().parent / "static" / "auth_admin.js"
+_STATIC = Path(__file__).resolve().parent.parent / "static"
+_AUTH_ADMIN_JS = _STATIC / "auth_admin.js"
 
 
 def _source() -> str:
@@ -62,6 +61,36 @@ def test_mutate_checks_status_and_handles_an_unreachable_gateway():
     body = js.split("function mutate(", 1)[1].split("\n    }", 1)[0]
     assert "resp.ok" in body, "mutate() must check the response status"
     assert ".catch(" in body, "mutate() must handle an unreachable gateway"
+
+
+def test_failed_mutations_and_create_await_structured_error_details():
+    js = _source()
+    mutate_body = js.split("function mutate(", 1)[1].split("\n    }", 1)[0]
+    create_body = js.split('createBtn.addEventListener("click"', 1)[1].split("\n    });", 1)[0]
+    assert "if (failed) onStatus(await failureMessage(label, resp));" in mutate_body
+    assert 'if (failed) onStatus(await failureMessage("create", resp));' in create_body
+    for body in (mutate_body, create_body):
+        assert body.index("await failureMessage(") < body.index("return reload(failed);")
+
+
+def test_error_details_keep_status_and_ignore_non_json_or_unsafe_fields():
+    body = _source().split("async function failureMessage(", 1)[1].split("\n    }", 1)[0]
+    assert 'label + " failed (" + resp.status + ")"' in body
+    assert "data = await resp.json();" in body
+    assert "catch (_) {\n        return fallback;" in body
+    assert "const detail = data && data.detail;" in body
+    assert 'if (!detail || Array.isArray(detail) || typeof detail !== "object") return fallback;' in body
+    assert 'typeof detail.code === "string" ? detail.code : ""' in body
+    assert 'typeof detail.message === "string" ? detail.message : ""' in body
+    assert '[code, message].filter(Boolean).join(": ")' in body
+    assert 'return summary ? fallback + ": " + summary : fallback;' in body
+    assert "JSON.stringify" not in body, "error rendering must not dump response objects"
+    assert "resp.text(" not in body, "non-JSON responses must not expose raw response text"
+    assert "detail.details" not in body, "nested error details can contain credentials"
+
+
+def test_auth_admin_uses_text_rendering_only():
+    assert "innerHTML" not in _source()
 
 
 def test_the_initial_paint_reports_its_own_failure():
@@ -120,8 +149,9 @@ def test_reload_surfaces_list_failures_and_clears_on_success():
 def test_embedders_pass_an_onStatus_callback():
     """Both terminal.html and harness.html instantiate the shared panel with a
     real status callback; without one the default no-op swallows errors."""
-    static = Path(gate.__file__).resolve().parent / "static"
     for filename in ("terminal.js", "harness.html"):
-        text = (static / filename).read_text(encoding="utf-8")
+        text = (_STATIC / filename).read_text(encoding="utf-8")
         assert "onStatus:" in text, f"{filename} does not pass onStatus to CyClawAuthAdmin.render"
         assert "usersPanelStatus" in text, f"{filename} is missing the usersPanelStatus node"
+        status_callback = text.split("onStatus: function (msg)", 1)[1].split("\n      }", 1)[0]
+        assert "el.textContent = msg;" in status_callback, f"{filename} must render status as text"

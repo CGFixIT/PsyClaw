@@ -1066,7 +1066,6 @@ def create_app(
 
     @app.post("/api/web/fetch", dependencies=guarded)
     def web_fetch(req: _harness_schemas.WebUrlRequest, request: Request) -> dict:
-        _enforce_rate_limit(request)
         try:
             return web.fetch(req.url)
         except WebToolError as exc:
@@ -1074,7 +1073,6 @@ def create_app(
 
     @app.post("/api/web/search", dependencies=guarded)
     def web_search(req: _harness_schemas.WebSearchRequest, request: Request) -> dict:
-        _enforce_rate_limit(request)
         try:
             return web.search(req.query)
         except WebToolError as exc:
