@@ -34,12 +34,13 @@ These are tracked, deliberate exceptions — re-reviewed at every release and en
 - **Guardrails:** any future change introducing `chromadb.HttpClient` or a standalone Chroma server MUST be treated as a security regression and re-open this assessment.
 - **Review date:** next chromadb release or 2026-10-01, whichever comes first.
 
-### nltk 3.10.0 — CVE-2026-12243 / [PYSEC-2026-597](https://osv.dev/vulnerability/PYSEC-2026-597) (Medium)
+### nltk 3.10.3 — pin bump (closes the 3.10.2 CVE cluster)
 
-- **What it is:** a URL-encoded path-traversal reached through `nltk.data.load()` — the loader the punkt sentence tokenizer uses. No fixed release available at the time of writing.
-- **Why accepted:** CyClaw never calls `nltk.data.load()` and never loads punkt. `retrieval/stemmer.py` tokenizes with its own compiled regex (`_WORD_RE`) and imports only `nltk.stem.PorterStemmer`, a pure-Python stemmer that loads no data files; the module comment records that avoiding `nltk.data.load()` was the explicit reason for the hand-rolled tokenizer. The vulnerable code path is unreachable in this deployment.
-- **Not a timing argument:** `tokenize_and_stem()` runs at corpus index time *and* on every keyword query at request time. The acceptance rests on punkt never being loaded at all — not on tokenization being offline-only.
+- **Pin:** `nltk==3.10.3` in `pyproject.toml`, `requirements.txt`, `constraints.txt`, and `environment.yml`. Dockerfile installs from those manifests.
+- **Why bumped:** [#1256](https://github.com/cgfixit/CyClaw/issues/1256). CyClaw-reachable finding is [CVE-2026-81722](https://osv.dev/vulnerability/CVE-2026-81722) (PorterStemmer O(n²) DoS on a long run of `y` plus a matching suffix). `retrieval/stemmer.py` calls `PorterStemmer.stem()` on every keyword query and at index time. The rest of the 3.10.2 cluster (CVE-2026-79675 / 78680 / 79657 / 79676 / 79674 / 78682 / 81726) is the same unpatched pin; those APIs (Stanford JVM wrappers, Graphviz `dot`, pickle loaders, corpus readers, `nltk.data.load` / downloader) are not imported here.
+- **Still true:** CyClaw never calls `nltk.data.load()` and never loads punkt. Tokenization stays on `_WORD_RE`. The old punkt path-traversal (CVE-2026-12243 / PYSEC-2026-597) remains unreachable; `.trivyignore` / `pip-audit` entries for it stay until a post-bump scan proves they are dead. Do not add the 3.10.2 cluster IDs to any ignore list.
 - **Guardrails:** any future change introducing `nltk.data.load()`, `nltk.download()`, or `punkt`/`word_tokenize` MUST be treated as a security regression and re-open this assessment.
+- **Residual:** if CVE-2026-81726 still flags 3.10.3 after merge (advisory text says “through 3.10.3”), re-triage — unused model-artifact APIs; do not pre-ignore.
 - **Review date:** next nltk release or 2026-10-01, whichever comes first.
 
 ## Verification
