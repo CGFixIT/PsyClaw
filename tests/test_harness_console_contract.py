@@ -339,7 +339,8 @@ def test_console_documents_goal_and_loop_slash_commands():
     assert "const MAX_LOOP_TURNS = 5;" in html
     assert "const DEFAULT_LOOP_TURNS = 3;" in html
     assert "const LOOP_COOLDOWN_MS = 2000;" in html
-    assert "const MAX_LOOP_COMPLETION_TOKENS = 12000;" in html
+    assert "const MAX_LOOP_TOTAL_COMPLETION_TOKENS = 12000;" in html
+    assert "loopState.completionTokens >= MAX_LOOP_TOTAL_COMPLETION_TOKENS" in html
     assert "body.loop = true" in html
     assert "LOOP_RATE_LIMIT" in html
     assert "CHAT_BUSY" in html
@@ -348,6 +349,19 @@ def test_console_documents_goal_and_loop_slash_commands():
     assert "new AbortController()" in html
     assert "aborting the in-flight turn" in html
     assert "function paintGoalLoop()" in html
+
+
+def test_chat_request_leaves_generation_budget_to_server():
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    body = html.split("async function sendChat(text, asLoop)", 1)[1].split(
+        "function isLoopStopCommand", 1
+    )[0]
+    assert "const body = { message: text, session_id: currentSession };" in body
+    assert "if (asLoop) body.loop = true;" in body
+    assert "api('/api/chat', 'POST', body)" in body
+    assert "max_tokens" not in body
+    assert "/api/agent/" not in body
+    assert set(re.findall(r"body\.(\w+)\s*=", body)) == {"loop"}
 
 
 def test_console_documents_tools_slash_command():

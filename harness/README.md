@@ -94,9 +94,17 @@ onto the `/api/*` routes in the table above.
 ```
 
 `/loop` is separately rate-limited (default 8 turns / 300s). Turns send
-`{"loop": true}`, use a 2048-token output budget and a clipped history
-window, and share a process-wide single-generation lock with ordinary chat
-so Metal is never double-booked. A loop without a goal is `400 LOOP_REQUIRES_GOAL`.
+`{"loop": true}` without a client `max_tokens` value. The server controls the
+per-turn generation budget: 2048 tokens by default, or the operator's existing
+`api.harness_loop_rate_limit.max_tokens` override. Loop turns use a clipped
+history window and share a process-wide single-generation lock with ordinary
+chat so Metal is never double-booked. A loop without a goal is `400 LOOP_REQUIRES_GOAL`.
+
+The browser separately caps each loop at 5 turns and stops further turns once
+reported **aggregate completion usage** reaches 12,000 tokens. This check runs
+after a reply, so the final turn can take the total above that threshold. It is
+not a per-generation allowance and remains useful when the server's per-turn
+budget is configured above its default.
 
 ### Operator memory (off by default)
 

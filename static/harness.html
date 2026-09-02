@@ -293,7 +293,9 @@ const DEFAULT_LOOP_TURNS = 3;
 /* Local 27b (qwen3.8:27b-mlx on Apple Silicon) needs a breath between auto
    turns so /loop stop can land and Metal is not hammered. */
 const LOOP_COOLDOWN_MS = 2000;
-const MAX_LOOP_COMPLETION_TOKENS = 12000;
+/* Aggregate reported completion usage across turns, checked after each reply.
+   The server separately controls each turn's generation budget. */
+const MAX_LOOP_TOTAL_COMPLETION_TOKENS = 12000;
 const MAX_LOOP_FAILURES = 2;
 const LOOP_RETRY_CAP_SEC = 30;
 /* Client deadlines for routes that block on a server-side subprocess
@@ -694,7 +696,7 @@ const COMMANDS = [
   ['/soul on|off|status', 'soul.md in system prompt (not /memory)'],
   ['/memory [on|off|add|forget|clear]', 'operator notes in prompt (off by default)'],
   ['/goal [text]|clear', 'set, show, or clear the session goal'],
-  ['/loop [n]|stop|auto', 'human-gated chat turns toward the goal'],
+  ['/loop [n]|stop|auto', 'human-gated chat; aggregate completion budget; per-turn budget set by server'],
   ['/model [use <name>]', 'show or select the model'],
   ['/skills [all|<name>]', 'wired harness skills as a diagram'],
   ['/tools [all|<name>]', 'wired harness tools as a diagram'],
@@ -1493,8 +1495,8 @@ async function runLoopTurns() {
         stopLoop('model signaled GOAL_DONE — loop stopped');
         return;
       }
-      if (loopState.completionTokens >= MAX_LOOP_COMPLETION_TOKENS) {
-        stopLoop('loop token budget exhausted (' + loopState.completionTokens + ' completion tokens)');
+      if (loopState.completionTokens >= MAX_LOOP_TOTAL_COMPLETION_TOKENS) {
+        stopLoop('loop aggregate token budget exhausted (' + loopState.completionTokens + ' total completion tokens)');
         return;
       }
       if (loopState.remaining <= 0) {

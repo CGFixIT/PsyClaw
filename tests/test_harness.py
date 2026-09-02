@@ -1031,7 +1031,9 @@ def test_chat_busy_when_generation_already_held(client):
         client.app.state.generation_gate.release()
 
 
-def test_loop_turn_uses_smaller_max_tokens(cfg):
+@pytest.mark.parametrize("settings,expected", [({}, 2048), ({"max_tokens": 6000}, 6000)])
+def test_loop_turn_uses_server_max_tokens(cfg, monkeypatch, settings, expected):
+    monkeypatch.setattr(harness_server, "_loop_rate_limit_settings", lambda: settings)
     captured: list[int] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1055,7 +1057,19 @@ def test_loop_turn_uses_smaller_max_tokens(cfg):
         "/api/chat", json={"message": "loop-now", "session_id": sid, "loop": True}
     ).status_code == 200
     assert captured[0] == 4096
-    assert captured[1] == 2048
+    assert captured[1] == expected
+
+
+@pytest.mark.parametrize("as_loop", [False, True])
+def test_chat_rejects_client_max_tokens(client, as_loop):
+    sid = _goal_session(client)
+    response = client.post("/api/chat", json={
+        "message": "go", "session_id": sid, "loop": as_loop, "max_tokens": 6000,
+    })
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "VALIDATION_ERROR"
+    assert detail["details"]["fields"] == ["(unexpected field)"]
 
 
 def test_loop_history_is_clipped_to_char_budget(cfg, monkeypatch):
