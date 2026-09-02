@@ -36,6 +36,36 @@ def test_nonpositive_days_is_env_error(tmp_path):
     ]) == gen_cert.EXIT_ENV
 
 
+def test_repo_local_custom_keyfile_is_refused(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("utils.gen_cert._REPO_ROOT", tmp_path)
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+
+    def _should_not_run(*_args, **_kwargs):
+        raise AssertionError("unsafe repository-local keyfile must be refused before OpenSSL runs")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _should_not_run)
+    rc = gen_cert.main(["--certfile", "data/tls/cert.pem", "--keyfile", "certs/key.pem"])
+    assert rc == gen_cert.EXIT_ENV
+    assert "outside data/tls" in capsys.readouterr().err
+
+
+def test_force_does_not_bypass_repo_local_keyfile_guard(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr("utils.gen_cert._REPO_ROOT", tmp_path)
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+
+    def _should_not_run(*_args, **_kwargs):
+        raise AssertionError("--force must not write a repository-local key outside data/tls")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _should_not_run)
+    rc = gen_cert.main([
+        "--certfile", "data/tls/cert.pem",
+        "--keyfile", "certs/key.pem",
+        "--force",
+    ])
+    assert rc == gen_cert.EXIT_ENV
+    assert "outside data/tls" in capsys.readouterr().err
+
+
 def test_openssl_timeout_is_reported(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
 

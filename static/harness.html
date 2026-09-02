@@ -179,6 +179,7 @@
           <button class="toggle" id="hAuthLogin" type="button">login</button>
         </span>
         <span id="hAuthWho"></span>
+        <button class="toggle" id="hAuthLogout" type="button" hidden>logout</button>
       </span>
       <div class="pill model">model <b id="hModel">…</b></div>
       <div class="pill">tokens <b id="hTokens">0</b></div>
@@ -1594,6 +1595,10 @@ document.querySelectorAll('.side-tab').forEach(tab => {
 const hAuthLogin = document.getElementById('hAuthLogin');
 const hAuthLoginBox = document.getElementById('hAuthLoginBox');
 const hAuthSetup = document.getElementById('hAuthSetup');
+const hAuthLogout = document.getElementById('hAuthLogout');
+function setHarnessLogoutVisible(on) {
+  if (hAuthLogout) hAuthLogout.hidden = !on;
+}
 /* Both probes are bounded, matching terminal.js's refreshAuthUi. The catch
    below deliberately keeps the last-known UI on failure, but a bare fetch
    against a gateway that accepted the socket and then stalled never settles,
@@ -1607,6 +1612,7 @@ async function refreshHarnessAuth() {
     if (me.status === 503) {
       if (hAuthSetup) hAuthSetup.hidden = true;
       if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      setHarnessLogoutVisible(false);
       if (who) who.textContent = '';
       return;
     }
@@ -1615,6 +1621,7 @@ async function refreshHarnessAuth() {
       window.__cyclawRole = data.role;
       if (hAuthSetup) hAuthSetup.hidden = true;
       if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      setHarnessLogoutVisible(true);
       if (who) who.textContent = data.username + ' · ' + data.role;
       return;
     }
@@ -1624,11 +1631,15 @@ async function refreshHarnessAuth() {
       if (status.needs_password) {
         if (hAuthSetup) hAuthSetup.hidden = false;
         if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+        setHarnessLogoutVisible(false);
         return;
       }
     }
     if (hAuthSetup) hAuthSetup.hidden = true;
     if (hAuthLoginBox) hAuthLoginBox.hidden = false;
+    window.__cyclawRole = null;
+    if (who) who.textContent = '';
+    setHarnessLogoutVisible(false);
   } catch (e) { /* keep last UI */ }
 }
 if (hAuthLogin) {
@@ -1649,10 +1660,26 @@ if (hAuthLogin) {
       if (who) who.textContent = data.username + ' · ' + data.role;
       if (hAuthSetup) hAuthSetup.hidden = true;
       if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      setHarnessLogoutVisible(true);
     } catch (e) {
       pass.value = '';
       if (who) who.textContent = 'network error: login failed';
     }
+  });
+}
+if (hAuthLogout) {
+  hAuthLogout.addEventListener('click', async function () {
+    const headers = { 'Content-Type': 'application/json' };
+    if (CSRF_TOKEN) headers['X-CyClaw-CSRF'] = CSRF_TOKEN;
+    try {
+      const response = await fetchWithTimeout('/api/auth/logout', { method: 'POST', headers: headers }, 15000);
+      if (!response.ok) {
+        const who = document.getElementById('hAuthWho');
+        if (who) who.textContent = 'logout rejected (' + response.status + ')';
+        return;
+      }
+    } catch (e) { /* best-effort; refresh below paints whatever session remains */ }
+    await refreshHarnessAuth();
   });
 }
 const hAuthSetupBtn = document.getElementById('hAuthSetupBtn');
@@ -1678,6 +1705,7 @@ if (hAuthSetupBtn) {
       if (who) who.textContent = data.username + ' · ' + data.role;
       if (hAuthSetup) hAuthSetup.hidden = true;
       if (hAuthLoginBox) hAuthLoginBox.hidden = true;
+      setHarnessLogoutVisible(true);
     } catch (e) {
       if (who) who.textContent = 'network error: could not set password';
     }
