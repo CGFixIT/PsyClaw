@@ -279,6 +279,36 @@ def _windows_schedule_args(cfg: RcloneConfig) -> list[str]:
     return ["/SC", "DAILY"]
 
 
+def _parse_schtasks_schedule_type(raw: str) -> str | None:
+    """Map schtasks ``Schedule Type`` (needs ``/Query /V``) to config frequency.
+
+    Returns ``daily`` / ``weekly`` / ``monthly``, or ``None`` when the field is
+    missing or unmapped (do not invent a false drift warning).
+    """
+    for line in raw.splitlines():
+        if not line.lower().startswith("schedule type:"):
+            continue
+        value = line.split(":", 1)[1].strip().lower()
+        if value in ("daily", "weekly", "monthly"):
+            return value
+        return None
+    return None
+
+
+def _windows_cadence_drift_note(cfg: RcloneConfig, raw: str) -> str:
+    """Warn when live schtasks cadence disagrees with ``cfg.schedule_frequency``."""
+    live = _parse_schtasks_schedule_type(raw)
+    if live is None:
+        return ""
+    expected = getattr(cfg, "schedule_frequency", "daily")
+    if live == expected:
+        return ""
+    return (
+        f"Live Task Scheduler cadence is {live} but sync.schedule_frequency is "
+        f"{expected}; re-run `python -m sync.cli schedule` to recreate the task."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Linux / macOS -- cron
 # ---------------------------------------------------------------------------
@@ -749,7 +779,8 @@ class WindowsTaskScheduler:
         )
 
     def status(self) -> ScheduleEntry | None:
-        argv = [self._schtasks(), "/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST"]
+        # /V is required for Schedule Type (plain LIST omits it).
+        argv = [self._schtasks(), "/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST", "/V"]
         try:
             proc = subprocess.run(  # noqa: S603  # argv list, schtasks resolved via shutil.which
                 argv, capture_output=True, text=True, timeout=15, check=False
@@ -763,11 +794,13 @@ class WindowsTaskScheduler:
             if "cannot find the file specified" not in combined.lower() and "does not exist" not in combined.lower():
                 logger.warning("schtasks /Query returned rc=%s: %s", proc.returncode, combined[:500].strip())
             return None
+        raw = proc.stdout.strip()
         return ScheduleEntry(
             platform_name="windows",
             command=_sync_command(self.cfg),
             cron_or_time=f"{self.cfg.schedule_hour:02d}:{self.cfg.schedule_min:02d}",
-            raw=proc.stdout.strip(),
+            raw=raw,
+            note=_windows_cadence_drift_note(self.cfg, raw),
         )
 
 
