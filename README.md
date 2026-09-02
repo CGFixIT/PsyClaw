@@ -407,7 +407,10 @@ cyclaw-gen-cert --hostname "$(hostname)" --days 825
 ```
 
 Flags: `--certfile`, `--keyfile`, `--hostname` (defaults to the machine
-hostname), `--days` (default `825`). Read
+hostname), `--days` (default `825`), `--san` (repeatable extra SAN entry,
+e.g. `IP:10.0.0.5` or `DNS:box.local`), and `--force` — **required to
+overwrite an existing cert/key pair**; without it the command refuses rather
+than clobbering one. Read
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) before exposing the port —
 CyClaw's stated scope is single-operator and loopback-bound.
 

@@ -236,7 +236,7 @@ README's "API Key Setup" section, before enabling it.
 | POST | `/api/chat/cancel` | Abort the in-flight Ollama POST (`/loop stop`) |
 | GET | `/api/github/status` | `gh` / agentic status via ops runner |
 | GET | `/api/agent/checks` | Named check profiles |
-| POST | `/api/agent/run` | Start a real-repo run |
+| POST | `/api/agent/run` | Start a real-repo run; `409 AGENT_RUN_BUSY` if another run is already in progress, and again if it shares the local-model backend with an in-flight `/api/chat` turn |
 | GET | `/api/agent/runs/{id}` | Run status |
 | POST | `/api/agent/runs/{id}/decision` | Human approve / reject |
 | POST | `/api/agent/runs/{id}/push` | Push agent branch |
