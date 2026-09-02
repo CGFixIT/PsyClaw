@@ -1,9 +1,8 @@
 # Unslop Integration Plan — Offline Prose-Quality Rail for the Agentic Loop
 
-**Status:** planning only, no code written. **Date:** 2026-08-21. **Scope:** a new,
-default-off, fully-offline observability+nudge rail on the local model's output
-inside `agentic/real_repo_loop.py`. Nothing in this plan has been implemented yet;
-this document is the deliverable for this task.
+**Status:** shipped, default-off. **Date:** 2026-09-02 (header restamp; code landed in [#1029](https://github.com/cgfixit/CyClaw/pull/1029)). **Scope:** an opt-in, fully-offline observability+nudge rail on the local model's output inside `agentic/real_repo_loop.py`, wired through `agentic/unslop_bridge.py`. `unslop.enabled` stays `false` in shipped `config.yaml`. Do not enable by default. Do not put Unslop on `/query`. Leftover on [#1129](https://github.com/cgfixit/CyClaw/issues/1129): measure false-positive rate on an opt-in local run.
+
+This document is the design record. The header that said "planning only, no code written" was stale once v1 merged.
 
 ## Context
 
