@@ -47,6 +47,10 @@ data/memory/*.db-wal
 data/auth/*.db
 data/auth/*.db-shm
 data/auth/*.db-wal
+# Self-signed TLS pair from cyclaw-gen-cert (unencrypted key, -nodes)
+data/tls/
+# --keyfile may place the same generated private key in another repo subdirectory.
+*.key
 # Telegram poller state (getUpdates offset) — never commit runtime offset
 data/telegram/
 
