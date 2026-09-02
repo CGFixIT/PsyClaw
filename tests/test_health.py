@@ -108,6 +108,13 @@ class TestPing:
         assert timeout.write == health._HEALTH_PROBE_TIMEOUT_SEC
         assert timeout.pool == health._HEALTH_PROBE_TIMEOUT_SEC
 
+    def test_loopback_https_health_timeout_keeps_full_connect_budget(self):
+        # httpx connect timeout includes start_tls; 20 ms would false-degrade
+        # a local HTTPS backend that answers queries normally.
+        assert health._health_probe_timeout("https://127.0.0.1:11434/v1") == (
+            health._HEALTH_PROBE_TIMEOUT_SEC
+        )
+
     def test_nonloopback_health_timeout_preserves_existing_budget(self):
         assert health._health_probe_timeout("http://host/v1") == health._HEALTH_PROBE_TIMEOUT_SEC
 

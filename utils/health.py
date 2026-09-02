@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import yaml
@@ -24,9 +25,10 @@ _cfg_ttl_sec = 60
 _status_cache: dict[str, tuple[tuple[HealthStatus, ...], float]] = {}
 _status_ttl_sec = 2
 
-# A loopback service either accepts a TCP connection immediately or is not
-# listening. Keeping the normal five-second response budget while bounding only
-# that connect avoids a stale /health response waiting on a refused local port.
+# A loopback HTTP service either accepts a TCP connection immediately or is
+# not listening. Bounding only that connect avoids a stale /health wait on a
+# refused local port. httpx applies `connect` to TCP+TLS, so HTTPS loopback
+# keeps the full budget (handshake is not a refused-port stall).
 _HEALTH_PROBE_TIMEOUT_SEC = 5.0
 _LOOPBACK_CONNECT_TIMEOUT_SEC = 0.02
 
@@ -56,10 +58,10 @@ def _http_get(
 
 
 def _health_probe_timeout(base_url: str) -> float | httpx.Timeout:
-    """Preserve normal budgets except for the local backend TCP connect."""
+    """Preserve normal budgets except for a plain-HTTP loopback TCP connect."""
     from llm.client import is_loopback_url
 
-    if is_loopback_url(base_url):
+    if is_loopback_url(base_url) and urlparse(base_url).scheme == "http":
         return httpx.Timeout(
             _HEALTH_PROBE_TIMEOUT_SEC,
             connect=_LOOPBACK_CONNECT_TIMEOUT_SEC,
