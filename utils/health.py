@@ -24,6 +24,12 @@ _cfg_ttl_sec = 60
 _status_cache: dict[str, tuple[tuple[HealthStatus, ...], float]] = {}
 _status_ttl_sec = 2
 
+# A loopback service either accepts a TCP connection immediately or is not
+# listening. Keeping the normal five-second response budget while bounding only
+# that connect avoids a stale /health response waiting on a refused local port.
+_HEALTH_PROBE_TIMEOUT_SEC = 5.0
+_LOOPBACK_CONNECT_TIMEOUT_SEC = 0.02
+
 # Shared pooled HTTP client for all probes. Constructing a fresh httpx.Client
 # per request (what module-level httpx.get() does under the hood) costs ~48 ms
 # on this hot path — it rebuilds the SSL context and re-reads the CA bundle
@@ -34,7 +40,12 @@ _http_client: httpx.Client | None = None
 _http_client_lock = threading.Lock()
 
 
-def _http_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx.Response:
+def _http_get(
+    url: str,
+    *,
+    timeout: float | httpx.Timeout,
+    headers: dict | None = None,
+) -> httpx.Response:
     """GET through the shared client (lazily created, thread-safe)."""
     global _http_client
     if _http_client is None:
@@ -42,6 +53,18 @@ def _http_get(url: str, *, timeout: float, headers: dict | None = None) -> httpx
             if _http_client is None:
                 _http_client = httpx.Client(timeout=timeout, trust_env=False)
     return _http_client.get(url, timeout=timeout, headers=headers)
+
+
+def _health_probe_timeout(base_url: str) -> float | httpx.Timeout:
+    """Preserve normal budgets except for the local backend TCP connect."""
+    from llm.client import is_loopback_url
+
+    if is_loopback_url(base_url):
+        return httpx.Timeout(
+            _HEALTH_PROBE_TIMEOUT_SEC,
+            connect=_LOOPBACK_CONNECT_TIMEOUT_SEC,
+        )
+    return _HEALTH_PROBE_TIMEOUT_SEC
 
 
 def close_http_client() -> None:
@@ -179,6 +202,7 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
             local_name,
             headers=local_headers,
             expect_model=local_model if local_model else None,
+            timeout=_health_probe_timeout(llm_base),
         ))
     if (probe_external and cfg["app"]["mode"] == "hybrid" and
             cfg["models"].get("grok", {}).get("enabled") is True):
@@ -229,11 +253,16 @@ def check_all(config_path: str = "config.yaml") -> list[HealthStatus]:
     _status_cache[config_path] = (tuple(results), time.monotonic())
     return results
 
-def _ping(url: str, name: str, headers: dict | None = None,
-          expect_model: str | None = None) -> HealthStatus:
+def _ping(
+    url: str,
+    name: str,
+    headers: dict | None = None,
+    expect_model: str | None = None,
+    timeout: float | httpx.Timeout = _HEALTH_PROBE_TIMEOUT_SEC,
+) -> HealthStatus:
     try:
         start = time.monotonic()
-        resp = _http_get(url, timeout=5.0, headers=headers or {})
+        resp = _http_get(url, timeout=timeout, headers=headers or {})
         latency = (time.monotonic() - start) * 1000
         resp.raise_for_status()
     except Exception as e:

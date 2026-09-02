@@ -99,6 +99,18 @@ def _clear_health_cfg_cache():
 
 
 class TestPing:
+    def test_loopback_health_timeout_limits_connect_only(self):
+        timeout = health._health_probe_timeout(_OLLAMA_BASE)
+
+        assert isinstance(timeout, httpx.Timeout)
+        assert timeout.connect == health._LOOPBACK_CONNECT_TIMEOUT_SEC
+        assert timeout.read == health._HEALTH_PROBE_TIMEOUT_SEC
+        assert timeout.write == health._HEALTH_PROBE_TIMEOUT_SEC
+        assert timeout.pool == health._HEALTH_PROBE_TIMEOUT_SEC
+
+    def test_nonloopback_health_timeout_preserves_existing_budget(self):
+        assert health._health_probe_timeout("http://host/v1") == health._HEALTH_PROBE_TIMEOUT_SEC
+
     def test_ping_healthy(self, monkeypatch):
         monkeypatch.setattr(health, "_http_get", lambda url, **kw: _OKResp())
         status = health._ping(_HOST_MODELS, "ollama")
