@@ -189,6 +189,10 @@ class AuthWhoamiResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     username: str
     role: str
+    # Cookie-session whoami rotates CSRF and returns the new plaintext so a
+    # reloaded console can logout/mutate again. Bearer (device-token) whoami
+    # leaves this None -- those callers are not a CSRF vector.
+    csrf_token: str | None = None
 
 
 class AuthUserRecord(BaseModel):
