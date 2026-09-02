@@ -373,7 +373,8 @@ behind it.
 Preferred: download the signed `.app` from
 [ollama.com/download/mac](https://ollama.com/download/mac) and launch it. The
 `curl -fsSL https://ollama.com/install.sh | sh` one-liner in
-[`OLLAMA_SETUP.md`](OLLAMA_SETUP.md) also works, but it is a pipe-to-shell —
+[`docs/! How-To-Guides/OLLAMA_SETUP.md`](docs/!%20How-To-Guides/OLLAMA_SETUP.md)
+also documents the one-liner, but it is a pipe-to-shell —
 prefer the signed app on a machine you care about.
 
 ```bash
@@ -732,13 +733,13 @@ hangs instead of failing loudly:
 This is the single most common "CyClaw hangs" cause, and it is *more* likely on
 a large model, not less — a bigger model does not raise `num_ctx` for you.
 Full detail, including the per-session `/set parameter num_ctx` alternative:
-[`OLLAMA_SETUP.md`](OLLAMA_SETUP.md).
+[`docs/! How-To-Guides/OLLAMA_SETUP.md`](docs/!%20How-To-Guides/OLLAMA_SETUP.md).
 
 **Driving `agentic/real_repo_loop.py`** (`real-repo-run`/`real-repo-run-plan`,
 or the harness console's `/api/agent/run`) against the same Ollama instance
 needs more headroom than the formula above — that pathway's per-iteration
-prompt can legitimately run several times larger. See OLLAMA_SETUP.md's
-["The agentic real-repo coding loop needs more headroom than that"](OLLAMA_SETUP.md#the-agentic-real-repo-coding-loop-needs-more-headroom-than-that).
+prompt can legitimately run several times larger. See
+[`OLLAMA_SETUP.md`'s agentic context guidance](docs/!%20How-To-Guides/OLLAMA_SETUP.md#the-agentic-real-repo-coding-loop-needs-more-headroom-than-that).
 
 The shipped `local_llm.timeout_sec: 720` and `max_tokens: 4096` are sized for a
 dense ~27B MLX model on M5 Pro class Apple Silicon (see `CLAUDE.md`'s
@@ -759,12 +760,14 @@ try to query CyClaw, not necessarily before every server start — and note
 `index/` is never checked into git, so this step is needed in every fresh
 clone and every fresh environment, not just the first one you ever set up.
 
-### GROK_API_KEY in offline mode
+### GROK_API_KEY in offline mode and tests
 
-The dummy value is fine for `app.mode: "offline"` in `config.yaml` — the key
-is only read lazily, at an actual Grok call site (`llm/client.py`), which
-never fires in offline mode. `security.require_env` in `config.yaml` is
-decorative; no code enforces it. Tests specifically require
+A dummy value is fine when you explicitly set `app.mode: "offline"`, and for
+the test command below. The key is read lazily at an actual Grok call site
+(`llm/client.py`), which never fires in offline mode. The shipped config is
+`app.mode: "hybrid"`; it still cannot call Grok without the provider gate,
+per-request confirmation, and a usable real key. `security.require_env` in
+`config.yaml` is descriptive; no code enforces it. Tests specifically require
 `GROK_API_KEY=dummy` (or any non-empty value) to be set.
 
 ### CYCLAW_API_KEY — required for the Soul console, not for `/query`
@@ -863,7 +866,7 @@ the transitive-pin guarantee.
 
 ```yaml
 app:
-  mode: "offline"                          # keep offline unless you have GROK_API_KEY
+  mode: "hybrid"                           # shipped value; external calls still need provider enablement + per-query confirmation + a real key
 
 models:
   local_llm:
@@ -980,4 +983,6 @@ results are hints, not a complete or live reachability map.
 ---
 
 *Built by [Chris Grady](https://cgfixit.com) · Repo: [github.com/CGFixIT/CyClaw](https://github.com/CGFixIT/CyClaw)*
-*v1.9.0 package train, Python 3.12 — last docs accuracy pass 2026-08-04 (NeMo phase status, Telegram pointer; install steps last re-verified 2026-07-29 / macOS 2026-08-02)*
+*v1.9.0 package train, Python 3.12 — documentation reconciled with code,
+config, manifests, and workflows on 2026-09-01; install execution last verified
+2026-07-29 / macOS 2026-08-02.*

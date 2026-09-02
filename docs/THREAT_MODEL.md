@@ -563,7 +563,7 @@ not attacker-chosen at the command level.
   short-lived consent record; the next non-command message claims and deletes
   it before `/query`. Core `mode=hybrid` and provider-enabled gates remain the
   final authority.
-- **Shipped posture.** `telegram.enabled: false`, `mode: notify`, empty
+- **Shipped posture.** `telegram.enabled: false`, `mode: chat`, empty
   `allowed_chat_ids`. Enabling with an empty allowlist is a **config load
   error**. CyClaw never persists the bot token: unattended jobs use
   `TELEGRAM_BOT_TOKEN` by default, while an explicit `--prompt-token` manual CLI

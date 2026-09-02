@@ -1,6 +1,6 @@
 # CyClaw — Consolidated Security Review Status
 
-**Last updated:** 2026-07-27 (S5/S7/follow-ups reconciled against current `main`; see
+**Last updated:** 2026-09-01 (S5/S7/S9/follow-ups reconciled against current `main`; see
 below. Original table: 2026-06-20.)
 **Scope:** Single source of truth for the status of every security finding raised across the
 historical reviews. Supersedes the per-run status notes in
@@ -29,7 +29,7 @@ there too for anything found after this table's S1–S10 baseline.
 | S6 | Low/Med | Dead config: `policy.prompt_filter.*` ignored by a hardcoded sanitizer | **Resolved** | `utils/sanitizer.py` on `main` is config-driven (`_load_filter(config_path)` reads `enabled` / `banned_patterns` / `max_input_chars`, caches per path, warns when enabled-but-empty). Verified by `tests/test_sanitizer.py` incl. the new `enabled:false` bypass / per-config tests. |
 | S7 | Low | CORS allowlist contains an inert `null`/`None` entry + a hardcoded LAN IP | **Partially resolved** | The literal `"null"` entry is gone — `config.yaml` now carries an explicit `# NOTE: "null" is deliberately absent from this list — do not re-add it` guard comment. `http://10.0.0.112(:8787)` remains, documented in `config.yaml` as an intentional home-lab LAN origin (the gateway still binds `127.0.0.1` only). Reaffirmed as accepted, not a code defect, by `docs/audits/2026-07-26-security-scan.md`'s A5. |
 | S8 | Low/Med | `/soul/propose` injection scan is advisory; `apply_evolution` wrote unconditionally (soul-poisoning vector: a flagged soul persisted to `soul.md` is prepended to every system prompt) | **Resolved** | `apply_evolution` now ENFORCES the scan at the write boundary (`main` commit `001e4a4`): injection patterns raise `PromptInjectionError` before any file/DB write, and `gate.py` maps it to `400 PROMPT_INJECTION_BLOCKED`. `propose` stays advisory (preview only); the trusted `restore_from_backup` path re-applies a vetted `.bak` via `scan=False`. Documented in the `propose_evolution`/`apply_evolution` docstrings and the README. Regression-guarded by `tests/test_personality.py::TestApplyEvolutionInjectionGate`. |
-| S9 | Low | No auth on state-mutating `/soul/*` endpoints | **Resolved** | Bearer-token auth via `CYCLAW_API_KEY` on `/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore` (`gate.require_api_key`). Tested in `tests/test_security.py::TestAPIKeyAuth`. Auth is bypassed only when the env var is unset (single-user localhost default). |
+| S9 | Low | No auth on state-mutating `/soul/*` endpoints | **Resolved** | Bearer-token auth via `CYCLAW_API_KEY` on `/soul/propose`, `/soul/apply`, `/soul/reload`, `/soul/restore` (`gate.require_api_key`). Tested in `tests/test_security.py::TestAPIKeyAuth`. The gate now fails closed when the key is unset; `security.api_key_optional: true` is the sole deliberate bypass and applies only to requests whose socket peer is loopback. |
 | S10 | Info | Positive controls (XSS escaping, secret redaction, telemetry kill, no-sampling MCP, env-only key) | **OK** | Re-verified. MCP audit privacy is now at parity with the HTTP path (T1.3): the persisted MCP event stores only a `query_hash`, identical to what the HTTP/graph path writes. |
 
 No **Critical** issues. No secrets committed.

@@ -110,18 +110,22 @@ cd CyClaw
 python3.12 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install PyTorch CPU (keeps install lean)
-pip install torch==2.4.1+cpu --index-url https://download.pytorch.org/whl/cpu
+# Install the pinned PyTorch CPU wheel first (Windows/Linux)
+pip install torch==2.13.0+cpu --index-url https://download.pytorch.org/whl/cpu
 
 # Install all other dependencies
 pip install -r requirements.txt -c constraints.txt
 ```
 
-### One-Time NLTK Setup
+Do not download NLTK `punkt` data. CyClaw deliberately uses
+`retrieval/stemmer.py`'s local regex tokenizer plus `PorterStemmer`; loading
+punkt would add an unused data surface that the accepted-risk guardrails in
+[`SECURITY.md`](../../SECURITY.md) explicitly prohibit.
 
-```bash
-python -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True)"
-```
+On macOS, do not use the `+cpu` command above. Follow the canonical
+[`setup-guide.md` macOS section](../../setup-guide.md#macos-apple-silicon),
+which installs plain `torch==2.13.0` and strips the Linux/Windows Torch lines
+from the manifests for that install.
 
 ---
 
@@ -131,7 +135,7 @@ The shipped `config.yaml` is already set for Ollama. Verify these values:
 
 ```yaml
 app:
-  mode: "offline"  # keep offline unless you have GROK_API_KEY
+  mode: "hybrid"  # shipped value; Grok/Claude still require provider enablement, a real key, and per-query confirmation
 
 models:
   local_llm:
