@@ -20,6 +20,8 @@ function browser(respond = () => ({status: 200, body: {ok: true, parsed: {status
   const calls = [];
   const messages = [];
   const constants = html.match(/^const (?:MAX_AGENT_\w+|AGENT_\w+_TIMEOUT_MS) = .+;.*$/gm) || [];
+  const reviewState = html.match(/^const shownAgentDiffs = .+;$/m);
+  if (reviewState) constants.push(reviewState[0]);
   const context = vm.createContext({
     URL, AbortController,
     pendingAgentRun: null, inflightChat: null, apiKeyInput: null, CSRF_TOKEN: '',
@@ -40,7 +42,7 @@ function browser(respond = () => ({status: 200, body: {ok: true, parsed: {status
       };
     },
   });
-  const functions = ['api', 'agentRecord', 'showPendingAgentRun', 'showAgentRecord', 'runSlash',
+  const functions = ['api', 'agentRecord', 'showPendingAgentRun', 'isReviewableAgentDiff', 'showAgentRecord', 'runSlash',
     'isSafeRepoRelativePath', 'canonicalRepoRelativePath'].map(sourceFunction).join('\n');
   vm.runInContext(constants.join('\n') + '\n' + functions, context);
   return {context, calls, messages};
@@ -165,7 +167,94 @@ async function refusals() {
   }
 }
 
-const scenarios = {staging, github, refusals};
+async function review() {
+  const initial = {run_id: 'run-1', status: 'pending_decision', diff: '-old\n+new'};
+  let current = {...initial};
+  const b = browser(call => ({status: 200, body: {ok: true, parsed:
+    call.method === 'GET' ? {...current} : {...current, status: 'approved'}}}));
+  const approve = () => b.context.runSlash('/agent approve run-1');
+  await approve();
+  assert.deepEqual(b.calls.map(c => c.method), ['GET'], 'unseen diff must not be approved');
+  assert.match(b.messages.join('\n'), /candidate diff\n-old\n\+new/);
+  await approve();
+  assert.deepEqual(b.calls.map(c => c.method), ['GET', 'GET', 'POST']);
+  assert.equal(b.calls.at(-1).url, '/api/agent/runs/run-1/decision');
+  assert.deepEqual(b.calls.at(-1).body, {decision: 'approve'});
+
+  await b.context.runSlash('/agent status run-1');
+  current.diff = '-old\n+changed';
+  b.calls.length = 0;
+  await approve();
+  assert.equal(b.calls.length, 1, 'changed diff requires another explicit command');
+  assert.match(b.messages.join('\n'), /candidate diff\n-old\n\+changed/);
+  await approve();
+  assert.equal(b.calls.at(-1).method, 'POST');
+
+  await b.context.runSlash('/agent status run-1');
+  await b.context.runSlash('/clear');
+  b.calls.length = 0;
+  await approve();
+  assert.equal(b.calls.length, 1, 'clear invalidates the displayed diff');
+
+  for (const record of [
+    {...initial, diff: ''}, {...initial, diff: null}, {...initial, diff: {text: 'not a diff'}},
+    {...initial, diff: '   '}, {...initial, diff: '[diff unavailable: clone inaccessible]'},
+    {...initial, diff: '[no diff to show -- the candidate reported changed files, but none were tracked or new]'},
+    {...initial, diff: '-old\n+partial\n... [diff truncated at 20000 chars]'},
+    {...initial, status: 'running'}, {...initial, run_id: 'different-run'},
+  ]) {
+    current = {...initial};
+    await b.context.runSlash('/agent status run-1');
+    current = record;
+    b.calls.length = 0;
+    await approve();
+    assert.equal(b.calls.length, 1, 'invalid or unready run must not reach decision');
+    assert.equal(b.calls[0].method, 'GET');
+    assert.equal(b.context.sendBtn.disabled, false);
+  }
+
+  for (const response of [
+    {status: 200, body: {ok: false, label: 'refused', exit_code: 4, stderr: 'status refused'}},
+    {status: 200, body: {ok: true, parsed: null, stdout: 'disabled'}},
+    {status: 500, body: {detail: {code: 'OPS_FAILED', message: 'status failed'}}},
+  ]) {
+    const failedStatus = browser(() => response);
+    failedStatus.context.showAgentRecord(initial);
+    await failedStatus.context.runSlash('/agent approve run-1');
+    assert.equal(failedStatus.calls.length, 1, 'failed status cannot reuse a previous displayed diff');
+    assert.equal(failedStatus.calls[0].method, 'GET');
+    assert.equal(failedStatus.context.sendBtn.disabled, false);
+  }
+
+  const refused = browser(call => ({status: call.method === 'GET' ? 200 : 403,
+    body: call.method === 'GET' ? {ok: true, parsed: initial} :
+      {detail: {code: 'TOOL_DENIED', message: 'write denied'}}}));
+  await stage(refused.context);
+  const staged = JSON.stringify(refused.context.pendingAgentRun);
+  await refused.context.runSlash('/agent status run-1');
+  await refused.context.runSlash('/agent approve run-1');
+  assert.equal(JSON.stringify(refused.context.pendingAgentRun), staged);
+  assert.match(refused.messages.join('\n'), /TOOL_DENIED: write denied/);
+  assert.equal(refused.context.sendBtn.disabled, false);
+  refused.calls.length = 0;
+  for (const command of ['reject', 'push', 'publish', 'discard']) {
+    if (command === 'publish') {
+      await refused.context.runSlash('/agent publish run-1');
+      assert.equal(refused.calls.length, 2, 'publish needs its own reason');
+    }
+    await refused.context.runSlash('/agent ' + command + ' run-1' + (command === 'publish' ? ' reviewed publication' : ''));
+    assert.equal(JSON.stringify(refused.context.pendingAgentRun), staged);
+  }
+  assert.deepEqual(refused.calls.map(c => c.url), [
+    '/api/agent/runs/run-1/decision', '/api/agent/runs/run-1/push',
+    '/api/agent/runs/run-1/publish', '/api/agent/runs/run-1/discard',
+  ]);
+  assert.deepEqual(refused.calls.map(c => c.body), [
+    {decision: 'reject'}, {}, {reason: 'reviewed publication', confirm: true}, {},
+  ]);
+}
+
+const scenarios = {staging, github, refusals, review};
 const scenario = process.argv[2];
 assert.ok(Object.hasOwn(scenarios, scenario), 'unknown runtime scenario');
 scenarios[scenario]().then(() => console.log(scenario + ': passed')).catch(error => {

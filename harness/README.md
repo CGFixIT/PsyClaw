@@ -204,6 +204,19 @@ and may refuse a run that exceeds its budget even within the iteration range.
 `confirm: true`. A loaded `/agent plan` remains plan **text** in that same body;
 there is no separate plan endpoint.
 
+`/agent approve <id>` fetches the current run before deciding. If its pending
+diff has not been displayed in this console, or has changed since display, the
+console shows it and asks you to repeat the approval command after review.
+`/agent status <id>` also displays the diff. `/clear` and page reload forget
+displayed diffs. A missing diff, an unavailable/truncated-diff notice, or a
+non-pending run cannot be approved through the console. This is a console
+review guard; server authorization still applies.
+
+Approval commits locally. `/agent push <id>` is a separate action, followed by
+`/agent publish <id> <reason>` with its own `confirm: true`. Nothing combines
+approval, push, or publication. `/agent discard <id>` explicitly reclaims the
+clone; refusals do not discard the staged proposal or trigger a retry.
+
 ## Operator API (loopback)
 
 For `403 CROSS_ORIGIN_BLOCKED` or `403 CROSS_SITE_BLOCKED`, bookmark and fetch
