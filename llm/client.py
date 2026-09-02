@@ -419,8 +419,14 @@ def _provider_label(provider: str) -> str:
     return labels.get(provider, provider or "local LLM")
 
 
-def _is_loopback_url(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
+def is_loopback_url(url: str) -> bool:
+    """Whether ``url`` resolves to one of the supported loopback hostnames."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        # Keep malformed operator configuration on the existing fail-soft
+        # health/error path instead of raising while selecting probe policy.
+        return False
     return host in _LOOPBACK_HOSTS
 
 
@@ -532,7 +538,7 @@ def resolve_local_backend(llm_cfg: dict, *, force: bool = False) -> ResolvedLoca
             "models.local_llm.fallback requires base_url and model when enabled",
             details={"base_url": bool(fb_url), "model": bool(fb_model)},
         )
-    if not _is_loopback_url(fb_url):
+    if not is_loopback_url(fb_url):
         raise LLMServiceError(
             "models.local_llm.fallback.base_url must be loopback (127.0.0.1 / localhost / ::1)",
             details={"hint": "non-loopback local servers must be set as primary base_url explicitly"},
