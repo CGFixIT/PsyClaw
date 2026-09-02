@@ -27,16 +27,25 @@ def _porter() -> "PorterStemmer":
 
     return PorterStemmer()
 
-# Tokenizer: extracts words starting with a letter (2+ chars). Avoids nltk.data.load()
-# so the NLTK URL-encoded path-traversal CVE (punkt tokenizer) is not reachable.
-# Compiled once at import rather than on every call. findall() returns only
-# maximal runs of this exact shape, so every token is already letter-led and
-# >= 2 chars by construction — no second-pass validation is required.
+# Tokenizer: extracts words starting with a letter (2–256 chars). Avoids
+# nltk.data.load() so the NLTK URL-encoded path-traversal CVE (punkt tokenizer)
+# is not reachable. Compiled once at import rather than on every call.
+# findall() returns only maximal runs of this exact shape, so every token is
+# already letter-led and in [2, 256] by construction — no second-pass
+# validation is required.
+#
+# 256 is defense in depth for CVE-2026-81722 (PorterStemmer O(n²) on a long
+# run of 'y'): far below the ~20–50 KB payload, far above any _CUSTOM_STEMS
+# key or sane BM25 token. The nltk 3.10.3 pin is the real fix; this cap
+# still bounds cache keys and Porter if that pin regresses. A 50 KB 'y'-run
+# splits into ~200 tokens of 256 chars (non-overlapping), not one huge token.
+#
 # KNOWN LIMITATION (deliberate): the pattern is ASCII-only, so non-Latin text
 # (CJK, Cyrillic, accented words after .lower()) tokenizes to ZERO tokens —
 # such content is invisible to the BM25 keyword leg and is covered only by the
 # semantic leg. The indexer warns per-document at build time when this happens.
-_WORD_RE = re.compile(r'[a-z][a-z0-9_-]+')
+_MAX_TOKEN_CHARS = 256
+_WORD_RE = re.compile(r'[a-z][a-z0-9_-]{1,255}')
 
 _CUSTOM_STEMS = {
     "embedding": "embed", "embeddings": "embed",
@@ -54,17 +63,20 @@ _CUSTOM_STEMS = {
 @lru_cache(maxsize=100_000)
 def stem_token(token: str) -> str:
     lower = token.lower()
+    if len(lower) > _MAX_TOKEN_CHARS:
+        lower = lower[:_MAX_TOKEN_CHARS]
     if lower in _CUSTOM_STEMS:
         return _CUSTOM_STEMS[lower]
     return _porter().stem(lower)
 
 @lru_cache(maxsize=4096)
 def _tokenize_and_stem_cached(text: str) -> tuple[str, ...]:
-    # _WORD_RE.findall() already guarantees each token matches [a-z][a-z0-9_-]+
-    # (letter-led, length >= 2). The previous `if _TOKEN_RE.match(t)` filter
-    # re-validated that exact same shape and therefore always returned True —
-    # a redundant per-token regex match on the index/query hot path. Dropping it
-    # produces byte-for-byte identical output with one fewer regex op per token.
+    # _WORD_RE.findall() already guarantees each token matches
+    # [a-z][a-z0-9_-]{1,255} (letter-led, length in [2, 256]). The previous
+    # `if _TOKEN_RE.match(t)` filter re-validated that exact same shape and
+    # therefore always returned True — a redundant per-token regex match on
+    # the index/query hot path. Dropping it produces byte-for-byte identical
+    # output with one fewer regex op per token.
     #
     # Returns a tuple, not a list: stem_token() is already memoized per-token,
     # but repeated identical queries (common on the retrieval hot path) still

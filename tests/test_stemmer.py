@@ -6,7 +6,11 @@ domain dictionary), not an idealized stemmer -- e.g. Porter yields `polici`/`run
 for `policies`/`running`, and the domain map intentionally folds `kubernetes`->`k8s`.
 """
 
-from retrieval.stemmer import stem_token as enhanced_porter_stem, tokenize_and_stem
+from retrieval.stemmer import (
+    _MAX_TOKEN_CHARS,
+    stem_token as enhanced_porter_stem,
+    tokenize_and_stem,
+)
 
 
 class TestPorterStem:
@@ -71,3 +75,24 @@ class TestTokenizeAndStem:
         t1.clear()
         t2 = tokenize_and_stem("backup configuration")
         assert t2 == ["backup", "configur"]
+
+
+class TestTokenLengthCap:
+    """CVE-2026-81722 defense in depth: Porter never sees a 20–50 KB token."""
+
+    def test_max_length_token_is_stemmed_not_dropped(self) -> None:
+        token = "a" * _MAX_TOKEN_CHARS
+        stemmed = enhanced_porter_stem(token)
+        assert stemmed
+        assert len(stemmed) <= _MAX_TOKEN_CHARS
+
+    def test_direct_y_run_is_capped_before_porter(self) -> None:
+        # Direct caller, not tokenize_and_stem: the advertised DoS shape.
+        payload = "y" * 20_000 + "ness"
+        stemmed = enhanced_porter_stem(payload)
+        assert len(stemmed) <= _MAX_TOKEN_CHARS
+
+    def test_tokenize_and_stem_does_not_emit_overlong_tokens(self) -> None:
+        tokens = tokenize_and_stem("y" * 20_000 + "ness")
+        assert tokens
+        assert all(len(t) <= _MAX_TOKEN_CHARS for t in tokens)

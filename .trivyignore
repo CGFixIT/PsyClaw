@@ -27,16 +27,14 @@ CVE-2026-45830
 CVE-2026-45831
 CVE-2026-45833
 
-# nltk 3.10.0 — no fixed release available. The advisory is a URL-encoded
-# path-traversal reached through nltk.data.load(), i.e. the punkt tokenizer.
-# CyClaw never calls nltk.data.load() and never loads punkt: retrieval/stemmer.py
-# tokenizes with its own compiled regex (_WORD_RE) and imports only
-# nltk.stem.PorterStemmer, a pure-Python stemmer that loads no data files. The
-# vulnerable code path is therefore unreachable regardless of WHEN tokenization
-# runs -- which matters, because tokenize_and_stem() runs both at corpus index
-# time AND on every keyword query at request time.
+# nltk — CVE-2026-12243 / PYSEC-2026-597 (punkt / nltk.data.load path
+# traversal). Historical accepted-risk: CyClaw never calls nltk.data.load()
+# and never loads punkt. retrieval/stemmer.py tokenizes with _WORD_RE and
+# imports only nltk.stem.PorterStemmer. Pin is now 3.10.3 (see SECURITY.md
+# and #1256); leave these two IDs until a post-bump Trivy scan proves they
+# no longer match 3.10.3. Do not add the 3.10.2 cluster (CVE-2026-81722 and
+# siblings) here — those are fixed by the pin, not ignored.
 # Guardrail: any change introducing nltk.data.load(), nltk.download(), or
 # punkt/word_tokenize re-opens this assessment.
-# Review: next nltk release or 2026-10-01, whichever comes first.
 CVE-2026-12243
 PYSEC-2026-597

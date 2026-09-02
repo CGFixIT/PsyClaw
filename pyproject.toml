@@ -42,7 +42,7 @@ dependencies = [
     "httpx==0.28.1",
     "pyyaml==6.0.3",
     "numpy==1.26.4",
-    "nltk==3.10.2",
+    "nltk==3.10.3",
     # tzdata is required on Windows (and any host without a system IANA database)
     # for zoneinfo to resolve IANA names such as America/New_York. Kept
     # unconditional so OpenTweet scheduling tests behave identically across platforms.
