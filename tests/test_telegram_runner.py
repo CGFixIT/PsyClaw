@@ -785,6 +785,13 @@ def test_offset_roundtrip(tmp_path: Path) -> None:
     assert list(tmp_path.glob(".offset.json.*.tmp")) == []
 
 
+def test_load_offset_corrupt_utf8_returns_none(tmp_path: Path) -> None:
+    """Non-UTF-8 offset bytes must fail soft (None), not kill poll_forever."""
+    path = tmp_path / "offset.json"
+    path.write_bytes(b"\xff\xfe{\"offset\": 1}")
+    assert load_offset(path) is None
+
+
 def test_poll_forever_persists_offset(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     offset_path = tmp_path / "offset.json"
