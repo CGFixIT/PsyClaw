@@ -47,6 +47,8 @@ data/memory/*.db-wal
 data/auth/*.db
 data/auth/*.db-shm
 data/auth/*.db-wal
+# Self-signed TLS pair from cyclaw-gen-cert (unencrypted key, -nodes)
+data/tls/
 # Telegram poller state (getUpdates offset) — never commit runtime offset
 data/telegram/
 
