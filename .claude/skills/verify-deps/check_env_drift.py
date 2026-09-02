@@ -425,15 +425,25 @@ def check_docker_surface_coherence() -> None:
                            f"127.0.0.1 (loopback invariant)")
         expose = re.search(r"(?m)^EXPOSE\s+(\d+)", docker_text)
         cmd_port = re.search(r'"--port",\s*"(\d+)"', docker_text)
-        ports = {
-            "Dockerfile EXPOSE": expose.group(1) if expose else None,
-            "Dockerfile CMD --port": cmd_port.group(1) if cmd_port else None,
-        } | {f"compose publish[{i}]": container for i, (_, _, container) in enumerate(publishes)}
-        distinct = {v for v in ports.values() if v}
-        if len(distinct) > 1:
-            fail("E6", f"container port disagrees across the Docker surface: {ports}")
-        elif distinct and publishes and all(h == "127.0.0.1:" for h, _, _ in publishes):
-            ok("E6", f"loopback publish; container port {next(iter(distinct))} agrees across EXPOSE, CMD, and compose")
+        # Absence must fail before comparing present values: dropping None from
+        # the set used to green when EXPOSE/compose agreed but CMD --port was
+        # gone, and uvicorn then silently listened on 8000. fail() records and
+        # continues, so skip the comparison when either declaration is missing.
+        absent = [name for name, hit in (("EXPOSE", expose), ("CMD --port", cmd_port)) if not hit]
+        if absent:
+            fail("E6", f"Dockerfile is missing {' and '.join(absent)} -- uvicorn defaults to 8000 "
+                       f"without an explicit --port")
+        else:
+            ports = {
+                "Dockerfile EXPOSE": expose.group(1),
+                "Dockerfile CMD --port": cmd_port.group(1),
+            } | {f"compose publish[{i}]": container for i, (_, _, container) in enumerate(publishes)}
+            distinct = set(ports.values())
+            if len(distinct) > 1:
+                fail("E6", f"container port disagrees across the Docker surface: {ports}")
+            elif publishes and all(h == "127.0.0.1:" for h, _, _ in publishes):
+                ok("E6", f"loopback publish; container port {next(iter(distinct))} "
+                         f"agrees across EXPOSE, CMD, and compose")
 
         unmounted = [d for d in _RUNTIME_STATE_DIRS
                      if not re.search(rf"(?m):/app/{re.escape(d)}(?::|\s|$)", compose_text)]
