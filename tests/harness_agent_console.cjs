@@ -132,7 +132,40 @@ async function github() {
   assert.doesNotMatch(output, /GitHub ready|tree attached|context injected|write access granted/i);
 }
 
-const scenarios = {staging, github};
+async function refusals() {
+  const typed = (status, code, message, details = {}) => ({status, body: {detail: {code, message, details}}});
+  const responses = [
+    [typed(409, 'AGENT_RUN_BUSY', 'another agent run is already in progress'), /AGENT_RUN_BUSY: another agent run/],
+    [typed(409, 'AGENT_RUN_BUSY', 'a local model chat turn is already running'), /AGENT_RUN_BUSY: a local model chat/],
+    [typed(422, 'AGENTIC_BUDGET_EXCEEDED', 'at 3 check profile(s) the most that fits is max_iterations=2',
+      {max_iterations_that_fit: 2}), /AGENTIC_BUDGET_EXCEEDED:.*max_iterations=2/],
+    [typed(403, 'TOOL_DENIED', 'agentic run is not in the broker allowlist'), /TOOL_DENIED: agentic run/],
+    [typed(500, 'OPS_FAILED', 'operation failed'), /confirm failed — staged run kept.*OPS_FAILED/],
+    [{status: 200, body: {ok: false, label: 'agent-run', exit_code: 4,
+      stderr: 'explicit confirmation required', parsed: null}}, /exit 4\).*explicit confirmation required/s],
+    [{status: 200, body: {ok: true, stdout: 'agentic.enabled is false', parsed: null}}, /disabled in config.yaml — nothing ran/],
+  ];
+  for (const [response, expected] of responses) {
+    const b = browser(() => response);
+    await stage(b.context);
+    await b.context.runSlash('/agent iterations 2');
+    await b.context.runSlash('/agent issue 42');
+    b.context.pendingAgentRun.plan = 'Reviewed plan text';
+    await b.context.runSlash('/agent read README.md');
+    const staged = JSON.stringify(b.context.pendingAgentRun);
+    await b.context.runSlash('/agent confirm');
+    assert.equal(b.calls.length, 0, 'missing reason must not dispatch');
+    await b.context.runSlash('/agent confirm reviewed this plan');
+    assert.equal(b.calls.length, 1, 'refusal must not retry or dispatch another action');
+    assert.equal(b.calls[0].url, '/api/agent/run');
+    assert.equal(b.calls[0].body.plan, 'Reviewed plan text');
+    assert.equal(JSON.stringify(b.context.pendingAgentRun), staged, 'refusal preserves the whole proposal');
+    assert.match(b.messages.join('\n'), expected);
+    assert.equal(b.context.sendBtn.disabled, false);
+  }
+}
+
+const scenarios = {staging, github, refusals};
 const scenario = process.argv[2];
 assert.ok(Object.hasOwn(scenarios, scenario), 'unknown runtime scenario');
 scenarios[scenario]().then(() => console.log(scenario + ': passed')).catch(error => {

@@ -252,7 +252,7 @@ def test_staged_agent_plan_read_paths_and_checks_reach_confirmation():
     assert "pendingAgentRun = stagedRun" in commands
 
 
-@pytest.mark.parametrize("scenario", ["staging", "github"])
+@pytest.mark.parametrize("scenario", ["staging", "github", "refusals"])
 def test_agent_console_runtime(scenario):
     # Execute the shipped JavaScript with Node's standard library; no browser,
     # service, npm package, or separate JS test framework is needed.
