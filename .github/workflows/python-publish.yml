@@ -30,6 +30,11 @@ jobs:
         with:
           # Match requires-python / CI matrix (pyproject.toml: >=3.12).
           python-version: "3.12"
+          cache: "pip"
+          # pip/build have no manifest pin (installed ad hoc below), so key
+          # the cache on the workflow file itself -- same pattern ci.yml and
+          # semgrep.yml already use for the identical situation.
+          cache-dependency-path: .github/workflows/python-publish.yml
 
       - name: Build release distributions
         run: |

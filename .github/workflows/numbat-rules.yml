@@ -62,6 +62,11 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+          cache: "pip"
+          # pytest/pyyaml have no manifest pin (installed ad hoc below), so
+          # key the cache on the workflow file itself -- same pattern
+          # ci.yml and semgrep.yml already use for the identical situation.
+          cache-dependency-path: .github/workflows/numbat-rules.yml
 
       - name: Live executor-jail events must produce zero hits
         env:
