@@ -65,7 +65,7 @@ from harness import schemas as _harness_schemas
 from harness.agent_policy import RUN_ID_RE, CheckProfileError, available_profiles, resolve_check_profiles
 from harness.config import _MAX_PORT, _MIN_USER_PORT, HarnessConfig, HarnessConfigError
 from harness.memory_notes import MemoryNotes, MemoryNotesError, rag_flags
-from harness.ollama import HarnessChatClient, HarnessLLMError
+from harness.ollama import DEFAULT_CHAT_TIMEOUT_SEC, HarnessChatClient, HarnessLLMError
 from harness.prompts import compose_system_prompt
 from harness.registry_view import full_registry
 from harness.schemas import (
@@ -233,7 +233,6 @@ _UNEXPECTED_FIELD = "(unexpected field)"
 # one is 32 chars; this bounds an oversized path segment without hiding a
 # near-miss the operator needs to see to spot their own typo.
 _MAX_ECHOED_RUN_ID_LEN = 64
-_DEFAULT_TIMEOUT_SEC = 300
 _DEFAULT_MAX_TOKENS = 4096
 _DEFAULT_TEMPERATURE = 0.3
 _MODEL_KEY = "model"
@@ -472,7 +471,7 @@ def _default_chat_client(backend: ResolvedLocalBackend) -> HarnessChatClient:
     return HarnessChatClient(
         base_url=backend.base_url,
         model=backend.model,
-        timeout_sec=float(llm.get("timeout_sec", _DEFAULT_TIMEOUT_SEC)),
+        timeout_sec=float(llm.get("timeout_sec", DEFAULT_CHAT_TIMEOUT_SEC)),
         api_key=backend.api_key,
         # Provider-gated upstream by resolve_local_backend, so a fallback to a
         # non-Ollama backend hands None through and the field is omitted.

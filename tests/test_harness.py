@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from harness.config import HarnessConfig, default_home
-from harness.ollama import HarnessChatClient, HarnessLLMError
+from harness.ollama import DEFAULT_CHAT_TIMEOUT_SEC, HarnessChatClient, HarnessLLMError
 from harness.prompts import _strip_frontmatter, compose_system_prompt
 from harness.registry_view import full_registry, list_governed_skills, list_mcp_tools, list_repo_skills
 from harness.skills_view import list_wired_skills, render_skills_diagram
@@ -487,6 +487,30 @@ def test_chat_client_disables_ambient_proxy():
     )
     try:
         assert chat._client.trust_env is False
+    finally:
+        chat.close()
+
+
+def test_chat_client_default_timeout_matches_local_27b_budget():
+    chat = HarnessChatClient(base_url="http://127.0.0.1:11434/v1", model="x")
+    try:
+        assert chat._timeout_sec == DEFAULT_CHAT_TIMEOUT_SEC
+    finally:
+        chat.close()
+
+
+def test_default_chat_client_uses_27b_timeout_when_config_key_is_absent(monkeypatch):
+    backend = SimpleNamespace(
+        base_url="http://127.0.0.1:11434/v1",
+        model="x",
+        api_key="",
+        reasoning_effort=None,
+    )
+    monkeypatch.setattr(harness_server, "_llm_settings", lambda: {})
+
+    chat = harness_server._default_chat_client(backend)
+    try:
+        assert chat._timeout_sec == DEFAULT_CHAT_TIMEOUT_SEC
     finally:
         chat.close()
 

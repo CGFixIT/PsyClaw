@@ -27,6 +27,9 @@ logger = logging.getLogger("cyclaw.harness.ollama")
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 _HTTP_OK = 200
 _ERROR_BODY_PREVIEW = 300
+# Keep missing-key/direct-construction behavior aligned with the shipped 27B
+# local-model budget. Explicit config values still override this fallback.
+DEFAULT_CHAT_TIMEOUT_SEC = 720.0
 
 
 class HarnessLLMError(AgenticError):
@@ -98,7 +101,7 @@ class HarnessChatClient:
         *,
         base_url: str,
         model: str,
-        timeout_sec: float = 300.0,
+        timeout_sec: float = DEFAULT_CHAT_TIMEOUT_SEC,
         api_key: str = "",
         reasoning_effort: str | None = None,
         transport: httpx.BaseTransport | None = None,
