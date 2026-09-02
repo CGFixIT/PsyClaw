@@ -1283,13 +1283,21 @@ jobs:
       - name: Discover skills and dependency profiles
         id: discover
         run: |
+          set -o pipefail
           SKILLS=$(find .claude/skills -maxdepth 1 -mindepth 1 -type d | sort | while read -r d; do
             if [ -f "$d/verify.sh" ] || [ -f "$d/smoke.sh" ]; then
               skill=$(basename "$d")
               case "$skill" in
                 CyClaw-Sandbox|index-doctor) profile=heavy ;;
                 config-guard|doc-sync|injection-redteam) profile=yaml ;;
-                *) profile=stdlib ;;
+                cyclaw-advisor|dep-guard|invariant-guard|otel-hardening|verify-deps) profile=stdlib ;;
+                *)
+                  # Unknown skills must fail closed: a silent stdlib default can
+                  # skip-green when the verifier needs PyYAML/runtime the stdlib
+                  # job does not install. Add an explicit heavy|yaml|stdlib arm.
+                  echo "error: unclassified skill '$skill' — add an explicit profile (heavy|yaml|stdlib) in discover-skills" >&2
+                  exit 1
+                  ;;
               esac
               jq -cn --arg skill "$skill" --arg profile "$profile" \
                 '{skill: $skill, profile: $profile}'
