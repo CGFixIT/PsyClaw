@@ -30,6 +30,14 @@ EXIT_OK = 0
 EXIT_FAIL = 2
 EXIT_ENV = 3
 
+# RSA-2048 keygen + self-sign is near-instant on any real machine; this only
+# bounds the pathological case (e.g. an entropy-starved container stalling
+# openssl's RNG read) so the operator gets a diagnostic instead of a silent
+# indefinite hang -- matching the timeout convention every other subprocess
+# call in this codebase already follows (sync/runner.py, agentic/gh_client.py,
+# agentic/writer.py, agentic/netconnect/client.py).
+_OPENSSL_TIMEOUT_SEC = 30
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CERT = "data/tls/cert.pem"
 _DEFAULT_KEY = "data/tls/key.pem"
@@ -127,8 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     ]
     try:
         completed = subprocess.run(  # noqa: S603 - argv list; openssl from which/fixed path
-            cmd, check=False, capture_output=True, text=True,
+            cmd, check=False, capture_output=True, text=True, timeout=_OPENSSL_TIMEOUT_SEC,
         )
+    except subprocess.TimeoutExpired as exc:
+        print(f"openssl req timed out after {_OPENSSL_TIMEOUT_SEC}s: {exc}", file=sys.stderr)
+        return EXIT_FAIL
     except OSError as exc:
         print(f"failed to run openssl: {exc}", file=sys.stderr)
         return EXIT_FAIL
