@@ -1,6 +1,6 @@
 # Remaining work
 
-Live checklist as of **2026-09-02**, verified against `origin/main` `b3309c5d`.
+Live checklist as of **2026-09-02**, verified against `origin/main` `8baea94f`.
 
 Code and `config.yaml` win. Re-list GitHub issues before acting.
 History of closed 2026-08-02 items lives in
@@ -60,7 +60,7 @@ Closed since the 2026-08-16 snapshot and not in the open table: [#958](https://g
 
 ## Open GitHub issues (re-list before acting)
 
-Exactly four OPEN issues on `cgfixit/CyClaw` as of this verification. The table
+Exactly five OPEN issues on `cgfixit/CyClaw` as of this verification. The table
 records each issue's closure gate; consult the issue body for optional,
 non-blocking cleanup that is not part of that gate.
 
@@ -68,7 +68,8 @@ non-blocking cleanup that is not part of that gate.
 |---|---|---|
 | [#1013](https://github.com/cgfixit/CyClaw/issues/1013) | Agentic spend ledger | Code ACs on main. Close-out is live-key Leg 1 (`tests/spend_live_probe.py`) + Leg 2 (`real-repo-run-plan --confirm-online`). Do not rebuild the emitter |
 | [#1128](https://github.com/cgfixit/CyClaw/issues/1128) | Numbat remainder | Slices A+B on main. Left: Slice C parked (on-path sequence policy needs a hashed session/checkpointer; #1071 keeps the offline detector off `/query`) and Slice D tracking (`source_agent` stays `"unknown"` until upstream accepts `cyclaw`) |
-| [#1129](https://github.com/cgfixit/CyClaw/issues/1129) | Unslop v1.1 leftover | v1 on main. Left: rewrite the stale “planning only, no code written” header on `docs/UNSLOP_INTEGRATION_PLAN.md`, then measure FP on an opt-in local run. Do not enable by default. Do not put it on `/query` |
+| [#1129](https://github.com/cgfixit/CyClaw/issues/1129) | Unslop v1.1 leftover | v1 on main; plan header restamped (no longer claims "planning only"). Left: measure FP on an opt-in local run. Do not enable by default. Do not put it on `/query` |
 | [#1252](https://github.com/cgfixit/CyClaw/issues/1252) | Authn process-local lock | Integrity already held. Left: harness same-origin port/scheme parity with gate_auth (#1205 leftover) and a live two-process `create_user` test. Do not demand `INSERT … ON CONFLICT` |
+| [#1255](https://github.com/cgfixit/CyClaw/issues/1255) | chromadb CVE / sqlite-vec | PostHog path is dead code at pin 1.5.9. sqlite-vec swap is a parked design (not this pass). Cheaper half: startup hash-pin of the telemetry maps + `Settings(anonymized_telemetry=False)` sites |
 
 Ignore PR #415 if it reappears (it is **closed**; still skip it during agentic coding if reopened).

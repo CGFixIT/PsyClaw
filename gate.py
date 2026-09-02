@@ -50,7 +50,7 @@ _BASE_DIR = Path(__file__).resolve().parent
 # credentials, and returns the mapping it enforced so the startup table below can
 # report it. Keep the local _TELEMETRY_KILL name: invariant-guard's G1 check
 # asserts (by AST) that an assignment to this name precedes the first heavy import.
-from utils.telemetry_kill import apply_telemetry_kill
+from utils.telemetry_kill import apply_telemetry_kill, verify_telemetry_contract
 
 _TELEMETRY_KILL = apply_telemetry_kill()
 
@@ -62,6 +62,7 @@ for k, v in _verified.items():
     # `v not in ("", "NOT SET")` check marked them MISSING on every startup.
     status = "OK" if v == _TELEMETRY_KILL[k] else "MISSING"
     print(f"  {status}  {k}={v}")
+verify_telemetry_contract()
 
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 try:
