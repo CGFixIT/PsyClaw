@@ -677,6 +677,15 @@ jobs:
             tests/test_fsconnect_macos_real.py \
             tests/test_macos_fsconnect_setup.py::test_installer_enabled_profile_lists_stats_reads_and_dry_runs_writes
 
+      - name: macOS real launchd scheduler integration
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # Same reasoning as the fsconnect step above: the full-suite `-q`
+          # progress alone cannot show whether the real launchctl probe ran
+          # or was silently skipped.
+          pytest -vv -rs tests/test_launchd_scheduler_macos_real.py
+
       - name: Windows native fsconnect handle-authority integration
         if: runner.os == 'Windows'
         shell: bash
