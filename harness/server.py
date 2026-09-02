@@ -723,9 +723,15 @@ def create_app(
         loopback. It is not: Origin is scheme+host+port (issue #1201 / #1252).
         A page at ``http://127.0.0.1:9999`` or ``https://127.0.0.1:8790`` must
         not pass as this console. Port/scheme are taken from THIS request's
-        live URL, not from config, matching gate_auth.py. Loopback aliases
-        (127.0.0.1 / localhost / ::1) stay interchangeable -- the harness has
-        no LAN allow-list to confuse with same-origin.
+        live URL, not from config, matching gate_auth.py.
+
+        Host is compared exactly against ``request.url.hostname`` as well
+        (gate_auth #1205). ``localhost`` and ``127.0.0.1`` are different
+        browser origins even though both names are in ``_LOOPBACK_HOSTS``;
+        a page served on one must not drive the other. Membership in
+        ``_LOOPBACK_HOSTS`` stays as a second, independent condition so an
+        unvalidated Host (TrustedHostMiddleware wildcard) can never be
+        "matched" by an equally attacker-chosen Origin.
         """
         site = request.headers.get("sec-fetch-site")
         if site is not None and site not in ("same-origin", "none"):
@@ -764,8 +770,10 @@ def create_app(
                 },
             ) from None
         same_origin = (
-            origin_hostname in _LOOPBACK_HOSTS
-            and parsed is not None
+            parsed is not None
+            and origin_hostname is not None
+            and origin_hostname in _LOOPBACK_HOSTS
+            and origin_hostname == request.url.hostname
             and parsed.scheme == request.url.scheme
             and _canonical_port(origin_port, parsed.scheme)
             == _canonical_port(request.url.port, request.url.scheme)
