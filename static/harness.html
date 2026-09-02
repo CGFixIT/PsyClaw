@@ -510,27 +510,60 @@ async function api(path, method, body, timeoutMs) {
      Long-running routes (agent run/CLI-backed reads) pass their own timeoutMs
      sized above the server-side subprocess budget, so the server's typed
      AGENTIC_TIMEOUT/OPS envelope wins the race instead of a generic abort. */
-  const resp = opts.signal
-    ? await fetch(path, opts)
-    : await fetchWithTimeout(path, opts, timeoutMs || 15000);
+  let resp;
+  try {
+    resp = opts.signal
+      ? await fetch(path, opts)
+      : await fetchWithTimeout(path, opts, timeoutMs || 15000);
+  } catch (e) {
+    const message = e && typeof e.message === 'string' ? e.message : '';
+    const isFetchFailure = (e && e.name === 'AbortError') || e instanceof TypeError ||
+      /failed to fetch|load failed|networkerror/i.test(message);
+    if (!isFetchFailure) throw e;
+    const target = new URL(path, window.location.href).href;
+    const err = new Error(
+      'NETWORK: cannot reach the harness API at ' + target +
+      '. Open http://127.0.0.1:8790/ unless CYCLAW_HARNESS_PORT overrides the default.'
+    );
+    /* Preserve AbortError so an intentional /loop stop remains silent in
+       sendChat(), while every visible abort gets the actionable message. */
+    err.name = e && e.name === 'AbortError' ? 'AbortError' : 'NetworkError';
+    err.code = 'NETWORK';
+    err.details = { path: path, target: target };
+    throw err;
+  }
   let data = null;
-  try { data = await resp.json(); } catch (e) { /* non-JSON error body */ }
+  try {
+    data = await resp.json();
+  } catch (e) {
+    if (resp.ok) throw new Error('HTTP ' + resp.status + ' non-JSON from ' + path);
+    /* Preserve the HTTP status below for non-JSON error bodies. */
+  }
   if (!resp.ok) {
-    const d = data && data.detail;
-    let msg = d && d.message ? d.code + ': ' + d.message : ('HTTP ' + resp.status);
+    const d = data && data.detail !== undefined ? data.detail : data;
+    const validation = Array.isArray(d) && d.length ? d[0] : null;
+    const typed = d && !Array.isArray(d) && typeof d === 'object' ? d : null;
+    const code = typed && typed.code ? typed.code : '';
+    let msg = typed && typed.message
+      ? (code ? code + ': ' : 'HTTP ' + resp.status + ': ') + typed.message
+      : validation && validation.msg
+        ? 'HTTP ' + resp.status + ': ' + validation.msg
+        : typeof d === 'string'
+          ? 'HTTP ' + resp.status + ': ' + d
+          : 'HTTP ' + resp.status;
     /* The console's key input sends a Bearer to the server, but the server
        compares it against CYCLAW_API_KEY in its own process environment. When
        that env var is unset, typing a key here cannot help until the server is
        restarted with the key sourced from the shell. Make that explicit so the
        operator does not think the input field is broken. */
-    if (d && d.code === 'UNAUTHORIZED' && d.details && d.details.reason === 'key_not_configured') {
+    if (typed && typed.code === 'UNAUTHORIZED' && typed.details && typed.details.reason === 'key_not_configured') {
       msg += '\nThe harness server was started without CYCLAW_API_KEY in its environment. Set it in the shell that launches the harness and restart; typing it here only works when the server already has the same key configured.';
     }
     const err = new Error(msg);
-    err.code = d && d.code ? d.code : '';
-    err.details = d && d.details ? d.details : {};
+    err.code = code;
+    err.details = typed && typed.details ? typed.details : {};
     const headerWait = parseInt(resp.headers.get('Retry-After') || '0', 10);
-    const bodyWait = d && d.details && d.details.retry_after_sec;
+    const bodyWait = typed && typed.details && typed.details.retry_after_sec;
     err.retryAfter = headerWait || (typeof bodyWait === 'number' ? bodyWait : 0);
     throw err;
   }
@@ -803,6 +836,10 @@ function showAgentRecord(rec) {
 /* ── slash commands ── */
 async function runSlash(line) {
   const parts = line.slice(1).split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    sys('unknown command: / — try /help');
+    return;
+  }
   const cmd = parts[0].toLowerCase();
   const rest = parts.slice(1);
   const arg = rest.join(' ').trim();

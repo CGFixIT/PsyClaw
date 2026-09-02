@@ -438,6 +438,40 @@ def test_slash_commands_are_case_insensitive():
     assert "const cmd = parts[0].toLowerCase();" in body
 
 
+def test_console_api_errors_preserve_actionable_failure_details():
+    """The console must not collapse transport and response failures into
+    Safari/WebKit's opaque ``Type error`` or a bare HTTP status."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("async function api(")
+    end = html.index("/* ── status / statusbar ── */", start)
+    body = html[start:end]
+
+    assert "e instanceof TypeError" in body
+    assert "e.name === 'AbortError'" in body
+    assert "new URL(path, window.location.href).href" in body
+    assert "NETWORK: cannot reach the harness API at " in body
+    assert "http://127.0.0.1:8790/" in body
+    assert "CYCLAW_HARNESS_PORT" in body
+    assert "HTTP ' + resp.status + ' non-JSON from ' + path" in body
+    assert "Array.isArray(d) && d.length ? d[0]" in body
+    assert "'HTTP ' + resp.status + ': ' + validation.msg" in body
+    assert "data.detail !== undefined ? data.detail : data" in body
+
+
+def test_lone_slash_is_rejected_before_command_normalization():
+    """A lone slash has no command token and must never dereference parts[0]."""
+    html = _HARNESS_HTML.read_text(encoding="utf-8")
+    start = html.index("async function runSlash(")
+    end = html.index("/* ── chat ── */", start)
+    body = html[start:end]
+
+    guard = "if (!parts.length)"
+    normalize = "const cmd = parts[0].toLowerCase();"
+    assert guard in body
+    assert "unknown command: / — try /help" in body
+    assert body.index(guard) < body.index(normalize)
+
+
 def test_loop_stop_is_recognized_while_in_flight():
     """/loop stop must halt an in-flight chat even with extra whitespace or
     mixed case, matching the parsing used by the normal slash dispatcher."""
