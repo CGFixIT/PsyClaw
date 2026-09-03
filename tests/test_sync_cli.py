@@ -530,3 +530,147 @@ def test_main_maps_typed_errors_and_does_not_mask_untyped_bugs(monkeypatch):
     monkeypatch.setattr("sync.cli.cmd_status", lambda _a: (_ for _ in ()).throw(RuntimeError("a real bug")))
     with pytest.raises(RuntimeError, match="a real bug"):
         main(["status"])
+
+
+# ---------------------------------------------------------------------------
+# Remaining cmd_* error / reporting branches
+# ---------------------------------------------------------------------------
+
+def test_get_scheduler_lazy_import_returns_real_callable():
+    # Lines 68-70: the lazy proxy must import and forward to sync.scheduler.
+    cfg = _cfg()
+    with patch("sync.scheduler.get_scheduler") as real:
+        real.return_value = MagicMock(name="scheduler")
+        from sync.cli import get_scheduler
+
+        out = get_scheduler(cfg)
+    real.assert_called_once_with(cfg)
+    assert out is real.return_value
+
+
+def test_setup_bad_config_exit_env():
+    with patch("sync.cli.load_sync_config", side_effect=SyncConfigError("bad setup")):
+        assert main(["setup"]) == EXIT_ENV
+
+
+def test_setup_rclone_missing_exit_env():
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", side_effect=RcloneNotInstalledError("no rclone")):
+        assert main(["setup"]) == EXIT_ENV
+
+
+def test_setup_filter_write_oserror_exit_env():
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.write_filter_file", side_effect=OSError("readonly")):
+        assert main(["setup"]) == EXIT_ENV
+
+
+def test_setup_schedule_scheduler_error_exit_env():
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.write_filter_file", return_value="/tmp/filters.txt"), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.install.side_effect = SchedulerError("cannot schedule")
+        assert main(["setup", "--schedule"]) == EXIT_ENV
+
+
+def test_setup_schedule_warns_when_entry_has_note(capsys):
+    entry = MagicMock(cron_or_time="0 2 * * *", platform_name="cron", note="drift warning")
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.write_filter_file", return_value="/tmp/filters.txt"), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.install.return_value = entry
+        assert main(["setup", "--schedule"]) == EXIT_OK
+    assert "drift warning" in capsys.readouterr().err
+
+
+def test_auto_reindex_oserror_launch_returns_exit_fail(capsys):
+    cfg = _cfg()
+    cfg.auto_reindex = True
+    with patch("sync.cli.load_sync_config", return_value=cfg), \
+         patch("sync.cli.run_sync", return_value=_result(corpus_changed=True)), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_REINDEX), \
+         patch("sync.cli.subprocess.run", side_effect=OSError("exec format error")):
+        assert main(["sync"]) == EXIT_FAIL
+    assert "Could not launch the indexer" in capsys.readouterr().err
+
+
+def test_sync_prints_result_errors(capsys):
+    result = _result(success=False)
+    result.errors = ["rclone said no", "second error line"]
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.run_sync", return_value=result), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_FAIL):
+        assert main(["sync"]) == EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "rclone said no" in err
+    assert "second error line" in err
+
+
+def test_sync_prints_failed_check_result(capsys):
+    result = _result()
+    cr = MagicMock()
+    cr.ok = False
+    cr.differences = 2
+    cr.missing_local = 1
+    cr.missing_remote = 1
+    cr.errors = ["remote missing file.md"]
+    result.check_result = cr
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.run_sync", return_value=result), \
+         patch("sync.cli.reindex_exit_code_for", return_value=EXIT_OK):
+        assert main(["sync"]) == EXIT_OK
+    out = capsys.readouterr()
+    assert "check_differences" in out.out
+    assert "remote missing file.md" in out.err
+
+
+def test_unschedule_bad_config_exit_env():
+    with patch("sync.cli.load_sync_config", side_effect=SyncConfigError("bad")):
+        assert main(["unschedule"]) == EXIT_ENV
+
+
+def test_unschedule_scheduler_error_exit_env():
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.remove.side_effect = SchedulerError("locked")
+        assert main(["unschedule"]) == EXIT_ENV
+
+
+def test_unschedule_reports_when_nothing_registered(capsys):
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.remove.return_value = False
+        assert main(["unschedule"]) == EXIT_OK
+    assert "No CyClaw scheduled job was registered" in capsys.readouterr().out
+
+
+def test_status_reports_scheduled_entry_with_note(capsys):
+    entry = MagicMock(cron_or_time="0 3 * * *", note="frequency drift")
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.status.return_value = entry
+        assert main(["status"]) == EXIT_OK
+    captured = capsys.readouterr()
+    assert "0 3 * * *" in captured.out
+    assert "frequency drift" in captured.err
+
+
+def test_status_scheduler_error_is_warning(capsys):
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.get_scheduler") as mgs:
+        mgs.return_value.status.side_effect = SchedulerError("cannot read")
+        assert main(["status"]) == EXIT_OK
+    assert "Could not read scheduler state" in capsys.readouterr().err
+
+
+def test_status_scheduler_import_error_is_warning(capsys):
+    with patch("sync.cli.load_sync_config", return_value=_cfg()), \
+         patch("sync.cli.check_rclone_version", return_value=(1, 70, 0)), \
+         patch("sync.cli.get_scheduler", side_effect=ImportError("no scheduler")):
+        assert main(["status"]) == EXIT_OK
+    assert "Scheduler module unavailable" in capsys.readouterr().err

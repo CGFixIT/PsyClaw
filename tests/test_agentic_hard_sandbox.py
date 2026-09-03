@@ -16,12 +16,18 @@ from pathlib import Path
 import pytest
 
 from agentic.executor.hard_sandbox import (
+    ArgvListSandbox,
     DarwinSeatbeltSandbox,
     HardSandboxUnavailable,
     LinuxNetnsSandbox,
     WindowsJobObjectSandbox,
+    _assign_pid,
+    _create_job,
+    _kill_sandbox_tree,
     production_sandbox,
     seatbelt_profile,
+    stream_to_str,
+    truncate_output,
 )
 from agentic.executor.runner import Check, run_verification
 from utils.errors import AgenticError
@@ -188,3 +194,295 @@ def test_job_object_uses_disposable_home_not_operator_home(tmp_path: Path) -> No
         )],
     )
     assert report.ok is True
+
+
+def test_stream_to_str_none_str_and_bytes() -> None:
+    assert stream_to_str(None) == ""
+    assert stream_to_str("already text") == "already text"
+    assert stream_to_str(b"bytes\xfftext") == "bytes\ufffdtext"
+
+
+def test_truncate_output_passthrough_and_cap() -> None:
+    from agentic.executor import hard_sandbox as hs
+
+    assert truncate_output("short") == "short"
+    huge = "x" * (hs.MAX_OUTPUT_CHARS + 10)
+    out = truncate_output(huge)
+    assert out.startswith("x" * hs.MAX_OUTPUT_CHARS)
+    assert "truncated" in out
+
+
+def test_production_sandbox_selects_darwin_and_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", lambda cmd: "/usr/bin/sandbox-exec")
+    assert isinstance(production_sandbox(), DarwinSeatbeltSandbox)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", lambda cmd: "/usr/bin/unshare")
+
+    class _Probe:
+        returncode = 0
+        stderr = b""
+
+    monkeypatch.setattr(
+        "agentic.executor.hard_sandbox.subprocess.run",
+        lambda *a, **k: _Probe(),
+    )
+    assert isinstance(production_sandbox(), LinuxNetnsSandbox)
+
+    monkeypatch.setattr(sys, "platform", "aix")
+    with pytest.raises(HardSandboxUnavailable, match="no hard-sandbox backend"):
+        production_sandbox()
+
+
+def test_darwin_seatbelt_run_wraps_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", lambda cmd: "/usr/bin/sandbox-exec")
+    seen: dict[str, object] = {}
+
+    def _fake_run(self, argv, *, cwd, env, timeout_sec):  # noqa: ANN001
+        seen["argv"] = list(argv)
+        seen["env"] = dict(env)
+        from agentic.executor.hard_sandbox import SandboxOutcome
+
+        return SandboxOutcome(exit_code=0, stdout="ok")
+
+    monkeypatch.setattr(ArgvListSandbox, "run", _fake_run)
+    backend = DarwinSeatbeltSandbox()
+    outcome = backend.run([sys.executable, "-c", "pass"], cwd=tmp_path, env={"PATH": "/bin"}, timeout_sec=5)
+    assert outcome.exit_code == 0
+    assert seen["argv"][0] == "/usr/bin/sandbox-exec"
+    assert seen["argv"][1] == "-p"
+    assert "--" in seen["argv"]
+    assert "TMPDIR" in seen["env"]  # type: ignore[operator]
+
+
+def test_linux_netns_probe_oserror_and_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", lambda cmd: "/usr/bin/unshare")
+
+    def _oserror(*_a, **_k):
+        raise OSError("probe blocked")
+
+    monkeypatch.setattr("agentic.executor.hard_sandbox.subprocess.run", _oserror)
+    with pytest.raises(HardSandboxUnavailable, match="could not run"):
+        LinuxNetnsSandbox()
+
+    class _Bad:
+        returncode = 1
+        stderr = b"EPERM"
+
+    monkeypatch.setattr(
+        "agentic.executor.hard_sandbox.subprocess.run",
+        lambda *a, **k: _Bad(),
+    )
+    with pytest.raises(HardSandboxUnavailable, match="probe failed"):
+        LinuxNetnsSandbox()
+
+
+def test_linux_netns_run_wraps_unshare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agentic.executor.hard_sandbox.shutil.which", lambda cmd: "/usr/bin/unshare")
+
+    class _Probe:
+        returncode = 0
+        stderr = b""
+
+    monkeypatch.setattr(
+        "agentic.executor.hard_sandbox.subprocess.run",
+        lambda *a, **k: _Probe(),
+    )
+    seen: dict[str, object] = {}
+
+    def _fake_run(self, argv, *, cwd, env, timeout_sec):  # noqa: ANN001
+        seen["argv"] = list(argv)
+        from agentic.executor.hard_sandbox import SandboxOutcome
+
+        return SandboxOutcome(exit_code=0)
+
+    monkeypatch.setattr(ArgvListSandbox, "run", _fake_run)
+    backend = LinuxNetnsSandbox()
+    outcome = backend.run(["echo", "hi"], cwd=tmp_path, env={}, timeout_sec=2)
+    assert outcome.exit_code == 0
+    assert seen["argv"][:3] == ["/usr/bin/unshare", "--net", "--"]
+
+
+def test_argv_list_sets_start_new_session_off_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    captured: dict[str, object] = {}
+
+    class _Proc:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    def _popen(argv, **kwargs):
+        captured.update(kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    ArgvListSandbox().run(["true"], cwd=tmp_path, env={}, timeout_sec=1)
+    assert captured.get("start_new_session") is True
+
+
+def test_kill_sandbox_tree_posix_uses_killpg(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+    calls: list[tuple[int, int]] = []
+
+    def _killpg(pid: int, sig: int) -> None:
+        calls.append((pid, sig))
+
+    monkeypatch.setattr(os, "killpg", _killpg, raising=False)
+
+    class _Proc:
+        pid = 4242
+
+        def kill(self) -> None:
+            raise AssertionError("killpg succeeded; proc.kill must not run")
+
+    _kill_sandbox_tree(_Proc())  # type: ignore[arg-type]
+    assert calls == [(4242, 9)]
+
+
+def test_kill_sandbox_tree_posix_falls_back_on_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(signal, "SIGKILL", 9, raising=False)
+
+    def _boom(pid: int, sig: int) -> None:
+        raise OSError("no process group")
+
+    monkeypatch.setattr(os, "killpg", _boom, raising=False)
+    killed = {"n": 0}
+
+    class _Proc:
+        pid = 7
+
+        def kill(self) -> None:
+            killed["n"] += 1
+
+    _kill_sandbox_tree(_Proc())  # type: ignore[arg-type]
+    assert killed["n"] == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object helpers are Windows-only")
+def test_job_object_popen_fallback_and_assign_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    class _BoomProc:
+        def __init__(self, *a, **k):
+            raise OSError("create failed")
+
+    monkeypatch.setattr(subprocess, "Popen", _BoomProc)
+    outcome = WindowsJobObjectSandbox().run(
+        ["missing-bin"], cwd=tmp_path, env={}, timeout_sec=1
+    )
+    assert outcome.exit_code == -2
+    assert "could not execute" in outcome.stderr
+
+    class _Alive:
+        pid = 999001
+        returncode = None
+
+        def __init__(self, *a, **k):
+            pass
+
+        def kill(self) -> None:
+            self.returncode = -1
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    monkeypatch.setattr(subprocess, "Popen", _Alive)
+    monkeypatch.setattr("agentic.executor.hard_sandbox._assign_pid", lambda job, pid: False)
+    outcome = WindowsJobObjectSandbox().run(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, env={}, timeout_sec=1
+    )
+    assert outcome.exit_code == -2
+    assert "AssignProcessToJobObject failed" in outcome.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object helpers are Windows-only")
+def test_job_object_double_timeout_drain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    class _Hung:
+        pid = 999002
+        returncode = None
+        _n = 0
+
+        def __init__(self, *a, **k):
+            pass
+
+        def communicate(self, timeout=None):
+            self._n += 1
+            if self._n == 1:
+                raise subprocess.TimeoutExpired(cmd=["x"], timeout=timeout or 1)
+            if self._n == 2:
+                raise subprocess.TimeoutExpired(cmd=["x"], timeout=timeout or 5)
+            return ("drained", "")
+
+        def kill(self) -> None:
+            self.returncode = -1
+
+    monkeypatch.setattr(subprocess, "Popen", _Hung)
+    monkeypatch.setattr("agentic.executor.hard_sandbox._assign_pid", lambda job, pid: True)
+    monkeypatch.setattr("agentic.executor.hard_sandbox._terminate_job", lambda job: None)
+    outcome = WindowsJobObjectSandbox().run(
+        [sys.executable, "-c", "pass"], cwd=tmp_path, env={}, timeout_sec=1
+    )
+    assert outcome.timed_out is True
+    assert outcome.exit_code == -1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object helpers are Windows-only")
+def test_create_job_and_assign_pid_failure_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    import agentic.executor.hard_sandbox as hs
+
+    class _FakeK32:
+        def CreateJobObjectW(self, *_a):
+            return 0
+
+        def SetInformationJobObject(self, *_a):
+            return 0
+
+        def CloseHandle(self, *_a):
+            return 1
+
+        def OpenProcess(self, *_a):
+            return 0
+
+        def AssignProcessToJobObject(self, *_a):
+            return 0
+
+    def _fake_kernel():
+        import ctypes
+
+        return ctypes, ctypes.wintypes, _FakeK32()
+
+    monkeypatch.setattr(hs, "_win_kernel32", _fake_kernel)
+    with pytest.raises(HardSandboxUnavailable, match="CreateJobObjectW"):
+        _create_job()
+
+    class _FakeK32SetFail(_FakeK32):
+        def CreateJobObjectW(self, *_a):
+            return 1234
+
+    def _fake_kernel_set():
+        import ctypes
+
+        return ctypes, ctypes.wintypes, _FakeK32SetFail()
+
+    monkeypatch.setattr(hs, "_win_kernel32", _fake_kernel_set)
+    with pytest.raises(HardSandboxUnavailable, match="SetInformationJobObject"):
+        _create_job()
+
+    assert _assign_pid(1, 2) is False

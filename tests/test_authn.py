@@ -24,6 +24,7 @@ from utils.authn import (
     new_session_id,
     next_lock_until,
     validate_password,
+    validate_role,
     validate_username,
     verify_password,
 )
@@ -169,6 +170,21 @@ class TestPolicy:
     def test_hash_password_enforces_the_policy(self):
         with pytest.raises(PasswordPolicyError):
             hash_password("tooshort")
+
+    @pytest.mark.parametrize("bad", [None, 12, b"bytes", True])
+    def test_non_string_role_username_password_rejected(self, bad):
+        with pytest.raises(PasswordPolicyError, match="role must be a string"):
+            validate_role(bad)  # type: ignore[arg-type]
+        with pytest.raises(PasswordPolicyError, match="username must be a string"):
+            validate_username(bad)  # type: ignore[arg-type]
+        with pytest.raises(PasswordPolicyError, match="password must be a string"):
+            validate_password(bad)  # type: ignore[arg-type]
+
+    def test_scrypt_rejects_non_power_of_two_n_without_raising(self):
+        salt = base64.b64encode(b"0123456789abcdef").decode()
+        expected = base64.b64encode(b"0" * 32).decode()
+        record = f"scrypt$3$8$1${salt}${expected}"
+        assert verify_password(_GOOD, record) == (False, False)
 
 
 class TestLockout:

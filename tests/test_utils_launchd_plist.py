@@ -169,3 +169,38 @@ def test_wrap_with_keychain_secrets_chains_in_order() -> None:
         "/wrapper.sh", "svc-b", "VAR_B", "--",
         "python", "poll",
     ]
+
+def test_probe_python_raises_when_imports_missing() -> None:
+    with patch(
+        "utils.launchd_plist.subprocess.run",
+        return_value=_completed(returncode=1),
+    ):
+        try:
+            launchd_plist._probe_python("/fake/python")
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "fastapi/uvicorn" in str(exc)
+
+
+def test_python_executable_uses_cyclaw_home_venv(tmp_path: Path, monkeypatch) -> None:
+    venv_py = tmp_path / "venv" / "bin" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text("", encoding="utf-8")
+    monkeypatch.delenv("CYCLAW_PYTHON", raising=False)
+    monkeypatch.setenv("CYCLAW_HOME", str(tmp_path))
+    with patch("utils.launchd_plist._probe_python") as probe:
+        assert launchd_plist.python_executable() == str(venv_py)
+        probe.assert_called_once_with(str(venv_py))
+
+
+def test_python_executable_falls_back_to_which(monkeypatch) -> None:
+    monkeypatch.delenv("CYCLAW_PYTHON", raising=False)
+    monkeypatch.delenv("CYCLAW_HOME", raising=False)
+    monkeypatch.setattr(launchd_plist.sys, "executable", "")
+    monkeypatch.setattr(launchd_plist.os.path, "isfile", lambda _p: False)
+    monkeypatch.setattr(launchd_plist.shutil, "which", lambda name: "/usr/bin/python3" if name == "python3" else None)
+    with patch("utils.launchd_plist._probe_python") as probe:
+        assert launchd_plist.python_executable() == "/usr/bin/python3"
+        probe.assert_called_once_with("/usr/bin/python3")
+    monkeypatch.setattr(launchd_plist.shutil, "which", lambda _name: None)
+    assert launchd_plist.python_executable() == "python"

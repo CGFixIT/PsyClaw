@@ -75,6 +75,30 @@ class TestAuditLogPathAnchoring:
         assert absolute.exists()
 
 
+class TestCloseAuditHandles:
+    def test_close_swallows_oserror_on_handle(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        bad = MagicMock()
+        bad.close.side_effect = OSError("already torn down")
+        monkeypatch.setitem(logger._AUDIT_HANDLES, pathlib.Path("x"), bad)
+        logger.close_audit_handles()
+        assert logger._AUDIT_HANDLES == {}
+
+
+class TestSetupLoggingLoadsConfig:
+    def test_setup_logging_reads_config_when_cfg_omitted(self, monkeypatch):
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+        monkeypatch.setattr(
+            logger,
+            "_get_config",
+            lambda: {"logging": {"level": "WARNING", "log_file": ""}},
+        )
+        logger.setup_logging()
+        assert logger._logging_initialized is True
+        monkeypatch.setattr(logger, "_logging_initialized", False)
+
+
 class TestAuditLogWriteFailure:
     """audit_logger is the unconditional terminal node every graph path
     converges on (invariant I4), running AFTER the answer is already

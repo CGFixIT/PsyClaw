@@ -178,3 +178,53 @@ class TestBuildOutputGuardEnabled:
         monkeypatch.setattr("guardrails.config.load_guardrails_config", _boom)
         with pytest.raises(GuardrailsConfigError):
             build_output_guard({"guardrails": {"enabled": True}})
+
+
+class TestBuildGenerateGuardEnabled:
+    """build_generate_guard enabled branch — same load_guardrails_config seam."""
+
+    def _patch_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "guardrails.config.load_guardrails_config",
+            lambda: GuardrailsConfig(
+                enabled=True,
+                block_message="BLOCKED_BY_BRIDGE",
+                metrics_path=str(tmp_path / "guardrails.jsonl"),
+            ),
+        )
+
+    def test_enabled_returns_a_callable(self, tmp_path, monkeypatch):
+        self._patch_config(monkeypatch, tmp_path)
+        guard = build_generate_guard({"guardrails": {"enabled": True}})
+        assert callable(guard)
+
+    def test_returned_guard_forwards_to_guarded_generate(self, tmp_path, monkeypatch):
+        self._patch_config(monkeypatch, tmp_path)
+        # Degrade NeMo engine so the wrap still reaches client.generate.
+        monkeypatch.setattr("guardrails.broker.GuardrailBroker._engine", lambda self: None)
+
+        class _Client:
+            def __init__(self) -> None:
+                self.spend = None
+
+            def generate(self, prompt: str, *, spend_context=None) -> str:
+                self.spend = spend_context
+                return f"ok:{prompt}"
+
+        guard = build_generate_guard({"guardrails": {"enabled": True}})
+        client = _Client()
+        spend = {"n": 1}
+        answer, err = guard(client, "hello", query="q", label="LLM", spend_context=spend)
+        assert answer == "ok:hello"
+        assert err is None
+        assert client.spend is spend
+
+    def test_invalid_guardrails_block_fails_fast(self, monkeypatch):
+        from guardrails.errors import GuardrailsConfigError
+
+        def _boom():
+            raise GuardrailsConfigError("bad config")
+
+        monkeypatch.setattr("guardrails.config.load_guardrails_config", _boom)
+        with pytest.raises(GuardrailsConfigError):
+            build_generate_guard({"guardrails": {"enabled": True}})

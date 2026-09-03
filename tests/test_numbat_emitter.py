@@ -484,3 +484,303 @@ def test_rollover_reclaims_an_abandoned_lock(tmp_path: Path) -> None:
 
     assert live.with_name(live.name + ".1").exists(), "abandoned lock should be reclaimed"
     assert not lock_path.exists()
+
+
+def test_max_bytes_garbage_falls_back_to_default() -> None:
+    assert numbat_emitter._max_bytes({"numbat": {"max_bytes": "nope"}}) == numbat_emitter.DEFAULT_MAX_BYTES
+    assert numbat_emitter._max_bytes({"numbat": {"max_bytes": None}}) == numbat_emitter.DEFAULT_MAX_BYTES
+    assert numbat_emitter._max_bytes({"numbat": {"max_bytes": -5}}) == 0
+
+
+def test_build_endpoint_arch_and_device_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(numbat_emitter.platform, "machine", lambda: "aarch64")
+    monkeypatch.setenv("NUMBAT_DEVICE_ID", "dev-123")
+    ep = build_endpoint()
+    assert ep["arch"] == "arm64"
+    assert ep["device_id"] == "dev-123"
+
+    monkeypatch.setattr(numbat_emitter.platform, "machine", lambda: "riscv64")
+    ep2 = build_endpoint()
+    assert ep2["arch"] == "riscv64"
+
+
+def test_build_endpoint_getuser_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> str:
+        raise OSError("no user")
+
+    monkeypatch.setattr(numbat_emitter.getpass, "getuser", boom)
+    ep = build_endpoint()
+    assert ep["username"] == "unknown"
+
+
+def test_build_event_normalizes_bad_enums() -> None:
+    record = build_event(
+        "command.exec",
+        command="echo",
+        confidence="nope",  # type: ignore[arg-type]
+        decision="maybe",  # type: ignore[arg-type]
+        approval_decision="nah",  # type: ignore[arg-type]
+        actor="robot",  # type: ignore[arg-type]
+    )
+    assert record["confidence"] == "high"
+    assert "decision" not in record
+    assert "approval_decision" not in record
+    assert "actor" not in record
+
+
+def test_build_event_rejects_schema_extras(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        numbat_emitter,
+        "_KNOWN_FIELDS",
+        frozenset(numbat_emitter._KNOWN_FIELDS) - {"command"},
+    )
+    with pytest.raises(ValueError, match="schema extras rejected"):
+        build_event("command.exec", command="echo hi")
+
+
+def test_handle_still_points_at_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "n.ndjsonl"
+    path.write_text("", encoding="utf-8")
+    handle = path.open("a", encoding="utf-8")
+    try:
+        monkeypatch.setattr(
+            numbat_emitter.os,
+            "fstat",
+            lambda _fd: (_ for _ in ()).throw(OSError("gone")),
+        )
+        assert numbat_emitter._handle_still_points_at(handle, path) is False
+    finally:
+        handle.close()
+
+
+def test_numbat_handle_reopens_when_inode_diverges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "n.ndjsonl"
+    path.write_text("old\n", encoding="utf-8")
+    with numbat_emitter._WRITE_LOCK:
+        first = numbat_emitter._numbat_handle(path)
+        first.write("cached\n")
+        first.flush()
+        monkeypatch.setattr(numbat_emitter, "_handle_still_points_at", lambda _h, _p: False)
+        second = numbat_emitter._numbat_handle(path)
+        assert second is not first
+        second.write("fresh\n")
+        second.flush()
+    close_numbat_handles()
+    assert "fresh" in path.read_text(encoding="utf-8")
+
+
+def test_numbat_handle_close_oserror_on_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "n.ndjsonl"
+    path.write_text("", encoding="utf-8")
+    with numbat_emitter._WRITE_LOCK:
+        handle = numbat_emitter._numbat_handle(path)
+
+        def boom_close() -> None:
+            raise OSError("close failed")
+
+        monkeypatch.setattr(handle, "close", boom_close)
+        monkeypatch.setattr(numbat_emitter, "_handle_still_points_at", lambda _h, _p: False)
+        # Must not raise; reopens a fresh handle.
+        numbat_emitter._numbat_handle(path)
+    close_numbat_handles()
+
+
+def test_close_numbat_handles_swallows_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "n.ndjsonl"
+    with numbat_emitter._WRITE_LOCK:
+        handle = numbat_emitter._numbat_handle(path)
+
+        def boom_close() -> None:
+            raise OSError("close failed")
+
+        monkeypatch.setattr(handle, "close", boom_close)
+    close_numbat_handles()
+    assert numbat_emitter._NUMBAT_HANDLES == {}
+
+
+def test_rollover_stat_oserror_after_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    live = tmp_path / "numbat-events.ndjsonl"
+    live.write_text("x" * 500, encoding="utf-8")
+    real_stat = Path.stat
+    live_stats = {"n": 0}
+
+    def flaky_stat(self, *a, **k):
+        if self == live or self.resolve() == live.resolve():
+            live_stats["n"] += 1
+            # First size check succeeds; re-check under the lock fails.
+            if live_stats["n"] >= 2:
+                raise OSError("stat failed")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+    numbat_emitter._rollover_if_needed(live, 100)
+    monkeypatch.undo()
+    assert live.exists()
+    assert not live.with_name(live.name + ".1").exists()
+
+
+def test_rollover_handle_close_and_replace_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = tmp_path / "numbat-events.ndjsonl"
+    live.write_text("x" * 500, encoding="utf-8")
+    with numbat_emitter._WRITE_LOCK:
+        handle = numbat_emitter._numbat_handle(live)
+
+        def boom_close() -> None:
+            raise OSError("close failed")
+
+        monkeypatch.setattr(handle, "close", boom_close)
+    monkeypatch.setattr(
+        numbat_emitter.os,
+        "replace",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("replace refused")),
+    )
+    numbat_emitter._rollover_if_needed(live, 100)
+    # Replace failed: live file remains (never-raise contract).
+    assert live.exists()
+    close_numbat_handles()
+
+
+def test_acquire_rollover_lock_oserror_branches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = tmp_path / "x.rollover.lock"
+
+    def open_oserror(*_a, **_k):
+        raise OSError("open failed")
+
+    monkeypatch.setattr(numbat_emitter.os, "open", open_oserror)
+    assert numbat_emitter._acquire_rollover_lock(lock_path) is None
+
+    # FileExists then stat fails → None
+    lock_path.write_text("", encoding="utf-8")
+
+    def open_exists(*_a, **_k):
+        raise FileExistsError
+
+    monkeypatch.setattr(numbat_emitter.os, "open", open_exists)
+    monkeypatch.setattr(
+        Path,
+        "stat",
+        lambda self, *a, **k: (_ for _ in ()).throw(OSError("stat")),
+    )
+    assert numbat_emitter._acquire_rollover_lock(lock_path) is None
+
+
+def test_acquire_rollover_lock_reclaim_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = tmp_path / "x.rollover.lock"
+    lock_path.write_text("", encoding="utf-8")
+    stale = time.time() - (numbat_emitter._ROLLOVER_LOCK_STALE_SEC + 30)
+    os.utime(lock_path, (stale, stale))
+
+    def open_exists_then(*_a, **_k):
+        raise FileExistsError
+
+    monkeypatch.setattr(numbat_emitter.os, "open", open_exists_then)
+    monkeypatch.setattr(
+        numbat_emitter.os,
+        "unlink",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("lost race")),
+    )
+    assert numbat_emitter._acquire_rollover_lock(lock_path) is None
+
+
+def test_release_rollover_lock_swallows_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = tmp_path / "x.rollover.lock"
+    lock_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        numbat_emitter.os,
+        "close",
+        lambda _fd: (_ for _ in ()).throw(OSError("close")),
+    )
+    monkeypatch.setattr(
+        numbat_emitter.os,
+        "unlink",
+        lambda *_a, **_k: (_ for _ in ()).throw(OSError("unlink")),
+    )
+    numbat_emitter._release_rollover_lock(3, lock_path)  # must not raise
+
+
+def test_audit_content_preview_empty_and_truncation() -> None:
+    assert numbat_emitter._audit_content_preview({"timestamp": "t", "event": None}) is None
+    # Only timestamp/None → empty preview → None
+    assert numbat_emitter._audit_content_preview({"timestamp": "t"}) is None
+
+    bulky = {
+        "event": "query",
+        "sources": ["x" * 800],
+        "errors": ["y" * 800],
+        "details": {"z": "w" * 800},
+        "extra": "k" * 500,
+    }
+    text = numbat_emitter._audit_content_preview(bulky)
+    assert text is not None
+    assert len(text) <= numbat_emitter._AUDIT_PREVIEW_CAP
+
+    # After dropping bulky keys the remainder is still over the cap → hard slice.
+    still_huge = {
+        "event": "query",
+        "sources": ["s"],
+        "errors": ["e"],
+        "details": {"d": 1},
+        "pad": "p" * (numbat_emitter._AUDIT_PREVIEW_CAP + 100),
+    }
+    sliced = numbat_emitter._audit_content_preview(still_huge)
+    assert sliced is not None
+    assert len(sliced) == numbat_emitter._AUDIT_PREVIEW_CAP
+
+
+def test_project_audit_record_writes_and_swallows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "numbat-events.ndjsonl"
+    cfg = {
+        "numbat": {
+            "enabled": True,
+            "output_path": str(out),
+            "source_agent": "unknown",
+            "source_type": "hook",
+        },
+        "models": {"local_llm": {"provider": "ollama"}},
+    }
+    numbat_emitter.project_audit_record(
+        {
+            "event": "rag_query",
+            "model_used": "local",
+            "llm_model": "llama",
+            "top_score": 0.04,
+            "guardrail_blocked": True,
+        },
+        cfg=cfg,
+    )
+    for event in ("mcp_rag_query", "mcp_rag_error", "retrieval_degraded", "user_gate_pause"):
+        numbat_emitter.project_audit_record({"event": event}, cfg=cfg)
+    close_numbat_handles()
+    assert out.exists()
+    body = out.read_text(encoding="utf-8")
+    assert "guardrail_blocked" in body
+
+    before = out.read_text(encoding="utf-8")
+    numbat_emitter.project_audit_record({"event": "x"}, cfg={"numbat": {"enabled": False}})
+    numbat_emitter.project_audit_record({"event": ""}, cfg=cfg)
+    numbat_emitter.project_audit_record({"event": 123}, cfg=cfg)
+
+    monkeypatch.setattr(
+        numbat_emitter,
+        "emit_numbat_event",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    numbat_emitter.project_audit_record({"event": "query_complete"}, cfg=cfg)
+    close_numbat_handles()
+    assert out.read_text(encoding="utf-8") == before

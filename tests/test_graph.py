@@ -1923,3 +1923,99 @@ class TestLLMIdentityMappings:
         identity = _llm_identity("offline-best-effort", cfg)
         assert identity["llm_model"] == "qwen-test"
         assert "offline best-effort local" in identity["llm"]
+
+
+class TestLocalLlmGenerateGuardAndTrust:
+    """Remaining local_llm / generate_guard / endpoint-trust branches."""
+
+    def test_generate_guard_success_replaces_generate(self, tmp_path):
+        llm = MockLocalLLM(response="unwrapped")
+
+        def guard(client, prompt, **kwargs):
+            return "from-guard", None
+
+        out = local_llm_node(
+            {"query": "q", "retrieved_docs": []},
+            llm=llm, cfg=_make_cfg(tmp_path), generate_guard=guard,
+        )
+        assert out["answer"] == "from-guard"
+        assert llm.last_prompt is None
+
+    def test_generate_guard_raise_falls_back_to_unwrapped(self, tmp_path):
+        llm = MockLocalLLM(response="unwrapped")
+
+        def guard(client, prompt, **kwargs):
+            raise RuntimeError("guard exploded")
+
+        out = local_llm_node(
+            {"query": "q", "retrieved_docs": []},
+            llm=llm, cfg=_make_cfg(tmp_path), generate_guard=guard,
+        )
+        assert out["answer"] == "unwrapped"
+        assert llm.last_prompt is not None
+
+    def test_local_llm_prepends_soul_when_personality_present(self, tmp_path):
+        llm = MockLocalLLM()
+        local_llm_node(
+            {"query": "explain immutability", "retrieved_docs": []},
+            llm=llm, cfg=_make_cfg(tmp_path), personality=_FakePersonality(),
+        )
+        assert _SOUL_PREAMBLE in llm.last_prompt
+
+    def test_local_llm_rejects_non_loopback_base_url(self, tmp_path):
+        llm = MockLocalLLM(response="should-not-run")
+        cfg = _make_cfg(tmp_path)
+        cfg["models"] = {
+            **cfg["models"],
+            "local_llm": {**cfg["models"]["local_llm"], "base_url": "http://evil.example/v1"},
+        }
+        out = local_llm_node({"query": "q", "retrieved_docs": []}, llm=llm, cfg=cfg)
+        assert out["answer_model"] == "local"
+        assert out["error"].startswith("ENDPOINT_TRUST:")
+        assert llm.last_prompt is None
+
+    def test_grok_fallback_rejects_unconfirmed_online(self, tmp_path):
+        grok = MockGrokClient()
+        cfg = {
+            "models": {"grok": {"base_url": "https://api.x.ai/v1"}},
+            "policy": {"fallback": {"send_local_context_to_grok": False}},
+        }
+        out = grok_fallback_node(
+            {"query": "q", "user_confirmed_online": False}, grok=grok, cfg=cfg,
+        )
+        assert out["answer_model"] == "grok"
+        assert out["error"].startswith("ENDPOINT_TRUST:")
+        assert grok.last_prompt is None
+
+    def test_truncation_residual_slice_when_query_exceeds_cap(self, tmp_path):
+        grok = MockGrokClient()
+        cfg = {"policy": {"fallback": {
+            "send_local_context_to_grok": True,
+            "grok_max_prompt_chars": 40,
+        }}}
+        state = {
+            "query": "x" * 50,
+            "retrieved_docs": [{"text": "Y" * 200, "source": "d.md", "score": 0.5}],
+        }
+        grok_fallback_node(state, grok=grok, cfg=cfg)
+        assert grok.last_prompt == ("USER QUERY: " + "x" * 50)[:40]
+
+
+class TestAuditMemoryEpisode:
+    def test_stage_episode_failure_is_stamped_on_audit_event(self, tmp_path):
+        from unittest.mock import patch
+
+        cfg = _make_cfg(tmp_path)
+        cfg["memory"] = {"enabled": True, "episodes": {"enabled": True}}
+        state = {
+            "query": "test query",
+            "answer_model": "local",
+            "answer_sources": [],
+            "retrieved_docs": [],
+            "top_score": 0.9,
+            "retrieval_mode": "hybrid",
+        }
+        with patch("memory.store.stage_episode", side_effect=RuntimeError("episode db down")):
+            result = audit_logger_node(state, cfg=cfg)
+        assert "memory_episode_error" in result["audit_event"]
+        assert "episode db down" in result["audit_event"]["memory_episode_error"]

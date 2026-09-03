@@ -505,6 +505,40 @@ class TestHealthCfgCache:
         assert first is not second
         assert second == first  # same content, freshly parsed
 
+    def test_relative_config_path_is_anchored_to_repo_root(self, monkeypatch, tmp_path):
+        """Bare relative paths must not depend on process CWD (mirrors gate.py)."""
+        cfg_path = _write_cfg(tmp_path)
+        # Point _REPO_ROOT at tmp so "config.yaml" resolves to our fixture.
+        monkeypatch.setattr(health, "_REPO_ROOT", tmp_path)
+        monkeypatch.chdir(tmp_path.parent)  # different CWD than the config dir
+        cfg = health._health_cfg("config.yaml")
+        assert cfg["app"]["mode"] == "offline"
+
+
+class TestCheckAllFailureArms:
+    def test_missing_config_returns_unhealthy_config_status(self, tmp_path):
+        missing = str(tmp_path / "no-such-config.yaml")
+        statuses = health.check_all(missing)
+        assert len(statuses) == 1
+        assert statuses[0].name == "config"
+        assert statuses[0].healthy is False
+        assert "config load failed" in (statuses[0].error or "")
+
+    def test_resolve_local_backend_failure_surfaces_unhealthy_local(
+        self, tmp_path, monkeypatch
+    ):
+        cfg_path = _write_cfg(tmp_path)
+
+        def _boom(_llm_cfg):
+            raise RuntimeError("fallback enabled without model")
+
+        monkeypatch.setattr("llm.client.resolve_local_backend", _boom)
+        statuses = health.check_all(cfg_path)
+        by_name = {s.name: s for s in statuses}
+        assert by_name["local_llm"].healthy is False
+        assert "fallback enabled without model" in (by_name["local_llm"].error or "")
+        assert by_name["embeddings_local"].healthy is True
+
 
 class TestSharedClientLifecycle:
     """The pooled _http_client must be closable via close_http_client()."""

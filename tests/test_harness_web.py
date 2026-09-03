@@ -100,6 +100,11 @@ def test_parse_allow_entry_refuses_ssrf_shapes(raw):
     assert exc.value.code in {"WEB_BAD_URL", "WEB_SSRF_DENIED"}
 
 
+def test_url_is_allowed_returns_none_for_unparseable():
+    assert url_is_allowed("ftp://docs.python.org/", []) is None
+    assert url_is_allowed("", []) is None
+
+
 def test_url_is_allowed_matches_host_and_path_prefix():
     entries = [parse_allow_entry("https://docs.python.org/3/")]
     assert url_is_allowed("https://docs.python.org/3/library/os.html", entries)
@@ -335,3 +340,190 @@ def test_corrupt_allowlist_is_not_overwritten(cfg):
         tool.status()
     assert status.value.code == "WEB_ALLOWLIST_UNREADABLE"
     assert path.read_bytes() == garbage
+
+
+def test_parse_allow_entry_rejects_out_of_range_port():
+    with pytest.raises(WebToolError) as exc:
+        parse_allow_entry("https://docs.python.org:99999/")
+    assert exc.value.code == "WEB_BAD_URL"
+
+
+def test_allowlist_target_rejects_bad_port_and_path():
+    with pytest.raises(WebToolError) as port:
+        _allowlist_target({"scheme": "https", "host": "docs.python.org", "port": "99999", "path": "/"})
+    assert port.value.code == "WEB_BAD_URL"
+    with pytest.raises(WebToolError) as path:
+        _allowlist_target({"scheme": "https", "host": "docs.python.org", "port": "", "path": "/a b"})
+    assert path.value.code == "WEB_BAD_URL"
+
+
+def test_allowlist_target_prefixes_path_missing_leading_slash():
+    assert (
+        _allowlist_target(
+            {"scheme": "https", "host": "docs.python.org", "port": "", "path": "library"}
+        )
+        == "https://docs.python.org/library"
+    )
+
+
+def test_atomic_write_text_cleans_staged_on_failure(tmp_path, monkeypatch):
+    from harness import web_search as web_mod
+
+    target = tmp_path / "web_context.txt"
+    staged = tmp_path / ".staged.web_context.txt.tmp"
+
+    def boom(_staged, _path, _text):
+        staged.write_text("partial", encoding="utf-8")
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(web_mod, "_stage_and_replace", boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        web_mod._atomic_write_text(target, "hello")
+    assert not staged.exists()
+
+
+def test_web_tool_allowlist_empty_when_disabled(cfg):
+    cfg.web_enabled = False
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    assert tool._web_tool_allowlist() == frozenset()
+
+
+def test_load_entries_non_list_is_empty(cfg):
+    path = cfg.tools_dir / "web_allowlist.json"
+    path.write_text('{"entries": "nope"}', encoding="utf-8")
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    assert tool.status()["allowlist"] == []
+
+
+def test_assert_public_host_dns_failures(monkeypatch):
+    import socket
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *_a, **_k: (_ for _ in ()).throw(socket.gaierror("nxdomain")))
+    with pytest.raises(WebToolError) as dns:
+        assert_public_host("docs.python.org")
+    assert dns.value.code == "WEB_DNS"
+
+    monkeypatch.setattr("socket.getaddrinfo", lambda *_a, **_k: [])
+    with pytest.raises(WebToolError) as empty:
+        assert_public_host("docs.python.org")
+    assert empty.value.code == "WEB_DNS"
+
+    with pytest.raises(WebToolError) as blocked:
+        assert_public_host("localhost")
+    assert blocked.value.code == "WEB_SSRF_DENIED"
+
+
+def test_extract_text_plain_and_script_end_tags():
+    assert "hello" in extract_text("  hello   world  ", "text/plain")
+    html = "<html><script>steal()</script><style>x</style><div>Visible</div></html>"
+    text = extract_text(html, "text/html")
+    assert "Visible" in text
+    assert "steal" not in text
+
+
+def test_allow_duplicate_and_cap(cfg):
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    first = tool.allow("https://docs.python.org/")
+    again = tool.allow("https://docs.python.org/")
+    assert first["allowlist"] == again["allowlist"]
+    from harness import web_search as web_mod
+
+    original = web_mod._MAX_ALLOW
+    web_mod._MAX_ALLOW = 1
+    try:
+        with pytest.raises(WebToolError) as exc:
+            tool.allow("https://example.com/")
+        assert exc.value.code == "WEB_ALLOWLIST_FULL"
+    finally:
+        web_mod._MAX_ALLOW = original
+
+
+def test_fetch_refuses_query_string_and_http_error(cfg):
+    cfg.web_enabled = True
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    tool = WebTool(cfg, transport=httpx.MockTransport(fail), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    with pytest.raises(WebToolError) as query:
+        tool.fetch("https://docs.python.org/?q=1")
+    assert query.value.code == "WEB_BAD_URL"
+    with pytest.raises(WebToolError) as failed:
+        tool.fetch("https://docs.python.org/")
+    assert failed.value.code == "WEB_FETCH_FAILED"
+
+
+def test_read_text_response_rejects_http_error_and_non_text(cfg):
+    cfg.web_enabled = True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "image" in str(request.url):
+            return httpx.Response(200, content=b"\x00\x01", headers={"content-type": "image/png"})
+        return httpx.Response(503, text="down", headers={"content-type": "text/plain"})
+
+    tool = WebTool(cfg, transport=httpx.MockTransport(handler), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    with pytest.raises(WebToolError) as http_err:
+        tool.fetch("https://docs.python.org/")
+    assert http_err.value.code == "WEB_FETCH_FAILED"
+
+    tool.deny("https://docs.python.org/")
+    tool.allow("https://example.com/image")
+    # url_is_allowed matches path prefix; fetch still uses allowlist target.
+    with pytest.raises(WebToolError) as not_text:
+        tool.fetch("https://example.com/image")
+    assert not_text.value.code in {"WEB_NOT_TEXT", "WEB_HOST_DENIED", "WEB_FETCH_FAILED"}
+
+
+def test_inject_rejects_empty_last_extract(cfg):
+    from harness.web_search import _atomic_write_json, _last_path
+
+    _atomic_write_json(_last_path(cfg), {"url": "https://docs.python.org/", "text": "   "})
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    with pytest.raises(WebToolError) as exc:
+        tool.inject()
+    assert exc.value.code == "WEB_NO_LAST"
+
+
+def test_fetch_maps_tool_denied(cfg, monkeypatch):
+    from utils.tool_broker import ToolDenied
+
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    monkeypatch.setattr(
+        "harness.web_search.assert_allowed",
+        lambda *_a, **_k: (_ for _ in ()).throw(ToolDenied("no")),
+    )
+    with pytest.raises(WebToolError) as exc:
+        tool.fetch("https://docs.python.org/")
+    assert exc.value.code == "WEB_TOOL_DENIED"
+
+
+def test_search_rejects_empty_query_and_inject_without_last(cfg):
+    cfg.web_enabled = True
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    tool.allow("https://docs.python.org/")
+    with pytest.raises(WebToolError) as query:
+        tool.search("")
+    assert query.value.code == "WEB_BAD_QUERY"
+    with pytest.raises(WebToolError) as inject:
+        tool.inject()
+    assert inject.value.code == "WEB_NO_LAST"
+
+
+def test_forget_and_context_survive_missing_files(cfg):
+    tool = WebTool(cfg, transport=_page_transport(), resolver=_noop_resolve)
+    assert tool.context_text() == ""
+    assert tool.forget()["injected"] is False
+
+
+def test_snippets_add_ellipsis_when_match_is_interior():
+    from harness.web_search import _snippets
+
+    leading = _snippets("x" * 80 + "needle", "needle")
+    assert leading and leading[0].startswith("…")
+    trailing = _snippets("needle" + "y" * 200, "needle")
+    assert trailing and trailing[0].endswith("…")

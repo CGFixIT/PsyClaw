@@ -913,3 +913,187 @@ class TestDeviceTokens:
         manager.revoke_device_token("bob", "laptop")
         assert manager.verify_device_token(token_a) == "alice"
         assert manager.verify_device_token(token_b) is None
+
+
+class TestCoverageLeftovers:
+    def test_is_unique_violation_recognizes_postgres_sqlstate(self):
+        from utils.authn_manager import _is_unique_violation
+
+        class _PgExc(Exception):
+            sqlstate = "23505"
+
+        class _Other(Exception):
+            sqlstate = "23503"
+
+        assert _is_unique_violation(_PgExc()) is True
+        assert _is_unique_violation(_Other()) is False
+
+    def test_postgres_backend_builds_percent_sql(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        fake_conn = MagicMock()
+        fake_conn.execute.return_value.fetchone.return_value = None
+        fake_conn.execute.return_value.fetchall.return_value = []
+        monkeypatch.setattr(
+            "utils.authn_store.connect",
+            lambda *_a, **_k: (fake_conn, "%s", "postgres"),
+        )
+        monkeypatch.setattr(
+            "utils.authn_store.ensure_users_role_column",
+            lambda *_a, **_k: None,
+        )
+        m = AuthManager({"auth": {"enabled": True, "db_path": str(tmp_path / "pg.db")}})
+        try:
+            assert m.backend == "postgres"
+            assert "%s" in m._sql_rotate_csrf
+            m._lock_enabled_admins_locked()
+            fake_conn.execute.assert_any_call(m._sql_lock_enabled_admins)
+        finally:
+            m.close()
+
+    def test_close_swallows_connection_errors(self, manager):
+        class _BoomClose:
+            def close(self):
+                raise RuntimeError("already closed")
+
+        manager.conn = _BoomClose()
+        manager.close()  # must not raise
+
+    def test_bootstrap_non_unique_error_reraises(self, manager):
+        manager.conn.execute("DELETE FROM users")
+        manager.conn.commit()
+
+        class _Boom(Exception):
+            pass
+
+        class _Wrapped:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if "INSERT INTO users" in sql:
+                    raise _Boom("disk full")
+                return self.wrapped.execute(sql, params)
+
+            def commit(self):
+                return self.wrapped.commit()
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        manager.conn = _Wrapped(manager.conn)
+        with pytest.raises(_Boom):
+            manager.bootstrap_if_empty()
+
+    def test_create_user_non_unique_error_reraises(self, manager):
+        class _Boom(Exception):
+            pass
+
+        class _Wrapped:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if "INSERT INTO users" in sql:
+                    raise _Boom("disk full")
+                return self.wrapped.execute(sql, params)
+
+            def commit(self):
+                return self.wrapped.commit()
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        manager.conn = _Wrapped(manager.conn)
+        with pytest.raises(_Boom):
+            manager.create_user("alice", _GOOD_PASSWORD)
+
+    def test_count_enabled_admins_and_unknown_enable(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD, role="admin")
+        assert manager.count_enabled_admins() >= 1
+        with pytest.raises(AuthUserNotFound):
+            manager.enable_user("nobody")
+
+    def test_needs_password_setup_false_when_bootstrap_missing(self, manager):
+        manager.conn.execute("DELETE FROM users")
+        manager.conn.commit()
+        assert manager.needs_password_setup() is False
+
+    def test_bootstrap_set_password_already_complete(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+        # Replace bootstrap pending hash with a real password via set_password path,
+        # or delete bootstrap and ensure AuthBootstrapComplete when claiming fails.
+        manager.conn.execute("DELETE FROM users WHERE username = ?", (BOOTSTRAP_USERNAME,))
+        manager.conn.commit()
+        with pytest.raises(AuthBootstrapComplete):
+            manager.bootstrap_set_password(_GOOD_PASSWORD)
+
+    def test_bootstrap_set_password_claim_race_raises_complete(self, manager):
+        """Zero-rowcount claim (another process won) maps to AuthBootstrapComplete."""
+        assert manager.bootstrap_if_empty() is True
+
+        class _ZeroClaim:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if "password_hash" in sql and "UPDATE" in sql.upper():
+                    class _Cur:
+                        rowcount = 0
+
+                    return _Cur()
+                return self.wrapped.execute(sql, params)
+
+            def commit(self):
+                return self.wrapped.commit()
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        manager.conn = _ZeroClaim(manager.conn)
+        with pytest.raises(AuthBootstrapComplete):
+            manager.bootstrap_set_password(_GOOD_PASSWORD)
+
+    def test_rotate_csrf_revokes_idle_expired_session(self, fast_manager):
+        fast_manager.create_user("alice", _GOOD_PASSWORD)
+        result = fast_manager.login("alice", _GOOD_PASSWORD)
+        real_now = fast_manager._now
+        fast_manager._now = lambda: real_now() + 10  # past 5s idle
+        assert fast_manager.rotate_csrf(result.session_id) is None
+
+    def test_create_device_token_non_unique_error_reraises(self, manager):
+        manager.create_user("alice", _GOOD_PASSWORD)
+
+        class _Boom(Exception):
+            pass
+
+        class _Wrapped:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, sql, params=()):
+                if "INSERT INTO device_tokens" in sql:
+                    raise _Boom("disk full")
+                return self.wrapped.execute(sql, params)
+
+            def commit(self):
+                return self.wrapped.commit()
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        manager.conn = _Wrapped(manager.conn)
+        with pytest.raises(_Boom):
+            manager.create_device_token("alice", "laptop")

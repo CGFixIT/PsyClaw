@@ -399,3 +399,162 @@ class TestMain:
         out = capsys.readouterr().out
         assert "Total events: 1" in out
         assert "hybrid: 1" in out
+
+
+class TestSpendPrintAndWindows:
+    def test_print_spend_none_is_noop(self, capsys):
+        metrics._print_spend(None)
+        assert capsys.readouterr().out == ""
+
+    def test_spend_event_date_and_token_guards(self):
+        assert metrics._spend_event_date({}) is None
+        assert metrics._spend_event_date({"timestamp": "not-a-date"}) is None
+        naive = metrics._spend_event_date({"timestamp": "2026-08-16T12:00:00"})
+        assert naive is not None
+        aware = metrics._spend_event_date({"timestamp": "2026-08-16T12:00:00+00:00"})
+        assert aware is not None
+        assert metrics._spend_token_count({"input_tokens": True}, "input_tokens") == 0
+        assert metrics._spend_token_count({"input_tokens": 4}, "input_tokens") == 4
+
+    def test_compute_spend_now_normalization(self):
+        from datetime import UTC, datetime
+
+        events = [{
+            "timestamp": "2026-08-16T12:00:00+00:00",
+            "provider": "grok",
+            "model": "not-a-real-model",
+            "input_tokens": 1,
+            "output_tokens": 1,
+        }]
+        naive = datetime(2026, 8, 16, 12, 0)
+        summary = metrics.compute_spend(events, now=naive)
+        assert summary["rate_unknown"] == 1
+        aware = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
+        metrics.compute_spend(events, now=aware)
+        metrics.compute_spend([{"not": "usable"}], now=aware)
+
+    def test_print_metrics_no_events_with_integrity_and_vendor_na(self, tmp_path, capsys, monkeypatch):
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
+        audit = tmp_path / "audit.jsonl"
+        audit.write_text("NOT JSON\n", encoding="utf-8")
+        spend = tmp_path / "spend.jsonl"
+        spend.write_text(
+            json.dumps({
+                "timestamp": now.isoformat(),
+                "provider": "grok",
+                "model": "not-a-real-model",
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "vendor_cost_ticks": 1_000_000,
+                "usage_missing": True,
+            })
+            + "\n",
+            encoding="utf-8",
+        )
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump({
+                "logging": {"audit_file": str(audit), "spend_file": str(spend)},
+            }, f)
+        monkeypatch.setattr(metrics, "_REPO_ROOT", tmp_path)
+        import utils.sequence_detect as seq
+
+        monkeypatch.setattr(seq, "format_sequences", lambda *_a, **_k: ["Sequences: demo"])
+        print_metrics(str(config_path))
+        out = capsys.readouterr().out
+        assert "No audit events found." in out
+        assert "malformed_lines: 1" in out
+        assert "delta_usd=n/a" in out
+        assert "usage_missing:" in out
+        assert "Sequences: demo" in out
+
+    def test_print_metrics_prints_source_and_rate_unknown(self, tmp_path, capsys, monkeypatch):
+        from datetime import UTC, datetime
+
+        audit = _write_audit(
+            tmp_path,
+            [{"event": "rag_query", "top_score": 0.4, "retrieval_mode": "hybrid", "model_used": "qwen"}],
+        )
+        spend = tmp_path / "spend.jsonl"
+        spend.write_text(
+            json.dumps({
+                "timestamp": datetime.now(UTC).isoformat(),
+                "provider": "grok",
+                "model": "not-a-real-model",
+                "input_tokens": 3,
+                "output_tokens": 1,
+                "source": "query",
+            })
+            + "\n",
+            encoding="utf-8",
+        )
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump({"logging": {"audit_file": audit, "spend_file": str(spend)}}, f)
+        monkeypatch.setattr(metrics, "_REPO_ROOT", tmp_path)
+        print_metrics(str(config_path))
+        out = capsys.readouterr().out
+        assert "source query:" in out
+        assert "rate_unknown:" in out
+
+    def test_compute_spend_skips_non_dict_events(self):
+        from datetime import UTC, datetime
+
+        summary = metrics.compute_spend(
+            ["not-a-dict", 42, None],
+            now=datetime(2026, 8, 16, tzinfo=UTC),
+        )
+        assert summary["today"]["tokens_in"] == 0
+        assert summary["usage_missing"] == 0
+
+    def test_print_spend_prints_delta_when_both_sides_priced(self, capsys):
+        spend = {
+            "today": {
+                "tokens_in": 1,
+                "tokens_out": 1,
+                "usd": 0.001,
+                "table_usd": 0.001,
+                "ticked_table_usd": 0.001,
+                "vendor_usd": 0.002,
+                "delta_usd": -0.001,
+                "vendor_rows": 1,
+                "by_provider": {"grok": 1},
+                "by_source": {},
+            },
+            "last_7d": {
+                "tokens_in": 1,
+                "tokens_out": 1,
+                "usd": 0.001,
+                "table_usd": 0.001,
+                "ticked_table_usd": 0.001,
+                "vendor_usd": 0.002,
+                "delta_usd": -0.001,
+                "vendor_rows": 1,
+                "by_provider": {"grok": 1},
+                "by_source": {},
+            },
+            "usage_missing": 0,
+            "rate_unknown": 0,
+        }
+        metrics._print_spend(spend)
+        out = capsys.readouterr().out
+        assert "delta_usd=-0.001000" in out
+        assert "ticked_table_usd=" in out
+
+    def test_compute_audit_integrity_missing_file_is_empty(self, tmp_path):
+        assert compute_audit_integrity(str(tmp_path / "nope.jsonl")) == {
+            "malformed_lines": 0,
+            "events_with_raw_query": 0,
+            "rag_events_missing_query_hash": 0,
+        }
+
+    def test_summarize_audit_missing_file_and_non_dict_lines(self, tmp_path):
+        missing = summarize_audit(str(tmp_path / "nope.jsonl"))
+        assert missing["audit_integrity"]["malformed_lines"] == 0
+        p = tmp_path / "audit.jsonl"
+        p.write_text('{"event": "rag_query", "query_hash": "abc"}\nnull\n42\n', encoding="utf-8")
+        summary = summarize_audit(str(p))
+        assert summary["audit_integrity"]["malformed_lines"] == 2
+        assert summary["total_events"] == 1

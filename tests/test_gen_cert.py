@@ -23,6 +23,82 @@ def test_san_appends_extra_entries():
     )
 
 
+def test_find_openssl_falls_back_to_windows_candidates(monkeypatch, tmp_path):
+    monkeypatch.setattr("utils.gen_cert.shutil.which", lambda _name: None)
+    candidate = tmp_path / "openssl.exe"
+    candidate.write_text("", encoding="utf-8")
+    monkeypatch.setattr("utils.gen_cert._WINDOWS_OPENSSL", (candidate,))
+    assert gen_cert.find_openssl() == candidate
+
+
+def test_find_openssl_returns_none_when_absent(monkeypatch):
+    monkeypatch.setattr("utils.gen_cert.shutil.which", lambda _name: None)
+    monkeypatch.setattr("utils.gen_cert._WINDOWS_OPENSSL", ())
+    assert gen_cert.find_openssl() is None
+
+
+def test_lan_ipv4_oserror_and_loopback_are_ignored(monkeypatch):
+    class _BoomSock:
+        def connect(self, *_a):
+            raise OSError("no route")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("utils.gen_cert.socket.socket", lambda *a, **k: _BoomSock())
+    assert gen_cert._lan_ipv4() is None
+
+    class _LoopSock:
+        def connect(self, *_a):
+            return None
+
+        def getsockname(self):
+            return ("127.0.0.1", 0)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("utils.gen_cert.socket.socket", lambda *a, **k: _LoopSock())
+    assert gen_cert._lan_ipv4() is None
+
+
+def test_remove_temporary_output_warns_on_oserror(monkeypatch, tmp_path, capsys):
+    target = tmp_path / "x.tmp"
+    target.write_text("x", encoding="utf-8")
+    original = Path.unlink
+
+    def _unlink(self, *args, **kwargs):
+        if self == target:
+            raise OSError("busy")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _unlink)
+    gen_cert._remove_temporary_output(target)
+    assert "could not remove temporary" in capsys.readouterr().err
+
+
+def test_backup_existing_output_cleans_failed_copy(monkeypatch, tmp_path):
+    target = tmp_path / "cert.pem"
+    target.write_text("old", encoding="utf-8")
+    monkeypatch.setattr("utils.gen_cert._temporary_output_path", lambda _t: tmp_path / "bak.tmp")
+
+    def _boom(*_a, **_k):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr("utils.gen_cert.shutil.copy2", _boom)
+    removed: list[Path] = []
+    monkeypatch.setattr(
+        "utils.gen_cert._remove_temporary_output",
+        lambda p: removed.append(p),
+    )
+    try:
+        gen_cert._backup_existing_output(target)
+        raise AssertionError("expected OSError")
+    except OSError:
+        pass
+    assert removed and removed[0].name == "bak.tmp"
+
+
 def test_missing_openssl_is_env_error(monkeypatch):
     monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: None)
     assert gen_cert.main(["--certfile", "x.pem", "--keyfile", "y.pem"]) == gen_cert.EXIT_ENV
@@ -219,3 +295,107 @@ def test_force_overwrites_and_forwards_extra_san(tmp_path, monkeypatch):
     assert "subjectAltName=" in " ".join(seen["cmd"])
     assert "IP:10.0.0.5" in " ".join(seen["cmd"])
     assert cert.read_text(encoding="utf-8") == "new-cert"
+
+
+def test_find_openssl_uses_which_when_present(monkeypatch):
+    monkeypatch.setattr("utils.gen_cert.shutil.which", lambda _name: r"C:\Tools\openssl.exe")
+    assert gen_cert.find_openssl() == Path(r"C:\Tools\openssl.exe")
+
+
+def test_umask_unavailable_still_runs_openssl(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+    monkeypatch.setattr(
+        "utils.gen_cert.os.umask",
+        lambda *_a, **_k: (_ for _ in ()).throw(AttributeError("no umask")),
+    )
+
+    def _fake_run(cmd, **_kwargs):
+        Path(cmd[cmd.index("-out") + 1]).write_text("cert", encoding="utf-8")
+        Path(cmd[cmd.index("-keyout") + 1]).write_text("key", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _fake_run)
+    rc = gen_cert.main([
+        "--certfile", str(tmp_path / "c.pem"),
+        "--keyfile", str(tmp_path / "k.pem"),
+    ])
+    assert rc == gen_cert.EXIT_OK
+
+
+def test_openssl_oserror_is_reported(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+
+    def _boom(*_a, **_k):
+        raise OSError("cannot exec")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _boom)
+    rc = gen_cert.main([
+        "--certfile", str(tmp_path / "c.pem"),
+        "--keyfile", str(tmp_path / "k.pem"),
+    ])
+    assert rc == gen_cert.EXIT_FAIL
+    assert "failed to run openssl" in capsys.readouterr().err
+
+
+def test_failed_key_install_without_prior_cert_unlinks_and_reports_rollback_error(
+    tmp_path, monkeypatch, capsys
+):
+    """Cert freshly written (no previous backup); key install fails; unlink rollback fails."""
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+    cert = tmp_path / "c.pem"
+    key = tmp_path / "k.pem"
+    staged: dict[str, Path] = {}
+
+    def _successful_run(cmd, **_kwargs):
+        out = Path(cmd[cmd.index("-out") + 1])
+        keyout = Path(cmd[cmd.index("-keyout") + 1])
+        out.write_text("new-cert", encoding="utf-8")
+        keyout.write_text("new-key", encoding="utf-8")
+        staged["cert"] = out
+        staged["key"] = keyout
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _successful_run)
+    real_replace = gen_cert.os.replace
+
+    def _fail_key_install(source, destination):
+        if Path(source) == staged.get("key") and Path(destination) == key:
+            raise OSError("key file is locked")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr("utils.gen_cert.os.replace", _fail_key_install)
+    original_unlink = Path.unlink
+
+    def _unlink_boom(self, *args, **kwargs):
+        if self == cert:
+            raise OSError("unlink blocked")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _unlink_boom)
+    rc = gen_cert.main(["--certfile", str(cert), "--keyfile", str(key)])
+    assert rc == gen_cert.EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "failed to restore previous certificate" in err
+    assert "failed to install certificate pair" in err
+
+
+def test_keyfile_chmod_failure_is_best_effort(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.gen_cert.find_openssl", lambda: Path("/usr/bin/openssl"))
+
+    def _fake_run(cmd, **_kwargs):
+        Path(cmd[cmd.index("-out") + 1]).write_text("cert", encoding="utf-8")
+        Path(cmd[cmd.index("-keyout") + 1]).write_text("key", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("utils.gen_cert.subprocess.run", _fake_run)
+    monkeypatch.setattr(
+        Path,
+        "chmod",
+        lambda self, *a, **k: (_ for _ in ()).throw(OSError("acl deny")),
+    )
+    rc = gen_cert.main([
+        "--certfile", str(tmp_path / "c.pem"),
+        "--keyfile", str(tmp_path / "k.pem"),
+    ])
+    assert rc == gen_cert.EXIT_OK
+    assert (tmp_path / "c.pem").read_text(encoding="utf-8") == "cert"

@@ -24,8 +24,12 @@ from sync.scheduler import (
     WindowsTaskScheduler,
     get_scheduler,
 )
+import sync.scheduler as _sched_mod
 from utils.errors import SchedulerError
 from utils.logger import reset_config_cache
+
+# Captured before the autouse fixture stubs it with a tmp_path lambda.
+_REAL_POSIX_LAUNCHER_PATH = _sched_mod._posix_launcher_path
 
 # A repo-valid corpus path: config validation requires local_path to resolve
 # under the repo's data/corpus tree, so derive it from this file's location.
@@ -872,3 +876,309 @@ def test_windows_install_honors_schedule_frequency(
     else:
         assert argv[argv.index("/D") + 1] == expected_day
     assert entry.note == ""
+
+# ---------------------------------------------------------------------------
+# Leftover branch coverage
+# ---------------------------------------------------------------------------
+
+
+def test_python_executable_falls_back_to_which(monkeypatch) -> None:
+    from sync.scheduler import _python_executable
+
+    monkeypatch.setattr("sync.scheduler.sys.executable", "")
+    monkeypatch.setattr("sync.scheduler.os.path.isfile", lambda _p: False)
+    monkeypatch.setattr("sync.scheduler.shutil.which", lambda name: "/usr/bin/python3" if name == "python3" else None)
+    assert _python_executable() == "/usr/bin/python3"
+
+
+def test_python_executable_falls_back_to_literal_python(monkeypatch) -> None:
+    from sync.scheduler import _python_executable
+
+    monkeypatch.setattr("sync.scheduler.sys.executable", "")
+    monkeypatch.setattr("sync.scheduler.os.path.isfile", lambda _p: False)
+    monkeypatch.setattr("sync.scheduler.shutil.which", lambda _name: None)
+    assert _python_executable() == "python"
+
+
+def test_posix_launcher_unlink_cleanup_on_replace_failure(tmp_path, monkeypatch) -> None:
+    from sync.scheduler import _write_posix_launcher
+
+    cfg = _make_cfg(log_dir=str(tmp_path))
+    monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Linux")
+    monkeypatch.setattr(os, "replace", MagicMock(side_effect=OSError("replace failed")))
+    unlink_calls: list[str] = []
+    real_unlink = os.unlink
+
+    def _unlink(path: str) -> None:
+        unlink_calls.append(path)
+        raise OSError("already gone")
+
+    monkeypatch.setattr(os, "unlink", _unlink)
+    with pytest.raises(OSError, match="replace failed"):
+        _write_posix_launcher(cfg)
+    assert unlink_calls and unlink_calls[0].endswith(".tmp")
+    monkeypatch.setattr(os, "unlink", real_unlink)
+
+
+def test_parse_schtasks_schedule_type_unmapped_returns_none() -> None:
+    from sync.scheduler import _parse_schtasks_schedule_type
+
+    raw = "Schedule Type:                        Once\nStart Time: 2:00:00 AM\n"
+    assert _parse_schtasks_schedule_type(raw) is None
+
+
+def test_cron_read_file_not_found_is_typed() -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=FileNotFoundError("gone")),
+    ):
+        with pytest.raises(SchedulerError, match="crontab not available"):
+            CronScheduler(cfg).status()
+
+
+def test_cron_read_nonzero_returncode_is_typed() -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(returncode=2, stderr="permission denied"),
+        ),
+    ):
+        with pytest.raises(SchedulerError, match="crontab -l failed"):
+            CronScheduler(cfg).status()
+
+
+def test_cron_write_file_not_found_is_typed() -> None:
+    cfg = _make_cfg()
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout="")
+        raise FileNotFoundError("gone")
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        with pytest.raises(SchedulerError, match="crontab binary not available"):
+            CronScheduler(cfg).install()
+
+
+def test_cron_write_nonzero_returncode_is_typed() -> None:
+    cfg = _make_cfg()
+
+    def fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1] == "-l":
+            return _completed(stdout="")
+        return _completed(returncode=1, stderr="write denied")
+
+    with (
+        patch("sync.scheduler.shutil.which", return_value="/usr/bin/crontab"),
+        patch("sync.scheduler.subprocess.run", side_effect=fake_run),
+        patch("sync.scheduler.platform.system", return_value="Linux"),
+    ):
+        with pytest.raises(SchedulerError, match="crontab write failed"):
+            CronScheduler(cfg).install()
+
+
+def test_launchd_program_arguments_include_config_path() -> None:
+    from sync.scheduler import _launchd_program_arguments
+
+    cfg = _make_cfg()
+    cfg._config_path = "/tmp/custom.yaml"
+    argv = _launchd_program_arguments(cfg)
+    assert "--config" in argv
+    assert argv[argv.index("--config") + 1] == "/tmp/custom.yaml"
+    assert argv[-1] == "sync"
+
+
+def test_windows_install_subprocess_error_is_typed(tmp_path: Path) -> None:
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch("sync.scheduler.subprocess.run", side_effect=subprocess.SubprocessError("boom")),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with pytest.raises(SchedulerError, match="schtasks /Create failed"):
+            WindowsTaskScheduler(cfg).install()
+
+
+def test_windows_install_nonzero_returncode_is_typed(tmp_path: Path) -> None:
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(returncode=1, stderr="access denied"),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with pytest.raises(SchedulerError, match="schtasks /Create failed"):
+            WindowsTaskScheduler(cfg).install()
+
+
+def test_windows_remove_subprocess_error_is_typed() -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch("sync.scheduler.subprocess.run", side_effect=subprocess.SubprocessError("boom")),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with pytest.raises(SchedulerError, match="schtasks /Delete failed"):
+            WindowsTaskScheduler(cfg).remove()
+
+
+def test_windows_remove_unexpected_error_is_typed() -> None:
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(returncode=2, stderr="fatal scheduler fault"),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        with pytest.raises(SchedulerError, match="schtasks /Delete failed"):
+            WindowsTaskScheduler(cfg).remove()
+
+
+def test_windows_remove_returncode_one_without_not_found_is_false() -> None:
+    # returncode 1 with no not-found phrasing still treats as absent (line 774-775).
+    cfg = _make_cfg()
+    with (
+        patch("sync.scheduler.shutil.which", return_value=r"C:\Windows\System32\schtasks.exe"),
+        patch(
+            "sync.scheduler.subprocess.run",
+            return_value=_completed(returncode=1, stderr="ERROR: weird"),
+        ),
+        patch("sync.scheduler.platform.system", return_value="Windows"),
+    ):
+        assert WindowsTaskScheduler(cfg).remove() is False
+
+def test_launchd_calendar_and_human_schedule() -> None:
+    from sync.scheduler import _launchd_calendar_interval, _launchd_human_schedule
+
+    daily = _launchd_calendar_interval(_make_cfg())
+    assert daily == {"Hour": 2, "Minute": 0}
+    assert _launchd_human_schedule(daily) == "daily 02:00"
+
+    weekly = _launchd_calendar_interval(_make_cfg(schedule_frequency="weekly", schedule_weekday=1))
+    assert weekly["Weekday"] == 1
+    assert "Monday" in _launchd_human_schedule(weekly) or "weekly" in _launchd_human_schedule(weekly)
+
+    monthly = _launchd_calendar_interval(_make_cfg(schedule_frequency="monthly", schedule_day=15))
+    assert monthly["Day"] == 15
+    assert "monthly" in _launchd_human_schedule(monthly)
+    assert "weekday" in _launchd_human_schedule({"Hour": 1, "Minute": 2, "Weekday": 99})
+
+
+def test_launchd_scheduler_install_remove_status(tmp_path: Path, monkeypatch) -> None:
+    from sync.scheduler import LaunchdScheduler, LAUNCHD_LABEL
+
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
+    monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("sync.scheduler.Path.home", lambda: home)
+    # Avoid real uid/launchctl.
+    monkeypatch.setattr(LaunchdScheduler, "_uid", lambda self: 501)
+    monkeypatch.setattr(LaunchdScheduler, "_launchctl", lambda self: "/bin/launchctl")
+    monkeypatch.setattr(
+        "sync.scheduler.subprocess.run",
+        lambda *a, **k: _completed(returncode=0, stdout="ok"),
+    )
+
+    sched = LaunchdScheduler(cfg)
+    entry = sched.install()
+    assert entry.platform_name == "darwin"
+    assert entry.note and "NOT loaded" in entry.note
+    plist = Path(entry.raw)
+    assert plist.exists()
+
+    status = sched.status()
+    assert status is not None
+    assert status.note == "loaded"
+    assert sched.remove() is True
+    assert not plist.exists()
+    assert sched.remove() is False
+
+
+def test_posix_launcher_path_uses_log_dir_or_repo(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_sched_mod, "_posix_launcher_path", _REAL_POSIX_LAUNCHER_PATH)
+    cfg = _make_cfg(log_dir=str(tmp_path / "logs"))
+    assert _REAL_POSIX_LAUNCHER_PATH(cfg) == str(tmp_path / "logs" / "cyclaw_sync.sh")
+    cfg2 = _make_cfg(log_dir="")
+    path = _REAL_POSIX_LAUNCHER_PATH(cfg2)
+    assert path.endswith("cyclaw_sync.sh")
+
+
+def test_launchd_require_darwin_and_uid_fallback() -> None:
+    from sync.scheduler import LaunchdScheduler
+
+    with patch("sync.scheduler.platform.system", return_value="Windows"):
+        with pytest.raises(SchedulerError, match="Darwin-only"):
+            LaunchdScheduler(_make_cfg()).install()
+    assert LaunchdScheduler._uid() == (os.getuid() if hasattr(os, "getuid") else 0)
+    with patch("sync.scheduler.shutil.which", return_value=None):
+        assert LaunchdScheduler._launchctl() is None
+
+
+def test_get_scheduler_launchd_backend_rejected_off_darwin() -> None:
+    cfg = _make_cfg()
+    cfg.scheduler_backend = "launchd"
+    with patch("sync.scheduler.platform.system", return_value="Windows"):
+        with pytest.raises(SchedulerError, match="requires macOS"):
+            get_scheduler(cfg)
+
+
+def test_get_scheduler_launchd_backend_on_darwin() -> None:
+    from sync.scheduler import LaunchdScheduler
+
+    cfg = _make_cfg()
+    cfg.scheduler_backend = "launchd"
+    with patch("sync.scheduler.platform.system", return_value="Darwin"):
+        assert isinstance(get_scheduler(cfg), LaunchdScheduler)
+
+
+def test_launchd_status_missing_and_malformed_plist(tmp_path: Path, monkeypatch) -> None:
+    from sync.scheduler import LaunchdScheduler
+
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = _make_cfg()
+    monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("sync.scheduler.Path.home", lambda: home)
+    monkeypatch.setattr(LaunchdScheduler, "_uid", lambda self: 501)
+    monkeypatch.setattr(LaunchdScheduler, "_launchctl", lambda self: None)
+    sched = LaunchdScheduler(cfg)
+    assert sched.status() is None
+    plist = LaunchdScheduler._plist_path()
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(b"not-a-plist")
+    with pytest.raises(SchedulerError, match="could not parse"):
+        sched.status()
+
+
+def test_launchd_remove_tolerates_bootout_oserror(tmp_path: Path, monkeypatch) -> None:
+    from sync.scheduler import LaunchdScheduler
+
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg = _make_cfg()
+    monkeypatch.setattr("sync.scheduler.platform.system", lambda: "Darwin")
+    monkeypatch.setattr("sync.scheduler.Path.home", lambda: home)
+    monkeypatch.setattr(LaunchdScheduler, "_uid", lambda self: 501)
+    monkeypatch.setattr(LaunchdScheduler, "_launchctl", lambda self: "/bin/launchctl")
+    sched = LaunchdScheduler(cfg)
+    plist = LaunchdScheduler._plist_path()
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(b"plist")
+    monkeypatch.setattr(
+        "sync.scheduler.subprocess.run",
+        MagicMock(side_effect=OSError("bootout wedged")),
+    )
+    assert sched.remove() is True
+    assert not plist.exists()

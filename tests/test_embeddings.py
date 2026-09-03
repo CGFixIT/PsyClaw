@@ -206,6 +206,18 @@ class TestEmbeddingFailureWrapping:
         assert result == [float(len("same query")), 0.5]
         assert model.calls == 1
 
+    def test_embedding_service_error_is_reraised(self, tmp_path, monkeypatch):
+        from utils.errors import EmbeddingServiceError
+
+        cfg_path = _write_cfg(tmp_path)
+
+        def _boom(name, cache):
+            raise EmbeddingServiceError("already wrapped")
+
+        monkeypatch.setattr(embeddings, "_load_model", _boom)
+        with pytest.raises(EmbeddingServiceError, match="already wrapped"):
+            embeddings.get_embedding("query text", cfg_path)
+
 
 class TestOfflineEligibility:
     """_model_offline_eligible + _load_model's conditional HF_HUB_OFFLINE set.
@@ -357,6 +369,38 @@ class TestOfflineEligibility:
         )
         embeddings._load_model("some-model", "")
         assert captured.get("device") == embeddings.EMBED_DEVICE == "cpu"
+
+    def test_load_model_retries_transient_oserror(self, monkeypatch):
+        calls = {"n": 0}
+
+        def ctor(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise OSError("transient hub")
+            return _FakeModel()
+
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setattr(embeddings.time, "sleep", lambda _s: None)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": ctor})(),
+        )
+        model = embeddings._load_model("retry-model", "")
+        assert calls["n"] == 2
+        assert isinstance(model, _FakeModel)
+
+    def test_load_model_reraises_after_retries_exhausted(self, monkeypatch):
+        def ctor(*_a, **_k):
+            raise RuntimeError("still down")
+
+        monkeypatch.setattr(embeddings, "_model_offline_eligible", lambda name, cache: False)
+        monkeypatch.setattr(embeddings.time, "sleep", lambda _s: None)
+        monkeypatch.setitem(
+            sys.modules, "sentence_transformers",
+            type("_Mod", (), {"SentenceTransformer": ctor})(),
+        )
+        with pytest.raises(RuntimeError, match="still down"):
+            embeddings._load_model("fail-model", "")
 
 
 class TestEmbeddingFingerprint:

@@ -12,9 +12,11 @@ import yaml
 
 from telegram.client import (
     _hash_token_fingerprint,
+    _send_one,
     _token_pseudonym,
     chunk_text,
     download_file,
+    fetch_loopback_health,
     get_file,
     get_updates,
     post_query,
@@ -855,3 +857,354 @@ def test_post_query_uses_split_connect_timeout(
     assert isinstance(timeout, httpx.Timeout)
     assert timeout.connect == expected_connect
     assert timeout.read == float(deadline_sec)
+
+
+def test_chunk_text_empty_and_invalid_max_chars() -> None:
+    assert chunk_text("   ", max_chars=10) == []
+    assert chunk_text("", max_chars=10) == []
+    with pytest.raises(ValueError, match="max_chars"):
+        chunk_text("hello", max_chars=0)
+
+
+def test_chunk_text_hard_split_when_boundary_is_at_index_zero() -> None:
+    # max_chars=1 makes max_chars//4 == 0, so a leading newline keeps split_at=0
+    # and exercises the empty-piece fallback.
+    parts = chunk_text("\nabcdef", max_chars=1)
+    assert "".join(parts) == "\nabcdef"
+    assert all(len(p) <= 1 for p in parts)
+
+
+def test_send_message_refuses_empty_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    with pytest.raises(TelegramRefused) as exc:
+        send_message(cfg, chat_id=42, text="   ")
+    assert (exc.value.details or {}).get("gate") == "empty_text"
+
+
+def test_send_message_rejects_non_json_and_non_object_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    non_json = MagicMock()
+    non_json.status_code = 200
+    non_json.json.side_effect = ValueError("nope")
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = non_json
+        with pytest.raises(TelegramRuntimeError) as exc_json:
+            send_message(cfg, chat_id=42, text="hello")
+    assert (exc_json.value.details or {}).get("retryable") is True
+
+    reset_http_client_for_tests()
+    non_object = MagicMock()
+    non_object.status_code = 200
+    non_object.json.return_value = ["not", "an", "object"]
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = non_object
+        with pytest.raises(TelegramRuntimeError) as exc_obj:
+            send_message(cfg, chat_id=42, text="hello")
+    assert "non-object" in exc_obj.value.message
+
+
+def test_bot_api_retry_loop_exhausted_when_max_retries_negative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defensive terminal branch: range(max_retries+1) is empty when max_retries < 0."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    with (
+        patch("telegram.client._TELEGRAM_429_MAX_RETRIES", -1),
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRuntimeError) as exc,
+    ):
+        get_updates(cfg)
+    assert "retry loop exhausted" in exc.value.message
+    client_cls.return_value.get.assert_not_called()
+
+    with (
+        patch("telegram.client._TELEGRAM_429_MAX_RETRIES", -1),
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRuntimeError) as exc_file,
+    ):
+        get_file(cfg, file_id="opaque")
+    assert "retry loop exhausted" in exc_file.value.message
+
+    with (
+        patch("telegram.client._TELEGRAM_429_MAX_RETRIES", -1),
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRuntimeError) as exc_dl,
+    ):
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert "retry loop exhausted" in exc_dl.value.message
+
+    reservation = MagicMock()
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRuntimeError) as exc_send,
+    ):
+        _send_one(
+            cfg,
+            chat_id=42,
+            body="hello",
+            tok="tok-abc",
+            disable_notification=False,
+            reservation=reservation,
+            max_retries=-1,
+        )
+    assert "retry loop exhausted" in exc_send.value.message
+    client_cls.return_value.post.assert_not_called()
+    reservation.consume.assert_not_called()
+
+
+def test_fetch_loopback_health_shapes(tmp_path: Path) -> None:
+    import httpx
+
+    cfg = _cfg(tmp_path)
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.side_effect = httpx.ConnectError("down")
+        assert fetch_loopback_health(cfg).startswith("health unreachable:")
+
+    reset_http_client_for_tests()
+    non_json = MagicMock()
+    non_json.status_code = 502
+    non_json.json.side_effect = ValueError("nope")
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = non_json
+        assert fetch_loopback_health(cfg) == "health HTTP 502 (non-JSON)"
+
+    reset_http_client_for_tests()
+    non_object = MagicMock()
+    non_object.status_code = 200
+    non_object.json.return_value = ["x"]
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = non_object
+        assert fetch_loopback_health(cfg) == "health HTTP 200"
+
+    reset_http_client_for_tests()
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.json.return_value = {
+        "status": "ok",
+        "mode": "offline",
+        "index_ready": True,
+        "graph_ready": True,
+    }
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = ok
+        text = fetch_loopback_health(cfg)
+    assert "status=ok" in text
+    assert "index_ready=True" in text
+
+
+def test_get_updates_rejects_non_json_and_non_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    non_json = MagicMock()
+    non_json.status_code = 200
+    non_json.json.side_effect = ValueError("nope")
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = non_json
+        with pytest.raises(TelegramRuntimeError) as exc:
+            get_updates(cfg)
+    assert "non-JSON" in exc.value.message
+
+    reset_http_client_for_tests()
+    non_object = MagicMock()
+    non_object.status_code = 200
+    non_object.json.return_value = ["x"]
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.get.return_value = non_object
+        with pytest.raises(TelegramRuntimeError) as exc_obj:
+            get_updates(cfg)
+    assert "non-object" in exc_obj.value.message
+
+
+def test_get_file_validation_and_error_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    with pytest.raises(TelegramRefused) as exc_id:
+        get_file(cfg, file_id="  ")
+    assert (exc_id.value.details or {}).get("gate") == "file_id"
+
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.side_effect = httpx.ConnectError("down")
+        with pytest.raises(TelegramRuntimeError) as exc_tr:
+            get_file(cfg, file_id="opaque")
+    assert "getFile" in exc_tr.value.message
+
+    reset_http_client_for_tests()
+    non_json = MagicMock()
+    non_json.status_code = 500
+    non_json.json.side_effect = ValueError("nope")
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = non_json
+        with pytest.raises(TelegramRuntimeError) as exc_nj:
+            get_file(cfg, file_id="opaque")
+    assert "non-JSON" in exc_nj.value.message
+
+    reset_http_client_for_tests()
+    non_object = MagicMock()
+    non_object.status_code = 200
+    non_object.json.return_value = ["x"]
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = non_object
+        with pytest.raises(TelegramRuntimeError) as exc_no:
+            get_file(cfg, file_id="opaque")
+    assert "non-object" in exc_no.value.message
+
+    reset_http_client_for_tests()
+    no_path = MagicMock()
+    no_path.status_code = 200
+    no_path.json.return_value = {"ok": True, "result": {"file_id": "opaque"}}
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.post.return_value = no_path
+        with pytest.raises(TelegramRuntimeError) as exc_path:
+            get_file(cfg, file_id="opaque")
+    assert "no download path" in exc_path.value.message
+
+    reset_http_client_for_tests()
+    limited = MagicMock()
+    limited.status_code = 429
+    limited.json.return_value = {"ok": False, "parameters": {"retry_after": 1}}
+    success = MagicMock()
+    success.status_code = 200
+    success.json.return_value = {
+        "ok": True,
+        "result": {"file_path": "documents/opaque.bin", "file_size": 3},
+    }
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+    ):
+        client_cls.return_value.post.side_effect = [limited, success]
+        descriptor = get_file(cfg, file_id="opaque")
+    assert descriptor["file_path"] == "documents/opaque.bin"
+    sleep.assert_called_once_with(1.0)
+
+    reset_http_client_for_tests()
+    over_cap = MagicMock()
+    over_cap.status_code = 429
+    over_cap.json.return_value = {"ok": False, "parameters": {"retry_after": 999}}
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep2,
+        pytest.raises(TelegramRuntimeError) as exc_cap,
+    ):
+        client_cls.return_value.post.return_value = over_cap
+        get_file(cfg, file_id="opaque")
+    sleep2.assert_not_called()
+    assert (exc_cap.value.details or {}).get("status") == 429
+
+
+def test_download_file_validation_and_stream_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-abc")
+    cfg = _cfg(tmp_path)
+    with pytest.raises(ValueError, match="max_bytes"):
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=0)
+    with pytest.raises(TelegramRefused) as exc_path:
+        download_file(cfg, file_path="  ", max_bytes=3)
+    assert (exc_path.value.details or {}).get("gate") == "file_path"
+
+    limited = MagicMock()
+    limited.status_code = 429
+    limited.read.return_value = None
+    limited.json.side_effect = ValueError("bad")
+    limited_stream = MagicMock()
+    limited_stream.__enter__.return_value = limited
+    limited_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep,
+        pytest.raises(TelegramRuntimeError) as exc_429,
+    ):
+        client_cls.return_value.stream.return_value = limited_stream
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    # Empty retry_after metadata → no sleep retry, raise 429.
+    sleep.assert_not_called()
+    assert (exc_429.value.details or {}).get("status") == 429
+
+    reset_http_client_for_tests()
+    over_cap = MagicMock()
+    over_cap.status_code = 429
+    over_cap.read.return_value = None
+    over_cap.json.return_value = {"ok": False, "parameters": {"retry_after": 999}}
+    over_stream = MagicMock()
+    over_stream.__enter__.return_value = over_cap
+    over_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        patch("telegram.client.time.sleep") as sleep2,
+        pytest.raises(TelegramRuntimeError) as exc_cap,
+    ):
+        client_cls.return_value.stream.return_value = over_stream
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    sleep2.assert_not_called()
+    assert (exc_cap.value.details or {}).get("status") == 429
+
+    reset_http_client_for_tests()
+    bad_status = MagicMock()
+    bad_status.status_code = 403
+    bad_status.headers = {}
+    bad_stream = MagicMock()
+    bad_stream.__enter__.return_value = bad_status
+    bad_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRuntimeError) as exc_st,
+    ):
+        client_cls.return_value.stream.return_value = bad_stream
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert (exc_st.value.details or {}).get("status") == 403
+    assert (exc_st.value.details or {}).get("fatal") is False
+
+    reset_http_client_for_tests()
+    # Invalid content-length is ignored; streaming still enforces the byte cap.
+    weird_len = MagicMock()
+    weird_len.status_code = 200
+    weird_len.headers = {"content-length": "nope"}
+    weird_len.iter_bytes.return_value = [b"abcd"]
+    weird_stream = MagicMock()
+    weird_stream.__enter__.return_value = weird_len
+    weird_stream.__exit__.return_value = False
+    with (
+        patch("telegram.client.httpx.Client") as client_cls,
+        pytest.raises(TelegramRefused) as exc_stream_cap,
+    ):
+        client_cls.return_value.stream.return_value = weird_stream
+        download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert (exc_stream_cap.value.details or {}).get("gate") == "max_download_bytes"
+
+    reset_http_client_for_tests()
+    with patch("telegram.client.httpx.Client") as client_cls:
+        client_cls.return_value.stream.side_effect = httpx.ReadError("cut")
+        with pytest.raises(TelegramRuntimeError) as exc_http:
+            download_file(cfg, file_path="documents/opaque.bin", max_bytes=3)
+    assert "file download" in exc_http.value.message
+
+
+def test_post_query_input_gates(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, max_message_chars=8)
+    with pytest.raises(TelegramRefused) as exc_len:
+        post_query(cfg, query="abcdefghijk")
+    assert (exc_len.value.details or {}).get("gate") == "max_message_chars"
+
+    with pytest.raises(TelegramRefused) as exc_bool:
+        post_query(cfg, query="short", user_confirmed_online="yes")  # type: ignore[arg-type]
+    assert (exc_bool.value.details or {}).get("gate") == "hybrid_confirm"
+
+    with pytest.raises(TelegramRefused) as exc_prov:
+        post_query(cfg, query="short", user_confirmed_online=True, online_provider="other")
+    assert (exc_prov.value.details or {}).get("gate") == "online_provider"

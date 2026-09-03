@@ -359,6 +359,211 @@ def test_iorails_env_fails_engine_startup(monkeypatch):
         get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
 
 
+def test_policy_fingerprint_missing_dir_raises(tmp_path, monkeypatch):
+    from guardrails.errors import RailsLoadError
+    from guardrails.integration import policy_fingerprint
+
+    cfg = GuardrailsConfig()
+    monkeypatch.setattr(cfg, "nemo_config_dir", str(tmp_path / "missing"), raising=False)
+    with pytest.raises(RailsLoadError, match="NeMo config directory missing"):
+        policy_fingerprint(cfg)
+
+
+def test_get_cyclaw_guardrails_dependency_and_breaker(monkeypatch):
+    from guardrails.errors import GuardrailsDependencyError, RailsLoadError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", False)
+    with pytest.raises(GuardrailsDependencyError):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.setattr(gi, "_breaker_failures", gi._BREAKER_LIMIT)
+    with pytest.raises(RailsLoadError, match="circuit breaker open"):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_missing_nemo_files(monkeypatch):
+    from guardrails.errors import RailsLoadError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: False),
+    )
+    with pytest.raises(RailsLoadError, match="NeMo config files not found"):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_loads_and_caches(monkeypatch):
+    from types import SimpleNamespace
+
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: True),
+    )
+
+    cfg = GuardrailsConfig(enabled=True)
+    fake_rails = object()
+    monkeypatch.setattr(gi, "RailsConfig", SimpleNamespace(from_path=lambda p: SimpleNamespace(models=[])))
+    monkeypatch.setattr(gi, "_apply_guardrails_config", lambda *a, **k: None)
+    monkeypatch.setattr(gi, "suppress_onnx_telemetry", lambda **k: None)
+    monkeypatch.setattr(gi, "LLMRails", lambda config: fake_rails)
+    monkeypatch.setattr(gi, "register_actions", lambda *a, **k: None)
+    monkeypatch.setattr(gi, "policy_fingerprint", lambda c: "deadbeef" * 8)
+
+    first = gi.get_cyclaw_guardrails(cfg)
+    second = gi.get_cyclaw_guardrails(cfg)
+    assert first is fake_rails
+    assert second is fake_rails
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_load_failure_trips_breaker(monkeypatch):
+    from types import SimpleNamespace
+
+    from guardrails.errors import RailsLoadError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: True),
+    )
+    monkeypatch.setattr(gi, "policy_fingerprint", lambda c: "cafebabe" * 8)
+    monkeypatch.setattr(
+        gi,
+        "RailsConfig",
+        SimpleNamespace(from_path=lambda p: (_ for _ in ()).throw(RuntimeError("boom"))),
+    )
+    monkeypatch.setattr(gi, "suppress_onnx_telemetry", lambda **k: None)
+
+    with pytest.raises(RailsLoadError, match="failed to load NeMo rails"):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+    assert gi._breaker_failures == 1
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_loads_default_cfg(monkeypatch):
+    from guardrails.errors import GuardrailsDependencyError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", False)
+    monkeypatch.setattr(gi, "load_guardrails_config", lambda: GuardrailsConfig(enabled=True))
+    with pytest.raises(GuardrailsDependencyError):
+        gi.get_cyclaw_guardrails()
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_admission_timeout(monkeypatch):
+    from types import SimpleNamespace
+
+    from guardrails.errors import RailsLoadError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: True),
+    )
+    monkeypatch.setattr(gi, "_cache_key", lambda _cfg: ("k", "openai", "m", "u"))
+    monkeypatch.setattr(gi, "_rails_admit", SimpleNamespace(acquire=lambda timeout=30: False, release=lambda: None))
+    with pytest.raises(RailsLoadError, match="admission timeout"):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_returns_cache_after_admit(monkeypatch):
+    from types import SimpleNamespace
+
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: True),
+    )
+    key = ("k", "openai", "m", "u")
+    sentinel = object()
+
+    class _Admit:
+        def acquire(self, timeout=30):
+            gi._rails_cache[key] = sentinel
+            return True
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(gi, "_cache_key", lambda _cfg: key)
+    monkeypatch.setattr(gi, "_rails_admit", _Admit())
+    assert gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True)) is sentinel
+    gi.reset_rails_singleton()
+
+
+def test_get_cyclaw_guardrails_reraises_rails_load_error(monkeypatch):
+    from types import SimpleNamespace
+
+    from guardrails.errors import RailsLoadError
+    import guardrails.integration as gi
+
+    gi.reset_rails_singleton()
+    monkeypatch.setattr(gi, "NEMO_AVAILABLE", True)
+    monkeypatch.delenv("NEMO_GUARDRAILS_IORAILS_ENGINE", raising=False)
+    monkeypatch.setattr(
+        GuardrailsConfig,
+        "nemo_config_present",
+        property(lambda self: True),
+    )
+    monkeypatch.setattr(gi, "_cache_key", lambda _cfg: ("k", "openai", "m", "u"))
+    monkeypatch.setattr(
+        gi,
+        "RailsConfig",
+        SimpleNamespace(from_path=lambda _p: (_ for _ in ()).throw(RailsLoadError("already typed"))),
+    )
+    monkeypatch.setattr(gi, "suppress_onnx_telemetry", lambda **k: None)
+    with pytest.raises(RailsLoadError, match="already typed"):
+        gi.get_cyclaw_guardrails(GuardrailsConfig(enabled=True))
+    assert gi._breaker_failures == 0
+    gi.reset_rails_singleton()
+
+
+def test_safe_generate_and_node_default_cfg(monkeypatch):
+    cfg = GuardrailsConfig(enabled=False)
+    monkeypatch.setattr(
+        "guardrails.integration.load_guardrails_config",
+        lambda path=None: cfg,
+    )
+    res = _run(safe_generate("benign corpus question"))
+    assert res["blocked"] is False
+    assert res["reason"] == "guardrails disabled"
+
+    out = _run(guardrail_safety_node({"query": "benign corpus question"}))
+    assert out["safety_blocked"] is False
+
+
 def test_nemo_template_matches_guardrails_block():
     # Drift pin: the shipped NeMo template must keep pointing at the same
     # local endpoint as config.yaml's guardrails: block (LM Studio -> Ollama

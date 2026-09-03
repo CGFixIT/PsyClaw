@@ -2076,3 +2076,56 @@ class TestAuditRoleGuard:
             gate._forbid_audit_query("ghost")
         finally:
             gate.auth_manager = saved
+
+
+class TestTlsSslKwargs:
+    def test_enabled_without_cert_paths_fails_closed(self, monkeypatch):
+        import gate
+
+        monkeypatch.setattr(gate, "cfg", {"api": {"tls": {"enabled": True}}})
+        kwargs, err = gate._tls_ssl_kwargs()
+        assert kwargs is None
+        assert "certfile/keyfile" in err
+
+    def test_relative_cert_and_key_are_anchored_to_base_dir(self, tmp_path, monkeypatch):
+        import gate
+
+        cert = tmp_path / "c.pem"
+        key = tmp_path / "k.pem"
+        cert.write_bytes(b"c")
+        key.write_bytes(b"k")
+        monkeypatch.setattr(gate, "_BASE_DIR", tmp_path)
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {"api": {"tls": {"enabled": True, "certfile": "c.pem", "keyfile": "k.pem"}}},
+        )
+        kwargs, err = gate._tls_ssl_kwargs()
+        assert err is None
+        assert kwargs == {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}
+
+    def test_unreadable_cert_fails_closed(self, tmp_path, monkeypatch):
+        import gate
+        from pathlib import Path
+
+        cert = tmp_path / "c.pem"
+        key = tmp_path / "k.pem"
+        cert.write_bytes(b"c")
+        key.write_bytes(b"k")
+        monkeypatch.setattr(
+            gate,
+            "cfg",
+            {"api": {"tls": {"enabled": True, "certfile": str(cert), "keyfile": str(key)}}},
+        )
+        orig_open = Path.open
+
+        def fake_open(self, *args, **kwargs):
+            if self.resolve() == cert.resolve():
+                raise OSError("permission denied")
+            return orig_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", fake_open)
+        kwargs, err = gate._tls_ssl_kwargs()
+        assert kwargs is None
+        assert "not readable" in err
+        assert "certfile" in err

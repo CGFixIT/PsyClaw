@@ -169,3 +169,141 @@ def test_post_query_non_object_json_is_not_retryable(
         with pytest.raises(OpenTweetRuntimeError) as exc_info:
             client.post_query(cfg, "hello topic")
     assert exc_info.value.details.get("retryable") is False
+
+
+def test_http_client_pools_create_and_reset_closes() -> None:
+    """Lazy Client() construction and reset close both pools."""
+    mock_loop = MagicMock()
+    mock_ot = MagicMock()
+    with patch("opentweet.client.httpx.Client", side_effect=[mock_loop, mock_ot]) as client_cls:
+        assert client._get_loopback_http_client() is mock_loop
+        assert client._get_opentweet_http_client() is mock_ot
+        assert client_cls.call_count == 2
+        assert client_cls.call_args_list[0].kwargs.get("trust_env") is False
+    client.reset_http_client_for_tests()
+    mock_loop.close.assert_called_once()
+    mock_ot.close.assert_called_once()
+    assert client._loopback_http_client is None
+    assert client._opentweet_http_client is None
+
+
+def test_post_query_transport_error_is_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    mock_http = MagicMock()
+    mock_http.post.side_effect = httpx.ConnectError("refused")
+    with patch("opentweet.client._get_loopback_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.post_query(cfg, "hello topic")
+    assert "ConnectError" in str(exc_info.value)
+    assert exc_info.value.details.get("retryable") is True
+
+
+def test_post_query_non_json_body_sets_data_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.side_effect = ValueError("not json")
+    mock_http = MagicMock()
+    mock_http.post.return_value = resp
+    with patch("opentweet.client._get_loopback_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.post_query(cfg, "hello topic")
+    assert "non-object JSON" in str(exc_info.value)
+    assert exc_info.value.details.get("retryable") is False
+
+
+def test_get_me_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"authenticated": True, "subscription": {"can_schedule": True}}
+    mock_http = MagicMock()
+    mock_http.get.return_value = resp
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        data = client.get_me(cfg)
+    assert data["authenticated"] is True
+    mock_http.get.assert_called_once()
+    assert mock_http.get.call_args.kwargs["headers"]["Authorization"] == "Bearer ot_test"
+
+
+def test_get_me_transport_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    mock_http = MagicMock()
+    mock_http.get.side_effect = httpx.ReadTimeout("slow")
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.get_me(cfg)
+    assert "ReadTimeout" in str(exc_info.value)
+    assert exc_info.value.details.get("retryable") is True
+
+
+@pytest.mark.parametrize("status, body", [
+    (401, {"error": "nope"}),
+    (200, ["not", "dict"]),
+    (500, None),
+])
+def test_get_me_rejects_bad_status_or_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, body: object,
+) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    resp = MagicMock()
+    resp.status_code = status
+    if body is None:
+        resp.json.side_effect = ValueError("bad json")
+    else:
+        resp.json.return_value = body
+    mock_http = MagicMock()
+    mock_http.get.return_value = resp
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.get_me(cfg)
+    assert exc_info.value.details.get("status") == status
+    assert "retryable" in exc_info.value.details
+
+
+def test_create_post_transport_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    mock_http = MagicMock()
+    mock_http.post.side_effect = httpx.ConnectError("down")
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.create_post(cfg, "body")
+    assert "ConnectError" in str(exc_info.value)
+    assert exc_info.value.details.get("retryable") is True
+
+
+def test_create_post_non_json_and_bad_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENTWEET_API_KEY", "ot_test")
+    cfg = load_opentweet_config(_cfg(tmp_path))
+
+    bad_json = MagicMock()
+    bad_json.status_code = 201
+    bad_json.json.side_effect = ValueError("nope")
+    mock_http = MagicMock()
+    mock_http.post.return_value = bad_json
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.create_post(cfg, "body")
+    assert exc_info.value.details.get("status") == 201
+
+    bad_status = MagicMock()
+    bad_status.status_code = 403
+    bad_status.json.return_value = {"error": "forbidden"}
+    mock_http.post.return_value = bad_status
+    with patch("opentweet.client._get_opentweet_http_client", return_value=mock_http):
+        with pytest.raises(OpenTweetRuntimeError) as exc_info:
+            client.create_post(cfg, "body")
+    assert exc_info.value.details.get("status") == 403
+    assert exc_info.value.details.get("retryable") is False

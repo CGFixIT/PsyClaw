@@ -159,3 +159,50 @@ def test_human_size_units():
     assert clear_cache.human_size(0) == "0.0 B"
     assert clear_cache.human_size(1536) == "1.5 KiB"
     assert clear_cache.human_size(5 * 1024 * 1024) == "5.0 MiB"
+    assert clear_cache.human_size(1024 ** 4) == "1.0 TiB"
+
+
+def test_read_cache_dir_invalid_yaml_raises(tmp_path):
+    import pytest
+
+    from utils.errors import ConfigError
+
+    p = tmp_path / "config.yaml"
+    p.write_text("models: [\n  - broken", encoding="utf-8")
+    with pytest.raises(ConfigError, match="Invalid YAML"):
+        clear_cache.read_cache_dir(str(p))
+
+
+def test_dir_stats_ignores_vanished_files(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    cache = _make_cache(tmp_path)
+    gone = cache / "gone.bin"
+    gone.write_bytes(b"abc")
+    orig_stat = Path.stat
+    calls = {"n": 0}
+
+    def flaky(self, *args, **kwargs):
+        if self.name == "gone.bin":
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise OSError("vanished")
+        return orig_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky)
+    files, total = clear_cache.dir_stats(cache)
+    assert files == 3
+    assert total == 2048 + len("{}")
+
+
+def test_apply_rmtree_failure_returns_fail(tmp_path, monkeypatch):
+    cache = _make_cache(tmp_path)
+    cfg = _write_cfg(tmp_path, str(cache))
+
+    def boom(_path):
+        raise OSError("busy")
+
+    monkeypatch.setattr(clear_cache.shutil, "rmtree", boom)
+    rc = clear_cache.main(["--config", cfg, "--apply"])
+    assert rc == clear_cache.EXIT_FAIL
+    assert cache.exists()

@@ -108,7 +108,7 @@ class _GeneratingClient(Protocol):
         # Protocol method stub: never executed, only implementations' bodies run.
         # `pass` (not `...`) here so CodeQL's ineffectual-statement check doesn't
         # flag a bare Ellipsis expression statement.
-        pass
+        pass  # pragma: no cover - Protocol stub; implementations' generate() runs
 
 # =============================================================================
 # State Definition

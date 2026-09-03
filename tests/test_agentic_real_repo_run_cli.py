@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -1718,3 +1719,296 @@ def test_status_diff_is_truncated_past_the_budget(cfg_path, checks_file, monkeyp
     status = json.loads(capsys.readouterr().out)
     assert len(status["diff"]) < _MAX_STATUS_DIFF_CHARS + 200
     assert "truncated" in status["diff"]
+
+
+def test_run_refuses_whitespace_only_reason(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic import context
+    from agentic.deepagent_github import repo_workspace
+
+    def explode(*_a, **_k):
+        raise AssertionError("must refuse before network I/O")
+
+    monkeypatch.setattr(context, "run_read", explode)
+    monkeypatch.setattr(repo_workspace, "run_read", explode)
+    code = main([
+        "--config", cfg_path, "real-repo-run", "--repo", "--instruction", "x",
+        "--checks-file", checks_file, "--branch", "agent/x", "--commit-message", "x",
+        "--reason", "   ", "--confirm",
+    ])
+    assert code == EXIT_REFUSED
+    assert "non-empty --reason" in capsys.readouterr().err
+
+
+def test_run_bad_config_is_env_exit(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump({"logging": {"audit_file": str(tmp_path / "a.jsonl")}}), encoding="utf-8")
+    assert main([
+        "--config", str(bad), "real-repo-run", "--repo", "--instruction", "x",
+        "--checks-file", str(tmp_path / "c.json"), "--branch", "agent/x",
+        "--commit-message", "x", "--reason", "r", "--confirm",
+    ]) == EXIT_ENV
+
+
+def test_run_persists_failed_record_on_write_refused(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic import real_repo_loop
+    from utils.errors import AgenticWriteRefused
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+
+    def refuse(*_a, **_k):
+        raise AgenticWriteRefused("loop refused write")
+
+    monkeypatch.setattr(real_repo_loop, "run_real_repo_loop", refuse)
+    assert _run_start(cfg_path, checks_file) == EXIT_REFUSED
+    assert "loop refused write" in capsys.readouterr().err
+
+
+def test_render_pending_diff_empty_message(cfg_path, tmp_path, monkeypatch):
+    from agentic.cli import _render_pending_diff
+    from agentic.config import load_agentic_config
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+
+    cfg = load_agentic_config(cfg_path)
+    tools = MagicMock()
+    tools.diff.return_value = ""
+    tools.untracked_files.return_value = []
+    monkeypatch.setattr(RepoWorkspaceTools, "attach", classmethod(lambda cls, *a, **k: tools))
+    msg = _render_pending_diff(cfg, str(tmp_path), cfg_path, ["missing.txt"])
+    assert "no diff to show" in msg
+    tools.release.assert_called_once()
+
+
+def test_status_bad_config_is_env_exit(tmp_path):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump({"logging": {"audit_file": str(tmp_path / "a.jsonl")}}), encoding="utf-8")
+    assert main(["--config", str(bad), "real-repo-run-status", "--run-id", "a" * 32]) == EXIT_ENV
+
+
+def test_push_record_missing_branch_and_write_refused(tmp_path, cfg_path, monkeypatch, capsys):
+    from agentic.cli import _push_record
+    from agentic.real_repo_run_store import RealRepoRunRecord
+    from utils.errors import AgenticWriteRefused
+
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    record = RealRepoRunRecord(
+        run_id="b" * 32, repo="CGFixIT/CyClaw", dest=str(tmp_path / "wt"), status="approved",
+    )
+    tools = MagicMock()
+    with pytest.raises(AgenticError, match="no branch_name"):
+        _push_record(tools, record, runs_dir)
+
+    record.branch_name = "agent/topic"
+    tools.push_branch.side_effect = AgenticWriteRefused("push closed")
+    assert _push_record(tools, record, runs_dir) == EXIT_REFUSED
+    assert "push refused" in capsys.readouterr().err
+
+
+def test_publish_record_success_sets_pr_url(tmp_path, cfg_path, monkeypatch):
+    from agentic.cli import _publish_record
+    from agentic.config import load_agentic_config
+    from agentic.real_repo_run_store import RealRepoRunRecord
+
+    cfg = load_agentic_config(cfg_path)
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    record = RealRepoRunRecord(
+        run_id="c" * 32, repo=cfg.repo, dest=str(tmp_path / "wt"), status="approved",
+        branch_name="agent/topic", commit_message="msg", pushed=True,
+    )
+    monkeypatch.setattr(
+        "agentic.writer.plan_write",
+        lambda *a, **k: {"op": "pr_create", "repo": cfg.repo, "params": {}, "would_run": ["gh"], "reason": "r"},
+    )
+    monkeypatch.setattr(
+        "agentic.writer.execute_write",
+        lambda *a, **k: {"status": "executed", "stdout": "https://example/pr/9"},
+    )
+    assert _publish_record(cfg, record, runs_dir, reason="ship", confirm=True, config_path=cfg_path) == EXIT_OK
+    assert record.pr_url == "https://example/pr/9"
+
+
+def test_decide_bad_config_and_disabled(tmp_path, capsys):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump({"logging": {"audit_file": str(tmp_path / "a.jsonl")}}), encoding="utf-8")
+    assert main([
+        "--config", str(bad), "real-repo-run-decide", "--run-id", "a" * 32, "--decision", "approve",
+    ]) == EXIT_ENV
+
+    from utils.logger import reset_config_cache
+
+    src = yaml.safe_load(Path("config.yaml").read_text(encoding="utf-8"))
+    src["agentic"]["enabled"] = False
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(src), encoding="utf-8")
+    reset_config_cache()
+    try:
+        assert main([
+            "--config", str(path), "real-repo-run-decide", "--run-id", "a" * 32, "--decision", "approve",
+        ]) == EXIT_OK
+        assert "disabled" in capsys.readouterr().out.lower()
+    finally:
+        reset_config_cache()
+
+
+def test_decide_missing_branch_fields_and_attach_failure(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic.config import load_agentic_config
+    from agentic.cli import _real_repo_runs_dir
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.real_repo_run_store import RealRepoRunRecord, save_run
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    cfg = load_agentic_config(cfg_path)
+    runs_dir = _real_repo_runs_dir(cfg)
+    broken = RealRepoRunRecord(
+        run_id=run_id, repo=cfg.repo, dest=str(Path(cfg_path).parent / "missing-wt"),
+        status="pending_decision",
+    )
+    save_run(runs_dir, broken)
+    assert main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve",
+    ]) == EXIT_FAIL
+    assert "missing branch_name" in capsys.readouterr().err
+
+    broken.branch_name = "agent/topic"
+    broken.commit_message = "msg"
+    save_run(runs_dir, broken)
+
+    def boom_attach(*_a, **_k):
+        raise AgenticError("attach failed")
+
+    monkeypatch.setattr(RepoWorkspaceTools, "attach", classmethod(lambda cls, *a, **k: boom_attach()))
+    assert main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve",
+    ]) == EXIT_FAIL
+    assert "attach failed" in capsys.readouterr().err
+
+
+def test_decide_finalize_agentic_error_on_approve(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic import real_repo_loop
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    def boom(*_a, **_k):
+        raise AgenticError("finalize boom")
+
+    monkeypatch.setattr(real_repo_loop, "finalize_real_repo_change", boom)
+    assert main([
+        "--config", cfg_path, "real-repo-run-decide", "--run-id", run_id, "--decision", "approve",
+    ]) == EXIT_FAIL
+    assert "finalize boom" in capsys.readouterr().err
+
+
+def test_attach_approved_run_error_paths(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    from agentic.cli import _attach_approved_run
+    from agentic.config import load_agentic_config
+    from agentic.cli import _real_repo_runs_dir
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+    from agentic.real_repo_run_store import RealRepoRunRecord, save_run
+    import argparse
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump({"logging": {"audit_file": str(tmp_path / "a.jsonl")}}), encoding="utf-8")
+    args = argparse.Namespace(config=str(bad), run_id="a" * 32)
+    code, *_rest = _attach_approved_run(args, require="push")
+    assert code == EXIT_ENV
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+
+    cfg = load_agentic_config(cfg_path)
+    runs_dir = _real_repo_runs_dir(cfg)
+    record = json.loads((runs_dir / f"{run_id}.json").read_text(encoding="utf-8"))
+    record["branch_name"] = None
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(record), encoding="utf-8")
+    args = argparse.Namespace(config=cfg_path, run_id=run_id)
+    code, *_rest = _attach_approved_run(args, require="push")
+    assert code == EXIT_FAIL
+    assert "missing branch_name" in capsys.readouterr().err
+
+    record["branch_name"] = "agent/fixture-topic"
+    (runs_dir / f"{run_id}.json").write_text(json.dumps(record), encoding="utf-8")
+
+    def boom_attach(*_a, **_k):
+        raise AgenticError("attach no")
+
+    monkeypatch.setattr(RepoWorkspaceTools, "attach", classmethod(lambda cls, *a, **k: boom_attach()))
+    code, *_rest = _attach_approved_run(args, require="push")
+    assert code == EXIT_FAIL
+    assert "attach no" in capsys.readouterr().err
+
+
+def test_push_subcommand_returns_push_failure(cfg_path, checks_file, monkeypatch, capsys):
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+
+    def boom(self, name):
+        raise AgenticError("push exploded")
+
+    monkeypatch.setattr(RepoWorkspaceTools, "push_branch", boom)
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_FAIL
+    assert "push failed" in capsys.readouterr().err
+
+
+def test_publish_subcommand_success(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    _use_real_origin_remote(tmp_path, monkeypatch)
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+    assert main(["--config", cfg_path, "real-repo-run-push", "--run-id", run_id]) == EXIT_OK
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        "agentic.writer.plan_write",
+        lambda *a, **k: {"op": "pr_create", "repo": "CGFixIT/CyClaw", "params": {}, "would_run": ["gh"], "reason": "r"},
+    )
+    monkeypatch.setattr(
+        "agentic.writer.execute_write",
+        lambda *a, **k: {"status": "executed", "stdout": "https://example/pr/42"},
+    )
+    assert main([
+        "--config", cfg_path, "real-repo-run-publish", "--run-id", run_id,
+        "--reason", "ship", "--confirm",
+    ]) == EXIT_OK
+    published = json.loads(capsys.readouterr().out)
+    assert published["pr_url"] == "https://example/pr/42"
+
+
+def test_discard_bad_config_load_fail_and_attach_fail(tmp_path, cfg_path, checks_file, monkeypatch, capsys):
+    from agentic.deepagent_github.repo_workspace import RepoWorkspaceTools
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(yaml.safe_dump({"logging": {"audit_file": str(tmp_path / "a.jsonl")}}), encoding="utf-8")
+    assert main(["--config", str(bad), "real-repo-run-discard", "--run-id", "a" * 32]) == EXIT_ENV
+
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", "d" * 32]) == EXIT_FAIL
+    assert capsys.readouterr().err
+
+    monkeypatch.setattr(LocalProposerClient, "invoke", _fake_model(_RIGHT_BLOCK))
+    _run_start(cfg_path, checks_file)
+    record = json.loads(capsys.readouterr().out)
+    run_id, dest = record["run_id"], record["dest"]
+    _approve(cfg_path, run_id)
+    capsys.readouterr()
+
+    def boom_attach(*_a, **_k):
+        raise AgenticError("discard attach failed")
+
+    monkeypatch.setattr(RepoWorkspaceTools, "attach", classmethod(lambda cls, *a, **k: boom_attach()))
+    assert Path(dest).is_dir()
+    assert main(["--config", cfg_path, "real-repo-run-discard", "--run-id", run_id]) == EXIT_FAIL
+    assert "discard attach failed" in capsys.readouterr().err

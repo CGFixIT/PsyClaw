@@ -16,6 +16,8 @@ from utils.external_pre_hook import (
     DEFAULT_TIMEOUT_SEC,
     MAX_TIMEOUT_SEC,
     MIN_TIMEOUT_SEC,
+    _hook_cfg,
+    _include_query_hash,
     _normalize_timeout,
     run_pre_action_hook,
 )
@@ -281,3 +283,84 @@ def test_emit_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
     assert result["verdict"] == "deny"
     assert _lines(Path(cfg["numbat"]["output_path"])) == []
+
+
+def test_hook_cfg_non_dict_fallback_or_block():
+    assert _hook_cfg({"policy": {"fallback": "nope"}}) == {}
+    assert _hook_cfg({"policy": {"fallback": {"pre_action_hook": "nope"}}}) == {}
+
+
+def test_include_query_hash_non_dict_branches():
+    assert _include_query_hash(None) is True
+    assert _include_query_hash({"logging": "nope"}) is True
+    assert _include_query_hash({"logging": {"audit_fields": "nope"}}) is True
+
+
+def test_enabled_with_empty_command_allows():
+    cfg = {"policy": {"fallback": {"pre_action_hook": {"enabled": True, "command": []}}}}
+    assert run_pre_action_hook("grok", "grok-4.5", "abc", cfg) == {"verdict": "allow"}
+
+
+def test_unsupported_fail_mode_still_enforces(monkeypatch: pytest.MonkeyPatch):
+    cfg = {
+        "policy": {
+            "fallback": {
+                "pre_action_hook": {
+                    "enabled": True,
+                    "command": ["hook"],
+                    "fail_mode": "monitor",
+                }
+            }
+        }
+    }
+
+    def _exit_2(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout=b"", stderr=b"deny")
+
+    monkeypatch.setattr(subprocess, "run", _exit_2)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"
+
+
+def test_oserror_running_hook_denies_and_emits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    cfg = _hook_config(tmp_path)
+
+    def _boom(*_a, **_k):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    result = run_pre_action_hook("grok", "grok-4.5", _TEST_QUERY_HASH, cfg)
+    assert result["verdict"] == "deny"
+    assert "hook execution failed" in result["reason"]
+    records = _lines(Path(cfg["numbat"]["output_path"]))
+    assert len(records) == 1
+    assert records[0]["event_type"] == "network.indicator"
+    assert "hook_error" in records[0].get("tags", [])
+
+
+def test_emitter_import_failure_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import builtins
+    import sys
+
+    cfg = _hook_config(tmp_path)
+
+    def _exit_2(*args, **kwargs):
+        return subprocess.CompletedProcess(args=args[0], returncode=2, stdout=b"", stderr=b"deny")
+
+    monkeypatch.setattr(subprocess, "run", _exit_2)
+    for key in [k for k in list(sys.modules) if k.startswith("utils.numbat_emitter")]:
+        monkeypatch.delitem(sys.modules, key, raising=False)
+    real_import = builtins.__import__
+
+    def _import(name, g=None, loc=None, fromlist=(), level=0):
+        if name == "utils.numbat_emitter" or (
+            name == "utils" and fromlist and "numbat_emitter" in fromlist
+        ):
+            raise ImportError("numbat_emitter unavailable")
+        return real_import(name, g, loc, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    result = run_pre_action_hook("grok", "grok-4.5", "abc", cfg)
+    assert result["verdict"] == "deny"

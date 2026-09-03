@@ -406,3 +406,63 @@ def test_the_head_branch_pattern_matches_repo_workspaces():
     from agentic.writer import _HEAD_BRANCH_RE
 
     assert _HEAD_BRANCH_RE.pattern == BRANCH_NAME_RE.pattern
+
+
+def test_missing_number_raises_typed_error():
+    from agentic.writer import _build_write_argv
+
+    with pytest.raises(AgenticError, match="requires 'number'"):
+        _build_write_argv("pr_comment", "CGFixIT/CyClaw", {"body": "hi"})
+
+
+def test_unknown_write_op_in_builder_raises():
+    from agentic.writer import _build_write_argv
+
+    with pytest.raises(AgenticError, match="Unknown write op"):
+        _build_write_argv("force_push", "CGFixIT/CyClaw", {})
+
+
+def test_execute_write_rejects_non_dict_or_non_string_op(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
+    with pytest.raises(AgenticError, match="plan dict"):
+        execute_write(["not-a-plan"], cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
+    with pytest.raises(AgenticError, match="plan dict"):
+        execute_write({"op": 12, "repo": "CGFixIT/CyClaw"}, cfg=_write_cfg(), confirm=True,
+                      config_path=_config_path(tmp_path))
+
+
+def test_execute_write_runs_subprocess_and_handles_outcomes(monkeypatch, tmp_path: Path):
+    """Drive the real execute_write path with gh/network mocked at the boundary."""
+    import subprocess
+
+    monkeypatch.setattr("agentic.writer.EXECUTION_ENABLED", True)
+    plan = plan_write(
+        _write_cfg(), "pr_create", "ship it", confirm=True,
+        config_path=_config_path(tmp_path), head="agent/topic", title="t", body="b",
+    )
+
+    monkeypatch.setattr("agentic.writer.shutil.which", lambda _bin: None)
+    with pytest.raises(AgenticError, match="gh binary not found"):
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
+
+    monkeypatch.setattr("agentic.writer.shutil.which", lambda _bin: r"C:\fake\gh.exe")
+
+    def _timeout(*_a, **_k):
+        raise subprocess.TimeoutExpired(cmd=["gh"], timeout=1)
+
+    monkeypatch.setattr("agentic.writer.subprocess.run", _timeout)
+    with pytest.raises(AgenticError, match="INDETERMINATE") as timed:
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path), timeout_sec=1)
+    assert timed.value.details.get("indeterminate") is True
+
+    failed = subprocess.CompletedProcess(args=["gh"], returncode=1, stdout="", stderr="boom")
+    monkeypatch.setattr("agentic.writer.subprocess.run", lambda *_a, **_k: failed)
+    with pytest.raises(AgenticError, match="exit code 1"):
+        execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
+
+    ok = subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="https://example/pr/1", stderr="")
+    monkeypatch.setattr("agentic.writer.subprocess.run", lambda *_a, **_k: ok)
+    result = execute_write(plan, cfg=_write_cfg(), confirm=True, config_path=_config_path(tmp_path))
+    assert result["status"] == "executed"
+    assert result["op"] == "pr_create"
+    assert result["stdout"] == "https://example/pr/1"

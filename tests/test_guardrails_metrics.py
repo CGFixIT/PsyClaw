@@ -212,3 +212,57 @@ def test_load_events_skips_invalid_event_lines(tmp_path):
     events = load_events(path)
     assert len(events) == 1
     assert compute_guardrail_metrics(events)["hallucinations_flagged"] == 1
+
+
+def test_sanitize_metric_fields_list_and_tuple():
+    from guardrails.metrics import sanitize_metric_fields
+
+    cleaned = sanitize_metric_fields(
+        [{"query": "secret", "ok": 1}, ({"response": "nope", "n": 2},)]
+    )
+    assert cleaned == [{"ok": 1}, [{"n": 2}]]
+
+
+def test_print_metrics_empty_and_rich(tmp_path, capsys):
+    from guardrails.metrics import EVENT_ALLOWED, EVENT_TOOL_CALL, print_metrics
+
+    missing = tmp_path / "missing.jsonl"
+    print_metrics(missing)
+    assert "No guardrail events found" in capsys.readouterr().out
+
+    path = tmp_path / "guardrails.jsonl"
+    events = [
+        {"event": EVENT_ALLOWED, "grounding_score": 0.5},
+        {"event": EVENT_TOOL_CALL, "tool": "web_fetch", "ok": True},
+        {"event": EVENT_TOOL_CALL, "tool": "web_fetch", "ok": True},
+    ]
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    print_metrics(path)
+    out = capsys.readouterr().out
+    assert "Total guardrail events" in out
+    assert "web_fetch" in out
+    assert "Grounding score" in out
+
+
+def test_metrics_main_uses_config_and_fallback(monkeypatch, capsys):
+    from guardrails import metrics as metrics_mod
+
+    class _Cfg:
+        metrics_path = "logs/from-config.jsonl"
+
+    monkeypatch.setattr(
+        "guardrails.config.load_guardrails_config",
+        lambda: _Cfg(),
+    )
+    seen: list[str] = []
+    monkeypatch.setattr(metrics_mod, "print_metrics", lambda path: seen.append(str(path)))
+    metrics_mod.main()
+    assert seen == ["logs/from-config.jsonl"]
+
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr("guardrails.config.load_guardrails_config", _boom)
+    seen.clear()
+    metrics_mod.main()
+    assert seen == ["logs/guardrails.jsonl"]

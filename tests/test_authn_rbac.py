@@ -26,6 +26,11 @@ def test_validate_role_rejects_unknown():
     assert authn.validate_role("Admin") == "admin"
 
 
+def test_validate_role_rejects_non_string():
+    with pytest.raises(authn.PasswordPolicyError, match="role must be a string"):
+        authn.validate_role(None)  # type: ignore[arg-type]
+
+
 def test_bootstrap_admin_has_admin_role(manager):
     assert manager.bootstrap_if_empty() is True
     user = manager.get_user(BOOTSTRAP_USERNAME)

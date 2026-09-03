@@ -8,9 +8,12 @@ import pytest
 import yaml
 
 from utils.config_validation import (
+    resolve_grok_reasoning_effort,
+    resolve_reasoning_effort,
     validate_auth_config,
     validate_boot_timeout_config,
     validate_fallback_confirm_placeholder,
+    validate_local_llm_reasoning_effort,
     validate_personality_config,
     validate_retrieval_config,
     validate_tls_config,
@@ -212,6 +215,50 @@ def test_fallback_confirm_absent_ok():
     validate_fallback_confirm_placeholder({})
 
 
+def test_fallback_confirm_non_dict_fallback_is_noop():
+    validate_fallback_confirm_placeholder({"policy": {"fallback": "nope"}})
+
+
+# ── resolve_reasoning_effort / grok ───────────────────────────────────────
+
+
+def test_resolve_reasoning_effort_unset_and_blank():
+    assert resolve_reasoning_effort("nope") is None  # type: ignore[arg-type]
+    assert resolve_reasoning_effort({}) is None
+    assert resolve_reasoning_effort({"reasoning_effort": None}) is None
+    assert resolve_reasoning_effort({"reasoning_effort": "  "}) is None
+
+
+def test_resolve_reasoning_effort_valid_and_invalid():
+    assert resolve_reasoning_effort({"reasoning_effort": "High"}) == "high"
+    with pytest.raises(ConfigError):
+        resolve_reasoning_effort({"reasoning_effort": 3})
+    with pytest.raises(ConfigError):
+        resolve_reasoning_effort({"reasoning_effort": "banana"})
+
+
+def test_validate_local_llm_reasoning_effort_noops_and_rejects():
+    validate_local_llm_reasoning_effort({})
+    validate_local_llm_reasoning_effort({"models": "nope"})
+    validate_local_llm_reasoning_effort({"models": {"local_llm": {"reasoning_effort": "low"}}})
+    with pytest.raises(ConfigError):
+        validate_local_llm_reasoning_effort(
+            {"models": {"local_llm": {"reasoning_effort": "nope"}}}
+        )
+
+
+def test_resolve_grok_reasoning_effort_defaults_and_rejects():
+    assert resolve_grok_reasoning_effort("nope") == "low"  # type: ignore[arg-type]
+    assert resolve_grok_reasoning_effort({}) == "low"
+    assert resolve_grok_reasoning_effort({"reasoning_effort": None}) == "low"
+    assert resolve_grok_reasoning_effort({"reasoning_effort": "  "}) == "low"
+    assert resolve_grok_reasoning_effort({"reasoning_effort": "Medium"}) == "medium"
+    with pytest.raises(ConfigError):
+        resolve_grok_reasoning_effort({"reasoning_effort": 1})
+    with pytest.raises(ConfigError):
+        resolve_grok_reasoning_effort({"reasoning_effort": "xhigh"})
+
+
 # ── validate_auth_config ──────────────────────────────────────────────────
 
 
@@ -328,6 +375,70 @@ def test_tls_enabled_readable_files_pass(tmp_path):
     validate_tls_config({
         "api": {"tls": {"enabled": True, "certfile": str(cert), "keyfile": str(key)}}
     })
+
+
+def test_tls_absent_api_or_tls_block_is_noop():
+    validate_tls_config({})
+    validate_tls_config({"api": None})
+    validate_tls_config({"api": "nope"})
+    validate_tls_config({"api": {"tls": None}})
+
+
+def test_tls_block_not_a_mapping_rejected():
+    with pytest.raises(ConfigError):
+        validate_tls_config({"api": {"tls": "enabled"}})
+
+
+def test_tls_enabled_empty_path_rejected(tmp_path):
+    with pytest.raises(ConfigError):
+        validate_tls_config({
+            "api": {
+                "tls": {
+                    "enabled": True,
+                    "certfile": "  ",
+                    "keyfile": str(tmp_path / "k.pem"),
+                }
+            }
+        })
+
+
+def test_tls_relative_paths_are_repo_anchored(tmp_path, monkeypatch):
+    import utils.config_validation as cv
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("x")
+    key.write_text("y")
+    monkeypatch.setattr(cv, "_REPO_ROOT", tmp_path)
+    validate_tls_config({
+        "api": {
+            "tls": {
+                "enabled": True,
+                "certfile": "cert.pem",
+                "keyfile": "key.pem",
+            }
+        }
+    })
+
+
+def test_tls_unreadable_file_rejected(tmp_path, monkeypatch):
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    cert.write_text("x")
+    key.write_text("y")
+    real_open = Path.open
+
+    def _open(self, *args, **kwargs):
+        if self == cert:
+            raise OSError("permission denied")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _open)
+    with pytest.raises(ConfigError) as exc:
+        validate_tls_config({
+            "api": {"tls": {"enabled": True, "certfile": str(cert), "keyfile": str(key)}}
+        })
+    assert "not readable" in str(exc.value)
 
 
 class TestShippedConfigNoDuplicateKeys:

@@ -266,6 +266,54 @@ def test_to_public_dict_has_no_token(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert pub["bot_token_set"] is True
 
 
+def test_non_bool_enabled_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"enabled": "yes"})
+    with pytest.raises(TelegramConfigError, match="YAML boolean"):
+        load_telegram_config(path)
+
+
+def test_rate_limit_non_int_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"rate_limit": {"max_ops": "fast"}})
+    with pytest.raises(TelegramConfigError, match="must be an integer"):
+        load_telegram_config(path)
+
+
+def test_rate_limit_negative_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"rate_limit": {"max_ops": -1}})
+    with pytest.raises(TelegramConfigError, match="must be > 0"):
+        load_telegram_config(path)
+
+
+def test_query_url_blank_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "   "}})
+    with pytest.raises(TelegramConfigError, match="is required"):
+        load_telegram_config(path)
+
+
+def test_query_url_shell_metachar_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "http://127.0.0.1:8787;rm"}})
+    with pytest.raises(TelegramConfigError, match="disallowed characters"):
+        load_telegram_config(path)
+
+
+def test_query_url_bad_scheme_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "ftp://127.0.0.1:8787"}})
+    with pytest.raises(TelegramConfigError, match="must be http or https"):
+        load_telegram_config(path)
+
+
+def test_query_url_credentials_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "http://u:p@127.0.0.1:8787"}})
+    with pytest.raises(TelegramConfigError, match="must not contain URL credentials"):
+        load_telegram_config(path)
+
+
+def test_query_url_fragment_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "http://127.0.0.1:8787/#x"}})
+    with pytest.raises(TelegramConfigError, match="query or fragment"):
+        load_telegram_config(path)
+
+
 def test_shipped_query_timeout_clears_graph_deadline() -> None:
     # 790 = api.graph_timeout_sec (780) + 10s: the channel client must lose the
     # race so the server's diagnosable 504 GRAPH_TIMEOUT arrives instead of a
@@ -274,3 +322,100 @@ def test_shipped_query_timeout_clears_graph_deadline() -> None:
     shipped = yaml.safe_load(shipped_path.read_text(encoding="utf-8"))
     assert shipped["telegram"]["query"]["timeout_sec"] == 790
     assert shipped["telegram"]["query"]["timeout_sec"] > shipped["api"]["graph_timeout_sec"]
+
+def test_validate_positive_int_allow_zero_rejects_negative() -> None:
+    from telegram.config import _validate_positive_int
+
+    with pytest.raises(TelegramConfigError, match="must be >= 0"):
+        _validate_positive_int(-1, "field", allow_zero=True)
+    assert _validate_positive_int(0, "field", allow_zero=True) == 0
+
+
+def test_query_url_invalid_port_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"query": {"base_url": "http://127.0.0.1:notaport"}})
+    with pytest.raises(TelegramConfigError, match="not a valid URL"):
+        load_telegram_config(path)
+
+
+def test_media_fsconnect_root_type_and_nul_rejected(tmp_path: Path) -> None:
+    from telegram.config import TelegramMediaConfig
+
+    path = _write_config(tmp_path, {"media": {"fsconnect_root": 12}})
+    with pytest.raises(TelegramConfigError, match="fsconnect_root must be a string"):
+        load_telegram_config(path)
+    with pytest.raises(TelegramConfigError, match="NUL"):
+        TelegramMediaConfig(fsconnect_root="C:/x\x00y")
+
+
+def test_api_base_validation_branches() -> None:
+    from telegram.config import TelegramConfig
+
+    cases = [
+        (123, "must be an https URL"),
+        ("https://api.telegram.org;evil", "disallowed characters"),
+        ("https://api.telegram.org:bad", "not a valid URL"),
+        ("http://api.telegram.org", "must be an https URL"),
+        ("https://user:pass@api.telegram.org", "must not contain URL credentials"),
+        ("https://api.telegram.org/#frag", "query or fragment"),
+    ]
+    for value, match in cases:
+        with pytest.raises(TelegramConfigError, match=match):
+            TelegramConfig(api_base=value)  # type: ignore[arg-type]
+
+
+def test_allowed_chat_ids_entry_type_and_shape_rejected() -> None:
+    from telegram.config import TelegramConfig
+
+    with pytest.raises(TelegramConfigError, match="must be int or digit-string"):
+        TelegramConfig(allowed_chat_ids=[True])  # type: ignore[list-item]
+    with pytest.raises(TelegramConfigError, match="entry invalid"):
+        TelegramConfig(allowed_chat_ids=["abc"])
+
+
+def test_nested_config_must_be_dataclass_instances(tmp_path: Path) -> None:
+    # Construct TelegramConfig directly with bad nested types to hit __post_init__.
+    from telegram.config import TelegramConfig, TelegramMediaConfig, TelegramQueryConfig, TelegramRateLimitConfig
+
+    with pytest.raises(TelegramConfigError, match="rate_limit must be a mapping"):
+        TelegramConfig(rate_limit="nope")  # type: ignore[arg-type]
+    with pytest.raises(TelegramConfigError, match="query must be a mapping"):
+        TelegramConfig(query="nope")  # type: ignore[arg-type]
+    with pytest.raises(TelegramConfigError, match="media must be a mapping"):
+        TelegramConfig(media="nope")  # type: ignore[arg-type]
+    # Sanity: valid nested defaults still construct.
+    assert isinstance(TelegramConfig().rate_limit, TelegramRateLimitConfig)
+    assert isinstance(TelegramConfig().query, TelegramQueryConfig)
+    assert isinstance(TelegramConfig().media, TelegramMediaConfig)
+
+
+def test_runtime_bot_token_and_resolve_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _write_config(tmp_path, {"bot_token_env": "TG_BOT_TOKEN", "query": {"api_key_env": "TG_API_KEY"}})
+    cfg = load_telegram_config(path)
+    with pytest.raises(TelegramConfigError, match="Prompted bot token is empty"):
+        cfg.set_runtime_bot_token("   ")
+    cfg.set_runtime_bot_token("123:ABC")
+    assert cfg.resolve_bot_token() == "123:ABC"
+    monkeypatch.delenv("TG_BOT_TOKEN", raising=False)
+    cfg2 = load_telegram_config(path)
+    with pytest.raises(TelegramConfigError, match="unset or empty"):
+        cfg2.resolve_bot_token()
+    monkeypatch.setenv("TG_BOT_TOKEN", "env-token")
+    assert cfg2.resolve_bot_token() == "env-token"
+    monkeypatch.delenv("TG_API_KEY", raising=False)
+    assert cfg2.resolve_api_key() is None
+    monkeypatch.setenv("TG_API_KEY", "k")
+    assert cfg2.resolve_api_key() == "k"
+
+
+def test_unknown_nested_keys_rejected(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, {"rate_limit": {"max_ops": 1, "window_seconds": 1, "extra": 1}})
+    with pytest.raises(TelegramConfigError, match="rate_limit unknown"):
+        load_telegram_config(path)
+    reset_config_cache()
+    path = _write_config(tmp_path, {"query": {"base_url": "http://127.0.0.1:8787", "surprise": True}})
+    with pytest.raises(TelegramConfigError, match="query unknown"):
+        load_telegram_config(path)
+    reset_config_cache()
+    path = _write_config(tmp_path, {"media": "not-a-map"})
+    with pytest.raises(TelegramConfigError, match="media must be a mapping"):
+        load_telegram_config(path)

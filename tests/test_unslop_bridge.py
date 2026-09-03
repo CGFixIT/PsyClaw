@@ -143,3 +143,85 @@ class TestBuildUnslopProbeEnabled:
         assert probe is not None
         result = probe("Any text.", {}, 1)
         assert result == {}
+
+
+class TestUnslopCoverageLeftovers:
+    def test_logged_phrase_fields_empty_and_structural(self):
+        from agentic.unslop_bridge import _logged_phrase_fields
+
+        assert _logged_phrase_fields(None) == {}
+        assert _logged_phrase_fields("") == {}
+        # Structural span text is hashed, not echoed.
+        out = _logged_phrase_fields("this is a long structural span not in banned phrases")
+        assert "phrase_sha256" in out
+        assert "phrase" not in out
+
+    def test_extract_response_prose_strips_file_blocks(self):
+        from agentic.unslop_bridge import _extract_response_prose
+
+        text = "intro\n=== FILE a.md ===\nbody\n=== END FILE ===\noutro"
+        prose = _extract_response_prose(text)
+        assert "intro" in prose
+        assert "outro" in prose
+        assert "body" not in prose
+
+    def test_append_record_failure_is_soft(self, tmp_path, monkeypatch):
+        from agentic.unslop_bridge import _append_record
+
+        path = tmp_path / "nested" / "unslop.jsonl"
+
+        def _boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "open", _boom)
+        _append_record(path, {"event": "unslop_scan"})  # must not raise
+
+    def test_structure_flags_and_span_fallback(self, tmp_path):
+        from agentic.unslop_bridge import _run_scan
+
+        metrics = tmp_path / "unslop.jsonl"
+
+        def _fake_suggest(_text: str):
+            return {
+                "suggestions": [
+                    {"category": "banned", "severity": "hard", "span": "treasure trove"},
+                ],
+                "counts": {
+                    "total": 1,
+                    "hard": 1,
+                    "soft": 0,
+                    "by_category": {},
+                    "structure_flags": ["list_heavy"],
+                },
+            }
+
+        result = _run_scan(
+            _fake_suggest,
+            "treasure trove of ideas.",
+            surface="response",
+            path=None,
+            step=1,
+            metrics_path=metrics,
+        )
+        assert result["counts"]["structure_flags"] == ["list_heavy"]
+        record = json.loads(metrics.read_text(encoding="utf-8").splitlines()[0])
+        assert record["structure_flags"] == ["list_heavy"]
+        assert record["findings"][0]["phrase"] == "treasure trove"
+
+    def test_vendor_import_failure_returns_none(self, monkeypatch):
+        import builtins
+        import sys
+
+        for key in [k for k in list(sys.modules) if k.startswith("agentic.vendor.unslop")]:
+            monkeypatch.delitem(sys.modules, key, raising=False)
+        real_import = builtins.__import__
+
+        def _import(name, g=None, loc=None, fromlist=(), level=0):
+            if name.startswith("agentic.vendor.unslop") or (
+                name == "agentic.vendor" and fromlist and "unslop" in fromlist
+            ):
+                raise ImportError("no vendor")
+            return real_import(name, g, loc, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _import)
+        assert build_unslop_probe({"unslop": {"enabled": True}}) is None

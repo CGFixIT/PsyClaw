@@ -123,6 +123,22 @@ def test_nemo_config_dir_rejects_dotdot():
         GuardrailsConfig(nemo_config_dir="guardrails/config/../config")
 
 
+def test_empty_nemo_config_dir_is_rejected():
+    with pytest.raises(GuardrailsConfigError, match="required"):
+        GuardrailsConfig(nemo_config_dir="")
+
+
+def test_nemo_config_dir_rejects_agentic_root():
+    with pytest.raises(GuardrailsConfigError, match="agent-writable"):
+        GuardrailsConfig(nemo_config_dir="agentic")
+
+
+def test_to_dict_round_trips_defaults():
+    dumped = GuardrailsConfig().to_dict()
+    assert dumped["enabled"] is False
+    assert dumped["engine"] == "openai"
+
+
 def test_nemo_config_dir_rejects_outside_repo(tmp_path):
     with pytest.raises(GuardrailsConfigError, match="inside the repository"):
         GuardrailsConfig(nemo_config_dir=str(tmp_path / "elsewhere"))

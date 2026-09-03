@@ -335,6 +335,15 @@ class TestBackendSwapLockingRegression:
         client._backend_lock.release()
         client.close()
 
+    def test_readopt_keeps_current_address_when_resolve_raises(self, tmp_path, mock_ollama):
+        base_url, _server = mock_ollama([(200, {"choices": [{"message": {"content": "ok"}}]})])
+        client = LocalLLMClient(_write_config(tmp_path, base_url))
+        before = (client.base_url, client.model, client.provider)
+        with patch("llm.client.resolve_local_backend", side_effect=LLMServiceError("no url")):
+            client._readopt_backend_if_stale()
+        assert (client.base_url, client.model, client.provider) == before
+        client.close()
+
     def test_concurrent_generate_blocks_until_backend_swap_releases_lock(self, tmp_path, mock_ollama):
         base_url, _server = mock_ollama([(200, {"choices": [{"message": {"content": "ok"}}]})])
         client = LocalLLMClient(_write_config(tmp_path, base_url))

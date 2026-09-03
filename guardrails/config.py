@@ -302,7 +302,7 @@ def load_guardrails_config(config_path: str = "config.yaml") -> GuardrailsConfig
 
     try:
         gc = GuardrailsConfig(**kwargs)
-    except TypeError as exc:
+    except TypeError as exc:  # pragma: no cover - unknown keys are filtered; all fields have defaults
         raise GuardrailsConfigError(
             f"guardrails: block invalid: {exc}",
             details={"unknown_keys": sorted(unknown)},

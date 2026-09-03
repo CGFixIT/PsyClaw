@@ -34,6 +34,7 @@ def test_size_cap():
 
 def test_tags():
     assert check_tags(["a", " b "]) == ["a", "b"]
+    assert check_tags(["", "  ", "kept"]) == ["kept"]
     with pytest.raises(ValueError, match="tag exceeds max length"):
         check_tags(["x" * 100])
     with pytest.raises(ValueError, match="too many tags"):
@@ -81,3 +82,14 @@ def test_scan_skips_non_string_pattern_and_enforces_valid_sibling():
     }
     assert scan_content("please cyclaw-only-sentinel now", cfg, enforced=True)
     assert scan_content("harmless fact about coffee", cfg, enforced=True) == []
+
+
+def test_scan_skips_invalid_regex_and_keeps_valid_sibling():
+    cfg = {
+        "policy": {
+            "prompt_filter": {
+                "banned_patterns": ["[unclosed", r"cyclaw-only-sentinel"],
+            },
+        },
+    }
+    assert scan_content("please cyclaw-only-sentinel now", cfg, enforced=True)

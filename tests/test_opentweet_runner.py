@@ -251,3 +251,112 @@ def test_schedule_with_naive_now_normalizes(tmp_path: Path) -> None:
     kwargs = create.call_args.kwargs
     assert kwargs.get("scheduled_date")
     assert kwargs["scheduled_date"].startswith("2026-08-24T09:00:00")
+
+def test_next_schedule_second_normalize_when_still_past() -> None:
+    # Force the post-UTC-normalize branch where target is still <= current.
+    tz = ZoneInfo("America/New_York")
+    now = datetime(2026, 3, 8, 3, 30, tzinfo=tz)  # after spring-forward
+    when = next_schedule_datetime(7, "02:30", now=now)
+    assert when > now
+
+
+def test_read_topic_missing_and_oversize(tmp_path: Path) -> None:
+    from opentweet.runner import read_topic
+
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    cfg.topic_file = ""
+    with pytest.raises(OpenTweetRefused) as exc:
+        read_topic(cfg, topic=None, topic_file=None)
+    assert exc.value.details["gate"] == "topic_missing"
+    cfg.max_topic_chars = 3
+    with pytest.raises(OpenTweetRefused) as exc2:
+        read_topic(cfg, topic="toolong", topic_file=None)
+    assert exc2.value.details["gate"] == "max_topic_chars"
+
+
+def test_validate_answer_error_and_non_string(tmp_path: Path) -> None:
+    from opentweet.runner import _validate_answer
+
+    cfg = load_opentweet_config(_cfg(tmp_path))
+    with pytest.raises(OpenTweetRefused) as exc:
+        _validate_answer(cfg, {"error": "boom", "hit_count": 1, "answer": "x"})
+    assert exc.value.details["gate"] == "query_error"
+    with pytest.raises(OpenTweetRefused) as exc2:
+        _validate_answer(cfg, {"hit_count": 1, "answer": None, "model_used": "local"})
+    assert exc2.value.details["gate"] == "empty_answer"
+    with pytest.raises(OpenTweetRefused) as exc3:
+        _validate_answer(cfg, {"hit_count": 1, "answer": "   ", "model_used": "local"})
+    assert exc3.value.details["gate"] == "empty_answer"
+
+
+def test_check_me_unauthenticated(tmp_path: Path) -> None:
+    from opentweet.runner import _check_me
+
+    with pytest.raises(OpenTweetRefused) as exc:
+        _check_me({"authenticated": False}, schedule=False)
+    assert exc.value.details["gate"] == "me_auth"
+
+
+def test_schedule_past_refuses(tmp_path: Path) -> None:
+    cfg = load_opentweet_config(_cfg(tmp_path, schedule_enabled=True, weekday=1, schedule_slot="09:00"))
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    future = now + timedelta(days=7)
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()),
+        patch(
+            "opentweet.client.get_me",
+            return_value={
+                "authenticated": True,
+                "subscription": {"has_access": True},
+                "limits": {"can_post": True},
+            },
+        ),
+        patch("opentweet.runner.next_schedule_datetime", return_value=now),
+        pytest.raises(OpenTweetRefused) as exc,
+    ):
+        post_once(cfg, schedule=True, now=future)
+    assert exc.value.details["gate"] == "schedule_past"
+
+def test_next_schedule_post_normalize_can_add_another_week(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Line 49: after the UTC round-trip the wall time can land <= now even when
+    # the pre-normalize target was still in the future. Subclass datetime so the
+    # second astimezone() in that round-trip returns a past instant.
+    real_cls = datetime
+    counter = {"n": 0}
+
+    class _DT(real_cls):
+        def astimezone(self, tz=None):  # type: ignore[override]
+            out = real_cls.astimezone(self, tz)
+            counter["n"] += 1
+            if counter["n"] == 2:
+                return out - timedelta(days=1)
+            return out
+
+    monkeypatch.setattr("opentweet.runner.datetime", _DT)
+    now = _DT(2026, 8, 24, 8, 0, tzinfo=UTC)  # Monday 08:00; slot Monday 09:00
+    when = next_schedule_datetime(1, "09:00", now=now)
+    assert when > now
+
+
+def test_schedule_naive_when_from_next_schedule(tmp_path: Path) -> None:
+    cfg = load_opentweet_config(_cfg(tmp_path, schedule_enabled=True, weekday=1, schedule_slot="09:00"))
+    naive_future = datetime(2099, 1, 1, 9, 0)  # naive
+    with (
+        patch("opentweet.client.post_query", return_value=_answer()),
+        patch(
+            "opentweet.client.get_me",
+            return_value={
+                "authenticated": True,
+                "subscription": {"has_access": True},
+                "limits": {"can_post": True},
+            },
+        ),
+        patch("opentweet.runner.next_schedule_datetime", return_value=naive_future),
+        patch(
+            "opentweet.client.create_post",
+            return_value={"success": True, "posts": [{"id": "p9"}]},
+        ) as create,
+    ):
+        result = post_once(cfg, schedule=True, now=datetime(2026, 8, 24, 6, 0, tzinfo=UTC))
+    assert result["ok"] is True
+    assert create.call_args.kwargs.get("scheduled_date")

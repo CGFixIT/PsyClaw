@@ -411,6 +411,41 @@ class TestLoadCorpusCaseInsensitive:
         assert len(docs) == 1
         assert "doc.md" in docs[0][0]
 
+    def test_missing_corpus_dir_raises(self, tmp_path):
+        from utils.errors import CorpusEmptyError
+
+        with pytest.raises(CorpusEmptyError, match="does not exist"):
+            load_corpus(str(tmp_path / "no-such-corpus"), extensions=[".md"])
+
+    def test_subdirectory_entries_are_skipped(self, tmp_path):
+        corpus = tmp_path / "corpus"
+        nested = corpus / "nested"
+        nested.mkdir(parents=True)
+        (corpus / "doc.md").write_text("keep", encoding="utf-8")
+        docs = load_corpus(str(corpus), extensions=[".md"])
+        assert len(docs) == 1
+        assert "doc.md" in docs[0][0]
+
+    def test_unreadable_utf8_file_is_skipped(self, tmp_path, caplog):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "good.md").write_text("ok", encoding="utf-8")
+        (corpus / "bad.md").write_bytes(b"\xff\xfe not utf-8")
+        with caplog.at_level("WARNING", logger="retrieval.indexer"):
+            docs = load_corpus(str(corpus), extensions=[".md"])
+        assert len(docs) == 1
+        assert "good.md" in docs[0][0]
+        assert any("bad.md" in rec.getMessage() for rec in caplog.records)
+
+    def test_no_matching_documents_raises(self, tmp_path):
+        from utils.errors import CorpusEmptyError
+
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        (corpus / "notes.json").write_text("{}", encoding="utf-8")
+        with pytest.raises(CorpusEmptyError, match="No documents found"):
+            load_corpus(str(corpus), extensions=[".md"])
+
 
 class TestLoadCorpusSymlinkGuard:
     """Test-spec tier 1.2: a corpus entry resolving OUTSIDE the corpus dir must

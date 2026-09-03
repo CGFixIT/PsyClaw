@@ -34,3 +34,62 @@ def test_self_test_total_consistent_on_config_failure(monkeypatch):
     assert "[FAIL] 01" in lines[0]
     assert any("07." in ln for ln in lines)
     assert passed == 6
+
+
+def test_self_test_fail_arms_for_heuristic_checks(monkeypatch):
+    """Force each heuristic fail branch while keeping config valid."""
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        nemo_config_present=False,
+        nemo_config_dir="/missing",
+        metrics_path="logs/guardrails.jsonl",
+        soul_topics=["soul"],
+    )
+    monkeypatch.setattr(selftest, "load_guardrails_config", lambda *_a, **_k: cfg)
+    monkeypatch.setattr(selftest, "is_soul_topic", lambda *_a, **_k: False)
+    monkeypatch.setattr(selftest, "detect_soul_mutation_intent", lambda *_a, **_k: False)
+    monkeypatch.setattr(selftest, "grounding_score", lambda *_a, **_k: 0.0)
+    monkeypatch.setattr(selftest, "scan_injection", lambda *_a, **_k: [])
+
+    class _BadMetrics:
+        def __init__(self, *_a, **_k):
+            self.counters = {"blocked_generation": 0}
+
+        def record_blocked(self, **_k):
+            return None
+
+    monkeypatch.setattr(selftest, "GuardrailMetrics", _BadMetrics)
+    monkeypatch.setattr("guardrails.integration.NEMO_AVAILABLE", True)
+
+    passed, total, lines = selftest.run_self_test()
+    assert total == 7
+    joined = "\n".join(lines)
+    assert "[FAIL] 02" in joined
+    assert "[FAIL] 03" in joined
+    assert "[FAIL] 04" in joined
+    assert "[FAIL] 05" in joined
+    assert "[FAIL] 06" in joined
+    assert "[OK]" in lines[-1] or "live rails available" in joined
+
+
+def test_self_test_metrics_exception_is_fail(monkeypatch):
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(
+        nemo_config_present=True,
+        nemo_config_dir="guardrails/config",
+        metrics_path="logs/guardrails.jsonl",
+        soul_topics=["soul", "personality"],
+    )
+    monkeypatch.setattr(selftest, "load_guardrails_config", lambda *_a, **_k: cfg)
+
+    class _BoomMetrics:
+        def __init__(self, *_a, **_k):
+            raise RuntimeError("metrics boom")
+
+    monkeypatch.setattr(selftest, "GuardrailMetrics", _BoomMetrics)
+    monkeypatch.setattr("guardrails.integration.NEMO_AVAILABLE", False)
+    passed, total, lines = selftest.run_self_test()
+    assert total == 7
+    assert any("[FAIL] 06" in ln and "metrics boom" in ln for ln in lines)

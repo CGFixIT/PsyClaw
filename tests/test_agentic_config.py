@@ -353,6 +353,103 @@ def test_to_dict_excludes_enabled(tmp_path: Path) -> None:
     assert d["repo"] == "CGFixIT/CyClaw"
 
 
+def test_is_loopback_url_fail_closed_on_malformed_ipv6() -> None:
+    from agentic.config import _is_loopback_url
+
+    assert _is_loopback_url("http://[::1") is False
+    assert _is_loopback_url("http://127.0.0.1/v1") is True
+
+
+def test_resolve_data_path_rejects_empty() -> None:
+    from agentic.config import _resolve_data_path
+
+    with pytest.raises(AgenticConfigError, match="required"):
+        _resolve_data_path("", "agentic.registry_path")
+
+
+def test_cloud_provider_model_must_be_string() -> None:
+    from agentic.config import DeepAgentCloudProviderConfig
+
+    with pytest.raises(AgenticConfigError, match="model must be a string"):
+        DeepAgentCloudProviderConfig(enabled=False, model=12)  # type: ignore[arg-type]
+
+
+def test_deepagent_rejects_empty_base_url_and_non_string_model(tmp_path: Path) -> None:
+    from agentic.config import DeepAgentGitHubConfig
+
+    with pytest.raises(AgenticConfigError, match="base_url"):
+        DeepAgentGitHubConfig(enabled=False, base_url="")
+    with pytest.raises(AgenticConfigError, match="model must be a string"):
+        DeepAgentGitHubConfig(enabled=False, model=99)  # type: ignore[arg-type]
+
+
+def test_coerce_providers_accepts_instance_and_rejects_bad_block(tmp_path: Path) -> None:
+    from agentic.config import DeepAgentCloudProviderConfig, DeepAgentGitHubConfig
+
+    already = DeepAgentCloudProviderConfig(enabled=False, model="")
+    cfg = DeepAgentGitHubConfig(providers={"grok": already})
+    assert cfg.providers["grok"] is already
+
+    with pytest.raises(AgenticConfigError, match="invalid"):
+        DeepAgentGitHubConfig(providers={"grok": {"enabled": False, "model": "", "bogus": 1}})
+
+
+def test_repo_metachar_defense_after_regex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # _REPO_RE and _SHELL_METACHARS are disjoint by design, so the metachar
+    # branch is defense-in-depth. Widen the regex temporarily to reach it.
+    import re
+
+    import agentic.config as config_mod
+
+    monkeypatch.setattr(config_mod, "_REPO_RE", re.compile(r".+"))
+    cfg = load_agentic_config(_write_config(tmp_path, _base_block()))
+    cfg.repo = "ok/name$"
+    with pytest.raises(AgenticConfigError, match="forbidden characters"):
+        cfg._validate_repo()
+
+
+def test_empty_registry_path_rejected(tmp_path: Path) -> None:
+    with pytest.raises(AgenticConfigError, match="registry_path is required"):
+        load_agentic_config(_write_config(tmp_path, _base_block(registry_path="")))
+
+
+def test_agentic_block_must_be_mapping(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump({
+        "logging": {"audit_file": str(tmp_path / "a.jsonl")},
+        "agentic": ["not", "a", "mapping"],
+    }), encoding="utf-8")
+    with pytest.raises(AgenticConfigError, match="must be a mapping"):
+        load_agentic_config(str(path))
+
+
+def test_agentic_block_typeerror_wrapped(tmp_path: Path) -> None:
+    # Unexpected nested kwargs raise TypeError inside AgenticConfig.__post_init__
+    # and load_agentic_config wraps them.
+    with pytest.raises(AgenticConfigError, match="invalid"):
+        load_agentic_config(_write_config(tmp_path, _base_block(
+            deepagent_github={"enabled": False, "not_a_real_field": True},
+        )))
+
+
+def test_deepagent_provider_coercion_edge_cases() -> None:
+    from agentic.config import DeepAgentGitHubConfig
+
+    with pytest.raises(AgenticConfigError, match="loopback"):
+        DeepAgentGitHubConfig(base_url="http://example.com/v1")
+    with pytest.raises(AgenticConfigError, match="providers must be a mapping"):
+        DeepAgentGitHubConfig(providers=["grok"])  # type: ignore[arg-type]
+    with pytest.raises(AgenticConfigError, match="unknown"):
+        DeepAgentGitHubConfig(providers={"openai": {"enabled": False, "model": ""}})
+    with pytest.raises(AgenticConfigError, match="must be a mapping"):
+        DeepAgentGitHubConfig(providers={"grok": "yes"})  # type: ignore[dict-item]
+    with pytest.raises(AgenticConfigError, match="allow_cloud_providers is false"):
+        DeepAgentGitHubConfig(
+            allow_cloud_providers=False,
+            providers={"grok": {"enabled": True, "model": "g"}},
+        )
+
+
 class TestShippedAgenticConfigContract:
     """Pins the SHIPPED config.yaml's agentic block, not a synthetic fixture.
 

@@ -119,3 +119,25 @@ class TestHoldConsole:
 
         monkeypatch.setattr("builtins.input", fail)
         gate._hold_console()  # returns without raising
+
+    def test_hold_console_swallows_eof_on_tty(self, monkeypatch):
+        class _Tty:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(gate.sys, "stdin", _Tty())
+        monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(EOFError()))
+        gate._hold_console()
+
+    def test_hold_console_swallows_keyboard_interrupt_on_tty(self, monkeypatch):
+        class _Tty:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(gate.sys, "stdin", _Tty())
+
+        def boom(*_a, **_k):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", boom)
+        gate._hold_console()

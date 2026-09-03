@@ -494,7 +494,9 @@ def cmd_health_task(args: argparse.Namespace) -> int:
     if not cfg.enabled:
         return _disabled_notice()
 
-    if not args.chat_id and not cfg.allowed_chat_ids:
+    # enabled+empty is refused at config load; disabled returns earlier
+    if not args.chat_id and not cfg.allowed_chat_ids:  # pragma: no cover
+
         _err("telegram.allowed_chat_ids is empty; pass --chat-id")
         return EXIT_ENV
     chat_id = args.chat_id or cfg.allowed_chat_ids[0]

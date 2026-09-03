@@ -312,3 +312,356 @@ def test_corrupt_proposal_json_columns_do_not_raise(mem_cfg):
     assert loaded.reason == "operator note"
     listed = list_proposals(mem_cfg)
     assert any(p.id == prop.id and p.payload == {} for p in listed)
+
+
+def test_max_active_garbage_and_zero_are_disabled(mem_cfg):
+    """Unset/invalid/non-positive max_active must not enforce a ceiling."""
+    from memory.store import _max_active_facts
+
+    mem_cfg["memory"]["facts"]["max_active"] = "not-an-int"
+    assert _max_active_facts(mem_cfg) is None
+    insert_fact(mem_cfg, "garbage ceiling still inserts", reason="a")
+
+    mem_cfg["memory"]["facts"]["max_active"] = 0
+    assert _max_active_facts(mem_cfg) is None
+    insert_fact(mem_cfg, "zero ceiling still inserts", reason="b")
+    assert count_active_facts(mem_cfg) == 2
+
+
+def test_connect_chmod_oserror_is_warned(mem_cfg, monkeypatch, caplog):
+    """Existing DB with wrong mode: chmod failure is logged, connect continues."""
+    import logging
+    import os
+
+    import memory.store as store
+
+    connect(mem_cfg).close()  # create the file so the harden path runs
+
+    def boom(_path, _mode):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(os, "chmod", boom)
+    monkeypatch.setattr(store.stat, "S_IMODE", lambda _mode: 0o644)
+    with caplog.at_level(logging.WARNING, logger="cyclaw.memory"):
+        conn = connect(mem_cfg)
+        conn.close()
+    assert any("Could not harden memory DB permissions" in r.message for r in caplog.records)
+
+
+def test_parse_json_column_passthrough_already_parsed():
+    from memory.store import _parse_json_column
+
+    assert _parse_json_column(["a", "b"], empty="[]", expect=list) == ["a", "b"]
+    assert _parse_json_column({"k": 1}, empty="{}", expect=dict) == {"k": 1}
+
+
+def test_list_facts_includes_inactive_when_requested(mem_cfg):
+    fact = insert_fact(mem_cfg, "will deactivate", reason="seed")
+    deactivate_fact(mem_cfg, fact.id, reason="done")
+    active = list_facts(mem_cfg, active_only=True)
+    all_rows = list_facts(mem_cfg, active_only=False)
+    assert active == []
+    assert len(all_rows) == 1
+    assert all_rows[0].active is False
+
+
+def test_update_and_deactivate_missing_fact_rollback(mem_cfg):
+    with pytest.raises(ValueError, match="fact 99999 not found"):
+        update_fact(mem_cfg, 99999, content="nope", reason="missing")
+    with pytest.raises(ValueError, match="fact 99999 not found"):
+        deactivate_fact(mem_cfg, 99999, reason="missing")
+
+
+def test_create_proposal_rejects_invalid_action(mem_cfg):
+    with pytest.raises(ValueError, match="invalid action"):
+        create_proposal(mem_cfg, "explode", {"content": "x"}, reason="bad")
+
+
+def test_list_proposals_without_status_filter(mem_cfg):
+    pending = create_proposal(
+        mem_cfg, "add_fact", {"content": "pending one"}, reason="p"
+    )
+    reject_me = create_proposal(
+        mem_cfg, "add_fact", {"content": "reject one"}, reason="r"
+    )
+    reject_proposal(mem_cfg, reject_me.id, reason="nope")
+    all_props = list_proposals(mem_cfg, status=None)
+    statuses = {p.id: p.status for p in all_props}
+    assert statuses[pending.id] == "pending"
+    assert statuses[reject_me.id] == "rejected"
+
+
+def test_apply_missing_proposal_raises(mem_cfg):
+    with pytest.raises(ValueError, match="proposal 40404 not found"):
+        apply_proposal(mem_cfg, 40404, reason="gone")
+
+
+def test_apply_update_and_deactivate_fact_proposals(mem_cfg):
+    seed = insert_fact(mem_cfg, "original content", category="ops", tags=["t"], reason="seed")
+    upd = create_proposal(
+        mem_cfg,
+        "update_fact",
+        {"fact_id": seed.id, "content": "updated via proposal", "category": "prefs"},
+        reason="edit",
+    )
+    out = apply_proposal(mem_cfg, upd.id, reason="apply update")
+    assert out["status"] == "applied"
+    assert get_fact(mem_cfg, seed.id).content == "updated via proposal"
+
+    deact = create_proposal(
+        mem_cfg,
+        "deactivate_fact",
+        {"fact_id": seed.id},
+        reason="retire",
+    )
+    out2 = apply_proposal(mem_cfg, deact.id, reason="apply deactivate")
+    assert out2["status"] == "applied"
+    assert get_fact(mem_cfg, seed.id).active is False
+
+
+def test_apply_update_deactivate_require_fact_id(mem_cfg):
+    bad_upd = create_proposal(
+        mem_cfg, "update_fact", {"content": "no id"}, reason="missing id"
+    )
+    with pytest.raises(ValueError, match="update_fact requires fact_id"):
+        apply_proposal(mem_cfg, bad_upd.id, reason="fail")
+
+    bad_deact = create_proposal(
+        mem_cfg, "deactivate_fact", {}, reason="missing id"
+    )
+    with pytest.raises(ValueError, match="deactivate_fact requires fact_id"):
+        apply_proposal(mem_cfg, bad_deact.id, reason="fail")
+
+
+def test_apply_unsupported_action(mem_cfg, monkeypatch):
+    """CHECK + create_proposal block bad actions; mapper override reaches the else."""
+    from dataclasses import replace
+
+    import memory.store as store
+
+    prop = create_proposal(
+        mem_cfg, "add_fact", {"content": "will be remapped"}, reason="seed"
+    )
+    real = store._row_to_proposal
+
+    def remap(row):
+        return replace(real(row), action="noop")  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "_row_to_proposal", remap)
+    with pytest.raises(ValueError, match="unsupported action"):
+        apply_proposal(mem_cfg, prop.id, reason="reject noop")
+
+
+def test_reject_missing_and_not_pending(mem_cfg):
+    with pytest.raises(ValueError, match="proposal 90909 not found"):
+        reject_proposal(mem_cfg, 90909, reason="gone")
+    prop = create_proposal(
+        mem_cfg, "add_fact", {"content": "once"}, reason="once"
+    )
+    reject_proposal(mem_cfg, prop.id, reason="first")
+    with pytest.raises(ValueError, match="not pending"):
+        reject_proposal(mem_cfg, prop.id, reason="second")
+
+
+def test_search_facts_fts_blank_query(mem_cfg):
+    assert search_facts_fts(mem_cfg, "") == []
+    assert search_facts_fts(mem_cfg, "   ") == []
+
+
+def test_search_facts_fts_operational_error_degrades(mem_cfg, monkeypatch, caplog):
+    import logging
+    import sqlite3
+
+    import memory.store as store
+
+    insert_fact(mem_cfg, "Preferred shell is zsh", reason="seed")
+    real_connect = store.connect
+
+    class BoomConn:
+        def execute(self, *_a, **_k):
+            raise sqlite3.OperationalError("fts5: boom")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(store, "connect", lambda _cfg: BoomConn())
+    with caplog.at_level(logging.WARNING, logger="cyclaw.memory"):
+        assert search_facts_fts(mem_cfg, "zsh") == []
+    assert any("memory FTS query failed" in r.message for r in caplog.records)
+    monkeypatch.setattr(store, "connect", real_connect)
+
+
+def test_stage_episode_disabled_gates(mem_cfg):
+    mem_cfg["memory"]["enabled"] = False
+    stage_episode(mem_cfg, {"query": "q", "answer": "a", "retrieved_docs": []})
+    assert list_episodes(mem_cfg) == []
+
+    mem_cfg["memory"]["enabled"] = True
+    mem_cfg["memory"]["episodes"]["enabled"] = False
+    stage_episode(mem_cfg, {"query": "q", "answer": "a", "retrieved_docs": []})
+    assert list_episodes(mem_cfg) == []
+
+
+def test_stage_episode_stores_raw_query_when_configured(mem_cfg):
+    mem_cfg["memory"]["episodes"]["store_raw_query"] = True
+    stage_episode(
+        mem_cfg,
+        {
+            "query": "hello raw query",
+            "answer": "answer text",
+            "answer_model": "local",
+            "retrieved_docs": [],
+        },
+    )
+    eps = list_episodes(mem_cfg)
+    assert len(eps) == 1
+    assert eps[0].raw_query is not None
+    assert "hello" in eps[0].raw_query
+
+
+def test_prune_episodes_ttl_disabled(mem_cfg):
+    # `0 or 365` collapses to 365; negative is the real disable path.
+    mem_cfg["memory"]["episodes"]["ttl_days"] = -1
+    stage_episode(
+        mem_cfg,
+        {"query": "q", "answer": "a", "answer_model": "local", "retrieved_docs": []},
+    )
+    assert prune_episodes(mem_cfg) == 0
+    assert len(list_episodes(mem_cfg)) == 1
+
+
+class _ConnProxy:
+    """Delegate to a real sqlite3 connection but allow overriding execute."""
+
+    def __init__(self, inner, execute_fn):
+        self._inner = inner
+        self.execute = execute_fn
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _vanish_after_mutating_select(conn):
+    """Proxy so the first SELECT * after a mutating statement returns None."""
+    original = conn.execute
+    mutated = {"done": False}
+
+    class _NoneRow:
+        def fetchone(self):
+            return None
+
+    def wrapped(sql, params=()):
+        cur = original(sql, params)
+        sql_s = sql.strip().upper() if isinstance(sql, str) else ""
+        if sql_s.startswith(("INSERT ", "UPDATE ")):
+            mutated["done"] = True
+            return cur
+        if mutated["done"] and "SELECT * FROM" in sql_s and "WHERE ID" in sql_s:
+            mutated["done"] = False
+            return _NoneRow()
+        return cur
+
+    return _ConnProxy(conn, wrapped)
+
+
+def test_insert_update_deactivate_proposal_row_missing_after_write(mem_cfg, monkeypatch):
+    """Defensive RuntimeError when the post-write re-SELECT returns None."""
+    import memory.store as store
+
+    conn = _vanish_after_mutating_select(connect(mem_cfg))
+    try:
+        with pytest.raises(RuntimeError, match="fact row missing after write"):
+            store._insert_fact_conn(conn, mem_cfg, "ghost insert", reason="r")
+    finally:
+        conn.close()
+
+    seed = insert_fact(mem_cfg, "seed for vanish", reason="seed")
+    conn = _vanish_after_mutating_select(connect(mem_cfg))
+    try:
+        with pytest.raises(RuntimeError, match="fact row missing after write"):
+            store._update_fact_conn(conn, mem_cfg, seed.id, content="x", reason="r")
+    finally:
+        conn.close()
+
+    seed2 = insert_fact(mem_cfg, "seed for deactivate vanish", reason="seed")
+    conn = _vanish_after_mutating_select(connect(mem_cfg))
+    try:
+        with pytest.raises(RuntimeError, match="fact row missing after write"):
+            store._deactivate_fact_conn(conn, seed2.id, reason="r")
+    finally:
+        conn.close()
+
+    real_connect = store.connect
+
+    def connect_vanishing(cfg):
+        return _vanish_after_mutating_select(real_connect(cfg))
+
+    monkeypatch.setattr(store, "connect", connect_vanishing)
+    with pytest.raises(RuntimeError, match="proposal row missing after write"):
+        create_proposal(mem_cfg, "add_fact", {"content": "ghost proposal"}, reason="r")
+
+
+def test_apply_detects_status_changed_underfoot(mem_cfg, monkeypatch):
+    """If the pending claim UPDATE matches 0 rows, apply raises status-changed."""
+    import memory.store as store
+
+    prop = create_proposal(
+        mem_cfg, "add_fact", {"content": "race claim"}, reason="race"
+    )
+    real_connect = store.connect
+
+    def connect_racing(cfg):
+        inner = real_connect(cfg)
+        original = inner.execute
+
+        def wrapped(sql, params=()):
+            cur = original(sql, params)
+            sql_s = sql.strip() if isinstance(sql, str) else ""
+            if "UPDATE memory_proposals" in sql_s and "status=?" in sql_s:
+
+                class _Zero:
+                    rowcount = 0
+
+                return _Zero()
+            return cur
+
+        return _ConnProxy(inner, wrapped)
+
+    monkeypatch.setattr(store, "connect", connect_racing)
+    with pytest.raises(ValueError, match="status changed"):
+        apply_proposal(mem_cfg, prop.id, reason="claim")
+
+
+def test_reject_row_missing_after_update(mem_cfg, monkeypatch):
+    import memory.store as store
+
+    prop = create_proposal(
+        mem_cfg, "add_fact", {"content": "reject vanish"}, reason="r"
+    )
+    real_connect = store.connect
+
+    def connect_vanishing(cfg):
+        inner = real_connect(cfg)
+        original = inner.execute
+        claimed = {"yes": False}
+
+        class _NoneRow:
+            def fetchone(self):
+                return None
+
+        def wrapped(sql, params=()):
+            cur = original(sql, params)
+            sql_s = sql.strip() if isinstance(sql, str) else ""
+            if "UPDATE memory_proposals" in sql_s:
+                claimed["yes"] = True
+                return cur
+            if claimed["yes"] and "SELECT * FROM memory_proposals WHERE id" in sql_s:
+                claimed["yes"] = False
+                return _NoneRow()
+            return cur
+
+        return _ConnProxy(inner, wrapped)
+
+    monkeypatch.setattr(store, "connect", connect_vanishing)
+    with pytest.raises(ValueError, match="proposal .* not found"):
+        reject_proposal(mem_cfg, prop.id, reason="vanish")

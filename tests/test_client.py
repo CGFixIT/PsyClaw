@@ -703,6 +703,34 @@ class TestExternalSpendRecording:
         assert record["served_model"] == "grok-4.5-2026-08-01"
         client.close()
 
+    def test_spend_context_receives_served_model(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(
+            response=_ok_response(
+                "grok answer",
+                usage={"prompt_tokens": 1, "completion_tokens": 1},
+                model="grok-4.5-resolved",
+            )
+        )
+        client._client.post = fake
+        ctx: dict = {}
+        assert client.generate("a prompt", spend_context=ctx) == "grok answer"
+        assert ctx["served_model"] == "grok-4.5-resolved"
+        client.close()
+
+    def test_spend_record_failure_does_not_change_answer(self, tmp_path, monkeypatch, _spend_ledger):
+        monkeypatch.setenv("GROK_API_KEY", "xai-secret")
+        monkeypatch.setattr(
+            "llm.client.record_external_usage",
+            lambda **_kw: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        client = GrokClient(_write_config(tmp_path))
+        fake = _FakePost(response=_ok_response("grok answer", usage={"prompt_tokens": 1, "completion_tokens": 1}))
+        client._client.post = fake
+        assert client.generate("a prompt") == "grok answer"
+        client.close()
+
     def test_claude_spend_records_served_model_alongside_configured(
         self, tmp_path, monkeypatch, _spend_ledger
     ):
@@ -1294,6 +1322,56 @@ class TestResolveLocalBackend:
         }
         with pytest.raises(LLMServiceError, match="fallback requires"):
             resolve_local_backend(llm_cfg)
+
+    def test_missing_primary_base_url_raises(self):
+        with pytest.raises(LLMServiceError, match="base_url is required"):
+            resolve_local_backend({"model": "qwen3.8:27b-mlx"})
+
+    def test_non_positive_probe_timeout_falls_back_to_default(self, monkeypatch):
+        seen = {}
+
+        def probe(base_url, **kw):
+            seen["timeout"] = kw.get("timeout_sec")
+            return True
+
+        monkeypatch.setattr("llm.client._probe_openai_models", probe)
+        llm_cfg = {
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen3.8:27b-mlx",
+            "fallback": {
+                "enabled": True,
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "other",
+                "probe_timeout_sec": 0,
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "primary"
+        from llm.client import _DEFAULT_PROBE_TIMEOUT_SEC
+        assert seen["timeout"] == _DEFAULT_PROBE_TIMEOUT_SEC
+
+    def test_fallback_survives_audit_log_failure(self, monkeypatch):
+        def probe(base_url, **kw):
+            return "1234" in base_url
+
+        monkeypatch.setattr("llm.client._probe_openai_models", probe)
+        monkeypatch.setattr(
+            "utils.logger.audit_log",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("audit down")),
+        )
+        llm_cfg = {
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",  # DevSkim: ignore DS162092
+            "model": "qwen3.8:27b-mlx",
+            "fallback": {
+                "enabled": True,
+                "provider": "lmstudio",
+                "base_url": "http://127.0.0.1:1234/v1",  # DevSkim: ignore DS162092
+                "model": "local-gguf-model",
+            },
+        }
+        resolved = resolve_local_backend(llm_cfg)
+        assert resolved.source == "fallback"
 
     def test_fallback_rejects_non_loopback_secondary(self):
         llm_cfg = {

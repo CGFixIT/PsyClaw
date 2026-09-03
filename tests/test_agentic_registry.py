@@ -542,3 +542,168 @@ def test_registry_lock_refuses_live_owner(tmp_path: Path):
 
     with pytest.raises(SkillRegistryError, match="another skills-registry apply"):
         _acquire_registry_lock(lock)
+
+
+def test_write_lock_token_oserror_is_swallowed(tmp_path: Path, monkeypatch):
+    from agentic.registry import _write_lock_token
+
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+
+    def _boom(self, *a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    _write_lock_token(lock)  # advisory; must not raise
+
+
+def test_is_lock_owner_without_token_is_true(tmp_path: Path):
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    assert _is_lock_owner(lock) is True
+
+
+def test_reclaim_handles_vanished_lock_and_guard_cleanup(tmp_path: Path, monkeypatch):
+    from agentic.registry import _reclaim_registry_lock
+
+    lock = tmp_path / "registry.lock.d"
+    # No lock dir yet: FileNotFoundError on stat -> age=0 path, then mkdir succeeds.
+    assert _reclaim_registry_lock(lock) is True
+    assert lock.exists()
+    _release_registry_lock(lock)
+
+    lock.mkdir()
+    token = {"pid": 999999, "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    real_mkdir = Path.mkdir
+    calls = {"n": 0}
+
+    def _mkdir_race(self: Path, *args: object, **kwargs: object) -> None:
+        # First mkdir is the reclaim guard (succeeds). Second is lock_dir after
+        # rmtree -- simulate another acquirer winning with FileExistsError.
+        if str(self).endswith(".reclaim.d"):
+            return real_mkdir(self, *args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise FileExistsError("lost race")
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _mkdir_race)
+    assert _reclaim_registry_lock(lock) is False
+
+
+def test_reclaim_stat_oserror_returns_false(tmp_path: Path, monkeypatch):
+    from agentic.registry import _reclaim_registry_lock
+
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    real_stat = Path.stat
+
+    def _stat(self: Path, *a, **k):
+        if self == lock:
+            raise OSError("stat failed")
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", _stat)
+    assert _reclaim_registry_lock(lock) is False
+
+
+def test_reclaim_oserror_after_rmtree_returns_false(tmp_path: Path, monkeypatch):
+    from agentic.registry import _reclaim_registry_lock
+
+    lock = tmp_path / "registry.lock.d"
+    lock.mkdir()
+    token = {"pid": 999999, "started_at": time.time() - 9999}
+    lock.joinpath("owner.json").write_text(json.dumps(token), encoding="utf-8")
+    old = time.time() - (_LOCK_STALE_SEC + 60)
+    os.utime(lock, (old, old))
+
+    def _rmtree_fail(_path):
+        raise OSError("rmtree failed")
+
+    monkeypatch.setattr("agentic.registry.shutil.rmtree", _rmtree_fail)
+    assert _reclaim_registry_lock(lock) is False
+
+
+def test_reclaim_guard_rmdir_oserror_is_swallowed(tmp_path: Path, monkeypatch):
+    from agentic.registry import _reclaim_registry_lock
+
+    lock = tmp_path / "registry.lock.d"
+    real_rmdir = Path.rmdir
+
+    def _rmdir(self: Path) -> None:
+        if str(self).endswith(".reclaim.d"):
+            raise OSError("busy")
+        return real_rmdir(self)
+
+    monkeypatch.setattr(Path, "rmdir", _rmdir)
+    assert _reclaim_registry_lock(lock) is True
+    _release_registry_lock(lock)
+
+
+def test_release_lock_oserror_paths(tmp_path: Path, monkeypatch):
+    lock = tmp_path / "registry.lock.d"
+    _acquire_registry_lock(lock)
+
+    def _owner_boom(_lock):
+        raise OSError("gone")
+
+    monkeypatch.setattr("agentic.registry._is_lock_owner", _owner_boom)
+    _release_registry_lock(lock)  # swallows OSError from owner check
+
+    monkeypatch.setattr("agentic.registry._is_lock_owner", lambda _l: True)
+
+    def _unlink_boom(self, missing_ok=False):
+        raise OSError("unlink failed")
+
+    monkeypatch.setattr(Path, "unlink", _unlink_boom)
+    _release_registry_lock(lock)  # best-effort unlock OSError
+
+
+def test_load_rejects_bad_json_and_malformed_registry(tmp_path: Path):
+    rel = f"data/agentic/_pytest_bad_{uuid.uuid4().hex}.json"
+    target = (REPO_ROOT / rel).resolve()
+    cfg_doc = dict(SCAN_CFG)
+    cfg_doc["logging"] = {"audit_file": str(tmp_path / "audit.jsonl"), "audit_fields": {}}
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg_doc), encoding="utf-8")
+    reset_config_cache()
+    from utils.logger import _get_config
+
+    cfg = _get_config(str(cfg_path))
+    ac = _agentic_cfg(registry_path=rel, mode="write", writes_enabled=True)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{not-json", encoding="utf-8")
+        with pytest.raises(SkillRegistryError, match="Could not read"):
+            SkillRegistry(cfg, ac)
+
+        target.write_text(json.dumps({"version": 1}), encoding="utf-8")
+        with pytest.raises(SkillRegistryError, match="malformed"):
+            SkillRegistry(cfg, ac)
+    finally:
+        reset_config_cache()
+        target.unlink(missing_ok=True)
+
+
+def test_atomic_write_oserror_becomes_registry_error(reg, monkeypatch):
+    def _boom(self, *a, **k):
+        raise OSError("write failed")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+    with pytest.raises(SkillRegistryError, match="Failed to write"):
+        reg._atomic_write({"version": 1, "updated": None, "skills": {}, "history": []})
+
+
+def test_score_spec_awards_structure_bonuses(reg):
+    long_desc = "a" * 40
+    long_body = "b" * 120
+    proposal = reg.propose_skill(
+        {"name": "rich", "description": long_desc, "body": long_body},
+        reason="structure bonuses",
+    )
+    assert proposal["governance_score"] == 100
+    assert reg._score_spec({"name": "rich", "description": long_desc, "body": long_body}) == 100

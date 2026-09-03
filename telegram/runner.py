@@ -108,7 +108,7 @@ def _dispatch_command(
         return _online_command(cfg, chat_id=chat_id, chat_type=chat_type, text=text)
     if cmd == "save":
         return "Attach a photo or document with caption: /save --confirm <reason>"
-    return None
+    return None  # pragma: no cover -- _CMD_RE only matches help|status|id|online|save
 
 
 def _online_command(

@@ -60,7 +60,8 @@ def test_macos_smoke_exists_and_is_bash() -> None:
 
 
 def test_macos_smoke_bash_syntax() -> None:
-    bash = shutil.which("bash")
+    git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+    bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
     assert bash, "bash is required to syntax-check macos-smoke.sh"
     result = subprocess.run(
         [bash, "-n", str(_MACOS)],
@@ -68,7 +69,12 @@ def test_macos_smoke_bash_syntax() -> None:
         text=True,
         check=False,
     )
-    if result.returncode and "access is denied" in (result.stdout + result.stderr).lower():
+    combined = f"{result.stdout}{result.stderr}".lower()
+    if result.returncode and (
+        "access is denied" in combined
+        or "wslstore" in combined
+        or "windows subsystem for linux" in combined
+    ):
         pytest.skip("discovered Bash executable cannot run on this host")
     assert result.returncode == 0, result.stderr
 

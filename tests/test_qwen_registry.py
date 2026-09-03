@@ -28,3 +28,32 @@ def test_provenance_ids_omit_raw_text() -> None:
     )
     assert ids == ("rrf.md:0",)
     assert "SECRET" not in "".join(ids)
+
+
+def test_manifest_unreadable_raises(tmp_path):
+    from guardrails.errors import GuardrailsConfigError
+    from guardrails.qwen_registry import load_qwen_manifest
+
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(GuardrailsConfigError, match="unreadable"):
+        load_qwen_manifest(missing)
+
+
+def test_manifest_must_be_mapping(tmp_path):
+    from guardrails.errors import GuardrailsConfigError
+    from guardrails.qwen_registry import load_qwen_manifest
+
+    path = tmp_path / "m.yaml"
+    path.write_text("- just a list\n", encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="mapping"):
+        load_qwen_manifest(path)
+
+
+def test_manifest_missing_tag_raises(tmp_path):
+    from guardrails.errors import GuardrailsConfigError
+    from guardrails.qwen_registry import load_qwen_manifest
+
+    path = tmp_path / "m.yaml"
+    path.write_text("sha256: abc\n", encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="missing tag"):
+        load_qwen_manifest(path)

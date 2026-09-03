@@ -609,3 +609,82 @@ def test_gate_and_shared_module_agree() -> None:
     )
     result = _run_in_subprocess(snippet, extra_env=dict(_HOSTILE_ENV))
     _assert_subprocess_ok(result, "gate_and_shared_module_agree")
+
+
+def test_is_anonymized_false_rejects_non_settings_and_true_flag() -> None:
+    import ast
+
+    from utils.telemetry_kill import _is_anonymized_false
+
+    not_settings = ast.parse("Other(anonymized_telemetry=False)", mode="eval").body
+    assert _is_anonymized_false(not_settings) is False
+
+    true_flag = ast.parse("Settings(anonymized_telemetry=True)", mode="eval").body
+    assert _is_anonymized_false(true_flag) is False
+
+    no_kw = ast.parse("Settings()", mode="eval").body
+    assert _is_anonymized_false(no_kw) is False
+
+
+def test_scheduler_env_overlay_merges_kill_and_update() -> None:
+    from utils.telemetry_kill import (
+        TELEMETRY_KILL,
+        UPDATE_CHECK_OPT_OUT,
+        scheduler_env_overlay,
+    )
+
+    overlay = scheduler_env_overlay()
+    assert overlay == {**TELEMETRY_KILL, **UPDATE_CHECK_OPT_OUT}
+    overlay["GH_TELEMETRY"] = "tampered"
+    assert scheduler_env_overlay()["GH_TELEMETRY"] == "false"
+
+
+def test_export_lines_shell_and_powershell() -> None:
+    from utils.telemetry_kill import (
+        SCRUBBED_ENV_KEYS,
+        TELEMETRY_KILL,
+        UPDATE_CHECK_OPT_OUT,
+        _export_lines,
+    )
+
+    shell = _export_lines("shell")
+    text = "\n".join(shell)
+    assert "export LANGSMITH_TRACING_V2='false'" in text
+    assert "unset LANGCHAIN_API_KEY 2>/dev/null || true" in text
+    for name in TELEMETRY_KILL:
+        assert f"export {name}=" in text
+    for name in UPDATE_CHECK_OPT_OUT:
+        assert f"export {name}=" in text
+    for name in SCRUBBED_ENV_KEYS:
+        assert f"unset {name}" in text
+
+    ps = "\n".join(_export_lines("powershell"))
+    assert "$env:LANGSMITH_TRACING_V2 = 'false'" in ps
+    assert "Remove-Item -ErrorAction SilentlyContinue Env:LANGCHAIN_API_KEY" in ps
+
+
+def test_export_lines_rejects_hostile_names_and_values(monkeypatch) -> None:
+    import utils.telemetry_kill as tk
+
+    monkeypatch.setitem(tk.TELEMETRY_KILL, "not-an-identifier!", "x")
+    with pytest.raises(ValueError, match="refusing invalid env name"):
+        tk._export_lines("shell")
+
+    monkeypatch.undo()
+    monkeypatch.setitem(tk.TELEMETRY_KILL, "LANGSMITH_TRACING_V2", "bad'value")
+    with pytest.raises(ValueError, match="refusing env value"):
+        tk._export_lines("shell")
+
+
+def test_main_export_shell_and_powershell(capsys) -> None:
+    from utils.telemetry_kill import _main
+
+    assert _main(["--export", "shell"]) == 0
+    out = capsys.readouterr().out
+    assert "export OTEL_SDK_DISABLED='true'" in out
+    assert "unset LANGCHAIN_API_KEY" in out
+
+    assert _main(["--export", "powershell"]) == 0
+    out_ps = capsys.readouterr().out
+    assert "$env:OTEL_SDK_DISABLED = 'true'" in out_ps
+    assert "Remove-Item -ErrorAction SilentlyContinue Env:LANGCHAIN_API_KEY" in out_ps

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import stat
+from pathlib import Path
 
 import httpx
 import pytest
@@ -300,3 +301,70 @@ def test_every_managed_key_is_read_somewhere_in_the_repo():
     blob = "\n".join(sources)
     for spec in env_keys.MANAGED_KEYS:
         assert re.search(rf"\b{spec.name}\b", blob), f"{spec.name} is read nowhere"
+
+
+def test_home_dir_prefers_profile_then_path_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("CYCLAW_HOME", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "profile"))
+    assert env_keys.home_dir() == tmp_path / "profile" / ".CyClaw"
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    assert env_keys.home_dir() == Path.home() / ".CyClaw"
+
+
+def test_spec_for_and_validate_value_reject_bad_inputs():
+    with pytest.raises(env_keys.EnvKeyError):
+        env_keys.spec_for("PATH")
+    with pytest.raises(env_keys.EnvKeyError):
+        env_keys.validate_value("GROK_API_KEY", "x" * (env_keys._MAX_VALUE_LEN + 1))
+
+
+def test_unquote_double_and_bare_tokens():
+    assert env_keys._unquote('"hello"') == "hello"
+    assert env_keys._unquote("bare") == "bare"
+    assert env_keys._is_quoted("x") is False
+    assert env_keys._split_assignment("not an assignment") is None
+    assert env_keys._split_assignment("# comment") is None
+
+
+def test_read_env_file_missing_or_undecodable(tmp_path):
+    missing = tmp_path / "nope.env"
+    assert env_keys.read_env_file(missing) == {}
+    junk = tmp_path / "bad.env"
+    junk.write_bytes(b"\xff\xfe")
+    assert env_keys.read_env_file(junk) == {}
+
+
+def test_read_status_unset_and_env_sources(home, monkeypatch):
+    monkeypatch.delenv("GROK_API_KEY", raising=False)
+    rows = {row["name"]: row for row in env_keys.read_status()}
+    assert rows["GROK_API_KEY"]["source"] == "unset"
+    monkeypatch.setenv("GROK_API_KEY", "live-process-value-xxxx")
+    rows = {row["name"]: row for row in env_keys.read_status()}
+    assert rows["GROK_API_KEY"]["source"] == "env"
+
+
+def test_write_keys_empty_batch_and_replace_failure(home, monkeypatch):
+    with pytest.raises(env_keys.EnvKeyError):
+        env_keys.write_keys({})
+
+    def boom(_src, _dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(env_keys.os, "replace", boom)
+    with pytest.raises(OSError):
+        env_keys.write_keys({"GROK_API_KEY": "good-value-1234"})
+    leftovers = [p for p in home.iterdir() if p.name.startswith(".env.")]
+    assert leftovers == []
+
+
+def test_write_keys_survives_parent_chmod_failure(home, monkeypatch):
+    real_chmod = Path.chmod
+
+    def selective(self, mode):
+        if self == home:
+            raise OSError("home chmod denied")
+        return real_chmod(self, mode)
+
+    monkeypatch.setattr(Path, "chmod", selective)
+    result = env_keys.write_keys({"GROK_API_KEY": "good-value-1234"})
+    assert result["written"] == ["GROK_API_KEY"]

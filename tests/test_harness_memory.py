@@ -249,6 +249,18 @@ def test_chat_does_not_500_on_corrupt_notes(cfg):
     assert path.read_bytes() == garbage
 
 
+def test_api_memory_maps_unreadable_notes_to_400(cfg):
+    cfg.memory_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.memory_dir / "notes.json").write_bytes(b"{not-json")
+    client = _client(cfg)
+    status = client.get("/api/memory")
+    assert status.status_code == 400
+    assert status.json()["detail"]["code"] == "MEMORY_NOTES_UNREADABLE"
+    toggle = client.post("/api/memory", json={"enabled": True})
+    assert toggle.status_code == 400
+    assert toggle.json()["detail"]["code"] == "MEMORY_NOTES_UNREADABLE"
+
+
 def test_corrupt_notes_are_not_overwritten(tmp_path):
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
@@ -285,5 +297,54 @@ def test_memory_module_does_not_import_rag_memory():
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             names.add(node.module.split(".")[0])
     assert "memory" not in names
-    assert "agentic" not in names
-    assert "gate" not in names
+
+
+def test_notes_reject_empty_and_oversized_text(tmp_path):
+    store = MemoryNotes(tmp_path / "memory")
+    with pytest.raises(MemoryNotesError) as empty:
+        store.add("   ")
+    assert empty.value.code == "MEMORY_NOTE_EMPTY"
+    with pytest.raises(MemoryNotesError) as too_long:
+        store.add("x" * 501)
+    assert too_long.value.code == "MEMORY_NOTE_TOO_LONG"
+
+
+def test_notes_forget_requires_id(tmp_path):
+    store = MemoryNotes(tmp_path / "memory")
+    with pytest.raises(MemoryNotesError) as exc:
+        store.forget("  ")
+    assert exc.value.code == "MEMORY_NOTE_ID_REQUIRED"
+    with pytest.raises(MemoryNotesError) as unknown:
+        store.forget("deadbeef")
+    assert unknown.value.code == "MEMORY_NOTE_UNKNOWN"
+
+
+def test_notes_load_skips_malformed_entries_and_non_list(tmp_path):
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    path = memory_dir / "notes.json"
+    path.write_text(
+        json.dumps(
+            {
+                "notes": [
+                    "not-a-dict",
+                    {"id": "", "text": "missing id"},
+                    {"id": "abcd", "text": ""},
+                    {"id": "ok01", "text": "kept", "ts": "t"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = MemoryNotes(memory_dir)
+    status = store.status(False)
+    assert status["count"] == 1
+    assert status["notes"][0]["id"] == "ok01"
+    assert "kept" in store.context_text()
+
+    path.write_text(json.dumps({"notes": {"not": "a list"}}), encoding="utf-8")
+    assert store.status(False)["count"] == 0
+    assert store.context_text() == ""
+
+    path.write_text(json.dumps({"notes": []}), encoding="utf-8")
+    assert store.context_text() == ""

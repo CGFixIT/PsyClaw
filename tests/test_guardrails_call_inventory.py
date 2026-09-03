@@ -41,3 +41,23 @@ def test_cli_exits_nonzero_on_extras(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "sneaky.py").write_text("ChatAnthropic(model='x')\n", encoding="utf-8")
     monkeypatch.setattr("guardrails.call_inventory.REPO_ROOT", tmp_path)
     assert main() == 1
+
+
+def test_cli_exits_zero_when_no_extras() -> None:
+    assert main() == 0
+
+
+def test_scan_tree_skips_vcs_and_unreadable(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "hook.py").write_text("generate()\n", encoding="utf-8")
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "cached.py").write_text("generate()\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text("def (\n", encoding="utf-8")
+    (tmp_path / "dir.py").mkdir()
+    (tmp_path / "ok.py").write_text("print(1)\n", encoding="utf-8")
+    sites = scan_tree(tmp_path)
+    paths = {s.path.replace("\\", "/") for s in sites}
+    assert "ok.py" not in paths
+    assert not any(p.startswith(".git/") or p.startswith("__pycache__/") for p in paths)
+    assert "broken.py" not in paths
+    assert "dir.py" not in paths

@@ -507,6 +507,22 @@ def test_real_repo_run_budget_falls_back_on_unreadable_config(monkeypatch: pytes
     assert ops_runner._real_repo_run_timeout_sec(1, 1) > 0  # noqa: SLF001
 
 
+def test_real_repo_run_budget_rejects_non_positive_planner_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        ops_runner,
+        "_get_config",
+        lambda _path: {"agentic": {"deepagent_github": {"planner_timeout_sec": 0}}},
+    )
+    expected = (
+        1 * ops_runner._REAL_REPO_RUN_FALLBACK_PLANNER_SEC  # noqa: SLF001
+        + 1 * 120
+        + ops_runner._REAL_REPO_RUN_OVERHEAD_SEC  # noqa: SLF001
+    )
+    assert ops_runner.real_repo_run_budget_sec(1, 1) == expected
+
+
 def test_real_repo_run_temp_files_are_cleaned_up_when_run_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
@@ -758,6 +774,14 @@ def test_sync_timeout_sec_fallback_on_unreadable_config(monkeypatch: pytest.Monk
         raise OSError("config missing")
 
     monkeypatch.setattr(ops_runner, "_get_config", _boom)
+    assert ops_runner.sync_timeout_sec() == 3600 + 60
+
+
+def test_sync_timeout_sec_nonpositive_resets_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ops_runner, "_get_config",
+        lambda _path: {"sync": {"sync_timeout_sec": 0}},
+    )
     assert ops_runner.sync_timeout_sec() == 3600 + 60
 
 

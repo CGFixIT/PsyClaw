@@ -356,6 +356,46 @@ class TestConfigPathAnchoring:
             with pytest.raises(IndexNotFoundError, match="corrupt or empty"):
                 HybridRetriever(str(repo / "config.yaml"))
 
+    def test_missing_bm25_raises_index_not_found(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "config.yaml").write_text(
+            json.dumps({
+                "indexing": {
+                    "bm25_path": "index/bm25.json",
+                    "chroma_path": "index/chroma_db",
+                    "collection_name": "test_kb",
+                },
+                "retrieval": {"top_k_semantic": 1, "top_k_keyword": 1, "rrf_k": 60},
+            }),
+            encoding="utf-8",
+        )
+        with pytest.raises(IndexNotFoundError, match="BM25 index not found"):
+            HybridRetriever(str(repo / "config.yaml"))
+
+    def test_bm25_directory_is_not_a_regular_file(self, tmp_path):
+        repo = tmp_path / "repo"
+        index_dir = repo / "index"
+        index_dir.mkdir(parents=True)
+        (index_dir / "bm25.json").mkdir()
+        (repo / "config.yaml").write_text(
+            json.dumps({
+                "indexing": {
+                    "bm25_path": "index/bm25.json",
+                    "chroma_path": "index/chroma_db",
+                    "collection_name": "test_kb",
+                },
+                "retrieval": {"top_k_semantic": 1, "top_k_keyword": 1, "rrf_k": 60},
+            }),
+            encoding="utf-8",
+        )
+        with patch(
+            "retrieval.hybrid_search.get_vector_reader",
+            return_value=SimpleNamespace(close=lambda: None),
+        ):
+            with pytest.raises(IndexNotFoundError, match="not a regular file"):
+                HybridRetriever(str(repo / "config.yaml"))
+
 
 class TestEmbeddingFingerprintCheck:
     """HybridRetriever.__init__'s embedding-fingerprint guard.
@@ -667,3 +707,31 @@ class TestBM25ScoreCache:
         second = r.hybrid_search("retrieval augmented generation")
         assert [h.rrf_score for h in first] == [h.rrf_score for h in second]
         assert [h.score for h in first] == [h.score for h in second]
+
+
+def test_normalize_single_path_stamps_semantic_contrib() -> None:
+    fake = SimpleNamespace(rrf_k=60)
+    hit = SearchResult(
+        text="t", score=0.9, source="s.md", chunk_id=0,
+        stem_tags=[], retrieval_mode="semantic",
+    )
+    out = HybridRetriever._normalize_single_path(fake, [hit])
+    assert out[0].rrf_semantic_contrib == pytest.approx(1 / 60)
+    assert out[0].rrf_keyword_contrib is None
+
+
+def test_maybe_fuse_memory_survives_audit_failure() -> None:
+    hits = [SearchResult(
+        text="t", score=0.1, source="s.md", chunk_id=0,
+        stem_tags=[], retrieval_mode="keyword",
+    )]
+    fake = _bind_hybrid_helpers(SimpleNamespace(
+        cfg={"memory": {"enabled": True, "retrieval_fusion": {"enabled": True}}},
+    ))
+    with (
+        patch("memory.flags.facts_retrieval_enabled", return_value=True),
+        patch("memory.retrieval_adapter.fuse_memory_hits", side_effect=RuntimeError("fuse boom")),
+        patch("retrieval.hybrid_search.audit_log", side_effect=RuntimeError("audit boom")),
+    ):
+        out = HybridRetriever._maybe_fuse_memory(fake, "q", hits)
+    assert out is hits

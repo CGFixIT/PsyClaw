@@ -162,7 +162,7 @@ def detect_sequences(
         by_hash_audit.setdefault(hashed, []).append((ts, row))
     by_hash_spend: dict[str, list[tuple[datetime, dict[str, Any]]]] = {}
     for ts, hashed, row in spend:
-        if hashed is None:
+        if hashed is None:  # pragma: no cover -- spend rows are appended only after hash filter
             continue
         by_hash_spend.setdefault(hashed, []).append((ts, row))
 
@@ -241,7 +241,7 @@ def detect_sequences(
             continue
         escalations.append((ts, hashed, row, "audit"))
     for ts, hashed, row in spend:
-        if hashed is None:
+        if hashed is None:  # pragma: no cover -- spend rows are appended only after hash filter
             continue
         escalations.append((ts, hashed, row, "spend"))
     escalations.sort(key=lambda item: item[0])

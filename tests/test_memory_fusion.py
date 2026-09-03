@@ -158,6 +158,19 @@ def test_new_key_does_not_warn(mem_on, caplog):
     assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
+def test_fusion_off_or_empty_fts_is_identity(mem_on, monkeypatch):
+    corpus = _corpus()
+    fusion_off = dict(mem_on)
+    fusion_off["memory"] = {
+        **mem_on["memory"],
+        "retrieval_fusion": {**mem_on["memory"]["retrieval_fusion"], "enabled": False},
+    }
+    assert fuse_memory_hits("MacBook", corpus, fusion_off) == corpus
+
+    monkeypatch.setattr("memory.store.search_facts_fts", lambda *_a, **_k: [])
+    assert fuse_memory_hits("MacBook", corpus, mem_on) == corpus
+
+
 @pytest.mark.parametrize(
     ("block", "fuses"),
     [

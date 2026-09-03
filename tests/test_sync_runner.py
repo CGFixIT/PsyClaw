@@ -1579,3 +1579,238 @@ def test_run_sync_timeout_after_partial_copy_preserves_evidence(tmp_path):
     assert rec["counts"]["added"] == 1
     assert rec["dry_run"] is False
     assert rec["aborted_for_safety"] is False
+
+# ---------------------------------------------------------------------------
+# Leftover branch coverage (dedupe, fast_list, lock OS edges, bisync, budget)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_log_dedupes_same_kind_path_pair(tmp_path):
+    log = tmp_path / "rclone.log"
+    log.write_text(textwrap.dedent("""\
+        2026/06/20 02:10:02 INFO  : notes.md: Copied (replaced existing)
+        2026/06/20 02:10:03 INFO  : notes.md: Updated modification time
+    """), encoding="utf-8")
+    events, errors = parse_log(str(log))
+    assert errors == []
+    assert len(events) == 1
+    assert events[0].kind == "modified"
+    assert events[0].path == "notes.md"
+
+
+def test_build_check_argv_includes_fast_list_when_configured(tmp_path):
+    cfg = _make_cfg(tmp_path, fast_list=True)
+    argv = build_check_argv(cfg, rclone_bin=FAKE_RCLONE)
+    assert "--fast-list" in argv
+
+
+def test_try_os_lock_and_unlock_use_fcntl_on_posix(monkeypatch, tmp_path):
+    flock_calls: list[tuple[int, int]] = []
+    fake_fcntl = MagicMock()
+    fake_fcntl.LOCK_EX = 2
+    fake_fcntl.LOCK_NB = 4
+    fake_fcntl.LOCK_UN = 8
+
+    def _flock(fd: int, flags: int) -> None:
+        flock_calls.append((fd, flags))
+
+    fake_fcntl.flock = _flock
+    real_import = __import__
+
+    def _import_module(name: str, *args, **kwargs):
+        if name == "fcntl":
+            return fake_fcntl
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr("sync.runner.importlib.import_module", _import_module)
+
+    from sync.runner import _try_os_lock, _unlock_os_lock
+
+    lock_path = str(tmp_path / "posix.lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        assert _try_os_lock(fd, lock_path) is True
+        _unlock_os_lock(fd)
+    finally:
+        os.close(fd)
+
+    assert flock_calls[0][1] == fake_fcntl.LOCK_EX | fake_fcntl.LOCK_NB
+    assert flock_calls[1][1] == fake_fcntl.LOCK_UN
+
+
+def test_try_os_lock_busy_errno_returns_false_then_acquire_raises(monkeypatch, tmp_path):
+    _patch_platform_lock_failure(monkeypatch, OSError(errno.EAGAIN, "resource temporarily unavailable"))
+    lock_path = str(tmp_path / "busy.lock")
+    with pytest.raises(SyncRuntimeError, match="Another CyClaw sync"):
+        _acquire_sync_lock(lock_path)
+
+
+def test_acquire_cleanup_tolerates_unlock_and_close_oserror(monkeypatch, tmp_path):
+    lock_path = str(tmp_path / "meta.lock")
+
+    def _raise_write(_fd, _data):
+        raise OSError(errno.ENOSPC, "no space left on device")
+
+    monkeypatch.setattr(os, "write", _raise_write)
+    monkeypatch.setattr(
+        "sync.runner._unlock_os_lock",
+        MagicMock(side_effect=OSError(errno.EBADF, "bad fd")),
+    )
+    real_close = os.close
+
+    def _close(fd: int) -> None:
+        raise OSError(errno.EBADF, "bad fd")
+
+    # Close must fail during cleanup; restore after so the test process stays healthy.
+    monkeypatch.setattr(os, "close", _close)
+    with pytest.raises(SyncRuntimeError, match="Unable to write the sync lock metadata"):
+        _acquire_sync_lock(lock_path)
+    monkeypatch.setattr(os, "close", real_close)
+
+
+def test_release_tolerates_ftruncate_unlock_and_close_oserror(monkeypatch, tmp_path):
+    lock = _acquire_sync_lock(str(tmp_path / "rel.lock"))
+    monkeypatch.setattr(os, "ftruncate", MagicMock(side_effect=OSError(errno.EIO, "io")))
+    monkeypatch.setattr(
+        "sync.runner._unlock_os_lock",
+        MagicMock(side_effect=OSError(errno.EIO, "io")),
+    )
+    real_close = os.close
+
+    def _close(fd: int) -> None:
+        # Swallow the lock fd close so the OS lock is not leaked forever on Windows.
+        try:
+            real_close(fd)
+        except OSError:
+            pass
+        raise OSError(errno.EIO, "io")
+
+    monkeypatch.setattr(os, "close", _close)
+    _release_sync_lock(lock)  # must not raise
+    assert lock.fd is None
+    monkeypatch.setattr(os, "close", real_close)
+
+
+def test_run_sync_bisync_builds_bisync_argv(tmp_path):
+    cfg = _make_cfg(tmp_path, direction="bisync")
+    Path(cfg.workdir).mkdir(parents=True, exist_ok=True)
+    log_path = cfg.log_path
+    seen: list[list[str]] = []
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        seen.append(list(argv))
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert result.success is True
+    assert result.direction == "bisync"
+    assert seen and seen[0][1] == "bisync"
+
+
+def test_run_sync_budget_exhausted_before_attempt_raises(tmp_path):
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=10, sync_retries=1, retry_backoff_sec=0)
+    mono = iter([0.0, 100.0])  # deadline=10; first attempt sees remaining<=0
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        raise AssertionError("rclone sync must not run after budget exhaustion")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.time.monotonic", side_effect=lambda: next(mono)), \
+         _patch_audit():
+        with pytest.raises(SyncRuntimeError, match="budget exhausted by retries"):
+            run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+
+def test_run_sync_rclone_file_not_found_maps_to_not_installed(tmp_path):
+    cfg = _make_cfg(tmp_path)
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        raise FileNotFoundError("rclone vanished")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        with pytest.raises(RcloneNotInstalledError, match="disappeared"):
+            run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+
+def test_run_sync_rclone_subprocess_error_maps_to_runtime(tmp_path):
+    cfg = _make_cfg(tmp_path)
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        raise subprocess.SubprocessError("spawn failed")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         _patch_audit():
+        with pytest.raises(SyncRuntimeError, match="subprocess failed"):
+            run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+
+def test_run_sync_retry_breaks_when_remaining_budget_is_zero(tmp_path):
+    cfg = _make_cfg(tmp_path, sync_timeout_sec=10, sync_retries=2, retry_backoff_sec=1.0)
+    log_path = cfg.log_path
+    # deadline = 0+10; attempt1 remaining=9; after transient, remaining check sees 0 -> break
+    mono_vals = [0.0, 1.0, 10.0]
+    mono_i = {"i": 0}
+
+    def mono() -> float:
+        i = mono_i["i"]
+        mono_i["i"] = min(i + 1, len(mono_vals) - 1)
+        return mono_vals[i]
+
+    calls = {"sync": 0}
+
+    def dispatch(argv, **kwargs):
+        if argv[1] == "version":
+            return _version_mock("1.70.0")
+        calls["sync"] += 1
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(log_path).write_text("", encoding="utf-8")
+        return MagicMock(returncode=5, stdout="", stderr="transient")
+
+    with patch("sync.runner.shutil.which", return_value=FAKE_RCLONE), \
+         patch("sync.runner.subprocess.run", side_effect=dispatch), \
+         patch("sync.runner.time.monotonic", side_effect=mono), \
+         patch("sync.runner.time.sleep") as sleep, \
+         _patch_audit():
+        result = run_sync(cfg, rclone_bin=FAKE_RCLONE)
+
+    assert calls["sync"] == 1
+    sleep.assert_not_called()
+    assert result.success is False
+
+def test_bisync_argv_includes_dry_run_flag(tmp_path):
+    cfg = _make_cfg(tmp_path, direction="bisync")
+    argv = build_bisync_argv(cfg, dry_run=True, log_path="/tmp/x.log", resync=False, rclone_bin=FAKE_RCLONE)
+    assert "--dry-run" in argv
+
+
+def test_sync_lock_context_manager_and_release_none(tmp_path):
+    with _acquire_sync_lock(str(tmp_path / "cm.lock")) as lock:
+        assert lock.fd is not None
+    assert lock.fd is None
+    _release_sync_lock(None)
+    _release_sync_lock(lock)  # idempotent after context exit
+
+
+def test_acquire_open_oserror_is_typed(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "open", MagicMock(side_effect=OSError(errno.EPERM, "denied")))
+    with pytest.raises(SyncRuntimeError, match="Unable to open the sync lock file"):
+        _acquire_sync_lock(str(tmp_path / "noopen.lock"))

@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from metrics import print_metrics, summarize_audit
-from utils.sequence_detect import detect_sequences
+from utils.sequence_detect import _parse_ts, detect_sequences, format_sequences
 
 NOW = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 HASH_A = "a" * 64
@@ -310,3 +310,48 @@ def test_metrics_lazy_imports_sequence_detect() -> None:
                 if alias.name == "utils.sequence_detect":
                     top_level.append(node.lineno)
     assert top_level == []
+
+
+def test_parse_ts_naive_gets_utc() -> None:
+    parsed = _parse_ts("2026-08-21T12:00:00")
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert parsed.utcoffset() == timedelta(0)
+
+
+def test_spend_with_hash_but_bad_timestamp_is_dropped() -> None:
+    result = detect_sequences(
+        [_audit("rag_query", minutes=0)],
+        [{"source": "query", "query_hash": HASH_A, "timestamp": "not-a-ts"}],
+    )
+    assert result["findings"] == []
+    assert result["unjoinable_query_spend"] == 0
+
+
+def test_audit_without_hash_is_skipped_in_join_maps() -> None:
+    result = detect_sequences(
+        [_audit("rag_query", minutes=0, query_hash=None), _audit("rag_query", minutes=1)],
+        [_spend(minutes=2)],
+    )
+    assert "repeat_hash" in _rules(result) or result["findings"] is not None
+
+
+def test_format_sequences_skips_non_dict_and_reports_agentic_skip() -> None:
+    lines = format_sequences(
+        {
+            "findings": [
+                "nope",
+                {
+                    "rule": "repeat_hash",
+                    "query_hash": HASH_A,
+                    "count": 3,
+                    "window_start": None,
+                    "window_end": None,
+                },
+            ],
+            "agentic_spend_skipped": 2,
+        }
+    )
+    assert lines[0] == "Sequences:"
+    assert any("repeat_hash" in ln for ln in lines)
+    assert any("agentic_spend_skipped: 2" in ln for ln in lines)

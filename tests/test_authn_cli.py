@@ -110,6 +110,18 @@ class TestAddListDisableEnable:
         ])
         assert code == EXIT_FAIL
 
+    def test_role_subcommand_updates_role(self, config_path, capsys):
+        assert main([
+            "--config", config_path, "add", "alice", "--password", _GOOD_PASSWORD,
+        ]) == EXIT_OK
+        capsys.readouterr()
+        assert main([
+            "--config", config_path, "role", "alice", "audit",
+        ]) == EXIT_OK
+        assert "role updated: alice -> audit" in capsys.readouterr().out
+        assert main(["--config", config_path, "list"]) == EXIT_OK
+        assert "audit" in capsys.readouterr().out
+
 
 class TestPasswd:
     def test_passwd_changes_the_password(self, config_path):

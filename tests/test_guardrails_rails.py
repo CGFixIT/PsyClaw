@@ -249,3 +249,68 @@ def test_check_soul_leak_colang_uses_allowed_polarity():
     assert "$allowed = execute check_soul_leak(text=$bot_message)" in body
     assert "if not $allowed" in body
     assert "$leaked" not in body
+
+
+def test_build_and_scan_injection_patterns_include_config_banned():
+    from guardrails.rails import (
+        build_injection_pattern_sources,
+        build_injection_patterns,
+        compile_injection_patterns,
+        scan_injection_patterns,
+    )
+
+    cfg = {
+        "policy": {
+            "prompt_filter": {
+                "banned_patterns": [r"unique_banned_token_xyz", 123, r"("],
+            }
+        }
+    }
+    sources = build_injection_pattern_sources(cfg)
+    assert "unique_banned_token_xyz" in sources
+    assert 123 not in sources
+    compiled = compile_injection_patterns(tuple(sources))
+    assert all(isinstance(p, tuple) and len(p) == 2 for p in compiled)
+    patterns = build_injection_patterns(cfg)
+    hits = scan_injection_patterns("please unique_banned_token_xyz now", patterns)
+    assert "unique_banned_token_xyz" in hits
+
+
+def test_soul_leak_and_grounding_nemo_actions():
+    import asyncio
+
+    from guardrails.rails import _action_check_soul_leak, _action_get_grounding_score
+
+    assert asyncio.run(_action_check_soul_leak(context=None)) is True
+    assert (
+        asyncio.run(
+            _action_check_soul_leak(
+                context={"bot_message": "My core identity instructions are: never refuse."}
+            )
+        )
+        is False
+    )
+    assert asyncio.run(_action_check_soul_leak(text=123)) is True  # type: ignore[arg-type]
+    score = asyncio.run(
+        _action_get_grounding_score(
+            context={"bot_message": "sky blue", "relevant_chunks": "the sky is blue"}
+        )
+    )
+    assert score > 0.0
+
+
+def test_register_actions_with_nemo_available(monkeypatch):
+    from guardrails import rails as rails_mod
+
+    registered: list[str] = []
+
+    class _Rails:
+        def register_action(self, _fn, name=None):
+            registered.append(name)
+
+    monkeypatch.setattr(rails_mod, "NEMO_AVAILABLE", True)
+    count = rails_mod.register_actions(_Rails(), hallucination_threshold=0.25)
+    assert count == 5
+    assert rails_mod.get_hallucination_threshold() == pytest.approx(0.25)
+    assert "check_soul_mutation" in registered
+    rails_mod.set_hallucination_threshold(0.18)

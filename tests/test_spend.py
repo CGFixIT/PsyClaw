@@ -359,6 +359,8 @@ def test_ticks_mismatch_relative_floor_and_cap() -> None:
     assert spend.ticks_mismatch(0.004, 0.1) is False
     assert spend.ticks_mismatch(0.02, 1.0) is True
     assert spend.ticks_mismatch(None, 1.0) is False
+    assert spend.ticks_mismatch(0.1, None) is False
+    assert spend.ticks_mismatch(0.1, True) is False
 
 
 def test_compare_vendor_cost_claude_has_no_ticks() -> None:
@@ -428,6 +430,34 @@ def test_rates_are_stale_after_thirty_days() -> None:
 
     assert spend.rates_are_stale(datetime(2026, 8, 20, tzinfo=UTC)) is False
     assert spend.rates_are_stale(datetime(2026, 9, 19, tzinfo=UTC)) is True
+    assert spend.rates_are_stale(datetime(2026, 9, 19)) is True  # naive → UTC
+
+
+def test_rates_are_stale_when_priced_as_of_unparseable(monkeypatch) -> None:
+    monkeypatch.setattr(spend, "PRICED_AS_OF", "not-a-date")
+    assert spend.rates_are_stale() is True
+
+
+def test_resolve_spend_path_falls_back_when_config_unreadable(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(spend, "_get_config", lambda: (_ for _ in ()).throw(OSError("gone")))
+    path = spend._resolve_spend_path(None)
+    assert path.name == "spend.jsonl"
+
+
+def test_resolve_spend_path_reads_config_spend_file(monkeypatch) -> None:
+    monkeypatch.setattr(
+        spend,
+        "_get_config",
+        lambda: {"logging": {"spend_file": "logs/custom_spend.jsonl"}},
+    )
+    path = spend._resolve_spend_path(None)
+    assert path.name == "custom_spend.jsonl"
+
+
+def test_normalize_provider_unknown_for_blank() -> None:
+    assert spend._normalize_provider("") == "unknown"
+    assert spend._normalize_provider("  ") == "unknown"
+    assert spend._normalize_provider(None) == "unknown"  # type: ignore[arg-type]
 
 
 def test_estimate_usd_unknown_model_usd_none() -> None:

@@ -326,6 +326,33 @@ def test_is_windows_property(tmp_path: Path) -> None:
     assert isinstance(cfg.is_windows, bool)
 
 
+def test_xdg_config_home_rclone_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from sync.config import _default_rclone_state_dir
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert _default_rclone_state_dir() == tmp_path / "xdg" / "rclone"
+
+
+def test_empty_local_path_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(SyncConfigError, match="local_path is required"):
+        load_sync_config(_write_config(tmp_path, _base_block(local_path="")))
+
+
+def test_to_dict_includes_local_path(tmp_path: Path) -> None:
+    cfg = load_sync_config(_write_config(tmp_path, _base_block()))
+    dumped = cfg.to_dict()
+    assert "local_path" in dumped
+    assert dumped["direction"] == "pull"
+
+
+def test_non_mapping_sync_block_raises(tmp_path: Path) -> None:
+    cfg = {"logging": {"audit_file": str(tmp_path / "audit.jsonl")}, "sync": ["not", "a", "mapping"]}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    with pytest.raises(SyncConfigError, match="must be a mapping"):
+        load_sync_config(str(path))
+
+
 def test_blank_path_overrides_fall_back_to_defaults(tmp_path: Path) -> None:
     # Whitespace-only / empty overrides are treated as "unset" and replaced by
     # the computed defaults, never passed verbatim to rclone (which would fail

@@ -178,7 +178,7 @@ _EVENT_TYPE_ALLOWED_ACTION_FIELDS: dict[str, frozenset[str]] = {
     "config.mcp": frozenset({"mcp_server", "mcp_tool"}),
     "network.indicator": frozenset({"url", "tool_name", "tool_call_id", "mcp_server", "mcp_tool", "decision"}),
 }
-if set(_EVENT_TYPE_ALLOWED_ACTION_FIELDS) != _EVENT_TYPES:
+if set(_EVENT_TYPE_ALLOWED_ACTION_FIELDS) != _EVENT_TYPES:  # pragma: no cover -- import-time map consistency guard
     raise RuntimeError("Numbat action-field map does not cover every event_type")
 _EVENT_TYPE_FORBIDDEN_FIELDS: dict[str, frozenset[str]] = {
     event_type: _ACTION_FIELDS - allowed

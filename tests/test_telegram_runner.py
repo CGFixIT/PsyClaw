@@ -11,7 +11,16 @@ import yaml
 
 from telegram.config import load_telegram_config
 from telegram.ratelimit import SlidingWindowLimiter, get_limiter, reset_limiters_for_tests
-from telegram.runner import _extract_answer, handle_inbound_text, poll_forever, poll_once, send_notify
+from telegram.media import MediaAttachment
+from telegram.runner import (
+    _extract_answer,
+    _media_from_update,
+    handle_inbound_media,
+    handle_inbound_text,
+    poll_forever,
+    poll_once,
+    send_notify,
+)
 from telegram.state import load_offset, save_offset
 from utils.errors import TelegramRefused, TelegramRuntimeError
 from utils.logger import reset_config_cache
@@ -46,6 +55,16 @@ def test_send_notify_disabled(tmp_path: Path) -> None:
     with pytest.raises(TelegramRefused) as exc:
         send_notify(cfg, chat_id=42, text="x")
     assert "enabled" in (exc.value.details or {}).get("gate", "")
+
+
+def test_send_notify_forwards_to_client(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with patch("telegram.client.send_message", return_value={"ok": True, "result": {"message_id": 9}}) as send:
+        out = send_notify(cfg, chat_id=42, text="hello")
+    assert out["ok"] is True
+    send.assert_called_once()
+    assert send.call_args.kwargs["chat_id"] == 42
+    assert send.call_args.kwargs["text"] == "hello"
 
 
 def test_handle_inbound_requires_chat_mode(tmp_path: Path) -> None:
@@ -770,6 +789,37 @@ def test_rate_limiter_reserves_partial_optional_capacity() -> None:
         limiter.check("k")
 
 
+def test_rate_limiter_rejects_invalid_ctor_cost_and_reservation_misuse() -> None:
+    with pytest.raises(ValueError, match="must be > 0"):
+        SlidingWindowLimiter(max_ops=0, window_seconds=60)
+    with pytest.raises(ValueError, match="must be > 0"):
+        SlidingWindowLimiter(max_ops=1, window_seconds=0)
+
+    limiter = SlidingWindowLimiter(max_ops=3, window_seconds=60)
+    with pytest.raises(ValueError, match="positive integer"):
+        limiter.check("k", cost=0)
+    with pytest.raises(ValueError, match="positive integer"):
+        limiter.check("k", cost=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="minimum reservation"):
+        limiter.reserve_up_to("k", minimum=3, maximum=1)
+
+    reservation = limiter.reserve("k", cost=2)
+    reservation.consume()
+    reservation.consume()
+    with pytest.raises(RuntimeError, match="reservation exhausted"):
+        reservation.consume()
+
+    with pytest.raises(RuntimeError, match="not active"):
+        limiter._consume_reserved("missing")
+    with pytest.raises(RuntimeError, match="cannot release more"):
+        limiter._release_reserved("absent", 1)
+
+    limiter.reserve("partial", cost=2)
+    limiter._release_reserved("partial", 1)  # remaining hold stays on the key
+    assert limiter._reserved.get("partial") == 1
+    limiter._release_reserved("partial", 1)
+
+
 def test_get_limiter_shared() -> None:
     a = get_limiter(5, 60)
     b = get_limiter(5, 60)
@@ -909,3 +959,233 @@ def test_poll_forever_surfaces_terminal_get_updates_failure(tmp_path: Path) -> N
     ):
         with pytest.raises(TelegramRuntimeError):
             poll_forever(cfg, max_iterations=1)
+
+
+# ---------------------------------------------------------------------------
+# Remaining extract / command / media / poll gate branches
+# ---------------------------------------------------------------------------
+
+def test_extract_answer_uses_response_alias() -> None:
+    assert _extract_answer({"response": "alias answer"}) == "alias answer"
+
+
+def test_extract_answer_uses_nested_data_answer() -> None:
+    assert _extract_answer({"data": {"answer": "nested"}}) == "nested"
+
+
+def test_extract_answer_uses_error_string() -> None:
+    assert _extract_answer({"error": "boom"}) == "(error) boom"
+
+
+def test_extract_answer_fallback_when_empty() -> None:
+    assert _extract_answer({}) == "(no answer field in /query response)"
+
+
+def test_handle_inbound_save_command_prompts_for_confirm(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with (
+        patch("telegram.client.post_query") as query,
+        patch("telegram.client.send_message", return_value={"ok": True}) as send,
+    ):
+        out = handle_inbound_text(cfg, chat_id=42, text="/save")
+    assert "caption" in out["answer"]
+    query.assert_not_called()
+    send.assert_called_once()
+
+
+def test_dispatch_command_unknown_returns_none(tmp_path: Path) -> None:
+    from telegram.runner import _dispatch_command
+
+    cfg = _cfg(tmp_path)
+    assert _dispatch_command(cfg, chat_id=42, chat_type="private", text="/notacommand") is None
+    assert "Attach a photo" in (
+        _dispatch_command(cfg, chat_id=42, chat_type="private", text="/save") or ""
+    )
+
+
+def test_handle_inbound_disabled_refuses(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path, enabled=False, allowed_chat_ids=[])
+    with pytest.raises(TelegramRefused) as exc:
+        handle_inbound_text(cfg, chat_id=42, text="hi")
+    assert (exc.value.details or {}).get("gate") == "enabled"
+
+
+def test_handle_inbound_media_allowlist_and_confirm_gates(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    attachment = MediaAttachment(kind="photo", file_id="f1", declared_size=10)
+    with pytest.raises(TelegramRefused) as exc:
+        handle_inbound_media(
+            cfg,
+            chat_id=999,
+            chat_type="private",
+            attachment=attachment,
+            caption="/save --confirm reason",
+            update_id=3,
+        )
+    assert (exc.value.details or {}).get("gate") == "allowlist"
+
+    with (
+        patch("telegram.runner.get_limiter") as limiter,
+        patch("telegram.runner.audit_log"),
+    ):
+        limiter.return_value.check.return_value = None
+        with pytest.raises(TelegramRefused) as exc:
+            handle_inbound_media(
+                cfg,
+                chat_id=42,
+                chat_type="private",
+                attachment=attachment,
+                caption="no confirm",
+                update_id=4,
+            )
+    assert (exc.value.details or {}).get("gate") == "media_confirm"
+
+
+def test_handle_inbound_media_happy_path(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    attachment = MediaAttachment(kind="photo", file_id="f1", declared_size=10)
+    with (
+        patch("telegram.runner.get_limiter") as limiter,
+        patch("telegram.runner.audit_log"),
+        patch("telegram.runner.stage_attachment", return_value={"staged": True}) as stage,
+        patch("telegram.client.send_message", return_value={"ok": True}) as send,
+    ):
+        limiter.return_value.check.return_value = None
+        out = handle_inbound_media(
+            cfg,
+            chat_id=42,
+            chat_type="private",
+            attachment=attachment,
+            caption="/save --confirm because tests",
+            update_id=5,
+        )
+    assert out["media"] == {"staged": True}
+    assert "staged" in out["answer"].lower()
+    stage.assert_called_once()
+    send.assert_called_once()
+
+
+def test_handle_inbound_media_disabled_and_wrong_mode(tmp_path: Path) -> None:
+    attachment = MediaAttachment(kind="photo", file_id="f1", declared_size=10)
+    disabled = _cfg(tmp_path, enabled=False, allowed_chat_ids=[])
+    with pytest.raises(TelegramRefused) as exc:
+        handle_inbound_media(
+            disabled,
+            chat_id=42,
+            chat_type="private",
+            attachment=attachment,
+            caption="/save --confirm reason",
+            update_id=1,
+        )
+    assert (exc.value.details or {}).get("gate") == "enabled"
+
+    reset_config_cache()
+    notify = _cfg(tmp_path, mode="notify")
+    with pytest.raises(TelegramRefused) as exc:
+        handle_inbound_media(
+            notify,
+            chat_id=42,
+            chat_type="private",
+            attachment=attachment,
+            caption="/save --confirm reason",
+            update_id=1,
+        )
+    assert (exc.value.details or {}).get("gate") == "mode"
+
+
+def test_media_from_update_rejects_non_message_and_incomplete_chat() -> None:
+    assert _media_from_update({"update_id": 1}) is None
+    assert _media_from_update({"message": {"chat": "not-a-dict"}}) is None
+    assert _media_from_update({"message": {"chat": {"id": 1}}}) is None  # no type
+    assert _media_from_update({
+        "message": {"chat": {"id": 1, "type": "private"}, "text": "no media"},
+    }) is None
+
+
+def test_poll_once_disabled_and_wrong_mode(tmp_path: Path) -> None:
+    disabled = _cfg(tmp_path, enabled=False, allowed_chat_ids=[])
+    with pytest.raises(TelegramRefused) as exc:
+        poll_once(disabled)
+    assert (exc.value.details or {}).get("gate") == "enabled"
+
+    reset_config_cache()
+    notify = _cfg(tmp_path, mode="notify")
+    with pytest.raises(TelegramRefused) as exc:
+        poll_once(notify)
+    assert (exc.value.details or {}).get("gate") == "mode"
+
+
+def test_poll_once_skips_non_dict_updates(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    with patch("telegram.client.get_updates", return_value=["not-a-dict", 12, None]):
+        next_offset, handled = poll_once(cfg)
+    assert next_offset is None
+    assert handled == []
+
+
+def test_poll_once_media_invalid_update_id_is_terminal(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [{
+        "update_id": True,  # bool must not be treated as a valid int id
+        "message": {
+            "chat": {"id": 42, "type": "private"},
+            "photo": [{"file_id": "p1", "file_size": 8}],
+            "caption": "/save --confirm reason",
+        },
+    }]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch("telegram.runner.handle_inbound_media") as media,
+    ):
+        next_offset, handled = poll_once(cfg)
+    media.assert_not_called()
+    assert next_offset is None or isinstance(next_offset, int)
+    assert handled and handled[0]["error"]
+    assert "update id" in handled[0]["error"].lower()
+
+
+def test_poll_once_runtime_error_includes_retry_after(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    updates = [{"update_id": 7, "message": {"chat": {"id": 42, "type": "private"}, "text": "x"}}]
+    with (
+        patch("telegram.client.get_updates", return_value=updates),
+        patch(
+            "telegram.runner.handle_inbound_text",
+            side_effect=TelegramRuntimeError(
+                "slow down",
+                details={"retryable": True, "retry_after": 3.5},
+            ),
+        ),
+    ):
+        next_offset, handled = poll_once(cfg, offset=None)
+    assert next_offset is None
+    assert handled[0]["retryable"] is True
+    assert handled[0]["retry_after"] == 3.5
+
+
+def test_poll_forever_disabled_and_wrong_mode(tmp_path: Path) -> None:
+    disabled = _cfg(tmp_path, enabled=False, allowed_chat_ids=[])
+    with pytest.raises(TelegramRefused) as exc:
+        poll_forever(disabled, max_iterations=1)
+    assert (exc.value.details or {}).get("gate") == "enabled"
+
+    reset_config_cache()
+    notify = _cfg(tmp_path, mode="notify")
+    with pytest.raises(TelegramRefused) as exc:
+        poll_forever(notify, max_iterations=1)
+    assert (exc.value.details or {}).get("gate") == "mode"
+
+
+def test_poll_forever_honors_retry_after_from_handled_result(tmp_path: Path) -> None:
+    cfg = _cfg(tmp_path)
+    sleeps: list[float] = []
+    with (
+        patch(
+            "telegram.runner.poll_once",
+            return_value=(None, [{"error": "rate", "retryable": True, "retry_after": 4}]),
+        ),
+        patch("telegram.runner.time.sleep", side_effect=lambda s: sleeps.append(s)),
+        patch("telegram.runner.load_offset", return_value=None),
+    ):
+        poll_forever(cfg, max_iterations=1, sleep_on_error_sec=1.0)
+    assert sleeps and sleeps[0] >= 4.0

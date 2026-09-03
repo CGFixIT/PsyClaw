@@ -154,6 +154,26 @@ class TestBootstrapPassword:
         assert r.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
         assert manager.needs_password_setup() is True
 
+    def test_unparseable_client_host_is_not_loopback(self, manager):
+        """_client_is_loopback falls through to ipaddress; a hostname that is
+        neither in the literal set nor a valid IP must return False, not 500."""
+        manager.bootstrap_if_empty()
+        app = _make_app(manager)
+        client = TestClient(app, base_url=_base_url(), client=("not-an-ip", 50000))
+        r = client.post("/auth/bootstrap-password", json={"password": _GOOD_PASSWORD})
+        assert r.status_code == 403
+        assert r.json()["detail"]["code"] == "AUTH_LOOPBACK_ONLY"
+        assert manager.needs_password_setup() is True
+
+    def test_short_password_is_422_policy(self, manager):
+        manager.bootstrap_if_empty()
+        app = _make_app(manager)
+        client = TestClient(app, base_url=_base_url(), client=("127.0.0.1", 50000))
+        r = client.post("/auth/bootstrap-password", json={"password": "short"})
+        assert r.status_code == 422
+        assert r.json()["detail"]["code"] == "AUTH_POLICY"
+        assert manager.needs_password_setup() is True
+
 
 class TestLogin:
     def test_success_returns_username_and_csrf(self, manager, user):

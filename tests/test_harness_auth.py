@@ -940,3 +940,323 @@ def test_unknown_user_delete_is_404_not_an_unhandled_500(tmp_path, monkeypatch, 
     resp = admin.delete("/api/auth/users/nobody", headers=_csrf(admin))
     assert resp.status_code == 404, f"expected 404, got {resp.status_code}"
     assert resp.json()["detail"]["code"] == "AUTH_USER_NOT_FOUND"
+
+
+# --- /api/auth/* happy paths and remaining error branches (auth_routes.py) ---
+
+
+def _auth_enabled_app(tmp_path, monkeypatch, cfg):
+    monkeypatch.setenv("CYCLAW_API_KEY", _KEY)
+    monkeypatch.setattr(
+        harness_server,
+        "_get_config",
+        lambda _path: {"auth": {"enabled": True, "db_path": str(tmp_path / "hauth.db")}},
+    )
+    return harness_server.create_app(cfg, _chat())
+
+
+def _loop_client(app) -> TestClient:
+    return TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
+
+
+def _sess_client(app) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        client=("127.0.0.1", 50000),
+        raise_server_exceptions=False,
+    )
+
+
+def test_bootstrap_already_complete_is_409(tmp_path, monkeypatch, cfg):
+    app = _auth_enabled_app(tmp_path, monkeypatch, cfg)
+    loop = _loop_client(app)
+    assert loop.post(
+        "/api/auth/bootstrap-password", json={"password": _BOOTSTRAP_PASSWORD}
+    ).status_code == 200
+    again = loop.post(
+        "/api/auth/bootstrap-password", json={"password": _BOOTSTRAP_PASSWORD}
+    )
+    assert again.status_code == 409
+    assert again.json()["detail"]["code"] == "AUTH_BOOTSTRAP_COMPLETE"
+
+
+def test_bootstrap_short_password_is_422_policy(tmp_path, monkeypatch, cfg):
+    app = _auth_enabled_app(tmp_path, monkeypatch, cfg)
+    loop = _loop_client(app)
+    resp = loop.post("/api/auth/bootstrap-password", json={"password": "short"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "AUTH_POLICY"
+
+
+def test_login_locked_account_is_423(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    app = admin.app
+    from utils.authn_manager import AuthManager
+
+    # Freeze AuthManager clock so five failures stay inside the lockout window.
+    frozen = {"t": 1_700_000_000.0}
+    monkeypatch.setattr(AuthManager, "_now", lambda self: frozen["t"])
+    for _ in range(5):
+        admin.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "wrong wrong wrong!!"},
+        )
+    locked = admin.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": _BOOTSTRAP_PASSWORD},
+    )
+    assert locked.status_code == 423
+    assert "AUTH" in locked.json()["detail"]["code"]
+
+
+def test_whoami_and_list_users_and_logout(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    who = admin.get("/api/auth/whoami")
+    assert who.status_code == 200
+    assert who.json()["username"] == "admin"
+    assert who.json()["role"] == "admin"
+
+    listed = admin.get("/api/auth/users")
+    assert listed.status_code == 200
+    assert any(row["username"] == "admin" for row in listed.json())
+
+    out = admin.post("/api/auth/logout", headers=_csrf(admin))
+    assert out.status_code == 200
+    assert out.json()["ok"] is True
+    assert admin.get("/api/auth/whoami").status_code == 401
+
+
+def test_logout_without_session_cookie_still_ok(tmp_path, monkeypatch, cfg):
+    app = _auth_enabled_app(tmp_path, monkeypatch, cfg)
+    loop = _loop_client(app)
+    loop.post("/api/auth/bootstrap-password", json={"password": _BOOTSTRAP_PASSWORD})
+    bare = _sess_client(app)
+    resp = bare.post("/api/auth/logout", headers=_csrf(bare))
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_whoami_without_session_is_401(tmp_path, monkeypatch, cfg):
+    app = _auth_enabled_app(tmp_path, monkeypatch, cfg)
+    loop = _loop_client(app)
+    loop.post("/api/auth/bootstrap-password", json={"password": _BOOTSTRAP_PASSWORD})
+    bare = _loop_client(app)
+    resp = bare.get("/api/auth/whoami")
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "AUTH_REQUIRED"
+
+
+def test_whoami_when_session_user_row_missing_is_401(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "ghosted", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    ghost = _sess_client(admin.app)
+    assert ghost.post(
+        "/api/auth/login",
+        json={"username": "ghosted", "password": "another good password!!"},
+    ).status_code == 200
+
+    from utils.authn_manager import AuthManager
+
+    real_get = AuthManager.get_user
+
+    def _missing(self, username):  # noqa: ANN001
+        if username == "ghosted":
+            return None
+        return real_get(self, username)
+
+    monkeypatch.setattr(AuthManager, "get_user", _missing)
+    resp = ghost.get("/api/auth/whoami")
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["code"] == "AUTH_REQUIRED"
+
+
+def test_audit_role_cannot_list_users(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "auditor", "password": "another good password!!", "role": "audit"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    auditor = _sess_client(admin.app)
+    assert auditor.post(
+        "/api/auth/login",
+        json={"username": "auditor", "password": "another good password!!"},
+    ).status_code == 200
+    resp = auditor.get("/api/auth/users")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "AUTH_PERMISSION_DENIED"
+
+
+def test_create_user_rejects_invalid_role(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.post(
+        "/api/auth/users",
+        json={"username": "badrole", "password": "another good password!!", "role": "viewer"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "AUTH_POLICY"
+
+
+def test_create_user_missing_row_is_503(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    from utils.authn_manager import AuthManager
+
+    real_get = AuthManager.get_user
+    real_create = AuthManager.create_user
+
+    def _create(self, username, password, role):  # noqa: ANN001
+        return real_create(self, username, password, role)
+
+    def _vanish(self, username):  # noqa: ANN001
+        if username == "vanished":
+            return None
+        return real_get(self, username)
+
+    monkeypatch.setattr(AuthManager, "create_user", _create)
+    monkeypatch.setattr(AuthManager, "get_user", _vanish)
+    resp = admin.post(
+        "/api/auth/users",
+        json={"username": "vanished", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["code"] == "AUTH_ERROR"
+
+
+def test_set_password_unknown_user_is_404(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    resp = admin.post(
+        "/api/auth/users/nobody/password",
+        json={"password": "another good password!!"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["code"] == "AUTH_USER_NOT_FOUND"
+
+
+def test_operator_cannot_set_admin_password(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "ops", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    ops = _sess_client(admin.app)
+    assert ops.post(
+        "/api/auth/login", json={"username": "ops", "password": "another good password!!"}
+    ).status_code == 200
+    resp = ops.post(
+        "/api/auth/users/admin/password",
+        json={"password": "brand new admin password!!"},
+        headers=_csrf(ops),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "AUTH_PERMISSION_DENIED"
+
+
+def test_audit_cannot_set_password(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "auditor2", "password": "another good password!!", "role": "audit"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "target", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    auditor = _sess_client(admin.app)
+    assert auditor.post(
+        "/api/auth/login",
+        json={"username": "auditor2", "password": "another good password!!"},
+    ).status_code == 200
+    resp = auditor.post(
+        "/api/auth/users/target/password",
+        json={"password": "brand new target password!!"},
+        headers=_csrf(auditor),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "AUTH_PERMISSION_DENIED"
+
+
+def test_admin_set_password_role_and_delete_succeed(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "carol", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+
+    pw = admin.post(
+        "/api/auth/users/carol/password",
+        json={"password": "carol has a new password!!"},
+        headers=_csrf(admin),
+    )
+    assert pw.status_code == 200
+    assert pw.json()["ok"] is True
+
+    role = admin.post(
+        "/api/auth/users/carol/role",
+        json={"role": "audit"},
+        headers=_csrf(admin),
+    )
+    assert role.status_code == 200
+    assert role.json()["ok"] is True
+
+    deleted = admin.delete("/api/auth/users/carol", headers=_csrf(admin))
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+
+
+def test_operator_cannot_set_role_or_delete(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "ops2", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "peer", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    ops = _sess_client(admin.app)
+    assert ops.post(
+        "/api/auth/login", json={"username": "ops2", "password": "another good password!!"}
+    ).status_code == 200
+    role = ops.post(
+        "/api/auth/users/peer/role",
+        json={"role": "audit"},
+        headers=_csrf(ops),
+    )
+    assert role.status_code == 403
+    deleted = ops.delete("/api/auth/users/peer", headers=_csrf(ops))
+    assert deleted.status_code == 403
+
+
+def test_set_password_unexpected_error_propagates(tmp_path, monkeypatch, cfg):
+    admin = _rbac_admin_client(tmp_path, monkeypatch, cfg)
+    assert admin.post(
+        "/api/auth/users",
+        json={"username": "dave", "password": "another good password!!", "role": "operator"},
+        headers=_csrf(admin),
+    ).status_code == 200
+    from utils.authn_manager import AuthManager
+
+    def _boom(self, username, password):  # noqa: ANN001
+        raise RuntimeError("unexpected auth store failure")
+
+    monkeypatch.setattr(AuthManager, "set_password", _boom)
+    resp = admin.post(
+        "/api/auth/users/dave/password",
+        json={"password": "another good password!!"},
+        headers=_csrf(admin),
+    )
+    assert resp.status_code == 500

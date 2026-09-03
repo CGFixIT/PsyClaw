@@ -14,7 +14,15 @@ from unittest.mock import patch
 
 import pytest
 
-from utils.authn_store import connect, ddl_device_tokens, ddl_indexes, ddl_sessions, ddl_users
+from utils.authn_store import (
+    connect,
+    ddl_device_tokens,
+    ddl_indexes,
+    ddl_sessions,
+    ddl_users,
+    ensure_users_role_column,
+    users_column_names,
+)
 
 
 class TestSqliteConnect:
@@ -95,24 +103,42 @@ class TestSqliteConnect:
 
 
 class TestPostgresOptIn:
-    def test_database_url_config_key_selects_postgres(self, tmp_path):
+    @pytest.fixture
+    def hide_psycopg(self, monkeypatch):
+        """Force the missing-driver arm even when the postgres extra is installed."""
+        import builtins
+        import sys
+
+        for key in [k for k in sys.modules if k == "psycopg" or k.startswith("psycopg.")]:
+            monkeypatch.delitem(sys.modules, key, raising=False)
+
+        real_import = builtins.__import__
+
+        def _import(name, g=None, loc=None, fromlist=(), level=0):
+            if name == "psycopg" or name.startswith("psycopg."):
+                raise ImportError("No module named 'psycopg'")
+            return real_import(name, g, loc, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", _import)
+
+    def test_database_url_config_key_selects_postgres(self, tmp_path, hide_psycopg):
         with pytest.raises(ImportError) as excinfo:
             connect(tmp_path / "unused.db", {"database_url": "postgresql://user:secret@host/db"})
         assert "psycopg" in str(excinfo.value)
 
-    def test_env_var_selects_postgres(self, tmp_path, monkeypatch):
+    def test_env_var_selects_postgres(self, tmp_path, monkeypatch, hide_psycopg):
         monkeypatch.setenv("CYCLAW_AUTH_DB_URL", "postgresql://user:secret@host/db")
         with pytest.raises(ImportError):
             connect(tmp_path / "unused.db", {})
 
-    def test_config_key_takes_precedence_over_env_var(self, tmp_path, monkeypatch):
+    def test_config_key_takes_precedence_over_env_var(self, tmp_path, monkeypatch, hide_psycopg):
         """Both point at postgres either way here (psycopg absent), but this
         pins the precedence order documented in connect()'s own dsn lookup."""
         monkeypatch.setenv("CYCLAW_AUTH_DB_URL", "postgresql://from-env/db")
         with pytest.raises(ImportError):
             connect(tmp_path / "unused.db", {"database_url": "postgresql://from-config/db"})
 
-    def test_missing_driver_error_never_echoes_the_dsn(self, tmp_path):
+    def test_missing_driver_error_never_echoes_the_dsn(self, tmp_path, hide_psycopg):
         """The DSN may carry credentials; the ImportError message must not
         repeat it (same rule utils/personality_db.py's connect() documents)."""
         secret_dsn = "postgresql://alice:hunter2@internal-host/proddb"
@@ -180,3 +206,106 @@ class TestDDL:
             conn.commit()
         finally:
             conn.close()
+
+
+class TestPostgresConnectSuccessPath:
+    def test_connect_returns_postgres_backend_when_psycopg_works(self, tmp_path, monkeypatch):
+        """Happy-path postgres arm: import + connect succeed (mocked)."""
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        fake_psycopg = types.ModuleType("psycopg")
+        fake_psycopg.__path__ = []  # mark as package so submodule imports work
+        fake_rows = types.ModuleType("psycopg.rows")
+        fake_rows.dict_row = object()
+        fake_conninfo = types.ModuleType("psycopg.conninfo")
+        fake_conninfo.conninfo_to_dict = lambda dsn, **_k: {"dbname": "db"}
+        fake_conninfo.make_conninfo = lambda **kwargs: "postgresql://hardened"
+        fake_conn = MagicMock(name="pg_conn")
+        fake_psycopg.connect = MagicMock(return_value=fake_conn)
+        monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+        monkeypatch.setitem(sys.modules, "psycopg.rows", fake_rows)
+        monkeypatch.setitem(sys.modules, "psycopg.conninfo", fake_conninfo)
+        monkeypatch.setattr(
+            "utils.authn_store._harden_pg_conninfo",
+            lambda dsn: "postgresql://hardened",
+        )
+
+        conn, placeholder, backend = connect(
+            tmp_path / "unused.db",
+            {"database_url": "postgresql://user:secret@host/db"},
+        )
+        assert conn is fake_conn
+        assert placeholder == "%s"
+        assert backend == "postgres"
+        fake_psycopg.connect.assert_called_once()
+        assert fake_psycopg.connect.call_args.kwargs["autocommit"] is False
+        assert fake_psycopg.connect.call_args.args[0] == "postgresql://hardened"
+
+
+class TestChmodFailureOnExistingDb:
+    def test_chmod_oserror_warns_and_still_connects(self, tmp_path, monkeypatch):
+        """Cover the OSError arm that POSIX-mode tests skip on Windows."""
+        db_path = tmp_path / "auth.db"
+        db_path.touch()
+        # Force the "existed + mode != 600" branch regardless of platform.
+        monkeypatch.setattr(
+            "utils.authn_store.stat.S_IMODE",
+            lambda _mode: 0o644,
+        )
+        monkeypatch.setattr(
+            "utils.authn_store.os.chmod",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("nope")),
+        )
+        conn, placeholder, backend = connect(db_path, {})
+        try:
+            assert backend == "sqlite"
+            assert placeholder == "?"
+            assert conn.execute("SELECT 1").fetchone()[0] == 1
+        finally:
+            conn.close()
+
+
+class TestUsersColumnHelpers:
+    def test_sqlite_column_names_and_role_backfill(self, tmp_path):
+        conn, _, backend = connect(tmp_path / "auth.db", {})
+        try:
+            # Pre-Stage-6 shape: users table without role.
+            conn.execute(
+                """
+                CREATE TABLE users (
+                    username TEXT PRIMARY KEY,
+                    password_hash TEXT NOT NULL,
+                    created_ts REAL NOT NULL,
+                    disabled INTEGER NOT NULL DEFAULT 0,
+                    last_login_ts REAL,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    locked_until_ts REAL
+                )
+                """
+            )
+            names = users_column_names(conn, backend)
+            assert "username" in names
+            assert "role" not in {n.lower() for n in names}
+            ensure_users_role_column(conn, backend)
+            names_after = {n.lower() for n in users_column_names(conn, backend)}
+            assert "role" in names_after
+            # Idempotent when role already present.
+            ensure_users_role_column(conn, backend)
+        finally:
+            conn.close()
+
+    def test_postgres_users_column_names(self):
+        from unittest.mock import MagicMock
+
+        conn = MagicMock()
+        conn.execute.return_value.fetchall.return_value = [
+            {"column_name": "username"},
+            {"column_name": "role"},
+        ]
+        names = users_column_names(conn, "postgres")
+        assert names == {"username", "role"}
+        sql = conn.execute.call_args.args[0]
+        assert "information_schema.columns" in sql
+        assert "users" in sql

@@ -146,3 +146,125 @@ def test_unknown_profile_name_fails(tmp_path: Path):
     path = _write_profiles(tmp_path, [_minimal_profile("fantasy")])
     with pytest.raises(GuardrailsConfigError, match="unknown profile name"):
         load_profiles(path)
+
+
+def test_unreadable_profiles_path_fails(tmp_path: Path):
+    missing = tmp_path / "nope" / "profiles.yaml"
+    with pytest.raises(GuardrailsConfigError, match="could not read"):
+        load_profiles(missing)
+
+
+def test_invalid_yaml_fails(tmp_path: Path):
+    path = tmp_path / "profiles.yaml"
+    path.write_text("profiles: [unterminated\n", encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="invalid YAML"):
+        load_profiles(path)
+
+
+def test_missing_profiles_key_fails(tmp_path: Path):
+    path = tmp_path / "profiles.yaml"
+    path.write_text(yaml.safe_dump({"other": []}), encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="top-level 'profiles' key"):
+        load_profiles(path)
+
+
+def test_profiles_must_be_a_list(tmp_path: Path):
+    path = tmp_path / "profiles.yaml"
+    path.write_text(yaml.safe_dump({"profiles": {"off": {}}}), encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="profiles must be a list"):
+        load_profiles(path)
+
+
+def test_non_mapping_profile_entry_fails(tmp_path: Path):
+    path = tmp_path / "profiles.yaml"
+    path.write_text(yaml.safe_dump({"profiles": ["off"]}), encoding="utf-8")
+    with pytest.raises(GuardrailsConfigError, match="each profile must be a mapping"):
+        load_profiles(path)
+
+
+def test_empty_profile_name_fails(tmp_path: Path):
+    path = _write_profiles(tmp_path, [{"name": "  ", "stages": dict(_ALL_OUT), "rails": []}])
+    with pytest.raises(GuardrailsConfigError, match="profile name must be a non-empty"):
+        load_profiles(path)
+
+
+def test_stages_must_be_mapping(tmp_path: Path):
+    path = _write_profiles(tmp_path, [_minimal_profile("off", stages=["input"])])
+    with pytest.raises(GuardrailsConfigError, match="stages must be a mapping"):
+        load_profiles(path)
+
+
+def test_unknown_stage_posture_fails(tmp_path: Path):
+    stages = dict(_ALL_OUT)
+    stages["input"] = "maybe"
+    path = _write_profiles(tmp_path, [_minimal_profile("off", stages=stages)])
+    with pytest.raises(GuardrailsConfigError, match="unknown stage posture"):
+        load_profiles(path)
+
+
+def test_rails_must_be_list(tmp_path: Path):
+    path = _write_profiles(tmp_path, [_minimal_profile("off", rails={"x": 1})])
+    with pytest.raises(GuardrailsConfigError, match="rails must be a list"):
+        load_profiles(path)
+
+
+def test_non_mapping_rail_fails(tmp_path: Path):
+    path = _write_profiles(tmp_path, [_minimal_profile("off", rails=["check_injection"])])
+    with pytest.raises(GuardrailsConfigError, match="each rail must be a mapping"):
+        load_profiles(path)
+
+
+def test_duplicate_rail_name_fails(tmp_path: Path):
+    rail = {"name": "check_injection", "status": "implemented", "mode": "enforced", "stage": "input"}
+    path = _write_profiles(tmp_path, [_minimal_profile("deterministic", rails=[rail, dict(rail)])])
+    with pytest.raises(GuardrailsConfigError, match="duplicate rail name"):
+        load_profiles(path)
+
+
+def test_unknown_rail_status_fails(tmp_path: Path):
+    path = _write_profiles(
+        tmp_path,
+        [
+            _minimal_profile(
+                "off",
+                rails=[{"name": "check_injection", "status": "imaginary", "mode": "out-of-scope"}],
+            )
+        ],
+    )
+    with pytest.raises(GuardrailsConfigError, match="unknown rail status"):
+        load_profiles(path)
+
+
+def test_unknown_rail_mode_fails(tmp_path: Path):
+    path = _write_profiles(
+        tmp_path,
+        [
+            _minimal_profile(
+                "off",
+                rails=[{"name": "check_injection", "status": "implemented", "mode": "magic"}],
+            )
+        ],
+    )
+    with pytest.raises(GuardrailsConfigError, match="unknown rail mode"):
+        load_profiles(path)
+
+
+def test_unknown_rail_stage_fails(tmp_path: Path):
+    path = _write_profiles(
+        tmp_path,
+        [
+            _minimal_profile(
+                "off",
+                rails=[
+                    {
+                        "name": "check_injection",
+                        "status": "implemented",
+                        "mode": "out-of-scope",
+                        "stage": "not-a-stage",
+                    }
+                ],
+            )
+        ],
+    )
+    with pytest.raises(GuardrailsConfigError, match="unknown stage name"):
+        load_profiles(path)

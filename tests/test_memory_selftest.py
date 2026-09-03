@@ -15,6 +15,8 @@ property is asserted here for both flag states.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import memory.selftest as selftest
 from memory.consolidation import run_consolidation
 
@@ -40,6 +42,28 @@ class TestMemorySelftest:
         reported = {line.split("PASS", 1)[1].strip()
                     for line in out.splitlines() if "PASS" in line}
         assert expected <= reported, f"missing checks: {expected - reported}"
+
+    def test_check_failure_and_unhandled_exception_return_nonzero(self, capsys):
+        # Imports happen inside main(); patch the source modules before the call.
+        with patch("memory.store.connect", side_effect=RuntimeError("db down")):
+            rc = selftest.main()
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "FAIL" in out
+        assert "unhandled" in out
+
+    def test_reason_gate_and_injection_false_paths(self, capsys):
+        # Force the "accepted" failure branches for the two refuse gates.
+        with (
+            patch("memory.policy.require_reason", return_value=None),
+            patch("memory.policy.enforce_content", return_value=None),
+        ):
+            rc = selftest.main()
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "reason_gate" in out
+        assert "injection_refuse" in out
+        assert "FAILED" in out
 
 
 class TestRunConsolidation:

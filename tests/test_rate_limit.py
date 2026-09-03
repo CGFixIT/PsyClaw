@@ -273,6 +273,8 @@ class TestPersistence:
         assert rl.allow("203.0.113.10") is True
         assert rl.tracked_ips() == 1
         assert not list(tmp_path.glob("*.db")), "in-memory mode must not write a sqlite file"
+        assert rl._backend is None
+        rl._load_from_db()  # defensive no-op when persistence is off
 
     def test_multiple_ips_each_persist_independently(self, tmp_path):
         """Per-IP persistence regression guard. ``_persist`` writes only the IP
@@ -896,3 +898,124 @@ class TestPersistence:
             "a second rejected touch from the same instance re-persisted -- "
             "the hammering-abuse optimization was lost"
         )
+
+
+class TestPostgresBackendWithoutLiveServer:
+    """Cover Postgres branches with a stubbed psycopg surface (no CYCLAW_DB_URL)."""
+
+    def test_pg_dsn_selects_postgres_backend_and_persists(self, monkeypatch):
+        import json
+        import sys
+        import types
+
+        executed: list[tuple[str, tuple | None]] = []
+        closed = {"n": 0}
+
+        class _FakeErrors:
+            class DuplicateColumn(Exception):
+                pass
+
+        class _FakeConn:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+                if "SELECT ip, timestamps, last_sweep FROM rate_hits" in sql:
+                    return self
+                return self
+
+            def fetchall(self):
+                return [("10.0.0.1", json.dumps([1000.0]), 1000.0)]
+
+            def cursor(self):
+                raise AssertionError("not needed for this test")
+
+            def close(self):
+                closed["n"] += 1
+
+        fake_psycopg = types.ModuleType("psycopg")
+        fake_psycopg.connect = lambda *a, **k: _FakeConn()
+        fake_psycopg.errors = _FakeErrors
+        monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+        monkeypatch.setattr(
+            "utils.personality_db._harden_pg_conninfo",
+            lambda dsn: dsn,
+        )
+
+        clock = FakeClock(1000.0)
+        rl = RateLimiter(
+            max_requests=2,
+            window_seconds=60,
+            clock=clock,
+            db_url="postgresql://example/cyclaw",
+        )
+        try:
+            assert rl._backend == "postgres"
+            assert rl._ph == "%s"
+            assert "CREATE TABLE IF NOT EXISTS rate_hits" in executed[0][0]
+            assert "DOUBLE PRECISION" in executed[0][0]
+            assert rl.allow("10.0.0.1") is True  # loaded one hit, room for one more
+            assert any("INSERT INTO rate_hits" in sql for sql, _ in executed)
+        finally:
+            rl.close()
+        assert closed["n"] == 1
+        assert rl._pg_conn is None
+
+    def test_pg_duplicate_column_migration_is_idempotent(self, monkeypatch):
+        import sys
+        import types
+
+        class _FakeErrors:
+            class DuplicateColumn(Exception):
+                pass
+
+        class _FakeConn:
+            def __init__(self):
+                self.alters = 0
+
+            def execute(self, sql, params=None):
+                if sql.startswith("ALTER TABLE"):
+                    self.alters += 1
+                    raise _FakeErrors.DuplicateColumn()
+                return self
+
+            def fetchall(self):
+                return []
+
+            def close(self):
+                pass
+
+        fake_psycopg = types.ModuleType("psycopg")
+        fake_psycopg.connect = lambda *a, **k: _FakeConn()
+        fake_psycopg.errors = _FakeErrors
+        monkeypatch.setitem(sys.modules, "psycopg", fake_psycopg)
+        monkeypatch.setattr("utils.personality_db._harden_pg_conninfo", lambda dsn: dsn)
+
+        rl = RateLimiter(max_requests=1, window_seconds=10, clock=FakeClock(), db_url="postgres://x/y")
+        try:
+            assert rl._backend == "postgres"
+        finally:
+            rl.close()
+
+    def test_sqlite_non_duplicate_alter_error_propagates(self, tmp_path):
+        rl = RateLimiter(
+            max_requests=1,
+            window_seconds=10,
+            clock=FakeClock(),
+            db_path=str(tmp_path / "rl.db"),
+        )
+        try:
+            class _RaisingTxn:
+                def __enter__(self):
+                    class _C:
+                        def execute(self, sql):
+                            raise sqlite3.OperationalError("disk I/O error")
+
+                    return _C()
+
+                def __exit__(self, *exc):
+                    return False
+
+            rl._sqlite_txn = lambda: _RaisingTxn()  # type: ignore[method-assign]
+            with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+                rl._ensure_window_seconds_column()
+        finally:
+            rl.close()

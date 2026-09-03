@@ -845,6 +845,190 @@ class TestPersonalityConcurrency:
         assert pm.soul_core == "# Soul\n\nApplied while reload paused.\n"
 
 
+class TestPersonalityCoverageLeftovers:
+    def test_atomic_write_cleans_temp_when_fd_still_open(self, tmp_path, monkeypatch):
+        from utils.personality import _atomic_write_owner_only
+
+        target = tmp_path / "soul.md"
+        # Force the write path to fail after mkstemp so finally closes the fd
+        # and attempts temp cleanup.
+        monkeypatch.setattr(
+            "utils.personality.os.chmod",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("chmod blocked")),
+        )
+        with pytest.raises(OSError):
+            _atomic_write_owner_only(target, "content")
+        assert not list(tmp_path.glob(".*.tmp"))
+
+    def test_atomic_write_temp_unlink_oserror_is_warned(self, tmp_path, monkeypatch):
+        from utils.personality import _atomic_write_owner_only
+
+        target = tmp_path / "soul.md"
+        real_unlink = Path.unlink
+        boom = {"hit": False}
+
+        def _unlink(self, *args, **kwargs):
+            # First unlink (cleanup after forced failure) raises; later ones ok.
+            if self.parent == tmp_path and self.name.startswith(".soul.md.") and not boom["hit"]:
+                boom["hit"] = True
+                raise OSError("busy")
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(
+            "utils.personality.os.chmod",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("chmod blocked")),
+        )
+        monkeypatch.setattr(Path, "unlink", _unlink)
+        with pytest.raises(OSError, match="chmod blocked"):
+            _atomic_write_owner_only(target, "content")
+
+    def test_soul_chmod_failure_does_not_crash_load(self, cfg, tmp_paths, monkeypatch):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Soul", encoding="utf-8")
+        monkeypatch.setattr(
+            "utils.personality.stat.S_IMODE",
+            lambda _mode: 0o644,
+        )
+        monkeypatch.setattr(
+            "utils.personality.os.chmod",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("nope")),
+        )
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+        assert pm.soul_core.startswith("# Soul")
+        pm.close()
+
+    def test_bad_regex_pattern_is_skipped(self, cfg, tmp_paths):
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+        compiled = pm._build_patterns(["(valid)", "(unclosed"])
+        assert len(compiled) == 1
+        assert compiled[0][0] == "(valid)"
+        pm.close()
+
+    def test_apply_evolution_rollback_failure_is_recorded(self, cfg, tmp_paths):
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Governed V1", encoding="utf-8")
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        class CommitAndRollbackFailing:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, *args, **kwargs):
+                return self.wrapped.execute(*args, **kwargs)
+
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+            def rollback(self):
+                raise RuntimeError("rollback failed")
+
+            def close(self):
+                return self.wrapped.close()
+
+        real_conn = pm.conn
+        pm.conn = CommitAndRollbackFailing(real_conn)
+        with patch("utils.personality.audit_log") as mock_audit, \
+             pytest.raises(RuntimeError, match="commit failed"):
+            pm.apply_evolution("# V2", "force rollback failure path")
+        events = [c.args[0] for c in mock_audit.call_args_list if c.args]
+        failed = [e for e in events if e.get("event") == "soul_evolution_failed"]
+        assert failed and failed[0].get("rollback_succeeded") is False
+        pm.conn = real_conn
+        pm.close()
+
+    def test_apply_evolution_unlinks_when_no_previous_soul(self, cfg, tmp_paths):
+        """No prior soul on disk: failure after publish must unlink the new file."""
+        soul_path, _, _ = tmp_paths
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+        soul_path.unlink()
+        bak = soul_path.with_suffix(soul_path.suffix + ".bak")
+        if bak.exists():
+            bak.unlink()
+
+        class CommitFailing:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, *args, **kwargs):
+                return self.wrapped.execute(*args, **kwargs)
+
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        real_conn = pm.conn
+        pm.conn = CommitFailing(real_conn)
+        with patch("utils.personality.audit_log"), \
+             pytest.raises(RuntimeError, match="commit failed"):
+            pm.apply_evolution("# Brand New", "first write fails after publish")
+        assert not soul_path.exists()
+        pm.conn = real_conn
+        pm.close()
+
+    def test_apply_evolution_unlinks_new_backup_when_none_existed(self, cfg, tmp_paths):
+        """Soul exists, bak does not: failed apply must unlink the new .bak."""
+        soul_path, _, _ = tmp_paths
+        soul_path.parent.mkdir(parents=True, exist_ok=True)
+        soul_path.write_text("# Prior", encoding="utf-8")
+        bak = soul_path.with_suffix(soul_path.suffix + ".bak")
+        if bak.exists():
+            bak.unlink()
+
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+
+        class CommitFailing:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def execute(self, *args, **kwargs):
+                return self.wrapped.execute(*args, **kwargs)
+
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+            def rollback(self):
+                return self.wrapped.rollback()
+
+            def close(self):
+                return self.wrapped.close()
+
+        real_conn = pm.conn
+        pm.conn = CommitFailing(real_conn)
+        with patch("utils.personality.audit_log"), \
+             pytest.raises(RuntimeError, match="commit failed"):
+            pm.apply_evolution("# Next", "backup unlink path")
+        assert soul_path.read_text(encoding="utf-8") == "# Prior"
+        assert not bak.exists()
+        pm.conn = real_conn
+        pm.close()
+
+    def test_close_is_idempotent(self, cfg, tmp_paths):
+        with patch("utils.personality.audit_log"):
+            from utils.personality import PersonalityManager
+            pm = PersonalityManager(cfg)
+        pm.close()
+        pm.close()  # second close must be a no-op
+        assert pm.conn is None
+
+
 class TestSoulSizeCap:
     """The in-memory soul (prepended to every LLM prompt) is bounded by
     personality.soul_max_chars so an oversized soul.md cannot inflate the prompt

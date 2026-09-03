@@ -10,6 +10,7 @@ import pytest
 from utils.mcp_manifest import (
     ManifestDriftError,
     compare_registered_tools,
+    load_committed_manifest,
     manifest_fingerprint,
     verify_registered_tools,
 )
@@ -114,6 +115,15 @@ def test_missing_pin_fails_closed(tmp_path: Path) -> None:
         verify_registered_tools(tools, path=missing)
     assert caught.value.expected == "missing"
     assert caught.value.actual == result.actual
+    with pytest.raises(FileNotFoundError, match="MCP tool manifest pin missing"):
+        load_committed_manifest(missing)
+
+
+def test_load_committed_manifest_rejects_non_list(tmp_path: Path) -> None:
+    pin = tmp_path / "mcp_manifest.json"
+    pin.write_text(json.dumps({"tools": []}), encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a JSON list"):
+        load_committed_manifest(pin)
 
 
 def test_extra_keys_are_ignored() -> None:

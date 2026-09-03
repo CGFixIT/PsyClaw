@@ -92,6 +92,18 @@ def test_mock_runner_scorecard_and_acceptance_gate() -> None:
     assert decision.accepted is True
     assert "candidate_score: 0.8500" in card
     assert score_cases((CaseResult("x", True, 0.25), CaseResult("y", True, 0.75))) == 0.5
+    assert score_cases(()) == 0.0
+
+
+def test_case_result_validation_rejects_bad_fields() -> None:
+    with pytest.raises(AgenticError, match="case_id"):
+        CaseResult("", True, 0.5)
+    with pytest.raises(AgenticError, match="passed"):
+        CaseResult("x", "yes", 0.5)  # type: ignore[arg-type]
+    with pytest.raises(AgenticError, match="numeric"):
+        CaseResult("x", True, "0.5")  # type: ignore[arg-type]
+    with pytest.raises(AgenticError, match="between 0 and 1"):
+        CaseResult("x", True, 1.5)
 
 
 def test_mock_runner_rejects_undeclared_cases() -> None:
@@ -251,6 +263,50 @@ def test_workspace_tools_reject_symlink_escape(tmp_path: Path) -> None:
     tools = ProposerWorkspaceTools(workspace, cfg=cfg)
     with pytest.raises(AgenticError):
         tools.read_file("current/link/secret.txt")
+
+
+def test_workspace_parts_and_tool_denials(tmp_path: Path) -> None:
+    from agentic.harness_optimizer.mcp.tools import _parts
+
+    with pytest.raises(AgenticError, match="NUL"):
+        _parts("a\x00b")
+    with pytest.raises(AgenticError, match="relative"):
+        _parts("C:/abs")
+    with pytest.raises(AgenticError, match=":"):
+        _parts("bad:name")
+    with pytest.raises(AgenticError, match="trailing"):
+        _parts("name. ")
+
+    cfg = _audit_cfg(tmp_path)
+    workspace = build_proposer_workspace(tmp_path / "runs", _experiment(), "variant_1", cfg=cfg)
+    (workspace.current_dir / "note.md").write_text("hi", encoding="utf-8")
+    (workspace.current_dir / "subdir").mkdir()
+    tools = ProposerWorkspaceTools(workspace, cfg=cfg)
+
+    with pytest.raises(AgenticError, match="not a directory"):
+        tools.list_workspace("current/note.md")
+    with pytest.raises(AgenticError, match="not a file"):
+        tools.read_file("current/subdir")
+    with pytest.raises(AgenticError, match="must be a string"):
+        tools.write_current_file("x.md", 123)  # type: ignore[arg-type]
+    with pytest.raises(AgenticError, match="directory"):
+        tools.write_current_file("subdir", "x")
+
+    # Missing nested write target still resolves via parent walk (FileNotFoundError arm).
+    result = tools.write_current_file("nested/new.md", "body")
+    assert result["bytes"] == 4
+
+    # Oversized read denial.
+    big = workspace.current_dir / "big.md"
+    big.write_text("x" * 100, encoding="utf-8")
+    small_tools = ProposerWorkspaceTools(workspace, cfg=cfg, max_read_bytes=10)
+    with pytest.raises(AgenticError, match="max_read_bytes"):
+        small_tools.read_file("current/big.md")
+
+    # Malformed surface manifest.
+    workspace.manifest_path.write_text("{not-json", encoding="utf-8")
+    with pytest.raises(AgenticError, match="malformed"):
+        tools.read_surface_manifest()
 
 
 def test_local_lmstudio_proposer_uses_fake_transport(tmp_path: Path) -> None:
