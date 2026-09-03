@@ -274,6 +274,9 @@ https://www.youtube.com/watch?v=NEFw4q-ouu8
 https://www.youtube.com/watch?v=tZQ9t55ZmEw
 https://www.youtube.com/watch?v=30xKxdBCtmg
 https://www.youtube.com/watch?v=AGAUL0EGA_A
-..and queue spiderman pointing at each other meme with langgraph replacing its core - https://www.youtube.com/watch?v=6DqCfh46oRk
+
+..and queue spiderman pointing at each other meme with langgraph replacing its core:
+
+https://www.youtube.com/watch?v=6DqCfh46oRk
 
 ^lolz too many things but might as well read more about it since its like an inverse oof lanchain but a container at least at surface read
