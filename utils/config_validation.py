@@ -119,6 +119,12 @@ def validate_boot_timeout_config(cfg: dict[str, Any]) -> None:
 # forwarded to a native endpoint -- the two vocabularies are not interchangeable.
 _VALID_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "max"})
 
+# xAI grok-4.5 Chat Completions: low|medium|high. Omitted on the wire defaults
+# to vendor "high". "none" is Ollama-only (Grok reasoning cannot be disabled).
+# "xhigh" is grok-4.6-only; shipped model is grok-4.5, so reject it for now.
+_VALID_GROK_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+_DEFAULT_GROK_REASONING_EFFORT = "low"
+
 
 def resolve_reasoning_effort(llm_cfg: dict[str, Any]) -> str | None:
     """Normalized ``models.local_llm.reasoning_effort``, or None when unset.
@@ -167,6 +173,35 @@ def validate_local_llm_reasoning_effort(cfg: dict[str, Any]) -> None:
     if not isinstance(models, dict):
         return
     resolve_reasoning_effort(models.get("local_llm"))
+
+
+def resolve_grok_reasoning_effort(grok_cfg: dict[str, Any]) -> str:
+    """Normalized ``models.grok.reasoning_effort``; defaults to ``low`` when unset.
+
+    Missing/blank fails closed to cheap, not to the vendor default of ``high``.
+    ``none`` and ``xhigh`` raise: none is Ollama-only, xhigh is grok-4.6-only
+    while this pin stays grok-4.5.
+    """
+    if not isinstance(grok_cfg, dict):
+        return _DEFAULT_GROK_REASONING_EFFORT
+    raw = grok_cfg.get("reasoning_effort")
+    if raw is None:
+        return _DEFAULT_GROK_REASONING_EFFORT
+    valid = sorted(_VALID_GROK_REASONING_EFFORTS)
+    if not isinstance(raw, str):
+        raise ConfigError(
+            f"models.grok.reasoning_effort must be a string, got: {raw!r}",
+            details={"received": raw, "valid": valid},
+        )
+    normalized = raw.strip().lower()
+    if not normalized:
+        return _DEFAULT_GROK_REASONING_EFFORT
+    if normalized not in _VALID_GROK_REASONING_EFFORTS:
+        raise ConfigError(
+            f"models.grok.reasoning_effort must be one of {valid}, got: {raw!r}",
+            details={"received": raw, "valid": valid},
+        )
+    return normalized
 
 
 def validate_fallback_confirm_placeholder(cfg: dict[str, Any]) -> None:
