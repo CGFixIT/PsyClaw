@@ -218,7 +218,13 @@ class MemoryNotes:
             return {"cleared": True, "count": 0}
 
     def context_text(self) -> str:
-        notes = _load_notes(self.path)
+        # Chat/loop inject this into the system prompt. Mutate/status stay
+        # fail-closed; a corrupt file must not 500 /api/chat (and this path
+        # never writes, so returning "" cannot wipe recoverable bytes).
+        try:
+            notes = _load_notes(self.path)
+        except MemoryNotesError:
+            return ""
         if not notes:
             return ""
         lines = [f"- [{note[_ID_KEY]}] {note[_TEXT_KEY]}" for note in notes]
